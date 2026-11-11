@@ -207,10 +207,12 @@ export function transcriptFixture(count = 640, local = true) {
       };
     },
   };
+  // A local host is on this machine, with no connection to connect.
   const dependencies = {
     ...base.dependencies,
     chat,
     mode: local ? ('local' as const) : ('remote' as const),
+    ...(local ? { connection: undefined } : {}),
   };
   return {
     ...base,

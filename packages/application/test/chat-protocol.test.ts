@@ -26,6 +26,7 @@ async function setup(t: { after: (f: () => Promise<void>) => void }, hold = fals
     storage = new Storage(),
     controller = await models.make({
       chat: root.chat,
+      mode: 'local',
       connection: root.connection,
       context: f.session,
       storage,
@@ -36,15 +37,16 @@ async function setup(t: { after: (f: () => Promise<void>) => void }, hold = fals
     async () => controller.getSnapshot(),
     (s) => !!s.host,
   );
-  await controller.create('Production protocol chat');
+  // The host is the daemon in host mode: the chat chooses its folder and model.
+  await controller.create('Production protocol chat', f.settings);
   return { ...f, clientRoot: root, controller, storage, models };
 }
 test('public chat controller creates, lists, opens, streams real tool output and captures exact Stop through SSH/HTTP/Pi', async (t) => {
   const f = await setup(t, true);
   const target = f.controller.getSnapshot().selected!;
   const host = f.controller.getSnapshot().host!;
-  assert('cwd' in host);
-  assert.equal(host.cwd, f.cwd);
+  assert('mode' in host && host.mode === 'local');
+  assert.equal((await f.clientRoot.chat.command('getChat', { target })).conversation.cwd, f.cwd);
   f.controller.setDraft('Inspect controlled context');
   await f.controller.send();
   const active = await until(
@@ -90,6 +92,7 @@ test('lost actual HTTP Send response + newer draft + controller reload/client cl
   const second = f.root(),
     next = await f.models.make({
       chat: second.chat,
+      mode: 'local',
       connection: second.connection,
       context: f.session,
       storage: f.storage,
@@ -115,6 +118,7 @@ test('lost actual HTTP Send response + newer draft + controller reload/client cl
   const third = f.root(),
     last = await f.models.make({
       chat: third.chat,
+      mode: 'local',
       connection: third.connection,
       context: f.session,
       storage: f.storage,

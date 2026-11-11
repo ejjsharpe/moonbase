@@ -166,8 +166,7 @@ export function ChatView({
     }
   };
   const findInput = useRef<HTMLInputElement>(null);
-  const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot),
-    [dockList, setDockList] = useState(false),
+  const [dockList, setDockList] = useState(false),
     // An error belongs to the command line it was about; editing it or changing chat hides it.
     [commandError, setCommandError] = useState<{ text: string; message: string } | null>(null),
     [turning, setTurning] = useState(false),
@@ -178,8 +177,12 @@ export function ChatView({
   // A new chat's folder choices outlive this view, which unmounts while another view shows the chat.
   const composer = getChatComposer(controller),
     composerState = useSyncExternalStore(composer.subscribe, composer.getSnapshot);
+  const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
+  // A remote host's chats use its folders, never this Mac's: no picker, editor projects,
+  // worktrees or dock folder apply to them.
+  const remote = state.remote;
   const placeKey = dock ? `dock:${dock.cwd}` : 'agents',
-    initialCwd = dock?.cwd ?? '';
+    initialCwd = (!remote && dock?.cwd) || '';
   const { cwd, newWorktree, folderError } = composer.readPlace(placeKey, initialCwd),
     creatingWorktree = composerState.creatingWorktree;
   const updatePlace = (change: Partial<ChatComposerPlace>) =>
@@ -238,13 +241,14 @@ export function ChatView({
   if (state.selected) conversationTitle = 'Saved chat selected';
   if (state.snapshot) conversationTitle = state.snapshot.conversation.title;
   let toolNotice = 'Messages and tools run on your configured host.';
+  const tools = remote ? 'Tools on the host' : 'Local tools';
   if (local)
     toolNotice =
       state.selected || cwd
-        ? 'Local tools can access files outside the working folder.'
-        : 'Runs in a new empty folder. Local tools are not sandboxed.';
+        ? `${tools} can access files outside the working folder.`
+        : `Runs in a new empty folder. ${tools} are not sandboxed.`;
   if (local && !state.selected && !models.length)
-    toolNotice = 'Set up a provider to send. Local tools are not sandboxed.';
+    toolNotice = `Set up a provider to send. ${tools} are not sandboxed.`;
   const selectedChat = findSelectedChat(state);
   // A chat without a project has no project crumb.
   const selectedFolder =
@@ -270,7 +274,10 @@ export function ChatView({
     </Button>
   );
   // A chat without a project can become one: its folder opens as a project where it is.
-  const turnButton = turnIntoProject && local && state.selected && selectedChat?.ownFolder && (
+  // A remote host's own folders never open here as a project, nor in this Mac's folder picker.
+  const turnable = remote ? undefined : turnIntoProject,
+    browseFolder = remote ? undefined : chooseFolder;
+  const turnButton = turnable && local && state.selected && selectedChat?.ownFolder && (
     <Button
       aria-label="Turn into project"
       title="Turn into project · opens this chat’s folder as a project"
@@ -280,7 +287,7 @@ export function ChatView({
         const id = state.selected!.conversationId;
         setTurning(true);
         setTurnError(null);
-        void turnIntoProject(id)
+        void turnable(id)
           .then(
             () => controller.reloadChats(),
             (error: unknown) =>
@@ -300,8 +307,8 @@ export function ChatView({
       aria-hidden="true"
       {...stylex.props(
         styles.localDot,
-        !local && !connected && styles.offlineDot,
-        !local && state.connection?.state === 'connecting' && styles.pendingDot,
+        remote && !connected && styles.offlineDot,
+        remote && state.connection?.state === 'connecting' && styles.pendingDot,
       )}
     />
   );
@@ -420,6 +427,7 @@ export function ChatView({
   const worktreeChoice =
     !state.selected &&
     local &&
+    !remote &&
     !!createWorktree &&
     !!cwd &&
     !folderProjects.some((project) => project.root === cwd && project.branch === undefined);
@@ -511,7 +519,7 @@ export function ChatView({
   );
   let emptyList = '';
   if (connected) emptyList = 'Your conversations will appear here.';
-  else if (local) emptyList = 'Loading chats…';
+  else if (!remote) emptyList = 'Loading chats…';
   const listElement = useRef<HTMLElement>(null),
     focusInList = useRef(false);
   // Hiding the chat list while focus is in it hands focus to the composer rather than the page.
@@ -557,7 +565,7 @@ export function ChatView({
             New <kbd {...stylex.props(styles.newKey)}>⌘N</kbd>
           </Button>
         </div>
-        {!local && !connected && (
+        {remote && !connected && (
           <div {...stylex.props(controls.row, styles.offline)}>
             <span role="status" {...stylex.props(styles.offlineText)}>
               {state.connection?.state === 'connecting' ? 'Connecting…' : 'Not connected'}
@@ -860,8 +868,17 @@ export function ChatView({
                 {local && (
                   <FolderPicker
                     cwd={cwd}
-                    projects={folderProjects}
+                    projects={remote ? [] : folderProjects}
                     recentFolders={recentFolders}
+                    hostFolders={
+                      remote
+                        ? {
+                            label: 'On the host',
+                            empty:
+                              'The host offers no folders. Add approved roots to its daemon.json.',
+                          }
+                        : undefined
+                    }
                     disabled={busy('send') || creatingWorktree}
                     noProject={
                       // A project's dock keeps its chats in the project.
@@ -874,10 +891,10 @@ export function ChatView({
                       if (folder !== cwd) setCwd(folder);
                     }}
                     browse={
-                      chooseFolder &&
+                      browseFolder &&
                       (() => {
                         setFolderError(null);
-                        void chooseFolder()
+                        void browseFolder()
                           .then((folder) => {
                             if (folder) setCwd(folder);
                           })
@@ -921,7 +938,7 @@ export function ChatView({
                   <span {...stylex.props(styles.localLabel)}>
                     {hostDot}
                     {hosts?.targets.find((target) => target.id === hosts.current)?.label ??
-                      (local ? 'local' : 'remote')}
+                      (remote ? 'remote' : 'local')}
                   </span>
                 )}
               </div>

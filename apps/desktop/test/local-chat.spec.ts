@@ -521,7 +521,7 @@ for (const mode of ['local', 'remote'] as const)
     const host =
       mode === 'remote'
         ? await controlledHostFixture(
-            new URL('../../../tests/chat/tool-host.mjs', import.meta.url),
+            new URL('../../../tests/chat/faux-tool.mjs', import.meta.url),
             true,
           )
         : undefined;
@@ -651,7 +651,7 @@ for (const mode of ['local', 'remote'] as const)
 test('transcript remote first/next chunks render through authenticated stream and Electron IPC before held completion', async () => {
   test.setTimeout(60000);
   const host = await controlledHostFixture(
-    new URL('../../../tests/chat/stream-host.mjs', import.meta.url),
+    new URL('../../../tests/chat/faux-stream.mjs', import.meta.url),
     true,
   );
   const userData = join(host.directory, 'desktop');
@@ -725,7 +725,7 @@ for (const mode of ['local', 'remote'] as const)
   test(`stored image ${mode} record is served over moonbase:// under production CSP; viewer keyboard, close and actual zoom`, async () => {
     const host =
       mode === 'remote'
-        ? await controlledHostFixture(new URL('./stored-image-host.mjs', import.meta.url))
+        ? await controlledHostFixture(new URL('./stored-image-faux.mjs', import.meta.url))
         : undefined;
     const directory =
       host?.directory ?? (await realpath(await mkdtemp(join(tmpdir(), 'moonbase-image-native-'))));

@@ -24,6 +24,11 @@ export type FolderPickerProps = {
   projects: readonly ChatFolderProject[];
   /** Folders the native picker approved before, newest first; read each time the menu opens. */
   recentFolders?: () => Promise<readonly string[]>;
+  /**
+   * Names `recentFolders` for a host with no picker here, whose folders are its approved roots and
+   * the folders inside them.
+   */
+  hostFolders?: { label: string; empty: string };
   choose(folder: string): void;
   /** Opens the native folder picker. */
   browse?: () => void;
@@ -40,6 +45,7 @@ export function FolderPicker({
   cwd,
   projects,
   recentFolders,
+  hostFolders,
   choose,
   browse,
   noProject,
@@ -132,7 +138,7 @@ export function FolderPicker({
                   })),
                 },
                 {
-                  label: 'Recent folders',
+                  label: hostFolders?.label ?? 'Recent folders',
                   items: others.map((folder) => ({
                     path: folder,
                     detail: parentPath(folder),
@@ -152,7 +158,7 @@ export function FolderPicker({
                 })
               }
               browseLabel="Choose folder…"
-              empty="Folders you open or choose for a chat appear here."
+              empty={hostFolders?.empty ?? 'Folders you open or choose for a chat appear here.'}
             />
           </Popover.Popup>
         </Popover.Positioner>

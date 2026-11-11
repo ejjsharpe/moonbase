@@ -70,9 +70,6 @@ test('chat backends join explicit local retry and revoke pending folder selectio
         completeRetry = resolve;
       });
     },
-    chatConfiguration: null,
-    remoteChat: null,
-    connection: null,
     emit: () => {
       assert.fail('No observation should be started');
     },
@@ -125,7 +122,7 @@ for (const failure of [false, true])
     const receives: ((snapshot: never) => void)[] = [],
       releases = [0, 0],
       emitted: [string, string][] = [];
-    const remoteChat: Dependencies['remoteChat'] = {
+    const remoteChat: NonNullable<Dependencies['remote']>['chat'] = {
       command: async () => null as never,
       watch: (_input, receive) => {
         const index = receives.length;
@@ -146,13 +143,14 @@ for (const failure of [false, true])
         error: new ApplicationError({ code: 'Unavailable', message: 'No local chat' }),
       },
       acquireLocal: () => new Promise(() => {}),
-      // Only the remote context and label are read when installing the session.
-      chatConfiguration: {
-        context,
-        ssh: { profile: { label: 'Remote' } },
-      } as unknown as Dependencies['chatConfiguration'],
-      remoteChat,
-      connection: { command: async () => ({}) as never, watch: () => async () => {} },
+      // Only the remote context and label, the chat and owner release are used here.
+      remote: {
+        configuration: { context, ssh: { profile: { label: 'Remote' } } },
+        chat: remoteChat,
+        connection: { command: async () => ({}) as never, watch: () => async () => {} },
+        providers: { releaseOwner: () => Effect.void },
+        folders: {},
+      } as unknown as Dependencies['remote'],
       emit: (backendId, id) => emitted.push([backendId, id]),
       pickFolder: async () => null,
     });
@@ -217,9 +215,6 @@ test('a new worktree starts only from a folder local chat may use, and is approv
     runtime,
     localResult: { backend, error: null },
     acquireLocal: async () => ({ backend, error: null }),
-    chatConfiguration: null,
-    remoteChat: null,
-    connection: null,
     emit: () => {},
     pickFolder: async () => null,
     isEditorFolder: (path) => path === editor,
@@ -245,9 +240,6 @@ test('a new worktree starts only from a folder local chat may use, and is approv
       runtime,
       localResult: { backend, error: null },
       acquireLocal: async () => ({ backend, error: null }),
-      chatConfiguration: null,
-      remoteChat: null,
-      connection: null,
       emit: () => {},
       pickFolder: async () => null,
       createWorktree: (root, branch, creation) => {
@@ -312,9 +304,6 @@ test('turning a chat into a project opens only its own folder, then lists it und
     runtime,
     localResult: { backend, error: null },
     acquireLocal: async () => ({ backend, error: null }),
-    chatConfiguration: null,
-    remoteChat: null,
-    connection: null,
     emit: () => {},
     pickFolder: async () => null,
     openFolderProject: async (root) => {
@@ -384,9 +373,6 @@ test('an editor folder is granted to the daemon only when a chat first uses it, 
     localResult: { backend, error: null },
     acquireLocal: async () => ({ backend, error: null }),
     isEditorFolder: (path) => editorFolders.has(path),
-    chatConfiguration: null,
-    remoteChat: null,
-    connection: null,
     emit: () => {},
     pickFolder: async () => null,
   });
@@ -471,9 +457,6 @@ test('an editor folder the daemon no longer holds is granted again once, and the
     localResult: { backend, error: null },
     acquireLocal: async () => ({ backend, error: null }),
     isEditorFolder: (path) => path === editor,
-    chatConfiguration: null,
-    remoteChat: null,
-    connection: null,
     emit: () => {},
     pickFolder: async () => null,
   });
@@ -559,9 +542,6 @@ test('an editor folder that no longer resolves to itself, or that the daemon res
     localResult: { backend, error: null },
     acquireLocal: async () => ({ backend, error: null }),
     isEditorFolder: (path) => path === editor || path === other,
-    chatConfiguration: null,
-    remoteChat: null,
-    connection: null,
     emit: () => {},
     pickFolder: async () => null,
   });
@@ -598,5 +578,80 @@ test('an editor folder that no longer resolves to itself, or that the daemon res
     await owner.releaseDocument();
     await runtime.dispose();
     await rm(base, { recursive: true, force: true });
+  }
+});
+
+test('a remote daemon host offers its approved roots for folders, its own provider setup, and no local folder actions', async () => {
+  const runtime = ManagedRuntime.make(Layer.empty);
+  const context = { host: { hostId: 'remote-host', storeId: 'store' }, actorId: 'actor' };
+  const listed: unknown[] = [],
+    released: string[] = [],
+    providerCalls: [string, string][] = [];
+  const backends = createChatBackends({
+    runtime,
+    localResult: {
+      backend: null,
+      error: new ApplicationError({ code: 'Unavailable', message: 'No local chat' }),
+    },
+    acquireLocal: () => new Promise(() => {}),
+    remote: {
+      configuration: { context, ssh: { profile: { label: 'Mac mini' } } },
+      chat: { command: async () => null as never, watch: () => async () => {} },
+      connection: { command: async () => ({}) as never, watch: () => async () => {} },
+      providers: {
+        forOwner: (owner: string) => ({
+          getProviders: () =>
+            Effect.sync(() => {
+              providerCalls.push([owner, 'getProviders']);
+              return { providers: [], flow: null };
+            }),
+        }),
+        releaseOwner: (owner: string) =>
+          Effect.sync(() => {
+            released.push(owner);
+          }),
+      },
+      folders: {
+        listHostFolders: (input: unknown) =>
+          Effect.sync(() => {
+            listed.push(input);
+            return { folders: ['/Users/host/projects', '/Users/host/projects/site'] };
+          }),
+      },
+    } as unknown as Dependencies['remote'],
+    emit: () => {},
+    pickFolder: async () => assert.fail('A remote host has no native picker'),
+  });
+  try {
+    assert.deepEqual(
+      backends.getTargets().map(({ id, label, mode }) => ({ id, label, mode })),
+      [
+        { id: 'local', label: 'Local', mode: 'local' },
+        { id: 'remote', label: 'Mac mini', mode: 'remote' },
+      ],
+    );
+    assert.deepEqual(await backends.recentFolders('remote'), [
+      '/Users/host/projects',
+      '/Users/host/projects/site',
+    ]);
+    assert.deepEqual(listed, [{ host: context.host }]);
+    // Local chat is not available, so its recent folders are empty and nothing reaches the host.
+    assert.deepEqual(await backends.recentFolders('local'), []);
+    const session = backends.getSession('remote')!;
+    assert((await session.call('providers', 'getProviders', {}, 'providers')).ok);
+    assert.equal(providerCalls.length, 1);
+    // A chat on the host names its settings; one without them is refused before it is sent.
+    const missing = await session.call(
+      'chat',
+      'createChat',
+      { session: context, requestId: 'missing', title: 'Missing settings' },
+      'missing',
+    );
+    assert(!missing.ok && missing.error.code === 'InvalidInput');
+    await backends.releaseDocument();
+    assert.deepEqual(released, [providerCalls[0]![0]]);
+  } finally {
+    for (const session of backends.getSessions()) await session.dispose();
+    await runtime.dispose();
   }
 });

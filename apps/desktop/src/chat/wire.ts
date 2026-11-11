@@ -58,8 +58,11 @@ export type TranscriptNative = {
 export interface ChatBridge {
   targets?(): Promise<DesktopChatTarget[]>;
   chooseFolder?(): Promise<string | null>;
-  /** Folders local chat may use again without the picker, newest first. */
-  recentFolders?(): Promise<string[]>;
+  /**
+   * Folders a new chat may use without a picker: local chat's recent ones, newest first, or a
+   * remote host's approved roots and their folders.
+   */
+  recentFolders?(backendId?: string): Promise<string[]>;
   /** Creates a new local chat's linked worktree beside the repository, returning its root. */
   createWorktree?(root: string, branch: string): Promise<string>;
   /** Opens a local chat without a project's folder as a project where it is, returning its root. */

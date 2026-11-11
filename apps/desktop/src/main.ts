@@ -14,25 +14,18 @@ import {
   session,
   shell,
 } from 'electron';
-import { Context, ManagedRuntime, Effect, Layer, Scope } from 'effect';
+import { ManagedRuntime, Effect } from 'effect';
 import { WorkspaceLive, WorkspaceNative } from '@moonbase/workspace';
-import {
-  makeEditorClient,
-  bindChatClient,
-  bindConnectionClient,
-} from '@moonbase/application/runtime/clients';
+import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import { ChatService, ConnectionService } from '@moonbase/contracts/services';
 import { acquireDaemonChat } from './chat/daemon.ts';
 import { realpathSync, mkdirSync } from 'node:fs';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EditorSession } from './session.ts';
 import { channels } from './wire.ts';
-
-import { RemoteChatLive } from '@moonbase/pi-runtime/remote';
-import { SshLive } from '@moonbase/ssh';
 import { readConfiguration } from './chat/config.ts';
+import { acquireRemoteChat } from './chat/remote.ts';
 import { channels as chatChannels } from './chat/wire.ts';
 import { respondTranscriptImage, transcriptImagePath } from './chat/transcript-native.ts';
 import { createNativeActions } from './main/native-actions.ts';
@@ -131,19 +124,8 @@ async function main() {
       },
     );
   const remote = chatConfiguration
-    ? await runApplicationEffect(
-        runtime,
-        Layer.buildWithScope(
-          RemoteChatLive.pipe(Layer.provideMerge(SshLive(chatConfiguration.ssh))),
-          Scope.forkUnsafe(runtime.scope, 'parallel'),
-        ),
-      )
+    ? await acquireRemoteChat(runtime, chatConfiguration, (url) => shell.openExternal(url))
     : null;
-  const remoteChat = remote ? bindChatClient(runtime, Context.get(remote, ChatService)) : null;
-  const connection = remote
-    ? bindConnectionClient(runtime, Context.get(remote, ConnectionService))
-    : null;
-  if (connection) await connection.command('getConnection', {});
   const window = new BrowserWindow({
     title: 'Moonbase',
     titleBarStyle: 'hiddenInset',
@@ -210,9 +192,7 @@ async function main() {
     // A checkout or worktree the editor approved is granted to the daemon when a chat first uses
     // it, so a project's docked chat needs no picker.
     isEditorFolder: (path) => editorSession.hasFolder(path),
-    chatConfiguration,
-    remoteChat,
-    connection,
+    remote,
     emit: (backendId, id, result) => {
       if (!window.isDestroyed()) window.webContents.send(chatChannels.event, id, result, backendId);
     },

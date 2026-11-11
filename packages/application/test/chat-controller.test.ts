@@ -559,6 +559,61 @@ test('local first Send requires folder/model settings and retains the exact appr
   assert.equal(f.calls.filter((call) => call.operation === 'sendChat').length, 1);
 });
 
+test('a local-mode host over a connection waits for an explicit Connect, then chooses settings like local chat', async (t) => {
+  const f = await fixture(t);
+  const providerReads: string[] = [];
+  const controller = await f.root.make({
+    providers: {
+      command: async (operation) => {
+        providerReads.push(operation);
+        return { providers: [], flow: null } as never;
+      },
+    },
+    chat: {
+      ...f.chat,
+      command: (operation, input, options) =>
+        operation === 'getChatHost'
+          ? Promise.resolve({ ...context, mode: 'local' } as never)
+          : f.chat.command(operation, input, options),
+    },
+    mode: 'local',
+    connection: f.connection,
+    context,
+    storage: new Storage(),
+  });
+  await controller.start();
+  const offline = controller.getSnapshot();
+  assert.equal(offline.mode, 'local');
+  assert.equal(offline.remote, true);
+  assert.equal(offline.ready, false);
+  assert.match(offline.notice, /Connect explicitly/);
+  // Nothing reaches the host until the user connects.
+  assert(!f.calls.some((call) => call.operation === 'getChatHost'));
+  assert.deepEqual(providerReads, []);
+  controller.setDraft('Remote first message');
+  await controller.send({ model: { provider: 'configured', modelId: 'model' } });
+  assert(!f.calls.some((call) => call.operation === 'createChat'));
+  assert.match(controller.getSnapshot().error ?? '', /Connect to the configured host/);
+  await controller.connect();
+  await turn();
+  assert.equal(controller.getSnapshot().ready, true);
+  assert.match(controller.getSnapshot().notice, /Verified host/);
+  // The verified host's providers are read, so its models can be chosen.
+  assert.deepEqual(providerReads, ['getProviders']);
+  // A local-mode host needs each new chat's settings, wherever it runs.
+  await controller.send();
+  assert(!f.calls.some((call) => call.operation === 'createChat'));
+  const settings = { cwd: '/host/projects/site', model: { provider: 'configured', modelId: 'm' } };
+  await controller.send(settings);
+  assert.deepEqual(
+    (f.calls.find((call) => call.operation === 'createChat')!.input as { settings: unknown })
+      .settings,
+    settings,
+  );
+  await controller.disconnect();
+  assert.equal(controller.getSnapshot().ready, false);
+});
+
 test('throwing chat subscribers cannot poison saved drafts or block Send and preservation', async (t) => {
   const f = await fixture(t);
   await ready(f);

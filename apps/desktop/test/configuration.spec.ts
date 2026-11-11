@@ -2,7 +2,7 @@ import { findTestBun, prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
 import { closeSettings, openSettings, selectRemoteChat } from './chat-target.ts';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { fixture } from '../../../tests/chat/tool-fixture.ts';
-import { mkdtempSync, realpathSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -211,3 +211,85 @@ for (const configured of [false, true])
       );
     }
   });
+
+test('a remote daemon host offers its approved roots for a new chat, its own providers and model choice', async () => {
+  const f = await fixture();
+  const site = join(f.cwd, 'site');
+  mkdirSync(site);
+  const base = f.directory;
+  await prepareDaemonData(join(base, 'desktop'));
+  const app = await electron.launch({
+    executablePath: executable,
+    args,
+    env: {
+      ...platform,
+      MOONBASE_USER_DATA: join(base, 'desktop'),
+      MOONBASE_CHAT_CONFIG: f.clientConfig,
+      MOONBASE_CHAT_FORWARD_LOG: f.log,
+    },
+  });
+  try {
+    const page = await app.firstWindow();
+    await page
+      .getByRole('tablist', { name: 'Workbench views', exact: true })
+      .getByRole('tab', { name: 'Agents', exact: true })
+      .click();
+    await selectRemoteChat(page);
+    await page.getByRole('button', { name: 'Connect', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Connect', exact: true })).toHaveCount(0);
+    // The host's own provider setup, where ChatGPT signs in by pasting the redirect URL.
+    await expect(
+      (await openSettings(page, 'Providers')).getByRole('button', {
+        name: 'Sign in to ChatGPT subscription',
+        exact: true,
+      }),
+    ).toBeVisible();
+    await closeSettings(page);
+    // No picker reaches the host's disk: the menu offers its approved root and the folders in it.
+    await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+    const menu = page.getByRole('dialog', { name: 'Working folder', exact: true });
+    const hostFolders = menu.getByRole('group', { name: 'On the host', exact: true });
+    await expect(hostFolders.getByRole('button', { name: /^remote-folder/ })).toBeVisible();
+    await expect(menu.getByRole('button', { name: 'Choose folder…', exact: true })).toHaveCount(0);
+    await hostFolders.getByRole('button', { name: /^site/ }).click();
+    await expect(
+      page.getByRole('button', { name: 'Choose working folder', exact: true }),
+    ).toHaveText(/site/);
+    // The host's default model is chosen, as for a local chat.
+    await expect(page.getByRole('button', { name: 'Chat model', exact: true })).toContainText(
+      'Faux model',
+    );
+    await page.getByLabel('Message', { exact: true }).fill('Work in the host folder');
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    await expect
+      .poll(async () => (await f.stats()).mutations.find((m) => m.operation === 'createChat'))
+      .toMatchObject({
+        input: {
+          settings: { cwd: site, model: { provider: 'anthropic', modelId: 'claude-opus-5-5' } },
+        },
+      });
+    await expect.poll(async () => (await f.stats()).tools).toBe(1);
+  } finally {
+    try {
+      await app.windows()[0].evaluate(async () => {
+        const state = await window.moonbaseChat.call(
+          'connection',
+          'getConnection',
+          {},
+          crypto.randomUUID(),
+        );
+        if (state.ok && (state.value as { connectionId?: string }).connectionId)
+          await window.moonbaseChat.call(
+            'connection',
+            'disconnect',
+            { connectionId: (state.value as { connectionId: string }).connectionId },
+            crypto.randomUUID(),
+          );
+      });
+      await app.evaluate(({ app }) => app.exit(0));
+    } finally {
+      await stopDaemon(join(base, 'desktop', 'daemon-v1'));
+      await f.close();
+    }
+  }
+});

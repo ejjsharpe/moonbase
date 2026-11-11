@@ -116,12 +116,7 @@ export function installCommandIpc({
       }
       if (v.kind === 'recent-folders') {
         fields(v, ['kind', 'backendId']);
-        if (backendId !== 'local')
-          throw new ApplicationError({
-            code: 'Unavailable',
-            message: 'Recent folders are unavailable.',
-          });
-        return { ok: true, value: await chatBackends.recentFolders() };
+        return { ok: true, value: await chatBackends.recentFolders(backendId) };
       }
       if (v.kind === 'turn-into-project') {
         fields(v, ['kind', 'backendId', 'conversationId']);

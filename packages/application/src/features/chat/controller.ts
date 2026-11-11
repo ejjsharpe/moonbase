@@ -619,6 +619,8 @@ class ChatModelState {
             ? 'Verified host. Reconnection reads saved state; it does not send.'
             : 'Local tools use this computer’s permissions. The selected folder is context, not a sandbox.',
         });
+        // A connected host's providers are read once it is verified; a local one's at start.
+        if (this.connection) void this.providers?.refresh();
         const listed = yield* Effect.exit(this.listChats());
         if (!owner.alive || epoch !== this.epoch) return;
         if (Exit.isSuccess(listed)) {

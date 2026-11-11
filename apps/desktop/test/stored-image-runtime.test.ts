@@ -21,7 +21,7 @@ for (const mode of ['local', 'remote'] as const)
   test(`${mode} retained real images are served by main from exact record ownership and independently padded authenticated chunks`, async () => {
     const host =
       mode === 'remote'
-        ? await controlledHostFixture(new URL('./stored-image-host.mjs', import.meta.url))
+        ? await controlledHostFixture(new URL('./stored-image-faux.mjs', import.meta.url))
         : undefined;
     const directory =
       host?.directory ?? (await realpath(await mkdtemp(join(tmpdir(), 'moonbase-images-'))));
@@ -31,10 +31,7 @@ for (const mode of ['local', 'remote'] as const)
     };
     const local = host
       ? undefined
-      : createImageRuntime(
-          { ...session, cwd: directory, databasePath: join(directory, 'chat.sqlite') },
-          true,
-        );
+      : createImageRuntime({ ...session, databasePath: join(directory, 'chat.sqlite') });
     const root = host?.root();
     let connectionId: string | undefined;
     try {
@@ -49,7 +46,7 @@ for (const mode of ['local', 'remote'] as const)
             session,
             requestId,
             title: requestId,
-            ...(local ? { settings: { cwd: directory, model: local.model } } : {}),
+            settings: host?.settings ?? { cwd: directory, model: local!.model },
           })
         ).conversation.target;
       const target = await create('images'),

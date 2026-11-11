@@ -105,7 +105,9 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       await p.getByRole('button', { name: 'Send message', exact: true }).click();
       await until(f.stats, (s) => s.tools === 1);
       await p.getByLabel('Message', { exact: true }).fill('newer chat draft across reload');
-      const state = await p.evaluate(() => JSON.parse(localStorage.getItem('moonbase.chat.v1')!));
+      const state = await p.evaluate(() =>
+        JSON.parse(localStorage.getItem('moonbase.chat.remote.v2')!),
+      );
       const connection = await p.evaluate(() =>
         window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
       );
@@ -138,7 +140,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       if (veto) {
         if (mode === 'veto')
           await p.evaluate(() =>
-            localStorage.setItem('moonbase.chat.v1', 'controlled external replacement'),
+            localStorage.setItem('moonbase.chat.remote.v2', 'controlled external replacement'),
           );
         await p.getByLabel('Message', { exact: true }).fill('newer unpreserved live draft');
       } else {
@@ -181,7 +183,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
           project.click();
           if (!document.querySelector('[aria-label="a.ts editor"]')?.getClientRects().length) return null;
           const r = await window.moonbase.call("command", { operation: "loadRecovery", input: { clientId: window.moonbase.clientId } }, crypto.randomUUID());
-          return { recovery: r, saved: JSON.parse(localStorage.getItem("moonbase.chat.v1")), connection: await window.moonbaseChat.call("connection", "getConnection", {}, crypto.randomUUID()) };
+          return { recovery: r, saved: JSON.parse(localStorage.getItem("moonbase.chat.remote.v2")), connection: await window.moonbaseChat.call("connection", "getConnection", {}, crypto.randomUUID()) };
         })()`),
           );
         const restored = (await until(read, Boolean)) as {

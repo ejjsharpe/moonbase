@@ -83,7 +83,7 @@ function Desktop({ application }: { application: MoonbaseApplication }) {
       closing={closing}
       transcriptNative={getTranscriptActions}
       chooseChatFolder={() => window.moonbaseChat.chooseFolder!()}
-      recentChatFolders={() => window.moonbaseChat.recentFolders!()}
+      recentChatFolders={(targetId) => window.moonbaseChat.recentFolders!(targetId)}
       createChatWorktree={(root, branch) => window.moonbaseChat.createWorktree!(root, branch)}
       turnChatIntoProject={(conversationId) => window.moonbaseChat.turnIntoProject!(conversationId)}
       selectCheckout={async () =>
@@ -127,6 +127,7 @@ function StartupFailure({ error }: { error: ErrorDTO }) {
   return <WorkbenchStartupFailure message={error.message} />;
 }
 
+const chatStorageKeys = { local: 'moonbase.chat.local.v1', remote: 'moonbase.chat.remote.v2' };
 try {
   configureMonacoWorkers();
   const targets = await window.moonbaseChat.targets!();
@@ -138,12 +139,13 @@ try {
       label: target.label,
       acquire: async () => {
         const clients = browserClients(window.moonbaseChat, target.id);
+        // Every target is a daemon whose chats choose their folder and model; a remote host is
+        // reached through a connection the user connects.
         return {
           chat: clients.chat,
-          ...(target.mode === 'local'
-            ? { providers: clients.providers }
-            : { connection: clients.connection }),
-          mode: target.mode,
+          providers: clients.providers,
+          ...(target.mode === 'remote' ? { connection: clients.connection } : {}),
+          mode: 'local' as const,
           context: await window.moonbaseChat.context(target.id).catch((error: unknown) => {
             // An error crosses the context bridge as a plain Error that keeps only its message,
             // which main already made safe to show (why local chat is Unavailable, say).
@@ -152,16 +154,11 @@ try {
               message: String((error as Error | undefined)?.message ?? '').slice(0, 512),
             });
           }),
+          // Drafts saved for a fixed-settings remote host (`moonbase.chat.v1`) are left alone:
+          // their pending chats name no folder or model, so a daemon host can't take them.
           storage: {
-            read: () =>
-              localStorage.getItem(
-                target.mode === 'local' ? 'moonbase.chat.local.v1' : 'moonbase.chat.v1',
-              ),
-            write: (value: string) =>
-              localStorage.setItem(
-                target.mode === 'local' ? 'moonbase.chat.local.v1' : 'moonbase.chat.v1',
-                value,
-              ),
+            read: () => localStorage.getItem(chatStorageKeys[target.mode]),
+            write: (value: string) => localStorage.setItem(chatStorageKeys[target.mode], value),
           },
         };
       },

@@ -51,7 +51,6 @@ const makeImageReadsBusyError = () =>
 export class ChatIpcSession {
   private lifetime: IpcLifetime;
   private chat: ChatClient;
-  private mode: 'local' | 'remote';
   private connection: ConnectionClient | null;
   private capabilities: ChatIpcCapabilities;
   private copies = 0;
@@ -76,7 +75,6 @@ export class ChatIpcSession {
   ) {
     this.lifetime = new IpcLifetime(runtime, 64, errorDTO);
     this.chat = chat;
-    this.mode = backend.mode;
     this.connection = backend.mode === 'remote' ? backend.connection : null;
     this.context = context;
     this.emit = emit;
@@ -209,10 +207,10 @@ export class ChatIpcSession {
       // The folder a local chat request names, which the host must have approved.
       let folder: string | undefined;
       if (kind === 'chat' && operation === 'createChat') {
-        // Only a local chat chooses its folder and model; a remote host fixes both.
+        // Every host is a daemon, local or remote, whose chats choose their folder and model.
         const settings = (v as { settings?: { cwd?: string } }).settings;
-        if ((this.mode === 'local') !== (settings !== undefined)) return invalid();
-        folder = settings?.cwd;
+        if (settings === undefined) return invalid();
+        folder = settings.cwd;
       }
       if (kind === 'chat' && operation === 'findChatFiles') folder = (v as { cwd?: string }).cwd;
       if (folder !== undefined) await this.capabilities.prepareFolder?.(folder);

@@ -10,10 +10,8 @@ const bridge: ChatBridge = {
     unwrap(
       await ipcRenderer.invoke(channels.call, { kind: 'choose-folder', backendId: 'local' }),
     ) as never,
-  recentFolders: async () =>
-    unwrap(
-      await ipcRenderer.invoke(channels.call, { kind: 'recent-folders', backendId: 'local' }),
-    ) as never,
+  recentFolders: async (backendId = 'local') =>
+    unwrap(await ipcRenderer.invoke(channels.call, { kind: 'recent-folders', backendId })) as never,
   createWorktree: async (root, branch) =>
     unwrap(
       await ipcRenderer.invoke(channels.call, {

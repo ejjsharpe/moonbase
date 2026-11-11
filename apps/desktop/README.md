@@ -1,6 +1,6 @@
 # Moonbase desktop
 
-The macOS Electron app. It composes the workbench, headless application, workspace and the chat clients of Pi: local chat runs in the [daemon](../daemon/README.md), reached over loopback, and remote chat on an SSH host. `src/main.ts` is the privileged composition root and owns native capabilities; the sandboxed renderer receives browser-safe clients only.
+The macOS Electron app. It composes the workbench, headless application, workspace and the chat clients of Pi: local chat runs in the [daemon](../daemon/README.md), reached over loopback, and remote chat in the same daemon on an SSH host. `src/main.ts` is the privileged composition root and owns native capabilities; the sandboxed renderer receives browser-safe clients only.
 
 The renderer opens only roots chosen in the native picker, already known, listed by `listWorktrees` for an approved checkout, or opened by main with `EditorSession.openFolderProject`. It cannot call `createWorktree` with a location of its own; a new chat's worktree is made by main instead (below). Copy Path and Reveal in Finder likewise send main a checkout and relative paths: main writes the clipboard itself and reveals only paths that still resolve inside the checkout once links are followed. A clipboard import asks for consent only when the clipboard holds Finder files, checking for their type without reading anything, and finds none otherwise, so ⌘V can paste the tree's own entries; a declined prompt returns null, so it pastes nothing.
 
@@ -73,7 +73,24 @@ Set `MOONBASE_CHAT_CONFIG` to an absolute private JSON file outside source contr
 }
 ```
 
-An optional absolute `sshExecutable` overrides `/usr/bin/ssh`. Start the [Pi host](../../packages/pi-runtime/README.md) on the remote machine and configure SSH as described in the [SSH package](../../packages/ssh/README.md), then Connect in the app: from the chats sidebar, or in **Settings › Hosts**, which also switches hosts and shows connection details. A new chat's composer picks the host it runs on. The renderer never receives the endpoint or key, and a remote host's paths never grant access to local files.
+An optional absolute `sshExecutable` overrides `/usr/bin/ssh`. The host runs the [daemon in host mode](../daemon/README.md#remote-host): `remotePort` is its `port`, `expected` and `actorId` come from its `identity.json`, and `token` must be its `token` file. Copy the token without it ever being a command's argument, for example straight into the configuration file:
+
+```sh
+ssh my-host 'cat ~/MoonbaseHost/data/token' | node -e '
+  const fs = require("node:fs"), file = process.argv[1];
+  const config = JSON.parse(fs.readFileSync(file, "utf8"));
+  config.token = fs.readFileSync(0, "utf8").trim();
+  fs.writeFileSync(file, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
+' /absolute/private/remote-chat.json
+```
+
+Configure SSH as described in the [SSH package](../../packages/ssh/README.md), then Connect in the app: from the chats sidebar, or in **Settings › Hosts**, which also switches hosts and shows connection details. A new chat's composer picks the host it runs on. Remote chat uses the same chat, folder and provider clients as local chat, each sent only when the host's signed health advertises it:
+
+- A new chat picks its model and reasoning effort as a local one does. With no picker for the host's disk, its folder menu lists the host's approved roots and the folders directly inside them; without one, the chat runs in a new folder in the host's `chats/`. Editor projects, worktrees, the project dock's folder and Turn into project are local only.
+- **Settings › Providers** sets up the host's providers: API keys, and ChatGPT by pasting the final redirect URL after signing in, since the browser's callback can't reach the host. Claude Code uses `claude auth login`, run on the host.
+- Drafts are kept per host; ones saved for an older fixed-settings host (`moonbase.chat.v1`) are left in place, unused.
+
+The renderer never receives the endpoint or key, and a remote host's paths never grant access to local files.
 
 ## Transcript
 

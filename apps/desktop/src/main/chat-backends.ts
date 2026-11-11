@@ -13,6 +13,14 @@ import { ChatIpcSession } from '../chat/session.ts';
 import type { Reply, DesktopChatTarget } from '../chat/wire.ts';
 
 type LocalResult = { backend: DaemonChat | null; error: ApplicationError | null };
+/** A remote host's daemon in host mode, over its SSH connection. */
+export type RemoteChat = {
+  configuration: ChatConfiguration;
+  chat: ChatClient;
+  connection: ConnectionClient;
+  providers: DaemonChat['providers'];
+  folders: DaemonChat['folders'];
+};
 
 const editorFolderChanged = () =>
   new ApplicationError({
@@ -24,9 +32,7 @@ export function createChatBackends({
   runtime,
   localResult,
   acquireLocal,
-  chatConfiguration,
-  remoteChat,
-  connection,
+  remote = null,
   emit,
   pickFolder,
   isEditorFolder = () => false,
@@ -37,9 +43,7 @@ export function createChatBackends({
   runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>;
   localResult: LocalResult;
   acquireLocal(): Promise<LocalResult>;
-  chatConfiguration: ChatConfiguration | null;
-  remoteChat: ChatClient | null;
-  connection: ConnectionClient | null;
+  remote?: RemoteChat | null;
   emit(backendId: string, id: string, result: Reply): void;
   pickFolder(): Promise<string | null>;
   /** Whether a folder is a checkout or worktree the editor approved natively. */
@@ -124,16 +128,21 @@ export function createChatBackends({
           },
         ),
       );
-    if (chatConfiguration && remoteChat && connection && !sessions.has('remote'))
+    // A remote host sets up its own providers; its folders are its approved roots, which a
+    // chat names directly, so main grants nothing for it.
+    if (remote && !sessions.has('remote'))
       sessions.set(
         'remote',
         new ChatIpcSession(
           runtime,
-          remoteChat,
-          { mode: 'remote', connection },
-          chatConfiguration.context,
+          remote.chat,
+          { mode: 'remote', connection: remote.connection },
+          remote.configuration.context,
           emitChat('remote'),
-          { transcript },
+          {
+            transcript,
+            providers: bindProviderSetupClient(runtime, remote.providers, documentId),
+          },
         ),
       );
   };
@@ -148,13 +157,13 @@ export function createChatBackends({
         actorId: 'unavailable-local',
       },
     },
-    ...(chatConfiguration
+    ...(remote
       ? [
           {
             id: 'remote',
-            label: chatConfiguration.ssh.profile.label,
+            label: remote.configuration.ssh.profile.label,
             mode: 'remote' as const,
-            context: chatConfiguration.context,
+            context: remote.configuration.context,
           },
         ]
       : []),
@@ -174,6 +183,9 @@ export function createChatBackends({
     const results = await Promise.allSettled([
       ...closing,
       ...(local ? [run(local.providers.releaseOwner(owner))] : []),
+      // A remote host may be disconnected or unreachable; it drops an owner it hasn't heard
+      // from in 30 minutes, so releasing it there is best effort.
+      ...(remote ? [run(remote.providers.releaseOwner(owner)).catch(() => {})] : []),
     ]);
     const failure = results.find((result) => result.status === 'rejected');
     if (failure?.status === 'rejected') throw failure.reason;
@@ -216,8 +228,17 @@ export function createChatBackends({
       );
       return path;
     },
-    /** Folders the native picker approved before, still the same directories, newest first. */
-    async recentFolders() {
+    /**
+     * Local chat's folders the native picker approved before, still the same directories, newest
+     * first; or a remote host's approved roots and their folders, which it offers in place of a
+     * picker for its disk.
+     */
+    async recentFolders(backendId = 'local') {
+      if (backendId === 'remote') {
+        if (!remote) return [];
+        const { host } = remote.configuration.context;
+        return (await run(remote.folders.listHostFolders({ host }))).folders;
+      }
       if (!local) return [];
       return (await run(local.folders.listRecentFolders({ host: local.session.host }))).folders;
     },

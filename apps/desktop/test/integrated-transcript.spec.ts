@@ -184,7 +184,7 @@ async function image(app: ElectronApplication, page: Page) {
 
 test('integrated remote archive/runtime reveals early/middle/end Find in real history and streams held progress without polling', async () => {
   const host = await controlledHostFixture(
-    new URL('../../../tests/chat/stream-host.mjs', import.meta.url),
+    new URL('../../../tests/chat/faux-stream.mjs', import.meta.url),
     true,
   );
   let app: ElectronApplication | undefined;
@@ -196,7 +196,7 @@ test('integrated remote archive/runtime reveals early/middle/end Find in real hi
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
     await createRemoteChat(page, 'Integrated remote retained history');
     const target = await page.evaluate(
-      () => JSON.parse(localStorage.getItem('moonbase.chat.v1')!).selected,
+      () => JSON.parse(localStorage.getItem('moonbase.chat.remote.v2')!).selected,
     );
     const ids = await host.seedHistory(target);
     for (const index of [1, 561, 1119]) await find(page, `record ${index} 🌔`);
@@ -238,7 +238,7 @@ test('integrated remote archive/runtime reveals early/middle/end Find in real hi
 });
 
 test('integrated remote archive/runtime displays retained images with production CSP and releases its viewer', async () => {
-  const host = await controlledHostFixture(new URL('./stored-image-host.mjs', import.meta.url));
+  const host = await controlledHostFixture(new URL('./stored-image-faux.mjs', import.meta.url));
   let app: ElectronApplication | undefined;
   try {
     const launched = await launch(host.directory, host);

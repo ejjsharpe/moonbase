@@ -2066,7 +2066,7 @@ test('Settings holds hosts and providers; the sidebar keeps only a Connect line'
   await expect(hosts.getByRole('button', { name: 'Disconnect', exact: true })).toBeEnabled();
   await expect(settings).toContainText('Remote work continues until you Stop it.');
   await settings.getByRole('tab', { name: 'Providers', exact: true }).click();
-  await expect(settings).toContainText('A remote host signs in to model providers itself.');
+  await expect(settings).toContainText('This host does not offer provider setup.');
   await page.keyboard.press('Escape');
   await expect(settings).toHaveCount(0);
   // Connected, the Connect line goes and the chats are listed.

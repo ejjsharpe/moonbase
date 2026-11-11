@@ -16,7 +16,8 @@ The data directory is its only argument (a second one is refused); everything el
 | `daemon.lock` | One daemon per directory, taken before the store opens |
 | `endpoint.json` | `{port, pid, version, protocol, build}` (`build`: the bundle's SHA-256, or `development` from source), written once listening, removed on a clean exit and, if a crash left one, once the lock is taken |
 | `chat.sqlite` | Pi Durable store |
-| `credentials/`, `approved-folders.json`, `chats/` | Local mode: encrypted provider credentials, approved folders, folders of chats without a project |
+| `credentials/`, `chats/` | Encrypted provider credentials; folders of chats without a project |
+| `approved-folders.json` | Local mode: folders a client approved |
 | `logs/` | `daemon.log`, rotated at 1 MiB to `daemon.1.log`…`daemon.3.log` |
 
 `daemon.json`, decoded strictly:
@@ -24,13 +25,58 @@ The data directory is its only argument (a second one is refused); everything el
 ```json
 { "mode": "local", "credentialKey": { "source": "keychain" } }
 { "mode": "local", "credentialKey": { "source": "file", "path": "/absolute/private/key" } }
-{ "mode": "host", "cwd": "/absolute/folder", "model": { "provider": "openai", "modelId": "gpt-6-sol" }, "port": 8787 }
+{ "mode": "host", "port": 8787, "approvedRoots": ["/Users/me/Projects"], "credentialKey": { "source": "file", "path": "/Users/me/MoonbaseHost/credential.key" } }
 ```
 
-- **Local mode** listens on an ephemeral 127.0.0.1 port. It runs the local Pi runtime with the local provider catalog and the Claude Code subscription; credentials are encrypted under a key in the Keychain (the default) or a private key file, which is checked at startup and created at the first sign-in. A chat may use only a folder in `approved-folders.json`. Besides chat it serves provider setup, folder approvals and control over the same protocol, and advertises them in signed health (`daemon-local-v1`, `providers-v1`, `folders-v1`), so a token holder can drive it completely: through `LoopbackConnectionLive` with `RemoteChatLive`, `RemoteLocalHostLive` and `RemoteProviderSetupLive` from [pi-runtime](../../packages/pi-runtime/README.md). Admissions and Quit are its own concern, not a client's. The daemon never opens a browser: sign-in links go back to the client, and ChatGPT's loopback callback runs in the daemon.
-- **Host mode** advertises only `chat-v0`. It is the fixed-settings runtime of the standalone host (`host.ts`) on the configured port, with host-side provider keys. Until remote hosts move to the daemon (DM-07), host mode still reads those keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) and `PI_CLAUDE_CODE_COMMAND` from its environment, as `host.ts` does. Local mode reads no provider keys; like any Claude Code client it takes the Claude CLI from `PI_CLAUDE_CODE_COMMAND` when set, otherwise from PATH and the usual install locations.
+Both modes serve the same runtime: local-mode chats that each choose their folder, model and reasoning effort, provider setup with credentials encrypted under the daemon's key, the local provider catalog and the Claude Code subscription, settle, `@` search and transcripts. A token holder drives either completely over the same protocol, through `RemoteChatLive`, `RemoteLocalHostLive` and `RemoteProviderSetupLive` from [pi-runtime](../../packages/pi-runtime/README.md) on a loopback or SSH connection. Signed health advertises `daemon-local-v1`, `providers-v1` and `folders-v1` in both modes. The daemon never opens a browser: sign-in links go back to the client, and ChatGPT's loopback callback runs in the daemon. Chats without a project get a new folder in `chats/`. Admissions and Quit are the daemon's concern, not a client's. The daemon reads no provider keys from its environment; like any Claude Code client it takes the Claude CLI from `PI_CLAUDE_CODE_COMMAND` when set, otherwise from PATH and the usual install locations, and Claude Code signs in with `claude auth login` on the daemon's machine.
 
-On start it prints one JSON `ready` line on stdout (`{"event":"ready","host":…,"port":…}`); failures print one `failed` line on stderr and exit 1, including "already running" when another daemon holds the lock. `SIGTERM` or `SIGINT` stops admitting (new requests and runs are refused at once), closes the server and runtime, closes Claude Code's workers, removes `endpoint.json` and exits 0; interrupted runs resume on the next start through Pi Durable. A local daemon also exits by itself after 5 minutes with no authenticated client request in flight, no open watch and no active work; host mode never idles out. Logs record only lifecycle events and failure codes: no token, credentials, request bodies or chat text.
+- **Local mode** listens on an ephemeral 127.0.0.1 port. Its credential key is in the Keychain (the default) or a private key file. A chat may use only a folder in `approved-folders.json`, which the client approves from its native picker or editor.
+- **Host mode** listens on its configured 127.0.0.1 `port`, for clients on other machines over the [SSH forward](../../packages/ssh/README.md), and never idles out. Its credential key is always the key file it names (`openssl rand -base64 32`, or created at the first sign-in), since the login keychain is usually locked without a GUI session. A chat may use one of `approvedRoots` (1–64 absolute folders, each named by its real path, none inside another) or a folder under one, named by its real path: a path through a link is refused, so a link inside a root can't lead out of it. Each root is checked at startup (a missing one is refused) and must stay the directory it was, so a root replaced by another folder or a link approves nothing until the daemon restarts. A client has no picker for the host's disk, so host mode also advertises `roots-v1`, whose `listHostFolders` lists the roots and then the folders directly inside each (hidden ones and links left out, at most 256 in all); `approveFolder` checks a folder against the roots and stores nothing, and recent folders are always empty.
+
+On start it prints one JSON `ready` line on stdout (`{"event":"ready","host":…,"port":…}`); failures print one `failed` line on stderr and exit 1, including "already running" when another daemon holds the lock. `SIGTERM` or `SIGINT` stops admitting (new requests and runs are refused at once), closes the server and runtime, closes Claude Code's workers, removes `endpoint.json` and exits 0; interrupted runs resume on the next start through Pi Durable. A local daemon also exits by itself after 5 minutes with no authenticated client request in flight, no open watch and no active work; a host-mode daemon never idles out. Logs record only lifecycle events and failure codes: no token, credentials, request bodies or chat text.
+
+## Remote host
+
+A remote host, such as a Mac mini reached only over SSH, runs the daemon in host mode under launchd. On the host:
+
+1. Install Moonbase (its bundled runtime and daemon need no code signing), or copy the Bun 1.4.4 runtime with `dist/daemon/daemon.mjs` and `inert-mcp.mjs` from `bun run --cwd apps/daemon build`. Sign in to Claude Code with `claude auth login` if you use it.
+2. Make a private data directory (`mkdir -m 700 -p ~/MoonbaseHost/data`) and write its `daemon.json` (mode 0600) in host mode, as above. The daemon creates `identity.json` and `token` there when it first starts.
+3. Save this LaunchAgent as `~/Library/LaunchAgents/app.moonbase.host.plist`, with your own paths. It runs the runtime as the app does, from inside the data directory, restarts it if it exits, and keeps launchd's own output private in the data directory beside the daemon's `logs/`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>app.moonbase.host</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Applications/Moonbase.app/Contents/Helpers/bun</string>
+    <string>--no-env-file</string>
+    <string>--config=/dev/null</string>
+    <string>--no-install</string>
+    <string>/Applications/Moonbase.app/Contents/Resources/daemon/daemon.mjs</string>
+    <string>/Users/me/MoonbaseHost/data</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/me/MoonbaseHost/data</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/Users/me/.local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    <key>WS_NO_BUFFER_UTIL</key><string>1</string>
+    <key>WS_NO_UTF_8_VALIDATE</key><string>1</string>
+  </dict>
+  <key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/>
+  <key>Umask</key><integer>63</integer>
+  <key>StandardOutPath</key><string>/Users/me/MoonbaseHost/data/launchd.log</string>
+  <key>StandardErrorPath</key><string>/Users/me/MoonbaseHost/data/launchd.log</string>
+</dict>
+</plist>
+```
+
+4. Load it with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/app.moonbase.host.plist` when you are logged in at the Mac, or from an SSH session with `user/$(id -u)` in place of `gui/$(id -u)`. `launchctl bootout` with the same domain sends `SIGTERM`, which stops it cleanly; interrupted runs resume when it starts again.
+
+On the client, the [desktop app's remote configuration](../desktop/README.md#remote-chat) names an SSH alias for the host, the host's `port`, the `host` and `actorId` from its `identity.json`, and its `token`. The token is the host's whole authority: copy it into the configuration through a pipe or an editor, never in a command's arguments. Host-key checking stays on, as the [SSH package](../../packages/ssh/README.md) requires.
 
 ## Build and package
 
@@ -52,4 +98,4 @@ bun run --cwd apps/daemon lint
 bun run --cwd apps/daemon test
 ```
 
-Tests run under `bun test` with temporary data directories. `test/faux-daemon.ts` is the test entry: the real daemon with faux providers (including faux sign-ins for every provider setup offers), scripted by `faux.json` in the data directory, and an in-memory credential key (or the key file `daemon.json` names, so sign-ins survive a restart), so no test reaches a provider, the sign-in callback port or the Keychain. The desktop's native tests run this entry too.
+Tests run under `bun test` with temporary data directories, in both modes. `test/faux-daemon.ts` is the test entry: the real daemon with faux providers (including faux sign-ins for every provider setup offers), scripted by `faux.json` in the data directory, and an in-memory credential key (or the key file `daemon.json` names, so sign-ins survive a restart), so no test reaches a provider, the sign-in callback port or the Keychain. The desktop's native tests run this entry too.
