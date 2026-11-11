@@ -44,6 +44,7 @@ import {
   type SocketOutput,
   type SocketSubscriptionState,
 } from './socket-client.ts';
+import { systemSocketClock, type SocketClock } from './socket-protocol.ts';
 
 /** What a subscription delivers: a value (`reset` after one that replaced missed updates) or a gap. */
 type LinkUpdate<K extends SocketSubscriptionKind> =
@@ -82,6 +83,13 @@ class DaemonLink extends Context.Service<
   }
 >()('moonbase/DaemonLink') {}
 
+/**
+ * The clock a daemon link's sockets and reconnect backoff run on: the system's unless a test
+ * provides one.
+ */
+export const DaemonLinkClock = Context.Reference<SocketClock>('moonbase/DaemonLinkClock', {
+  defaultValue: () => systemSocketClock,
+});
 const sameEndpoint = (a: VerifiedChatEndpoint, b: VerifiedChatEndpoint) =>
   a.connectionId === b.connectionId &&
   a.origin === b.origin &&
@@ -108,6 +116,12 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
   DaemonLink,
   Effect.gen(function* () {
     const connections = yield* ConnectionService;
+    const clock = yield* DaemonLinkClock;
+    const sleep = (ms: number) =>
+      Effect.callback<void>((resume) => {
+        const handle = clock.setTimeout(() => resume(Effect.void), ms);
+        return Effect.sync(() => clock.clearTimeout(handle));
+      });
     let current: { endpoint: VerifiedChatEndpoint; socket: Promise<DaemonSocket> } | undefined,
       released = false;
     const closeSocket = (socket: Promise<DaemonSocket>) =>
@@ -130,7 +144,7 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
         );
       if (current && sameEndpoint(current.endpoint, endpoint)) return current.socket;
       if (current) closeSocket(current.socket);
-      const link = { endpoint, socket: connectDaemonSocket(endpoint) };
+      const link = { endpoint, socket: connectDaemonSocket(endpoint, { clock }) };
       current = link;
       const forget = () => {
         if (current === link) current = undefined;
@@ -281,7 +295,7 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
                   )
                     return yield* Effect.fail(ended.error);
                   if (delivered) Queue.offerUnsafe(queue, { reconnecting: true });
-                  yield* Effect.sleep(P.streamLimits.reconnectMs[failures++]!);
+                  yield* sleep(P.streamLimits.reconnectMs[failures++]!);
                 }
               });
               yield* failWith(loop);

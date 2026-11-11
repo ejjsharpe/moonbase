@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { connect } from 'node:net';
+import { connect, type AddressInfo } from 'node:net';
 import { createServer } from 'node:http';
 import { test, type TestContext } from 'node:test';
 import { Effect, Exit, Scope } from 'effect';
@@ -12,10 +12,18 @@ import type { DaemonClient } from '@moonbase/contracts/daemon';
 import type { ProviderState } from '@moonbase/contracts/providers';
 import { socketLimits, socketPath } from '@moonbase/contracts/socket';
 import { ApplicationError } from '@moonbase/contracts/errors';
+import {
+  chatHostCapabilities,
+  chatHostVersion,
+  chatProtocolVersion,
+  type ChatHostHealth,
+} from '@moonbase/contracts/host';
 import { localDaemonCapabilities, serveChat, type SocketSources } from '../src/server.ts';
 import { connectDaemonSocket } from '../src/socket-client.ts';
+import { createSocketServer } from '../src/socket-server.ts';
 import {
   deriveSocketKeys,
+  systemSocketClock,
   openSocketMessage,
   PayloadAssembler,
   sealSocketMessage,
@@ -24,32 +32,13 @@ import {
 } from '../src/socket-protocol.ts';
 import { encodeWebSocketFrame, WebSocketReader } from '../src/websocket.ts';
 import * as P from '../src/protocol.ts';
-import { fixture as runtimeFixture, until } from './runtime-fixture.ts';
+import { fixture as runtimeFixture, manualClock, until } from './runtime-fixture.ts';
 
 const host = { hostId: 'socket-host', storeId: 'socket-store' };
 const session = { host, actorId: 'owner' };
 const target = { ...session, conversationId: 'A' };
 const providers: ProviderState = { providers: [], flow: null };
 
-/** Time that moves only when a test advances it. */
-function manualClock() {
-  let now = 0,
-    next = 0;
-  const timers = new Map<number, { at: number; run: () => void }>();
-  return {
-    now: () => now,
-    setTimeout: (run: () => void, ms: number) => {
-      timers.set(++next, { at: now + ms, run });
-      return next;
-    },
-    clearTimeout: (handle: unknown) => void timers.delete(handle as number),
-    advance(ms: number) {
-      now += ms;
-      for (const [handle, timer] of [...timers].sort(([, a], [, b]) => a.at - b.at))
-        if (timer.at <= now && timers.delete(handle)) timer.run();
-    },
-  } satisfies SocketClock & { advance(ms: number): void };
-}
 /** A chat whose run shows the end of `text`, after `entries` long entries that `seed` varies. */
 const snapshotOf = (text: string | null, entries = 0, seed = ''): ChatSnapshot => ({
   conversation: {
@@ -926,4 +915,107 @@ test('subscriptions are bounded, reads and watches end with their connection, an
   assert.equal(((await readSealed(raw, keys)) as { type: string }).type, 'heartbeat');
   clock.advance(socketLimits.idleMs - socketLimits.heartbeatMs);
   await assertRefused(raw);
+});
+
+test('daemon requests are bound to this host and their request ID; a substituted reply is refused, a mutation’s as Uncertain', async (t) => {
+  // The daemon refuses another host's request and a request ID reused for another input, and
+  // dispatches neither.
+  const dispatched: unknown[] = [];
+  const daemon: DaemonClient = {
+    command: async (operation, input) => {
+      dispatched.push(input);
+      if (operation === 'approveFolder') {
+        const { requestId, path } = input as { requestId: string; path: string };
+        return { requestId, path } as never;
+      }
+      return daemonClient().command(operation, input as never);
+    },
+  };
+  const served = await serve(t, controlledClient().client, { daemon });
+  const socket = await open(t, served.endpoint);
+  const approve = { host, requestId: 'approve', path: '/folder' },
+    approved = { requestId: 'approve', path: '/folder' };
+  assert.deepEqual(await socket.request('approveFolder', approve), approved);
+  await assert.rejects(
+    socket.request('approveFolder', { ...approve, host: { ...host, storeId: 'other' } }),
+    { code: 'Unauthorized' },
+  );
+  await assert.rejects(socket.request('approveFolder', { ...approve, path: '/other' }), {
+    code: 'InvalidInput',
+  });
+  assert.deepEqual(await socket.request('approveFolder', approve), approved);
+  assert.deepEqual(dispatched, [approve]);
+
+  // A daemon that can prove the token but answers with another request's reply or another
+  // read's content is refused by the client.
+  let substitute: (operation: string, input: Record<string, unknown>) => unknown = () => null;
+  const token = P.nonce(),
+    health: ChatHostHealth = {
+      ...host,
+      protocol: chatProtocolVersion,
+      version: chatHostVersion,
+      capabilities: [
+        chatHostCapabilities.chat,
+        ...localDaemonCapabilities,
+        chatHostCapabilities.socket,
+      ],
+    };
+  const sockets = createSocketServer({
+    token,
+    host,
+    health,
+    client: controlledClient().client,
+    sources: {},
+    clock: systemSocketClock,
+    answer: async (operation, input) => ({
+      ok: true,
+      value: substitute(operation, input as Record<string, unknown>),
+    }),
+  });
+  const hostile = createServer((_request, response) => response.writeHead(404).end());
+  hostile.on('upgrade', (request, upgraded, head) => sockets.upgrade(request, upgraded, head));
+  await new Promise<void>((resolve) => hostile.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    await sockets.close();
+    await new Promise<void>((resolve) => hostile.close(() => resolve()));
+  });
+  const client = await open(t, {
+    origin: `http://127.0.0.1:${(hostile.address() as AddressInfo).port}`,
+    token,
+    expected: host,
+  });
+  substitute = () => ({ ...approved, requestId: 'another' });
+  await assert.rejects(client.request('approveFolder', approve), { code: 'Uncertain' });
+  substitute = () => ({ state: { providers: 'none' } });
+  await assert.rejects(client.request('getProviders', { host, ownerId: 'document' }), {
+    code: 'Incompatible',
+  });
+  const source = { kind: 'entry' as const, target, entryId: 'e0' },
+    selection = { partId: 'p0', bytes: 3, revision: 'a'.repeat(64) };
+  const content = {
+    kind: 'content',
+    cursor: null,
+    source,
+    selection,
+    offset: 0,
+    nextCursor: null,
+    encoding: 'utf8',
+    data: 'abc',
+  };
+  for (const changed of [
+    { source: { ...source, target: { ...target, actorId: 'other' } } },
+    { selection: { ...selection, partId: 'other' } },
+    { cursor: 'other' },
+  ]) {
+    substitute = () => ({ ...content, ...changed });
+    await assert.rejects(client.request('getChatTranscriptContent', { source, selection }), {
+      code: 'Incompatible',
+    });
+  }
+  // The unchanged reply is accepted, so each refusal above was the substitution's.
+  substitute = () => content;
+  assert.deepEqual(
+    await client.request('getChatTranscriptContent', { source, selection }),
+    content,
+  );
 });

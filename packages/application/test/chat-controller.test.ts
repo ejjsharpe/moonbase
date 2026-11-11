@@ -2586,7 +2586,7 @@ test('a background reload lists again without clearing an error or Refresh state
   assert.deepEqual(f.controller.getSnapshot().active, []);
 });
 
-test('settle updates the listed chat and the open snapshot from the host reply, then lists again', async (t) => {
+test('settle updates the listed chat and the open snapshot from the host reply', async (t) => {
   const f = await fixture(t);
   const activity = { state: 'idle' as const, at: '2026-01-02T00:00:00Z' };
   // The host lists the chat as settled once a settle reply has been sent.
@@ -2616,7 +2616,7 @@ test('settle updates the listed chat and the open snapshot from the host reply, 
   // The listing keeps its activity, which only listings carry.
   assert.deepEqual(state.chats[0], { ...summary, settledAt, activity });
   assert.equal(state.snapshot?.conversation.settledAt, settledAt);
-  // A reload follows, so a listing begun before the reply can't leave the list behind it.
+  // A later listing keeps the host's settled state.
   await f.controller.reloadChats();
   assert(listings() > before);
   assert.deepEqual(f.controller.getSnapshot().chats[0], { ...summary, settledAt, activity });
@@ -2962,16 +2962,29 @@ test('the chat list follows its watch: changes merge without listing, and a rese
     ['other', target.conversationId],
   );
   assert.equal(lists(), listed);
+  // A reload that read before a watch page lands after it: the newer page still wins.
+  let reply!: () => void;
+  f.answers.set('listChats', async () => {
+    await new Promise<void>((resolve) => (reply = resolve));
+    return { conversations: [{ ...other, title: 'Stale' }, summary], nextCursor: null };
+  });
+  const reloading = controller.reloadChats();
+  await until(() => lists() === listed + 1);
+  first.receive(page([{ ...other, title: 'Fresh' }, summary]));
+  reply();
+  await reloading;
+  f.answers.delete('listChats');
+  assert.equal(controller.getSnapshot().chats[0]!.title, 'Fresh');
   // A reset may have missed changes past the first page, so the list is read again.
   first.receive({ ...page([other, summary]), reset: true });
-  await until(() => lists() === listed + 1);
+  await until(() => lists() === listed + 2);
   // A dropped watch watches again after its backoff and lists once it delivers.
   first.fail(new ApplicationError({ code: 'Unavailable', message: 'Dropped.' }));
   await until(() => f.chatLists.at(-1) !== first);
   assert.equal(first.closed, true);
   const second = open();
   second.receive(page([summary, other]));
-  await until(() => lists() === listed + 2);
+  await until(() => lists() === listed + 3);
   // A refused watch stops; becoming visible watches again, and an open one is left alone.
   second.fail(new ApplicationError({ code: 'Incompatible', message: 'Refused.' }));
   await until(() => second.closed);

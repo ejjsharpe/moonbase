@@ -31,6 +31,7 @@ import {
   type SocketKeys,
 } from './socket-protocol.ts';
 import { projectSocketDelta } from './socket-deltas.ts';
+import { followChanges } from './changes.ts';
 import {
   acceptWebSocketKey,
   encodeWebSocketClose,
@@ -503,42 +504,17 @@ class Session {
       }
       const daemon = this.context.daemon,
         subscribe = this.context.sources.subscribeProviderSetup;
-      if (!daemon || !subscribe) V.fail('Incompatible', 'This host does not serve provider setup.');
+      if (!daemon || !subscribe)
+        return V.fail('Incompatible', 'This host does not serve provider setup.');
       // A provider read follows each change, one at a time; changes during a read start one more.
-      let reading = false,
-        again = false,
-        stopped = false;
-      const read = async () => {
-        if (reading) {
-          again = true;
-          return;
-        }
-        reading = true;
-        try {
-          do {
-            again = false;
-            const target = feed.target as SocketSubscriptionTarget<'providerSetup'>;
-            receive(
-              (
-                await daemon!.command('getProviders', {
-                  host: target.host,
-                  ownerId: target.ownerId,
-                })
-              ).state,
-            );
-          } while (again && !stopped);
-        } catch (error) {
-          end(error);
-        } finally {
-          reading = false;
-        }
-      };
-      const off = subscribe!(() => void read());
-      feed.close = async () => {
-        stopped = true;
-        off();
-      };
-      void read();
+      const target = feed.target as SocketSubscriptionTarget<'providerSetup'>;
+      const stop = followChanges(
+        subscribe,
+        () => daemon.command('getProviders', { host: target.host, ownerId: target.ownerId }),
+        ({ state }) => receive(state),
+        end,
+      );
+      feed.close = async () => stop();
     } catch (error) {
       end(error);
     }

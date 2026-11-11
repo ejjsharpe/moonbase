@@ -20,6 +20,7 @@ import {
   requestId,
   errorDTO,
   invalid,
+  isChatWatchKind,
   type Reply,
   type TranscriptImage,
 } from './wire.ts';
@@ -109,11 +110,7 @@ export class ChatIpcSession {
   }
   async call(kind: unknown, operation: unknown, input: unknown, id: unknown): Promise<Reply> {
     requestId(id);
-    const watch =
-      kind === 'watch-chat' ||
-      kind === 'watch-chat-list' ||
-      kind === 'watch-connection' ||
-      kind === 'watch-providers';
+    const watch = isChatWatchKind(kind);
     if (this.lifetime.getAdmissionError(id, watch)) invalid();
     if (typeof operation !== 'string') invalid();
     try {

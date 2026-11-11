@@ -205,7 +205,10 @@ class ChatModelState {
     if (this.mode === 'remote' && !this.connection)
       throw invalid('Remote chat requires a connection capability.');
     this.providers = dependencies.providers
-      ? makeProviderSetupController(dependencies.providers)
+      ? makeProviderSetupController(dependencies.providers, {
+          retryMs: this.transcriptWatchRetryMs,
+          healthyMs: this.transcriptWatchHealthyMs,
+        })
       : null;
     this.session = structuredClone(
       decodeChatInput('listChats', { session: dependencies.context }).session,
@@ -736,6 +739,7 @@ class ChatModelState {
     } catch {
       return;
     }
+    const watched = this.chatPagesWatched;
     return this.runEffect(
       Effect.flatMap(
         Effect.forkIn(
@@ -753,11 +757,17 @@ class ChatModelState {
         const past = kept.length > 0 && !listed.chats.includes(kept.at(-1)!);
         if (!past) this.chatPages = listed.pages;
         this.listed({ chats: kept, next: past ? this.state.nextChats : listed.next });
+        // A watch page that landed while this read is newer than the rows it returned.
+        if (this.chatPagesWatched !== watched && this.lastChatPage)
+          this.mergeChats(this.lastChatPage);
       })
       .catch(() => {});
   }
   /** The owner whose chat list watch is open or waiting to reconnect. */
   private chatsFollowed?: Owner;
+  /** The latest first page the chat list's watch delivered, and how many it has delivered. */
+  private lastChatPage?: ChatOutput<'listChats'>;
+  private chatPagesWatched = 0;
   /**
    * Follows the chat list's watch for `owner`: each first page it delivers merges into the list
    * on screen, and a reset (or the first page after a failed watch) lists again in the
@@ -768,6 +778,7 @@ class ChatModelState {
   private followChats(owner: Owner, recovering = false): Effect.Effect<void, ApplicationError> {
     type Attempt = { open: boolean; firstAt?: number; observation?: Observation };
     let failures = 0;
+    if (this.chatsFollowed !== owner) this.lastChatPage = undefined;
     this.chatsFollowed = owner;
     // A selection changes the epoch but not the list, so only the owner bounds the watch.
     const current = () => owner.alive && this.chatsFollowed === owner;
@@ -782,6 +793,8 @@ class ChatModelState {
               (update) => {
                 if (!attempt.open || !current()) return;
                 attempt.firstAt ??= performance.now();
+                this.lastChatPage = update.list;
+                this.chatPagesWatched++;
                 this.mergeChats(update.list);
                 if (update.reset || reload) {
                   reload = false;
@@ -1297,8 +1310,8 @@ class ChatModelState {
     );
   /**
    * Settles or unsettles a chat on its host. The listed chat and the open snapshot take the host's
-   * reply, so the chat moves group at once; a reload then lists it again, after any listing that
-   * began before the reply.
+   * reply, so the chat moves group at once. The list's watch then delivers the change; without an
+   * open watch a reload lists it again, after any listing that began before the reply.
    */
   settle = (target: ChatTarget, settled: boolean) =>
     this.action(
@@ -1320,7 +1333,7 @@ class ChatModelState {
         }
         if (this.selection?.alive && sameTarget(this.selection.target, summary.target))
           this.selection.transcript?.updateConversation(summary);
-        void this.reloadChats({ latest: true });
+        if (this.chatsFollowed !== this.refreshOwner) void this.reloadChats({ latest: true });
       }),
       this.generation,
     );

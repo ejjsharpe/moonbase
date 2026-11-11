@@ -63,7 +63,7 @@ test('provider setup cleanup failure remains part of the root disposal outcome',
   await assert.rejects(application.dispose(), /Setup cleanup failed/);
   assert.equal(application.getSnapshot().phase, 'failed');
 });
-test('sign-in progress comes from the watch, never from polling, and a failed watch reopens on refresh', async () => {
+test('sign-in progress comes from the watch, never from polling, and a failed watch reopens', async () => {
   const fixture = chatCapabilities(),
     calls: string[] = [];
   let receive: ((state: ProviderState) => void) | undefined,
@@ -85,7 +85,7 @@ test('sign-in progress comes from the watch, never from polling, and a failed wa
     },
   };
   const application = await createMoonbaseApplication({
-    chat: async () => ({ ...fixture.dependencies, providers }),
+    chat: async () => ({ ...fixture.dependencies, providers, transcriptWatchRetryMs: [0] }),
   });
   const controller = application.chat!.providers!;
   try {
@@ -99,15 +99,25 @@ test('sign-in progress comes from the watch, never from polling, and a failed wa
     assert.equal(controller.getSnapshot().status?.flow?.message, 'Waiting for the browser');
     receive!({ ...status, flow: { ...running.flow!, state: 'completed', prompt: null } });
     assert.equal(controller.getSnapshot().status?.flow?.state, 'completed');
-    // A running flow starts no timer: nothing reads providers again by itself.
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    assert.deepEqual(calls, ['getProviders', 'startProviderLogin', 'answerProviderPrompt']);
+    // A dropped watch (a restarted daemon, say) opens again by itself after its backoff.
     fail!(new ApplicationError({ code: 'Unavailable', message: 'Gone.' }));
     assert.equal(closes, 1);
-    await controller.refresh();
+    while (watches < 2) await new Promise((resolve) => setTimeout(resolve, 0));
+    // Once the backoff runs out it stays closed until a sign-in step opens it again.
+    fail!(new ApplicationError({ code: 'Unavailable', message: 'Gone again.' }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(watches, 2);
+    await controller.login('openai');
+    assert.equal(watches, 3);
+    // Nothing read providers again by itself: no timer polls a running flow.
+    assert.deepEqual(calls, [
+      'getProviders',
+      'startProviderLogin',
+      'answerProviderPrompt',
+      'startProviderLogin',
+    ]);
   } finally {
     await application.dispose();
   }
-  assert.equal(closes, 2);
+  assert.equal(closes, 3);
 });

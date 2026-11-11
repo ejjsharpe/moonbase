@@ -15,15 +15,22 @@ export type ProviderSetupSnapshot = {
 /**
  * Transient setup state only: answers never enter snapshots or draft storage. The state comes from
  * the client's watch once it delivers, so a sign-in's progress appears without polling; until then
- * (or after the watch fails, until the next refresh reopens it) command replies supply it.
+ * command replies supply it. A watch that fails retryably opens again after the chat list's
+ * backoff (renewed once a watch stays up `healthyMs`); once that runs out, or after another
+ * failure, the next refresh, login or answer opens it again.
  */
-export function makeProviderSetupController(client: ProviderSetupClient) {
+export function makeProviderSetupController(
+  client: ProviderSetupClient,
+  { retryMs, healthyMs }: { retryMs: readonly number[]; healthyMs: number },
+) {
   let snapshot: ProviderSetupSnapshot = { status: null, busy: false, error: null };
   let closed = false,
     admissionsOpen = true;
-  /** The open watch, and whether it has delivered; it is the state's source once it has. */
-  type Watching = { close?: ObservationClose; delivered: boolean };
+  /** The open watch, and when it first delivered; it is the state's source once it has. */
+  type Watching = { close?: ObservationClose; deliveredAt?: number };
   let watching: Watching | undefined;
+  let failures = 0,
+    retry: ReturnType<typeof setTimeout> | undefined;
   let disposal: Promise<void> | undefined;
   const cleanupErrors: Error[] = [];
   let revision = 0,
@@ -59,7 +66,7 @@ export function makeProviderSetupController(client: ProviderSetupClient) {
             await client.command('cancelProviderLogin', { flowId: status.flow.id });
           return;
         }
-        if (captured !== revision || watching?.delivered) return;
+        if (captured !== revision || watching?.deliveredAt !== undefined) return;
         publish({ status });
       })
       .catch((error) => {
@@ -80,25 +87,48 @@ export function makeProviderSetupController(client: ProviderSetupClient) {
     watching = undefined;
     void current?.close?.().catch(() => {});
   };
-  /** Opens the watch unless one is open; a failed one closes, and the next refresh reopens it. */
+  /** Opens the watch unless one is open or waiting to reopen. */
   const watch = () => {
-    if (closed || !admissionsOpen || watching) return;
-    const current: Watching = { delivered: false };
+    if (closed || !admissionsOpen || watching || retry) return;
+    const current: Watching = {};
     watching = current;
     try {
       current.close = client.watch(
         (status) => {
           if (closed || watching !== current) return;
-          current.delivered = true;
+          current.deliveredAt ??= performance.now();
           publish({ status });
         },
-        () => {
-          if (watching === current) closeWatch();
+        (error) => {
+          if (watching !== current) return;
+          closeWatch();
+          reopen(error, current);
         },
       );
-    } catch {
+    } catch (error) {
       if (watching === current) watching = undefined;
+      reopen(error, current);
     }
+  };
+  const reopen = (error: unknown, failed: Watching) => {
+    if (closed) return;
+    if (failed.deliveredAt !== undefined && performance.now() - failed.deliveredAt >= healthyMs)
+      failures = 0;
+    const delay = retryMs[failures];
+    if (normalizeApplicationError(error).code !== 'Unavailable' || delay === undefined) {
+      failures = 0;
+      return;
+    }
+    failures++;
+    retry = setTimeout(() => {
+      retry = undefined;
+      watch();
+    }, delay);
+  };
+  /** Commands that start or continue a sign-in first make sure its progress is being watched. */
+  const watched = <T>(run: () => T) => {
+    watch();
+    return run();
   };
   return {
     getSnapshot: () => snapshot,
@@ -108,13 +138,10 @@ export function makeProviderSetupController(client: ProviderSetupClient) {
         listeners.delete(listener);
       };
     },
-    refresh: () => {
-      watch();
-      return command('getProviders', {});
-    },
-    login: (providerId: string) => command('startProviderLogin', { providerId }),
+    refresh: () => watched(() => command('getProviders', {})),
+    login: (providerId: string) => watched(() => command('startProviderLogin', { providerId })),
     answer: (flowId: string, promptId: string, answer: string) =>
-      command('answerProviderPrompt', { flowId, promptId, answer }),
+      watched(() => command('answerProviderPrompt', { flowId, promptId, answer })),
     cancel: (flowId: string) => command('cancelProviderLogin', { flowId }),
     openUrl: (flowId: string) => command('openProviderUrl', { flowId }),
     logout: (providerId: string) => command('logoutProvider', { providerId }),
@@ -124,6 +151,7 @@ export function makeProviderSetupController(client: ProviderSetupClient) {
     dispose(): Promise<void> {
       if (disposal) return disposal;
       closed = true;
+      clearTimeout(retry);
       closeWatch();
       listeners.clear();
       disposal = (async () => {

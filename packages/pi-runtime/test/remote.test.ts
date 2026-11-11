@@ -6,10 +6,10 @@ import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { ConnectionService, type VerifiedChatEndpoint } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
-import { RemoteChatLive, RemoteLocalHostLive } from '../src/remote.ts';
+import { DaemonLinkClock, RemoteChatLive, RemoteLocalHostLive } from '../src/remote.ts';
 import { serveChat } from '../src/server.ts';
 import * as P from '../src/protocol.ts';
-import { fixture as runtimeFixture, session, until } from './runtime-fixture.ts';
+import { fixture as runtimeFixture, manualClock, session, until } from './runtime-fixture.ts';
 
 /** A daemon over a fixed-settings runtime that can stop and start again on its port. */
 async function daemon(t: TestContext) {
@@ -67,8 +67,15 @@ async function daemon(t: TestContext) {
     }),
   };
 }
-/** A remote client of `d`, over a connection whose endpoint the test may replace. */
-function remote(t: TestContext, d: Awaited<ReturnType<typeof daemon>>) {
+/**
+ * A remote client of `d`, over a connection whose endpoint the test may replace; its sockets and
+ * reconnect backoff run on `clock` when one is given.
+ */
+function remote(
+  t: TestContext,
+  d: Awaited<ReturnType<typeof daemon>>,
+  clock?: ReturnType<typeof manualClock>,
+) {
   let endpoint = d.endpoint();
   const changes = new Set<() => void>();
   const unavailable = () =>
@@ -92,7 +99,11 @@ function remote(t: TestContext, d: Awaited<ReturnType<typeof daemon>>) {
     endpoint: () => Effect.sync(() => structuredClone(endpoint)),
   });
   const runtime = ManagedRuntime.make(
-    Layer.mergeAll(RemoteChatLive, RemoteLocalHostLive).pipe(Layer.provide(connection)),
+    Layer.mergeAll(RemoteChatLive, RemoteLocalHostLive).pipe(
+      Layer.provide(
+        clock ? Layer.merge(connection, Layer.succeed(DaemonLinkClock, clock)) : connection,
+      ),
+    ),
   );
   t.after(() => runtime.dispose());
   return {
@@ -144,9 +155,10 @@ test('one client shares one socket, and a chat another client creates reaches it
   assert.deepEqual([...list.errors, ...chat.errors], []);
 });
 
-test('a dropped daemon shows reconnecting, then resets its watches; a lost budget or generation fails them', async (t) => {
-  const d = await daemon(t);
-  const client = remote(t, d);
+test('a dropped daemon shows reconnecting, then resets its watches; healthy traffic renews the budget, and a lost budget or generation fails them', async (t) => {
+  const d = await daemon(t),
+    clock = manualClock();
+  const client = remote(t, d, clock);
   const target = (
     await client.chat.command('createChat', { session, requestId: 'create', title: 'Kept' })
   ).conversation.target;
@@ -157,23 +169,36 @@ test('a dropped daemon shows reconnecting, then resets its watches; a lost budge
   const closeList = client.chat.watchChatList({ session }, list.receive, list.fail);
   t.after(() => closeList().catch(() => {}));
   await until(async () => chat.values.length && list.values.length, Boolean);
-  // While the daemon is gone the last snapshot reads as reconnecting; nothing fails.
-  await d.stop();
-  await until(
-    async () => chat.values.at(-1)!.observationStatus,
-    (status) => status === 'reconnecting',
-  );
-  await d.start();
-  // The restarted daemon kept no deltas, so both watches reset from fresh snapshots.
-  await until(
-    async () => chat.values.at(-1)!.observationStatus,
-    (status) => status === 'connected',
-  );
-  await until(async () => list.values.at(-1)!.reset, Boolean);
+  /** Moves the clock past the longest backoff until `done`, so each pending reconnect runs. */
+  const advanceUntil = <T>(get: () => T, done: (value: T) => boolean) =>
+    until(async () => {
+      clock.advance(P.streamLimits.reconnectMs.at(-1)!);
+      return get();
+    }, done);
+  // More drops than the budget allows, each after a healthy period, keep reconnecting.
+  for (let outage = 0; outage <= P.streamLimits.reconnectMs.length; outage++) {
+    const lists = list.values.length;
+    // While the daemon is gone the last snapshot reads as reconnecting; nothing fails.
+    await d.stop();
+    await until(
+      async () => chat.values.at(-1)!.observationStatus,
+      (status) => status === 'reconnecting',
+    );
+    await d.start();
+    // The restarted daemon kept no deltas, so both watches reset from fresh snapshots.
+    await advanceUntil(
+      () => chat.values.at(-1)!.observationStatus,
+      (status) => status === 'connected',
+    );
+    await advanceUntil(() => list.values.length > lists && list.values.at(-1)!.reset, Boolean);
+    // Traffic `renewMs` after the reconnect proves the connection healthy.
+    clock.advance(P.streamLimits.renewMs);
+    await client.chat.command('listChats', { session });
+  }
   assert.deepEqual([...chat.errors, ...list.errors], []);
-  // Three failed reconnects in one outage end the watch.
+  // Failed reconnects through the whole budget in one outage end the watch.
   await d.stop();
-  await until(async () => chat.errors.length, Boolean);
+  await advanceUntil(() => chat.errors.length, Boolean);
   assert.equal(chat.errors[0]!.code, 'Unavailable');
   // A new connection generation ends a watch at once.
   await d.start();
