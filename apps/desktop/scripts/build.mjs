@@ -7,12 +7,19 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative, resolve } from 'node:path';
 import { notices } from '../../../scripts/notices.mjs';
+import { bunComponents, verifyBunRuntime } from '../../../scripts/prepare-bun.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url)),
   repository = fileURLToPath(new URL('../../../', import.meta.url)),
   require = createRequire(import.meta.url);
 // Packaging also stages the Bun runtime the bundled daemon runs on; development runs the daemon
 // from source with the `bun` on PATH, so a plain build needs no runtime download.
 const packaged = process.argv.includes('--package');
+// The packaged daemon's runtime and its notices from `scripts/prepare-bun.mjs`, or another folder
+// it prepared; either way they must be the pinned bytes, checked before anything is built.
+const bun = process.env.MOONBASE_BUN_RUNTIME
+  ? resolve(process.env.MOONBASE_BUN_RUNTIME)
+  : join(repository, 'dist/tools/bun');
+if (packaged) await verifyBunRuntime(bun);
 await rm(join(root, 'dist'), { recursive: true, force: true });
 const main = await build({
   absWorkingDir: root,
@@ -137,19 +144,7 @@ assert(
   !daemonInputs.some((path) => /pi-runtime\/src\/host\.ts$|apps\/daemon\/test\//.test(path)),
   'The standalone host or a daemon test entry reached the daemon bundle',
 );
-// The packaged daemon's runtime and its notices, verified by `scripts/prepare-bun.mjs`.
-const bun = process.env.MOONBASE_BUN_RUNTIME
-  ? resolve(process.env.MOONBASE_BUN_RUNTIME)
-  : join(repository, 'dist/tools/bun');
-const bunNotices = [
-  'LICENSE.md',
-  'JavaScriptCore-COPYING.LIB',
-  'WebCore-LICENSE-LGPL-2',
-  'WebCore-LICENSE-LGPL-2.1',
-  'WebCore-LICENSE-APPLE',
-];
 if (packaged) {
-  for (const file of ['bun', ...bunNotices]) await stat(join(bun, file));
   await mkdir(join(root, 'dist/helpers'), { recursive: true });
   await cp(join(bun, 'bun'), join(root, 'dist/helpers/bun'));
 }
@@ -159,14 +154,12 @@ const packages = await notices(
     .concat(rendererInputs, daemonInputs, require.resolve('electron/package.json')),
   join(root, 'dist/dependency-notices.txt'),
   packaged
-    ? [
-        {
-          label: 'Bun 1.4.4 runtime (statically links JavaScriptCore and WebCore from WebKit)',
-          license: 'MIT AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-2-Clause',
-          directory: bun,
-          files: bunNotices,
-        },
-      ]
+    ? bunComponents.map(({ label, license, notices }) => ({
+        label,
+        license,
+        directory: bun,
+        files: notices.map((notice) => notice.file),
+      }))
     : [],
 );
 await writeFile(join(root, 'dist/main-inputs.json'), JSON.stringify(main.metafile.inputs));

@@ -76,18 +76,17 @@ mcp.kill();
 `;
 
 test('the packaged daemon serves a chat from temporary data, and its Claude Code helper starts from the bundle', async () => {
+  const { root, directory } = await prepareDaemonRoot();
   const daemon = findDaemonCommand(
     {
       packaged: true,
       resourcesPath: join(contents, 'Resources'),
       bundleDirectory: join(contents, 'Resources/app.asar'),
     },
-    '',
+    directory,
   );
-  const [bundle] = daemon.args as [string];
   await access(daemon.command);
-  await access(bundle);
-  const { root, directory } = await prepareDaemonRoot();
+  await access(daemon.args[0]!);
   const bin = join(root, 'bin'),
     project = join(root, 'project');
   await mkdir(bin);
@@ -97,16 +96,13 @@ test('the packaged daemon serves a chat from temporary data, and its Claude Code
   await chmod(claude, 0o755);
   // Like an npm install, the faux CLI runs through `env node`, with its `node` beside it.
   await symlink(process.execPath, join(bin, 'node'));
-  const started = startDaemonCommand(
-    { command: daemon.command, args: [bundle, directory] },
-    {
-      // Only the system PATH, as an app launched from Finder has.
-      PATH: '/usr/bin:/bin',
-      HOME: root,
-      TMPDIR: root,
-      PI_CLAUDE_CODE_COMMAND: claude,
-    },
-  );
+  const started = startDaemonCommand(daemon, {
+    // Only the system PATH, as an app launched from Finder has: no `rg` on it.
+    PATH: '/usr/bin:/bin',
+    HOME: root,
+    TMPDIR: root,
+    PI_CLAUDE_CODE_COMMAND: claude,
+  });
   let runtime: ManagedRuntime.ManagedRuntime<unknown, unknown> | undefined;
   try {
     const ready = await bounded(started.ready);
@@ -134,6 +130,13 @@ test('the packaged daemon serves a chat from temporary data, and its Claude Code
       folders.approveFolder({ host: session.host, requestId: 'approve', path: project }),
     );
     const chat = makeChatClient(clients);
+    // The project is no Git repository and PATH has no `rg`, so only the app's ripgrep lists it.
+    await writeFile(join(project, 'readme.md'), 'hello');
+    const found = await chat.command('findChatFiles', { session, cwd: project, query: 'readme' });
+    assert.deepEqual(
+      found.matches.map((match) => match.path),
+      ['readme.md'],
+    );
     const created = await chat.command('createChat', {
       session,
       requestId: 'create',

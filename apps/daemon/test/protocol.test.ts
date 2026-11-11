@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { test } from 'node:test';
 import { chmod, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -429,5 +431,62 @@ test('the loopback connection refuses unsafe files, another protocol, another id
     } finally {
       await clients.runtime.dispose();
     }
+  });
+});
+
+test('the built daemon searches files with the ripgrep shipped beside its bundle, with none on PATH', async () => {
+  await withRoot(async (root, started) => {
+    // The app's layout: `daemon/daemon.mjs` beside `workspace/ripgrep/rg` in its resources.
+    const resources = join(root, 'Resources');
+    execFileSync(process.execPath, [
+      new URL('../scripts/build.mjs', import.meta.url).pathname,
+      join(resources, 'daemon'),
+      join(root, 'daemon-inputs.json'),
+    ]);
+    await mkdir(join(resources, 'workspace/ripgrep'), { recursive: true });
+    const rg = join(resources, 'workspace/ripgrep/rg');
+    await writeFile(rg, "#!/bin/sh\nprintf 'listed-by-bundled-ripgrep.md\\0'\n");
+    await chmod(rg, 0o755);
+    const directory = join(root, 'data'),
+      project = join(root, 'project');
+    await mkdir(directory, { mode: 0o700 });
+    // Not a Git repository, so without ripgrep the search would fail.
+    await mkdir(project);
+    await writeFile(join(project, 'readme.md'), 'hello');
+    await writeFile(join(root, 'key'), randomBytes(32).toString('base64') + '\n', { mode: 0o600 });
+    await writeFile(
+      join(directory, 'daemon.json'),
+      JSON.stringify({ mode: 'local', credentialKey: { source: 'file', path: join(root, 'key') } }),
+      { mode: 0o600 },
+    );
+    const daemon = startDaemon([directory], {
+      entry: join(resources, 'daemon/daemon.mjs'),
+      // Only the system PATH, as an app launched from Finder has: no `rg` on it.
+      env: { PATH: '/usr/bin:/bin', HOME: root },
+    });
+    started.push(daemon);
+    const ready = await bounded(daemon.ready);
+    const identity = await readJson(join(directory, 'identity.json'));
+    const session = { host: identity.host, actorId: identity.actorId };
+    const clients = connectClients(directory, ready.host);
+    try {
+      await clients.connection.command('connect', { profileId: 'loopback' });
+      const folders = await clients.runtime.runPromise(LocalHostService);
+      await clients.run(
+        folders.approveFolder({ host: session.host, requestId: 'approve', path: project }),
+      );
+      const found = await clients.chat.command('findChatFiles', {
+        session,
+        cwd: project,
+        query: '',
+      });
+      assert.deepEqual(
+        found.matches.map((match) => match.path),
+        ['listed-by-bundled-ripgrep.md'],
+      );
+    } finally {
+      await clients.runtime.dispose();
+    }
+    assert.deepEqual(await daemon.stop(), [0, null]);
   });
 });

@@ -56,6 +56,9 @@
     "electron-builder": "26.18.0"
   },
   "nx": {
+    "implicitDependencies": [
+      "@moonbase/daemon"
+    ],
     "targets": {
       "dev": {
         "dependsOn": [

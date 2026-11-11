@@ -71,6 +71,8 @@ export type DaemonOptions = {
   idleMs?: number;
   /** How often an otherwise unused local daemon checks for active work; 30 seconds. */
   pollMs?: number;
+  /** Absolute ripgrep for chat file search; otherwise `rg` on PATH, then Git. */
+  ripgrepExecutable?: string;
 };
 export type DaemonExit = 'stopped' | 'idle';
 
@@ -124,6 +126,7 @@ async function serveDaemon(
   };
   if (options.signal.aborted) stop();
   else options.signal.addEventListener('abort', stop, { once: true });
+  const ripgrep = options.ripgrepExecutable ? { ripgrepExecutable: options.ripgrepExecutable } : {};
   try {
     if (settings.mode === 'host') {
       const { models, registry } = await prepareFixedSettingsHost(settings);
@@ -135,6 +138,7 @@ async function serveDaemon(
           databasePath,
           models,
           registry,
+          ...ripgrep,
         }),
       );
       try {
@@ -146,7 +150,7 @@ async function serveDaemon(
       const providers = options.local(settings, session);
       if (settings.credentialKey?.source === 'file') await checkKeyFile(providers.keySource);
       const runtime = ManagedRuntime.make(
-        composeLocal(options.directory, providers, session, databasePath),
+        composeLocal(options.directory, providers, session, databasePath, ripgrep),
       );
       try {
         const control = await runtime.runPromise(
@@ -248,6 +252,7 @@ function composeLocal(
   providers: LocalProviders,
   session: ChatSession,
   databasePath: string,
+  ripgrep: { ripgrepExecutable?: string },
 ) {
   const credentials = createCredentialStore(
     join(directory, 'credentials'),
@@ -276,6 +281,7 @@ function composeLocal(
       await folders.touch(creation.cwd);
     },
     approveFolder: (cwd: string) => requireApprovedFolder(cwd, 'searching its files'),
+    ...ripgrep,
   });
   return Layer.mergeAll(
     LocalHostLive({ host: session.host, folders, chatFolders }).pipe(Layer.provideMerge(runtime)),

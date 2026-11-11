@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { isPrivilegedDesktopInput } from '../../../scripts/boundaries.mjs';
+import { bunComponents, bunExecutableSha256, bunVersion } from '../../../scripts/prepare-bun.mjs';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url)),
   repository = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(import.meta.url),
@@ -136,14 +137,26 @@ for (const [name, built] of daemonFiles) {
   if (name === 'Helpers/bun') assert(mode & 0o111, `${name} is not executable`);
   records.push({ name, bytes: bytes.length, mode, sha256: hash(bytes) });
 }
+// The pinned runtime, checked by its bytes before it runs.
+assert.equal(
+  hash(await readFile(join(contents, 'Helpers/bun'))),
+  bunExecutableSha256,
+  'Packaged Bun executable checksum mismatch',
+);
 assert.equal(
   execFileSync(join(contents, 'Helpers/bun'), ['--version'], {
     encoding: 'utf8',
     env: { PATH: '/usr/bin:/bin' },
   }).trim(),
-  '1.4.4',
+  bunVersion,
   'Unexpected packaged Bun runtime',
 );
+// The daemon finds the app's ripgrep relative to its own bundle (`apps/daemon/src/ripgrep.ts`).
+const daemonRipgrep = fileURLToPath(
+  new URL('../workspace/ripgrep/rg', pathToFileURL(join(resources, 'daemon/daemon.mjs'))),
+);
+assert.equal(daemonRipgrep, join(resources, 'workspace/ripgrep/rg'));
+assert((await stat(daemonRipgrep)).mode & 0o111, 'The daemon finds no executable ripgrep');
 const daemonInputs = JSON.parse(await readFile(join(root, 'dist/daemon-inputs.json'), 'utf8')).map(
   (path) => relative(repository, path),
 );
@@ -182,14 +195,17 @@ for (const [name] of daemonFiles.slice(1)) {
 }
 // The notices cover the runtime, the WebKit it links and every package in the daemon bundle.
 const shippedNotices = asar.extractFile(archive, 'dependency-notices.txt').toString();
-for (const notice of [
-  'Bun 1.4.4 runtime',
+for (const { label, license, notices } of bunComponents) {
+  assert(shippedNotices.includes(`${label} (${JSON.stringify(license)})`), `Notices omit ${label}`);
+  for (const { file } of notices)
+    assert(shippedNotices.includes(`\n${file}\n`), `Notices omit ${file}`);
+}
+for (const text of [
   'Bun itself is MIT-licensed.',
-  'JavaScriptCore-COPYING.LIB',
   'GNU LIBRARY GENERAL PUBLIC LICENSE',
   'GNU LESSER GENERAL PUBLIC LICENSE',
 ])
-  assert(shippedNotices.includes(notice), `Notices omit ${notice}`);
+  assert(shippedNotices.includes(text), `Notices omit ${text}`);
 for (const path of daemonInputs.filter((path) => path.includes('node_modules/'))) {
   const parts = path.slice(path.lastIndexOf('node_modules/') + 'node_modules/'.length).split('/');
   const name = parts[0].startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];

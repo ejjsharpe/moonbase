@@ -45,12 +45,19 @@ const entries = {
 const noNetwork = new URL('./no-network.ts', import.meta.url).pathname;
 
 export type DaemonProcess = ReturnType<typeof startDaemon>;
-/** Starts a daemon on this Bun, with provider network refused. */
+/**
+ * Starts a daemon on this Bun, with provider network refused. `entry` is the faux or real source
+ * entry, or the absolute path of a built bundle.
+ */
 export function startDaemon(
   args: string[],
-  { entry = 'faux', env = {} }: { entry?: keyof typeof entries; env?: Record<string, string> } = {},
+  {
+    entry = 'faux',
+    env = {},
+  }: { entry?: keyof typeof entries | (string & {}); env?: Record<string, string> } = {},
 ) {
-  const child = spawn(process.execPath, ['--preload', noNetwork, entries[entry], ...args], {
+  const path = entry in entries ? entries[entry as keyof typeof entries] : entry;
+  const child = spawn(process.execPath, ['--preload', noNetwork, path, ...args], {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ...env },
   });

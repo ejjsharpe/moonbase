@@ -6,6 +6,7 @@ import {
 import { runDaemon } from './daemon.ts';
 import { readDirectoryArgument } from './data-directory.ts';
 import { describeFailure } from './failure.ts';
+import { findBundledRipgrep } from './ripgrep.ts';
 import { onShutdownSignal } from './signals.ts';
 
 /**
@@ -18,6 +19,8 @@ async function main() {
     signal: onShutdownSignal(),
     ready: (line) => console.log(line),
     closeClaudeCode: closeClaudeCodeProcesses,
+    // The app's ripgrep beside the packaged bundle; from source, the one on PATH.
+    ripgrepExecutable: findBundledRipgrep(import.meta.url),
     local: (settings, session) => ({
       keySource:
         settings.credentialKey?.source === 'file'
