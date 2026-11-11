@@ -1,4 +1,5 @@
 import { expect, type Page } from '@playwright/test';
+import { fauxModel } from '../../../tests/chat/faux-model.ts';
 
 /** Opens Settings from the rail at one section; hosts, connection and providers live there. */
 export async function openSettings(page: Page, section: 'Hosts' | 'Providers' = 'Hosts') {
@@ -41,16 +42,21 @@ export async function createRemoteChat(page: Page, title: string) {
   await expect(
     page.getByRole('button', { name: 'Refresh saved chats', exact: true }),
   ).toBeEnabled();
-  const result = await page.evaluate(async (title) => {
-    const session = await window.moonbaseChat.context('remote');
-    return window.moonbaseChat.call(
-      'chat',
-      'createChat',
-      { session, requestId: crypto.randomUUID(), title },
-      crypto.randomUUID(),
-      'remote',
-    );
-  }, title);
+  // The host is a daemon: the chat names its model and runs in the host's first approved root.
+  const result = await page.evaluate(
+    async ({ title, model }) => {
+      const session = await window.moonbaseChat.context('remote');
+      const [cwd] = await window.moonbaseChat.recentFolders!('remote');
+      return window.moonbaseChat.call(
+        'chat',
+        'createChat',
+        { session, requestId: crypto.randomUUID(), title, settings: { cwd, model } },
+        crypto.randomUUID(),
+        'remote',
+      );
+    },
+    { title, model: fauxModel },
+  );
   if (!result.ok) throw Error(result.error.message);
   await page.getByRole('button', { name: 'Refresh saved chats', exact: true }).click();
   await (await showChat(page, title)).click();

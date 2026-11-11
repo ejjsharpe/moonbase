@@ -16,8 +16,7 @@ import { Harness, createRegistry, defineExtension, defineTool } from '@earendil-
 import { Type } from 'typebox';
 import { NodeSqliteDatabase } from '@earendil-works/chord/sqlite/node';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import { PiRuntimeLive } from '../src/index.ts';
-import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
+import { LocalPiRuntimeLive } from '../src/index.ts';
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { Effect, Layer } from 'effect';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
@@ -440,9 +439,10 @@ test('queued admission cancellation releases its lease without overtaking held S
     requestId: 'unrelated',
     text: 'Independent',
   });
+  // Stop it once its model call holds the first response.
   const current = await until(
     () => f.client.command('getChat', { target: other }),
-    (value) => !!value.run,
+    (value) => !!value.run && f.faux.state.callCount === 1,
   );
   assert.equal(
     (await f.client.command('stopChat', { stop: current.run!.stop, requestId: 'independent-stop' }))
@@ -787,11 +787,10 @@ test('partial acquisition attempts each transferred resource release once and pr
     faux = fauxProvider();
   models.setProvider(faux.provider);
   const root = ManagedRuntime.make(Layer.empty),
-    counts = { database: 0, storage: 0, env: 0 },
+    counts = { database: 0, storage: 0 },
     canary = 'private-construction-canary';
   const closeDatabase = NodeSqliteDatabase.prototype.close,
-    closeStorage = SqliteStorage.prototype.close,
-    cleanupEnv = NodeExecutionEnv.prototype.cleanup;
+    closeStorage = SqliteStorage.prototype.close;
   mock.method(Harness, 'open', async () => {
     throw Error(canary);
   });
@@ -811,18 +810,6 @@ test('partial acquisition attempts each transferred resource release once and pr
       });
     },
   );
-  mock.method(
-    NodeExecutionEnv.prototype,
-    'cleanup',
-    async function (this: NodeExecutionEnv, context: Parameters<typeof cleanupEnv>[0]) {
-      counts.env++;
-      await cleanupEnv.call(this, context);
-      throw new ApplicationError({
-        code: 'Unavailable',
-        message: 'Controlled environment cleanup failure',
-      });
-    },
-  );
   t.after(async () => {
     mock.restoreAll();
     await root.dispose();
@@ -833,13 +820,7 @@ test('partial acquisition attempts each transferred resource release once and pr
       root,
       Effect.scoped(
         Layer.build(
-          PiRuntimeLive({
-            ...session,
-            cwd: directory,
-            databasePath: join(directory, 'chat.sqlite'),
-            models,
-            model: { provider: faux.provider.id, modelId: faux.getModel().id },
-          }),
+          LocalPiRuntimeLive({ ...session, databasePath: join(directory, 'chat.sqlite'), models }),
         ),
       ),
     ),
@@ -847,79 +828,12 @@ test('partial acquisition attempts each transferred resource release once and pr
       assert(ApplicationError.is(error));
       assert.equal(error.code, 'Persistence');
       assert(error.message.includes('Controlled storage cleanup failure'));
-      assert(error.message.includes('Controlled environment cleanup failure'));
       assert(!error.message.includes(canary));
       assert(!error.message.includes(directory));
       return true;
     },
   );
-  assert.deepEqual(counts, { database: 1, storage: 1, env: 1 });
-});
-
-test('Harness release failure still releases the environment and reports both typed cleanup failures', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'moonbase-pi-release-')),
-    models = createModels(),
-    faux = fauxProvider();
-  models.setProvider(faux.provider);
-  const root = ManagedRuntime.make(Layer.empty),
-    original = Harness.open,
-    cleanupEnv = NodeExecutionEnv.prototype.cleanup;
-  let closes = 0,
-    cleanups = 0;
-  mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
-    const harness = await original(...args),
-      close = harness.close.bind(harness);
-    harness.close = async (...args: Parameters<typeof close>) => {
-      closes++;
-      await close(...args);
-      throw new ApplicationError({
-        code: 'Persistence',
-        message: 'Controlled Harness cleanup failure',
-      });
-    };
-    return harness;
-  });
-  mock.method(
-    NodeExecutionEnv.prototype,
-    'cleanup',
-    async function (this: NodeExecutionEnv, context: Parameters<typeof cleanupEnv>[0]) {
-      cleanups++;
-      await cleanupEnv.call(this, context);
-      throw new ApplicationError({
-        code: 'Unavailable',
-        message: 'Controlled environment cleanup failure',
-      });
-    },
-  );
-  t.after(async () => {
-    mock.restoreAll();
-    await root.dispose();
-    await rm(directory, { recursive: true, force: true });
-  });
-  await assert.rejects(
-    runApplicationEffect(
-      root,
-      Effect.scoped(
-        Layer.build(
-          PiRuntimeLive({
-            ...session,
-            cwd: directory,
-            databasePath: join(directory, 'chat.sqlite'),
-            models,
-            model: { provider: faux.provider.id, modelId: faux.getModel().id },
-          }),
-        ),
-      ),
-    ),
-    (error: unknown) => {
-      assert(ApplicationError.is(error));
-      assert(error.message.includes('Controlled Harness cleanup failure'));
-      assert(error.message.includes('Controlled environment cleanup failure'));
-      return true;
-    },
-  );
-  assert.equal(closes, 1);
-  assert.equal(cleanups, 1);
+  assert.deepEqual(counts, { database: 1, storage: 1 });
 });
 
 for (const count of [1, 2])

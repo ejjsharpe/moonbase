@@ -23,7 +23,7 @@ for (const mode of ['local', 'remote'] as const)
     const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-around-')));
     const remote =
       mode === 'remote'
-        ? await controlledHostFixture(new URL('./stream-host.mjs', import.meta.url), true)
+        ? await controlledHostFixture(new URL('./faux-stream.mjs', import.meta.url), true)
         : undefined;
     let harness!: Harness, reads!: ReturnType<typeof instrumentTranscriptReads>;
     if (!remote) {
@@ -57,7 +57,8 @@ for (const mode of ['local', 'remote'] as const)
       chat: async () => ({
         chat,
         context: session,
-        mode,
+        // The remote host is the daemon in host mode: local-mode chats over a connection.
+        mode: 'local',
         ...(root ? { connection: root.connection } : {}),
         storage: {
           read: () => saved,
@@ -89,7 +90,7 @@ for (const mode of ['local', 'remote'] as const)
     await controller.create(
       'Integrated range qualification',
       remote
-        ? undefined
+        ? remote.settings
         : {
             cwd: directory,
             model: { provider: faux.provider.id, modelId: faux.getModel().id },

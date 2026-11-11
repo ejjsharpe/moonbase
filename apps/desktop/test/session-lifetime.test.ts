@@ -44,6 +44,7 @@ async function createSession(
     watch: (_input, receive) => acquire(() => receive({ checkout, paths: [] })),
   };
   const chat: ChatClient = {
+    watchChatList: () => async () => {},
     command: async () => null as never,
     watch: (_input, receive) => acquire(() => receive({} as never)),
   };
@@ -65,11 +66,14 @@ async function createSession(
           runtime,
           chat,
           {
-            command: async () => {
-              await commandGate;
-              return null as never;
+            mode: 'remote',
+            connection: {
+              command: async () => {
+                await commandGate;
+                return null as never;
+              },
+              watch: () => async () => {},
             },
-            watch: () => async () => {},
           },
           context,
           emit,

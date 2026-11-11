@@ -4,7 +4,7 @@ import { ManagedRuntime } from 'effect';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { makeProviderSetupClient } from '@moonbase/application/runtime/clients';
-import { ProviderSetupLive, localProviderIds } from '../src/providers.ts';
+import { ProviderSetupLive, inactiveProviderOwnerMs, localProviderIds } from '../src/providers.ts';
 import { ProviderSetupService } from '@moonbase/contracts/services';
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
@@ -310,4 +310,117 @@ test('a status failure unwinds a newly started login before returning an error w
   assert.equal(signal?.aborted, true);
   broken = false;
   assert.equal((await client.command('getProviders', {})).flow, null);
+});
+
+test('one sign-in per provider at a time, and owners that went quiet or exceed the bound lose their flows', async (t) => {
+  const models = createModels({
+    authContext: { env: async () => undefined, fileExists: async () => false },
+  });
+  const aborted: string[] = [];
+  for (const id of localProviderIds) {
+    // Each sign-in waits for its prompt until it is aborted.
+    const waitForKey = async (interaction: {
+      signal?: AbortSignal;
+      prompt(prompt: { type: 'secret'; message: string }): Promise<string>;
+    }) => {
+      interaction.signal?.addEventListener('abort', () => aborted.push(id), { once: true });
+      return interaction.prompt({ type: 'secret', message: 'Enter key' });
+    };
+    models.setProvider({
+      ...fauxProvider({ provider: id }).provider,
+      name: id,
+      auth:
+        id === 'openai'
+          ? {
+              oauth: {
+                name: 'Controlled ChatGPT',
+                login: async (interaction) => {
+                  interaction.notify({
+                    type: 'auth_url',
+                    url: 'https://auth.openai.com/oauth/authorize?state=controlled',
+                  });
+                  return {
+                    type: 'oauth',
+                    access: await waitForKey(interaction),
+                    refresh: 'refresh',
+                    expires: 0,
+                  };
+                },
+                refresh: async () => {
+                  throw Error('No refresh');
+                },
+                toAuth: async (value) => ({ apiKey: value.access }),
+              },
+            }
+          : {
+              apiKey: {
+                name: 'API key',
+                login: async (interaction) => ({
+                  type: 'api_key',
+                  key: await waitForKey(interaction),
+                }),
+                resolve: async () => undefined,
+              },
+            },
+    });
+  }
+  let time = 0;
+  const runtime = ManagedRuntime.make(
+    ProviderSetupLive({
+      models,
+      deviceId: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',
+      now: () => time,
+    }),
+  );
+  t.after(() => runtime.dispose());
+  const owner = (id: string) => makeProviderSetupClient(runtime, id);
+  const flowOf = async (id: string) => (await owner(id).command('getProviders', {})).flow;
+
+  // A client that restarted under a new owner takes over the provider's sign-in.
+  const abandoned = await owner('crashed').command('startProviderLogin', { providerId: 'openai' });
+  const other = await owner('other').command('startProviderLogin', { providerId: 'google' });
+  const taken = await owner('restarted').command('startProviderLogin', { providerId: 'openai' });
+  assert.deepEqual(aborted, ['openai']);
+  assert.equal((await flowOf('crashed'))?.state, 'cancelled');
+  assert.equal((await flowOf('crashed'))?.id, abandoned.flow!.id);
+  assert.equal((await flowOf('restarted'))?.state, 'running');
+  assert.equal((await flowOf('other'))?.id, other.flow!.id, 'another provider is untouched');
+  assert.equal((await flowOf('other'))?.state, 'running');
+
+  // An owner unheard from for the inactivity window loses its flow; one still polling keeps it,
+  // and reading its sign-in URL counts as polling.
+  const providers = await runtime.runPromise(ProviderSetupService);
+  time += inactiveProviderOwnerMs - 1;
+  assert.equal((await flowOf('restarted'))?.id, taken.flow!.id);
+  time += inactiveProviderOwnerMs - 1;
+  assert.equal(
+    await runtime.runPromise(providers.getProviderUrl('restarted', taken.flow!.id)),
+    'https://auth.openai.com/oauth/authorize?state=controlled',
+  );
+  time += 1;
+  assert.equal(await flowOf('observer'), null);
+  assert.equal((await flowOf('restarted'))?.state, 'running');
+  assert.deepEqual(aborted.sort(), ['google', 'openai']);
+  assert.equal(await flowOf('other'), null);
+  assert.equal(await flowOf('crashed'), null);
+
+  // At most 64 owners hold a flow; the least recently used go first.
+  for (let index = 0; index < 70; index++) {
+    time += 1;
+    await owner(`document-${index}`).command('startProviderLogin', { providerId: 'anthropic' });
+  }
+  time += 1;
+  assert.equal(await flowOf('document-0'), null);
+  assert.equal(await flowOf('restarted'), null);
+  assert.equal((await flowOf('document-69'))?.state, 'running');
+  assert.equal((await flowOf('document-68'))?.state, 'cancelled');
+
+  // Released owners stay refused within a bound; the oldest are forgotten.
+  for (let index = 0; index < 300; index++)
+    await runtime.runPromise(providers.releaseOwner(`released-${index}`));
+  await assert.rejects(owner('released-299').command('getProviders', {}), {
+    code: 'InvalidInput',
+    message: 'The owning document was released.',
+  });
+  assert.equal(await flowOf('released-0'), null);
 });

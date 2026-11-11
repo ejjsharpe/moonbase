@@ -5,6 +5,7 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   timeout: 45000,
+  globalTeardown: './test/global-teardown.ts',
   use: { trace: 'retain-on-failure' },
   projects: [
     { name: 'editor', testMatch: 'desktop.spec.ts' },

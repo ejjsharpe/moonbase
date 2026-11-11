@@ -70,8 +70,12 @@ async function downloadNotice({ label, url, sha256 }) {
   return url + '\n' + text;
 }
 
-/** Collect actual upstream package files from bundled inputs; never maintain a copied source notice bundle. */
-export async function notices(inputs, output) {
+/**
+ * Collect actual upstream package files from bundled inputs; never maintain a copied source notice
+ * bundle. `components` adds shipped upstream components that are not packages, such as a runtime,
+ * each as `{label, license, directory, files}` with the notice files it ships.
+ */
+export async function notices(inputs, output, components = []) {
   const packages = new Map();
   for (const input of inputs) {
     if (!input.includes('node_modules')) continue;
@@ -136,6 +140,21 @@ export async function notices(inputs, output) {
             )
           ).join('\n'),
       );
+  for (const component of components)
+    sections.push(
+      component.label +
+        ' (' +
+        JSON.stringify(component.license) +
+        ')\n' +
+        (
+          await Promise.all(
+            component.files.map(
+              async (file) =>
+                '\n' + file + '\n' + (await readFile(join(component.directory, file), 'utf8')),
+            ),
+          )
+        ).join('\n'),
+    );
   await writeFile(output, sections.join('\n\n========================================\n\n'));
   return [...packages.keys()].sort();
 }

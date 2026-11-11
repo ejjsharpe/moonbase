@@ -53,7 +53,7 @@ export function chatCapabilities() {
       calls.push(operation);
       switch (operation) {
         case 'getChatHost':
-          return { ...context, cwd: conversation.cwd, model: conversation.model } as never;
+          return { ...context, mode: 'local' } as never;
         case 'listChats':
           return { conversations: [conversation], nextCursor: null } as never;
         case 'getChat':
@@ -87,6 +87,7 @@ export function chatCapabilities() {
       controls.observations++;
       return close();
     },
+    watchChatList: () => async () => {},
   };
   const connection: ConnectionClient = {
     async command(operation) {
@@ -96,7 +97,7 @@ export function chatCapabilities() {
           state: 'connected',
           connectionId: 'connection-' + ++connectionGeneration,
           profile,
-          health: { ...context.host, protocol: 1, version: '0.1.0', capabilities: ['chat-v0'] },
+          health: { ...context.host, protocol: 2, version: '0.1.0', capabilities: ['chat-v0'] },
         };
       if (operation === 'disconnect')
         connectionState = { state: 'disconnected', connectionId: null, profile };

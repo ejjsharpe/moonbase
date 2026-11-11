@@ -47,10 +47,7 @@ export function installCommandIpc({
     | 'requireLocal'
     | 'getSession'
   >;
-  lifecycle: Pick<
-    WindowLifecycle,
-    'reportCleanup' | 'isQuitting' | 'isPreparingQuit' | 'confirmLocalQuit'
-  >;
+  lifecycle: Pick<WindowLifecycle, 'reportCleanup' | 'isQuitting'>;
 }) {
   const { reportCleanup } = lifecycle;
   ipcMain.handle(channels.call, async (event, value: unknown) => {
@@ -103,7 +100,7 @@ export function installCommandIpc({
           message: 'Choose an installed chat target.',
         });
       const backendId = v.backendId;
-      if (v.kind !== 'context' && v.kind !== 'confirm-quit') chatBackends.requireLocal(backendId);
+      if (v.kind !== 'context') chatBackends.requireLocal(backendId);
       if (v.kind === 'context') {
         fields(v, ['kind', 'backendId']);
         return { ok: true, value: await chatBackends.getContext(backendId) };
@@ -119,12 +116,7 @@ export function installCommandIpc({
       }
       if (v.kind === 'recent-folders') {
         fields(v, ['kind', 'backendId']);
-        if (backendId !== 'local')
-          throw new ApplicationError({
-            code: 'Unavailable',
-            message: 'Recent folders are unavailable.',
-          });
-        return { ok: true, value: await chatBackends.recentFolders() };
+        return { ok: true, value: await chatBackends.recentFolders(backendId) };
       }
       if (v.kind === 'turn-into-project') {
         fields(v, ['kind', 'backendId', 'conversationId']);
@@ -154,15 +146,6 @@ export function installCommandIpc({
             message: 'Choose a folder and branch for the worktree.',
           });
         return { ok: true, value: await chatBackends.createWorktree(v.root, v.branch) };
-      }
-      if (v.kind === 'confirm-quit') {
-        fields(v, ['kind', 'backendId']);
-        if (backendId !== 'local' || !lifecycle.isPreparingQuit())
-          throw new ApplicationError({
-            code: 'Unavailable',
-            message: 'No active Quit preparation.',
-          });
-        return { ok: true, value: await lifecycle.confirmLocalQuit() };
       }
       fields(v, ['kind', 'operation', 'input', 'id', 'backendId']);
       const owner = chatBackends.getSession(backendId);

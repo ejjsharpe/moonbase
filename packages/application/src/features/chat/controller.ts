@@ -10,6 +10,7 @@ import type {
   ChatClient,
   ChatCommand,
   ChatInput,
+  ChatListState,
   ChatOutput,
   ChatHostConfiguration,
   ChatSession,
@@ -51,7 +52,8 @@ export interface DraftStorage {
   write(value: string): void;
 }
 export type ChatState = {
-  mode: 'local' | 'remote';
+  /** Whether the host is reached through a connection that is connected explicitly. */
+  remote: boolean;
   ready: boolean;
   connection: ConnectionSnapshot | null;
   host: ChatHostConfiguration | null;
@@ -76,7 +78,7 @@ export type ChatState = {
 };
 export type ChatDependencies = {
   chat: ChatClient;
-  mode?: 'local' | 'remote';
+  /** How a host on another machine is connected; absent for one on this machine. */
   connection?: ConnectionClient;
   providers?: ProviderSetupClient;
   context: ChatSession;
@@ -175,7 +177,6 @@ class ChatModelState {
   private readonly chat: ChatClient;
   private readonly connection?: ConnectionClient;
   readonly providers: ProviderSetupController | null;
-  private readonly mode: 'local' | 'remote';
   private readonly session: ChatSession;
   private storage: DraftStorage;
   private newId: () => string;
@@ -196,11 +197,11 @@ class ChatModelState {
     this.transcriptWatchHealthyMs =
       dependencies.transcriptWatchHealthyMs ?? transcriptLimits.watchHealthyMs;
     this.connection = dependencies.connection;
-    this.mode = dependencies.mode ?? 'remote';
-    if (this.mode === 'remote' && !this.connection)
-      throw invalid('Remote chat requires a connection capability.');
     this.providers = dependencies.providers
-      ? makeProviderSetupController(dependencies.providers)
+      ? makeProviderSetupController(dependencies.providers, {
+          retryMs: this.transcriptWatchRetryMs,
+          healthyMs: this.transcriptWatchHealthyMs,
+        })
       : null;
     this.session = structuredClone(
       decodeChatInput('listChats', { session: dependencies.context }).session,
@@ -220,14 +221,14 @@ class ChatModelState {
       if (this.raw !== null) {
         if (bytes(this.raw) > maximumSavedBytes)
           throw invalid('Saved chat data exceeds its bound. Preserve it for recovery.');
-        this.saved = decodeSaved(JSON.parse(this.raw), this.session, this.mode);
+        this.saved = decodeSaved(JSON.parse(this.raw), this.session);
       }
     } catch {
       storageError =
         'Saved chat data or storage is unavailable. Preserve the original data; no new mutation can start.';
     }
     this.state = {
-      mode: this.mode,
+      remote: !!this.connection,
       ready: false,
       connection: null,
       host: null,
@@ -245,10 +246,9 @@ class ChatModelState {
       active: [],
       error: null,
       storageError,
-      notice:
-        this.mode === 'local'
-          ? 'Local chat. Tools run on this computer; a working folder is not a filesystem sandbox.'
-          : 'Disconnected. Connect explicitly; reconnect never resends a message.',
+      notice: this.connection
+        ? 'Disconnected. Connect explicitly; reconnect never resends a message.'
+        : 'Local chat. Tools run on this computer; a working folder is not a filesystem sandbox.',
     };
   }
   /** Composition fences admissions; retained command results may still reconcile. */
@@ -306,7 +306,7 @@ class ChatModelState {
     if (this.closed) throw invalid('Chat model disposed.');
     if (this.state.storageError)
       throw new ApplicationError({ code: 'Persistence', message: this.state.storageError });
-    decodeSaved(next, this.session, this.mode);
+    decodeSaved(next, this.session);
     const raw = JSON.stringify(next);
     try {
       if (bytes(raw) > maximumSavedBytes || this.storage.read() !== this.raw) throw Error();
@@ -444,7 +444,7 @@ class ChatModelState {
   start(): Promise<void> {
     if (!this.admissionsOpen || this.attachment?.alive || this.closed) return Promise.resolve();
     const owner = (this.attachment = this.owner());
-    if (this.mode === 'local') {
+    if (!this.connection) {
       this.generation = this.owner(owner);
       return Promise.all([this.refresh(), this.providers?.refresh()]).then(() => {});
     }
@@ -507,7 +507,7 @@ class ChatModelState {
     this.action(
       'connect',
       Effect.gen({ self: this }, function* () {
-        if (this.mode === 'local') return;
+        if (!this.connection) return;
         const state = this.state.connection;
         if (!state) return;
         const attachment = this.attachment,
@@ -528,7 +528,7 @@ class ChatModelState {
       'disconnect',
       Effect.gen({ self: this }, function* () {
         if (
-          this.mode === 'local' ||
+          !this.connection ||
           !id ||
           this.generation !== generation ||
           this.state.connection?.connectionId !== id
@@ -571,7 +571,7 @@ class ChatModelState {
   private connected() {
     if (
       !this.generation?.alive ||
-      (this.mode !== 'local' && this.state.connection?.state !== 'connected')
+      (this.connection && this.state.connection?.state !== 'connected')
     )
       throw new ApplicationError({
         code: 'Unavailable',
@@ -595,11 +595,6 @@ class ChatModelState {
       'refresh',
       Effect.gen({ self: this }, function* () {
         const host = yield* this.call('getChatHost', { host: this.session.host });
-        if ((this.mode === 'local') !== 'mode' in host)
-          throw new ApplicationError({
-            code: 'Incompatible',
-            message: 'Chat backend mode does not match this controller.',
-          });
         if (!sameSession(host, this.session))
           throw new ApplicationError({
             code: 'Incompatible',
@@ -610,17 +605,28 @@ class ChatModelState {
         this.update({
           host,
           ready: true,
-          notice:
-            this.mode === 'local'
-              ? 'Local tools use this computer’s permissions. The selected folder is context, not a sandbox.'
-              : 'Verified host. Reconnection reads saved state; it does not send.',
+          notice: this.connection
+            ? 'Verified host. Reconnection reads saved state; it does not send.'
+            : 'Local tools use this computer’s permissions. The selected folder is context, not a sandbox.',
         });
+        // A connected host's providers are read once it is verified; a local one's at start.
+        if (this.connection) void this.providers?.refresh();
+        // The watch opens first, so the host follows changes past the first page the listing
+        // could read too early; its pages wait for the listing and the latest merges after it.
+        // Changes to the list arrive from the watch from here on; nothing lists on a timer.
+        const watched = this.chatPagesWatched;
+        this.listingChats = owner;
+        yield* this.followChats(owner);
         const listed = yield* Effect.exit(this.listChats());
-        if (!owner.alive || epoch !== this.epoch) return;
-        if (Exit.isSuccess(listed)) {
+        if (this.listingChats === owner) this.listingChats = undefined;
+        if (!owner.alive) return;
+        if (Exit.isSuccess(listed) && epoch === this.epoch) {
           this.chatPages = listed.value.pages;
           this.listed(listed.value);
         }
+        if (this.chatsFollowed === owner && this.chatPagesWatched !== watched && this.lastChatPage)
+          this.mergeChats(this.lastChatPage);
+        if (epoch !== this.epoch) return;
         if (this.state.transcript.observation === 'failed') {
           void this.closeOwner(this.selection);
           this.selection = undefined;
@@ -728,6 +734,7 @@ class ChatModelState {
     } catch {
       return;
     }
+    const watched = this.chatPagesWatched;
     return this.runEffect(
       Effect.flatMap(
         Effect.forkIn(
@@ -745,9 +752,125 @@ class ChatModelState {
         const past = kept.length > 0 && !listed.chats.includes(kept.at(-1)!);
         if (!past) this.chatPages = listed.pages;
         this.listed({ chats: kept, next: past ? this.state.nextChats : listed.next });
+        // A watch page that landed while this read is newer than the rows it returned.
+        if (this.chatPagesWatched !== watched && this.lastChatPage)
+          this.mergeChats(this.lastChatPage);
       })
       .catch(() => {});
   }
+  /** The owner whose chat list watch is open or waiting to reconnect. */
+  private chatsFollowed?: Owner;
+  /** The latest state the chat list's watch delivered, and how many it has delivered. */
+  private lastChatPage?: ChatListState;
+  private chatPagesWatched = 0;
+  /** The owner whose Refresh is reading the first listing; its watch pages wait for it. */
+  private listingChats?: Owner;
+  /**
+   * Follows the chat list's watch for `owner`: each first page it delivers merges into the list
+   * on screen with the changed chats past it, and a reset, a growing count of changed chats the
+   * watch let go (or the first page after a failed watch) lists again in the background, since
+   * chats past the first page may have changed unseen. A retryable failure watches
+   * again after the transcript's backoff; once that runs out, the list stays as it is until
+   * `watchChats` or Refresh.
+   */
+  private followChats(owner: Owner, recovering = false): Effect.Effect<void, ApplicationError> {
+    type Attempt = {
+      open: boolean;
+      firstAt?: number;
+      dropped?: number;
+      observation?: Observation;
+    };
+    let failures = 0;
+    if (this.chatsFollowed !== owner) this.lastChatPage = undefined;
+    this.chatsFollowed = owner;
+    // A selection changes the epoch but not the list, so only the owner bounds the watch.
+    const current = () => owner.alive && this.chatsFollowed === owner;
+    const follow = (reload: boolean): Effect.Effect<void, ApplicationError> =>
+      Effect.gen({ self: this }, function* () {
+        const attempt: Attempt = { open: true };
+        attempt.observation = yield* this.observe(
+          owner,
+          () =>
+            this.chat.watchChatList(
+              { session: this.session },
+              (update) => {
+                if (!attempt.open || !current()) return;
+                attempt.firstAt ??= performance.now();
+                const dropped = attempt.dropped !== undefined && update.dropped !== attempt.dropped;
+                attempt.dropped = update.dropped;
+                this.lastChatPage = update;
+                this.chatPagesWatched++;
+                if (this.listingChats !== owner) this.mergeChats(update);
+                if (update.reset || reload || dropped) {
+                  reload = false;
+                  void this.reloadChats({ latest: true });
+                }
+              },
+              (error) => {
+                if (!attempt.open) return;
+                attempt.open = false;
+                recover(error, attempt);
+              },
+            ),
+          this.generation,
+        );
+        if (!attempt.open && attempt.observation) void this.closeObservation(attempt.observation);
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.sync(() => {
+            if (!Cause.hasInterruptsOnly(cause)) recover(Cause.squash(cause), { open: false });
+          }),
+        ),
+      );
+    const recover = (error: unknown, failed: Attempt) => {
+      if (failed.observation) void this.closeObservation(failed.observation);
+      if (!current()) return;
+      if (
+        failed.firstAt !== undefined &&
+        performance.now() - failed.firstAt >= this.transcriptWatchHealthyMs
+      )
+        failures = 0;
+      const delay = this.transcriptWatchRetryMs[failures];
+      if (normalizeApplicationError(error).code !== 'Unavailable' || delay === undefined) {
+        this.chatsFollowed = undefined;
+        return;
+      }
+      failures++;
+      const again = Effect.gen({ self: this }, function* () {
+        yield* Effect.sleep(delay);
+        if (current()) yield* follow(true);
+      });
+      void this.runEffect(Effect.forkIn(again, owner.scope)).catch(this.error);
+    };
+    return follow(recovering);
+  }
+  /**
+   * Merges the chat list's first page into the list on screen, keeping chats it did not reach,
+   * and replaces listed chats past it with their changed rows.
+   */
+  private mergeChats({ list: page, changed }: ChatListState) {
+    const kept = keepUnreachedChats(this.state.chats, page.conversations);
+    // The list reaches past the page only when a chat it did not reach comes last.
+    const past = kept.length > 0 && !page.conversations.includes(kept.at(-1)!);
+    if (!past) this.chatPages = 1;
+    const rows = new Map(changed.map((chat) => [chat.target.conversationId, chat]));
+    this.listed({
+      chats: kept.map((chat) => rows.get(chat.target.conversationId) ?? chat),
+      next: past ? this.state.nextChats : page.nextCursor,
+    });
+  }
+  /**
+   * Watches the chat list again if its watch stopped (as a window becomes visible), listing it
+   * again once the watch delivers. A watch that is open or reconnecting is left alone.
+   */
+  watchChats = (): Promise<void> => {
+    const owner = this.refreshOwner;
+    if (!this.admissionsOpen || this.closed || !owner?.alive || !this.state.ready) {
+      return Promise.resolve();
+    }
+    if (this.chatsFollowed === owner) return Promise.resolve();
+    return this.runEffect(this.followChats(owner, true)).catch(this.error);
+  };
   /** Records that you saw a chat as of its activity time; an older look never replaces a newer one. */
   markSeen(conversationId: string, at: string) {
     if (!this.admissionsOpen || this.closed || this.state.storageError) return;
@@ -849,8 +972,7 @@ class ChatModelState {
       Effect.gen({ self: this }, function* () {
         this.connected();
         const target = this.saved.selected,
-          host = this.state.host;
-        const cwd = options.cwd ?? (host && 'cwd' in host ? host.cwd : undefined);
+          cwd = options.cwd;
         if (!target && !cwd) throw invalid('Choose a working folder to search its files.');
         const input = decodeChatInput(
           'findChatFiles',
@@ -935,7 +1057,8 @@ class ChatModelState {
         target: structuredClone(target),
         backend: this.backend,
         memory: this.transcriptMemory,
-        local: this.mode === 'local',
+        // A chat on this machine is read in place; one over a connection streams.
+        local: !this.connection,
         scope: owner.scope,
         closeGraceMs: this.transcriptCloseGraceMs,
         publish: (state, snapshot) => {
@@ -1094,13 +1217,12 @@ class ChatModelState {
         this.connected();
         if (!text(title, 200) || !title.trim())
           throw invalid('Use a chat title of 1–200 UTF-8 bytes.');
-        if ((this.mode === 'local') !== (settings !== undefined))
-          throw invalid('Choose folder/model settings for local chats only.');
+        if (!settings) throw invalid('Choose a folder and model for this chat.');
         const captured = decodeChatInput('createChat', {
           session: this.session,
           requestId: this.newId(),
           title,
-          ...(settings ? { settings } : {}),
+          settings,
         });
         const pending: Pending = {
           operation: 'createChat',
@@ -1135,8 +1257,7 @@ class ChatModelState {
             )
           )
             throw invalid('Resolve the retained new conversation before sending another.');
-          if ((this.mode === 'local') !== (settings !== undefined))
-            throw invalid('Choose folder/model settings for local chats only.');
+          if (!settings) throw invalid('Choose a folder and model for this chat.');
           let title = '';
           for (const character of value.trim().split('\n')[0]!) {
             if (bytes(title + character) > 80) break;
@@ -1148,7 +1269,7 @@ class ChatModelState {
               session: this.session,
               requestId: this.newId(),
               title: title || 'New conversation',
-              ...(settings ? { settings } : {}),
+              settings,
             }),
             firstMessage: { requestId: this.newId(), ...message },
             message: 'Outcome pending. Original creation and first message retained.',
@@ -1198,8 +1319,8 @@ class ChatModelState {
     );
   /**
    * Settles or unsettles a chat on its host. The listed chat and the open snapshot take the host's
-   * reply, so the chat moves group at once; a reload then lists it again, after any listing that
-   * began before the reply.
+   * reply, so the chat moves group at once. The list's watch then delivers the change; without an
+   * open watch a reload lists it again, after any listing that began before the reply.
    */
   settle = (target: ChatTarget, settled: boolean) =>
     this.action(
@@ -1221,7 +1342,7 @@ class ChatModelState {
         }
         if (this.selection?.alive && sameTarget(this.selection.target, summary.target))
           this.selection.transcript?.updateConversation(summary);
-        void this.reloadChats({ latest: true });
+        if (this.chatsFollowed !== this.refreshOwner) void this.reloadChats({ latest: true });
       }),
       this.generation,
     );
@@ -1512,6 +1633,7 @@ export type ChatController = Pick<
   | 'moreChats'
   | 'firstChats'
   | 'reloadChats'
+  | 'watchChats'
   | 'markSeen'
   | 'setDraft'
   | 'findFiles'

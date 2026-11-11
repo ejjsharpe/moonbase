@@ -72,7 +72,7 @@ export function Settings({
               ) : (
                 <p {...stylex.props(styles.note)}>
                   {chat
-                    ? 'A remote host signs in to model providers itself.'
+                    ? 'This host does not offer provider setup.'
                     : 'Chat is unavailable, so providers cannot be set up.'}
                 </p>
               )}
@@ -101,7 +101,8 @@ function Hosts({
     chat?.subscribe ?? noSubscription,
     chat?.getSnapshot ?? noChat,
   );
-  const local = state?.mode === 'local';
+  // A host on this Mac; a remote one is connected explicitly.
+  const local = !!state && !state.remote;
   const busy = (id: string) => !!state?.active.includes(id);
   const connected = state?.connection?.state === 'connected';
   const connection = state?.connection?.state;

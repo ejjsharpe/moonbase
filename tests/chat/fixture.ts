@@ -3,12 +3,30 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, realpath, readFile, writeFile, chmod, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createServer } from 'node:net';
+import { createServer, type AddressInfo } from 'node:net';
 import { ManagedRuntime, Layer } from 'effect';
-import { makeChatClient, makeConnectionClient } from '@moonbase/application/runtime/clients';
-import { RemoteChatLive } from '@moonbase/pi-runtime/remote';
+import {
+  makeChatClient,
+  makeConnectionClient,
+  makeProviderSetupClient,
+} from '@moonbase/application/runtime/clients';
+import {
+  RemoteChatLive,
+  RemoteLocalHostLive,
+  RemoteProviderSetupLive,
+} from '@moonbase/pi-runtime/remote';
+import { LocalHostService } from '@moonbase/contracts/services';
 import { SshLive } from '@moonbase/ssh';
 import type { ChatTarget } from '@moonbase/contracts/chat';
+import { fauxModel } from './faux-model.ts';
+
+async function findFreePort() {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
 export async function until<T>(get: () => Promise<T>, ready: (v: T) => boolean) {
   const end = Date.now() + 15000;
   while (Date.now() < end) {
@@ -44,25 +62,43 @@ export type CleanupReport = {
   processGroups: number[];
   reboundPorts: number[];
 };
-export async function controlledHostFixture(hostScript: URL, hold = false) {
+const daemonEntry = new URL('./daemon-host.ts', import.meta.url).pathname;
+const noNetwork = new URL('../../apps/daemon/test/no-network.ts', import.meta.url).pathname;
+/**
+ * A controlled remote host: the daemon in host mode in temporary data, on Bun, with the faux
+ * providers and tools of `behaviour` (a `faux-*.mjs` module), reached through `forward.mjs` in
+ * place of OpenSSH. Its approved root is `cwd`; chats choose `model`.
+ */
+export async function controlledHostFixture(behaviour: URL, hold = false) {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-chat-test-'))),
-    cwd = join(directory, 'remote-folder');
+    cwd = join(directory, 'remote-folder'),
+    data = join(directory, 'data');
   await mkdir(cwd);
+  await mkdir(data, { mode: 0o700 });
   const session = {
       host: { hostId: 'controlled-host', storeId: 'controlled-store' },
       actorId: 'personal',
     },
     token = randomBytes(32).toString('hex'),
-    configuration = join(directory, 'host.json'),
+    port = await findFreePort(),
     log = join(directory, 'forward.jsonl'),
     drop = join(directory, 'drop-send'),
     executable = join(directory, 'controlled-ssh'),
     clientConfig = join(directory, 'client.json');
-  await writeFile(
-    configuration,
-    JSON.stringify({ session, token, cwd, databasePath: join(directory, 'chat.sqlite'), hold }),
-    { mode: 0o600 },
-  );
+  // The host's identity and token are provisioned as for a real host; the client holds the token.
+  const write = (name: string, value: unknown) =>
+    writeFile(join(data, name), typeof value === 'string' ? value : JSON.stringify(value), {
+      mode: 0o600,
+    });
+  await write('identity.json', session);
+  await write('token', token);
+  await write('daemon.json', {
+    mode: 'host',
+    port,
+    approvedRoots: [cwd],
+    credentialKey: { source: 'file', path: join(directory, 'credential.key') },
+  });
+  await write('fixture.json', { behaviour: behaviour.pathname, hold });
   if (/\s/.test(process.execPath)) throw Error('Controlled executable path contains whitespace');
   await writeFile(
     executable,
@@ -83,14 +119,21 @@ export async function controlledHostFixture(hostScript: URL, hold = false) {
   let host: ChildProcess | undefined,
     origin = '';
   async function startHost() {
-    host = fork(hostScript, [configuration], {
-      execArgv: ['--experimental-strip-types'],
+    host = fork(daemonEntry, [data], {
+      execPath: 'bun',
+      // As the app runs the daemon: no `.env`, `bunfig.toml` or auto-install; no provider network.
+      execArgv: ['--no-env-file', '--config=/dev/null', '--no-install', '--preload', noNetwork],
+      cwd: data,
       silent: true,
-      env: Object.fromEntries(
-        Object.entries(process.env).filter(([k]) =>
-          ['PATH', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'LC_ALL', 'LC_CTYPE'].includes(k),
+      env: {
+        ...Object.fromEntries(
+          Object.entries(process.env).filter(([k]) =>
+            ['PATH', 'HOME', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'LC_ALL', 'LC_CTYPE'].includes(k),
+          ),
         ),
-      ),
+        WS_NO_BUFFER_UTIL: '1',
+        WS_NO_UTF_8_VALIDATE: '1',
+      },
     });
     hostPids.push(host.pid!);
     host.stderr?.resume();
@@ -104,13 +147,13 @@ export async function controlledHostFixture(hostScript: URL, hold = false) {
     });
     const child = host;
     origin = await new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => reject(Error('Host startup deadline')), 10000);
+      const timer = setTimeout(() => reject(Error('Host startup deadline')), 20000);
       const receive = (m: unknown) => {
-        const v = m as { event: string; origin: string };
+        const v = m as { event: string; port: number };
         if (v.event === 'ready') {
           clearTimeout(timer);
           child.off('message', receive);
-          resolve(v.origin);
+          resolve(`http://127.0.0.1:${v.port}`);
         }
         if (v.event === 'failed') {
           clearTimeout(timer);
@@ -163,8 +206,17 @@ export async function controlledHostFixture(hostScript: URL, hold = false) {
   }
   function root(expected = session.host) {
     const configuredProfile = profile(expected);
+    // The clients a remote desktop composes: chat, folders and provider setup over one forward.
     const runtime = ManagedRuntime.make(
-      RemoteChatLive.pipe(
+      Layer.mergeAll(
+        RemoteChatLive,
+        RemoteLocalHostLive,
+        RemoteProviderSetupLive({
+          host: expected,
+          sameMachine: false,
+          openUrl: async () => {},
+        }),
+      ).pipe(
         Layer.provideMerge(
           SshLive({ profile: configuredProfile, token, sshExecutable: executable }),
         ),
@@ -176,6 +228,8 @@ export async function controlledHostFixture(hostScript: URL, hold = false) {
       profile: configuredProfile,
       chat: makeChatClient(runtime),
       connection: makeConnectionClient(runtime),
+      providers: (ownerId: string) => makeProviderSetupClient(runtime, ownerId),
+      folders: () => runtime.runPromise(LocalHostService),
     };
   }
   async function close() {
@@ -264,9 +318,13 @@ export async function controlledHostFixture(hostScript: URL, hold = false) {
     });
   return {
     directory,
+    data,
     session,
     token,
     cwd,
+    model: fauxModel,
+    /** Settings for a new chat in the host's approved root. */
+    settings: { cwd, model: fauxModel },
     clientConfig,
     log,
     drop,

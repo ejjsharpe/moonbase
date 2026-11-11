@@ -4,6 +4,7 @@ import type {
   ProviderSetupClient,
   ProviderState,
 } from '@moonbase/contracts/providers';
+import type { ObservationClose } from '@moonbase/contracts/common';
 import { normalizeApplicationError } from '../../runtime/effect-client.ts';
 
 export type ProviderSetupSnapshot = {
@@ -11,12 +12,25 @@ export type ProviderSetupSnapshot = {
   busy: boolean;
   error: string | null;
 };
-/** Transient setup state only: answers never enter snapshots or draft storage. */
-export function makeProviderSetupController(client: ProviderSetupClient) {
+/**
+ * Transient setup state only: answers never enter snapshots or draft storage. The state comes from
+ * the client's watch once it delivers, so a sign-in's progress appears without polling; until then
+ * command replies supply it. A watch that fails retryably opens again after the chat list's
+ * backoff (renewed once a watch stays up `healthyMs`); once that runs out, or after another
+ * failure, the next refresh, login or answer opens it again.
+ */
+export function makeProviderSetupController(
+  client: ProviderSetupClient,
+  { retryMs, healthyMs }: { retryMs: readonly number[]; healthyMs: number },
+) {
   let snapshot: ProviderSetupSnapshot = { status: null, busy: false, error: null };
   let closed = false,
     admissionsOpen = true;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  /** The open watch, and when it first delivered; it is the state's source once it has. */
+  type Watching = { close?: ObservationClose; deliveredAt?: number };
+  let watching: Watching | undefined;
+  let failures = 0,
+    retry: ReturnType<typeof setTimeout> | undefined;
   let disposal: Promise<void> | undefined;
   const cleanupErrors: Error[] = [];
   let revision = 0,
@@ -43,7 +57,6 @@ export function makeProviderSetupController(client: ProviderSetupClient) {
     if (read && mutations) return Promise.resolve();
     const captured = read ? revision : ++revision;
     if (!read) mutations++;
-    if (timer) clearTimeout(timer);
     publish({ busy: true, error: null });
     const task = client
       .command(operation, input)
@@ -53,12 +66,8 @@ export function makeProviderSetupController(client: ProviderSetupClient) {
             await client.command('cancelProviderLogin', { flowId: status.flow.id });
           return;
         }
-        if (captured !== revision) return;
+        if (captured !== revision || watching?.deliveredAt !== undefined) return;
         publish({ status });
-        if (status.flow?.state === 'running')
-          timer = setTimeout(() => {
-            void command('getProviders', {});
-          }, 300);
       })
       .catch((error) => {
         if (closed) cleanupErrors.push(normalizeApplicationError(error));
@@ -73,6 +82,54 @@ export function makeProviderSetupController(client: ProviderSetupClient) {
     work.add(task);
     return task;
   };
+  const closeWatch = () => {
+    const current = watching;
+    watching = undefined;
+    void current?.close?.().catch(() => {});
+  };
+  /** Opens the watch unless one is open or waiting to reopen. */
+  const watch = () => {
+    if (closed || !admissionsOpen || watching || retry) return;
+    const current: Watching = {};
+    watching = current;
+    try {
+      current.close = client.watch(
+        (status) => {
+          if (closed || watching !== current) return;
+          current.deliveredAt ??= performance.now();
+          publish({ status });
+        },
+        (error) => {
+          if (watching !== current) return;
+          closeWatch();
+          reopen(error, current);
+        },
+      );
+    } catch (error) {
+      if (watching === current) watching = undefined;
+      reopen(error, current);
+    }
+  };
+  const reopen = (error: unknown, failed: Watching) => {
+    if (closed) return;
+    if (failed.deliveredAt !== undefined && performance.now() - failed.deliveredAt >= healthyMs)
+      failures = 0;
+    const delay = retryMs[failures];
+    if (normalizeApplicationError(error).code !== 'Unavailable' || delay === undefined) {
+      failures = 0;
+      return;
+    }
+    failures++;
+    retry = setTimeout(() => {
+      retry = undefined;
+      watch();
+    }, delay);
+  };
+  /** Commands that start or continue a sign-in first make sure its progress is being watched. */
+  const watched = <T>(run: () => T) => {
+    watch();
+    return run();
+  };
   return {
     getSnapshot: () => snapshot,
     subscribe: (listener: () => void) => {
@@ -81,26 +138,21 @@ export function makeProviderSetupController(client: ProviderSetupClient) {
         listeners.delete(listener);
       };
     },
-    refresh: () => command('getProviders', {}),
-    login: (providerId: string) => command('startProviderLogin', { providerId }),
+    refresh: () => watched(() => command('getProviders', {})),
+    login: (providerId: string) => watched(() => command('startProviderLogin', { providerId })),
     answer: (flowId: string, promptId: string, answer: string) =>
-      command('answerProviderPrompt', { flowId, promptId, answer }),
+      watched(() => command('answerProviderPrompt', { flowId, promptId, answer })),
     cancel: (flowId: string) => command('cancelProviderLogin', { flowId }),
     openUrl: (flowId: string) => command('openProviderUrl', { flowId }),
     logout: (providerId: string) => command('logoutProvider', { providerId }),
     setAdmissionsOpen(open: boolean) {
       admissionsOpen = open;
-      if (open && !closed && snapshot.status?.flow?.state === 'running') {
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(() => {
-          void command('getProviders', {});
-        }, 300);
-      }
     },
     dispose(): Promise<void> {
       if (disposal) return disposal;
       closed = true;
-      if (timer) clearTimeout(timer);
+      clearTimeout(retry);
+      closeWatch();
       listeners.clear();
       disposal = (async () => {
         await Promise.all(work);

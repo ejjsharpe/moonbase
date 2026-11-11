@@ -11,37 +11,36 @@ const listed = async (client: ChatClient, target: ChatTarget) =>
     (chat) => chat.target.conversationId === target.conversationId,
   );
 
-for (const local of [true, false])
-  test(`a ${local ? 'local' : 'fixed-settings'} chat settles and unsettles on its host, across a restart`, async (t) => {
-    const f = await fixture(t, undefined, {}, local);
-    const target = await f.create();
-    assert.equal((await listed(f.client, target))?.settledAt, undefined);
+test('a chat settles and unsettles on its host, across a restart', async (t) => {
+  const f = await fixture(t);
+  const target = await f.create();
+  assert.equal((await listed(f.client, target))?.settledAt, undefined);
 
-    const settled = await f.client.command('settleChat', { target, settled: true });
-    assert.deepEqual(settled.target, target);
-    assert(settled.settledAt && Number.isFinite(Date.parse(settled.settledAt)));
-    // Settling a settled chat again keeps its original time.
-    assert.deepEqual(await f.client.command('settleChat', { target, settled: true }), settled);
-    assert.equal((await listed(f.client, target))?.settledAt, settled.settledAt);
+  const settled = await f.client.command('settleChat', { target, settled: true });
+  assert.deepEqual(settled.target, target);
+  assert(settled.settledAt && Number.isFinite(Date.parse(settled.settledAt)));
+  // Settling a settled chat again keeps its original time.
+  assert.deepEqual(await f.client.command('settleChat', { target, settled: true }), settled);
+  assert.equal((await listed(f.client, target))?.settledAt, settled.settledAt);
 
-    await f.restart();
-    assert.equal((await listed(f.client, target))?.settledAt, settled.settledAt);
-    assert.equal(
-      (await f.client.command('getChat', { target })).conversation.settledAt,
-      settled.settledAt,
-    );
+  await f.restart();
+  assert.equal((await listed(f.client, target))?.settledAt, settled.settledAt);
+  assert.equal(
+    (await f.client.command('getChat', { target })).conversation.settledAt,
+    settled.settledAt,
+  );
 
-    const unsettled = await f.client.command('settleChat', { target, settled: false });
-    assert.equal(unsettled.settledAt, undefined);
-    assert.equal('settledAt' in unsettled, false);
-    assert.deepEqual(await f.client.command('settleChat', { target, settled: false }), unsettled);
-    await f.restart();
-    assert.equal((await listed(f.client, target))?.settledAt, undefined);
-    assert.equal((await f.client.command('getChat', { target })).conversation.settledAt, undefined);
-  });
+  const unsettled = await f.client.command('settleChat', { target, settled: false });
+  assert.equal(unsettled.settledAt, undefined);
+  assert.equal('settledAt' in unsettled, false);
+  assert.deepEqual(await f.client.command('settleChat', { target, settled: false }), unsettled);
+  await f.restart();
+  assert.equal((await listed(f.client, target))?.settledAt, undefined);
+  assert.equal((await f.client.command('getChat', { target })).conversation.settledAt, undefined);
+});
 
 test('sending to a settled chat unsettles it', async (t) => {
-  const f = await fixture(t, undefined, {}, true);
+  const f = await fixture(t);
   const target = await f.create();
   await f.client.command('settleChat', { target, settled: true });
   f.faux.setResponses([fauxAssistantMessage('Back on it')]);
@@ -59,7 +58,7 @@ test('sending to a settled chat unsettles it', async (t) => {
 });
 
 test('settling refuses foreign targets and waits for open admissions', async (t) => {
-  const f = await fixture(t, undefined, {}, true);
+  const f = await fixture(t);
   const target = await f.create();
   await assert.rejects(
     f.client.command('settleChat', {

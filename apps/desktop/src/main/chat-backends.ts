@@ -1,30 +1,41 @@
 import type { NativeTranscriptActions } from '../chat/transcript-native.ts';
 import { randomUUID } from 'node:crypto';
-import type { ManagedRuntime } from 'effect';
+import { realpath } from 'node:fs/promises';
+import type { Effect, ManagedRuntime } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatClient } from '@moonbase/contracts/chat';
 import type { ConnectionClient } from '@moonbase/contracts/connection';
 import { bindChatClient, bindProviderSetupClient } from '@moonbase/application/runtime/clients';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
-import type { acquireLocalChat } from '../chat/local.ts';
+import type { DaemonChat } from '../chat/daemon.ts';
 import type { ChatConfiguration } from '../chat/config.ts';
 import { ChatIpcSession } from '../chat/session.ts';
 import type { Reply, DesktopChatTarget } from '../chat/wire.ts';
 
-type LocalResult = {
-  backend: Awaited<ReturnType<typeof acquireLocalChat>> | null;
-  error: ApplicationError | null;
+type LocalResult = { backend: DaemonChat | null; error: ApplicationError | null };
+/** A remote host's daemon in host mode, over its SSH connection. */
+export type RemoteChat = {
+  configuration: ChatConfiguration;
+  chat: ChatClient;
+  connection: ConnectionClient;
+  providers: DaemonChat['providers'];
+  folders: DaemonChat['folders'];
 };
+
+const editorFolderChanged = () =>
+  new ApplicationError({
+    code: 'Unauthorized',
+    message: 'This folder changed since the editor approved it. Open it again.',
+  });
 
 export function createChatBackends({
   runtime,
   localResult,
   acquireLocal,
-  chatConfiguration,
-  remoteChat,
-  connection,
+  remote = null,
   emit,
   pickFolder,
+  isEditorFolder = () => false,
   createWorktree,
   openFolderProject,
   transcript,
@@ -32,11 +43,11 @@ export function createChatBackends({
   runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>;
   localResult: LocalResult;
   acquireLocal(): Promise<LocalResult>;
-  chatConfiguration: ChatConfiguration | null;
-  remoteChat: ChatClient | null;
-  connection: ConnectionClient | null;
+  remote?: RemoteChat | null;
   emit(backendId: string, id: string, result: Reply): void;
   pickFolder(): Promise<string | null>;
+  /** Whether a folder is a checkout or worktree the editor approved natively. */
+  isEditorFolder?(path: string): boolean;
   /** Creates a linked worktree of the checkout at `root`, returning its root. */
   createWorktree?(root: string, branch: string, signal: AbortSignal): Promise<string>;
   /** Opens a folder main trusts as a project, approving it for the editor; returns its root. */
@@ -48,9 +59,47 @@ export function createChatBackends({
   const sessions = new Map<string, ChatIpcSession>();
   /** Worktree creations for the current document; replacing the document cancels them. */
   const worktreeCreations = new Set<AbortController>();
+  /** Editor folders granted to the daemon by this process, or being granted, once each. */
+  const grants = new Map<string, Promise<void>>();
   let documentId = randomUUID();
+  const run = <A>(effect: Effect.Effect<A, ApplicationError>) =>
+    runApplicationEffect(runtime, effect);
   const emitChat = (backendId: string) => (id: string, result: Reply) => {
     emit(backendId, id, result);
+  };
+  /**
+   * Grants the daemon a checkout or worktree the editor approved, when a chat first uses it, so a
+   * folder no chat used gains no lasting authority. The daemon keeps the grant (unlisted among
+   * recent folders) and re-checks the folder's identity on use.
+   */
+  const grantEditorFolder = (path: string) => {
+    if (!local) return Promise.resolve();
+    const backend = local;
+    let grant = grants.get(path);
+    if (!grant) {
+      // The daemon stores the folder a path resolves to. Grant only a path that is itself that
+      // folder, so a root replaced by a link never grants the link's target.
+      grant = realpath(path)
+        .catch(() => '')
+        .then((resolved) => {
+          if (resolved !== path) throw editorFolderChanged();
+          return run(
+            backend.folders.approveFolder({
+              host: backend.session.host,
+              requestId: randomUUID(),
+              path,
+              recent: false,
+            }),
+          );
+        })
+        .then((approved) => {
+          if (approved.path !== path) throw editorFolderChanged();
+        });
+      grants.set(path, grant);
+      // A failed grant is tried again on the folder's next use.
+      grant.catch(() => grants.delete(path));
+    }
+    return grant;
   };
   const installChatSessions = () => {
     if (local && !sessions.has('local'))
@@ -59,25 +108,41 @@ export function createChatBackends({
         new ChatIpcSession(
           runtime,
           bindChatClient(runtime, local.chat),
-          null,
+          { mode: 'local' },
           local.session,
           emitChat('local'),
           {
             transcript,
             providers: bindProviderSetupClient(runtime, local.providers, documentId),
+            // An editor folder a chat names is granted first; any other path grants nothing.
+            prepareFolder: async (path) => {
+              if (isEditorFolder(path)) await grantEditorFolder(path);
+            },
+            // The daemon refused a folder this process granted: grant it once more, uncached.
+            regrantFolder: async (path) => {
+              if (!isEditorFolder(path)) return false;
+              grants.delete(path);
+              await grantEditorFolder(path);
+              return true;
+            },
           },
         ),
       );
-    if (chatConfiguration && remoteChat && connection && !sessions.has('remote'))
+    // A remote host sets up its own providers; its folders are its approved roots, which a
+    // chat names directly, so main grants nothing for it.
+    if (remote && !sessions.has('remote'))
       sessions.set(
         'remote',
         new ChatIpcSession(
           runtime,
-          remoteChat,
-          connection,
-          chatConfiguration.context,
+          remote.chat,
+          { mode: 'remote', connection: remote.connection },
+          remote.configuration.context,
           emitChat('remote'),
-          { transcript },
+          {
+            transcript,
+            providers: bindProviderSetupClient(runtime, remote.providers, documentId),
+          },
         ),
       );
   };
@@ -92,17 +157,21 @@ export function createChatBackends({
         actorId: 'unavailable-local',
       },
     },
-    ...(chatConfiguration
+    ...(remote
       ? [
           {
             id: 'remote',
-            label: chatConfiguration.ssh.profile.label,
+            label: remote.configuration.ssh.profile.label,
             mode: 'remote' as const,
-            context: chatConfiguration.context,
+            context: remote.configuration.context,
           },
         ]
       : []),
   ];
+  const requireBackend = (message: string) => {
+    if (!local) throw new ApplicationError({ code: 'Unavailable', message });
+    return local;
+  };
   const releaseChatDocument = async () => {
     const owner = documentId;
     for (const creation of worktreeCreations) creation.abort();
@@ -110,11 +179,13 @@ export function createChatBackends({
     const closing = [...sessions.values()].map((session) => session.dispose());
     sessions.clear();
     documentId = randomUUID();
-    local?.control.setAdmissionsOpen(true);
     installChatSessions();
     const results = await Promise.allSettled([
       ...closing,
-      ...(local ? [runApplicationEffect(runtime, local.providers.releaseOwner(owner))] : []),
+      ...(local ? [run(local.providers.releaseOwner(owner))] : []),
+      // A remote host may be disconnected or unreachable; it drops an owner it hasn't heard
+      // from in 30 minutes, so releasing it there is best effort.
+      ...(remote ? [run(remote.providers.releaseOwner(owner)).catch(() => {})] : []),
     ]);
     const failure = results.find((result) => result.status === 'rejected');
     if (failure?.status === 'rejected') throw failure.reason;
@@ -122,7 +193,6 @@ export function createChatBackends({
 
   return {
     getTargets: () => targets,
-    hasLocalChat: () => local !== null,
     getSession: (backendId: string) => sessions.get(backendId),
     getSessions: (): Pick<ChatIpcSession, 'dispose'>[] => [...sessions.values()],
     findTranscriptImage: (token: string) =>
@@ -145,26 +215,40 @@ export function createChatBackends({
       return targets.find((target) => target.id === backendId)!.context;
     },
     async chooseFolder() {
-      if (!local)
-        throw new ApplicationError({
-          code: 'Unavailable',
-          message: 'Folder selection is unavailable.',
-        });
+      const backend = requireBackend('Folder selection is unavailable.');
       const owner = documentId;
       const selection = await pickFolder();
       if (owner !== documentId || !selection) return null;
-      return local.approveFolder(selection);
+      const { path } = await run(
+        backend.folders.approveFolder({
+          host: backend.session.host,
+          requestId: randomUUID(),
+          path: selection,
+        }),
+      );
+      return path;
     },
-    /** Folders the native picker approved before, still the same directories, newest first. */
-    async recentFolders() {
-      return local ? local.listRecentFolders() : [];
+    /**
+     * Local chat's folders the native picker approved before, still the same directories, newest
+     * first; or a remote host's approved roots and their folders, which it offers in place of a
+     * picker for its disk.
+     */
+    async recentFolders(backendId = 'local') {
+      if (backendId === 'remote') {
+        if (!remote) return [];
+        const { host } = remote.configuration.context;
+        return (await run(remote.folders.listHostFolders({ host }))).folders;
+      }
+      if (!local) return [];
+      return (await run(local.folders.listRecentFolders({ host: local.session.host }))).folders;
     },
     /**
      * Starts a new local chat's worktree from a folder local chat may use, and approves the new
      * worktree as that chat's working folder.
      */
     async createWorktree(root: string, branch: string) {
-      if (!local || !createWorktree)
+      const backend = requireBackend('New worktrees are unavailable.');
+      if (!createWorktree)
         throw new ApplicationError({
           code: 'Unavailable',
           message: 'New worktrees are unavailable.',
@@ -173,7 +257,11 @@ export function createChatBackends({
         creation = new AbortController();
       worktreeCreations.add(creation);
       try {
-        await local.requireApprovedFolder(root);
+        if (isEditorFolder(root)) await grantEditorFolder(root);
+        else
+          await run(
+            backend.folders.checkApprovedFolder({ host: backend.session.host, path: root }),
+          );
         const created = await createWorktree(root, branch, creation.signal);
         // A replaced document's worktree is left on disk but not approved for the new document.
         if (owner !== documentId)
@@ -181,7 +269,15 @@ export function createChatBackends({
             code: 'Cancelled',
             message: 'The window reloaded while the worktree was created.',
           });
-        return await local.approveFolder(created, { recent: false });
+        const { path } = await run(
+          backend.folders.approveFolder({
+            host: backend.session.host,
+            requestId: randomUUID(),
+            path: created,
+            recent: false,
+          }),
+        );
+        return path;
       } finally {
         worktreeCreations.delete(creation);
       }
@@ -191,20 +287,23 @@ export function createChatBackends({
      * the agent keeps working in the same place, then lists the chat under that project.
      */
     async turnIntoProject(conversationId: string) {
-      if (!local || !openFolderProject)
+      const backend = requireBackend('Turning a chat into a project is unavailable.');
+      if (!openFolderProject)
         throw new ApplicationError({
           code: 'Unavailable',
           message: 'Turning a chat into a project is unavailable.',
         });
       const owner = documentId,
-        target = { ...local.session, conversationId };
-      const { conversation } = await runApplicationEffect(runtime, local.chat.getChat({ target }));
+        target = { ...backend.session, conversationId };
+      const { conversation } = await run(backend.chat.getChat({ target }));
       if (!conversation.ownFolder)
         throw new ApplicationError({
           code: 'InvalidInput',
           message: 'Only a chat without a project can become one.',
         });
-      await local.requireChatFolder(conversation.cwd);
+      await run(
+        backend.folders.checkChatFolder({ host: backend.session.host, path: conversation.cwd }),
+      );
       // Opening first leaves the chat as it was if that fails; a retry opens the same folder again.
       const root = await openFolderProject(conversation.cwd);
       if (owner !== documentId)
@@ -212,17 +311,12 @@ export function createChatBackends({
           code: 'Cancelled',
           message: 'The window reloaded while the project was opened.',
         });
-      await runApplicationEffect(runtime, local.control.markFolderAsProject(target));
+      await run(backend.folders.markFolderAsProject({ requestId: randomUUID(), target }));
       return root;
     },
     requireLocal(backendId: string) {
       if (backendId === 'local' && !local) throw localResult.error;
     },
-    setAdmissionsOpen(open: boolean) {
-      local?.control.setAdmissionsOpen(open);
-    },
-    hasActiveWork: () =>
-      local ? runApplicationEffect(runtime, local.control.hasActiveWork()) : Promise.resolve(false),
     releaseDocument: releaseChatDocument,
   };
 }

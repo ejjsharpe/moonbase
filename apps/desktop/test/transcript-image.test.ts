@@ -39,6 +39,7 @@ function fixture(
     hold: Promise<void> | undefined;
   // Trusted ChatClient: chunks past the selected size are rejected at the ChatClient boundary.
   const chat: ChatClient = {
+    watchChatList: () => async () => {},
     async command(operation, input, commandOptions) {
       if (operation === 'getChat') {
         await options.commands;
@@ -63,9 +64,16 @@ function fixture(
     },
     watch: () => () => Promise.resolve(),
   };
-  const session = new ChatIpcSession(runtime, chat, options.connection ?? null, context, () => {}, {
-    perf: options.perf,
-  });
+  const session = new ChatIpcSession(
+    runtime,
+    chat,
+    options.connection ? { mode: 'remote', connection: options.connection } : { mode: 'local' },
+    context,
+    () => {},
+    {
+      perf: options.perf,
+    },
+  );
   let id = 0;
   const issue = async (mimeType: string, value = selection) => {
     const reply = await session.call(

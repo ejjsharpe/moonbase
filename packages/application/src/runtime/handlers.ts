@@ -45,9 +45,13 @@ export const chatCommand = <K extends ChatCommand>(operation: K, input: ChatInpu
   });
 export const chatWatch = (input: Parameters<ChatService['Service']['watch']>[0]) =>
   Stream.unwrap(Effect.map(ChatService, (service) => service.watch(input)));
+export const chatListWatch = (input: Parameters<ChatService['Service']['watchChatList']>[0]) =>
+  Stream.unwrap(Effect.map(ChatService, (service) => service.watchChatList(input)));
 
 export const providerCommand = <K extends ProviderCommand>(
   ownerId: string,
   operation: K,
   input: ProviderInput<K>,
 ) => Effect.flatMap(ProviderSetupService, (service) => service.forOwner(ownerId)[operation](input));
+export const providerWatch = (ownerId: string) =>
+  Stream.unwrap(Effect.map(ProviderSetupService, (service) => service.watch(ownerId)));

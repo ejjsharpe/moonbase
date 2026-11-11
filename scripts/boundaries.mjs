@@ -86,7 +86,6 @@ export function readRepository(root) {
 }
 
 export const processRoots = new Set([
-  'packages/pi-runtime/src/host.ts',
   'packages/pi-runtime/examples/remote.ts',
   'packages/workspace/examples/local.ts',
   'packages/ssh/examples/connect.ts',

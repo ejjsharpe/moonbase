@@ -9,11 +9,18 @@ import {
 import { createRegistry, defineExtension, defineTool } from '@earendil-works/pi-durable';
 import { Type } from 'typebox';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
-import { PiRuntimeLive } from '../src/index.ts';
+import { chatHostCapabilities } from '@moonbase/contracts/host';
+import { ApplicationError } from '@moonbase/contracts/errors';
+import { LocalPiRuntimeLive } from '../src/index.ts';
 import { serveChat } from '../src/server.ts';
 const config = JSON.parse(await readFile(process.argv[2], 'utf8'));
 const models = createModels(),
-  faux = fauxProvider({ tokensPerSecond: 100000, tokenSize: { min: 65536, max: 65536 } });
+  faux = fauxProvider({
+    provider: 'faux-host',
+    models: [{ id: 'faux-model' }],
+    tokensPerSecond: 100000,
+    tokenSize: { min: 65536, max: 65536 },
+  });
 models.setProvider(faux.provider);
 const record = (event) =>
   appendFile(config.log, JSON.stringify({ event, pid: process.pid }) + '\n');
@@ -55,14 +62,12 @@ registry.install(
   }),
 );
 const runtime = ManagedRuntime.make(
-    PiRuntimeLive({
+    LocalPiRuntimeLive({
       host: config.host,
       actorId: config.actorId,
-      cwd: config.cwd,
       databasePath: config.databasePath,
       models,
       registry,
-      model: { provider: faux.provider.id, modelId: faux.getModel().id },
     }),
   ),
   client = makeChatClient(runtime);
@@ -73,7 +78,18 @@ try {
   await runtime.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        yield* serveChat({ host: config.host, token: config.token, port: config.port }, client);
+        // A local-mode chat host advertises local mode; it serves no other daemon operation.
+        const daemon = {
+          command: async () => {
+            throw new ApplicationError({ code: 'Unavailable', message: 'Not served here.' });
+          },
+        };
+        yield* serveChat(
+          { host: config.host, token: config.token, port: config.port },
+          client,
+          daemon,
+          [chatHostCapabilities.local],
+        );
         console.log(JSON.stringify({ event: 'ready' }));
         yield* Effect.promise(() => done);
       }),

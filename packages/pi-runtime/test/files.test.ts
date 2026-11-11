@@ -132,36 +132,6 @@ test('results stop at 50 and say they are partial', async () => {
   assert.equal(result.partial, true);
 });
 
-test('a fixed host searches only its working folder, for new and existing chats', async (t) => {
-  const f = await fixture(t);
-  // Git lists the folder whether or not this machine has ripgrep.
-  execFileSync('git', ['init', '-q'], { cwd: f.config.cwd });
-  const client = f.client;
-  await writeFile(join(f.config.cwd, 'notes.md'), 'x');
-  const cwd = await realpath(f.config.cwd);
-  assert(
-    paths(await client.command('findChatFiles', { session, cwd, query: 'notes' })).includes(
-      'notes.md',
-    ),
-  );
-  await assert.rejects(
-    client.command('findChatFiles', { session, cwd: tmpdir(), query: '' }),
-    (error) => ApplicationError.is(error) && error.code === 'Unauthorized',
-  );
-  await assert.rejects(
-    client.command('findChatFiles', {
-      session: { ...session, actorId: 'other' },
-      cwd,
-      query: '',
-    }),
-    (error) => ApplicationError.is(error) && error.code === 'Unauthorized',
-  );
-  const target = await f.create();
-  assert(
-    paths(await client.command('findChatFiles', { target, query: 'notes' })).includes('notes.md'),
-  );
-});
-
 test('a local chat searches its own folder; a new chat only an approved one', async (t) => {
   const approved = await folder(t),
     other = await folder(t);

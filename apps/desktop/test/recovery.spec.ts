@@ -1,3 +1,4 @@
+import { findTestBun, prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
 import { prepareCrashRecovery } from './editor-regressions.ts';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -11,14 +12,16 @@ declare global {
 for (const action of ['Recover workbench', 'Quit Moonbase', 'cleanup failure'])
   test(`native recovery action: ${action}`, async () => {
     const data = mkdtempSync(join(tmpdir(), 'moonbase-recovery-'));
+    await prepareDaemonData(data);
     const app = await electron.launch({
-      args: [resolve('dist/main.mjs')],
+      args: ['-r', resolve('test/faux-daemon-preload.cjs'), resolve('dist/main.mjs')],
       env: {
         PATH: '/usr/bin:/bin',
         PI_CLAUDE_CODE_COMMAND: '/nonexistent/claude',
         HOME: process.env.HOME!,
         TMPDIR: process.env.TMPDIR!,
         MOONBASE_USER_DATA: data,
+        MOONBASE_TEST_BUN: findTestBun(),
       },
     });
     const child = app.process();
@@ -86,10 +89,15 @@ for (const action of ['Recover workbench', 'Quit Moonbase', 'cleanup failure'])
       }
       await expect.poll(() => child.exitCode).toBe(action === 'cleanup failure' ? 1 : 0);
     } finally {
-      if (child.exitCode === null) {
-        const exited = new Promise((resolve) => child.once('exit', resolve));
-        await app.evaluate(({ app }) => app.exit(0));
-        await exited;
+      try {
+        if (child.exitCode === null) {
+          const exited = new Promise((resolve) => child.once('exit', resolve));
+          await app.evaluate(({ app }) => app.exit(0));
+          await exited;
+        }
+      } finally {
+        // A daemon outlives its app: stop it even when the steps before fail.
+        await stopDaemon(join(data, 'daemon-v1'));
       }
       rmSync(data, { recursive: true, force: true, maxRetries: 5 });
     }

@@ -12,7 +12,6 @@ import {
   chatContentChunkBytes,
   chatManifestPageSize,
   maximumChatInputBytes,
-  maximumChatReplyBytes,
   maximumChatMentions,
   maximumChatFileQueryBytes,
   chatFileMatchLimit,
@@ -90,15 +89,11 @@ export const ChatCreationSettingsSchema = struct({
   cwd: optional(text(4096)),
   ...ChatModelPreferenceSchema.fields,
 });
-const remoteHostConfiguration = struct({
+/** Every host is a local-mode daemon: each chat chooses its own folder and model. */
+export const ChatHostConfigurationSchema = struct({
   ...ChatSessionSchema.fields,
-  cwd: text(4096),
-  model: text(512),
+  mode: Schema.Literal('local'),
 });
-export const ChatHostConfigurationSchema = Schema.Union([
-  remoteHostConfiguration,
-  struct({ ...ChatSessionSchema.fields, mode: Schema.Literal('local') }),
-]);
 const timestamp = text(64).check(Schema.makeFilter((value) => Number.isFinite(Date.parse(value))));
 /** A listed chat's latest run: whether it is running or how it last ended, and when. */
 export const ChatActivitySchema = struct({
@@ -225,15 +220,18 @@ export const ChatTranscriptSchema = struct({
   thinking: Schema.Literals(['available', 'redacted', 'none']),
 });
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).length;
+/** A running response's transcript part, whose text may be whole rather than a preview. */
+export const ChatLiveTranscriptPartSchema = struct({
+  ...ChatTranscriptPartSchema.fields,
+  text: unicode,
+});
 /**
  * A running response's transcript: a text part may carry its whole text (`truncated` false), and
  * its parts' text stays within `chatLiveTextBytes` in all.
  */
 export const ChatLiveTranscriptSchema = struct({
   ...ChatTranscriptSchema.fields,
-  parts: Schema.mutable(
-    Schema.Array(struct({ ...ChatTranscriptPartSchema.fields, text: unicode })),
-  ).check(
+  parts: Schema.mutable(Schema.Array(ChatLiveTranscriptPartSchema)).check(
     Schema.isMaxLength(chatManifestPageSize),
     Schema.makeFilter(
       (parts) => parts.reduce((sum, part) => sum + utf8Bytes(part.text), 0) <= chatLiveTextBytes,
@@ -274,8 +272,8 @@ export const ChatSnapshotSchema = struct({
   transcriptBoundary: Schema.NullOr(ChatIdentifierSchema),
   observationStatus: optional(Schema.Literals(['connected', 'reconnecting'])),
 });
-/** Error codes a chat stream may sign; a stream never carries a mutation's `Uncertain` outcome. */
-const chatStreamErrorCodes = [
+/** Error codes a daemon may sign in a reply or a subscription's end. */
+export const chatReplyErrorCodes = [
   'InvalidInput',
   'Unauthorized',
   'Incompatible',
@@ -283,53 +281,21 @@ const chatStreamErrorCodes = [
   'Persistence',
   'Unavailable',
   'Cancelled',
+  'Uncertain',
 ] as const;
-/** Error codes a chat host may sign in an RPC reply. */
-export const chatReplyErrorCodes = [...chatStreamErrorCodes, 'Uncertain'] as const;
-// Network-only envelopes; ordinary snapshots/IPC remain browser-safe replacements.
-export const ChatStreamRequestSchema = struct({
-  target: ChatTargetSchema,
-  connectionId: ChatIdentifierSchema,
-});
-const streamIdentity = {
-  ...ChatStreamRequestSchema.fields,
-  streamId: unicode.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/)),
-  sequence: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
-};
-export const ChatStreamFrameSchema = Schema.Union([
-  struct({
-    ...streamIdentity,
-    kind: Schema.Literal('snapshot'),
-    offset: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: maximumChatReplyBytes })),
-    total: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: maximumChatReplyBytes })),
-    data: Schema.String.check(
-      Schema.makeFilter((value) => {
-        try {
-          const decoded = atob(value);
-          return (
-            decoded.length > 0 && decoded.length <= chatContentChunkBytes && btoa(decoded) === value
-          );
-        } catch {
-          return false;
-        }
-      }),
-    ),
+/** One chunk of a chunked payload: canonical base64 of 1 to `chatContentChunkBytes` bytes. */
+export const ChatContentChunkDataSchema = Schema.String.check(
+  Schema.makeFilter((value) => {
+    try {
+      const decoded = atob(value);
+      return (
+        decoded.length > 0 && decoded.length <= chatContentChunkBytes && btoa(decoded) === value
+      );
+    } catch {
+      return false;
+    }
   }),
-  struct({ ...streamIdentity, kind: Schema.Literal('heartbeat') }),
-  struct({
-    ...streamIdentity,
-    kind: Schema.Literal('error'),
-    code: Schema.Literals(chatStreamErrorCodes),
-  }),
-]);
-export const decodeChatStreamRequest = Schema.decodeUnknownSync(ChatStreamRequestSchema, {
-  onExcessProperty: 'error',
-  reportInput: false,
-});
-export const decodeChatStreamFrame = Schema.decodeUnknownSync(ChatStreamFrameSchema, {
-  onExcessProperty: 'error',
-  reportInput: false,
-});
+);
 const receipt = { target: ChatTargetSchema, requestId: ChatIdentifierSchema };
 export const ChatSendReceiptSchema = Schema.Union([
   struct({ ...receipt, admission: Schema.Literal('reserved'), submissionId: Schema.Null }),
@@ -343,7 +309,7 @@ export const chatInputSchemas = {
     session: ChatSessionSchema,
     requestId: ChatIdentifierSchema,
     title: text(200),
-    settings: optional(ChatCreationSettingsSchema),
+    settings: ChatCreationSettingsSchema,
   }),
   getChat: struct({ target: ChatTargetSchema }),
   getChatHistory: struct({ target: ChatTargetSchema, cursor }),

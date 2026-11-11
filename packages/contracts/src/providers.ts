@@ -1,4 +1,5 @@
-import type { CommandOptions } from './common.ts';
+import type { CommandOptions, ObservationClose } from './common.ts';
+import type { ApplicationError } from './errors.ts';
 import type * as Contracts from './providers-schema.ts';
 
 export type ProviderState = typeof Contracts.ProviderStateSchema.Type;
@@ -12,4 +13,9 @@ export interface ProviderSetupClient {
     input: ProviderInput<K>,
     options?: CommandOptions,
   ): Promise<ProviderOutput<K>>;
+  /** The setup state, then again after each change to it, so a sign-in's progress needs no polling. */
+  watch(
+    receive: (state: ProviderState) => void,
+    onError: (error: ApplicationError) => void,
+  ): ObservationClose;
 }

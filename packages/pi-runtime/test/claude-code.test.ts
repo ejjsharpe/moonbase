@@ -22,16 +22,13 @@ import { createLocalModels } from './src/local-models.ts';
 import { ProviderSetupLive } from './src/providers.ts';
 import { closeClaudeCodeProcesses, createClaudeCodeSubscription } from './src/claude-code.ts';
 async function main() {
-  assert(process.versions.electron);
-  // Like the desktop main process, children must not inherit Node mode except through helperEnv.
-  delete process.env.ELECTRON_RUN_AS_NODE;
   globalThis.fetch = async () => { throw Error('Network is disabled in this qualification.'); };
   const [directory, working, broken] = process.argv.slice(2);
   let command = working;
   const values = new Map();
   const credentials = {read:async(id)=>values.get(id),list:async()=>[],modify:async(id,fn)=>{const v=await fn(values.get(id));if(v)values.set(id,v);return values.get(id)},delete:async(id)=>{values.delete(id)}};
   const models = createLocalModels(credentials);
-  const subscription = createClaudeCodeSubscription({ findCommand: async () => command, helperEnv: { ELECTRON_RUN_AS_NODE: '1' } });
+  const subscription = createClaudeCodeSubscription({ findCommand: async () => command });
   models.setProvider(subscription);
   const session = {host:{hostId:'claude-code',storeId:'claude-code-store'},actorId:'owner'};
   const runtime = ManagedRuntime.make(Layer.merge(
@@ -94,7 +91,7 @@ async function bundleScript(contents: string, outfile: string) {
   });
 }
 
-test('a Claude subscription runs through Claude Code in bundled Electron, with Pi executing tools', async () => {
+test('a Claude subscription runs through Claude Code in a bundle, with Pi executing tools', async () => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-claude-code-')));
   try {
     const bundle = join(directory, 'bundle'),
@@ -103,19 +100,15 @@ test('a Claude subscription runs through Claude Code in bundled Electron, with P
     await mkdir(join(directory, 'broken'));
     const broken = await writeBrokenClaude(join(directory, 'broken'));
     await bundleScript(qualification, file);
-    // The desktop build copies this helper beside its bundle in the same way.
+    // The daemon build copies this helper beside its bundle in the same way.
     const library = dirname(
       createRequire(import.meta.url).resolve('@earendil-works/pi-claude-code/package.json'),
     );
     await cp(join(library, 'src/inert-mcp.mjs'), join(bundle, 'inert-mcp.mjs'));
-    const result = await promisify(execFile)(
-      require('electron') as string,
-      [file, directory, command, broken],
-      {
-        env: { PATH: '/usr/bin:/bin', HOME: directory, ELECTRON_RUN_AS_NODE: '1' },
-        timeout: 30000,
-      },
-    ).catch((error: { stdout?: string; stderr?: string }) => {
+    const result = await promisify(execFile)(process.execPath, [file, directory, command, broken], {
+      env: { PATH: '/usr/bin:/bin', HOME: directory },
+      timeout: 30000,
+    }).catch((error: { stdout?: string; stderr?: string }) => {
       throw Error(`${error.stderr ?? ''}${error.stdout ?? ''}`);
     });
     assert.match(result.stdout, /"claudeCode":true/);

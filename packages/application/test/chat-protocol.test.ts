@@ -36,15 +36,16 @@ async function setup(t: { after: (f: () => Promise<void>) => void }, hold = fals
     async () => controller.getSnapshot(),
     (s) => !!s.host,
   );
-  await controller.create('Production protocol chat');
+  // The host is the daemon in host mode: the chat chooses its folder and model.
+  await controller.create('Production protocol chat', f.settings);
   return { ...f, clientRoot: root, controller, storage, models };
 }
 test('public chat controller creates, lists, opens, streams real tool output and captures exact Stop through SSH/HTTP/Pi', async (t) => {
   const f = await setup(t, true);
   const target = f.controller.getSnapshot().selected!;
   const host = f.controller.getSnapshot().host!;
-  assert('cwd' in host);
-  assert.equal(host.cwd, f.cwd);
+  assert('mode' in host && host.mode === 'local');
+  assert.equal((await f.clientRoot.chat.command('getChat', { target })).conversation.cwd, f.cwd);
   f.controller.setDraft('Inspect controlled context');
   await f.controller.send();
   const active = await until(

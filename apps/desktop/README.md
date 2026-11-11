@@ -1,6 +1,6 @@
 # Moonbase desktop
 
-The macOS Electron app. It composes the workbench, headless application, workspace, local Pi and optional SSH/remote Pi modules. `src/main.ts` is the privileged composition root and owns native capabilities; the sandboxed renderer receives browser-safe clients only.
+The macOS Electron app. It composes the workbench, headless application, workspace and the chat clients of Pi: local chat runs in the [daemon](../daemon/README.md), reached over loopback, and remote chat in the same daemon on an SSH host. `src/main.ts` is the privileged composition root and owns native capabilities; the sandboxed renderer receives browser-safe clients only.
 
 The renderer opens only roots chosen in the native picker, already known, listed by `listWorktrees` for an approved checkout, or opened by main with `EditorSession.openFolderProject`. It cannot call `createWorktree` with a location of its own; a new chat's worktree is made by main instead (below). Copy Path and Reveal in Finder likewise send main a checkout and relative paths: main writes the clipboard itself and reveals only paths that still resolve inside the checkout once links are followed. A clipboard import asks for consent only when the clipboard holds Finder files, checking for their type without reading anything, and finds none otherwise, so ⌘V can paste the tree's own entries; a declined prompt returns null, so it pastes nothing.
 
@@ -20,13 +20,14 @@ NX_DAEMON=false bunx nx run @moonbase/desktop:dev
 
 `bun dev` in `apps/desktop` does the same build-then-launch. Development keeps its state between launches in a `Moonbase Dev` profile beside the packaged app's (on macOS, `~/Library/Application Support/Moonbase Dev`); set `MOONBASE_USER_DATA` to an absolute directory to use another. Never point it at real application data you care about. Rebuild and relaunch after changes.
 
-`bun run dev:mock` launches with a separate `Moonbase Dev Mock` profile. Its first launch seeds scripted local chats played by a faux model, covering thinking, completed and failed tool steps, an edit and Markdown answers. Their edits touch only a `mock-project` folder inside that profile, and the chat in this repository only reads. Delete the profile to seed again.
+`bun run dev:mock` launches with a separate `Moonbase Dev Mock` profile. Its first launch seeds its daemon's store (`daemon-v1`, before the daemon first starts) with scripted local chats played by a faux model, covering thinking, completed and failed tool steps, an edit and Markdown answers. Their edits touch only a `mock-project` folder inside that profile, and the chat in this repository only reads. Delete the profile to seed again.
 
 `bun run --cwd apps/desktop demo:browser` serves the shell in a browser with in-memory and faux capabilities, calling no real provider or host. Open `/?local&design` for local chat, `/?chat&design` for the remote fixture, or add `&transcript` for transcript reading fixtures.
 
 ## Package
 
 ```sh
+node scripts/prepare-bun.mjs
 NX_DAEMON=false bunx nx run @moonbase/desktop:build
 bun run --cwd apps/desktop check:renderer
 NX_DAEMON=false bunx nx run @moonbase/desktop:package
@@ -34,19 +35,25 @@ MOONBASE_USER_DATA="$(mktemp -d -t moonbase-packaged)" \
   apps/desktop/release/mac-arm64/Moonbase.app/Contents/MacOS/Moonbase
 ```
 
-The app bundles Electron, the workspace native helper and ripgrep; system Git and plutil are required. Packages are unsigned and not notarized.
+The app bundles Electron, the workspace native helper, ripgrep and the [daemon](../daemon/README.md): the pinned Bun runtime in `Contents/Helpers/bun` and `daemon.mjs` with `inert-mcp.mjs` in `Contents/Resources/daemon` (about 97.6 MB, 88.7 MB of it Bun and 2.4 MB of it Bun's notices). Only packaging needs `prepare-bun.mjs`; a build bundles the daemon but not its runtime. System Git and plutil are required. Packages are unsigned and not notarized.
 
 ## Local chat
 
-Local chat needs no configuration: choose a provider in **Settings › Providers** (⌘, or the gear at the foot of the rail; the model menu links there too), then a model and, optionally, a working folder. A chat in Agents starts with **No project**: it runs in a new empty folder the runtime makes under `local-pi-v1/chats`, and lists as No project. Moonbase never deletes a chat's folder. **Turn into project** in the chat's header (in the title bar on Agents) opens that folder as a plain-folder project where it is; the chat then lists under it, and **Initialize Git** adds branch and diff controls. A project's docked chat always uses one of the project's folders. **Claude subscription** uses an installed Claude Code CLI signed in with `claude auth login` (and out with `claude auth logout`), and counts against that Claude plan. A local chat may use a folder chosen in the native picker or a checkout the editor approved, such as the project root in its docked chat. The folder menu lists the editor's projects and recent picker folders; main keeps picker approvals in `local-pi-v1/approved-folders.json` (the 50 most recently used picker folders, and up to 200 chat worktrees counted separately) and re-checks each folder's identity on use, so a moved or replaced folder needs the picker again. Credentials are encrypted with Electron safeStorage (there is no plaintext fallback) and never reach renderer storage or snapshots. Local tools run with your OS permissions: **the working folder is context, not a sandbox**.
+Local chat runs in the profile's own daemon, with its data in `<user data>/daemon-v1`; each `MOONBASE_USER_DATA` profile, development's included, has its own daemon and never shares one with the packaged app. Main reads the daemon's `endpoint.json`, `token` and `identity.json` there and checks its signed health for that host and store. If none answers, main starts it detached with no stdio (it logs to `daemon-v1/logs`): the packaged app's bundled Bun and daemon, or in development `bun` from PATH on `apps/daemon/src/main.ts`. A second launch reuses it. A daemon of another build (`endpoint.json`'s `build`: the bundle's SHA-256, embedded in main, or `development` from source) that speaks this protocol is used meanwhile (a development daemon always reports `development`, so after changing daemon source a running one is reused until it idles out; stop it by hand to pick up the change); main asks it every 30 seconds whether it has active work and, once it has none, stops it (`SIGTERM`) and starts its own. One that speaks another protocol is never signalled: local chat is Unavailable ("An older Moonbase daemon is still finishing its work") and retried on each request until it exits by itself, idle with nobody connected. Before each request main checks that process still runs and otherwise starts or finds the daemon again, so a crashed daemon, or one that exited once idle, is back on the next request; an open chat shows **Reconnecting to live updates…** meanwhile. The window opens without waiting for the daemon. If it can't be started, local chat is Unavailable until a retry; editing still works. Main grants an editor checkout or worktree to the daemon only when a chat first uses it, once per launch; if the daemon refuses one anyway, main grants it again and retries the request once. Main reaches the daemon (local, or remote through the SSH forward) over one authenticated WebSocket, which carries requests and pushes chats, the chat list and provider sign-in progress; windows get them over IPC. The token and endpoint stay in main.
 
-The sidebar groups chats into Ready, Working and Idle, with a Settled drawer at its foot. A chat is settled only when you settle it, from the archive button in its header (in the title bar on Agents) or `/settle`; the host keeps that, and Unsettle or sending a message takes it back.
+Chats and sign-ins started fresh with the daemon: chats from before it, and their sign-ins, are in `<user data>/local-pi-v1`, which Moonbase no longer reads and leaves in place. Delete that folder by hand once you no longer need it.
+
+Local chat needs no configuration: choose a provider in **Settings › Providers** (⌘, or the gear at the foot of the rail; the model menu links there too), then a model and, optionally, a working folder. A chat in Agents starts with **No project**: it runs in a new empty folder the daemon makes under `daemon-v1/chats`, and lists as No project. Moonbase never deletes a chat's folder. **Turn into project** in the chat's header (in the title bar on Agents) opens that folder as a plain-folder project where it is; the chat then lists under it, and **Initialize Git** adds branch and diff controls. A project's docked chat always uses one of the project's folders. **Claude subscription** uses an installed Claude Code CLI signed in with `claude auth login` (and out with `claude auth logout`), and counts against that Claude plan. A local chat may use only a folder the daemon has approved, which only main grants: one chosen in the native picker, a checkout or worktree the editor approved (granted when a chat first uses it), such as the project root in its docked chat, and a new chat's worktree. A path the renderer names grants nothing. The folder menu lists the editor's projects and recent picker folders; the daemon keeps approvals in `daemon-v1/approved-folders.json` (the 50 most recently used picker folders, and up to 200 editor folders and chat worktrees counted separately) and re-checks each folder's identity on use, so a moved or replaced picker folder needs the picker again; an editor folder is granted again at its path while the editor approves it. Like a picker approval, a chat's grant of an editor folder stays in the daemon after the editor closes it; main grants only a root that still resolves to itself, so one replaced by a link is refused until it is opened again. The daemon keeps provider credentials, encrypted under a key in the Keychain; they never reach main, renderer storage or snapshots. Sign-in links come back from the daemon, and main opens one in the browser only once it has checked it is a provider's sign-in page. Local tools run with your OS permissions: **the working folder is context, not a sandbox**.
+
+The sidebar groups chats into Ready, Working and Idle, with a Settled drawer at its foot. A chat is settled only when you settle it, from the archive button in its header (in the title bar on Agents) or `/settle`; the host keeps that, and Unsettle or sending a message takes it back. The list follows the daemon's chat list watch, so a chat created, sent to, settled or finished in another window or client appears at once; a window becoming visible watches again if that watch stopped.
 
 Typing `@` in the composer searches the chat's working folder on its host (the bundled ripgrep for local chats) and inserts the picked file as a mention. A new chat's draft is shared by Agents and each project's dock, but each keeps its own folder choice (while the chat target's controller lasts), and each mention remembers the folder it was picked in. Send makes mentions relative to the folder it sends in; one outside it is written out as a full path first, and the send waits for a second Send. A mention whose folder isn't known, as after a restart, also holds the first Send, which then takes it as a file in that folder. A path already mentioned from another folder can't be mentioned again.
 
 Typing `/` at the start of a message lists the composer's commands (`src/renderer/chat/commands.ts`): `/new`, `/model`, `/effort`, `/stop`, `/settle`, `/unsettle` and `/clear`, each shown only when it can run. The renderer runs them; a command line sent with Enter runs instead of reaching the agent.
 
 Choosing **New worktree** for a new local chat creates a linked worktree when its first message is sent. The renderer sends only a branch named from the message (`chat/tidy-the-composer`); main makes it from the folder's current commit at `<main worktree>-worktrees/<branch>`, numbering a taken name, and approves it as the chat's working folder. It then lists in the project's worktree switcher, and the project's docked chat keeps chats in any of its worktrees.
+
+Quit asks nothing about local agents: they keep running in the daemon, and reopening Moonbase shows where they got to. Quit releases only main's clients and watches. Unsaved editor work still asks first, as before. A daemon with no client connected and no work running exits by itself after 5 minutes.
 
 ## Remote chat
 
@@ -66,7 +73,24 @@ Set `MOONBASE_CHAT_CONFIG` to an absolute private JSON file outside source contr
 }
 ```
 
-An optional absolute `sshExecutable` overrides `/usr/bin/ssh`. Start the [Pi host](../../packages/pi-runtime/README.md) on the remote machine and configure SSH as described in the [SSH package](../../packages/ssh/README.md), then Connect in the app: from the chats sidebar, or in **Settings › Hosts**, which also switches hosts and shows connection details. A new chat's composer picks the host it runs on. The renderer never receives the endpoint or key, and a remote host's paths never grant access to local files.
+An optional absolute `sshExecutable` overrides `/usr/bin/ssh`. The host runs the [daemon in host mode](../daemon/README.md#remote-host): `remotePort` is its `port`, `expected` and `actorId` come from its `identity.json`, and `token` must be its `token` file. Copy the token without it ever being a command's argument, for example straight into the configuration file:
+
+```sh
+ssh my-host 'cat ~/MoonbaseHost/data/token' | node -e '
+  const fs = require("node:fs"), file = process.argv[1];
+  const config = JSON.parse(fs.readFileSync(file, "utf8"));
+  config.token = fs.readFileSync(0, "utf8").trim();
+  fs.writeFileSync(file, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
+' /absolute/private/remote-chat.json
+```
+
+Configure SSH as described in the [SSH package](../../packages/ssh/README.md), then Connect in the app: from the chats sidebar, or in **Settings › Hosts**, which also switches hosts and shows connection details. A new chat's composer picks the host it runs on. Remote chat uses the same chat, folder and provider clients as local chat, each sent only when the host's signed health advertises it:
+
+- A new chat picks its model and reasoning effort as a local one does. With no picker for the host's disk, its folder menu lists the host's approved roots and the folders directly inside them; without one, the chat runs in a new folder in the host's `chats/`. Editor projects, worktrees, the project dock's folder and Turn into project are local only.
+- **Settings › Providers** sets up the host's providers: API keys, and ChatGPT by pasting the final redirect URL after signing in, since the browser's callback can't reach the host. Claude Code uses `claude auth login`, run on the host.
+- Remote drafts are kept under one key (`moonbase.chat.remote.v2`) for the configured host, so changing the host blocks sends until those drafts are cleared; ones saved for an older fixed-settings host (`moonbase.chat.v1`) are left in place, unused.
+
+The renderer never receives the endpoint or key, and a remote host's paths never grant access to local files.
 
 ## Transcript
 
@@ -91,4 +115,4 @@ bun run --cwd apps/desktop check:package
 bun run --cwd apps/desktop test:package
 ```
 
-`test:browser` runs the shell in Chromium without Electron; set `MOONBASE_BROWSER_PORT` to isolate concurrent runs (default 4177). `test:native` and `test:package` drive real Electron with temporary repositories and user data. Tests inject clipboard and file-opening capabilities.
+Native tests start the daemon's faux test entry (`apps/daemon/test/faux-daemon.ts`: faux providers, a temporary key file, provider network refused) in temporary user data, with the Bun that `MOONBASE_TEST_BUN` names or the one on PATH; packaged tests run the packaged daemon on a temporary key file. Every daemon a test starts is stopped afterwards. `test:browser` runs the shell in Chromium without Electron; set `MOONBASE_BROWSER_PORT` to isolate concurrent runs (default 4177). `test:native` and `test:package` drive real Electron with temporary repositories and user data. `check:package` also checks the daemon's files against `dist` and the Bun executable against its pinned SHA-256, that only they ship beside it, that they embed no checkout or home path or key, that the daemon finds the app's ripgrep beside its bundle and that the notices carry every pinned Bun notice and lockfile package; `test:package` first starts the packaged daemon on temporary data with a faux `claude` and only the system PATH (`test/packaged-daemon.smoke.ts`), searches files outside a Git repository and chats through Claude Code's helper. Tests inject clipboard and file-opening capabilities.

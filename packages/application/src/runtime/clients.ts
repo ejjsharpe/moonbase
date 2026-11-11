@@ -9,8 +9,10 @@ import {
   providerCommand,
   chatCommand,
   chatWatch,
+  chatListWatch,
   connectionCommand,
   connectionWatch,
+  providerWatch,
   workspaceCommand,
   workspaceWatch,
 } from './handlers.ts';
@@ -52,6 +54,8 @@ export function makeChatClient(
       runApplicationEffect(runtime, chatCommand(operation, input), options),
     watch: (input, receive, onError) =>
       observeApplicationStream(runtime, chatWatch(input), receive, onError),
+    watchChatList: (input, receive, onError) =>
+      observeApplicationStream(runtime, chatListWatch(input), receive, onError),
   };
 }
 
@@ -62,6 +66,8 @@ export function makeProviderSetupClient(
   return {
     command: (operation, input, options) =>
       runApplicationEffect(runtime, providerCommand(ownerId, operation, input), options),
+    watch: (receive, onError) =>
+      observeApplicationStream(runtime, providerWatch(ownerId), receive, onError),
   };
 }
 
@@ -81,6 +87,13 @@ export function bindChatClient(
       observeApplicationStream(
         runtime,
         chatWatch(input).pipe(Stream.provideService(ChatService, service)),
+        receive,
+        onError,
+      ),
+    watchChatList: (input, receive, onError) =>
+      observeApplicationStream(
+        runtime,
+        chatListWatch(input).pipe(Stream.provideService(ChatService, service)),
         receive,
         onError,
       ),
@@ -119,6 +132,13 @@ export function bindProviderSetupClient(
           Effect.provideService(ProviderSetupService, service),
         ),
         options,
+      ),
+    watch: (receive, onError) =>
+      observeApplicationStream(
+        runtime,
+        providerWatch(ownerId).pipe(Stream.provideService(ProviderSetupService, service)),
+        receive,
+        onError,
       ),
   };
 }

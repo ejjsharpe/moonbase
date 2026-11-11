@@ -290,7 +290,7 @@ test('file bytes, finite values, identity grammars and collection bounds retain 
   });
 });
 const host = { hostId: 'host', storeId: 'store' };
-const health = { ...host, protocol: 1, version: '0.1.0', capabilities: ['', 'chat-v0', 'chat-v0'] };
+const health = { ...host, protocol: 2, version: '0.1.0', capabilities: ['', 'chat-v0', 'chat-v0'] };
 const profile = {
   id: 'profile',
   label: 'Personal host',
@@ -323,7 +323,7 @@ test('connection and health decoders preserve states, void, order, and configura
   );
   assert.deepEqual(decodeChatHostHealth({ ...health, token: 'private' }), health);
   for (const changed of [
-    { protocol: 2 },
+    { protocol: 1 },
     { version: 'other' },
     { capabilities: ['other'] },
     { capabilities: ['chat-v0', 'x'.repeat(65)] },

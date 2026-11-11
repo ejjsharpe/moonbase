@@ -1,7 +1,10 @@
 import { Effect, Schema, SchemaGetter } from 'effect';
 import { isAbsolute } from 'node:path';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import { ConnectionProfileSchema } from '@moonbase/contracts/connection-schema';
+import {
+  ConnectionPortSchema,
+  ConnectionProfileSchema,
+} from '@moonbase/contracts/connection-schema';
 
 const executable = Schema.NullOr(Schema.String).pipe(
   Schema.decodeTo(
@@ -15,7 +18,13 @@ const executable = Schema.NullOr(Schema.String).pipe(
 );
 
 export const SshConfigurationSchema = Schema.Struct({
-  profile: Schema.mutableKey(ConnectionProfileSchema),
+  // SSH forwards to the host's port, so its profile must name one.
+  profile: Schema.mutableKey(
+    ConnectionProfileSchema.mapFields((fields) => ({
+      ...fields,
+      remotePort: Schema.mutableKey(ConnectionPortSchema),
+    })),
+  ),
   token: Schema.mutableKey(Schema.String.check(Schema.isPattern(/^[\x21-\x7e]{16,4096}$/))),
   sshExecutable: Schema.mutableKey(executable),
 }).check(

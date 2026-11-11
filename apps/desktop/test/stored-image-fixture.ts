@@ -8,20 +8,20 @@ import {
 } from '@earendil-works/pi-ai/providers/faux';
 import { createRegistry, defineExtension, defineTool } from '@earendil-works/pi-durable';
 import { Type } from 'typebox';
-import { PiRuntimeLive, LocalPiRuntimeLive } from '@moonbase/pi-runtime';
+import { LocalPiRuntimeLive } from '@moonbase/pi-runtime';
+import { fauxModel, fauxModelOptions, installFaux } from '../../../tests/chat/faux-model.ts';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import type { ChatSession } from '@moonbase/contracts/chat';
 
 export const retainedImage = readFileSync(
   new URL('./fixtures/images/retained.png', import.meta.url),
 );
-export function createImageRuntime(
-  config: ChatSession & { cwd: string; databasePath: string },
-  local = false,
-) {
-  const models = createModels(),
-    faux = fauxProvider({ tokensPerSecond: 100000 });
-  models.setProvider(faux.provider);
+/**
+ * A faux model that calls `retained_images` once, then replies, with the controlled tool that
+ * returns retained bytes: a real PNG, a truncated one and HTML labelled as a PNG.
+ */
+export function createImageProviders() {
+  const faux = fauxProvider({ ...fauxModelOptions, tokensPerSecond: 100000 });
   faux.setResponses([
     fauxAssistantMessage(fauxToolCall('retained_images', {}), { stopReason: 'toolUse' }),
     fauxAssistantMessage('Retained images completed'),
@@ -54,17 +54,22 @@ export function createImageRuntime(
       ],
     }),
   );
-  const model = { provider: faux.provider.id, modelId: faux.getModel().id };
+  return { faux, registry, model: fauxModel };
+}
+
+/** A local runtime in this process with the image providers. */
+export function createImageRuntime(config: ChatSession & { databasePath: string }) {
+  const models = createModels(),
+    { faux, registry, model } = createImageProviders();
+  installFaux(models, faux);
   const runtime = ManagedRuntime.make(
-    local
-      ? LocalPiRuntimeLive({
-          host: config.host,
-          actorId: config.actorId,
-          databasePath: config.databasePath,
-          models,
-          registry,
-        })
-      : PiRuntimeLive({ ...config, models, registry, model }),
+    LocalPiRuntimeLive({
+      host: config.host,
+      actorId: config.actorId,
+      databasePath: config.databasePath,
+      models,
+      registry,
+    }),
   );
   return { runtime, model, client: makeChatClient(runtime) };
 }

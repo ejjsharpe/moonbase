@@ -5,11 +5,37 @@ import { createRequire } from 'node:module';
 import { cp, mkdir, rm, writeFile, readFile, stat } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { notices } from '../../../scripts/notices.mjs';
+import { bunComponents, verifyBunRuntime } from '../../../scripts/prepare-bun.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url)),
+  repository = fileURLToPath(new URL('../../../', import.meta.url)),
   require = createRequire(import.meta.url);
+// Packaging also stages the Bun runtime the bundled daemon runs on; development runs the daemon
+// from source with the `bun` on PATH, so a plain build needs no runtime download.
+const packaged = process.argv.includes('--package');
+// The packaged daemon's runtime and its notices from `scripts/prepare-bun.mjs`, or another folder
+// it prepared; either way they must be the pinned bytes, checked before anything is built.
+const bun = process.env.MOONBASE_BUN_RUNTIME
+  ? resolve(process.env.MOONBASE_BUN_RUNTIME)
+  : join(repository, 'dist/tools/bun');
+if (packaged) await verifyBunRuntime(bun);
 await rm(join(root, 'dist'), { recursive: true, force: true });
+// The daemon ships as a bundle for the Bun runtime, with Claude Code's helper beside it. Main
+// embeds the bundle's build identifier, so a packaged app replaces a daemon of another build.
+execFileSync(
+  process.execPath,
+  [
+    join(repository, 'apps/daemon/scripts/build.mjs'),
+    join(root, 'dist/daemon'),
+    join(root, 'dist/daemon-inputs.json'),
+    join(root, 'dist/daemon-build.json'),
+  ],
+  { stdio: 'inherit' },
+);
+const daemonInputs = JSON.parse(await readFile(join(root, 'dist/daemon-inputs.json'), 'utf8'));
+const daemonBuild = JSON.parse(await readFile(join(root, 'dist/daemon-build.json'), 'utf8'));
+assert.match(daemonBuild, /^[0-9a-f]{64}$/, 'The daemon bundle has no build identifier');
 const main = await build({
   absWorkingDir: root,
   entryPoints: ['src/main.ts'],
@@ -18,6 +44,7 @@ const main = await build({
   platform: 'node',
   format: 'esm',
   external: ['electron'],
+  define: { MOONBASE_DAEMON_BUILD: JSON.stringify(daemonBuild) },
   banner: {
     js: "import { createRequire as moonbaseCreateRequire } from 'node:module'; const require = moonbaseCreateRequire(import.meta.url);",
   },
@@ -57,7 +84,7 @@ for (const entry of [
 assert(!rendererInputs.some((p) => /packages\/editor\/|desktop\/src\/chat\/view\.tsx$/.test(p)));
 const mainInputs = Object.keys(main.metafile.inputs),
   preloadInputs = Object.keys(preload.metafile.inputs);
-for (const inputs of [mainInputs, preloadInputs, rendererInputs]) {
+for (const inputs of [mainInputs, preloadInputs, rendererInputs, daemonInputs]) {
   assert.deepEqual(
     inputs.filter((p) =>
       /(?:^|\/)(?:test|tests)\/|(?:packages\/workbench|apps\/desktop)\/demo\/|test-fixture|(?:^|\/)host\.mjs$/.test(
@@ -86,16 +113,31 @@ for (const inputs of [preloadInputs, rendererInputs]) {
     'Local runtime reached a browser boundary',
   );
 }
+// Local chat runs in the daemon: main holds only its loopback client, never the chat runtime,
+// provider setup, credentials or Claude Code.
+assert.deepEqual(
+  mainInputs.filter((path) =>
+    /@earendil-works|pi-runtime\/src\/(?!remote|loopback|protocol|validation|socket-client|socket-protocol)[^/]+\.ts$/.test(
+      path,
+    ),
+  ),
+  [],
+  'The local chat runtime reached Electron main',
+);
+assert(
+  !/\bsafeStorage\b/.test(await readFile(join(root, 'dist/main.mjs'), 'utf8')),
+  'Electron main uses safeStorage',
+);
 for (const entry of [
-  'pi-runtime/src/index.ts',
-  'pi-runtime/src/local-models.ts',
-  'pi-runtime/src/claude-code.ts',
-  'pi-runtime/src/credentials.ts',
-  'pi-ai/dist/bun-oauth.js',
+  'pi-runtime/src/remote.ts',
+  'pi-runtime/src/loopback.ts',
+  'src/main/local-daemon.ts',
+  'src/main/daemon-command.ts',
+  'src/chat/daemon.ts',
 ])
   assert(
     mainInputs.some((path) => path.endsWith(entry)),
-    `Missing privileged local runtime input: ${entry}`,
+    `Missing local daemon client input: ${entry}`,
   );
 assert(
   mainInputs.includes('src/chat/transcript-native.ts'),
@@ -103,25 +145,43 @@ assert(
 );
 for (const entry of ['native-actions', 'ipc', 'window-lifecycle', 'chat-backends'])
   assert(mainInputs.includes(`src/main/${entry}.ts`), `Missing main owner: ${entry}`);
+for (const entry of [
+  'apps/daemon/src/main.ts',
+  'pi-runtime/src/index.ts',
+  'pi-runtime/src/claude-code.ts',
+  'pi-runtime/src/server.ts',
+])
+  assert(
+    daemonInputs.some((path) => path.endsWith(entry)),
+    `Missing daemon input: ${entry}`,
+  );
+assert(
+  !daemonInputs.some((path) => /pi-runtime\/src\/host\.ts$|apps\/daemon\/test\//.test(path)),
+  'The standalone host or a daemon test entry reached the daemon bundle',
+);
+if (packaged) {
+  await mkdir(join(root, 'dist/helpers'), { recursive: true });
+  await cp(join(bun, 'bun'), join(root, 'dist/helpers/bun'));
+}
 const packages = await notices(
   [...Object.keys(main.metafile.inputs), ...Object.keys(preload.metafile.inputs)]
     .map((p) => resolve(root, p))
-    .concat(rendererInputs, require.resolve('electron/package.json')),
+    .concat(
+      rendererInputs,
+      daemonInputs.map((path) => resolve(repository, path)),
+      require.resolve('electron/package.json'),
+    ),
   join(root, 'dist/dependency-notices.txt'),
+  packaged
+    ? bunComponents.map(({ label, license, notices }) => ({
+        label,
+        license,
+        directory: bun,
+        files: notices.map((notice) => notice.file),
+      }))
+    : [],
 );
 await writeFile(join(root, 'dist/main-inputs.json'), JSON.stringify(main.metafile.inputs));
-// Claude Code's tool-inventory helper resolves beside the bundle that imported it.
-await cp(
-  join(
-    dirname(
-      require.resolve('@earendil-works/pi-claude-code/package.json', {
-        paths: [join(root, '../../packages/pi-runtime')],
-      }),
-    ),
-    'src/inert-mcp.mjs',
-  ),
-  join(root, 'dist/inert-mcp.mjs'),
-);
 const resources = join(root, 'dist/workspace');
 await mkdir(resources, { recursive: true });
 await cp(require.resolve('@moonbase/workspace/filesystem'), join(resources, 'filesystem'));

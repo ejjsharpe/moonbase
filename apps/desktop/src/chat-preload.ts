@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { channels, unwrap, type ChatBridge, type Reply } from './chat/wire.ts';
+import { channels, isChatWatchKind, unwrap, type ChatBridge, type Reply } from './chat/wire.ts';
 
 // The reviewed bridge uses separate channels; the main process still authenticates every request.
 const active = new Map<string, string>();
@@ -10,10 +10,8 @@ const bridge: ChatBridge = {
     unwrap(
       await ipcRenderer.invoke(channels.call, { kind: 'choose-folder', backendId: 'local' }),
     ) as never,
-  recentFolders: async () =>
-    unwrap(
-      await ipcRenderer.invoke(channels.call, { kind: 'recent-folders', backendId: 'local' }),
-    ) as never,
+  recentFolders: async (backendId = 'local') =>
+    unwrap(await ipcRenderer.invoke(channels.call, { kind: 'recent-folders', backendId })) as never,
   createWorktree: async (root, branch) =>
     unwrap(
       await ipcRenderer.invoke(channels.call, {
@@ -31,10 +29,6 @@ const bridge: ChatBridge = {
         conversationId,
       }),
     ) as never,
-  confirmQuit: async () =>
-    unwrap(
-      await ipcRenderer.invoke(channels.call, { kind: 'confirm-quit', backendId: 'local' }),
-    ) as never,
   context: async (backendId = 'remote') =>
     unwrap(await ipcRenderer.invoke(channels.call, { kind: 'context', backendId })) as never,
   async call(kind, operation, input, id, backendId = 'remote') {
@@ -47,7 +41,7 @@ const bridge: ChatBridge = {
         id,
         backendId,
       });
-      if ((kind !== 'watch-chat' && kind !== 'watch-connection') || !reply.ok) active.delete(id);
+      if (!isChatWatchKind(kind) || !reply.ok) active.delete(id);
       return reply;
     } catch (error) {
       active.delete(id);

@@ -241,6 +241,11 @@ export function Transcript({
               </Button>
             </p>
           )}
+          {status.observation === 'reconnecting' && (
+            <p role="status" {...stylex.props(styles.small, styles.feedback)}>
+              Reconnecting to live updates…
+            </p>
+          )}
           {status.observation === 'failed' && (
             <p role="alert" {...stylex.props(styles.warning)}>
               Live updates stopped. Reopen the conversation to refresh.

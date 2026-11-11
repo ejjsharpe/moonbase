@@ -1,7 +1,12 @@
-import assert from 'node:assert/strict';
-import { test, expect, _electron as electron, type Page } from '@playwright/test';
-import { build } from 'esbuild';
-import { readFile, writeFile, mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
+import {
+  test,
+  expect,
+  _electron as electron,
+  type ElectronApplication,
+  type Page,
+} from '@playwright/test';
+import { execFileSync } from 'node:child_process';
+import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -15,192 +20,138 @@ import {
   showChat,
 } from './chat-target.ts';
 import { captureNative } from './editor-regressions.ts';
+import {
+  findTestBun,
+  type FauxScript,
+  prepareDaemonData,
+  readDaemonPid,
+  readFauxCalls,
+  stopDaemon,
+  writeFauxScript,
+} from './faux-daemon.mjs';
 import { openCallCard, openWorkingFold } from './transcript-list.ts';
 import { retainedImage } from './stored-image-fixture.ts';
+
+const main = pathToFileURL(resolve('dist/main.mjs')).href;
+const isAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 /** Opens the composer's folder menu and chooses a folder with the native picker. */
 async function chooseFolderNatively(page: Page) {
   await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
   await page.getByRole('button', { name: 'Choose folder…', exact: true }).click();
 }
+/** The native picker answers with `path` from now on. */
+const pickWith = (app: ElectronApplication, path: string) =>
+  app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = (async () => ({
+      canceled: false,
+      filePaths: [path],
+    })) as typeof dialog.showOpenDialog;
+  }, path);
+/** Signs in to the faux OpenAI API key provider the test daemon offers. */
+async function addProviderKey(page: Page, key: string) {
+  const providers = await openSettings(page, 'Providers');
+  await providers.getByRole('button', { name: 'Add key for openai-api-key', exact: true }).click();
+  await providers.getByLabel('Enter API key', { exact: true }).fill(key);
+  await providers.getByRole('button', { name: 'Continue setup', exact: true }).click();
+  await expect(
+    providers.getByRole('button', { name: 'Remove key for openai-api-key', exact: true }),
+  ).toBeVisible();
+  await closeSettings(page);
+  // The faux provider has no default model; its one model is chosen once and kept.
+  await page.getByRole('button', { name: 'Chat model', exact: true }).click();
+  const models = page.getByRole('dialog', { name: 'Choose model', exact: true });
+  await models.getByRole('button', { name: /Faux openai-api-key/ }).click();
+  await expect(page.getByRole('button', { name: 'Chat model', exact: true })).toContainText(
+    'Faux openai-api-key',
+  );
+}
 
-let fixtureDirectory: string;
-test.afterAll(async () => {
-  if (fixtureDirectory) await rm(fixtureDirectory, { recursive: true, force: true });
-});
-test.beforeAll(async () => {
-  await mkdir(resolve('../../test-results/transcript-111'), { recursive: true });
-  await mkdir(resolve('../../test-results/transcript-112'), { recursive: true });
-  fixtureDirectory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-local-ui-')));
-  for (const name of ['renderer', 'workspace', 'preload.cjs'])
-    await symlink(resolve('dist', name), join(fixtureDirectory, name));
-  await build({
-    entryPoints: [resolve('src/main.ts')],
-    outfile: join(fixtureDirectory, 'main.mjs'),
-    bundle: true,
-    platform: 'node',
-    format: 'esm',
-    external: ['electron'],
-    logLevel: 'silent',
-    banner: {
-      js: "import { createRequire as moonbaseRequire } from 'node:module';const require=moonbaseRequire(import.meta.url);",
-    },
-    plugins: [
-      {
-        name: 'controlled-local-model',
-        setup(builder) {
-          builder.onLoad({ filter: /pi-runtime\/src\/index\.ts$/ }, async ({ path }) => {
-            const source = await readFile(path, 'utf8');
-            const tools = '        registry.install(CodingTools);',
-              reads =
-                "    getChat: (d) => host.run('getChat', d, (input) => host.snapshot(input.target)),";
-            assert(
-              source.includes(tools) && source.includes(reads),
-              'Local activity tool injection point is missing',
-            );
-            return {
-              loader: 'ts',
-              contents:
-                "import { defineExtension, defineTool } from '@earendil-works/pi-durable'; import { Type } from 'typebox';\n" +
-                source
-                  .replace(
-                    tools,
-                    `        registry.install(CodingTools);
-      if (process.env.MOONBASE_TEST_ACTIVITY) registry.install(defineExtension({ name: 'held-local-activity', tools: [defineTool({
-        name: 'controlled_activity', description: 'Controlled held output; no filesystem access', parameters: Type.Object({}),
-        execute: async (_input, api, ctx) => {
-          const control = globalThis.localActivity ??= {};
-          api.output('First local tool chunk');
-          control.next = () => api.output(' and next update');
-          await new Promise(resolve => { control.release = resolve; if (ctx.abortSignal.aborted) resolve(); else ctx.abortSignal.addEventListener('abort', () => resolve(), { once: true }); });
-          return { output: [{ type: 'text', text: 'Local tool completed' }, ...(process.env.MOONBASE_TEST_IMAGES ? [{ type: 'image', data: process.env.MOONBASE_TEST_IMAGES, mimeType: 'image/png' }] : [])] };
-        }
-      })] }));`,
-                  )
-                  .replace(
-                    reads,
-                    "    getChat: (d) => { (globalThis.activityReads ??= []).push('getChat'); return host.run('getChat', d, (input) => host.snapshot(input.target)); },",
-                  ),
-            };
-          });
-          builder.onLoad({ filter: /desktop\/src\/main\/chat-backends\.ts$/ }, async ({ path }) => {
-            const source = await readFile(path, 'utf8');
-            const marker = '  let local = localResult.backend;';
-            assert(source.includes(marker), 'Local activity fixture injection point is missing');
-            return {
-              loader: 'ts',
-              contents:
-                "import { Effect } from 'effect';\n" +
-                source.replace(
-                  marker,
-                  "  let local = localResult.backend; if (local && process.env.MOONBASE_TEST_LOCAL_ACTIVE) local.control.hasActiveWork = () => Effect.succeed(true); if (local && process.env.MOONBASE_TEST_LOCAL_SCAN_ERROR) local.control.hasActiveWork = () => Effect.fail(new ApplicationError({ code: 'Persistence', message: 'Controlled activity scan failure' }));",
-                ),
-            };
-          });
-          builder.onLoad({ filter: /pi-runtime\/src\/local-models\.ts$/ }, async ({ path }) => {
-            const source = await readFile(path, 'utf8');
-            return {
-              loader: 'ts',
-              contents:
-                `import { fauxProvider, fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';\nimport { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';\n` +
-                source.replace(
-                  '  return models;',
-                  `
-          const original = models.getProvider('openai-api-key');
-          if (process.env.MOONBASE_TEST_TRANSCRIPT) {
-            let stream;
-            const message = text => fauxAssistantMessage([{type:'thinking',thinking:text.includes('second') ? 'Local thinking first and next' : 'Local thinking first'}, {type:'text',text}]);
-            globalThis.transcriptTest = {
-              first: () => stream.push({type:'text_delta',contentIndex:0,delta:'first',partial:message('## Held local response\\n\\nFirst local chunk 🌔')}),
-              next: () => stream.push({type:'text_delta',contentIndex:0,delta:' second',partial:message('## Held local response\\n\\nFirst local chunk 🌔 and second chunk\\n\\n[Read](https://example.com/read)')}),
-              finish: () => { const final=message('Local completed'); stream.push({type:'done',reason:'stop',message:final}); stream.end(final); },
-            };
-            models.setProvider({...original,streamSimple:(_model,_context,options)=>{
-              stream=createAssistantMessageEventStream(); options?.signal?.addEventListener('abort',()=>stream.end(fauxAssistantMessage('Stopped',{stopReason:'aborted'})),{once:true}); return stream;
-            }});
-            return models;
-          }
-
-          if (process.env.MOONBASE_TEST_ACTIVITY) {
-            const faux = fauxProvider({provider:'openai-api-key',tokensPerSecond:500});
-            faux.setResponses([fauxAssistantMessage(fauxToolCall('controlled_activity',{}),{stopReason:'toolUse'}),fauxAssistantMessage('Local tool response finished')]);
-            models.setProvider({...original,streamSimple:(model,context,options)=>faux.provider.streamSimple(model,context,options)});
-            return models;
-          }
-
-          const faux = fauxProvider({provider:'openai-api-key',tokensPerSecond:500});
-          faux.setResponses([
-            fauxAssistantMessage(fauxToolCall('write',{path:'local-result.txt',content:'first conversation'}),{stopReason:'toolUse'}),fauxAssistantMessage('First local response'),
-            fauxAssistantMessage(fauxToolCall('write',{path:'local-result.txt',content:'second conversation'}),{stopReason:'toolUse'}),fauxAssistantMessage('Second local response'),
-            fauxAssistantMessage('Active hidden local output '.repeat(1000)),
-          ]);
-          models.setProvider({...original,stream:faux.provider.stream,streamSimple:(model,context,options)=>{
-            if(model.id !== 'gpt-6.1-sol' || options?.reasoning !== 'xhigh') throw Error('Expected the chosen Sol model and xhigh reasoning');
-            return faux.provider.streamSimple(model,context,options);
-          }});
-          return models;
-        `,
-                ),
-            };
-          });
-        },
-      },
-    ],
-  });
-});
-test.afterAll(async () => {
-  await rm(fixtureDirectory, { recursive: true, force: true });
-});
-
-test('native local setup, approved folders/models, streaming/tools, hidden work Quit choices and restart', async () => {
-  test.setTimeout(60000);
-  const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-local-ui-data-')));
-  const first = join(directory, 'first'),
-    second = join(directory, 'second');
-  await mkdir(first);
-  await mkdir(second);
-  const launch = () =>
-    electron.launch({
+/**
+ * A temporary profile whose daemon is the faux test daemon, scripted by `script`. Its daemon
+ * outlives each app launch, so `release` stops it.
+ */
+async function localProfile(prefix: string, script: FauxScript) {
+  const root = await realpath(await mkdtemp(join(tmpdir(), prefix)));
+  const userData = join(root, 'data'),
+    daemon = join(userData, 'daemon-v1');
+  await prepareDaemonData(userData, { idleMs: 120_000, pollMs: 500, ...script });
+  const launch = async (env: Record<string, string> = {}) => {
+    const app = await electron.launch({
       args: [resolve('test/local-harness.mjs')],
       env: {
         PATH: '/usr/bin:/bin',
         HOME: process.env.HOME!,
         TMPDIR: process.env.TMPDIR!,
-        MOONBASE_USER_DATA: join(directory, 'data'),
-        MOONBASE_TEST_MAIN: pathToFileURL(join(fixtureDirectory, 'main.mjs')).href,
+        MOONBASE_USER_DATA: userData,
+        MOONBASE_TEST_MAIN: main,
+        MOONBASE_TEST_BUN: findTestBun(),
+        ...env,
       },
     });
-  let app = await launch(),
-    child = app.process(),
-    page = await app.firstWindow();
+    return { app, child: app.process(), page: await app.firstWindow() };
+  };
+  const exit = async ({ app, child }: Awaited<ReturnType<typeof launch>>) => {
+    if (child.exitCode === null && child.signalCode === null)
+      await app.evaluate(({ app }) => app.exit(0)).catch(() => {});
+    await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+  };
+  const release = async () => {
+    await stopDaemon(daemon);
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  };
+  return { root, userData, daemon, launch, exit, release };
+}
+
+test('local chat runs in the daemon: setup, picker folders, tools, @ search; Quit leaves the agent running and reopening reuses the daemon', async () => {
+  test.setTimeout(90_000);
+  const profile = await localProfile('moonbase-local-ui-', {});
+  const first = join(profile.root, 'first'),
+    second = join(profile.root, 'second'),
+    release = join(profile.root, 'release'),
+    dialogs = join(profile.root, 'dialogs.json');
+  await mkdir(first);
+  await mkdir(second);
+  await writeFile(join(second, 'search-target.md'), '# Found by @ search\n');
+  await writeFauxScript(profile.daemon, {
+    idleMs: 120_000,
+    pollMs: 500,
+    steps: [
+      { tool: 'write', args: { path: 'local-result.txt', content: 'first conversation' } },
+      { reply: 'First local response' },
+      { tool: 'write', args: { path: 'local-result.txt', content: 'second conversation' } },
+      { reply: 'Second local response' },
+      // A long-running tool: it finishes only after the app has quit.
+      {
+        tool: 'bash',
+        args: {
+          command: `while [ ! -e '${release}' ]; do sleep 0.05; done; echo finished > long-result.txt`,
+        },
+      },
+      { reply: 'Long task finished after Quit' },
+    ],
+  });
+  let launched = await profile.launch();
+  let { app, child, page } = launched;
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  const openChat = async () => {
-    await page.getByRole('tab', { name: 'Agents', exact: true }).click();
-  };
   try {
-    await openChat();
-    await expect(page.getByRole('tab', { name: 'Agents', exact: true })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
-    const chrome = await app.evaluate(({ BrowserWindow }) => {
-      const window = BrowserWindow.getAllWindows()[0];
-      return {
-        frame: window.getBounds(),
-        content: window.getContentBounds(),
-        background: window.getBackgroundColor(),
-      };
-    });
-    expect(chrome.frame.height - chrome.content.height).toBeLessThanOrEqual(2);
-    expect(chrome.content.y - chrome.frame.y).toBeLessThanOrEqual(2);
-    expect(chrome.background.toLowerCase()).toBe('#14151b');
-    await captureNative(app, page, resolve('../../test-results/redesign-review/native.png'));
+    await page.getByRole('tab', { name: 'Agents', exact: true }).click();
     await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
-    await expect(
-      page.getByText('Set up a provider to send. Local tools are not sandboxed.', { exact: true }),
-    ).toBeVisible();
+    // The app started the profile's daemon; the renderer knows only its public identity.
+    const pid = (await readDaemonPid(profile.daemon))!;
+    expect(isAlive(pid)).toBe(true);
     const context = await page.evaluate(() => window.moonbaseChat.context('local'));
+    const identity = JSON.parse(await readFile(join(profile.daemon, 'identity.json'), 'utf8'));
+    expect(context).toEqual(identity);
+    // A renderer-chosen folder gains no authority.
     const unauthorized = await page.evaluate(
       async (context) =>
         window.moonbaseChat.call(
@@ -212,7 +163,7 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
             title: 'No approval',
             settings: {
               cwd: '/private/tmp',
-              model: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+              model: { provider: 'openai-api-key', modelId: 'openai-api-key-faux' },
             },
           },
           crypto.randomUUID(),
@@ -221,34 +172,9 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
       context,
     );
     expect(unauthorized).toMatchObject({ ok: false, error: { code: 'Unauthorized' } });
-    await openSettings(page, 'Providers');
-    await page.getByRole('button', { name: 'Add key for OpenAI API key', exact: true }).click();
-    await page
-      .getByLabel('Enter OpenAI API key', { exact: true })
-      .fill('sk-controlled-private-key');
-    await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
-    await closeSettings(page);
-    await expect(page.getByRole('button', { name: 'Chat model', exact: true })).toBeEnabled();
-    await expect(page.getByRole('button', { name: 'Chat model', exact: true })).toContainText(
-      'GPT-6.1 Sol',
-    );
-    await expect(page.getByRole('button', { name: 'Chat model', exact: true })).toContainText(
-      'Medium',
-    );
-    // One chip holds the model and its effort; the effort is chosen in its popover.
-    await page.getByRole('button', { name: 'Chat model', exact: true }).click();
-    await page
-      .getByRole('dialog', { name: 'Choose model', exact: true })
-      .getByRole('radio', { name: 'Extra high', exact: true })
-      .click();
-    await page.keyboard.press('Escape');
+    await addProviderKey(page, 'sk-controlled-private-key');
     for (const [index, folder] of [first, second].entries()) {
-      await app.evaluate(({ dialog }, path) => {
-        dialog.showOpenDialog = (async () => ({
-          canceled: false,
-          filePaths: [path],
-        })) as typeof dialog.showOpenDialog;
-      }, folder);
+      await pickWith(app, folder);
       if (index) {
         // Main offers the folder the picker approved for the first chat again, by name only.
         await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
@@ -262,12 +188,14 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
       await expect(
         page.getByRole('button', { name: 'Choose working folder', exact: true }),
       ).toHaveAttribute('title', folder);
-      await expect(page.getByRole('button', { name: 'Chat model', exact: true })).toContainText(
-        'GPT-6.1 Sol',
-      );
-      await expect(page.getByRole('button', { name: 'Chat model', exact: true })).toContainText(
-        'Extra high',
-      );
+      if (index) {
+        // `@` searches the chat's folder through the daemon.
+        const message = page.getByLabel('Message', { exact: true });
+        await message.fill('@search-tar');
+        const files = page.getByRole('listbox', { name: 'Files', exact: true });
+        await expect(files.getByRole('option').first()).toHaveAccessibleName(/search-target\.md/);
+        await message.press('Escape');
+      }
       await page.getByLabel('Message', { exact: true }).fill('Local conversation ' + index);
       await page.getByRole('button', { name: 'Send message', exact: true }).click();
       await expect(
@@ -276,69 +204,46 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
       expect(await readFile(join(folder, 'local-result.txt'), 'utf8')).toBe(
         index ? 'second conversation' : 'first conversation',
       );
-      if (!index) await page.getByRole('button', { name: 'New chat', exact: true }).click();
+      await page.getByRole('button', { name: 'New chat', exact: true }).click();
     }
     await captureNative(app, page, test.info().outputPath('local-chat.png'));
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(660, 600));
-    await page.getByLabel('Message', { exact: true }).scrollIntoViewIfNeeded();
-    await expect(page.getByLabel('Message', { exact: true })).toBeInViewport();
-    await captureNative(app, page, test.info().outputPath('local-constrained.png'));
-    await app.evaluate(({ BrowserWindow }) => {
-      const window = BrowserWindow.getAllWindows()[0];
-      window.setSize(1280, 850);
-      window.webContents.setZoomFactor(2);
-    });
-    await page.getByLabel('Message', { exact: true }).scrollIntoViewIfNeeded();
-    await expect(page.getByLabel('Message', { exact: true })).toBeInViewport();
-    await captureNative(app, page, test.info().outputPath('local-zoom-200.png'));
-    await app.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1),
-    );
-
-    await page.getByLabel('Message', { exact: true }).fill('Keep working');
+    const message = page.getByLabel('Message', { exact: true });
+    await message.fill('Keep working after Quit');
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
-    await page.getByRole('tab', { name: 'Agents', exact: true }).focus();
-    await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
-    await app.evaluate(({ dialog, app }) => {
-      dialog.showMessageBox = (async () => ({
-        response: 0,
-        checkboxChecked: false,
-      })) as typeof dialog.showMessageBox;
+    await expect.poll(() => readFauxCalls(profile.daemon)).toBe(5);
+    // Quit asks nothing about local agents and leaves them running.
+    await app.evaluate(({ dialog, app }, dialogs) => {
+      dialog.showMessageBox = (async (_window, options) => {
+        process.getBuiltinModule('fs').appendFileSync(dialogs, JSON.stringify(options) + '\n');
+        return { response: 0, checkboxChecked: false };
+      }) as typeof dialog.showMessageBox;
       app.quit();
-    });
-    await expect(page.getByRole('button', { name: 'Open Chat panel', exact: true })).toBeEnabled();
-    expect(child.exitCode).toBeNull();
-    await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
-    await app.evaluate(({ dialog, app }) => {
-      dialog.showMessageBox = (async () => ({
-        response: 1,
-        checkboxChecked: false,
-      })) as typeof dialog.showMessageBox;
-      app.quit();
-    });
+    }, dialogs);
     await expect.poll(() => child.exitCode).toBe(0);
-    app = await launch();
-    child = app.process();
-    page = await app.firstWindow();
-    await openChat();
-    // Both chats survive the restart.
+    await expect(access(dialogs)).rejects.toThrow();
+    expect(isAlive(pid)).toBe(true);
+    await writeFile(release, '');
+    await expect
+      .poll(() => readFile(join(second, 'long-result.txt'), 'utf8').catch(() => ''))
+      .toBe('finished\n');
+    await expect.poll(() => readFauxCalls(profile.daemon)).toBe(6);
+    // Reopening finds the same daemon and shows the agent's result.
+    launched = await profile.launch();
+    ({ app, child, page } = launched);
+    page.on('pageerror', (error) => errors.push(error.message));
+    await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+    await (await showChat(page, /Keep working after Quit/)).click();
+    await expect(page.getByText('Long task finished after Quit', { exact: true })).toBeVisible();
+    expect(await readDaemonPid(profile.daemon)).toBe(pid);
+    expect(await page.evaluate(() => window.moonbaseChat.context('local'))).toEqual(context);
     await showChat(page, /Local conversation 0/);
     await showChat(page, /Local conversation 1/);
-    const after = await page.evaluate(() => window.moonbaseChat.context('local'));
-    expect(after).toEqual(context);
     const saved = await page.evaluate(() => localStorage.getItem('moonbase.chat.local.v1'));
     expect(saved).not.toContain('controlled-private-key');
-    await page.getByRole('button', { name: 'New chat', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Chat model', exact: true })).toContainText(
-      'GPT-6.1 Sol',
-    );
-    await expect(page.getByRole('button', { name: 'Chat model', exact: true })).toContainText(
-      'Extra high',
-    );
-    // Picker approvals survive the restart: the last-used folder leads, and choosing one needs no
+    // Picker approvals live in the daemon: the last-used folder leads, and choosing one needs no
     // native picker.
+    await page.getByRole('button', { name: 'New chat', exact: true }).click();
     await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
     const folders = page.getByRole('dialog', { name: 'Working folder', exact: true });
     await expect(
@@ -353,400 +258,260 @@ test('native local setup, approved folders/models, streaming/tools, hidden work 
     await expect(
       page.getByRole('button', { name: 'Choose working folder', exact: true }),
     ).toHaveAttribute('title', first);
+    // Signing out removes the daemon's credential.
+    const providers = await openSettings(page, 'Providers');
+    await providers
+      .getByRole('button', { name: 'Remove key for openai-api-key', exact: true })
+      .click();
+    await expect(
+      providers.getByRole('button', { name: 'Add key for openai-api-key', exact: true }),
+    ).toBeVisible();
+    await closeSettings(page);
     expect(errors).toEqual([]);
   } finally {
-    if (child.exitCode === null) await app.evaluate(({ app }) => app.exit(0));
-    await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
-    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    try {
+      await profile.exit(launched);
+    } finally {
+      await profile.release();
+    }
   }
 });
 
-test('startup-failure Quit still confirms hidden local work before disposal', async () => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-local-failed-startup-')));
-  const app = await electron.launch({
-    args: [resolve('test/local-harness.mjs')],
-    env: {
-      PATH: '/usr/bin:/bin',
-      HOME: process.env.HOME!,
-      TMPDIR: process.env.TMPDIR!,
-      MOONBASE_USER_DATA: directory,
-      MOONBASE_TEST_MAIN: pathToFileURL(join(fixtureDirectory, 'main.mjs')).href,
-      MOONBASE_TEST_STARTUP_FAILURE: 'editor',
-      MOONBASE_TEST_LOCAL_ACTIVE: '1',
-    },
+test('a crashed daemon restarts on the next request, and the chat shows it reconnecting', async () => {
+  const profile = await localProfile('moonbase-local-crash-', {
+    steps: [{ reply: 'Before the crash' }],
   });
-  const child = app.process(),
-    page = await app.firstWindow();
+  const folder = join(profile.root, 'folder');
+  await mkdir(folder);
+  const launched = await profile.launch();
+  const { app, page } = launched;
   try {
-    await expect(page.getByRole('alert', { name: 'Workbench startup failed' })).toBeVisible();
-    const keep = join(directory, 'kept.json');
-    await app.evaluate(({ app, dialog }, file) => {
-      dialog.showMessageBox = (async (_window, options) => {
-        process.getBuiltinModule('fs').writeFileSync(file, JSON.stringify(options));
-        return { response: 0, checkboxChecked: false };
-      }) as typeof dialog.showMessageBox;
-      app.quit();
-    }, keep);
+    await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+    await addProviderKey(page, 'sk-controlled-crash');
+    await pickWith(app, folder);
+    await chooseFolderNatively(page);
+    await page.getByLabel('Message', { exact: true }).fill('Start before the crash');
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    await expect(page.getByText('Before the crash', { exact: true })).toBeVisible();
+    await page.evaluate(() => {
+      const seen: string[] = [];
+      Object.assign(window, { reconnecting: seen });
+      new MutationObserver(() => {
+        if (document.body.textContent?.includes('Reconnecting to live updates…'))
+          seen.push('reconnecting');
+      }).observe(document.body, { subtree: true, childList: true, characterData: true });
+    });
+    const pid = (await readDaemonPid(profile.daemon))!;
+    // A restarted daemon replays its script from the start.
+    await writeFauxScript(profile.daemon, {
+      idleMs: 120_000,
+      pollMs: 500,
+      steps: [{ reply: 'After the restart' }],
+    });
+    process.kill(pid, 'SIGKILL');
+    // The open chat's watch fails, reconnects and so restarts the daemon on the same store.
     await expect
-      .poll(async () => {
-        try {
-          return JSON.parse(await readFile(keep, 'utf8')).buttons;
-        } catch {
-          return [];
-        }
-      })
-      .toEqual(['Keep running', 'Quit']);
-    expect(child.exitCode).toBeNull();
-    await expect(page.getByRole('alert', { name: 'Workbench startup failed' })).toBeVisible();
-    await app.evaluate(({ app, dialog }) => {
-      dialog.showMessageBox = (async (_window, options) => ({
-        response: options.buttons?.includes('Keep running') ? 1 : 0,
-        checkboxChecked: false,
-      })) as typeof dialog.showMessageBox;
-      app.quit();
-    });
-    await expect.poll(() => child.exitCode).toBe(1);
+      .poll(() =>
+        page.evaluate(() => (window as unknown as { reconnecting: string[] }).reconnecting),
+      )
+      .not.toEqual([]);
+    await expect.poll(async () => (await readDaemonPid(profile.daemon)) ?? pid).not.toBe(pid);
+    await expect(page.getByText('Reconnecting to live updates…')).toHaveCount(0);
+    // The failed watch it replaced is released without a cleanup failure.
+    await expect(page.getByText('Panel cleanup failed')).toHaveCount(0);
+    await page.getByLabel('Message', { exact: true }).fill('Continue after the restart');
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    await expect(page.getByText('After the restart', { exact: true })).toBeVisible();
+    expect(isAlive(pid)).toBe(false);
   } finally {
-    if (child.exitCode === null) await app.evaluate(({ app }) => app.exit(0));
-    await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
-    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    try {
+      await profile.exit(launched);
+    } finally {
+      await profile.release();
+    }
   }
 });
 
-test('obsolete native confirmation cannot cancel the replacement document’s Quit or reopen its admissions', async () => {
-  const directory = await realpath(
-    await mkdtemp(join(tmpdir(), 'moonbase-local-quit-replacement-')),
-  );
-  const app = await electron.launch({
-    args: [resolve('test/local-harness.mjs')],
-    env: {
-      PATH: '/usr/bin:/bin',
-      HOME: process.env.HOME!,
-      TMPDIR: process.env.TMPDIR!,
-      MOONBASE_USER_DATA: directory,
-      MOONBASE_TEST_MAIN: pathToFileURL(join(fixtureDirectory, 'main.mjs')).href,
-      MOONBASE_TEST_STARTUP_FAILURE: 'editor',
-      MOONBASE_TEST_LOCAL_ACTIVE: '1',
-    },
+test('the editor works while the daemon starts; a failed first start shows a retryable Unavailable state that recovers', async () => {
+  test.setTimeout(60_000);
+  const profile = await localProfile('moonbase-local-startup-', {
+    steps: [{ reply: 'Started after the retry' }],
   });
-  const child = app.process(),
-    page = await app.firstWindow();
+  const gate = join(profile.root, 'gate'),
+    checkout = join(profile.root, 'checkout');
+  await mkdir(gate);
+  await mkdir(checkout);
+  await writeFile(join(checkout, 'notes.md'), 'draft\n');
+  // Every daemon start waits on the gate, so the first stays starting until the test fails it.
+  const launched = await profile.launch({ MOONBASE_TEST_DAEMON_GATE: gate });
+  const { app, page } = launched;
   try {
-    await expect(page.getByRole('alert', { name: 'Workbench startup failed' })).toBeVisible();
-    await app.evaluate(({ app, dialog }) => {
-      const state = globalThis as unknown as {
-        localQuitDialogs: ((value: { response: number; checkboxChecked: boolean }) => void)[];
-      };
-      state.localQuitDialogs = [];
-      dialog.showMessageBox = (async (_window, options) =>
-        options.buttons?.includes('Keep running')
-          ? new Promise((resolve) => state.localQuitDialogs.push(resolve))
-          : { response: 0, checkboxChecked: false }) as typeof dialog.showMessageBox;
-      app.quit();
-    });
-    const dialogs = () =>
-      app.evaluate(
-        () => (globalThis as unknown as { localQuitDialogs: unknown[] }).localQuitDialogs.length,
-      );
-    await expect.poll(dialogs).toBe(1);
-    await app.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows()[0].webContents.reload(),
+    // The window and editor work while the daemon is still starting.
+    await pickWith(app, checkout);
+    await page.getByRole('button', { name: 'Open checkout', exact: true }).click();
+    const opener = page.getByRole('dialog', { name: 'Open project', exact: true });
+    const treeItem = page.getByRole('treeitem', { name: /^notes\.md/ });
+    await expect(opener.or(treeItem)).toBeVisible();
+    if (await opener.isVisible())
+      await opener.getByRole('button', { name: 'Open folder…' }).click();
+    await treeItem.dblclick();
+    const editor = page.getByRole('textbox', { name: 'notes.md editor', exact: true });
+    await editor.focus();
+    await editor.press('Meta+a');
+    await editor.pressSequentially('edited while the daemon starts');
+    await editor.press('Meta+s');
+    await expect
+      .poll(() => readFile(join(checkout, 'notes.md'), 'utf8'))
+      .toBe('edited while the daemon starts');
+    expect(await readDaemonPid(profile.daemon)).toBeUndefined();
+    // The first start fails: local chat is Unavailable, and says it can be retried.
+    await writeFile(join(gate, 'fail'), '');
+    await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+    const unavailable = page.getByLabel('Chat configuration');
+    await expect(unavailable).toContainText(
+      'Moonbase could not start or reach its local chat daemon. Retry; editing remains available.',
     );
-    await expect.poll(dialogs).toBe(2);
-    await app.evaluate(() =>
-      (
-        globalThis as unknown as { localQuitDialogs: ((value: unknown) => void)[] }
-      ).localQuitDialogs[0]({ response: 0, checkboxChecked: false }),
-    );
-    const denied = await page.evaluate(async (cwd) => {
+    // Once the daemon can start, a retry reaches it.
+    await rm(join(gate, 'fail'));
+    await writeFile(join(gate, 'start'), '');
+    await page.getByRole('tab', { name: /^checkout/ }).click();
+    await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
+    await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+    await expect(unavailable).toHaveCount(0);
+    await addProviderKey(page, 'sk-controlled-startup');
+    await page.getByLabel('Message', { exact: true }).fill('Start now');
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    await expect(page.getByText('Started after the retry', { exact: true })).toBeVisible();
+    expect(isAlive((await readDaemonPid(profile.daemon))!)).toBe(true);
+  } finally {
+    try {
+      await profile.exit(launched);
+    } finally {
+      await profile.release();
+    }
+  }
+});
+
+test('folder grants: a chat without a project becomes one, an editor checkout and a new worktree are granted to the daemon', async () => {
+  test.setTimeout(90_000);
+  const profile = await localProfile('moonbase-local-grants-', {
+    steps: [
+      { reply: 'Own folder reply' },
+      { reply: 'Editor checkout reply' },
+      { reply: 'Worktree reply' },
+    ],
+  });
+  const repository = join(profile.root, 'editor-repo');
+  await mkdir(repository);
+  const git = (...args: string[]) =>
+    execFileSync('/usr/bin/git', [
+      '-C',
+      repository,
+      '-c',
+      'user.name=Grant Test',
+      '-c',
+      'user.email=grant@example.invalid',
+      ...args,
+    ]);
+  git('init', '-q', '-b', 'main');
+  await writeFile(join(repository, 'README.md'), '# Editor checkout\n');
+  git('add', '.');
+  git('commit', '-qm', 'Grant fixture');
+  // A worktree Git lists for the checkout, which no chat uses.
+  const unused = join(profile.root, 'editor-repo-unused');
+  git('worktree', 'add', '-q', '-b', 'unused', unused);
+  const approvals = () =>
+    readFile(join(profile.daemon, 'approved-folders.json'), 'utf8').catch(() => '');
+  const launched = await profile.launch({
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_NOSYSTEM: '1',
+  });
+  const { app, page } = launched;
+  try {
+    await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+    await addProviderKey(page, 'sk-controlled-grants');
+    // A chat without a project runs in a folder the daemon makes, then becomes a project there.
+    await expect(
+      page.getByRole('button', { name: 'Choose working folder', exact: true }),
+    ).toHaveText(/^No project/);
+    await page.getByLabel('Message', { exact: true }).fill('Plan a trip');
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    await expect(page.getByText('Own folder reply', { exact: true })).toBeVisible();
+    const own = await page.evaluate(async () => {
       const session = await window.moonbaseChat.context('local');
-      return window.moonbaseChat.call(
+      const reply = await window.moonbaseChat.call(
         'chat',
-        'createChat',
-        {
-          session,
-          requestId: 'fenced',
-          title: 'Fenced',
-          settings: { cwd, model: { provider: 'openai', modelId: 'gpt-6.1-sol' } },
-        },
+        'listChats',
+        { session },
         crypto.randomUUID(),
         'local',
       );
-    }, directory);
-    expect(denied).toMatchObject({ ok: false, error: { code: 'Unavailable' } });
-    await app.evaluate(() =>
-      (
-        globalThis as unknown as { localQuitDialogs: ((value: unknown) => void)[] }
-      ).localQuitDialogs[1]({ response: 1, checkboxChecked: false }),
-    );
-    await expect.poll(() => child.exitCode).toBe(1);
-  } finally {
-    if (child.exitCode === null) await app.evaluate(({ app }) => app.exit(0));
-    await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
-    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-  }
-});
-
-test('a failed local activity scan during crash-Quit reports safely and recovers the renderer', async () => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-local-crash-scan-')));
-  const app = await electron.launch({
-    args: [resolve('test/local-harness.mjs')],
-    env: {
-      PATH: '/usr/bin:/bin',
-      HOME: process.env.HOME!,
-      TMPDIR: process.env.TMPDIR!,
-      MOONBASE_USER_DATA: directory,
-      MOONBASE_TEST_MAIN: pathToFileURL(join(fixtureDirectory, 'main.mjs')).href,
-      MOONBASE_TEST_LOCAL_SCAN_ERROR: '1',
-    },
-  });
-  const child = app.process(),
-    page = await app.firstWindow();
-  try {
-    await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible();
-    await app.evaluate(({ BrowserWindow, dialog }) => {
-      dialog.showMessageBox = (async () => ({
-        response: 1,
-        checkboxChecked: false,
-      })) as typeof dialog.showMessageBox;
-      BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer();
+      return (reply as { value: { conversations: { cwd: string }[] } }).value.conversations[0].cwd;
     });
-    await expect
-      .poll(async () => {
-        try {
-          return await app.evaluate(async ({ BrowserWindow }) =>
-            BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(
-              'document.body.textContent',
-            ),
-          );
-        } catch {
-          return '';
-        }
-      })
-      .toContain('Controlled activity scan failure');
-    expect(child.exitCode).toBeNull();
-    const editing = await app.evaluate(async ({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(
-        '[...document.querySelectorAll("button")].some(button => button.getAttribute("aria-label") === "Open checkout" && !button.disabled)',
+    expect(own.startsWith(join(profile.daemon, 'chats') + '/')).toBe(true);
+    await page.getByRole('button', { name: 'Turn into project', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Turn into project', exact: true })).toBeHidden();
+    // Only the chat's own folder can become a project; a forged one is refused by the daemon.
+    const forged = await page.evaluate(() =>
+      window.moonbaseChat.turnIntoProject!('missing-chat').then(
+        () => 'opened',
+        (error: Error) => error.message,
       ),
     );
-    expect(editing).toBe(true);
-  } finally {
-    if (child.exitCode === null) await app.evaluate(({ app }) => app.exit(0));
-    await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
-    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-  }
-});
-
-test('transcript local rendering precedes held completion; native Copy/link failures and actual 200% stay readable', async () => {
-  test.setTimeout(60000);
-  const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-transcript-native-')));
-  const app = await electron.launch({
-    args: [resolve('test/local-harness.mjs')],
-    env: {
-      PATH: '/usr/bin:/bin',
-      HOME: process.env.HOME!,
-      TMPDIR: process.env.TMPDIR!,
-      MOONBASE_USER_DATA: join(directory, 'data'),
-      MOONBASE_TEST_MAIN: pathToFileURL(join(fixtureDirectory, 'main.mjs')).href,
-      MOONBASE_TEST_TRANSCRIPT: '1',
-    },
-  });
-  const child = app.process(),
-    page = await app.firstWindow();
-  type Control = {
-    first(): void;
-    next(): void;
-    finish(): void;
-    restore?(): Promise<void>;
-    copied?: string[];
-    links?: string[];
-  };
-  try {
-    await openSettings(page, 'Providers');
-    await page.getByRole('button', { name: 'Add key for OpenAI API key', exact: true }).click();
+    expect(forged).not.toBe('opened');
+    // A checkout the editor opened is granted, so a chat may use it without the picker.
+    await pickWith(app, repository);
+    await page.getByRole('button', { name: 'Open checkout', exact: true }).click();
+    const opener = page.getByRole('dialog', { name: 'Open project', exact: true });
+    await expect(
+      opener.or(page.getByRole('tab', { name: 'editor-repo · main', exact: true })),
+    ).toBeVisible();
+    if (await opener.isVisible())
+      await opener.getByRole('button', { name: 'Open folder…' }).click();
+    await expect(page.getByRole('tab', { name: 'editor-repo · main', exact: true })).toBeVisible();
+    // Opening it grants the daemon nothing; a chat's first use of it does.
+    expect(await approvals()).not.toContain(JSON.stringify(repository));
+    await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+    await page.getByRole('button', { name: 'New chat', exact: true }).click();
+    await app.evaluate(({ dialog }) => {
+      dialog.showOpenDialog = (async () => {
+        throw new Error('The native picker should not open.');
+      }) as typeof dialog.showOpenDialog;
+    });
+    await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
     await page
-      .getByLabel('Enter OpenAI API key', { exact: true })
-      .fill('sk-controlled-transcript-fixture');
-    await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
-    await closeSettings(page);
-    await app.evaluate(({ dialog }, cwd) => {
-      dialog.showOpenDialog = (async () => ({
-        canceled: false,
-        filePaths: [cwd],
-      })) as typeof dialog.showOpenDialog;
-    }, directory);
-    await chooseFolderNatively(page);
-    await page.getByLabel('Message', { exact: true }).fill('Read the held local response');
+      .getByRole('dialog', { name: 'Working folder', exact: true })
+      .getByRole('button', { name: /^editor-repo/ })
+      .click();
+    await page.getByLabel('Message', { exact: true }).fill('Read the checkout');
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
-    await app.evaluate(() =>
-      (globalThis as unknown as { transcriptTest: Control }).transcriptTest.first(),
-    );
-    const live = page.getByRole('article', { name: 'Live response' });
-    await expect(live.getByRole('heading', { name: 'Held local response' })).toBeVisible();
-    await expect(live.getByText('First local chunk 🌔', { exact: true })).toBeVisible();
-    // Opening the Activity card shows its recorded parts, the running thought among them.
-    const activity = live.getByRole('button', { name: /^Activity/ });
-    await activity.click();
-    const thought = live
-      .locator('[data-transcript-part]')
-      .filter({ hasText: /^Thinking/ })
-      .locator('pre');
-    await expect(thought).toHaveText('Local thinking first');
-    await thought.focus();
-    const reads = await app.evaluate(
-      () => (globalThis as unknown as { activityReads: string[] }).activityReads.length,
-    );
-    await app.evaluate(() =>
-      (globalThis as unknown as { transcriptTest: Control }).transcriptTest.next(),
-    );
-    await expect(
-      live.getByText('First local chunk 🌔 and second chunk', { exact: true }),
-    ).toBeVisible();
-    await expect(
-      live.locator('pre').getByText('Local thinking first and next', { exact: true }),
-    ).toBeVisible();
-    await expect(thought).toBeFocused();
-    expect(
-      await app.evaluate(
-        () => (globalThis as unknown as { activityReads: string[] }).activityReads.length,
-      ),
-    ).toBe(reads);
-    await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
-    expect(
-      await app.evaluate(
-        ({ clipboard }) =>
-          clipboard.writeText ===
-          (globalThis as unknown as { moonbaseTestClipboardWrite: unknown })
-            .moonbaseTestClipboardWrite,
-      ),
-    ).toBe(true);
-    await app.evaluate(({ clipboard, shell }) => {
-      const original = clipboard.writeText.bind(clipboard);
-      const control = (globalThis as unknown as { transcriptTest: Control }).transcriptTest;
-      control.copied = [];
-      clipboard.writeText = async (text) => {
-        control.copied!.push(text);
-      };
-      control.restore = async () => {
-        clipboard.writeText = original;
-      };
-      control.links = [];
-      shell.openExternal = async (url) => {
-        control.links!.push(url);
-      };
-    });
-    await live.getByRole('button', { name: 'Copy message', exact: true }).click();
-    await expect(page.getByRole('status').filter({ hasText: 'Copied.' })).toBeVisible();
-    expect(
-      await app.evaluate(() =>
-        (globalThis as unknown as { transcriptTest: Control }).transcriptTest.copied!.at(-1),
-      ),
-    ).toBe(
-      '## Held local response\n\nFirst local chunk 🌔 and second chunk\n\n[Read](https://example.com/read)',
-    );
-    await live.getByRole('link', { name: 'Read', exact: true }).click();
-    expect(
-      await app.evaluate(
-        () => (globalThis as unknown as { transcriptTest: Control }).transcriptTest.links,
-      ),
-    ).toEqual(['https://example.com/read']);
-    await app.evaluate(({ clipboard }) => {
-      clipboard.writeText = async () => {
-        throw Error('Controlled OS clipboard failure');
-      };
-    });
-    await live.getByRole('button', { name: 'Copy message', exact: true }).click();
-    await expect(page.getByRole('alert')).toBeVisible();
-    if ((await activity.getAttribute('aria-expanded')) === 'true') await activity.click();
-    await app.evaluate(({ BrowserWindow }) => {
-      const window = BrowserWindow.getAllWindows()[0];
-      window.setSize(1280, 850);
-      window.webContents.setZoomFactor(2);
-    });
-    await expect(page.getByLabel('Message', { exact: true })).toBeInViewport();
-    const layout = await page.evaluate(() => {
-      const main = document.querySelector<HTMLElement>('[aria-label="Agent workspace"]')!,
-        grid = main.parentElement!;
-      return {
-        innerWidth,
-        compact: matchMedia('(max-width: 640px)').matches,
-        rootWidth: document.getElementById('root')!.getBoundingClientRect().width,
-        mainWidth: main.getBoundingClientRect().width,
-        railWidth: document.querySelector('[aria-label="Workbench views"]')!.getBoundingClientRect()
-          .width,
-        gridWidth: grid.getBoundingClientRect().width,
-        columns: getComputedStyle(grid).gridTemplateColumns,
-      };
-    });
-    await writeFile(
-      resolve('../../test-results/transcript-111/native-zoom-layout.json'),
-      JSON.stringify(layout, null, 2),
-    );
-    // Compact, the chat is one column filling the window beside the project rail.
-    expect(layout.columns.split(' ')).toHaveLength(1);
-    expect(layout.mainWidth).toBeGreaterThan(layout.innerWidth - layout.railWidth - 2);
-    const reading = live.getByText('First local chunk 🌔 and second chunk', { exact: true });
-    await reading.scrollIntoViewIfNeeded();
-    // Away from the floating Jump to latest button, which covers the centre of a short list.
+    await expect(page.getByText('Editor checkout reply', { exact: true })).toBeVisible();
+    // A new worktree of it is made by main, then granted to the daemon for its chat.
+    await page.getByRole('button', { name: 'New chat', exact: true }).click();
+    await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
     await page
-      .getByRole('region', { name: 'Chat transcript', exact: true })
-      .hover({ position: { x: 24, y: 24 } });
-    for (let attempt = 0; attempt < 8; attempt++) {
-      const gap = await reading.evaluate(
-        (element) =>
-          element.getBoundingClientRect().top -
-          element.closest('[aria-label="Chat transcript"]')!.getBoundingClientRect().top,
-      );
-      if (Math.abs(gap) < 0.25) break;
-      await page.mouse.wheel(0, gap);
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) =>
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-          ),
-      );
-    }
-    await page.screenshot({
-      path: resolve('../../test-results/transcript-112/native-local-zoom.png'),
-    });
-    const geometry = await reading.evaluate((element) => ({
-      reading: element.getBoundingClientRect().toJSON(),
-      transcript: element
-        .closest('[aria-label="Chat transcript"]')!
-        .getBoundingClientRect()
-        .toJSON(),
-    }));
-    await writeFile(
-      resolve('../../test-results/transcript-112/native-local-zoom.json'),
-      JSON.stringify(geometry, null, 2),
+      .getByRole('dialog', { name: 'Working folder', exact: true })
+      .getByRole('button', { name: /^editor-repo/ })
+      .click();
+    await page.getByRole('combobox', { name: 'Worktree', exact: true }).click();
+    await page.getByRole('option', { name: 'New worktree', exact: true }).click();
+    await page.getByLabel('Message', { exact: true }).fill('Tidy the readme');
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    await expect(page.getByText('Worktree reply', { exact: true })).toBeVisible();
+    await access(join(`${repository}-worktrees`, 'chat-tidy-the-readme', 'README.md'));
+    const granted = await approvals();
+    expect(granted).toContain(JSON.stringify(repository));
+    expect(granted).toContain(
+      JSON.stringify(join(`${repository}-worktrees`, 'chat-tidy-the-readme')),
     );
-    // Native scrolling at 200% rounds fractional CSS coordinates to device pixels.
-    expect(geometry.reading.top).toBeGreaterThanOrEqual(geometry.transcript.top - 1);
-    expect(geometry.reading.bottom).toBeLessThanOrEqual(geometry.transcript.bottom + 1);
-    await captureNative(
-      app,
-      page,
-      resolve('../../test-results/transcript-111/native-zoom-200.png'),
-    );
-    await page.getByLabel('Message', { exact: true }).focus();
-    await app.evaluate(() =>
-      (globalThis as unknown as { transcriptTest: Control }).transcriptTest.finish(),
-    );
-    await expect(page.getByText('Local completed', { exact: true })).toBeVisible();
+    // The listed worktree no chat used was never granted.
+    expect(granted).not.toContain(JSON.stringify(unused));
   } finally {
-    if (child.exitCode === null) {
-      try {
-        await app.evaluate(async () => {
-          await (globalThis as unknown as { transcriptTest: Control }).transcriptTest.restore?.();
-        });
-      } finally {
-        await app.evaluate(({ app }) => app.exit(0));
-      }
+    try {
+      await profile.exit(launched);
+    } finally {
+      await profile.release();
     }
-    await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
-    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 });
 
@@ -756,28 +521,39 @@ for (const mode of ['local', 'remote'] as const)
     const host =
       mode === 'remote'
         ? await controlledHostFixture(
-            new URL('../../../tests/chat/tool-host.mjs', import.meta.url),
+            new URL('../../../tests/chat/faux-tool.mjs', import.meta.url),
             true,
           )
         : undefined;
     const directory =
       host?.directory ??
       (await realpath(await mkdtemp(join(tmpdir(), 'moonbase-activity-native-'))));
+    const userData = join(directory, 'desktop'),
+      daemon = join(userData, 'daemon-v1'),
+      gate = join(directory, 'next-chunk');
+    await prepareDaemonData(userData, {
+      steps: [
+        {
+          tool: 'bash',
+          args: {
+            command: `printf 'First local tool chunk'; while [ ! -e '${gate}' ]; do sleep 0.05; done; printf ' and next update'; sleep 600`,
+          },
+        },
+        { reply: 'Local tool response finished' },
+      ],
+    });
     const app = await electron.launch({
       args: [resolve('test/local-harness.mjs')],
       env: {
         PATH: '/usr/bin:/bin',
         HOME: process.env.HOME!,
         TMPDIR: process.env.TMPDIR!,
-        MOONBASE_USER_DATA: join(directory, 'desktop'),
-        MOONBASE_TEST_MAIN: pathToFileURL(join(fixtureDirectory, 'main.mjs')).href,
+        MOONBASE_USER_DATA: userData,
+        MOONBASE_TEST_MAIN: main,
+        MOONBASE_TEST_BUN: findTestBun(),
         ...(host
-          ? {
-              MOONBASE_CHAT_CONFIG: host.clientConfig,
-              MOONBASE_CHAT_FORWARD_LOG: host.log,
-              MOONBASE_TEST_ALLOW_LOOPBACK: '1',
-            }
-          : { MOONBASE_TEST_ACTIVITY: '1' }),
+          ? { MOONBASE_CHAT_CONFIG: host.clientConfig, MOONBASE_CHAT_FORWARD_LOG: host.log }
+          : {}),
       },
     });
     const child = app.process(),
@@ -788,19 +564,9 @@ for (const mode of ['local', 'remote'] as const)
         await page.getByRole('button', { name: 'Connect', exact: true }).click();
         await createRemoteChat(page, 'Remote held activity');
       } else {
-        await openSettings(page, 'Providers');
-        await page.getByRole('button', { name: 'Add key for OpenAI API key', exact: true }).click();
-        await page
-          .getByLabel('Enter OpenAI API key', { exact: true })
-          .fill('sk-controlled-activity-fixture');
-        await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
-        await closeSettings(page);
-        await app.evaluate(({ dialog }, cwd) => {
-          dialog.showOpenDialog = (async () => ({
-            canceled: false,
-            filePaths: [cwd],
-          })) as typeof dialog.showOpenDialog;
-        }, directory);
+        await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+        await addProviderKey(page, 'sk-controlled-activity-fixture');
+        await pickWith(app, directory);
         await chooseFolderNatively(page);
       }
       await page.getByLabel('Message', { exact: true }).fill('Observe held tool progress');
@@ -814,25 +580,22 @@ for (const mode of ['local', 'remote'] as const)
       // its call's card above it.
       await expect(live.getByRole('button', { name: /^Activity/ })).toHaveCount(0);
       await expect(live).toContainText('running');
-      const group = await openCallCard(
-        page,
-        host ? 'inspect_remote_context' : 'controlled_activity',
-      );
+      // A shell call is headed by its command.
+      const group = await openCallCard(page, host ? 'inspect_remote_context' : 'printf');
       await expect(group).toHaveAttribute('aria-expanded', 'true');
       await expect(part.locator('pre')).toContainText(
         host ? 'Controlled remote tool activity' : 'First local tool chunk',
       );
       await part.locator('pre').focus();
-      const before = host
-        ? (await host.stats()).commands.filter((operation) => operation === 'getChat').length
-        : await app.evaluate(
-            () => (globalThis as unknown as { activityReads: string[] }).activityReads.length,
-          );
+      const reads = () =>
+        host
+          ? host.stats().then((stats) => stats.commands.filter((name) => name === 'getChat').length)
+          : app.evaluate(
+              () => (globalThis as unknown as { desktopChatReads?: number }).desktopChatReads ?? 0,
+            );
+      const before = await reads();
       if (host) host.nextChunk();
-      else
-        await app.evaluate(() =>
-          (globalThis as unknown as { localActivity: { next(): void } }).localActivity.next(),
-        );
+      else await writeFile(gate, '');
       const next = host
         ? 'Controlled remote tool activity\nFixed folder observed by the test tool.\n' +
           'preview '.repeat(800) +
@@ -841,12 +604,8 @@ for (const mode of ['local', 'remote'] as const)
       await expect(part.locator('pre')).toHaveText(next);
       await expect(part.locator('pre')).toBeFocused();
       await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
-      const after = host
-        ? (await host.stats()).commands.filter((operation) => operation === 'getChat').length
-        : await app.evaluate(
-            () => (globalThis as unknown as { activityReads: string[] }).activityReads.length,
-          );
-      expect(after).toBe(before);
+      // The update arrived through the watch, not by polling the chat.
+      expect(await reads()).toBe(before);
       await part.getByRole('button', { name: 'Copy part', exact: true }).click();
       await expect(page.getByRole('status').filter({ hasText: 'Copied.' })).toBeVisible();
       expect(
@@ -869,16 +628,21 @@ for (const mode of ['local', 'remote'] as const)
         'Stopped',
       );
     } finally {
-      host?.release();
-      if (child.exitCode === null) {
-        if (host) {
-          // Still connected when the sidebar has no Connect line.
-          if (!(await page.getByRole('button', { name: 'Connect', exact: true }).count()))
-            await disconnectChat(page);
+      try {
+        host?.release();
+        if (child.exitCode === null) {
+          if (host) {
+            // Still connected when the sidebar has no Connect line.
+            if (!(await page.getByRole('button', { name: 'Connect', exact: true }).count()))
+              await disconnectChat(page);
+          }
+          await app.evaluate(({ app }) => app.exit(0));
         }
-        await app.evaluate(({ app }) => app.exit(0));
+        await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+      } finally {
+        // A daemon outlives its app: stop it even when the steps before fail.
+        await stopDaemon(daemon);
       }
-      await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
       if (host) await host.close();
       else await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     }
@@ -887,20 +651,22 @@ for (const mode of ['local', 'remote'] as const)
 test('transcript remote first/next chunks render through authenticated stream and Electron IPC before held completion', async () => {
   test.setTimeout(60000);
   const host = await controlledHostFixture(
-    new URL('../../../tests/chat/stream-host.mjs', import.meta.url),
+    new URL('../../../tests/chat/faux-stream.mjs', import.meta.url),
     true,
   );
+  const userData = join(host.directory, 'desktop');
+  await prepareDaemonData(userData);
   const app = await electron.launch({
     args: [resolve('test/local-harness.mjs')],
     env: {
       PATH: '/usr/bin:/bin',
       HOME: process.env.HOME!,
       TMPDIR: process.env.TMPDIR!,
-      MOONBASE_USER_DATA: join(host.directory, 'desktop'),
+      MOONBASE_USER_DATA: userData,
       MOONBASE_CHAT_CONFIG: host.clientConfig,
       MOONBASE_CHAT_FORWARD_LOG: host.log,
-      MOONBASE_TEST_ALLOW_LOOPBACK: '1',
-      MOONBASE_TEST_MAIN: pathToFileURL(join(fixtureDirectory, 'main.mjs')).href,
+      MOONBASE_TEST_MAIN: main,
+      MOONBASE_TEST_BUN: findTestBun(),
     },
   });
   const child = app.process(),
@@ -913,19 +679,12 @@ test('transcript remote first/next chunks render through authenticated stream an
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     const live = page.getByRole('article', { name: 'Live response' });
     await expect(live.getByText('first remote text 0', { exact: true })).toBeVisible();
-    await live.getByRole('button', { name: /^Activity/ }).click();
-    const thought = live
-      .locator('[data-transcript-part]')
-      .filter({ hasText: /^Thinking/ })
-      .locator('pre');
-    await expect(thought).toHaveText('remote thinking 0');
-    await thought.focus();
+    // The text takes the place of the thought it follows, so the reply shows no step for it.
+    await expect(live.locator('[data-transcript-step]')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
     const before = await host.stats();
     host.nextChunk();
     await expect(live.getByText('first remote text 4', { exact: true })).toBeVisible();
-    await expect(live.locator('pre').getByText('remote thinking 4', { exact: true })).toBeVisible();
-    await expect(thought).toBeFocused();
     const after = await host.stats();
     expect(after.reads!.scans).toBe(before.reads!.scans);
     expect(after.commands.filter((operation) => operation === 'getChat').length).toBe(
@@ -938,14 +697,19 @@ test('transcript remote first/next chunks render through authenticated stream an
     await page.getByLabel('Message', { exact: true }).focus();
     await expect(page.getByText('REMOTE COMPLETED', { exact: true })).toBeVisible();
   } finally {
-    host.release();
-    if (child.exitCode === null) {
-      // Still connected when the sidebar has no Connect line.
-      if (!(await page.getByRole('button', { name: 'Connect', exact: true }).count()))
-        await disconnectChat(page);
-      await app.evaluate(({ app }) => app.exit(0));
+    try {
+      host.release();
+      if (child.exitCode === null) {
+        // Still connected when the sidebar has no Connect line.
+        if (!(await page.getByRole('button', { name: 'Connect', exact: true }).count()))
+          await disconnectChat(page);
+        await app.evaluate(({ app }) => app.exit(0));
+      }
+      await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+    } finally {
+      // A daemon outlives its app: stop it even when the steps before fail.
+      await stopDaemon(join(userData, 'daemon-v1'));
     }
-    await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
     await host.close();
   }
 });
@@ -954,28 +718,28 @@ for (const mode of ['local', 'remote'] as const)
   test(`stored image ${mode} record is served over moonbase:// under production CSP; viewer keyboard, close and actual zoom`, async () => {
     const host =
       mode === 'remote'
-        ? await controlledHostFixture(new URL('./stored-image-host.mjs', import.meta.url))
+        ? await controlledHostFixture(new URL('./stored-image-faux.mjs', import.meta.url))
         : undefined;
     const directory =
       host?.directory ?? (await realpath(await mkdtemp(join(tmpdir(), 'moonbase-image-native-'))));
+    const userData = join(directory, 'desktop');
+    if (!host) await writeFile(join(directory, 'retained.png'), retainedImage);
+    // The daemon's own read tool records the image.
+    await prepareDaemonData(userData, {
+      steps: [{ tool: 'read', args: { path: 'retained.png' } }, { reply: 'Image read' }],
+    });
     const app = await electron.launch({
       args: [resolve('test/local-harness.mjs')],
       env: {
         PATH: '/usr/bin:/bin',
         HOME: process.env.HOME!,
         TMPDIR: process.env.TMPDIR!,
-        MOONBASE_USER_DATA: join(directory, 'desktop'),
-        MOONBASE_TEST_MAIN: pathToFileURL(join(fixtureDirectory, 'main.mjs')).href,
+        MOONBASE_USER_DATA: userData,
+        MOONBASE_TEST_MAIN: main,
+        MOONBASE_TEST_BUN: findTestBun(),
         ...(host
-          ? {
-              MOONBASE_CHAT_CONFIG: host.clientConfig,
-              MOONBASE_CHAT_FORWARD_LOG: host.log,
-              MOONBASE_TEST_ALLOW_LOOPBACK: '1',
-            }
-          : {
-              MOONBASE_TEST_ACTIVITY: '1',
-              MOONBASE_TEST_IMAGES: retainedImage.toString('base64'),
-            }),
+          ? { MOONBASE_CHAT_CONFIG: host.clientConfig, MOONBASE_CHAT_FORWARD_LOG: host.log }
+          : {}),
       },
     });
     const child = app.process(),
@@ -994,35 +758,14 @@ for (const mode of ['local', 'remote'] as const)
         await page.getByRole('button', { name: 'Connect', exact: true }).click();
         await createRemoteChat(page, 'Retained remote images');
       } else {
-        await openSettings(page, 'Providers');
-        await page.getByRole('button', { name: 'Add key for OpenAI API key', exact: true }).click();
-        await page
-          .getByLabel('Enter OpenAI API key', { exact: true })
-          .fill('sk-controlled-image-fixture');
-        await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
-        await closeSettings(page);
-        await app.evaluate(({ dialog }, cwd) => {
-          dialog.showOpenDialog = (async () => ({
-            canceled: false,
-            filePaths: [cwd],
-          })) as typeof dialog.showOpenDialog;
-        }, directory);
+        await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+        await addProviderKey(page, 'sk-controlled-image-fixture');
+        await pickWith(app, directory);
         await chooseFolderNatively(page);
       }
       await page.getByLabel('Message', { exact: true }).fill('Inspect retained images');
       await page.getByRole('button', { name: 'Send message', exact: true }).click();
-      if (!host) {
-        // The tool is running once its output part is recorded; the output itself stays folded.
-        const output = page
-          .getByRole('article', { name: 'Live response' })
-          .locator('[data-transcript-part]')
-          .filter({ hasText: /Output · running/ });
-        await openWorkingFold(page, output);
-        await expect(output).toHaveCount(1);
-        await app.evaluate(() =>
-          (globalThis as unknown as { localActivity: { release(): void } }).localActivity.release(),
-        );
-      }
+      if (!host) await expect(page.getByText('Image read', { exact: true })).toBeVisible();
       const group = page
         .locator('[data-transcript-activity]')
         .filter({ has: page.locator('[data-transcript-part]').filter({ hasText: 'Stored image' }) })
@@ -1031,7 +774,7 @@ for (const mode of ['local', 'remote'] as const)
       // The image is the call's output, recorded in a later row with no chevron of its own; the
       // call's card opens it.
       await expect(group.getByRole('button', { name: /^Activity/ })).toHaveCount(0);
-      await openCallCard(page, host ? 'retained_images' : 'controlled_activity');
+      await openCallCard(page, host ? 'retained_images' : 'read');
       const trigger = group.getByRole('button', { name: 'View stored image', exact: true }).first();
       await trigger.scrollIntoViewIfNeeded();
       await expect(trigger).toBeEnabled();
@@ -1126,6 +869,7 @@ for (const mode of ['local', 'remote'] as const)
             .poll(() => child.exitCode !== null || child.signalCode !== null, { timeout: 15000 })
             .toBe(true);
         } finally {
+          await stopDaemon(join(userData, 'daemon-v1'));
           if (host) console.info('Image native remote cleanup', await host.close());
           else await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
         }

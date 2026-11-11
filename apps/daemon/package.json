@@ -1,0 +1,23 @@
+{
+  "name": "@moonbase/daemon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun src/main.ts",
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "oxlint .",
+    "test": "bun test --timeout 60000 ./test"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "1.4.0",
+    "@moonbase/application": "workspace:*",
+    "@moonbase/contracts": "workspace:*",
+    "@moonbase/pi-runtime": "workspace:*",
+    "effect": "4.1.0"
+  },
+  "engines": {
+    "bun": "1.4.4"
+  }
+}

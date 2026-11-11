@@ -14,33 +14,30 @@ import {
   session,
   shell,
 } from 'electron';
-import { Context, ManagedRuntime, Effect, Layer, Scope } from 'effect';
+import { ManagedRuntime, Effect } from 'effect';
 import { WorkspaceLive, WorkspaceNative } from '@moonbase/workspace';
-import {
-  makeEditorClient,
-  bindChatClient,
-  bindConnectionClient,
-} from '@moonbase/application/runtime/clients';
+import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import { ChatService, ConnectionService } from '@moonbase/contracts/services';
-import { acquireLocalChat } from './chat/local.ts';
+import { acquireDaemonChat } from './chat/daemon.ts';
 import { realpathSync, mkdirSync } from 'node:fs';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EditorSession } from './session.ts';
 import { channels } from './wire.ts';
-
-import { RemoteChatLive } from '@moonbase/pi-runtime/remote';
-import { SshLive } from '@moonbase/ssh';
 import { readConfiguration } from './chat/config.ts';
+import { acquireRemoteChat } from './chat/remote.ts';
 import { channels as chatChannels } from './chat/wire.ts';
 import { respondTranscriptImage, transcriptImagePath } from './chat/transcript-native.ts';
 import { createNativeActions } from './main/native-actions.ts';
 import { createChatBackends } from './main/chat-backends.ts';
+import { findDaemonCommand, type DaemonCommand } from './main/daemon-command.ts';
+import { findDaemonDirectory, olderDaemonMessage } from './main/local-daemon.ts';
 import { createTrustedDocumentGuard, installCommandIpc } from './main/ipc.ts';
 import { installWindowLifecycle } from './main/window-lifecycle.ts';
 
 const directory = fileURLToPath(new URL('.', import.meta.url));
+/** The packaged daemon bundle's build identifier, which `scripts/build.mjs` defines. */
+declare const MOONBASE_DAEMON_BUILD: string | undefined;
 
 async function main() {
   const requestedData =
@@ -83,39 +80,52 @@ async function main() {
   const runtime = ManagedRuntime.make(workspace);
   const client = makeEditorClient(runtime);
   await runtime.runPromise(Effect.asVoid(WorkspaceNative));
-  // Local and remote backends are acquired once in separate scopes of this root.
-  // Local chat is acquired before the window's editor session, which approves checkouts, exists.
-  let isEditorFolder = (_path: string) => false;
+  // Local chat runs in this profile's daemon, which outlives the app; main finds or starts it and
+  // binds clients to it. Local and remote clients are acquired in separate scopes of this root.
+  const daemonDirectory = findDaemonDirectory(userData);
+  // Tests of an unpackaged app start the daemon's faux entry instead; a packaged app never does.
+  const testDaemonCommand = app.isPackaged
+    ? undefined
+    : (globalThis as { moonbaseTestDaemonCommand?: (directory: string) => DaemonCommand })
+        .moonbaseTestDaemonCommand;
+  const daemonCommand: DaemonCommand =
+    testDaemonCommand?.(daemonDirectory) ??
+    findDaemonCommand(
+      {
+        packaged: app.isPackaged,
+        resourcesPath: process.resourcesPath,
+        bundleDirectory: directory,
+        build: typeof MOONBASE_DAEMON_BUILD === 'string' ? MOONBASE_DAEMON_BUILD : 'development',
+      },
+      daemonDirectory,
+      process.env,
+    );
   const acquireLocal = () =>
-    acquireLocalChat(runtime, userData, (url) => shell.openExternal(url), {
-      ripgrepExecutable: join(assets, 'ripgrep/rg'),
-      isEditorFolder: (path) => isEditorFolder(path),
+    acquireDaemonChat(runtime, {
+      directory: daemonDirectory,
+      command: daemonCommand,
+      openUrl: (url) => shell.openExternal(url),
     }).then(
       (backend) => ({ backend, error: null }),
-      () => ({
-        backend: null,
-        error: new ApplicationError({
-          code: 'Unavailable',
-          message:
-            'Local Pi could not initialize. Preserve local chat files, check the working folders and restart Moonbase. Editing remains available.',
-        }),
-      }),
+      (error: unknown) => {
+        const { code, message } = normalizeApplicationError(error);
+        console.error('Local chat is unavailable:', message);
+        return {
+          backend: null,
+          error: new ApplicationError({
+            code: 'Unavailable',
+            // The daemon's own reason when it is still busy; otherwise the generic one.
+            message:
+              code === 'Unavailable' && message === olderDaemonMessage
+                ? `${message} Editing remains available.`
+                : 'Moonbase could not start or reach its local chat daemon. Retry; editing remains available.',
+          }),
+        };
+      },
     );
-  const localResult = await acquireLocal();
   const remote = chatConfiguration
-    ? await runApplicationEffect(
-        runtime,
-        Layer.buildWithScope(
-          RemoteChatLive.pipe(Layer.provideMerge(SshLive(chatConfiguration.ssh))),
-          Scope.forkUnsafe(runtime.scope, 'parallel'),
-        ),
-      )
+    ? await acquireRemoteChat(runtime, chatConfiguration, (url) => shell.openExternal(url))
     : null;
-  const remoteChat = remote ? bindChatClient(runtime, Context.get(remote, ChatService)) : null;
-  const connection = remote
-    ? bindConnectionClient(runtime, Context.get(remote, ConnectionService))
-    : null;
-  if (connection) await connection.command('getConnection', {});
   const window = new BrowserWindow({
     title: 'Moonbase',
     titleBarStyle: 'hiddenInset',
@@ -165,7 +175,6 @@ async function main() {
   const editorSession = new EditorSession(runtime, client, native, (id, value) => {
     if (!window.isDestroyed()) window.webContents.send(channels.event, id, value);
   });
-  isEditorFolder = (path) => editorSession.hasFolder(path);
   const chatBackends = createChatBackends({
     transcript: {
       writeText: async (text) => {
@@ -174,11 +183,16 @@ async function main() {
       openExternal: (url) => shell.openExternal(url),
     },
     runtime,
-    localResult,
+    // Local chat is acquired in the background below, so the window doesn't wait for the daemon.
+    localResult: {
+      backend: null,
+      error: new ApplicationError({ code: 'Unavailable', message: 'Local chat is starting.' }),
+    },
     acquireLocal,
-    chatConfiguration,
-    remoteChat,
-    connection,
+    // A checkout or worktree the editor approved is granted to the daemon when a chat first uses
+    // it, so a project's docked chat needs no picker.
+    isEditorFolder: (path) => editorSession.hasFolder(path),
+    remote,
     emit: (backendId, id, result) => {
       if (!window.isDestroyed()) window.webContents.send(chatChannels.event, id, result, backendId);
     },
@@ -278,6 +292,8 @@ async function main() {
       { role: 'windowMenu' },
     ]),
   );
+  // The editor loads at once; local chat joins this first acquisition, or retries it on failure.
+  void chatBackends.getContext('local').catch(() => {});
   await window.loadURL(appURL);
 }
 void main().catch((error) => {

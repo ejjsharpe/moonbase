@@ -9,16 +9,17 @@
     "./providers": "./src/providers.ts",
     "./credentials": "./src/credentials.ts",
     "./local-models": "./src/local-models.ts",
-    "./claude-code": "./src/claude-code.ts"
+    "./claude-code": "./src/claude-code.ts",
+    "./folders": "./src/folders.ts",
+    "./host-configuration": "./src/host-configuration.ts",
+    "./loopback": "./src/loopback.ts",
+    "./socket": "./src/socket-client.ts"
   },
   "scripts": {
     "build": "tsc --noEmit -p tsconfig.json",
-    "build:host": "node --experimental-strip-types scripts/build-host.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint .",
-    "test": "bun run test:node && bun run test:bun",
-    "test:node": "node scripts/ensure-electron.mjs && node --experimental-strip-types --test test/*.test.ts",
-    "test:bun": "node scripts/ensure-electron.mjs && bun test --timeout 60000 ./test"
+    "test": "bun test --timeout 60000 ./test"
   },
   "dependencies": {
     "effect": "4.1.0",

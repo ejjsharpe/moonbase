@@ -49,7 +49,7 @@ function fixture(options: { slowSend?: boolean; cleanupFailure?: boolean } = {})
     getChatHost: (input) =>
       Effect.sync(() => {
         assert.deepEqual(input.host, session.host);
-        return { ...session, cwd: conversation.cwd, model: conversation.model };
+        return { ...session, mode: 'local' as const };
       }),
     listChats: (input) =>
       Effect.sync(() => {
@@ -129,6 +129,7 @@ function fixture(options: { slowSend?: boolean; cleanupFailure?: boolean } = {})
       Effect.fail(
         new ApplicationError({ code: 'Incompatible', message: 'Not served by this fixture.' }),
       ),
+    watchChatList: () => Stream.never,
     watch: (input) =>
       Stream.unwrap(
         Effect.as(
@@ -173,8 +174,7 @@ test('public chat entry points share one scope and preserve exact targets/reques
   let unsubscribe = async () => {};
   try {
     const host = await client.command('getChatHost', { host: session.host });
-    assert('cwd' in host);
-    assert.equal(host.cwd, conversation.cwd);
+    assert.equal(host.mode, 'local');
     assert.deepEqual((await second.command('listChats', { session })).conversations, [
       conversation,
     ]);
@@ -184,6 +184,7 @@ test('public chat entry points share one scope and preserve exact targets/reques
           session,
           requestId: 'create-one',
           title: 'Saved chat',
+          settings: { model: { provider: 'faux', modelId: 'model' } },
         })
       ).requestId,
       'create-one',

@@ -11,12 +11,8 @@ function fixture() {
     ipc = new EventEmitter(),
     appEvents = new EventEmitter();
   const released: string[] = [],
-    prompts: string[] = [],
-    admissions: boolean[] = [];
-  let failChat = false,
-    available = true,
-    active = false,
-    response = 1;
+    prompts: string[] = [];
+  let failChat = false;
   let releaseGate: Promise<void> = Promise.resolve();
   const app = Object.assign(appEvents, {
     quit() {
@@ -34,7 +30,7 @@ function fixture() {
     dialog: {
       showMessageBox: async (_window: unknown, options: { message: string }) => {
         prompts.push(options.message);
-        return { response, checkboxChecked: false };
+        return { response: 1, checkboxChecked: false };
       },
     } as Pick<Dialog, 'showMessageBox'>,
     editorSession: {
@@ -46,7 +42,6 @@ function fixture() {
       },
     },
     chatBackends: {
-      hasLocalChat: () => available,
       getSessions: () => [
         {
           dispose: async () => {
@@ -58,10 +53,6 @@ function fixture() {
       ],
       releaseDocument: async () => {
         released.push('chat-document');
-      },
-      hasActiveWork: async () => available && active,
-      setAdmissionsOpen: (open) => {
-        admissions.push(open);
       },
     },
     releaseRoot: async () => {
@@ -84,7 +75,6 @@ function fixture() {
     lifecycle,
     released,
     prompts,
-    admissions,
     ready,
     ack,
     last,
@@ -95,29 +85,8 @@ function fixture() {
     holdRelease: (gate: Promise<void>) => {
       releaseGate = gate;
     },
-    activeWork: (decision: number) => {
-      active = true;
-      response = decision;
-    },
-    setLocalAvailable: (value: boolean) => {
-      available = value;
-    },
   };
 }
-
-test('an absent local backend cannot cache confirmation for a later successful retry', async () => {
-  const f = fixture();
-  f.setLocalAvailable(false);
-  f.ready();
-  f.lifecycle.requestQuit();
-  assert.equal(await f.lifecycle.confirmLocalQuit(), true);
-  assert.deepEqual(f.admissions, []);
-  f.setLocalAvailable(true);
-  f.activeWork(0);
-  assert.equal(await f.lifecycle.confirmLocalQuit(), false);
-  assert(f.prompts.includes('Local agents are still working.'));
-  assert.equal(f.admissions.at(-1), true);
-});
 
 for (const stage of ['preserve', 'dispose'])
   test(`replacement during ${stage} requires fresh ready, preservation and disposal IDs`, async () => {
@@ -131,7 +100,7 @@ for (const stage of ['preserve', 'dispose'])
     f.contents.mainFrame.url += '?asset=1';
     await f.ack({ id: preserve, consent: false });
     f.contents.mainFrame.url = 'moonbase://editor/index.html';
-    assert.equal(f.lifecycle.isPreparingQuit(), true);
+    assert.equal(f.lifecycle.isQuitting(), true);
     f.lifecycle.requestQuit();
     assert.equal(f.actions.length, 1);
     if (stage === 'dispose') await f.ack({ id: preserve, consent: true });
@@ -145,7 +114,7 @@ for (const stage of ['preserve', 'dispose'])
     assert.equal(f.last().action, 'quit');
     assert.notEqual(fresh, preserve);
     await f.ack({ id: obsolete, consent: false });
-    assert.equal(f.lifecycle.isPreparingQuit(), true);
+    assert.equal(f.last().id, fresh);
     await f.ack({ id: fresh, consent: true });
     const dispose = f.last().id;
     assert.equal(f.last().action, 'dispose');
@@ -162,13 +131,12 @@ for (const stage of ['preserve', 'dispose'])
     assert.deepEqual(f.released.slice(-5), ['chat', 'editor', 'root', 'transport', 'quit']);
   });
 
-test('Quit veto restores admissions; actual cleanup is awaited and a failing release cannot skip later owners', async () => {
+test('Quit veto returns to the workbench; actual cleanup is awaited and a failing release cannot skip later owners', async () => {
   const f = fixture();
   f.ready();
   f.lifecycle.requestQuit();
   await f.ack({ id: f.last().id, consent: false });
   assert.equal(f.lifecycle.isQuitting(), false);
-  assert.equal(f.admissions.at(-1), true);
   f.lifecycle.requestQuit();
   await f.ack({ id: f.last().id, consent: true });
   let release!: () => void;
@@ -193,7 +161,7 @@ test('Quit veto restores admissions; actual cleanup is awaited and a failing rel
   assert.equal(f.ipc.listenerCount(channels.quit), 0);
 });
 
-test('close hides; activation shows; local Keep running vetoes Quit', async () => {
+test('close hides; activation shows; Quit asks nothing about local agents and releases only clients', async () => {
   const f = fixture();
   let prevented = false;
   f.window.emit('close', {
@@ -206,16 +174,24 @@ test('close hides; activation shows; local Keep running vetoes Quit', async () =
   f.appEvents.emit('activate');
   f.appEvents.emit('second-instance');
   assert.equal(f.calls.filter((call) => call === 'show').length, 2);
-  f.activeWork(0);
   f.ready();
   f.lifecycle.requestQuit();
   await f.ack({ id: f.last().id, consent: true });
-  assert.equal(f.lifecycle.isQuitting(), false);
-  assert.equal(f.admissions.at(-1), true);
-  assert.equal(
-    f.actions.some(({ action }) => action === 'dispose'),
-    false,
-  );
+  // Preservation consent moves straight to disposal: no local work prompt, nothing stopped.
+  assert.equal(f.last().action, 'dispose');
+  await f.ack({ id: f.last().id, consent: true });
+  assert.deepEqual(f.prompts, []);
+  assert.deepEqual(f.released, ['chat', 'editor', 'root', 'transport', 'quit']);
+});
+
+test('a crashed renderer quits on request without asking about local agents', async () => {
+  const f = fixture();
+  f.ready();
+  f.contents.emit('render-process-gone', {}, { reason: 'crashed' });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(f.prompts, ['The workbench stopped unexpectedly.']);
+  assert.deepEqual(f.released.slice(-5), ['chat', 'editor', 'root', 'transport', 'quit']);
 });
 
 test('Quit retains a held document cleanup failure before releasing the root', async () => {

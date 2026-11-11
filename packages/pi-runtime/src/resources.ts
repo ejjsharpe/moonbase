@@ -55,11 +55,10 @@ function retainedWork(kind: 'abort' | 'waiter'): Effect.Effect<RetainedWork, nev
   });
 }
 
-// Bun and Electron are qualified exactly, so upgrading either is a deliberate change. Bun reports
-// an older Node version than it implements, so it is never judged by that version.
-function isQualifiedRuntime(versions: NodeJS.ProcessVersions, local: boolean) {
+// Bun is qualified exactly, so upgrading it is a deliberate change. Bun reports an older Node
+// version than it implements, so it is never judged by that version.
+function isQualifiedRuntime(versions: NodeJS.ProcessVersions) {
   if (versions.bun !== undefined) return versions.bun === '1.4.4';
-  if (local && versions.electron === '45.1.0' && versions.node === '24.22.1') return true;
   const [major = 0, minor = 0] = versions.node.split('.').map(Number);
   return major > 26 || (major === 26 && minor >= 13);
 }
@@ -68,32 +67,17 @@ export function openHost(config: RuntimeConfiguration) {
   return Effect.gen(function* () {
     const validated = yield* Effect.tryPromise({
       try: async () => {
-        const local = 'mode' in config;
-        if (!isQualifiedRuntime(process.versions, local))
+        if (!isQualifiedRuntime(process.versions))
           V.fail(
             'Incompatible',
             'The Pi host requires Node 26.13 or newer, or exactly Bun 1.4.4. The remote client has its own runtime boundary.',
           );
-        if (local) return S.localConfiguration(config);
-        const data = S.runtimeConfiguration(config),
-          cwd = await realpath(data.cwd);
-        if (!(await stat(cwd)).isDirectory())
-          V.fail('InvalidInput', 'Chat working directory must exist.');
-        if (!data.models.getModel(data.model.provider, data.model.modelId))
-          V.fail(
-            'InvalidInput',
-            'Configured Pi model is not installed in the host model registry.',
-          );
-        return { ...data, cwd };
+        return S.localConfiguration(config);
       },
       catch: safeError,
     });
     const session = { host: validated.host, actorId: validated.actorId },
-      identity = JSON.stringify(
-        'mode' in validated
-          ? { ...session, mode: 'local' }
-          : { ...session, cwd: validated.cwd, model: validated.model },
-      );
+      identity = JSON.stringify({ ...session, mode: 'local' });
     const environments = new Map<string, NodeExecutionEnv>();
     yield* Effect.addFinalizer(() =>
       Effect.all(
@@ -111,27 +95,17 @@ export function openHost(config: RuntimeConfiguration) {
         }),
       ),
     );
-    if (!('mode' in validated))
-      environments.set(validated.cwd, new NodeExecutionEnv({ cwd: validated.cwd }));
     const getToolEnvironment = async (target: { conversationId: ConversationId; cwd?: string }) => {
-      let cwd: string;
-      if ('mode' in validated) {
-        const meta = await readOwnedMetadata(
-          harness,
-          identity,
-          {
-            ...session,
-            conversationId: String(target.conversationId),
-          },
-          true,
+      const meta = await readOwnedMetadata(harness, identity, {
+        ...session,
+        conversationId: String(target.conversationId),
+      });
+      const cwd = getSettings(meta).cwd;
+      if (target.cwd !== cwd || (await realpath(cwd)) !== cwd || !(await stat(cwd)).isDirectory())
+        V.fail(
+          'Unavailable',
+          'The saved local working folder is unavailable. Restore it before retrying.',
         );
-        cwd = getSettings(meta).cwd;
-        if (target.cwd !== cwd || (await realpath(cwd)) !== cwd || !(await stat(cwd)).isDirectory())
-          V.fail(
-            'Unavailable',
-            'The saved local working folder is unavailable. Restore it before retrying.',
-          );
-      } else cwd = validated.cwd;
       let env = environments.get(cwd);
       if (!env) {
         env = new NodeExecutionEnv({ cwd });

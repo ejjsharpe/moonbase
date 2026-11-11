@@ -24,10 +24,7 @@ export function installWindowLifecycle({
   ipcMain: Pick<IpcMain, 'on' | 'removeListener'>;
   requireTrusted(event: IpcMainEvent): void;
   editorSession: Pick<EditorSession, 'releaseDocument' | 'dispose'>;
-  chatBackends: Pick<
-    DesktopChatBackends,
-    'getSessions' | 'releaseDocument' | 'setAdmissionsOpen' | 'hasActiveWork' | 'hasLocalChat'
-  >;
+  chatBackends: Pick<DesktopChatBackends, 'getSessions' | 'releaseDocument'>;
   releaseRoot(): Promise<void>;
   releaseTransport(): void;
 }) {
@@ -47,7 +44,7 @@ export function installWindowLifecycle({
     pendingCleanup.add(reported);
     void reported.then(() => pendingCleanup.delete(reported));
   };
-  let quit: { id: string; stage: 'preserve' | 'dispose'; localConfirmed?: boolean } | undefined,
+  let quit: { id: string; stage: 'preserve' | 'dispose' } | undefined,
     exiting = false,
     rendererReady = false,
     quitRequested = false,
@@ -56,37 +53,6 @@ export function installWindowLifecycle({
     if (!window.isDestroyed()) {
       window.show();
       window.focus();
-    }
-  }
-  async function confirmLocalQuit(): Promise<boolean> {
-    if (!chatBackends.hasLocalChat() || quit?.localConfirmed) return true;
-    const owner = documentId,
-      intent = quit;
-    const current = () => owner === documentId && intent === quit;
-    chatBackends.setAdmissionsOpen(false);
-    try {
-      const active = await chatBackends.hasActiveWork();
-      if (!current()) return false;
-      const decision = active
-        ? await dialog.showMessageBox(window, {
-            type: 'question',
-            message: 'Local agents are still working.',
-            detail:
-              'Keep Moonbase open to continue, or quit and release local Pi. Reopening follows saved-task recovery; external tool effects cannot be rolled back. Remote work continues.',
-            buttons: ['Keep running', 'Quit'],
-            defaultId: 0,
-            cancelId: 0,
-            noLink: true,
-          })
-        : { response: 1 };
-      if (!current()) return false;
-      const consent = decision.response === 1;
-      if (!consent) chatBackends.setAdmissionsOpen(true);
-      else if (intent) intent.localConfirmed = true;
-      return consent;
-    } catch (error) {
-      if (current()) chatBackends.setAdmissionsOpen(true);
-      throw error;
     }
   }
   async function finishQuit() {
@@ -190,21 +156,13 @@ export function installWindowLifecycle({
           message: 'Disposal cannot return to the live workbench.',
         });
       if (!v.consent) {
-        chatBackends.setAdmissionsOpen(true);
         quit = undefined;
         quitRequested = false;
         show();
         return;
       }
+      // Local agents keep running in the daemon, so Quit asks nothing more of them.
       if (quit.stage === 'preserve') {
-        const consent = await confirmLocalQuit();
-        if (owner !== documentId || intent !== quit) return;
-        if (!consent) {
-          quit = undefined;
-          quitRequested = false;
-          show();
-          return;
-        }
         quit = { id: randomUUID(), stage: 'dispose' };
         window.webContents.send(channels.action, 'dispose', quit.id);
         return;
@@ -216,7 +174,6 @@ export function installWindowLifecycle({
         console.error('Invalid disposal acknowledgment:', normalizeApplicationError(error).message);
         return;
       }
-      chatBackends.setAdmissionsOpen(true);
       quit = undefined;
       show();
       console.error('Quit failed:', normalizeApplicationError(error).message);
@@ -260,16 +217,7 @@ export function installWindowLifecycle({
       noLink: true,
     });
     if (owner !== documentId || terminating || exiting) return;
-    let consent = false;
-    if (recovery.response !== 0) {
-      try {
-        consent = await confirmLocalQuit();
-      } catch (error) {
-        reportCleanup(Promise.reject(error));
-      }
-    }
-    if (owner !== documentId || terminating || exiting) return;
-    if (recovery.response === 0 || !consent) {
+    if (recovery.response === 0) {
       quitRequested = false;
       show();
       window.webContents.reload();
@@ -285,13 +233,6 @@ export function installWindowLifecycle({
   app.on('second-instance', show);
 
   window.once('ready-to-show', show);
-  return {
-    show,
-    requestQuit,
-    reportCleanup,
-    isQuitting: () => !!quit || terminating,
-    isPreparingQuit: () => quit?.stage === 'preserve',
-    confirmLocalQuit,
-  };
+  return { show, requestQuit, reportCleanup, isQuitting: () => !!quit || terminating };
 }
 export type WindowLifecycle = ReturnType<typeof installWindowLifecycle>;

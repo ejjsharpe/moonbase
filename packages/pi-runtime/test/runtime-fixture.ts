@@ -6,8 +6,9 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { type Registry } from '@earendil-works/pi-durable';
-import { PiRuntimeLive, LocalPiRuntimeLive } from '../src/index.ts';
+import { LocalPiRuntimeLive } from '../src/index.ts';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
+import type { SocketClock } from '../src/socket-protocol.ts';
 
 export const session = {
   host: { hostId: 'test-host', storeId: 'test-store' },
@@ -23,6 +24,27 @@ export const isRunning = (pid: number) => {
     throw error;
   }
 };
+/** Time that moves only when a test advances it. */
+export function manualClock() {
+  let now = 0,
+    next = 0;
+  const timers = new Map<number, { at: number; run: () => void }>();
+  return {
+    now: () => now,
+    setTimeout: (run: () => void, ms: number) => {
+      timers.set(++next, { at: now + ms, run });
+      return next;
+    },
+    clearTimeout: (handle: unknown) => void timers.delete(handle as number),
+    /** Whether a timer is due `ms` from now. */
+    hasTimer: (ms: number) => [...timers.values()].some((timer) => timer.at === now + ms),
+    advance(ms: number) {
+      now += ms;
+      for (const [handle, timer] of [...timers].sort(([, a], [, b]) => a.at - b.at))
+        if (timer.at <= now && timers.delete(handle)) timer.run();
+    },
+  } satisfies SocketClock & { hasTimer(ms: number): boolean; advance(ms: number): void };
+}
 export const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function until<T>(get: () => Promise<T>, ready: (value: T) => boolean): Promise<T> {
   for (let i = 0; i < 300; i++) {
@@ -36,9 +58,8 @@ export async function fixture(
   t: { after: (fn: () => Promise<void>) => void },
   registry?: Registry,
   fauxOptions: Parameters<typeof fauxProvider>[0] = {},
-  local = false,
 ) {
-  const directory = await mkdtemp(join(tmpdir(), 'moonbase-pi-')),
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-pi-'))),
     faux = fauxProvider({ tokensPerSecond: 100000, ...fauxOptions }),
     models = createModels();
   models.setProvider(faux.provider);
@@ -50,9 +71,14 @@ export async function fixture(
     models,
     registry,
   };
-  const layer = local
-    ? LocalPiRuntimeLive({ ...session, databasePath: config.databasePath, models, registry })
-    : PiRuntimeLive(config);
+  // Each chat's own folder and model, as a client's first Send names them.
+  const settings = { cwd: directory, model: config.model };
+  const layer = LocalPiRuntimeLive({
+    ...session,
+    databasePath: config.databasePath,
+    models,
+    registry,
+  });
   let runtime = ManagedRuntime.make(layer);
   t.after(async () => {
     try {
@@ -64,6 +90,7 @@ export async function fixture(
   return {
     faux,
     config,
+    settings,
     get runtime() {
       return runtime;
     },
@@ -86,7 +113,7 @@ export async function fixture(
           session,
           requestId,
           title: 'Saved chat',
-          ...(local ? { settings: { cwd: await realpath(directory), model: config.model } } : {}),
+          settings,
         })
       ).conversation.target;
     },

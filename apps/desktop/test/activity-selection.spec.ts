@@ -58,6 +58,7 @@ async function installCopy(page: Page) {
   const writes: string[] = [],
     inputs: TranscriptCopy[] = [];
   const client: ChatClient = {
+    watchChatList: () => async () => {},
     command: (operation, input) =>
       page.evaluate(
         async ({ operation, input }) =>
@@ -76,7 +77,7 @@ async function installCopy(page: Page) {
       };
     },
   };
-  const owner = new ChatIpcSession(runtime, client, null, context, () => {}, {
+  const owner = new ChatIpcSession(runtime, client, { mode: 'local' }, context, () => {}, {
     transcript: {
       writeText: async (text) => {
         writes.push(text);

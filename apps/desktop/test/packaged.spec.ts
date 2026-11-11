@@ -1,4 +1,5 @@
-import { openSettings } from './chat-target.ts';
+import { prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
+import { closeSettings, openSettings } from './chat-target.ts';
 import {
   saveFile,
   selectFileView,
@@ -43,6 +44,7 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
   const executablePath = resolve(
     `release/${process.arch === 'arm64' ? 'mac-arm64' : 'mac'}/Moonbase.app/Contents/MacOS/Moonbase`,
   );
+  await prepareDaemonData(join(base, 'fresh-user-data'));
   const launch = () =>
     electron.launch({
       executablePath,
@@ -144,13 +146,16 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
       page.getByRole('button', { name: 'Open sign-in page', exact: true }),
     ).toBeVisible();
     await expect(
-      page.getByLabel('Complete login in your browser, or paste the final redirect URL here:', {
-        exact: true,
-      }),
+      // The sign-in runs in the packaged daemon on this Mac, whose callback finishes it.
+      page.getByLabel(
+        'Finish signing in in your browser; Moonbase completes it by itself. If it does not, paste the final redirect URL here.',
+        { exact: true },
+      ),
     ).toBeVisible();
     await screen('local-oauth-loaded');
     await page.getByRole('button', { name: 'Cancel setup', exact: true }).click();
     await expect(page.getByText('Setup cancelled.', { exact: true })).toBeVisible();
+    await closeSettings(page);
     expect(resource.notices).toContain('@earendil-works/pi-durable@1.4.0');
     expect(resource.notices).toContain('@earendil-works/pi-ai@1.4.0');
 
@@ -275,6 +280,8 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
     await expect(page.getByRole('tab', { name: 'packaged-created.txt', exact: true })).toHaveCount(
       0,
     );
+    // At the small zoomed size the project chats dock would leave the editor no width for its tabs.
+    await page.getByRole('button', { name: 'Hide project chats', exact: true }).click();
     await checkTabMenu(app, page, screen, 'packaged-created.txt');
     writeFileSync(
       'test-results/packaged-filename-maps.json',
@@ -288,7 +295,12 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
       await page.getByRole('dialog').getByRole('button', { name: 'Discard', exact: true }).click();
     await closed;
   } finally {
-    await stop();
+    try {
+      await stop();
+    } finally {
+      // A daemon outlives its app: stop it even when the steps before fail.
+      await stopDaemon(join(base, 'fresh-user-data', 'daemon-v1'));
+    }
     rmSync(base, { recursive: true, force: true });
   }
 });

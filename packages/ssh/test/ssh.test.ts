@@ -15,7 +15,7 @@ import { chatHostVersion, chatProtocolVersion } from '@moonbase/contracts/host';
 import { createHostHealthReply } from '@moonbase/ssh/host-health';
 import { ConnectionService } from '@moonbase/contracts/services';
 import { makeConnectionClient } from '@moonbase/application/runtime/clients';
-import { SshLive, type SshConfiguration } from '@moonbase/ssh';
+import { SshLive, type SshConfiguration, type SshOptions } from '@moonbase/ssh';
 const failure = (code: ApplicationError['code']) => (e: unknown) =>
   ApplicationError.is(e) && e.code === code;
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 10));
@@ -64,7 +64,7 @@ async function free(port: number) {
   });
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
-async function fixture(mode = 'normal', healthMode = 'valid') {
+async function fixture(mode = 'normal', healthMode = 'valid', options: SshOptions = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-ssh-'))),
     key = randomBytes(32).toString('base64url'),
     log = join(base, 'children.jsonl'),
@@ -123,7 +123,7 @@ async function fixture(mode = 'normal', healthMode = 'valid') {
   };
   const config = { profile, token: key, sshExecutable: executable };
   const start = (configuration: SshConfiguration = config) => {
-    const runtime = ManagedRuntime.make(SshLive(configuration));
+    const runtime = ManagedRuntime.make(SshLive(configuration, options));
     return { runtime, client: makeConnectionClient(runtime) };
   };
   const current = start();
@@ -679,45 +679,21 @@ test('disconnect and root disposal during startup release the pending generation
   }
 });
 
-test(
-  'a stalled forwarded health response hits the bounded startup deadline and releases the reader/child/port',
-  { timeout: 25000 },
-  async () => {
-    const f = await fixture('normal', 'stall'),
-      began = Date.now();
-    try {
-      await assert.rejects(
-        f.client.command('connect', { profileId: 'configured' }),
-        failure('Unavailable'),
-      );
-      assert(Date.now() - began < 23000);
-      assert.equal((await f.client.command('getConnection', {})).state, 'failed');
-      await assert.rejects(f.endpoint(), failure('Unavailable'));
-    } finally {
-      await f.close();
-    }
-  },
-);
-
-test(
-  'a child that never opens its forward cannot keep startup pending beyond the overall deadline',
-  { timeout: 25000 },
-  async () => {
-    const f = await fixture('wait'),
-      began = Date.now();
-    try {
-      await assert.rejects(
-        f.client.command('connect', { profileId: 'configured' }),
-        (e) =>
-          failure('Unavailable')(e) && /startup deadline/.test((e as ApplicationError).message),
-      );
-      assert(Date.now() - began < 23000);
-      assert.equal((await f.client.command('getConnection', {})).state, 'failed');
-    } finally {
-      await f.close();
-    }
-  },
-);
+test('a stalled forwarded health response hits the startup deadline and releases the reader, child and port', async () => {
+  const f = await fixture('normal', 'stall', { startupMs: 500 });
+  try {
+    await assert.rejects(
+      f.client.command('connect', { profileId: 'configured' }),
+      (e) => failure('Unavailable')(e) && /startup deadline/.test((e as ApplicationError).message),
+    );
+    assert.equal((await f.client.command('getConnection', {})).state, 'failed');
+    await assert.rejects(f.endpoint(), failure('Unavailable'));
+    await until(() => f.spawned().every((child) => !alive(child.pid)));
+    for (const port of f.ports()) await free(port);
+  } finally {
+    await f.close();
+  }
+});
 
 test('runnable consumer composition root uses the public package and never prints its private configuration', async () => {
   const f = await fixture(),

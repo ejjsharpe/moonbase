@@ -1,8 +1,7 @@
 import type { CommitPublication, ConversationId } from '@earendil-works/pi-durable';
 import assert from 'node:assert/strict';
 import { test, mock } from 'node:test';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdtemp, mkdir, realpath, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/workspace';
@@ -24,7 +23,7 @@ import { NodeSqliteDatabase, openNodeSqliteDatabase } from '@earendil-works/chor
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { readFile } from 'node:fs/promises';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import { PiRuntimeLive } from '../src/index.ts';
+import { LocalPiRuntimeLive } from '../src/index.ts';
 import { classifyPublication } from '../src/commands.ts';
 import { Metadata, Store } from '../src/documents.ts';
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
@@ -35,7 +34,12 @@ test('atomic creation retries and actor/request immutable binding survive restar
   const target = await f.create();
   assert.deepEqual(await f.create(), target);
   await assert.rejects(
-    f.client.command('createChat', { session, requestId: 'create', title: 'Changed' }),
+    f.client.command('createChat', {
+      session,
+      requestId: 'create',
+      title: 'Changed',
+      settings: f.settings,
+    }),
     { code: 'InvalidInput' },
   );
   const list = await f.client.command('listChats', { session });
@@ -113,6 +117,12 @@ for (const admitted of [false, true])
     await f.restart();
     const receipt = await f.client.command('getChatSend', { target, requestId: 'lost' });
     assert.equal(receipt?.admission, admitted ? 'admitted' : 'reserved');
+    // An admitted run resumes on reopen by itself; reads add no model call to it.
+    if (admitted)
+      await until(
+        () => f.client.command('getChat', { target }),
+        (s) => s.run === null && s.entries.some((e) => e.text === 'Once'),
+      );
     const before = f.faux.state.callCount;
     await f.client.command('getChat', { target });
     await f.client.command('listChats', { session });
@@ -164,19 +174,19 @@ test('real SQLite full failure is visible and old committed chats survive reopen
   assert.equal(await f.client.command('getChatSend', { target, requestId: 'full' }), null);
 });
 
-test('fixed store authority rejects model/cwd/actor/host retargeting without executing work', async (t) => {
+test('store authority rejects actor/host retargeting without executing work', async (t) => {
   const f = await fixture(t);
   await f.create();
   await f.dispose();
-  const alternate = fauxProvider({ provider: 'alternate', models: [{ id: 'alternate' }] });
-  f.config.models.setProvider(alternate.provider);
-  for (const change of [
-    { model: { provider: 'alternate', modelId: 'alternate' } },
-    { actorId: 'other' },
-    { host: { ...session.host, storeId: 'other' } },
-    { cwd: tmpdir() },
-  ]) {
-    const runtime = ManagedRuntime.make(PiRuntimeLive({ ...f.config, ...change }));
+  for (const change of [{ actorId: 'other' }, { host: { ...session.host, storeId: 'other' } }]) {
+    const runtime = ManagedRuntime.make(
+      LocalPiRuntimeLive({
+        ...session,
+        databasePath: f.config.databasePath,
+        models: f.config.models,
+        ...change,
+      }),
+    );
     try {
       await assert.rejects(
         makeChatClient(runtime).command('getChatHost', { host: change.host ?? session.host }),
@@ -240,8 +250,9 @@ for (const typed of [false, true])
     });
     const snapshot = harness!.snapshot.bind(harness!);
     let reads = 0;
+    // The first read after the chat is committed fails.
     mock.method(harness!, 'snapshot', async (...args: Parameters<typeof snapshot>) => {
-      if (reads++ === 0)
+      if (committed.length && reads++ === 0)
         throw typed
           ? new ApplicationError({
               code: 'Persistence',
@@ -250,7 +261,12 @@ for (const typed of [false, true])
           : Error('Controlled post-commit read failure');
       return snapshot(...args);
     });
-    const input = { session, requestId: 'committed-create', title: 'Original saved chat' };
+    const input = {
+      session,
+      requestId: 'committed-create',
+      title: 'Original saved chat',
+      settings: f.settings,
+    };
     let failure: unknown;
     try {
       await f.client.command('createChat', input).catch((error) => {
@@ -304,7 +320,7 @@ test('R1 lost typed commit acknowledgement stays uncertain while proven create v
       message: 'Controlled lost commit acknowledgement',
     });
   });
-  const input = { session, requestId: 'lost-commit', title: 'Committed' };
+  const input = { session, requestId: 'lost-commit', title: 'Committed', settings: f.settings };
   try {
     await assert.rejects(f.client.command('createChat', { ...input, title: '' }), {
       code: 'InvalidInput',
@@ -506,11 +522,16 @@ test('strict programmatic configuration and cursor envelopes reject nested unfam
   for (const change of [
     { future: canary },
     { host: { ...session.host, future: canary } },
-    { model: { ...f.config.model, future: canary } },
-    { cwd: canary },
     { databasePath: '/private/' + 'x'.repeat(4096) },
   ]) {
-    const runtime = ManagedRuntime.make(PiRuntimeLive({ ...f.config, ...change }));
+    const runtime = ManagedRuntime.make(
+      LocalPiRuntimeLive({
+        ...session,
+        databasePath: f.config.databasePath,
+        models: f.config.models,
+        ...change,
+      }),
+    );
     try {
       await assert.rejects(
         makeChatClient(runtime).command('getChatHost', { host: session.host }),
@@ -644,7 +665,7 @@ for (const state of ['admitted', 'pending', 'empty'] as const)
   });
 
 test('escaped identity components open and reopen without an extra serialized identity limit', async (t) => {
-  const directory = await mkdtemp('/tmp/moonbase-pi-identity-escaped-');
+  const directory = await realpath(await mkdtemp('/tmp/moonbase-pi-identity-escaped-'));
   let cwd = directory;
   while (Buffer.byteLength(cwd) < 979)
     cwd = join(cwd, String.fromCharCode(1).repeat(Math.min(230, 980 - Buffer.byteLength(cwd) - 1)));
@@ -657,9 +678,9 @@ test('escaped identity components open and reopen without an extra serialized id
       actorId: 'a'.repeat(256),
     },
     model = { provider: faux.provider.id, modelId: faux.getModel().id },
-    config = { ...session, cwd, databasePath: join(directory, 'chat.sqlite'), model, models };
+    config = { ...session, databasePath: join(directory, 'chat.sqlite'), models };
   assert(Buffer.byteLength(JSON.stringify({ ...session, cwd, model })) > 8192);
-  let runtime = ManagedRuntime.make(PiRuntimeLive(config));
+  let runtime = ManagedRuntime.make(LocalPiRuntimeLive(config));
   t.after(async () => {
     try {
       await runtime.dispose();
@@ -672,9 +693,10 @@ test('escaped identity components open and reopen without an extra serialized id
     session,
     requestId: 'create',
     title: 'Escaped identity',
+    settings: { cwd, model },
   });
   await runtime.dispose();
-  runtime = ManagedRuntime.make(PiRuntimeLive(config));
+  runtime = ManagedRuntime.make(LocalPiRuntimeLive(config));
   assert.deepEqual(
     await makeChatClient(runtime).command('getChatHost', { host: session.host }),
     host,

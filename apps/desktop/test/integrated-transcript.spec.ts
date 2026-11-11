@@ -5,33 +5,23 @@ import {
   type Page,
   type ElectronApplication,
 } from '@playwright/test';
-import { mkdtemp, realpath, rm, copyFile, mkdir, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { controlledHostFixture, until } from '../../../tests/chat/fixture.ts';
-import { closeSettings, createRemoteChat, openSettings, selectRemoteChat } from './chat-target.ts';
+import { createRemoteChat, selectRemoteChat } from './chat-target.ts';
 import { captureNative } from './editor-regressions.ts';
 import { readFindHighlight } from './find-highlight.ts';
 import { openActivity } from './transcript-list.ts';
+import { findTestBun, prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
 
 const transcriptRegion = (page: Page) =>
   page.getByRole('region', { name: 'Chat transcript', exact: true });
 
-/** Opens the composer's folder menu and chooses a folder with the native picker. */
-async function chooseFolderNatively(page: Page) {
-  await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
-  await page.getByRole('button', { name: 'Choose folder…', exact: true }).click();
-}
-
 type Control = {
   calls: { kind: string; operation: string }[];
   copied: string[];
-  requests: number;
   beforeMain: boolean;
-  first(): void;
-  next(): void;
-  finish(): void;
 };
 declare global {
   var integratedTranscript: Control;
@@ -47,6 +37,7 @@ async function recordEvidence(name: string, value: unknown) {
 }
 async function launch(directory: string, host?: Host) {
   const launcher = join(directory, 'package-launcher');
+  await prepareDaemonData(join(directory, 'desktop'));
   if (packaged) {
     if (/\s/.test(process.execPath))
       throw Error('Controlled Node executable path contains whitespace');
@@ -69,6 +60,7 @@ async function launch(directory: string, host?: Host) {
       HOME: process.env.HOME!,
       TMPDIR: process.env.TMPDIR!,
       MOONBASE_USER_DATA: join(directory, 'desktop'),
+      MOONBASE_TEST_BUN: findTestBun(),
       ...(host
         ? { MOONBASE_CHAT_CONFIG: host.clientConfig, MOONBASE_CHAT_FORWARD_LOG: host.log }
         : {}),
@@ -145,6 +137,8 @@ async function cleanup(app: ElectronApplication | undefined, host?: Host) {
       await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
     }
   } finally {
+    // The daemon outlives the app; this test's is stopped with it.
+    if (host) await stopDaemon(join(host.directory, 'desktop', 'daemon-v1'));
     if (host) await recordEvidence('host-cleanup', await host.close());
   }
 }
@@ -188,89 +182,9 @@ async function image(app: ElectronApplication, page: Page) {
   ).toEqual([]);
 }
 
-test('integrated local archive/runtime streams held text and thinking, finds retained text, and displays a real read-tool image', async () => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-integrated-local-')));
-  await copyFile(resolve('test/fixtures/images/retained.png'), join(directory, 'retained.png'));
-  let app: ElectronApplication | undefined;
-  try {
-    const launched = await launch(directory);
-    app = launched.app;
-    const { page } = launched;
-    await openSettings(page, 'Providers');
-    await page.getByRole('button', { name: 'Add key for OpenAI API key', exact: true }).click();
-    await page
-      .getByLabel('Enter OpenAI API key', { exact: true })
-      .fill('sk-controlled-qualification-only');
-    await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
-    await closeSettings(page);
-    await app.evaluate(({ dialog }, cwd) => {
-      dialog.showOpenDialog = (async () => ({
-        canceled: false,
-        filePaths: [cwd],
-      })) as typeof dialog.showOpenDialog;
-    }, directory);
-    await chooseFolderNatively(page);
-    await page.getByLabel('Message', { exact: true }).fill('Read the retained controlled image');
-    await page.getByRole('button', { name: 'Send message', exact: true }).click();
-    await expect.poll(() => app!.evaluate(() => globalThis.integratedTranscript.requests)).toBe(1);
-    const sentAt = Date.now();
-    await app.evaluate(() => globalThis.integratedTranscript.first());
-    const live = page.getByRole('article', { name: 'Live response' });
-    await expect(live.getByText('First local chunk 🌔', { exact: true })).toBeVisible();
-    const firstVisibleMs = Date.now() - sentAt;
-    await live.getByRole('button', { name: /^Activity/ }).click();
-    const thought = live
-      .locator('[data-transcript-part]')
-      .filter({ hasText: /^Thinking/ })
-      .locator('pre');
-    await expect(thought).toHaveText('Local held thought first');
-    const before = await app.evaluate(
-      () =>
-        globalThis.integratedTranscript.calls.filter((call) => call.operation === 'getChat').length,
-    );
-    await app.evaluate(() => globalThis.integratedTranscript.next());
-    await expect(
-      live.getByText('First local chunk 🌔 and next local chunk', { exact: true }),
-    ).toBeVisible();
-    await expect(thought).toHaveText('Local held thought first and next');
-    expect(
-      await app.evaluate(
-        () =>
-          globalThis.integratedTranscript.calls.filter((call) => call.operation === 'getChat')
-            .length,
-      ),
-    ).toBe(before);
-    await live.getByRole('button', { name: 'Copy message', exact: true }).click();
-    expect(await app.evaluate(() => globalThis.integratedTranscript.copied.at(-1))).toBe(
-      '## Integrated held response\n\nFirst local chunk 🌔 and next local chunk',
-    );
-    await captureNative(app, page, test.info().outputPath('held-local.png'));
-    await app.evaluate(() => globalThis.integratedTranscript.finish());
-    await page.getByLabel('Message', { exact: true }).focus();
-    await expect(
-      page.getByText('Integrated completed after retained image', { exact: true }),
-    ).toBeVisible();
-    await find(page, 'First local chunk 🌔');
-    await image(app, page);
-    await recordEvidence('stream-timing', {
-      packaged,
-      firstVisibleMs,
-      heldUntilExplicitFinish: true,
-      requests: await app.evaluate(() => globalThis.integratedTranscript.requests),
-    });
-    await quit(app);
-  } finally {
-    try {
-      await cleanup(app);
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  }
-});
-
 test('integrated remote archive/runtime reveals early/middle/end Find in real history and streams held progress without polling', async () => {
   const host = await controlledHostFixture(
-    new URL('../../../tests/chat/stream-host.mjs', import.meta.url),
+    new URL('../../../tests/chat/faux-stream.mjs', import.meta.url),
     true,
   );
   let app: ElectronApplication | undefined;
@@ -282,7 +196,7 @@ test('integrated remote archive/runtime reveals early/middle/end Find in real hi
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
     await createRemoteChat(page, 'Integrated remote retained history');
     const target = await page.evaluate(
-      () => JSON.parse(localStorage.getItem('moonbase.chat.v1')!).selected,
+      () => JSON.parse(localStorage.getItem('moonbase.chat.remote.v2')!).selected,
     );
     const ids = await host.seedHistory(target);
     for (const index of [1, 561, 1119]) await find(page, `record ${index} 🌔`);
@@ -324,7 +238,7 @@ test('integrated remote archive/runtime reveals early/middle/end Find in real hi
 });
 
 test('integrated remote archive/runtime displays retained images with production CSP and releases its viewer @packaged', async () => {
-  const host = await controlledHostFixture(new URL('./stored-image-host.mjs', import.meta.url));
+  const host = await controlledHostFixture(new URL('./stored-image-faux.mjs', import.meta.url));
   let app: ElectronApplication | undefined;
   try {
     const launched = await launch(host.directory, host);

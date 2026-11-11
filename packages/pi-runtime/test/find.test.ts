@@ -305,7 +305,7 @@ test('Find JSON token continuations preserve string escaping, long keys, nesting
 
 test('Find adapts dense escaped matches to actual JSON envelopes with maximum-size authorities', async (t) => {
   const { ManagedRuntime } = await import('effect');
-  const { PiRuntimeLive } = await import('../src/index.ts');
+  const { LocalPiRuntimeLive } = await import('../src/index.ts');
   const { makeChatClient } = await import('@moonbase/application/runtime/clients');
   let harness!: Harness;
   const open = Harness.open;
@@ -320,7 +320,11 @@ test('Find adapts dense escaped matches to actual JSON envelopes with maximum-si
     actorId: 'a'.repeat(256),
   };
   const runtime = ManagedRuntime.make(
-    PiRuntimeLive({ ...f.config, ...session, databasePath: f.config.databasePath + '-bounded' }),
+    LocalPiRuntimeLive({
+      ...session,
+      models: f.config.models,
+      databasePath: f.config.databasePath + '-bounded',
+    }),
   );
   try {
     const client = makeChatClient(runtime);
@@ -329,6 +333,7 @@ test('Find adapts dense escaped matches to actual JSON envelopes with maximum-si
         session,
         requestId: 'dense',
         title: 'Dense escaped source',
+        settings: f.settings,
       })
     ).conversation.target;
     const query = '\u0001'.repeat(1024),

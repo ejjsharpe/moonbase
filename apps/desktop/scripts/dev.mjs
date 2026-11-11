@@ -15,8 +15,9 @@ function findAppData() {
 }
 process.env.MOONBASE_USER_DATA ??= join(findAppData(), mock ? 'Moonbase Dev Mock' : 'Moonbase Dev');
 console.log(`Moonbase user data: ${process.env.MOONBASE_USER_DATA}`);
-// Seeds only a profile with no local chats yet; existing chats are never replaced.
-if (mock && !existsSync(join(process.env.MOONBASE_USER_DATA, 'local-pi-v1')))
+// Seeds only a profile whose daemon has never run; existing chats are never replaced. The app
+// starts the profile's own daemon on this data, apart from every other profile's.
+if (mock && !existsSync(join(process.env.MOONBASE_USER_DATA, 'daemon-v1')))
   execFileSync(
     process.execPath,
     [

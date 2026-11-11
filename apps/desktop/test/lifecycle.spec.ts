@@ -1,3 +1,4 @@
+import { findTestBun, prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
 import {
   expectSaveEnabled,
   saveFile,
@@ -29,6 +30,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
     try {
       execFileSync('/usr/bin/git', ['-C', f.cwd, 'init', '-q', '-b', 'main']);
       await writeFile(join(f.cwd, 'a.ts'), 'original local text');
+      await prepareDaemonData(join(f.directory, 'lifecycle-data'));
       const current = await electron.launch({
         ...(packaged
           ? {
@@ -46,6 +48,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
           HOME: process.env.HOME!,
           TMPDIR: process.env.TMPDIR!,
           MOONBASE_USER_DATA: join(f.directory, 'lifecycle-data'),
+          MOONBASE_TEST_BUN: findTestBun(),
           MOONBASE_CHAT_CONFIG: f.clientConfig,
           MOONBASE_CHAT_FORWARD_LOG: f.log,
           MOONBASE_CHAT_DROP_SEND: f.drop,
@@ -102,7 +105,9 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       await p.getByRole('button', { name: 'Send message', exact: true }).click();
       await until(f.stats, (s) => s.tools === 1);
       await p.getByLabel('Message', { exact: true }).fill('newer chat draft across reload');
-      const state = await p.evaluate(() => JSON.parse(localStorage.getItem('moonbase.chat.v1')!));
+      const state = await p.evaluate(() =>
+        JSON.parse(localStorage.getItem('moonbase.chat.remote.v2')!),
+      );
       const connection = await p.evaluate(() =>
         window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
       );
@@ -135,7 +140,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       if (veto) {
         if (mode === 'veto')
           await p.evaluate(() =>
-            localStorage.setItem('moonbase.chat.v1', 'controlled external replacement'),
+            localStorage.setItem('moonbase.chat.remote.v2', 'controlled external replacement'),
           );
         await p.getByLabel('Message', { exact: true }).fill('newer unpreserved live draft');
       } else {
@@ -178,7 +183,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
           project.click();
           if (!document.querySelector('[aria-label="a.ts editor"]')?.getClientRects().length) return null;
           const r = await window.moonbase.call("command", { operation: "loadRecovery", input: { clientId: window.moonbase.clientId } }, crypto.randomUUID());
-          return { recovery: r, saved: JSON.parse(localStorage.getItem("moonbase.chat.v1")), connection: await window.moonbaseChat.call("connection", "getConnection", {}, crypto.randomUUID()) };
+          return { recovery: r, saved: JSON.parse(localStorage.getItem("moonbase.chat.remote.v2")), connection: await window.moonbaseChat.call("connection", "getConnection", {}, crypto.randomUUID()) };
         })()`),
           );
         const restored = (await until(read, Boolean)) as {
@@ -471,6 +476,8 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
             }
           }
         } finally {
+          // A daemon outlives its app: stop this profile's before the fixture goes.
+          await stopDaemon(join(f.directory, 'lifecycle-data', 'daemon-v1'));
           const cleanup = await f.close();
           for (const pid of pids)
             await until(async () => {

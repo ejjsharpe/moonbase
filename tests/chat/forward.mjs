@@ -16,35 +16,52 @@ if (args.includes('-G')) {
     let pending = Buffer.alloc(0),
       drop = false,
       tamper = false;
+    // The client's bytes: the upgrade request, then masked WebSocket frames, each a 32-byte MAC
+    // and JSON. A request for the directive's operation drops or tampers with what follows it.
+    let upgraded = false;
     socket.on('data', (chunk) => {
       pending = Buffer.concat([pending, chunk]);
-      if (pending.length > 128 * 1024) {
+      if (pending.length > 1024 * 1024) {
         pending = Buffer.alloc(0);
         return;
       }
-      for (;;) {
+      if (!upgraded) {
         const end = pending.indexOf('\r\n\r\n');
         if (end < 0) return;
-        const header = pending.subarray(0, end).toString(),
-          length = Number(/content-length:\s*(\d+)/i.exec(header)?.[1] ?? 0);
-        if (pending.length < end + 4 + length) return;
-        const body = pending.subarray(end + 4, end + 4 + length);
-        pending = pending.subarray(end + 4 + length);
-        if (
-          header.startsWith('POST /v1/chat ') &&
-          existsSync(process.env.MOONBASE_CHAT_DROP_SEND)
-        ) {
-          try {
-            const directive =
-              readFileSync(process.env.MOONBASE_CHAT_DROP_SEND, 'utf8') || 'sendChat';
-            const operation = directive.replace(/^tamper:/, '');
-            if (JSON.parse(body.toString()).operation === operation) {
-              unlinkSync(process.env.MOONBASE_CHAT_DROP_SEND);
-              if (directive.startsWith('tamper:')) tamper = true;
-              else drop = true;
-            }
-          } catch {}
+        upgraded = true;
+        pending = pending.subarray(end + 4);
+      }
+      for (;;) {
+        if (pending.length < 2) return;
+        let length = pending[1] & 0x7f,
+          offset = 2;
+        if (length === 126) {
+          if (pending.length < 4) return;
+          length = pending.readUInt16BE(2);
+          offset = 4;
+        } else if (length === 127) {
+          if (pending.length < 10) return;
+          length = Number(pending.readBigUInt64BE(2));
+          offset = 10;
         }
+        const masked = (pending[1] & 0x80) !== 0,
+          start = offset + (masked ? 4 : 0);
+        if (pending.length < start + length) return;
+        const payload = Buffer.from(pending.subarray(start, start + length));
+        if (masked)
+          for (let i = 0; i < payload.length; i++) payload[i] ^= pending[offset + (i % 4)];
+        pending = pending.subarray(start + length);
+        if (!existsSync(process.env.MOONBASE_CHAT_DROP_SEND) || payload.length <= 32) continue;
+        try {
+          const directive = readFileSync(process.env.MOONBASE_CHAT_DROP_SEND, 'utf8') || 'sendChat';
+          const operation = directive.replace(/^tamper:/, '');
+          const message = JSON.parse(payload.subarray(32).toString());
+          if (message.type === 'request' && message.operation === operation) {
+            unlinkSync(process.env.MOONBASE_CHAT_DROP_SEND);
+            if (directive.startsWith('tamper:')) tamper = true;
+            else drop = true;
+          }
+        } catch {}
       }
     });
     remote.on('data', (chunk) => {

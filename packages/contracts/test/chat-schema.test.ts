@@ -44,7 +44,12 @@ const snapshot = {
 const inputs = {
   getChatHost: { host },
   listChats: { session },
-  createChat: { session, requestId: 'create', title: '  Saved chat  ' },
+  createChat: {
+    session,
+    requestId: 'create',
+    title: '  Saved chat  ',
+    settings: { model: { provider: 'faux', modelId: 'model' } },
+  },
   getChat: { target },
   getChatHistory: { target, cursor: 'opaque cursor' },
   getChatTranscriptContent: { source: { kind: 'entry', target, entryId: 'entry' } },
@@ -57,7 +62,7 @@ const inputs = {
   findChatFiles: { target, query: 'src' },
 } satisfies { [K in ChatCommand]: ChatInput<K> };
 const outputs = {
-  getChatHost: { ...session, cwd: conversation.cwd, model: conversation.model },
+  getChatHost: { ...session, mode: 'local' },
   listChats: { conversations: [conversation], nextCursor: null },
   createChat: { requestId: 'create', conversation },
   getChat: snapshot,
@@ -295,7 +300,7 @@ test('schema failures use safe application errors without rejected values', () =
     ['InvalidInput', () => decodeChatInput('sendChat', { ...inputs.sendChat, text: { secret } })],
     [
       'Incompatible',
-      () => decodeChatOutput('getChatHost', { ...outputs.getChatHost, cwd: { secret } }),
+      () => decodeChatOutput('getChatHost', { ...outputs.getChatHost, mode: { secret } }),
     ],
   ] as const)
     assert.throws(decode, (error: unknown) => {
@@ -339,32 +344,7 @@ test('transcript schemas bound decoded chunks, canonical base64, identities and 
   assert.equal(isChatCommand('findChatTranscript'), true);
 });
 
-test('stream envelopes are strict and bound authority, sequences and decoded fragments', async () => {
-  const { decodeChatStreamRequest, decodeChatStreamFrame } =
-    await import('@moonbase/contracts/chat-schema');
-  const request = { target, connectionId: 'generation' };
-  assert.deepEqual(decodeChatStreamRequest(request), request);
-  assert.throws(() => decodeChatStreamRequest({ ...request, token: 'private' }));
-  const frame = {
-    ...request,
-    streamId: 'a'.repeat(43),
-    sequence: 0,
-    kind: 'snapshot',
-    offset: 0,
-    total: 32768,
-    data: Buffer.alloc(32768).toString('base64'),
-  };
-  assert.deepEqual(decodeChatStreamFrame(frame), frame);
-  for (const change of [
-    { sequence: -1 },
-    { sequence: Number.MAX_SAFE_INTEGER + 1 },
-    { data: Buffer.alloc(32769).toString('base64') },
-    { data: 'bad!' },
-    { total: 262145 },
-    { extra: true },
-    { target: { ...target, path: '/' } },
-  ])
-    assert.throws(() => decodeChatStreamFrame({ ...frame, ...change }));
+test('a snapshot may say it is reconnecting', () => {
   assert.equal(
     decodeChatOutput('getChat', { ...outputs.getChat, observationStatus: 'reconnecting' })
       .observationStatus,

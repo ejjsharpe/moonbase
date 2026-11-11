@@ -1,3 +1,4 @@
+import { findTestBun, prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
 import { expectSaveEnabled, saveFile, captureNative } from './editor-regressions.ts';
 import {
   closeSettings,
@@ -16,7 +17,7 @@ import {
 } from '@playwright/test';
 import { fixture, until } from '../../../tests/chat/tool-fixture.ts';
 import { openCallCard } from './transcript-list.ts';
-import { mkdir, writeFile, readFile, appendFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, appendFile, readdir } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 
@@ -29,6 +30,7 @@ async function launch(
   data = 'desktop-data',
   startupFailure?: 'editor' | 'chat-context',
 ) {
+  await prepareDaemonData(join(f.directory, data));
   const app = await electron.launch({
     ...(packaged
       ? {
@@ -46,6 +48,7 @@ async function launch(
       HOME: process.env.HOME!,
       TMPDIR: process.env.TMPDIR!,
       MOONBASE_USER_DATA: join(f.directory, data),
+      MOONBASE_TEST_BUN: findTestBun(),
       MOONBASE_CHAT_CONFIG: f.clientConfig,
       ...(startupFailure ? { MOONBASE_TEST_STARTUP_FAILURE: startupFailure } : {}),
       ...(process.env.MOONBASE_TEST_MAIN
@@ -151,7 +154,7 @@ const reloadOutcome = (app: ElectronApplication) =>
       }),
   );
 async function saved(p: Page) {
-  return p.evaluate(() => JSON.parse(localStorage.getItem('moonbase.chat.v1')!));
+  return p.evaluate(() => JSON.parse(localStorage.getItem('moonbase.chat.remote.v2')!));
 }
 async function recovery(p: Page) {
   return p
@@ -216,6 +219,9 @@ async function stop(app: ElectronApplication, fault = false) {
   );
 }
 async function close(f: Fixture) {
+  // A daemon outlives its app: stop each profile's before the fixture goes.
+  for (const entry of await readdir(f.directory).catch(() => []))
+    await stopDaemon(join(f.directory, entry, 'daemon-v1'));
   const report = await f.close();
   await mkdir(output, { recursive: true });
   await appendFile(join(output, 'cleanup.jsonl'), JSON.stringify(report) + '\n');
@@ -438,9 +444,10 @@ for (const change of ['external', 'write-failure'])
       await connect(p);
       await create(p, 'Preservation fence');
       await p.getByLabel('Message', { exact: true }).fill('preserved chat draft');
-      const prior = await p.evaluate(() => localStorage.getItem('moonbase.chat.v1'));
+      const prior = await p.evaluate(() => localStorage.getItem('moonbase.chat.remote.v2'));
       await p.evaluate((change) => {
-        if (change === 'external') localStorage.setItem('moonbase.chat.v1', 'external bytes');
+        if (change === 'external')
+          localStorage.setItem('moonbase.chat.remote.v2', 'external bytes');
         else
           Storage.prototype.setItem = () => {
             throw new DOMException('full controlled storage', 'QuotaExceededError');
@@ -459,7 +466,7 @@ for (const change of ['external', 'write-failure'])
       await expect
         .poll(async () => (await recovery(p)).state.drafts[0]?.text)
         .toBe('local dirty draft');
-      const bytes = await p.evaluate(() => localStorage.getItem('moonbase.chat.v1'));
+      const bytes = await p.evaluate(() => localStorage.getItem('moonbase.chat.remote.v2'));
       expect(bytes).toBe(change === 'external' ? 'external bytes' : prior);
       expect(
         (await f.stats()).commands.filter((v) => ['sendChat', 'stopChat'].includes(v)),
@@ -877,7 +884,7 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
       await until(f.stats, (s) => s.heldReplies.includes(operation));
       const retained = await page.evaluate(
         (op) =>
-          JSON.parse(localStorage.getItem('moonbase.chat.v1')!).pending.find(
+          JSON.parse(localStorage.getItem('moonbase.chat.remote.v2')!).pending.find(
             (p: { operation: string }) => p.operation === op,
           ),
         operation,
@@ -895,7 +902,7 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
       );
       const afterLoss = await page.evaluate(
         (op) =>
-          JSON.parse(localStorage.getItem('moonbase.chat.v1')!).pending.find(
+          JSON.parse(localStorage.getItem('moonbase.chat.remote.v2')!).pending.find(
             (p: { operation: string }) => p.operation === op,
           ),
         operation,
@@ -909,8 +916,10 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
       await expect.poll(() => reloadOutcome(app)).toBe('reload');
       await connect(page);
       if (operation !== 'createChat')
-        // The chat header's breadcrumb carries the working folder in its title.
-        await expect(page.getByRole('main').getByTitle(f.cwd, { exact: false })).toBeVisible();
+        // The title bar's breadcrumb carries the working folder in its title.
+        await expect(
+          page.locator('header[aria-label="Window title bar"]').getByTitle(f.cwd, { exact: false }),
+        ).toBeVisible();
       if (operation === 'sendChat') {
         await expect(page.getByRole('region', { name: 'Retained commands' })).toHaveCount(0);
         await expect(page.getByLabel('Message', { exact: true })).toHaveValue(
@@ -933,7 +942,8 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
       for (const call of mutations) expect(call.input).toEqual(retained.input);
       if (operation === 'createChat') {
         expect(mutations[1].result).toEqual(mutations[0].result);
-        expect(stats.calls).toBe(1);
+        // The retried Create's first message runs once; its model call may still be on its way.
+        await expect.poll(async () => (await f.stats()).calls).toBe(1);
       } else {
         expect(stats.commands.filter((c) => c === 'sendChat')).toHaveLength(1);
         expect(stats.tools).toBe(1);
@@ -1050,7 +1060,7 @@ for (const failsWrite of [false, true])
       const region = page.getByRole('region', { name: 'Retained commands' });
       await expect(region).toContainText('Conflict');
       const pending = await page.evaluate(
-        () => JSON.parse(localStorage.getItem('moonbase.chat.v1')!).pending[0],
+        () => JSON.parse(localStorage.getItem('moonbase.chat.remote.v2')!).pending[0],
       );
       await page.getByLabel('Message', { exact: true }).fill('Newer live draft remains');
       f.release();
@@ -1067,9 +1077,9 @@ for (const failsWrite of [false, true])
       );
       expect(reserved.ok && (reserved.value as { admission: string }).admission).toBe('reserved');
       const replacement = failsWrite
-        ? await page.evaluate(() => localStorage.getItem('moonbase.chat.v1'))
+        ? await page.evaluate(() => localStorage.getItem('moonbase.chat.remote.v2'))
         : await page.evaluate(() => {
-            const key = 'moonbase.chat.v1',
+            const key = 'moonbase.chat.remote.v2',
               v = JSON.parse(localStorage.getItem(key)!);
             v.pending = [];
             v.drafts = [{ target: v.selected, text: 'Newer external publication' }];
@@ -1093,7 +1103,7 @@ for (const failsWrite of [false, true])
       await expect(page.getByRole('alert').first()).toContainText('preservation failed');
       await region.getByRole('button', { name: 'Query outcome', exact: true }).click();
       const after = await f.stats(),
-        stored = await page.evaluate(() => localStorage.getItem('moonbase.chat.v1')),
+        stored = await page.evaluate(() => localStorage.getItem('moonbase.chat.remote.v2')),
         receipt = await page.evaluate(
           (p) =>
             window.moonbaseChat.call(
@@ -1174,7 +1184,7 @@ if (!packaged) {
       await connect(p);
       await create(p, 'Closing with pending cleanup');
       await p.getByLabel('Message', { exact: true }).fill('preserved while cleanup fails');
-      const preserved = await p.evaluate(() => localStorage.getItem('moonbase.chat.v1'));
+      const preserved = await p.evaluate(() => localStorage.getItem('moonbase.chat.remote.v2'));
       await app.evaluate(() => {
         globalThis.desktopTest.holdChatCancel = true;
         globalThis.desktopTest.failChatCancel = true;
@@ -1193,7 +1203,9 @@ if (!packaged) {
         'Controlled cancellation acknowledgment failure',
       );
       await expect(p.getByRole('button', { name: 'Open Chat panel', exact: true })).toBeDisabled();
-      expect(await p.evaluate(() => localStorage.getItem('moonbase.chat.v1'))).toBe(preserved);
+      expect(await p.evaluate(() => localStorage.getItem('moonbase.chat.remote.v2'))).toBe(
+        preserved,
+      );
       await screen(app, p, 'panel-cleanup-error');
       await app.evaluate(({ dialog }, report) => {
         dialog.showMessageBox = (async (_window, options) => {
@@ -1250,8 +1262,9 @@ if (!packaged) {
         current = app;
         await screen(app, p, 'startup-' + failure);
         if (failure === 'chat-context') {
+          // Main's reason reaches the renderer through the context bridge.
           await expect(p.getByLabel('Chat configuration')).toContainText(
-            'Application effect failed',
+            'Controlled chat context initialization failure',
           );
           await local(p, app, f);
           await expect(p.getByRole('alert', { name: 'Chat initialization failed' })).toBeVisible();
@@ -1259,7 +1272,7 @@ if (!packaged) {
           await expect.poll(() => readFile(join(f.cwd, 'a.ts'), 'utf8')).toBe('local dirty draft');
           await tab(p, 'Agents').click();
           await expect(p.getByLabel('Chat configuration')).toContainText(
-            'Application effect failed',
+            'Controlled chat context initialization failure',
           );
           expect(await reloadOutcome(app)).toBe('veto');
           await app.evaluate(({ app }) => app.quit());
@@ -1317,7 +1330,7 @@ if (!packaged) {
         await connect(p);
         await create(p, 'Consent handoff');
         await p.getByLabel('Message', { exact: true }).fill('preserved consent draft');
-        const before = await p.evaluate(() => localStorage.getItem('moonbase.chat.v1'));
+        const before = await p.evaluate(() => localStorage.getItem('moonbase.chat.remote.v2'));
         const report = join(f.directory, 'handoff.json');
         await app.evaluate(({ app, BrowserWindow, dialog }, report) => {
           const contents = BrowserWindow.getAllWindows()[0].webContents;
@@ -1387,7 +1400,9 @@ if (!packaged) {
               .find((button) => button.getAttribute('aria-label') === name)
               ?.click();
         });
-        expect(await p.evaluate(() => localStorage.getItem('moonbase.chat.v1'))).toBe(before);
+        expect(await p.evaluate(() => localStorage.getItem('moonbase.chat.remote.v2'))).toBe(
+          before,
+        );
         expect(await app.evaluate(() => globalThis.applicationHandoff.pickers)).toBe(0);
         expect(
           (await f.stats()).commands.filter((name) => ['sendChat', 'stopChat'].includes(name)),

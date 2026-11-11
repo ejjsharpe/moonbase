@@ -56,8 +56,11 @@ export type DesktopShellProps = {
   /** These callbacks return user-approved roots or opaque native references, never source paths. */
   transcriptNative?: (backendId: string) => TranscriptNative;
   chooseChatFolder?: () => Promise<string | null>;
-  /** Folders the native picker approved for local chat before, newest first. */
-  recentChatFolders?: () => Promise<readonly string[]>;
+  /**
+   * Folders a new chat on the target may use without a picker: local chat's recently approved
+   * ones, or a remote host's approved roots and their folders.
+   */
+  recentChatFolders?: (targetId: string) => Promise<readonly string[]>;
   /** Creates a new local chat's linked worktree beside the repository, returning its root. */
   createChatWorktree?: (root: string, branch: string) => Promise<string>;
   /** Opens a local chat without a project's folder as a project where it is, returning its root. */
@@ -985,7 +988,10 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                         key={`${lifecycle.chatTargetId}:${selected.checkoutId}`}
                         controller={chat}
                         chooseFolder={chooseChatFolder}
-                        recentFolders={recentChatFolders}
+                        recentFolders={
+                          recentChatFolders &&
+                          (() => recentChatFolders(lifecycle.chatTargetId ?? 'local'))
+                        }
                         folderProjects={folderProjects}
                         createWorktree={
                           createChatWorktree &&
@@ -1063,7 +1069,9 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
               titleBar={chatTitle}
               sidebarHidden={sidebarHidden}
               chooseFolder={chooseChatFolder}
-              recentFolders={recentChatFolders}
+              recentFolders={
+                recentChatFolders && (() => recentChatFolders(lifecycle.chatTargetId ?? 'local'))
+              }
               folderProjects={folderProjects}
               createWorktree={createChatWorktree}
               turnIntoProject={

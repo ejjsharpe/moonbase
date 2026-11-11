@@ -11,8 +11,9 @@ import {
   fauxAssistantMessage,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux';
+import type { ChatInput } from '@moonbase/contracts/chat';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
-import { LocalPiRuntimeLive, LocalPiControl, PiRuntimeLive } from '../src/index.ts';
+import { LocalPiRuntimeLive, LocalPiControl } from '../src/index.ts';
 
 const session = { host: { hostId: 'local-test', storeId: 'local-store' }, actorId: 'local-owner' };
 async function until<A>(read: () => Promise<A>, ready: (value: A) => boolean) {
@@ -54,7 +55,11 @@ test('local conversations retain distinct folders/models, coding tools, immutabl
     mode: 'local',
   });
   await assert.rejects(
-    client.command('createChat', { session, requestId: 'missing', title: 'No settings' }),
+    client.command('createChat', {
+      session,
+      requestId: 'missing',
+      title: 'No settings',
+    } as ChatInput<'createChat'>),
     { code: 'InvalidInput' },
   );
   const inputs = [first, second].map((cwd, index) => ({
@@ -162,11 +167,6 @@ test('local conversations retain distinct folders/models, coding tools, immutabl
     /working folder is unavailable/,
   );
   assert.deepEqual(await client.command('createChat', inputs[0]), chats[0]);
-  const remote = ManagedRuntime.make(
-    PiRuntimeLive({ ...config, cwd: first, model: inputs[0].settings.model }),
-  );
-  await assert.rejects(makeChatClient(remote).command('getChatHost', { host: session.host }));
-  await remote.dispose();
 });
 
 test('a local chat without a project runs in a new, empty folder of its own', async (t) => {

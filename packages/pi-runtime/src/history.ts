@@ -125,11 +125,25 @@ export async function readActivity(
     return { state, at: ms === undefined ? createdAt : new Date(ms).toISOString() };
   }, context);
 }
+/** One chat as a listing shows it, or undefined when it is missing or another identity's. */
+export async function readListedConversation(
+  harness: Harness,
+  session: ChatSession,
+  identity: string,
+  conversationId: string,
+): Promise<ChatSummary | undefined> {
+  const meta = await harness.snapshot(Metadata, cid(conversationId), 'metadata', context);
+  if (meta?.identity !== identity) return undefined;
+  const saved = S.savedMetadata(meta);
+  return {
+    ...summarizeConversation(session, conversationId, saved, getSettings(saved)),
+    activity: await readActivity(harness, conversationId, saved.createdAt),
+  };
+}
 export async function listConversations(
   harness: Harness,
   session: ChatSession,
   identity: string,
-  fixedSettings: ChatSettings | undefined,
   encoded?: string,
 ): Promise<ChatOutput<'listChats'>> {
   let scan = readCursor(encoded, 'list', getCursorIdentity(identity)),
@@ -145,13 +159,8 @@ export async function listConversations(
       scan = undefined;
       break;
     }
-    const meta = await harness.snapshot(Metadata, row.id, 'metadata', context);
-    if (meta?.identity === identity) {
-      const saved = S.savedMetadata(meta);
-      const summary = {
-        ...summarizeConversation(session, String(row.id), saved, getSettings(saved, fixedSettings)),
-        activity: await readActivity(harness, String(row.id), saved.createdAt),
-      };
+    const summary = await readListedConversation(harness, session, identity, String(row.id));
+    if (summary) {
       if (
         Buffer.byteLength(JSON.stringify({ conversations: [...conversations, summary] })) >
         entryListBytes
@@ -249,8 +258,6 @@ type SnapshotInput = {
   conversation: ChatSummary;
   /** Pending Send intents recorded in metadata. */
   pending: number;
-  /** Local conversations also report whether their saved working folder is available. */
-  local: boolean;
   cache?: SnapshotCache;
   signal?: AbortSignal;
 };
@@ -268,7 +275,7 @@ export async function projectSnapshot(
 }
 async function projectSnapshotOnce(
   harness: Harness,
-  { identity, target, conversation, pending, local, cache, signal }: SnapshotInput,
+  { identity, target, conversation, pending, cache, signal }: SnapshotInput,
 ): Promise<ChatSnapshot> {
   signal?.throwIfAborted();
   const captured = await captureTranscript(harness, target, {
@@ -341,19 +348,18 @@ async function projectSnapshotOnce(
   else if (pending)
     message = 'Pending Send intent is retained; query or retry its original request explicitly.';
   else if (state === 'failed') message = 'Pi could not complete the last submission.';
-  if (local) {
-    const cwd = conversation.cwd;
-    const available = await realpath(cwd)
-      .then(async (canonical) => canonical === cwd && (await stat(cwd)).isDirectory())
-      .catch(() => false);
-    if (!available)
-      message = [
-        message,
-        'The saved local working folder is unavailable. Restore its original path, or create another conversation with a new folder.',
-      ]
-        .filter(Boolean)
-        .join(' ');
-  }
+  // A chat reports whether its saved working folder is still available.
+  const cwd = conversation.cwd;
+  const available = await realpath(cwd)
+    .then(async (canonical) => canonical === cwd && (await stat(cwd)).isDirectory())
+    .catch(() => false);
+  if (!available)
+    message = [
+      message,
+      'The saved local working folder is unavailable. Restore its original path, or create another conversation with a new folder.',
+    ]
+      .filter(Boolean)
+      .join(' ');
   const source = getLiveSource(harness, target, captured);
   if (run && source) run.transcript = await projectLiveTranscript(harness, source, captured);
   const base = {

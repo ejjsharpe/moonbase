@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { ManagedRuntime } from 'effect';
+import type { ObservationClose } from '@moonbase/contracts/common';
 import { LRUCache } from 'lru-cache';
 import { decodeConnectionInput, isConnectionCommand } from '@moonbase/contracts/connection-schema';
 import type { ProviderSetupClient } from '@moonbase/contracts/providers';
@@ -9,6 +10,7 @@ import { ApplicationError } from '@moonbase/contracts/workspace';
 import {
   maximumChatRequestBytes,
   type ChatClient,
+  type ChatInput,
   type ChatCommand,
   type ChatSession,
 } from '@moonbase/contracts/chat';
@@ -19,6 +21,7 @@ import {
   requestId,
   errorDTO,
   invalid,
+  isChatWatchKind,
   type Reply,
   type TranscriptImage,
 } from './wire.ts';
@@ -68,14 +71,14 @@ export class ChatIpcSession {
   constructor(
     runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>,
     chat: ChatClient,
-    connection: ConnectionClient | null,
+    backend: ChatIpcBackend,
     context: ChatSession,
     emit: (id: string, result: Reply) => void,
     capabilities: ChatIpcCapabilities = {},
   ) {
     this.lifetime = new IpcLifetime(runtime, 64, errorDTO);
     this.chat = chat;
-    this.connection = connection;
+    this.connection = backend.mode === 'remote' ? backend.connection : null;
     this.context = context;
     this.emit = emit;
     this.capabilities = capabilities;
@@ -108,7 +111,7 @@ export class ChatIpcSession {
   }
   async call(kind: unknown, operation: unknown, input: unknown, id: unknown): Promise<Reply> {
     requestId(id);
-    const watch = kind === 'watch-chat' || kind === 'watch-connection';
+    const watch = isChatWatchKind(kind);
     if (this.lifetime.getAdmissionError(id, watch)) invalid();
     if (typeof operation !== 'string') invalid();
     try {
@@ -149,26 +152,40 @@ export class ChatIpcSession {
       if (operation !== '') invalid();
       v = decodeChatInput('getChat', v);
       this.authority(v);
-    } else if (kind === 'watch-connection') {
-      if (!this.connection) return invalid();
+    } else if (kind === 'watch-chat-list') {
+      if (operation !== '') invalid();
+      v = { session: decodeChatInput('listChats', v).session };
+      this.authority(v);
+    } else if (kind === 'watch-connection' || kind === 'watch-providers') {
+      if (kind === 'watch-connection' ? !this.connection : !this.capabilities.providers)
+        return invalid();
       if (operation !== '') invalid();
       fields(v, []);
     } else invalid();
     const request = this.lifetime.reserveRequest(id, watch);
     const live = request.isLive;
     try {
-      if (kind === 'watch-chat' || kind === 'watch-connection') {
+      if (watch) {
         const receive = (value: unknown) => {
             if (live()) this.emit(id, { ok: true, value });
           },
-          error = (e: ApplicationError) => {
+          delivered = (e: ApplicationError) => {
+            failed = true;
             if (live()) this.emit(id, errorDTO(e));
           };
-        await request.acquireWatch(() =>
-          kind === 'watch-chat'
-            ? this.chat.watch(v as never, receive, error)
-            : this.connection!.watch(receive, error),
-        );
+        let failed = false;
+        await request.acquireWatch(() => {
+          let close: ObservationClose;
+          if (kind === 'watch-chat') close = this.chat.watch(v as never, receive, delivered);
+          else if (kind === 'watch-chat-list')
+            close = this.chat.watchChatList(v as never, receive, delivered);
+          else if (kind === 'watch-providers')
+            close = this.capabilities.providers!.watch(receive, delivered);
+          else close = this.connection!.watch(receive, delivered);
+          // A failure the watch delivered is its outcome, not a failure to clean it up.
+          return () =>
+            close().catch((cause: unknown) => (failed ? undefined : Promise.reject(cause)));
+        });
         return { ok: true, value: null };
       }
       if (kind === 'transcript') {
@@ -198,20 +215,38 @@ export class ChatIpcSession {
         }
         return { ok: true, value: null };
       }
+      // The folder a local chat request names, which the host must have approved.
+      let folder: string | undefined;
       if (kind === 'chat' && operation === 'createChat') {
-        const settings = (v as { settings?: unknown }).settings;
-        if ((this.connection === null) !== (settings !== undefined)) return invalid();
+        // Every host is a daemon, local or remote, whose chats choose their folder and model.
+        folder = (v as ChatInput<'createChat'>).settings.cwd;
       }
+      if (kind === 'chat' && operation === 'findChatFiles') folder = (v as { cwd?: string }).cwd;
+      if (folder !== undefined) await this.capabilities.prepareFolder?.(folder);
       let value: unknown;
       if (kind === 'providers')
         value = await this.capabilities.providers!.command(operation as never, v as never, {
           signal: request.signal,
         });
-      else if (kind === 'chat')
-        value = await this.chat.command(operation as ChatCommand, v as never, {
-          signal: request.signal,
-        });
-      else if (operation === 'getConnection')
+      else if (kind === 'chat') {
+        const send = () =>
+          this.chat.command(operation as ChatCommand, v as never, { signal: request.signal });
+        try {
+          value = await send();
+        } catch (error) {
+          // A refused folder is granted again once if main may still grant it (the daemon lost
+          // its grant, or the folder was replaced), and the request is retried once. A refused
+          // request was never admitted, so its request ID is unused.
+          if (
+            folder === undefined ||
+            (error as { code?: unknown }).code !== 'Unauthorized' ||
+            !live() ||
+            !(await this.capabilities.regrantFolder?.(folder))
+          )
+            throw error;
+          value = await send();
+        }
+      } else if (operation === 'getConnection')
         value = await this.connection!.command(operation, v as never, { signal: request.signal });
       else {
         // Image URLs belong to the connection that issued them, including ones issued mid-change.
@@ -316,8 +351,14 @@ export class ChatIpcSession {
     return this.lifetime.count;
   }
 }
+/** What a session's backend is: a local daemon's chat, or a remote host's with its connection. */
+export type ChatIpcBackend = { mode: 'local' } | { mode: 'remote'; connection: ConnectionClient };
 export type ChatIpcCapabilities = {
   providers?: ProviderSetupClient;
+  /** Prepares a folder a local chat request names, before the request is sent. */
+  prepareFolder?(path: string): Promise<void>;
+  /** Grants a folder the host refused again, if main may; whether it did. */
+  regrantFolder?(path: string): Promise<boolean>;
   transcript?: NativeTranscriptActions;
   /** lru-cache clock for image URL expiry; tests inject one. */
   perf?: { now(): number };

@@ -67,41 +67,20 @@ export const cid = (value: string) => numeric(value) as ConversationId;
 export const eid = (value: string) => numeric(value) as EntryId;
 export const sid = (value: string) => numeric(value) as SubmissionId;
 export const tid = (value: string) => numeric(value) as TaskId;
-export async function readOwnedMetadata(
-  harness: Harness,
-  identity: string,
-  target: ChatTarget,
-  local: boolean,
-) {
+export async function readOwnedMetadata(harness: Harness, identity: string, target: ChatTarget) {
   const meta = await harness.snapshot(Metadata, cid(target.conversationId), 'metadata', context);
   if (!meta || meta.identity !== identity)
     return V.fail('Unauthorized', 'Conversation does not belong to this configured actor/store.');
   const saved = S.savedMetadata(meta);
-  if (local && !saved.settings)
+  if (!saved.settings)
     return V.fail(
       'Persistence',
       'Stored local conversation settings are missing; preserve this store.',
     );
-  if (!local && saved.settings)
-    return V.fail(
-      'Persistence',
-      'Remote conversation has incompatible settings; preserve this store.',
-    );
   return saved;
 }
-export function getSettings(
-  meta: { settings?: ChatSettings },
-  fixedSettings?: ChatSettings,
-): ChatSettings {
-  if (!fixedSettings) {
-    if (!meta.settings)
-      return V.fail('Persistence', 'Stored local conversation settings are missing.');
-    return meta.settings;
-  }
-  if (meta.settings)
-    return V.fail(
-      'Persistence',
-      'Remote conversation has incompatible settings; preserve this store.',
-    );
-  return fixedSettings;
+export function getSettings(meta: { settings?: ChatSettings }): ChatSettings {
+  if (!meta.settings)
+    return V.fail('Persistence', 'Stored local conversation settings are missing.');
+  return meta.settings;
 }
