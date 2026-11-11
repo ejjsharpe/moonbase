@@ -220,8 +220,7 @@ export function createLocalDaemon({
     if (endpoint && isAlive(endpoint.pid)) {
       if (endpoint.protocol === chatProtocolVersion) return adopt(endpoint);
       // An older app's daemon may be running its agents; it exits once idle with nobody connected.
-      if (await runsDaemon(endpoint.pid, directory))
-        throw unavailable(olderDaemonMessage);
+      if (await runsDaemon(endpoint.pid, directory)) throw unavailable(olderDaemonMessage);
     }
     await start();
   }
