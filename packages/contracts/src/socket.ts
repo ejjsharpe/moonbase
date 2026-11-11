@@ -27,8 +27,13 @@ export const socketLimits = {
   requests: 32,
   /** Replies and refusals waiting to be written; a client that leaves more unread is dropped. */
   queuedReplies: 64,
-  /** The hello must arrive this long after the challenge. */
-  handshakeMs: 2_000,
+  /** The server's bound on the hello arriving after its challenge. */
+  handshakeMs: 5_000,
+  /**
+   * The client's bound on connecting through to the welcome (TCP, an SSH forward's channel, the
+   * upgrade, challenge and hello), the HTTP stream's establishment budget.
+   */
+  connectMs: 20_000,
   /** A side that has sent nothing for this long sends a heartbeat. */
   heartbeatMs: 10_000,
   /** A side that has received nothing for this long closes the connection. */

@@ -64,8 +64,9 @@ export type SocketServerContext = {
 const maximumConnections = 32;
 /**
  * Connections still waiting for their hello, bounded apart from authenticated ones so that a
- * process without the token cannot take every slot. A new one evicts the oldest, so held
- * handshakes never lock a client out.
+ * process without the token cannot take every slot. A new one evicts the oldest, which bounds
+ * how long a held handshake occupies a slot; authenticated connections are unaffected, but a
+ * fast enough flood of new ones can still evict a client's before its hello arrives.
  */
 const maximumHandshakes = 8;
 /** A refused or closed connection's socket is destroyed this long after its close frame. */
@@ -303,7 +304,7 @@ class Session {
         else {
           const message = this.open(payload);
           this.lastReceived = this.context.clock.now();
-          this.handle(message);
+          this.handle(message, payload.length);
         }
         if (this.congested()) return;
       }
@@ -349,14 +350,14 @@ class Session {
     return message;
   }
 
-  private handle(message: SocketClientMessage) {
+  private handle(message: SocketClientMessage, bytes: number) {
     switch (message.type) {
       case 'hello':
         return this.fail();
       case 'heartbeat':
         return;
       case 'request':
-        return this.request(message.id, message.operation, message.input);
+        return this.request(message.id, message.operation, message.input, bytes);
       case 'cancel':
         this.requests.get(message.id)?.abort();
         return;
@@ -374,8 +375,16 @@ class Session {
     }
   }
 
-  private request(id: string, operation: string, input: unknown) {
+  /** `bytes` is the request's whole frame, held to an HTTP request body's bound. */
+  private request(id: string, operation: string, input: unknown, bytes: number) {
     if (this.requests.has(id)) return this.fail();
+    if (bytes > P.maximumChatRequestBytes) {
+      this.queueReply(id, {
+        ok: false,
+        error: { code: 'InvalidInput', message: 'Chat input exceeds its transport limit.' },
+      });
+      return;
+    }
     if (this.requests.size >= socketLimits.requests) {
       this.queueReply(id, {
         ok: false,
@@ -437,8 +446,10 @@ class Session {
     if (feed) {
       const after = message.afterSequence,
         start = feed.history.findIndex((update) => update.base === after);
-      if (after === undefined || (after !== feed.sequence && start < 0)) feed.sent = undefined;
-      else feed.replay = start < 0 ? [] : feed.history.slice(start);
+      if (after === undefined || (after !== feed.sequence && start < 0)) {
+        feed.sent = undefined;
+        feed.replay = [];
+      } else feed.replay = start < 0 ? [] : feed.history.slice(start);
     } else
       feed = {
         id,

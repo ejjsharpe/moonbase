@@ -192,7 +192,7 @@ export function connectDaemonSocket(
   };
   timer = clock.setTimeout(
     () => end(unavailable('The daemon did not complete its handshake.')),
-    socketLimits.handshakeMs,
+    socketLimits.connectMs,
   );
 
   const receive = (message: SocketServerMessage) => {
@@ -325,6 +325,11 @@ export function connectDaemonSocket(
           }
           if (!health!.capabilities.includes(capability as never))
             V.fail('Incompatible', 'The daemon does not offer this feature.');
+          if (
+            Buffer.byteLength(JSON.stringify({ operation, input: decoded })) >
+            P.maximumChatRequestBytes
+          )
+            V.fail('InvalidInput', 'Chat input exceeds its transport limit.');
           if (requestOptions?.signal?.aborted) V.fail('Cancelled', 'The request was cancelled.');
         } catch (error) {
           return reject(error);

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { connect } from 'node:net';
 import { createServer } from 'node:http';
 import { test, type TestContext } from 'node:test';
@@ -357,7 +358,14 @@ test('one connection serves requests and chat, chat-list and provider subscripti
   await until(async () => held, Boolean);
   const live = chats.filter((view) => view.update === 'delta' && !!view.value.run);
   assert(live.length > 1, 'appended text arrives as deltas');
-  assert.match(live.at(-1)!.value.run!.transcript!.parts[0]!.text, /^(streamed )+/);
+  // While the generation is held, the value the deltas built matches a fresh snapshot.
+  await until(async () => {
+    const { observationStatus: _, ...fresh } = await socket.request('getChat', {
+      target: chatTarget,
+    });
+    const { observationStatus: __, ...built } = chats.at(-1)!.value;
+    return chats.at(-1)!.update === 'delta' && isDeepStrictEqual(built, fresh);
+  }, Boolean);
   gate.resolve();
   const done = await until(
     async () => chats.at(-1)!.value,
@@ -420,6 +428,22 @@ test('the handshake and every authenticated frame refuse forgery, replay, reorde
     const reply = await readSealed(raw, keys);
     assert(reply !== 'closed' && reply !== 'timeout');
     assert.equal(reply.type, 'reply');
+    // A request over an HTTP body's bound is refused, and the connection stays open.
+    raw.send(
+      sealSocketMessage(keys.client, {
+        type: 'request',
+        seq: 2,
+        id: 'large',
+        operation: 'getChatHost',
+        input: { host, padding: 'x'.repeat(P.maximumChatRequestBytes) },
+      }),
+    );
+    const large = await readSealed(raw, keys);
+    assert(large !== 'closed' && large !== 'timeout');
+    assert.equal(
+      JSON.parse(Buffer.from(large.data as string, 'base64').toString()).error.code,
+      'InvalidInput',
+    );
     raw.socket.destroy();
   }
   const dispatched = source.calls.length;
@@ -547,13 +571,14 @@ test('the handshake and every authenticated frame refuse forgery, replay, reorde
   assert.equal(source.calls.length, dispatched);
 });
 
-test('a client refuses a daemon that cannot prove the token or skips a frame', async (t) => {
+test('a client refuses a daemon that cannot prove the token, skips a frame or never welcomes it', async (t) => {
   const token = P.nonce();
-  for (const fault of ['wrong key', 'skipped sequence'] as const) {
+  for (const fault of ['wrong key', 'skipped sequence', 'held upgrade'] as const) {
     const server = createServer(),
       upgraded = new Set<{ destroy(): void }>();
     server.on('upgrade', (request, socket) => {
       upgraded.add(socket);
+      if (fault === 'held upgrade') return;
       const accept = createHash('sha1')
         .update(`${request.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
         .digest('base64');
@@ -604,11 +629,22 @@ test('a client refuses a daemon that cannot prove the token or skips a frame', a
       server.close();
     });
     const { port } = server.address() as { port: number };
-    await assert.rejects(
-      connectDaemonSocket({ origin: `http://127.0.0.1:${port}`, token, expected: host }),
-      { code: 'Unauthorized' },
-      fault,
-    );
+    const endpoint = { origin: `http://127.0.0.1:${port}`, token, expected: host };
+    if (fault !== 'held upgrade') {
+      await assert.rejects(connectDaemonSocket(endpoint), { code: 'Unauthorized' }, fault);
+      continue;
+    }
+    // A slow forward gets the HTTP stream's establishment budget, past the server's hello bound.
+    const clock = manualClock();
+    let settled = false;
+    const connecting = connectDaemonSocket(endpoint, { clock });
+    void connecting.catch(() => {}).finally(() => (settled = true));
+    await until(async () => upgraded.size, Boolean);
+    clock.advance(socketLimits.connectMs - 1);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert(!settled);
+    clock.advance(1);
+    await assert.rejects(connecting, { code: 'Unavailable' });
   }
 });
 
@@ -799,7 +835,7 @@ test('a slow consumer is reset with a snapshot rather than a backlog, Stop stays
   assert.equal(stops, 1);
 });
 
-test('a ping flood that never reads stops being read and is dropped, and held handshakes never lock a client out', async (t) => {
+test('a ping flood that never reads stops being read and is dropped, and held handshakes give way to new ones', async (t) => {
   const source = controlledClient(),
     clock = manualClock();
   const { token, port, endpoint } = await serve(t, source.client, { clock });
@@ -811,7 +847,9 @@ test('a ping flood that never reads stops being read and is dropped, and held ha
   raw.socket.pause();
   const ping = encodeWebSocketFrame(9, Buffer.alloc(125, 1), true),
     batch = Buffer.concat(Array.from({ length: 1000 }, () => ping));
-  for (let index = 0; index < 256; index++) raw.socket.write(batch);
+  // About 21 MB: past the 1 MiB bound plus what loopback buffers absorb (up to 4 MiB on each
+  // side of each direction on macOS), so the daemon must stop reading.
+  for (let index = 0; index < 160; index++) raw.socket.write(batch);
   // What the daemon has not read stays queued here instead of as answers in the daemon.
   await until(async () => {
     const queued = raw.socket.writableLength;
