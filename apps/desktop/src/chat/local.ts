@@ -17,7 +17,7 @@ import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatCreationSettings, ChatSession } from '@moonbase/contracts/chat';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
-import { createFolderApprovals } from './folders.ts';
+import { createFolderApprovals } from '@moonbase/pi-runtime/folders';
 
 async function readLocalIdentity(directory: string): Promise<ChatSession> {
   const path = join(directory, 'identity.json');

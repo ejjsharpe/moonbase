@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { createFolderApprovals } from '../src/chat/folders.ts';
+import { createFolderApprovals } from '../src/folders.ts';
 
 test('native folder approvals survive a restart and lapse when the folder is replaced', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-folders-')));

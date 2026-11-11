@@ -11,9 +11,10 @@ const maxApprovals = maxRecentApprovals + maxWorktreeApprovals;
 const maxRecent = 8;
 
 /**
- * Working folders the native picker approved for local chat, kept in the private local chat
- * directory so they stay approved after a restart. Each use checks the folder is still the same
- * directory; a moved or replaced one needs the picker again. The renderer only ever names a path.
+ * Working folders the native picker approved for local chat, kept in a private file of the chat
+ * host's data directory so they stay approved after a restart. Each use checks the folder is still
+ * the same directory; a moved or replaced one needs the picker again. The renderer only ever names
+ * a path.
  */
 export function createFolderApprovals(file: string) {
   let approvals: Promise<Map<string, Approval>> | undefined;
