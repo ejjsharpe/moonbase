@@ -176,17 +176,20 @@ export function chatCapabilities(local = false, activity = false) {
           return { ...opened, conversation: withSettled(opened.conversation) } as never;
         }
         case 'createChat': {
-          const creation = input as {
-            title: string;
-            settings: ChatCreationSettings;
-          };
-          conversation.title = creation.title;
-          // Like the host, a chat without a project gets a new folder of its own.
-          conversation.cwd = creation.settings.cwd ?? `/demo/chats/chat-${++ownFolders}`;
-          if (creation.settings.cwd) delete conversation.ownFolder;
-          else conversation.ownFolder = true;
-          conversation.model = creation.settings.model.modelId;
-          conversation.reasoningEffort = creation.settings.reasoningEffort;
+          // The local fixture plays the host; the remote one answers with its saved chat.
+          if (local) {
+            const creation = input as {
+              title: string;
+              settings: ChatCreationSettings;
+            };
+            conversation.title = creation.title;
+            // Like the host, a chat without a project gets a new folder of its own.
+            conversation.cwd = creation.settings.cwd ?? `/demo/chats/chat-${++ownFolders}`;
+            if (creation.settings.cwd) delete conversation.ownFolder;
+            else conversation.ownFolder = true;
+            conversation.model = creation.settings.model.modelId;
+            conversation.reasoningEffort = creation.settings.reasoningEffort;
+          }
           return { requestId: (input as { requestId: string }).requestId, conversation } as never;
         }
         case 'sendChat':
