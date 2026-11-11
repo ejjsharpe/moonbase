@@ -9,7 +9,7 @@ import type {
   ChatTarget,
 } from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
-import { chatFileMatchLimit, type ChatInput } from '@moonbase/contracts/chat';
+import { chatFileMatchLimit, type ChatInput, type ChatOutput } from '@moonbase/contracts/chat';
 import { compareMatches, matchPath } from '@moonbase/contracts/lookup';
 
 /** The demo working folder's files, for @ mentions. */
@@ -73,8 +73,15 @@ export function chatCapabilities(local = false, activity = false) {
     model: 'fake',
     createdAt: '2026-01-01T00:00:00Z',
   };
-  let listings = 0,
+  let added = false,
     ownFolders = 0;
+  /** Open chat-list watches; `?activity` pushes its added chats to them. */
+  const listWatches = new Set<(list: ChatOutput<'listChats'>) => void>();
+  const listPage = () =>
+    ({
+      conversations: (added ? [conversation, ...activityChats()] : [conversation]).map(withSettled),
+      nextCursor: null,
+    }) as ChatOutput<'listChats'>;
   /** When each chat was settled, as the host keeps it; a Send unsettles it. */
   const settled = new Map<string, string>();
   const withSettled = (chat: ChatSummary): ChatSummary => {
@@ -157,15 +164,16 @@ export function chatCapabilities(local = false, activity = false) {
       switch (operation) {
         case 'getChatHost':
           return { ...context, mode: 'local' } as never;
-        case 'listChats':
-          // `?activity` adds chats after the first listing, which marks only that one as seen.
-          return {
-            conversations: (activity && ++listings > 1
-              ? [conversation, ...activityChats()]
-              : [conversation]
-            ).map(withSettled),
-            nextCursor: null,
-          } as never;
+        case 'listChats': {
+          const page = listPage();
+          // `?activity` adds chats after the first listing, which marks only that one as seen;
+          // the open list watches then deliver them.
+          if (activity && !added) {
+            added = true;
+            setTimeout(() => listWatches.forEach((receive) => receive(listPage())));
+          }
+          return page as never;
+        }
         case 'getChat': {
           const id = (input as ChatInput<'getChat'>).target.conversationId;
           const listed =
@@ -258,15 +266,16 @@ export function chatCapabilities(local = false, activity = false) {
       controls.observations++;
       return close();
     },
-    // The list watch delivers the first page once after subscribing, so `?activity` shows the
-    // chats it adds after the first listing.
-    watchChatList(input, receive) {
-      let open = true;
-      void chat.command('listChats', input).then((list) => {
-        if (open) receive({ list, changed: [], dropped: 0, reset: false });
+    // The list watch delivers the current page after subscribing, then each page `?activity` adds.
+    watchChatList(_input, receive) {
+      const deliver = (list: ChatOutput<'listChats'>) =>
+        receive({ list, changed: [], dropped: 0, reset: false });
+      listWatches.add(deliver);
+      void Promise.resolve().then(() => {
+        if (listWatches.has(deliver)) deliver(listPage());
       });
       return async () => {
-        open = false;
+        listWatches.delete(deliver);
       };
     },
   };
