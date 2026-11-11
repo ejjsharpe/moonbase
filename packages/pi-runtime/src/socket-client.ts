@@ -280,6 +280,13 @@ export function connectDaemonSocket(
       V.output('getChat', decoded, {
         target: subscription.target as SocketSubscriptionTarget<'chat'>,
       });
+    if (subscription.kind === 'chatList') {
+      // Every row, on the first page or past it, stays within the watched host and actor.
+      const { list, changed } = decoded as SocketSubscriptionValue<'chatList'>,
+        session = subscription.target as SocketSubscriptionTarget<'chatList'>;
+      V.output('listChats', list, { session });
+      V.output('listChats', { conversations: changed, nextCursor: null }, { session });
+    }
     subscription.state = {
       subscriptionId: message.subscriptionId,
       sequence,

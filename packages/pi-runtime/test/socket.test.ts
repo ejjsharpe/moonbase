@@ -7,7 +7,7 @@ import { test, type TestContext } from 'node:test';
 import { Effect, Exit, Scope } from 'effect';
 import { GenerationTask, createRegistry, defineExtension, hook } from '@earendil-works/pi-durable';
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
-import type { ChatClient, ChatSnapshot } from '@moonbase/contracts/chat';
+import type { ChatClient, ChatListUpdate, ChatSnapshot } from '@moonbase/contracts/chat';
 import type { DaemonClient } from '@moonbase/contracts/daemon';
 import type { ProviderState } from '@moonbase/contracts/providers';
 import { socketLimits, socketPath } from '@moonbase/contracts/socket';
@@ -989,11 +989,18 @@ test('daemon requests are bound to this host and their request ID; a substituted
         chatHostCapabilities.socket,
       ],
     };
+  let publishList: ((update: ChatListUpdate) => void) | undefined;
   const sockets = createSocketServer({
     token,
     host,
     health,
-    client: controlledClient().client,
+    client: {
+      ...controlledClient().client,
+      watchChatList: (_input, receive) => {
+        publishList = receive;
+        return async () => {};
+      },
+    },
     sources: {},
     clock: systemSocketClock,
     answer: async (operation, input) => ({
@@ -1008,11 +1015,12 @@ test('daemon requests are bound to this host and their request ID; a substituted
     await sockets.close();
     await new Promise<void>((resolve) => hostile.close(() => resolve()));
   });
-  const client = await open(t, {
+  const endpoint = {
     origin: `http://127.0.0.1:${(hostile.address() as AddressInfo).port}`,
     token,
     expected: host,
-  });
+  };
+  const client = await open(t, endpoint);
   substitute = () => ({ ...approved, requestId: 'another' });
   await assert.rejects(client.request('approveFolder', approve), { code: 'Uncertain' });
   substitute = () => ({ state: { providers: 'none' } });
@@ -1068,4 +1076,34 @@ test('daemon requests are bound to this host and their request ID; a substituted
     await client.request('getChatTranscriptContent', { source, selection }),
     content,
   );
+  // A signed chat list naming another session's chats is refused, in a snapshot's first page or
+  // in a delta's chats past it; the same list for its own session is accepted.
+  const list = (first: typeof target, past: typeof target) => ({
+    list: { conversations: [row(first)], nextCursor: null },
+    changed: [row(past)],
+    dropped: 0,
+    reset: false,
+  });
+  for (const updates of [[list(foreign, target)], [list(target, target), list(target, foreign)]]) {
+    publishList = undefined;
+    const watcher = await open(t, endpoint),
+      values: unknown[] = [],
+      failures: ApplicationError[] = [];
+    watcher.subscribe('chatList', session, {
+      receive: (value) => values.push(value),
+      onError: (error) => failures.push(error),
+    });
+    await until(async () => publishList, Boolean);
+    for (const [index, update] of updates.entries()) {
+      publishList!(update);
+      if (index < updates.length - 1)
+        await until(
+          async () => values.length,
+          (count) => count === index + 1,
+        );
+    }
+    await until(async () => failures.length, Boolean);
+    assert.equal(failures[0]!.code, 'Incompatible');
+    assert.equal(values.length, updates.length - 1);
+  }
 });

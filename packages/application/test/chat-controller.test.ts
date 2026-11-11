@@ -2932,12 +2932,35 @@ test('the chat list follows its watch: changes merge without listing, and a rese
     storage: new Storage(),
     transcriptWatchRetryMs: [0],
   });
-  await controller.start();
-  await controller.connect();
-  await turn();
   const until = async (done: () => boolean) => {
     while (!done()) await turn();
   };
+  const page = (conversations: ChatSummary[], changed: ChatSummary[] = [], dropped = 0) => ({
+    list: { conversations, nextCursor: null },
+    changed,
+    dropped,
+    reset: false,
+  });
+  // The watch opens before the first listing, so a chat past the first page that changes while
+  // the listing reads still reaches the list.
+  const old: ChatSummary = { ...summary, target: { ...target, conversationId: 'old' } };
+  let older: (() => void) | undefined;
+  f.answers.set('listChats', async (input: ChatInput<'listChats'>) => {
+    if (!input.cursor) return { conversations: [summary], nextCursor: 'older' };
+    await new Promise<void>((resolve) => (older = resolve));
+    return { conversations: [{ ...old, title: 'Read before it changed' }], nextCursor: null };
+  });
+  await controller.start();
+  const connecting = controller.connect();
+  await until(() => older !== undefined);
+  for (const watch of f.chatLists)
+    watch.receive(page([summary], [{ ...old, title: 'Changed while listing' }]));
+  older!();
+  await connecting;
+  await until(() => controller.getSnapshot().chats.length === 2);
+  assert.equal(controller.getSnapshot().chats[1]!.title, 'Changed while listing');
+  f.answers.delete('listChats');
+  await turn();
   const lists = () => f.calls.filter((call) => call.operation === 'listChats').length;
   const listed = lists();
   // The open watch: each refresh replaces the one before it.
@@ -2952,23 +2975,17 @@ test('the chat list follows its watch: changes merge without listing, and a rese
     target: { ...target, conversationId: 'other' },
     title: 'Made by another client',
   };
-  const page = (conversations: ChatSummary[], changed: ChatSummary[] = [], dropped = 0) => ({
-    list: { conversations, nextCursor: null },
-    changed,
-    dropped,
-    reset: false,
-  });
   first.receive(page([other, summary]));
   assert.deepEqual(
     controller.getSnapshot().chats.map((chat) => chat.target.conversationId),
-    ['other', target.conversationId],
+    ['other', target.conversationId, 'old'],
   );
   assert.equal(lists(), listed);
   // A changed chat past the first page replaces its row on screen without listing.
   first.receive(page([other], [{ ...summary, title: 'Changed past the page' }]));
   assert.deepEqual(
     controller.getSnapshot().chats.map((chat) => chat.title),
-    ['Made by another client', 'Changed past the page'],
+    ['Made by another client', 'Changed past the page', 'Changed while listing'],
   );
   assert.equal(lists(), listed);
   // A reload that read before a watch page lands after it: the newer page still wins.

@@ -625,14 +625,22 @@ class ChatModelState {
         });
         // A connected host's providers are read once it is verified; a local one's at start.
         if (this.connection) void this.providers?.refresh();
+        // The watch opens first, so the host follows changes past the first page the listing
+        // could read too early; its pages wait for the listing and the latest merges after it.
+        // Changes to the list arrive from the watch from here on; nothing lists on a timer.
+        const watched = this.chatPagesWatched;
+        this.listingChats = owner;
+        yield* this.followChats(owner);
         const listed = yield* Effect.exit(this.listChats());
-        if (!owner.alive || epoch !== this.epoch) return;
-        if (Exit.isSuccess(listed)) {
+        if (this.listingChats === owner) this.listingChats = undefined;
+        if (!owner.alive) return;
+        if (Exit.isSuccess(listed) && epoch === this.epoch) {
           this.chatPages = listed.value.pages;
           this.listed(listed.value);
         }
-        // Changes to the list arrive from its watch from here on; nothing lists on a timer.
-        yield* this.followChats(owner);
+        if (this.chatsFollowed === owner && this.chatPagesWatched !== watched && this.lastChatPage)
+          this.mergeChats(this.lastChatPage);
+        if (epoch !== this.epoch) return;
         if (this.state.transcript.observation === 'failed') {
           void this.closeOwner(this.selection);
           this.selection = undefined;
@@ -769,6 +777,8 @@ class ChatModelState {
   /** The latest state the chat list's watch delivered, and how many it has delivered. */
   private lastChatPage?: ChatListState;
   private chatPagesWatched = 0;
+  /** The owner whose Refresh is reading the first listing; its watch pages wait for it. */
+  private listingChats?: Owner;
   /**
    * Follows the chat list's watch for `owner`: each first page it delivers merges into the list
    * on screen with the changed chats past it, and a reset, a growing count of changed chats the
@@ -804,7 +814,7 @@ class ChatModelState {
                 attempt.dropped = update.dropped;
                 this.lastChatPage = update;
                 this.chatPagesWatched++;
-                this.mergeChats(update);
+                if (this.listingChats !== owner) this.mergeChats(update);
                 if (update.reset || reload || dropped) {
                   reload = false;
                   void this.reloadChats({ latest: true });

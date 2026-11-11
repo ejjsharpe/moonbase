@@ -6,6 +6,7 @@ import { chmod, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/
 import { join } from 'node:path';
 import { Context, Effect, Exit, Layer, Scope } from 'effect';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
+import type { ProviderState } from '@moonbase/contracts/providers';
 import type { ApplicationError } from '@moonbase/contracts/errors';
 import {
   ConnectionService,
@@ -200,8 +201,25 @@ test('a token holder drives a local-mode daemon completely over the loopback con
         undefined,
       );
 
-      // ChatGPT sign-in: the daemon returns the validated link, the client opens it.
+      // ChatGPT sign-in: the daemon returns the validated link, the client opens it. Two watches
+      // of one document share its subscription, and another document's never sees the flow.
       const owner = clients.owner('document-one');
+      const leaving: ProviderState[] = [],
+        kept: ProviderState[] = [],
+        others: ProviderState[] = [];
+      const leave = owner.watch(
+          (state) => leaving.push(state),
+          () => {},
+        ),
+        closeKept = owner.watch(
+          (state) => kept.push(state),
+          () => {},
+        ),
+        closeOther = clients.owner('document-two').watch(
+          (state) => others.push(state),
+          () => {},
+        );
+      await until(async () => leaving.length && kept.length && others.length, Boolean);
       const flow = (await owner.command('startProviderLogin', { providerId: 'openai' })).flow!;
       const waiting = await until(
         () => owner.command('getProviders', {}),
@@ -211,6 +229,12 @@ test('a token holder drives a local-mode daemon completely over the loopback con
       assert.equal(clients.opened.length, 1);
       assert.match(clients.opened[0]!, /^https:\/\/auth\.openai\.com\//);
       assert.equal((await clients.owner('document-two').command('getProviders', {})).flow, null);
+      // One watch leaving keeps the other following the flow.
+      await until(
+        async () => leaving.at(-1)?.flow?.id,
+        (id) => id === flow.id,
+      );
+      await leave();
       await owner.command('answerProviderPrompt', {
         flowId: flow.id,
         promptId: waiting.flow!.prompt!.id,
@@ -221,6 +245,15 @@ test('a token holder drives a local-mode daemon completely over the loopback con
         (state) => state.flow?.state === 'completed',
       );
       assert.equal(signedIn.providers.find((p) => p.id === 'openai')?.configured, true);
+      await until(
+        async () => kept.at(-1)?.flow?.state,
+        (state) => state === 'completed',
+      );
+      assert.equal(
+        others.some((state) => state.flow),
+        false,
+      );
+      await Promise.all([closeKept(), closeOther()]);
       const out = await owner.command('logoutProvider', { providerId: 'openai' });
       assert.equal(out.providers.find((p) => p.id === 'openai')?.configured, false);
       const providers = await clients.runtime.runPromise(ProviderSetupService);
