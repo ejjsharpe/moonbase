@@ -49,6 +49,12 @@ export function createKeyFileSource(path: string): CredentialKeySource {
     unavailable(
       'The credential key file must be a regular file owned by you with mode 0600, not a symlink, in a folder only you can change.',
     );
+  const notKey = () =>
+    unavailable(
+      'The credential key file is not a Moonbase key. Restore the original key file, or remove it and sign in to your providers again.',
+    );
+  // The uid checks need another owner, which only root can arrange, so tests cover modes and
+  // symlinks; a root-owned folder such as a system directory is accepted.
   const checkFolder = async () => {
     const info = await stat(dirname(path)).catch(() => undefined);
     if (
@@ -73,9 +79,9 @@ export function createKeyFileSource(path: string): CredentialKeySource {
       const info = await file.stat();
       if (!info.isFile() || info.uid !== process.getuid?.() || info.mode & 0o077)
         throw notPrivate();
-      if (info.size > 128) throw unavailable('The credential key file is not a Moonbase key.');
+      if (info.size > 128) throw notKey();
       const key = decodeKey((await file.readFile('utf8')).replace(/\n$/, ''));
-      if (!key) throw unavailable('The credential key file is not a Moonbase key.');
+      if (!key) throw notKey();
       return key;
     } finally {
       await file.close();
@@ -147,6 +153,9 @@ export function createKeychainKeySource(options: KeychainKeySourceOptions): Cred
     );
   const suffix = keychain === undefined ? '' : ` "${keychain}"`;
   const item = `-s "${keychainService}" -a "${storeId}"`;
+  // `security -i` reads lines of under 4096 bytes; the add command, with a key, is the longest.
+  if (Buffer.byteLength(`add-generic-password ${item} -w "${'A'.repeat(44)}"${suffix}`) >= 4096)
+    throw unavailable('The keychain path is too long.');
   const failed = (status: number | null) =>
     status === 36
       ? unavailable(
@@ -157,7 +166,7 @@ export function createKeychainKeySource(options: KeychainKeySourceOptions): Cred
         );
   const run = (line: string) =>
     new Promise<{ status: number | null; output: string }>((resolve, reject) => {
-      if (line.length >= 4096) return reject(failed(null));
+      if (Buffer.byteLength(line) >= 4096) return reject(failed(null));
       let child;
       try {
         child = spawn('/usr/bin/security', ['-i'], {
@@ -209,7 +218,10 @@ export function createKeychainKeySource(options: KeychainKeySourceOptions): Cred
     if (status === 44) return undefined;
     if (status !== 0) throw failed(status);
     const key = decodeKey(output.replace(/\n$/, ''));
-    if (!key) throw unavailable('The keychain item for the credential key is not a Moonbase key.');
+    if (!key)
+      throw unavailable(
+        'The keychain item for the credential key is not a Moonbase key. Restore the original item, or delete it in Keychain Access and sign in to your providers again.',
+      );
     return key;
   };
   return {
