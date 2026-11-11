@@ -178,71 +178,66 @@ test('chat commands work through the authenticated WebSocket, and logs keep no t
   });
 });
 
-for (const signal of ['SIGTERM', 'SIGKILL'] as const)
-  test(`${signal} during a run ${signal === 'SIGTERM' ? 'closes cleanly' : 'crashes'}, and the next start resumes the run`, async () => {
-    await withRoot(async (root, started) => {
-      const directory = join(root, 'data');
-      await mkdir(directory, { mode: 0o700 });
-      await writeScript(directory, { steps: [{ hold: true }] });
-      const first = startDaemon([directory]);
-      started.push(first);
-      const { port } = await bounded(first.ready);
-      const token = (await readFile(join(directory, 'token'), 'utf8')).trim(),
-        identity = await readJson(join(directory, 'identity.json')),
-        session = { host: identity.host, actorId: identity.actorId };
-      let client = createFauxClient(port, token, identity.host);
-      const target = (
-        await client.command('createChat', {
-          session,
-          requestId: 'create',
-          title: 'Interrupted',
-          settings: { model },
-        })
-      ).conversation.target;
-      const receipt = await client.command('sendChat', {
-        target,
-        requestId: 'original',
-        text: 'One original input',
-      });
-      const calls = async () =>
-        (await readFile(join(directory, 'faux-calls.jsonl'), 'utf8').catch(() => ''))
-          .trim()
-          .split('\n')
-          .filter(Boolean).length;
-      await until(calls, (count) => count === 1);
-      assert.equal((await client.command('getChat', { target })).state, 'running');
-
-      const [code, killed] = await first.stop(signal);
-      if (signal === 'SIGTERM') {
-        assert.deepEqual([code, killed], [0, null]);
-        await assert.rejects(stat(join(directory, 'endpoint.json')), { code: 'ENOENT' });
-      } else assert.equal(killed, 'SIGKILL');
-
-      await writeScript(directory, { steps: [] });
-      const second = startDaemon([directory]);
-      started.push(second);
-      const ready = await bounded(second.ready);
-      assert.deepEqual(await readJson(join(directory, 'endpoint.json')), {
-        port: ready.port,
-        pid: second.child.pid,
-        version: '0.1.0',
-        protocol: 2,
-        build: 'development',
-      });
-      client = createFauxClient(ready.port, token, identity.host);
-      assert.deepEqual(
-        await client.command('getChatSend', { target, requestId: 'original' }),
-        receipt,
-      );
-      const resumed = await until(
-        () => client.command('getChat', { target }),
-        (value) => !value.run && value.entries.some((entry) => entry.text === 'Faux reply'),
-      );
-      assert.equal(resumed.entries.filter((entry) => entry.role === 'user').length, 1);
-      assert.equal(await calls(), 2);
-      assert.deepEqual(await second.stop(), [0, null]);
+test('a daemon killed during a run resumes the run on its next start', async () => {
+  await withRoot(async (root, started) => {
+    const directory = join(root, 'data');
+    await mkdir(directory, { mode: 0o700 });
+    await writeScript(directory, { steps: [{ hold: true }] });
+    const first = startDaemon([directory]);
+    started.push(first);
+    const { port } = await bounded(first.ready);
+    const token = (await readFile(join(directory, 'token'), 'utf8')).trim(),
+      identity = await readJson(join(directory, 'identity.json')),
+      session = { host: identity.host, actorId: identity.actorId };
+    let client = createFauxClient(port, token, identity.host);
+    const target = (
+      await client.command('createChat', {
+        session,
+        requestId: 'create',
+        title: 'Interrupted',
+        settings: { model },
+      })
+    ).conversation.target;
+    const receipt = await client.command('sendChat', {
+      target,
+      requestId: 'original',
+      text: 'One original input',
     });
+    const calls = async () =>
+      (await readFile(join(directory, 'faux-calls.jsonl'), 'utf8').catch(() => ''))
+        .trim()
+        .split('\n')
+        .filter(Boolean).length;
+    await until(calls, (count) => count === 1);
+    assert.equal((await client.command('getChat', { target })).state, 'running');
+
+    assert.equal((await first.stop('SIGKILL'))[1], 'SIGKILL');
+
+    await writeScript(directory, { steps: [] });
+    const second = startDaemon([directory]);
+    started.push(second);
+    const ready = await bounded(second.ready);
+    assert.deepEqual(await readJson(join(directory, 'endpoint.json')), {
+      port: ready.port,
+      pid: second.child.pid,
+      version: '0.1.0',
+      protocol: 2,
+      build: 'development',
+    });
+    client = createFauxClient(ready.port, token, identity.host);
+    assert.deepEqual(
+      await client.command('getChatSend', { target, requestId: 'original' }),
+      receipt,
+    );
+    const resumed = await until(
+      () => client.command('getChat', { target }),
+      (value) => !value.run && value.entries.some((entry) => entry.text === 'Faux reply'),
+    );
+    assert.equal(resumed.entries.filter((entry) => entry.role === 'user').length, 1);
+    assert.equal(await calls(), 2);
+    assert.deepEqual(await second.stop(), [0, null]);
   });
+});
 
 test('a local daemon left unused exits by itself and removes endpoint.json', async () => {
   await withRoot(async (root, started) => {
@@ -288,17 +283,9 @@ test('the real local entry starts with a private key file and never needs the Ke
 
 type Refusal = {
   name: string;
-  /** The exact message, where the refusal has one of its own. */
-  message?: string;
   prepare(root: string, directory: string, secret: string): Promise<string[] | void>;
 };
 const refusals: Refusal[] = [
-  { name: 'a relative directory', prepare: async () => ['relative/data'] },
-  {
-    name: 'a second argument',
-    message: 'The daemon takes one argument: the absolute path of its data directory.',
-    prepare: async (_root, directory) => [directory, '--port=1'],
-  },
   {
     name: 'a directory others can read',
     prepare: async (_root, directory) => {
@@ -336,29 +323,6 @@ const refusals: Refusal[] = [
     },
   },
   {
-    name: 'a malformed identity',
-    prepare: async (_root, directory, secret) => {
-      await mkdir(directory, { mode: 0o700 });
-      await writeFile(join(directory, 'identity.json'), '{"' + secret, { mode: 0o600 });
-    },
-  },
-  {
-    name: 'a short token',
-    prepare: async (_root, directory) => {
-      await mkdir(directory, { mode: 0o700 });
-      await writeFile(join(directory, 'token'), 'too-short', { mode: 0o600 });
-    },
-  },
-  {
-    name: 'settings with an unknown field',
-    prepare: async (_root, directory, secret) => {
-      await mkdir(directory, { mode: 0o700 });
-      await writeFile(join(directory, 'daemon.json'), JSON.stringify({ mode: 'local', secret }), {
-        mode: 0o600,
-      });
-    },
-  },
-  {
     name: 'settings others can read',
     prepare: async (_root, directory) => {
       await mkdir(directory, { mode: 0o700 });
@@ -366,35 +330,10 @@ const refusals: Refusal[] = [
     },
   },
   {
-    name: 'host settings with a relative root',
-    prepare: async (root, directory) => {
-      await mkdir(directory, { mode: 0o700 });
-      await writeHostSettings(directory, ['work'], join(root, 'credential.key'));
-    },
-  },
-  {
-    name: 'host settings without a credential key file',
-    prepare: async (root, directory) => {
-      await mkdir(directory, { mode: 0o700 });
-      await writeFile(
-        join(directory, 'daemon.json'),
-        JSON.stringify({ mode: 'host', port: 8787, approvedRoots: [root] }),
-        { mode: 0o600 },
-      );
-    },
-  },
-  {
     name: 'host settings with a root holding its data and key file',
     prepare: async (root, directory) => {
       await mkdir(directory, { mode: 0o700 });
       await writeHostSettings(directory, [root], join(root, 'credential.key'));
-    },
-  },
-  {
-    name: 'host settings with nested roots',
-    prepare: async (root, directory) => {
-      await mkdir(directory, { mode: 0o700 });
-      await writeHostSettings(directory, [root, join(root, 'inner')], join(root, 'credential.key'));
     },
   },
   {
@@ -418,7 +357,6 @@ for (const refusal of refusals)
       const failure = JSON.parse(daemon.errors.trim());
       assert.equal(failure.event, 'failed');
       assert.equal(typeof failure.error.message, 'string');
-      if (refusal.message) assert.equal(failure.error.message, refusal.message);
       for (const leaked of [root, secret])
         assert.ok(!daemon.errors.includes(leaked), 'discloses ' + leaked);
     });

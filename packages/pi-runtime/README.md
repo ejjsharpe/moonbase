@@ -50,4 +50,4 @@ bun run --cwd packages/pi-runtime test
 bun run test:chat-integration
 ```
 
-`test` runs the suite under `node --test` (`test:node`) and then under `bun test` (`test:bun`). One case runs the compiled remote client in the pinned Electron, as desktop main runs it. Host-process tests run a controlled fixed-settings host (`test/faux-host.mjs`) as a child process: crash recovery, parked work, and a client refusing local-mode features from it. Tests use controlled providers and temporary SQLite stores, never real provider quota or SSH hosts.
+`test` runs the suite under `bun test`, the runtime the daemon ships on. One case runs the compiled remote client in the pinned Electron, as desktop main runs it, which covers the client's Node path. Host-process tests run a controlled fixed-settings host (`test/faux-host.mjs`) as a child process: crash recovery, parked work, and a client refusing local-mode features from it. Tests use controlled providers and temporary SQLite stores, never real provider quota or SSH hosts.

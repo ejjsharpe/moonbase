@@ -19,9 +19,7 @@
     "build": "tsc --noEmit -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint .",
-    "test": "bun run test:node && bun run test:bun",
-    "test:node": "node --experimental-strip-types --test test/*.test.ts",
-    "test:bun": "bun test --timeout 60000 ./test"
+    "test": "bun test --timeout 60000 ./test"
   },
   "dependencies": {
     "effect": "4.1.0",

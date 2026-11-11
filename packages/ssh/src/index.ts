@@ -46,8 +46,12 @@ type Generation = {
   health?: ChatHostHealth;
   reason?: 'disconnect' | 'cancel' | 'root';
 };
+export type SshOptions = {
+  /** How long a connection may take to verify its host; 20 seconds unless a test shortens it. */
+  startupMs?: number;
+};
 /** Root-scoped capability only. The consumer composes the process runtime and shared handlers. */
-export function SshLive(input: SshConfiguration) {
+export function SshLive(input: SshConfiguration, options: SshOptions = {}) {
   return Layer.effect(
     ConnectionService,
     Effect.gen(function* () {
@@ -61,7 +65,7 @@ export function SshLive(input: SshConfiguration) {
         }),
         scope = yield* Effect.scope;
       const owner = yield* Effect.acquireRelease(
-        Effect.sync(() => new Connection(config, scope)),
+        Effect.sync(() => new Connection(config, scope, options.startupMs ?? 20_000)),
         (c) => c.dispose(),
       );
       return owner.service;
@@ -77,8 +81,10 @@ class Connection {
   private readonly generations = new Set<Generation>();
   private readonly observers = new Set<Queue.Queue<ConnectionSnapshot, Cause.Done>>();
   private closed = false;
-  constructor(config: DecodedSshConfiguration, scope: Scope.Scope) {
+  readonly startupMs: number;
+  constructor(config: DecodedSshConfiguration, scope: Scope.Scope, startupMs: number) {
     this.config = config;
+    this.startupMs = startupMs;
     this.scope = scope;
     this.state = { profile: config.profile, state: 'disconnected', connectionId: null };
     this.service = {
@@ -459,7 +465,7 @@ class Connection {
       return child;
     }).pipe(
       Effect.timeoutOrElse({
-        duration: '20 seconds',
+        duration: self.startupMs,
         orElse: () =>
           Effect.fail(
             error(

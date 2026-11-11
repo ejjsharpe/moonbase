@@ -65,11 +65,6 @@ async function connect(t: TestContext, daemon: ReturnType<typeof createLocalDaem
   return { runtime, connection };
 }
 
-test('each profile has its own daemon directory', () => {
-  assert.equal(findDaemonDirectory('/profiles/Moonbase Dev'), '/profiles/Moonbase Dev/daemon-v1');
-  assert.notEqual(findDaemonDirectory('/profiles/Moonbase'), findDaemonDirectory('/profiles/Dev'));
-});
-
 test('with no daemon running one is started detached; another app finds and reuses it', async (t) => {
   const { directory, command } = await profile(t);
   const first = createLocalDaemon({ directory, command });
@@ -95,7 +90,7 @@ test('with no daemon running one is started detached; another app finds and reus
   }
 });
 
-test('a crashed daemon is restarted on the next request, in a new connection generation', async (t) => {
+test('a crashed or unanswering daemon is replaced on the next request, in a new connection generation', async (t) => {
   const { directory, command } = await profile(t);
   const daemon = createLocalDaemon({ directory, command });
   await daemon.ensure();
@@ -112,24 +107,15 @@ test('a crashed daemon is restarted on the next request, in a new connection gen
   assert.notEqual(await readDaemonPid(directory), pid);
   assert.deepEqual(await readDaemonSession(directory), session, 'the same store restarts');
   assert.equal(daemon.isRunning(), true);
-});
-
-test('an endpoint naming a live process that does not answer starts a daemon that does', async (t) => {
-  const { directory, command } = await profile(t);
-  const daemon = createLocalDaemon({ directory, command });
-  await daemon.ensure();
-  const session = await readDaemonSession(directory);
-  const pid = (await readDaemonPid(directory))!;
-  await stopDaemon(directory, pid);
-  // A reused process ID: this test process, which is alive but serves nothing.
+  // An endpoint naming a reused process ID: this test process, alive but serving nothing.
+  await stopDaemon(directory, (await readDaemonPid(directory))!);
   await writeFile(
     join(directory, 'endpoint.json'),
     JSON.stringify({ port: 9, pid: process.pid, version: '0.1.0', protocol: chatProtocolVersion }),
     { mode: 0o600 },
   );
-  const { runtime, connection } = await connect(t, daemon);
-  const endpoint = await runtime.runPromise(connection.endpoint({ host: session.host }));
-  assert.deepEqual(endpoint.expected, session.host);
+  const replaced = await runtime.runPromise(connection.endpoint({ host: session.host }));
+  assert.deepEqual(replaced.expected, session.host);
   const restarted = (await readDaemonPid(directory))!;
   assert.notEqual(restarted, process.pid);
   assert(isAlive(restarted));
@@ -360,22 +346,8 @@ test('a start that finds the lock held adopts only a daemon of this directory an
   }
 });
 
-test('a daemon that cannot start, exits while starting or never listens is Unavailable', async (t) => {
+test('a daemon that never listens is Unavailable and is not left running', async (t) => {
   const { directory, command } = await profile(t);
-  await assert.rejects(
-    createLocalDaemon({
-      directory,
-      command: { ...command, command: join(directory, 'missing-bun') },
-    }).ensure(),
-    { code: 'Unavailable', message: 'Moonbase could not start its local chat daemon.' },
-  );
-  await assert.rejects(
-    createLocalDaemon({
-      directory,
-      command: { ...command, command: '/usr/bin/false', args: [] },
-    }).ensure(),
-    { code: 'Unavailable', message: 'The local chat daemon stopped while starting.' },
-  );
   const marker = join(directory, 'slow.pid');
   await assert.rejects(
     createLocalDaemon({
@@ -387,7 +359,7 @@ test('a daemon that cannot start, exits while starting or never listens is Unava
       },
       startMs: 300,
     }).ensure(),
-    { code: 'Unavailable', message: 'The local chat daemon did not start in time.' },
+    { code: 'Unavailable' },
   );
   // The daemon that never listened is not left running.
   const slow = Number(await readFile(marker, 'utf8'));

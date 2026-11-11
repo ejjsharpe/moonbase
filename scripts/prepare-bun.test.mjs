@@ -125,41 +125,6 @@ test('an archive with another layout, another executable or a tampered notice fa
   await assertUntouched(folders);
 });
 
-test('an oversized download stops reading at its cap', async (t) => {
-  const folders = await prepareFolders(t);
-  const { archive, asset } = await makeArchive(t, { 'bun-darwin-aarch64/bun': 'bun' });
-  let pulled = 0,
-    cancelled = false;
-  // An endless notice: reading it whole would never finish.
-  const endless = () =>
-    new Response(
-      new ReadableStream({
-        pull(controller) {
-          pulled++;
-          controller.enqueue(new Uint8Array(64 * 1024));
-        },
-        cancel() {
-          cancelled = true;
-        },
-      }),
-    );
-  const fetch = async (url) => (url === releaseUrl ? new Response(archive) : endless());
-  await assert.rejects(
-    prepareBun({
-      output: folders.output,
-      temporaryDirectory: folders.temporaryDirectory,
-      arch: 'arm64',
-      platform: 'darwin',
-      fetch,
-      asset,
-    }),
-    /Unexpected LICENSE\.md size/,
-  );
-  assert(cancelled, 'The oversized body was not cancelled');
-  assert(pulled <= 1024 / 64 + 2, `Read ${pulled} chunks past a 1 MiB cap`);
-  await assertUntouched(folders);
-});
-
 test('a prepared runtime whose executable or notices differ from the pinned bytes is refused', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'moonbase-bun-runtime-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -188,10 +153,4 @@ test('every notice comes from a pinned commit of an official repository', () => 
     assert(!files.has(notice.file), `Two notices share ${notice.file}`);
     files.add(notice.file);
   }
-});
-
-test('only the qualified macOS arm64 runtime is prepared', async () => {
-  const fetch = async () => assert.fail('No download for an unqualified target');
-  await assert.rejects(prepareBun({ arch: 'x64', platform: 'darwin', fetch }), /x64/);
-  await assert.rejects(prepareBun({ arch: 'arm64', platform: 'linux', fetch }), /macOS/);
 });

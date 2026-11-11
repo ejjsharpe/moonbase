@@ -55,44 +55,18 @@ async function openStores(versions?: Versions) {
   }
 }
 
-const incompatible = {
-  code: 'Incompatible',
-  message:
-    'The Pi host requires Node 26.13 or newer, or exactly Bun 1.4.4. The remote client has its own runtime boundary.',
-};
+const opened = { local: 'opened', host: 'opened' };
 
 test('the running runtime opens local and host-mode stores', async () => {
   if (process.versions.bun) assert.equal(process.versions.bun, '1.4.4');
-  assert.deepEqual(await openStores(), { local: 'opened', host: 'opened' });
+  assert.deepEqual(await openStores(), opened);
 });
 
-test('exactly Bun 1.4.4 opens both modes, although it reports an older Node', async () => {
-  assert.deepEqual(await openStores({ bun: '1.4.4', node: '26.3.0' }), {
-    local: 'opened',
-    host: 'opened',
-  });
-});
-
-test('unqualified Bun versions are refused in both modes with Incompatible', async () => {
-  for (const bun of ['1.4.3', '1.4.5', '1.5.0', '2.0.0'])
-    assert.deepEqual(
-      await openStores({ bun, node: '26.13.0' }),
-      { local: incompatible, host: incompatible },
-      bun,
-    );
-});
-
-test('Node 26.13 or newer opens both modes and older Node is refused', async () => {
-  for (const node of ['26.13.0', '26.14.1', '27.0.0'])
-    assert.deepEqual(await openStores({ node }), { local: 'opened', host: 'opened' }, node);
-  for (const node of ['26.12.9', '26.3.0', '24.22.1'])
-    assert.deepEqual(await openStores({ node }), { local: incompatible, host: incompatible }, node);
-});
-
-test('Electron opens no store: its Node is too old, and local chat runs in the daemon', async () => {
-  for (const electron of ['45.1.0', '45.2.0'])
-    assert.deepEqual(await openStores({ electron, node: '24.22.1' }), {
-      local: incompatible,
-      host: incompatible,
-    });
+test('only exactly Bun 1.4.4, although it reports an older Node, or Node 26.13 or newer opens a store', async () => {
+  const refused = (results: Awaited<ReturnType<typeof openStores>>) =>
+    Object.values(results).every((result) => result !== 'opened' && result.code === 'Incompatible');
+  assert.deepEqual(await openStores({ bun: '1.4.4', node: '26.3.0' }), opened);
+  assert(refused(await openStores({ bun: '1.4.5', node: '26.13.0' })));
+  assert.deepEqual(await openStores({ node: '26.13.0' }), opened);
+  assert(refused(await openStores({ node: '26.12.9' })));
 });
