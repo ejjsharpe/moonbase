@@ -22,7 +22,12 @@ export function createFolderApprovals(file: string) {
     last = 0;
   // Strictly increasing, so the order of uses within one millisecond survives sorting.
   const now = () => new Date((last = Math.max(Date.now(), last + 1))).toISOString();
-  const load = () => (approvals ??= readApprovals(file));
+  // Uses after a restart stay later than every saved one, even within the same millisecond.
+  const load = () =>
+    (approvals ??= readApprovals(file).then((map) => {
+      for (const approval of map.values()) last = Math.max(last, Date.parse(approval.at) || 0);
+      return map;
+    }));
   const save = (map: Map<string, Approval>) => {
     const entries = [...map.values()].sort((a, b) => b.at.localeCompare(a.at));
     const kept = new Set([
