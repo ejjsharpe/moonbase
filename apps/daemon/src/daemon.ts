@@ -5,27 +5,35 @@ import {
   LocalHostLive,
   LocalPiControl,
   LocalPiRuntimeLive,
-  PiRuntimeLive,
+  type LocalPiRuntimeConfiguration,
 } from '@moonbase/pi-runtime';
 import {
   createCredentialStore,
   createKeyEncryption,
   type CredentialKeySource,
 } from '@moonbase/pi-runtime/credentials';
-import { createFolderApprovals } from '@moonbase/pi-runtime/folders';
 import {
-  prepareFixedSettingsHost,
-  type DaemonSettings,
-} from '@moonbase/pi-runtime/host-configuration';
+  createFolderApprovals,
+  createRootFolders,
+  type FolderApprovals,
+} from '@moonbase/pi-runtime/folders';
+import type { DaemonSettings } from '@moonbase/pi-runtime/host-configuration';
 import { createLocalModels } from '@moonbase/pi-runtime/local-models';
 import { ProviderSetupLive } from '@moonbase/pi-runtime/providers';
-import { makeDaemonClient, serveChat } from '@moonbase/pi-runtime/server';
+import {
+  hostDaemonCapabilities,
+  localDaemonCapabilities,
+  makeDaemonClient,
+  serveChat,
+} from '@moonbase/pi-runtime/server';
 import type { ClaudeCodeSubscription } from '@moonbase/pi-runtime/claude-code';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import type { ChatClient, ChatCreationSettings, ChatSession } from '@moonbase/contracts/chat';
 import type { DaemonClient } from '@moonbase/contracts/daemon';
+import type { ChatHostCapability } from '@moonbase/contracts/host';
 import { chatHostVersion, chatProtocolVersion } from '@moonbase/contracts/host';
 import { ApplicationError } from '@moonbase/contracts/errors';
+import { daemonErrorReasons } from '@moonbase/contracts/daemon';
 import {
   openPrivateDirectory,
   preparePrivateFile,
@@ -48,18 +56,19 @@ import { refuseDaemonWhileStopping, refuseWhileStopping } from './admission.ts';
 import { acquireDaemonLock } from './lock.ts';
 import { openDaemonLog, type DaemonLog } from './log.ts';
 
-export type LocalSettings = Extract<DaemonSettings, { mode: 'local' }>;
-/** What an entry point adds to a local-mode daemon. */
-export type LocalProviders = {
+/** What an entry point adds to a daemon in either mode. */
+export type DaemonProviders = {
   /** The key that encrypts the daemon's provider credentials. */
   keySource: CredentialKeySource;
   /** Adds providers to the local catalog; returns the Claude Code subscription if it added one. */
   installProviders?(models: MutableModels): ClaudeCodeSubscription | undefined;
+  /** Replaces the runtime's coding tools; test entries install controlled ones. */
+  registry?: LocalPiRuntimeConfiguration['registry'];
 };
 export type DaemonOptions = {
   /** The absolute data directory; everything else is read from files inside it. */
   directory: string;
-  local(settings: LocalSettings, session: ChatSession): LocalProviders;
+  providers(settings: DaemonSettings, session: ChatSession): DaemonProviders;
   /** Aborting it shuts the daemon down cleanly. */
   signal: AbortSignal;
   /** Called once with the JSON `ready` line. */
@@ -75,6 +84,8 @@ export type DaemonOptions = {
   ripgrepExecutable?: string;
   /** Identifies this daemon's code in `endpoint.json`, so a client can tell an outdated one. */
   build?: string;
+  /** Wraps the chat client the daemon serves; test entries count and hold requests with it. */
+  wrapChat?(client: ChatClient): ChatClient;
 };
 export type DaemonExit = 'stopped' | 'idle';
 
@@ -130,38 +141,38 @@ async function serveDaemon(
   else options.signal.addEventListener('abort', stop, { once: true });
   const ripgrep = options.ripgrepExecutable ? { ripgrepExecutable: options.ripgrepExecutable } : {};
   try {
-    if (settings.mode === 'host') {
-      const { models, registry } = await prepareFixedSettingsHost(settings);
-      const runtime = ManagedRuntime.make(
-        PiRuntimeLive({
-          ...session,
-          cwd: settings.cwd,
-          model: settings.model,
-          databasePath,
-          models,
-          registry,
-          ...ripgrep,
+    const providers = options.providers(settings, session);
+    // A key file is checked before serving; the Keychain is read at the first sign-in.
+    if (settings.credentialKey?.source === 'file') await checkKeyFile(providers.keySource);
+    // A host's roots are checked once, so a root replaced later approves nothing.
+    const folders =
+      settings.mode === 'host'
+        ? await createRootFolders(settings.approvedRoots).catch((error: unknown) => {
+            throw ApplicationError.is(error) ? new DaemonFailure(error.code, error.message) : error;
+          })
+        : createFolderApprovals(join(directory, 'approved-folders.json'));
+    const runtime = ManagedRuntime.make(
+      composeRuntime(directory, providers, folders, session, databasePath, ripgrep),
+    );
+    try {
+      const control = await runtime.runPromise(
+        Effect.gen(function* () {
+          return yield* LocalPiControl;
         }),
       );
-      try {
-        await serve(runtime, makeChatClient(runtime), settings.port);
-      } finally {
-        await runtime.dispose();
-      }
-    } else {
-      const providers = options.local(settings, session);
-      if (settings.credentialKey?.source === 'file') await checkKeyFile(providers.keySource);
-      const runtime = ManagedRuntime.make(
-        composeLocal(options.directory, providers, session, databasePath, ripgrep),
-      );
-      try {
-        const control = await runtime.runPromise(
-          Effect.gen(function* () {
-            return yield* LocalPiControl;
-          }),
+      closeAdmissions = () => control.setAdmissionsOpen(false);
+      if (stopping) closeAdmissions();
+      const wrap = options.wrapChat ?? ((client: ChatClient) => client);
+      if (settings.mode === 'host')
+        // A host serves remote clients on its configured port and never idles out.
+        await serve(
+          runtime,
+          wrap(makeChatClient(runtime)),
+          settings.port,
+          makeDaemonClient(runtime),
+          hostDaemonCapabilities,
         );
-        closeAdmissions = () => control.setAdmissionsOpen(false);
-        if (stopping) closeAdmissions();
+      else {
         idle = createIdleMonitor({
           idleMs: options.idleMs ?? 5 * 60_000,
           pollMs: options.pollMs ?? 30_000,
@@ -175,13 +186,14 @@ async function serveDaemon(
         if (stopping) idle.stop();
         await serve(
           runtime,
-          trackClientUse(makeChatClient(runtime), idle),
+          trackClientUse(wrap(makeChatClient(runtime)), idle),
           0,
           trackDaemonUse(makeDaemonClient(runtime), idle),
+          localDaemonCapabilities,
         );
-      } finally {
-        await runtime.dispose();
       }
+    } finally {
+      await runtime.dispose();
     }
   } finally {
     idle?.stop();
@@ -199,7 +211,8 @@ async function serveDaemon(
     runtime: ManagedRuntime.ManagedRuntime<R, ApplicationError>,
     client: ChatClient,
     port: number,
-    daemon?: DaemonClient,
+    daemon: DaemonClient,
+    capabilities: readonly ChatHostCapability[],
   ) {
     // A daemon told to stop while starting never listens or announces itself.
     if (stopping) return;
@@ -212,7 +225,8 @@ async function serveDaemon(
           const server = yield* serveChat(
             { host: session.host, token, port },
             refuseWhileStopping(client, refusing),
-            daemon && refuseDaemonWhileStopping(daemon, refusing),
+            refuseDaemonWhileStopping(daemon, refusing),
+            capabilities,
           );
           listening = Number(new URL(server.origin).port);
           if (!stopping)
@@ -250,9 +264,15 @@ async function checkKeyFile(keySource: CredentialKeySource) {
   }
 }
 
-function composeLocal(
+/**
+ * Composes the runtime both modes serve: local-mode chats with their own folders and models,
+ * provider setup and encrypted credentials. Only which folders chats may use differs: those a
+ * local client approved, or a host's approved roots.
+ */
+function composeRuntime(
   directory: string,
-  providers: LocalProviders,
+  providers: DaemonProviders,
+  folders: FolderApprovals,
   session: ChatSession,
   databasePath: string,
   ripgrep: { ripgrepExecutable?: string },
@@ -263,11 +283,12 @@ function composeLocal(
   );
   const models = createLocalModels(credentials);
   const claudeCode = providers.installProviders?.(models);
-  const folders = createFolderApprovals(join(directory, 'approved-folders.json')),
-    chatFolders = join(directory, 'chats');
-  // A folder a client approved, still the same directory, may be searched and chatted in.
+  const chatFolders = join(directory, 'chats');
+  // A folder chats may use, still the same directory, may be searched and chatted in.
   const requireApprovedFolder = async (path: string, purpose: string) => {
     if (await folders.has(path)) return;
+    if (folders.refusal === 'folder-outside-roots')
+      throw new ApplicationError(daemonErrorReasons['folder-outside-roots']);
     throw new ApplicationError({
       code: 'Unauthorized',
       message: `Approve this working folder before ${purpose}.`,
@@ -278,6 +299,7 @@ function composeLocal(
     databasePath,
     chatFolders,
     models,
+    ...(providers.registry ? { registry: providers.registry } : {}),
     approveCreation: async (creation: ChatCreationSettings) => {
       if (creation.cwd === undefined) return;
       await requireApprovedFolder(creation.cwd, 'creating or retrying a local chat');

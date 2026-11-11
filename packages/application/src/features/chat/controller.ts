@@ -51,7 +51,10 @@ export interface DraftStorage {
   write(value: string): void;
 }
 export type ChatState = {
+  /** `local`: a local-mode host, where each chat chooses its folder and model; `remote`: fixed. */
   mode: 'local' | 'remote';
+  /** Whether the host is reached through a connection that is connected explicitly. */
+  remote: boolean;
   ready: boolean;
   connection: ConnectionSnapshot | null;
   host: ChatHostConfiguration | null;
@@ -76,7 +79,9 @@ export type ChatState = {
 };
 export type ChatDependencies = {
   chat: ChatClient;
+  /** The host's mode; a fixed-settings (`remote`) host needs a connection. */
   mode?: 'local' | 'remote';
+  /** How a host on another machine is connected; absent for one on this machine. */
   connection?: ConnectionClient;
   providers?: ProviderSetupClient;
   context: ChatSession;
@@ -228,6 +233,7 @@ class ChatModelState {
     }
     this.state = {
       mode: this.mode,
+      remote: !!this.connection,
       ready: false,
       connection: null,
       host: null,
@@ -245,10 +251,9 @@ class ChatModelState {
       active: [],
       error: null,
       storageError,
-      notice:
-        this.mode === 'local'
-          ? 'Local chat. Tools run on this computer; a working folder is not a filesystem sandbox.'
-          : 'Disconnected. Connect explicitly; reconnect never resends a message.',
+      notice: this.connection
+        ? 'Disconnected. Connect explicitly; reconnect never resends a message.'
+        : 'Local chat. Tools run on this computer; a working folder is not a filesystem sandbox.',
     };
   }
   /** Composition fences admissions; retained command results may still reconcile. */
@@ -444,7 +449,7 @@ class ChatModelState {
   start(): Promise<void> {
     if (!this.admissionsOpen || this.attachment?.alive || this.closed) return Promise.resolve();
     const owner = (this.attachment = this.owner());
-    if (this.mode === 'local') {
+    if (!this.connection) {
       this.generation = this.owner(owner);
       return Promise.all([this.refresh(), this.providers?.refresh()]).then(() => {});
     }
@@ -507,7 +512,7 @@ class ChatModelState {
     this.action(
       'connect',
       Effect.gen({ self: this }, function* () {
-        if (this.mode === 'local') return;
+        if (!this.connection) return;
         const state = this.state.connection;
         if (!state) return;
         const attachment = this.attachment,
@@ -528,7 +533,7 @@ class ChatModelState {
       'disconnect',
       Effect.gen({ self: this }, function* () {
         if (
-          this.mode === 'local' ||
+          !this.connection ||
           !id ||
           this.generation !== generation ||
           this.state.connection?.connectionId !== id
@@ -571,7 +576,7 @@ class ChatModelState {
   private connected() {
     if (
       !this.generation?.alive ||
-      (this.mode !== 'local' && this.state.connection?.state !== 'connected')
+      (this.connection && this.state.connection?.state !== 'connected')
     )
       throw new ApplicationError({
         code: 'Unavailable',
@@ -610,10 +615,9 @@ class ChatModelState {
         this.update({
           host,
           ready: true,
-          notice:
-            this.mode === 'local'
-              ? 'Local tools use this computer’s permissions. The selected folder is context, not a sandbox.'
-              : 'Verified host. Reconnection reads saved state; it does not send.',
+          notice: this.connection
+            ? 'Verified host. Reconnection reads saved state; it does not send.'
+            : 'Local tools use this computer’s permissions. The selected folder is context, not a sandbox.',
         });
         const listed = yield* Effect.exit(this.listChats());
         if (!owner.alive || epoch !== this.epoch) return;
@@ -935,7 +939,8 @@ class ChatModelState {
         target: structuredClone(target),
         backend: this.backend,
         memory: this.transcriptMemory,
-        local: this.mode === 'local',
+        // A chat on this machine is read in place; one over a connection streams.
+        local: !this.connection,
         scope: owner.scope,
         closeGraceMs: this.transcriptCloseGraceMs,
         publish: (state, snapshot) => {

@@ -25,7 +25,8 @@ async function main() {
     // The app's ripgrep beside the packaged bundle; from source, the one on PATH.
     ripgrepExecutable: findBundledRipgrep(import.meta.url),
     build: typeof MOONBASE_DAEMON_BUILD === 'string' ? MOONBASE_DAEMON_BUILD : 'development',
-    local: (settings, session) => ({
+    providers: (settings, session) => ({
+      // A host always names a key file: without a GUI session the login keychain is locked.
       keySource:
         settings.credentialKey?.source === 'file'
           ? createKeyFileSource(settings.credentialKey.path)

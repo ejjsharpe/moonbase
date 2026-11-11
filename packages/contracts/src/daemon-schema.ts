@@ -30,6 +30,8 @@ export const FolderPathSchema = Schema.String.check(
 );
 /** How many recent folders a host lists. */
 export const maximumRecentFolders = 8;
+/** How many folders a host-mode daemon lists from its approved roots. */
+export const maximumHostFolders = 256;
 
 /** A local-mode daemon's folder approvals and control. */
 export const localHostInputSchemas = {
@@ -47,6 +49,8 @@ export const localHostInputSchemas = {
   checkApprovedFolder: struct({ host: ChatHostTargetSchema, path: FolderPathSchema }),
   getActiveWork: struct({ host: ChatHostTargetSchema }),
   markFolderAsProject: struct({ requestId: ChatIdentifierSchema, target: ChatTargetSchema }),
+  /** A host-mode daemon's approved roots, then their subfolders, for a client with no picker. */
+  listHostFolders: struct({ host: ChatHostTargetSchema }),
 };
 export const localHostOutputSchemas = {
   approveFolder: struct({ requestId: ChatIdentifierSchema, path: FolderPathSchema }),
@@ -57,6 +61,9 @@ export const localHostOutputSchemas = {
   checkApprovedFolder: voidResult,
   getActiveWork: struct({ active: Schema.Boolean }),
   markFolderAsProject: struct({ requestId: ChatIdentifierSchema }),
+  listHostFolders: struct({
+    folders: array(FolderPathSchema).check(Schema.isMaxLength(maximumHostFolders)),
+  }),
 } satisfies Record<keyof typeof localHostInputSchemas, Schema.Constraint>;
 
 /** Provider setup on the wire: each operation names its host and the client's owner. */
@@ -98,6 +105,7 @@ export const daemonCommandCapabilities: Record<DaemonCommand, ChatHostCapability
   checkApprovedFolder: chatHostCapabilities.folders,
   getActiveWork: chatHostCapabilities.local,
   markFolderAsProject: chatHostCapabilities.local,
+  listHostFolders: chatHostCapabilities.roots,
   getProviders: chatHostCapabilities.providers,
   startProviderLogin: chatHostCapabilities.providers,
   answerProviderPrompt: chatHostCapabilities.providers,

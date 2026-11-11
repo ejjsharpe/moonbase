@@ -1,8 +1,9 @@
 import { constants } from 'node:fs';
-import { open, realpath, rename, stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { lstat, open, readdir, realpath, rename, stat } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { daemonErrorReasons } from '@moonbase/contracts/daemon';
+import { daemonErrorReasons, type DaemonErrorReason } from '@moonbase/contracts/daemon';
+import { maximumHostFolders } from '@moonbase/contracts/daemon-schema';
 
 type Approval = { path: string; dev: number; ino: number; at: string; recent: boolean };
 // Picker folders and chat worktrees are kept to separate limits, so worktree chats never push
@@ -12,13 +13,29 @@ const maxWorktreeApprovals = 200;
 const maxApprovals = maxRecentApprovals + maxWorktreeApprovals;
 const maxRecent = 8;
 
+/** Which working folders a daemon's chats may use, and how a client chooses one. */
+export type FolderApprovals = {
+  /** Whether `path` is exactly a folder chats may use, still the directory it was. */
+  has(path: string): Promise<boolean>;
+  /** Approves a folder a client chose, returning its real path; refuses one chats may not use. */
+  approve(path: string, options?: { recent?: boolean }): Promise<string>;
+  /** Marks an approved folder as just used. */
+  touch(path: string): Promise<void>;
+  /** Recently used approved folders, newest first. */
+  listRecent(): Promise<string[]>;
+  /** The folders a client with no native picker chooses from; absent where it has one. */
+  listFolders?(): Promise<string[]>;
+  /** Why a folder chats may not use is refused. */
+  refusal: DaemonErrorReason;
+};
+
 /**
  * Working folders the native picker approved for local chat, kept in a private file of the chat
  * host's data directory so they stay approved after a restart. Each use checks the folder is still
  * the same directory; a moved or replaced one needs the picker again. The renderer only ever names
  * a path.
  */
-export function createFolderApprovals(file: string) {
+export function createFolderApprovals(file: string): FolderApprovals {
   let approvals: Promise<Map<string, Approval>> | undefined;
   let saving: Promise<unknown> = Promise.resolve(),
     last = 0;
@@ -66,6 +83,7 @@ export function createFolderApprovals(file: string) {
   };
   return {
     has,
+    refusal: 'folder-not-approved',
     /**
      * Approves a folder the native picker or main returned. `recent: false` approves it without
      * offering it again, as for a chat's new worktree.
@@ -110,7 +128,79 @@ export function createFolderApprovals(file: string) {
     },
   };
 }
-export type FolderApprovals = ReturnType<typeof createFolderApprovals>;
+
+const isInside = (root: string, path: string) =>
+  path === root || path.startsWith(root === '/' ? '/' : `${root}/`);
+
+/**
+ * A host-mode daemon's folders: its approved roots and any folder under one, named by its real
+ * path. Each root is checked at startup and must stay the same directory, so a root replaced by
+ * another folder or a link approves nothing, and a path through a link never resolves to itself.
+ * Nothing is stored: a remote client has no picker for the host's disk, so it chooses from the
+ * roots and their subfolders.
+ */
+export async function createRootFolders(roots: readonly string[]): Promise<FolderApprovals> {
+  const identities = await Promise.all(
+    roots.map(async (root) => {
+      const info = await lstat(root).catch(() => null);
+      if (!info?.isDirectory() || (await realpath(root).catch(() => '')) !== root)
+        throw new ApplicationError({
+          code: 'InvalidInput',
+          message: 'Each approved root must be an existing folder named by its real path.',
+        });
+      return { root, dev: info.dev, ino: info.ino };
+    }),
+  );
+  /** Whether a root is still the directory it was at startup. */
+  const unchanged = async ({ root, dev, ino }: (typeof identities)[number]) => {
+    const info = await lstat(root).catch(() => null);
+    return !!info?.isDirectory() && info.dev === dev && info.ino === ino;
+  };
+  const has = async (path: string) => {
+    const real = await realpath(path).catch(() => '');
+    if (!real || real !== path || !(await stat(real).catch(() => null))?.isDirectory())
+      return false;
+    const root = identities.find((identity) => isInside(identity.root, real));
+    return !!root && (await unchanged(root));
+  };
+  return {
+    has,
+    refusal: 'folder-outside-roots',
+    async approve(path) {
+      const real = await realpath(path).catch(() => {
+        throw new ApplicationError(daemonErrorReasons['folder-missing']);
+      });
+      if (!(await has(real)))
+        throw new ApplicationError(daemonErrorReasons['folder-outside-roots']);
+      return real;
+    },
+    async touch() {},
+    async listRecent() {
+      return [];
+    },
+    /** The roots, then the folders directly inside each, sorted; hidden folders and links are left out. */
+    async listFolders() {
+      const listed: string[] = [],
+        children: string[] = [];
+      for (const identity of identities) {
+        if (!(await unchanged(identity))) continue;
+        listed.push(identity.root);
+        // A root that can't be read lists only itself.
+        const entries = await readdir(identity.root, {
+          withFileTypes: true,
+        }).catch(() => []);
+        children.push(
+          ...entries
+            .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+            .map((entry) => entry.name)
+            .sort((a, b) => a.localeCompare(b))
+            .map((name) => join(identity.root, name)),
+        );
+      }
+      return [...listed, ...children].slice(0, maximumHostFolders);
+    },
+  };
+}
 
 /**
  * Refuses any folder but one the runtime made directly under `chatFolders` for a chat without a

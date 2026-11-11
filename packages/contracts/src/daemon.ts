@@ -2,7 +2,7 @@ import type { CommandOptions } from './common.ts';
 import type { ApplicationErrorCode } from './errors.ts';
 import type * as Contracts from './daemon-schema.ts';
 
-/** A local-mode daemon's folder and control operations. */
+/** A daemon's folder and control operations. */
 export type LocalHostCommand = keyof typeof Contracts.localHostInputSchemas;
 export type LocalHostInput<K extends LocalHostCommand> =
   (typeof Contracts.localHostInputSchemas)[K]['Type'];
@@ -62,6 +62,10 @@ export const daemonErrorReasons = {
   'folder-not-approved': {
     code: 'Unauthorized',
     message: 'Choose this working folder with the native picker first.',
+  },
+  'folder-outside-roots': {
+    code: 'Unauthorized',
+    message: 'Choose a folder in one of the host’s approved roots.',
   },
   'folders-unavailable': {
     code: 'Unavailable',

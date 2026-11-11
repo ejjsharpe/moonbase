@@ -4,7 +4,21 @@ import { once } from 'node:events';
 import { mkdtemp, readFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { type Effect, Layer, ManagedRuntime } from 'effect';
 import type { ChatCommand, ChatInput, ChatOutput, ChatTarget } from '@moonbase/contracts/chat';
+import type { ApplicationError } from '@moonbase/contracts/errors';
+import type { LocalHostService, ProviderSetupService } from '@moonbase/contracts/services';
+import {
+  makeChatClient,
+  makeConnectionClient,
+  makeProviderSetupClient,
+} from '@moonbase/application/runtime/clients';
+import {
+  RemoteChatLive,
+  RemoteLocalHostLive,
+  RemoteProviderSetupLive,
+} from '@moonbase/pi-runtime/remote';
+import { LoopbackConnectionLive } from '@moonbase/pi-runtime/loopback';
 import { runDaemon, type DaemonExit } from '../src/daemon.ts';
 import type { IdleClock } from '../src/idle.ts';
 import { createFauxProviders } from './faux.ts';
@@ -292,7 +306,7 @@ export async function startInProcess(
     signal: controller.signal,
     ready: (line) => ready(JSON.parse(line).port),
     closeClaudeCode,
-    local: () => createFauxProviders(directory),
+    providers: () => createFauxProviders(directory),
     clock: time.clock,
   }).then(
     (exit) => (settled = exit),
@@ -314,5 +328,39 @@ export async function startInProcess(
       controller.abort();
       return running;
     },
+  };
+}
+
+/**
+ * The clients a privileged process composes over a loopback connection to `directory`; with
+ * `sameMachine` false, they stand in for a remote client whose browser is on another machine.
+ */
+export function connectClients(
+  directory: string,
+  host: { hostId: string; storeId: string },
+  sameMachine = true,
+) {
+  const opened: string[] = [];
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      RemoteChatLive,
+      RemoteLocalHostLive,
+      RemoteProviderSetupLive({
+        host,
+        sameMachine,
+        openUrl: async (url) => {
+          opened.push(url);
+        },
+      }),
+    ).pipe(Layer.provideMerge(LoopbackConnectionLive({ directory }))),
+  );
+  return {
+    runtime,
+    opened,
+    chat: makeChatClient(runtime),
+    connection: makeConnectionClient(runtime),
+    owner: (ownerId: string) => makeProviderSetupClient(runtime, ownerId),
+    run: <A>(effect: Effect.Effect<A, ApplicationError, LocalHostService | ProviderSetupService>) =>
+      runtime.runPromise(effect),
   };
 }

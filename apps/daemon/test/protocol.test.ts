@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { test } from 'node:test';
 import { chmod, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Context, Effect, Exit, Layer, ManagedRuntime, Scope } from 'effect';
+import { Context, Effect, Exit, Layer, Scope } from 'effect';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
 import type { ApplicationError } from '@moonbase/contracts/errors';
 import {
@@ -12,19 +12,10 @@ import {
   LocalHostService,
   ProviderSetupService,
 } from '@moonbase/contracts/services';
-import {
-  makeChatClient,
-  makeConnectionClient,
-  makeProviderSetupClient,
-} from '@moonbase/application/runtime/clients';
-import {
-  RemoteChatLive,
-  RemoteLocalHostLive,
-  RemoteProviderSetupLive,
-} from '@moonbase/pi-runtime/remote';
 import { LoopbackConnectionLive } from '@moonbase/pi-runtime/loopback';
 import {
   bounded,
+  connectClients,
   readJson,
   startDaemon,
   temporaryRoot,
@@ -45,33 +36,6 @@ async function withRoot(run: (root: string, started: DaemonProcess[]) => Promise
     await Promise.all(started.map((daemon) => daemon.stop('SIGKILL')));
     await rm(root, { recursive: true, force: true });
   }
-}
-
-/** The clients a privileged process composes over a loopback connection to `directory`. */
-function connectClients(directory: string, host: { hostId: string; storeId: string }) {
-  const opened: string[] = [];
-  const runtime = ManagedRuntime.make(
-    Layer.mergeAll(
-      RemoteChatLive,
-      RemoteLocalHostLive,
-      RemoteProviderSetupLive({
-        host,
-        sameMachine: true,
-        openUrl: async (url) => {
-          opened.push(url);
-        },
-      }),
-    ).pipe(Layer.provideMerge(LoopbackConnectionLive({ directory }))),
-  );
-  return {
-    runtime,
-    opened,
-    chat: makeChatClient(runtime),
-    connection: makeConnectionClient(runtime),
-    owner: (ownerId: string) => makeProviderSetupClient(runtime, ownerId),
-    run: <A>(effect: Effect.Effect<A, ApplicationError, LocalHostService | ProviderSetupService>) =>
-      runtime.runPromise(effect),
-  };
 }
 
 /** The error an exit failed with, or `ok`. */
@@ -164,6 +128,10 @@ test('a token holder drives a local-mode daemon completely over the loopback con
       );
       assert.deepEqual(await clients.run(folders.listRecentFolders({ host: session.host })), {
         folders: [project],
+      });
+      // A local daemon has no approved roots to list; its client has a native picker.
+      await assert.rejects(clients.run(folders.listHostFolders({ host: session.host })), {
+        code: 'Incompatible',
       });
       const created = await clients.chat.command('createChat', {
         session,

@@ -7,6 +7,7 @@ import {
   decodeDaemonOutput,
   isDaemonCommand,
   isDaemonMutation,
+  maximumHostFolders,
   maximumRecentFolders,
 } from '../src/daemon-schema.ts';
 import { readProviderSignInUrl } from '../src/providers-schema.ts';
@@ -53,6 +54,7 @@ test('daemon inputs decode strictly and within bounds', () => {
     ['approveFolder', { host, path: '/folder' }],
     ['approveFolder', { host, requestId: 'r', path: '/folder', extra: true }],
     ['getActiveWork', { host: { ...host, extra: 1 } }],
+    ['listHostFolders', { host, path: '/root' }],
     ['getProviders', { host, ownerId: 'owner with spaces' }],
     ['getProviders', { host }],
     [
@@ -68,6 +70,10 @@ test('daemon inputs decode strictly and within bounds', () => {
 test('daemon replies decode strictly, bounding folders and validating sign-in links', () => {
   const folders = Array.from({ length: maximumRecentFolders }, (_, i) => `/folder-${i}`);
   assert.deepEqual(decodeDaemonOutput('listRecentFolders', { folders }), { folders });
+  const hostFolders = Array.from({ length: maximumHostFolders }, (_, i) => `/root/folder-${i}`);
+  assert.deepEqual(decodeDaemonOutput('listHostFolders', { folders: hostFolders }), {
+    folders: hostFolders,
+  });
   assert.equal(decodeDaemonOutput('checkChatFolder', undefined), undefined);
   assert.equal(decodeDaemonOutput('checkApprovedFolder', undefined), undefined);
   const url = 'https://auth.openai.com/api/accounts/authorize?state=1';
@@ -75,6 +81,8 @@ test('daemon replies decode strictly, bounding folders and validating sign-in li
   for (const [operation, output] of [
     ['listRecentFolders', { folders: [...folders, '/one-more'] }],
     ['listRecentFolders', { folders: ['relative'] }],
+    ['listHostFolders', { folders: [...hostFolders, '/one-more'] }],
+    ['listHostFolders', { folders: ['relative'] }],
     ['approveFolder', { path: '/folder' }],
     ['getActiveWork', { active: 'no' }],
     ['getProviders', { state, extra: true }],

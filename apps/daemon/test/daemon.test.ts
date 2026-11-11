@@ -39,6 +39,17 @@ async function withRoot(run: (root: string, started: DaemonProcess[]) => Promise
     await rm(root, { recursive: true, force: true });
   }
 }
+const writeHostSettings = async (directory: string, roots: string[], key: string) =>
+  writeFile(
+    join(directory, 'daemon.json'),
+    JSON.stringify({
+      mode: 'host',
+      port: await findFreePort(),
+      approvedRoots: roots,
+      credentialKey: { source: 'file', path: key },
+    }),
+    { mode: 0o600 },
+  );
 const writeScript = (directory: string, script: FauxScript) =>
   writeFile(join(directory, 'faux.json'), JSON.stringify(script));
 
@@ -249,39 +260,6 @@ test('a local daemon left unused exits by itself and removes endpoint.json', asy
   });
 });
 
-test('a host-mode daemon serves its fixed-settings runtime on the configured port', async () => {
-  await withRoot(async (root, started) => {
-    const directory = join(root, 'data'),
-      cwd = join(root, 'work');
-    await mkdir(directory, { mode: 0o700 });
-    await mkdir(cwd);
-    const port = await findFreePort();
-    await writeFile(
-      join(directory, 'daemon.json'),
-      JSON.stringify({
-        mode: 'host',
-        cwd,
-        model: { provider: 'openai', modelId: 'gpt-6-sol' },
-        port,
-      }),
-      { mode: 0o600 },
-    );
-    const daemon = startDaemon([directory], {
-      entry: 'main',
-      env: { OPENAI_API_KEY: 'synthetic-no-provider-requests' },
-    });
-    started.push(daemon);
-    assert.equal((await bounded(daemon.ready)).port, port);
-    const token = (await readFile(join(directory, 'token'), 'utf8')).trim(),
-      identity = await readJson(join(directory, 'identity.json'));
-    const host = await createFauxClient(port, token).command('getChatHost', {
-      host: identity.host,
-    });
-    assert.ok('cwd' in host && host.cwd === cwd);
-    assert.deepEqual(await daemon.stop(), [0, null]);
-  });
-});
-
 test('the real local entry starts with a private key file and never needs the Keychain to serve', async () => {
   await withRoot(async (root, started) => {
     const directory = join(root, 'data'),
@@ -384,6 +362,65 @@ const refusals: Refusal[] = [
     prepare: async (_root, directory) => {
       await mkdir(directory, { mode: 0o700 });
       await writeFile(join(directory, 'daemon.json'), '{"mode":"local"}', { mode: 0o644 });
+    },
+  },
+  {
+    name: 'host settings with a relative root',
+    prepare: async (root, directory) => {
+      await mkdir(directory, { mode: 0o700 });
+      await writeHostSettings(directory, ['work'], join(root, 'credential.key'));
+    },
+  },
+  {
+    name: 'host settings without a credential key file',
+    prepare: async (root, directory) => {
+      await mkdir(directory, { mode: 0o700 });
+      await writeFile(
+        join(directory, 'daemon.json'),
+        JSON.stringify({ mode: 'host', port: 8787, approvedRoots: [root] }),
+        { mode: 0o600 },
+      );
+    },
+  },
+  {
+    name: 'host settings with the Keychain',
+    prepare: async (root, directory) => {
+      await mkdir(directory, { mode: 0o700 });
+      await writeFile(
+        join(directory, 'daemon.json'),
+        JSON.stringify({
+          mode: 'host',
+          port: 8787,
+          approvedRoots: [root],
+          credentialKey: { source: 'keychain' },
+        }),
+        { mode: 0o600 },
+      );
+    },
+  },
+  {
+    name: 'host settings with a missing root',
+    message: 'Each approved root must be an existing folder named by its real path.',
+    prepare: async (root, directory) => {
+      await mkdir(directory, { mode: 0o700 });
+      await writeHostSettings(directory, [join(root, 'missing')], join(root, 'credential.key'));
+    },
+  },
+  {
+    name: 'host settings with a root that is a link',
+    message: 'Each approved root must be an existing folder named by its real path.',
+    prepare: async (root, directory) => {
+      await mkdir(directory, { mode: 0o700 });
+      await mkdir(join(root, 'real'));
+      await symlink(join(root, 'real'), join(root, 'linked'));
+      await writeHostSettings(directory, [join(root, 'linked')], join(root, 'credential.key'));
+    },
+  },
+  {
+    name: 'host settings with nested roots',
+    prepare: async (root, directory) => {
+      await mkdir(directory, { mode: 0o700 });
+      await writeHostSettings(directory, [root, join(root, 'inner')], join(root, 'credential.key'));
     },
   },
   {

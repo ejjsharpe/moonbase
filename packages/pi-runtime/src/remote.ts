@@ -438,7 +438,7 @@ function sendDaemonCommand<K extends DaemonCommand>(
   );
 }
 
-/** A local-mode daemon's folder approvals and control, over an injected `ConnectionService`. */
+/** A daemon's folder approvals and control, over an injected `ConnectionService`. */
 export const RemoteLocalHostLive: Layer.Layer<LocalHostService, never, ConnectionService> =
   Layer.effect(
     LocalHostService,
@@ -455,6 +455,7 @@ export const RemoteLocalHostLive: Layer.Layer<LocalHostService, never, Connectio
         checkApprovedFolder: send('checkApprovedFolder'),
         getActiveWork: send('getActiveWork'),
         markFolderAsProject: send('markFolderAsProject'),
+        listHostFolders: send('listHostFolders'),
       } satisfies LocalHostHandlers;
     }),
   );

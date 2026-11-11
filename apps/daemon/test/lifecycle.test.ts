@@ -90,7 +90,7 @@ test('a daemon stopped before it listens never announces itself, and still clean
       closeClaudeCode: async () => {
         closed++;
       },
-      local: () => createFauxProviders(directory),
+      providers: () => createFauxProviders(directory),
     });
     assert.equal(exit, 'stopped');
     assert.equal(ready, 0);
@@ -108,13 +108,13 @@ async function prepareDirectory(root: string, files: Record<string, string>) {
     await writeFile(join(directory, name), text, { mode: 0o600 });
   return directory;
 }
-const failToStart = (directory: string, local = () => createFauxProviders(directory)) =>
+const failToStart = (directory: string, providers = () => createFauxProviders(directory)) =>
   runDaemon({
     directory,
     signal: new AbortController().signal,
     ready: () => assert.fail('the daemon must not become ready'),
     closeClaudeCode: async () => {},
-    local,
+    providers,
   });
 
 test('a stale endpoint.json from a crashed daemon is removed once the lock is taken', async () => {
@@ -181,7 +181,7 @@ test('a local daemon refuses an insecure credential key file at startup, and cre
       signal: controller.signal,
       ready: () => ready(),
       closeClaudeCode: async () => {},
-      local,
+      providers: local,
     });
     try {
       await listening;

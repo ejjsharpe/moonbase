@@ -18,7 +18,7 @@ try {
     signal: onShutdownSignal(),
     ready: (line) => console.log(line),
     closeClaudeCode: async () => {},
-    local: (settings) => ({
+    providers: (settings) => ({
       ...createFauxProviders(directory),
       ...(settings.credentialKey?.source === 'file'
         ? { keySource: createKeyFileSource(settings.credentialKey.path) }

@@ -7,6 +7,7 @@ import type { ChatClient } from '@moonbase/contracts/chat';
 import { runDaemon, type DaemonExit } from '../src/daemon.ts';
 import { refuseWhileStopping } from '../src/admission.ts';
 import { createIdleMonitor } from '../src/idle.ts';
+import { createFauxProviders } from './faux.ts';
 import {
   bounded,
   createControlledClock,
@@ -227,27 +228,19 @@ test('a host-mode daemon never idles out and stops on its signal', async () => {
   const root = await temporaryRoot(),
     time = createControlledClock(),
     directory = join(root, 'data'),
-    cwd = join(root, 'work'),
-    previous = { cwd: process.cwd(), key: process.env.OPENAI_API_KEY, fetch: globalThis.fetch };
+    work = join(root, 'work');
   await mkdir(directory, { mode: 0o700 });
-  await mkdir(cwd);
+  await mkdir(work);
   await writeFile(
     join(directory, 'daemon.json'),
     JSON.stringify({
       mode: 'host',
-      cwd,
-      model: { provider: 'openai', modelId: 'gpt-6-sol' },
       port: await findFreePort(),
+      approvedRoots: [work],
+      credentialKey: { source: 'file', path: join(root, 'credential.key') },
     }),
     { mode: 0o600 },
   );
-  // The host's fixed providers read their key from the environment; nothing may reach a provider.
-  process.env.OPENAI_API_KEY = 'synthetic-no-provider-requests';
-  globalThis.fetch = ((url: string | URL | Request, options?: RequestInit) => {
-    const target = new URL(url instanceof Request ? url.url : url);
-    if (target.hostname !== '127.0.0.1') throw Error('Provider network is disabled.');
-    return previous.fetch(url, options);
-  }) as typeof fetch;
   const controller = new AbortController();
   let ready!: () => void;
   const listening = new Promise<void>((resolve) => (ready = resolve));
@@ -258,7 +251,7 @@ test('a host-mode daemon never idles out and stops on its signal', async () => {
       signal: controller.signal,
       ready: () => ready(),
       closeClaudeCode: async () => {},
-      local: () => assert.fail('host mode composes no local providers'),
+      providers: () => createFauxProviders(directory),
       clock: time.clock,
     }).then((exit) => (settled = exit));
     await listening;
@@ -270,10 +263,6 @@ test('a host-mode daemon never idles out and stops on its signal', async () => {
   } finally {
     controller.abort();
     await running?.catch(() => {});
-    process.chdir(previous.cwd);
-    if (previous.key === undefined) delete process.env.OPENAI_API_KEY;
-    else process.env.OPENAI_API_KEY = previous.key;
-    globalThis.fetch = previous.fetch;
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
 import { controlledHostFixture, until } from './fixture.ts';
+import { keyedModel } from './faux-model.ts';
 
 async function fixture(t: { after(fn: () => Promise<void>): void }, hold = false) {
-  const f = await controlledHostFixture(new URL('./host.mjs', import.meta.url), hold);
+  const f = await controlledHostFixture(new URL('./faux-reply.mjs', import.meta.url), hold);
   t.after(async () => {
     await f.close();
   });
@@ -24,10 +26,15 @@ test('combined public root requires explicit verified Connect, then saves/lists/
   assert.equal(connected.state, 'connected');
   assert(!JSON.stringify(connected).includes(f.token));
   assert(!JSON.stringify(connected).includes('http://'));
+  // The host is the daemon in host mode: each chat chooses its folder and model.
   const host = await client.chat.command('getChatHost', { host: f.session.host });
-  assert('cwd' in host);
-  assert.equal(host.cwd, f.cwd);
-  const input = { session: f.session, requestId: 'create-one', title: 'Saved remote chat' };
+  assert('mode' in host && host.mode === 'local');
+  const input = {
+    session: f.session,
+    requestId: 'create-one',
+    title: 'Saved remote chat',
+    settings: f.settings,
+  };
   const created = await client.chat.command('createChat', input);
   assert.deepEqual(await client.chat.command('createChat', input), created);
   assert.equal(
@@ -66,12 +73,109 @@ test('combined public root requires explicit verified Connect, then saves/lists/
   );
 });
 
+test('through the forward, a remote client chooses host folders from approved roots, sets up a faux provider, chooses its model and searches with @', async (t) => {
+  const f = await fixture(t),
+    client = f.root();
+  await client.connection.command('connect', { profileId: client.profile.id });
+  const project = join(f.cwd, 'project'),
+    outside = join(f.directory, 'outside');
+  await mkdir(project);
+  await mkdir(outside);
+  await writeFile(join(project, 'notes.md'), 'remote notes');
+  await symlink(outside, join(f.cwd, 'escape'));
+  const folders = await client.folders();
+  const host = f.session.host;
+  // No native picker reaches the host's disk: the client offers the roots and their folders.
+  assert.deepEqual(await client.runtime.runPromise(folders.listHostFolders({ host })), {
+    folders: [f.cwd, project],
+  });
+
+  // Provider setup runs on the host; the faux key never reaches a real provider.
+  const owner = client.providers('remote-document');
+  const before = await owner.command('getProviders', {});
+  assert.equal(before.providers.find((p) => p.id === keyedModel.provider)?.configured, false);
+  const flow = (
+    await owner.command('startProviderLogin', {
+      providerId: keyedModel.provider,
+    })
+  ).flow!;
+  const prompt = await until(
+    () => owner.command('getProviders', {}),
+    (state) => state.flow?.prompt?.type === 'secret',
+  );
+  await owner.command('answerProviderPrompt', {
+    flowId: flow.id,
+    promptId: prompt.flow!.prompt!.id,
+    answer: 'faux-host-key',
+  });
+  await until(
+    () => owner.command('getProviders', {}),
+    (state) => state.providers.find((p) => p.id === keyedModel.provider)?.configured === true,
+  );
+
+  // The chat chooses a folder under the root, the newly set up model and its reasoning effort.
+  const found = await client.chat.command('findChatFiles', {
+    session: f.session,
+    cwd: project,
+    query: 'notes',
+  });
+  assert.deepEqual(
+    found.matches.map((match) => match.path),
+    ['notes.md'],
+  );
+  const created = await client.chat.command('createChat', {
+    session: f.session,
+    requestId: 'keyed',
+    title: 'Keyed model',
+    settings: { cwd: project, model: keyedModel, reasoningEffort: 'low' },
+  });
+  const target = created.conversation.target;
+  assert.equal(created.conversation.cwd, project);
+  await client.chat.command('sendChat', {
+    target,
+    requestId: 'keyed-send',
+    text: 'Read @notes.md',
+    mentions: [{ path: 'notes.md' }],
+  });
+  const done = await until(
+    () => client.chat.command('getChat', { target }),
+    (value) => !value.run && value.entries.some((entry) => entry.text === 'KEYED COMPLETED'),
+  );
+  assert.equal(done.conversation.model, `${keyedModel.provider}/${keyedModel.modelId}`);
+  assert.equal(done.conversation.reasoningEffort, 'low');
+
+  // Folders outside the roots, links out of them, and searches there are refused.
+  for (const [requestId, cwd] of [
+    ['outside', outside],
+    ['escape', join(f.cwd, 'escape')],
+  ] as const)
+    await assert.rejects(
+      client.chat.command('createChat', {
+        session: f.session,
+        requestId,
+        title: 'Refused',
+        settings: { cwd, model: f.model },
+      }),
+      (error: { code: string }) => ['Unauthorized', 'InvalidInput'].includes(error.code),
+    );
+  await assert.rejects(
+    client.chat.command('findChatFiles', {
+      session: f.session,
+      cwd: outside,
+      query: 'x',
+    }),
+    { code: 'Unauthorized' },
+  );
+  assert.equal((await f.stats()).calls, 1);
+});
+
 test('lost HTTP Send response and client closure retain original receipt; reconnect/store reopen do not Send again', async (t) => {
   const f = await fixture(t, true),
     first = f.root();
   await first.connection.command('connect', { profileId: first.profile.id });
   const created = await first.chat.command('createChat', {
       session: f.session,
+      settings: f.settings,
       requestId: 'create',
       title: 'Retained',
     }),
@@ -121,6 +225,7 @@ test('disconnect denies commands without implicit reconnect; stale Disconnect an
   assert.equal(old.state, 'connected');
   const created = await first.chat.command('createChat', {
       session: f.session,
+      settings: f.settings,
       requestId: 'create',
       title: 'Stop exact work',
     }),
@@ -171,6 +276,7 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
     const connected = await client.connection.command('connect', { profileId: client.profile.id });
     const create = {
       session: f.session,
+      settings: f.settings,
       requestId: 'captured-create',
       title: 'Captured conversation',
     };
@@ -271,6 +377,7 @@ test('transcript reads cross the real child/forwarding boundary with identity, l
   const target = (
     await client.chat.command('createChat', {
       session: f.session,
+      settings: f.settings,
       requestId: 'transcript',
       title: 'Transcript',
     })
@@ -307,6 +414,7 @@ test('transcript reads cross the real child/forwarding boundary with identity, l
   const other = (
     await client.chat.command('createChat', {
       session: f.session,
+      settings: f.settings,
       requestId: 'other',
       title: 'Other',
     })
@@ -359,15 +467,25 @@ test('transcript reads cross the real child/forwarding boundary with identity, l
 });
 
 test('cross-process capable observation streams thinking/text before completion, reuses history and ignores unrelated B without recurring reads', async (t) => {
-  const f = await controlledHostFixture(new URL('./stream-host.mjs', import.meta.url), true);
+  const f = await controlledHostFixture(new URL('./faux-stream.mjs', import.meta.url), true);
   t.after(() => f.close().then(() => {}));
   const root = f.root();
   await root.connection.command('connect', { profileId: root.profile.id });
   const target = (
-    await root.chat.command('createChat', { session: f.session, requestId: 'stream-A', title: 'A' })
+    await root.chat.command('createChat', {
+      session: f.session,
+      requestId: 'stream-A',
+      title: 'A',
+      settings: f.settings,
+    })
   ).conversation.target;
   const other = (
-    await root.chat.command('createChat', { session: f.session, requestId: 'stream-B', title: 'B' })
+    await root.chat.command('createChat', {
+      session: f.session,
+      requestId: 'stream-B',
+      title: 'B',
+      settings: f.settings,
+    })
   ).conversation.target;
   const views: ChatSnapshot[] = [],
     errors: ApplicationError[] = [];
@@ -427,13 +545,14 @@ test('cross-process capable observation streams thinking/text before completion,
 });
 
 test('cross-process tool progress arrives while execution is held and independent Stop releases its observation', async (t) => {
-  const f = await controlledHostFixture(new URL('./tool-host.mjs', import.meta.url), true);
+  const f = await controlledHostFixture(new URL('./faux-tool.mjs', import.meta.url), true);
   t.after(() => f.close().then(() => {}));
   const root = f.root();
   await root.connection.command('connect', { profileId: root.profile.id });
   const target = (
     await root.chat.command('createChat', {
       session: f.session,
+      settings: f.settings,
       requestId: 'tool-stream',
       title: 'Tool',
     })

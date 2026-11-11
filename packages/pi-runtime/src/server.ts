@@ -15,6 +15,7 @@ import type {
   DaemonOutput,
 } from '@moonbase/contracts/daemon';
 import {
+  daemonCommandCapabilities,
   decodeDaemonInput,
   decodeDaemonOutput,
   isDaemonCommand,
@@ -27,6 +28,7 @@ import {
   chatHostCapabilities,
   chatHostVersion,
   chatProtocolVersion,
+  type ChatHostCapability,
   type ChatHostTarget,
 } from '@moonbase/contracts/host';
 import { releaseResource } from '@moonbase/effect';
@@ -37,6 +39,17 @@ import * as V from './validation.ts';
 import * as S from './private-schema.ts';
 
 export type ChatServerConfiguration = { host: ChatHostTarget; token: string; port: number };
+/** A local-mode daemon's features beyond chat: local-mode chat and control, providers, folders. */
+export const localDaemonCapabilities: readonly ChatHostCapability[] = [
+  chatHostCapabilities.local,
+  chatHostCapabilities.providers,
+  chatHostCapabilities.folders,
+];
+/** A host-mode daemon's: a local daemon's, and the approved roots a remote client chooses from. */
+export const hostDaemonCapabilities: readonly ChatHostCapability[] = [
+  ...localDaemonCapabilities,
+  chatHostCapabilities.roots,
+];
 /** Request IDs of recent daemon mutations; a repeat of one returns its outcome instead of rerunning. */
 const rememberedDaemonRequests = 256;
 // Codes a daemon raises only before it applies anything, so a refused request may be sent again.
@@ -52,6 +65,8 @@ export const serveChat = (
   config: ChatServerConfiguration,
   client: ChatClient,
   daemon?: DaemonClient,
+  /** What the daemon operations add to health; a local-mode daemon's by default. */
+  daemonCapabilities: readonly ChatHostCapability[] = localDaemonCapabilities,
 ) =>
   Effect.acquireRelease(
     Effect.tryPromise({
@@ -64,16 +79,7 @@ export const serveChat = (
             ...expected,
             protocol: chatProtocolVersion,
             version: chatHostVersion,
-            capabilities: [
-              chatHostCapabilities.chat,
-              ...(daemon
-                ? [
-                    chatHostCapabilities.local,
-                    chatHostCapabilities.providers,
-                    chatHostCapabilities.folders,
-                  ]
-                : []),
-            ],
+            capabilities: [chatHostCapabilities.chat, ...(daemon ? daemonCapabilities : [])],
           },
           expected,
         );
@@ -101,6 +107,9 @@ export const serveChat = (
           const shape = input as { host?: ChatHostTarget; target?: { host: ChatHostTarget } };
           if (!V.sameHost(shape.host ?? shape.target!.host, expected))
             V.fail('Unauthorized', 'Daemon request target differs from this host.');
+          // Only what health advertises is served, however the daemon's services were composed.
+          if (!health.capabilities.includes(daemonCommandCapabilities[operation]))
+            V.fail('Incompatible', 'This host does not serve that operation.');
           // Whether the daemon refused the request outright, so nothing of it applied.
           let refused = false;
           const run = async () => {
@@ -450,6 +459,8 @@ export function makeDaemonClient(
     getActiveWork: (input) => run(Effect.flatMap(LocalHostService, (s) => s.getActiveWork(input))),
     markFolderAsProject: (input) =>
       run(Effect.flatMap(LocalHostService, (s) => s.markFolderAsProject(input))),
+    listHostFolders: (input) =>
+      run(Effect.flatMap(LocalHostService, (s) => s.listHostFolders(input))),
     getProviders: ({ ownerId }) =>
       run(
         Effect.flatMap(ProviderSetupService, (s) =>

@@ -138,11 +138,13 @@ test('public local controller receives successive Pi text before held completion
 });
 
 test('public remote controller consumes authenticated successive replacements before held completion without additional history/content reads', async (t) => {
-  const fixture = await controlledHostFixture(new URL('./stream-host.mjs', import.meta.url), true);
+  const fixture = await controlledHostFixture(new URL('./faux-stream.mjs', import.meta.url), true);
   const root = fixture.root();
   const app = await createMoonbaseApplication({
     chat: async () => ({
       chat: root.chat,
+      // The remote host is the daemon in host mode: local-mode chats over a connection.
+      mode: 'local',
       connection: root.connection,
       context: fixture.session,
       storage: storage(),
@@ -160,7 +162,7 @@ test('public remote controller consumes authenticated successive replacements be
     async () => controller.getSnapshot(),
     (state) => !!state.host,
   );
-  await controller.create('Remote progressive');
+  await controller.create('Remote progressive', fixture.settings);
   await until(
     async () => controller.getSnapshot(),
     (state) => !!state.snapshot,

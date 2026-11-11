@@ -126,15 +126,17 @@ assert(
   }).some((error) => error.includes('package cycle')),
 );
 assert.deepEqual(
-  check({ 'packages/pi-runtime/src/host.ts': "import '@moonbase/application/runtime/clients';" }),
+  check({
+    'packages/pi-runtime/examples/remote.ts': "import '@moonbase/application/runtime/clients';",
+  }),
   [],
 );
 assert(
   check({
     'packages/pi-runtime/src/index.ts': "import './resources.ts';",
     'packages/pi-runtime/src/resources.ts': "import './commands.ts';",
-    'packages/pi-runtime/src/commands.ts': "import './host.ts';",
-    'packages/pi-runtime/src/host.ts': "import '@moonbase/application';",
+    'packages/pi-runtime/src/commands.ts': "import '../examples/remote.ts';",
+    'packages/pi-runtime/examples/remote.ts': "import '@moonbase/application';",
     'packages/application/src/index.ts': '',
   }).some((error) => error.includes('reusable export reaches process root')),
 );

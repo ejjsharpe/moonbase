@@ -6,27 +6,17 @@ import { test } from 'node:test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, writeFile, readFile, realpath, rm } from 'node:fs/promises';
-import { rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
-import { checkHostHealth } from '@moonbase/ssh/host-health';
 import { ConnectionService, LocalHostService } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { makeChatClient, makeProviderSetupClient } from '@moonbase/application/runtime/clients';
 import { RemoteChatLive, RemoteLocalHostLive, RemoteProviderSetupLive } from '../src/remote.ts';
 import { createRequire } from 'node:module';
-import { buildHost } from '../scripts/build-host.ts';
-import { writeFakeClaude } from './fake-claude.ts';
-import { isRunning } from './runtime-fixture.ts';
-
-// The production host runs from its bundle, built outside the repository to prove it is self-contained.
-const bundleDirectory = await mkdtemp(join(tmpdir(), 'moonbase-host-bundle-'));
-const hostEntry = await buildHost(bundleDirectory);
-process.once('exit', () => rmSync(bundleDirectory, { recursive: true, force: true }));
 
 async function bounded<T>(promise: Promise<T>, ms = 5000): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -48,31 +38,22 @@ async function port() {
   await new Promise<void>((r) => server.close(() => r()));
   return value;
 }
-// Hosts run on Node today and on Bun from the daemon on; each child runs on the suite's runtime
-// unless a test names one. Node needs its type-stripping flag for the TypeScript fixture.
-const runtimes = {
-  node: process.versions.bun ? 'node' : process.execPath,
-  bun: process.versions.bun ? process.execPath : 'bun',
-};
-function start(
-  path: string,
-  fixture = false,
-  env: NodeJS.ProcessEnv = process.env,
-  runtime = process.execPath,
-) {
+/**
+ * Starts the controlled fixed-settings host (`faux-host.mjs`) on the suite's runtime. Remote hosts
+ * themselves run the daemon, whose own suite covers its process; these cases cover the server and
+ * the remote client across a real process boundary.
+ */
+function start(path: string) {
   const child = spawn(
-    runtime,
+    process.execPath,
     [
       '--import',
       new URL('./no-provider.mjs', import.meta.url).pathname,
       '--experimental-strip-types',
-      fixture ? new URL('./faux-host.mjs', import.meta.url).pathname : hostEntry,
+      new URL('./faux-host.mjs', import.meta.url).pathname,
       path,
     ],
-    {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...env, OPENAI_API_KEY: 'synthetic-no-provider-requests' },
-    },
+    { stdio: ['ignore', 'pipe', 'pipe'], env: process.env },
   );
   let output = '',
     errors = '';
@@ -109,81 +90,7 @@ async function cleanup(child: ChildProcess, exited: Promise<unknown>) {
     await bounded(exited);
   });
 }
-async function readRuntime(path: string) {
-  for (let i = 0; i < 100; i++) {
-    const text = await readFile(path, 'utf8').catch(() => '');
-    if (text) return JSON.parse(text) as Record<string, string | undefined>;
-    await new Promise((r) => setTimeout(r, 10));
-  }
-  throw Error('The host never reported its runtime.');
-}
-for (const [name, runtime] of Object.entries(runtimes))
-  test(`actual standalone CLI on ${name} owns one SQLite store before serving, releases on shutdown and recovers after SIGKILL`, async () => {
-    await checkStoreOwnership(name, runtime);
-  });
-async function checkStoreOwnership(name: string, runtime: string) {
-  const dir = await mkdtemp(join(tmpdir(), 'moonbase-chat-host-')),
-    token = randomBytes(32).toString('base64url'),
-    host = { hostId: 'child-host', storeId: 'child-store' },
-    listen = await port(),
-    file = join(dir, 'private.json');
-  const config = {
-    host,
-    actorId: 'personal',
-    cwd: dir,
-    databasePath: join(dir, 'chat.sqlite'),
-    model: { provider: 'openai', modelId: 'gpt-6-sol' },
-    port: listen,
-    token,
-  };
-  await writeFile(file, JSON.stringify(config), { mode: 0o600 });
-  const children: ReturnType<typeof start>[] = [],
-    reported = join(dir, 'runtime.json'),
-    env = { ...process.env, MOONBASE_TEST_RUNTIME_LOG: reported };
-  try {
-    const owner = start(file, false, env, runtime);
-    children.push(owner);
-    await bounded(owner.ready);
-    const health = await Effect.runPromise(
-      checkHostHealth({ origin: `http://127.0.0.1:${listen}`, token, expected: host }),
-    );
-    assert.equal(health.hostId, host.hostId);
-    // A fixed-settings host signs protocol 2 and only the chat capability.
-    assert.equal(health.protocol, 2);
-    assert.deepEqual(health.capabilities, ['chat-v0']);
-    assert.equal((await readRuntime(reported)).bun, name === 'bun' ? '1.4.4' : undefined);
-    assert(!owner.output.includes(token));
-    assert(!owner.errors.includes(token));
-    const alternate = join(dir, 'alternate.json');
-    await writeFile(alternate, JSON.stringify({ ...config, port: await port() }), { mode: 0o600 });
-    const contender = start(alternate, false, env, runtime);
-    children.push(contender);
-    assert.equal((await bounded(contender.exited))[0], 1);
-    assert(!contender.output.includes('ready'));
-    assert(!contender.errors.includes(dir));
-    owner.child.kill('SIGKILL');
-    assert.equal((await bounded(owner.exited))[1], 'SIGKILL');
-    const recovered = start(file, false, env, runtime);
-    children.push(recovered);
-    await bounded(recovered.ready);
-    recovered.child.kill('SIGTERM');
-    assert.equal((await bounded(recovered.exited))[0], 0);
-    const again = start(file, false, env, runtime);
-    children.push(again);
-    await bounded(again.ready);
-    again.child.kill('SIGTERM');
-    assert.equal((await bounded(again.exited))[0], 0);
-    await new Promise<void>((resolve, reject) => {
-      const server = createServer();
-      server.once('error', reject);
-      server.listen(listen, '127.0.0.1', () => server.close(() => resolve()));
-    });
-  } finally {
-    await Promise.all(children.map((c) => cleanup(c.child, c.exited)));
-    await rm(dir, { recursive: true, force: true });
-  }
-}
-test('a client refuses local-mode features from the bundled fixed-settings host before dispatch', async () => {
+test('a client refuses local-mode features from a fixed-settings host before dispatch', async () => {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-chat-fixed-'))),
     token = randomBytes(32).toString('base64url'),
     host = { hostId: 'fixed-host', storeId: 'fixed-store' },
@@ -196,9 +103,9 @@ test('a client refuses local-mode features from the bundled fixed-settings host 
       actorId: 'personal',
       cwd: dir,
       databasePath: join(dir, 'chat.sqlite'),
-      model: { provider: 'openai', modelId: 'gpt-6-sol' },
       port: listen,
       token,
+      log: join(dir, 'effects.jsonl'),
     }),
     { mode: 0o600 },
   );
@@ -230,7 +137,13 @@ test('a client refuses local-mode features from the bundled fixed-settings host 
                 ...host,
                 protocol: 2,
                 version: '0.1.0',
-                capabilities: ['chat-v0', 'daemon-local-v1', 'providers-v1', 'folders-v1'],
+                capabilities: [
+                  'chat-v0',
+                  'daemon-local-v1',
+                  'providers-v1',
+                  'folders-v1',
+                  'roots-v1',
+                ],
               },
             }),
         }),
@@ -245,6 +158,7 @@ test('a client refuses local-mode features from the bundled fixed-settings host 
     for (const refused of [
       runtime.runPromise(folders.getActiveWork({ host })),
       runtime.runPromise(folders.approveFolder({ host, requestId: 'approve', path: dir })),
+      runtime.runPromise(folders.listHostFolders({ host })),
       runtime.runPromise(
         folders.markFolderAsProject({
           requestId: 'mark',
@@ -268,22 +182,6 @@ test('a client refuses local-mode features from the bundled fixed-settings host 
     await rm(dir, { recursive: true, force: true });
   }
 });
-test('CLI rejects malformed private config without echoing secrets or file paths', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'moonbase-chat-bad-')),
-    file = join(dir, 'private.json'),
-    secret = randomBytes(32).toString('hex');
-  await writeFile(file, '{' + secret);
-  const child = start(file);
-  try {
-    assert.equal((await bounded(child.exited))[0], 1);
-    assert(!child.errors.includes(secret));
-    assert(!child.errors.includes(file));
-  } finally {
-    await cleanup(child.child, child.exited);
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
 test('actual child host crash resumes Pi-owned work without resubmitting reserved application input or replaying the counted unsafe tool', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'moonbase-pi-resume-')),
     listen = await port(),
@@ -338,7 +236,7 @@ test('actual child host crash resumes Pi-owned work without resubmitting reserve
       }
     };
   try {
-    const first = start(file, true);
+    const first = start(file);
     children.push(first);
     await bounded(first.ready);
     const session = { host, actorId: 'personal' },
@@ -355,7 +253,7 @@ test('actual child host crash resumes Pi-owned work without resubmitting reserve
     assert.equal((await rows()).filter((r) => r.event === 'tool').length, 1);
     first.child.kill('SIGKILL');
     await bounded(first.exited);
-    const resumed = start(file, true);
+    const resumed = start(file);
     children.push(resumed);
     await bounded(resumed.ready);
     assert.deepEqual(
@@ -449,7 +347,7 @@ test('compiled remote entry runs on Electron Node24 against the separate product
       output.imports.some((value) => value.path === 'node:sqlite'),
     ),
   );
-  const server = start(file, true);
+  const server = start(file);
   let child: ChildProcess | undefined, exited: Promise<unknown> | undefined;
   try {
     await bounded(server.ready);
@@ -524,7 +422,7 @@ test('repeated actual process interruption parks Pi work visibly instead of repo
   try {
     let parked = false;
     for (let i = 0; i < 7; i++) {
-      const child = start(file, true);
+      const child = start(file);
       children.push(child);
       await bounded(child.ready);
       if (!target) {
@@ -551,158 +449,6 @@ test('repeated actual process interruption parks Pi work visibly instead of repo
       await bounded(child.exited);
     }
     assert(parked, 'Repeated crashes never surfaced Pi parking');
-  } finally {
-    await runtime.dispose();
-    await Promise.all(children.map((c) => cleanup(c.child, c.exited)));
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test('CLI rejects strict private configuration before opening or rewriting its store', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'moonbase-chat-strict-')),
-    file = join(directory, 'private.json'),
-    secret = randomBytes(32).toString('hex');
-  const config = {
-    host: { hostId: 'strict-host', storeId: 'store' },
-    actorId: 'personal',
-    cwd: directory,
-    databasePath: join(directory, 'chat.sqlite'),
-    model: { provider: 'openai', modelId: 'gpt-6-sol' },
-    token: secret,
-    port: 8787,
-  };
-  try {
-    for (const change of [
-      { future: secret },
-      { host: { ...config.host, future: secret } },
-      { model: { ...config.model, future: secret } },
-      { model: { ...config.model, modelId: 'x'.repeat(257) } },
-      { cwd: 'relative-' + secret },
-      { port: 0 },
-      { port: 65536 },
-      { token: secret + ' ' },
-    ]) {
-      const bytes = JSON.stringify({ ...config, ...change });
-      await writeFile(file, bytes, { mode: 0o600 });
-      const child = start(file);
-      try {
-        assert.equal((await bounded(child.exited))[0], 1);
-        assert(child.errors.includes('InvalidInput'));
-        assert(!child.errors.includes(secret));
-        assert(!child.errors.includes(directory));
-        assert.equal(await readFile(file, 'utf8'), bytes);
-        await assert.rejects(readFile(config.databasePath), { code: 'ENOENT' });
-      } finally {
-        await cleanup(child.child, child.exited);
-      }
-    }
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test('bundled host serves a Claude subscription through the host-side Claude Code login', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'moonbase-host-claude-')),
-    listen = await port(),
-    host = { hostId: 'claude-host', storeId: 'store' },
-    token = randomBytes(32).toString('base64url'),
-    file = join(directory, 'private.json');
-  const command = await writeFakeClaude(directory);
-  await writeFile(
-    file,
-    JSON.stringify({
-      host,
-      actorId: 'personal',
-      cwd: directory,
-      databasePath: join(directory, 'chat.sqlite'),
-      model: { provider: 'claude-code', modelId: 'claude-opus-5-5' },
-      port: listen,
-      token,
-    }),
-    { mode: 0o600 },
-  );
-  const env = { PATH: '/usr/bin:/bin', HOME: directory, PI_CLAUDE_CODE_COMMAND: command };
-  const unavailable = () =>
-    Effect.fail(
-      new ApplicationError({ code: 'Unavailable', message: 'Not a connection command.' }),
-    );
-  const runtime = ManagedRuntime.make(
-    RemoteChatLive.pipe(
-      Layer.provide(
-        Layer.succeed(ConnectionService, {
-          getConnection: unavailable,
-          connect: unavailable,
-          disconnect: unavailable,
-          watch: () => Stream.empty,
-          endpoint: () =>
-            Effect.succeed({
-              origin: `http://127.0.0.1:${listen}`,
-              token,
-              expected: host,
-              connectionId: 'controlled',
-              health: { ...host, protocol: 2, version: '0.1.0', capabilities: ['chat-v0'] },
-            }),
-        }),
-      ),
-    ),
-  );
-  const client = makeChatClient(runtime),
-    children: ReturnType<typeof start>[] = [];
-  try {
-    const signedOut = start(file, false, { ...env, FAKE_CLAUDE_LOGGED_OUT: '1' });
-    children.push(signedOut);
-    assert.equal((await bounded(signedOut.exited))[0], 1);
-    assert(!signedOut.output.includes('ready'));
-    const served = start(file, false, env);
-    children.push(served);
-    await bounded(served.ready, 15000);
-    const target = (
-      await client.command('createChat', {
-        session: { host, actorId: 'personal' },
-        requestId: 'create',
-        title: 'Remote Claude subscription',
-      })
-    ).conversation.target;
-    await client.command('sendChat', { target, requestId: 'send', text: 'Write a file' });
-    let entries: { text?: string }[] = [];
-    for (let i = 0; i < 500; i++) {
-      const snapshot = await client.command('getChat', { target });
-      entries = snapshot.entries;
-      if (!snapshot.run && entries.some((entry) => entry.text === 'Done')) break;
-      await new Promise((r) => setTimeout(r, 10));
-    }
-    assert(
-      entries.some((entry) => entry.text === 'Done'),
-      JSON.stringify(entries) + served.errors,
-    );
-    assert.equal(
-      await readFile(join(directory, 'claude.txt'), 'utf8'),
-      'Written through Claude Code',
-    );
-    // Claude Code runs in, and so reports, the host's chat folder rather than where it started.
-    const cwd = await realpath(directory);
-    const workers = (await readFile(join(directory, 'workers.log'), 'utf8'))
-      .trim()
-      .split('\n')
-      .map(
-        (line) =>
-          JSON.parse(line) as { cwd: string; pid: number; helper: number; lingering: number },
-      );
-    for (const worker of workers) assert.equal(worker.cwd, cwd);
-    // Warm workers and their children stay up between turns, in the worker's process group.
-    const processes = workers.flatMap((worker) => [worker.pid, worker.helper, worker.lingering]);
-    assert(processes.some(isRunning), 'No Claude Code worker stayed warm');
-    served.child.kill('SIGTERM');
-    assert.equal(
-      (await bounded(served.exited))[0],
-      0,
-      'Warm Claude Code workers kept the host alive',
-    );
-    // Closing them on shutdown stops each worker's whole group, leaving no stray process: the
-    // lingering child ignores its stdin, so only a group kill ends it.
-    for (let i = 0; i < 200 && processes.some(isRunning); i++)
-      await new Promise((r) => setTimeout(r, 10));
-    assert.deepEqual(processes.filter(isRunning), [], 'Claude Code processes outlived the host');
   } finally {
     await runtime.dispose();
     await Promise.all(children.map((c) => cleanup(c.child, c.exited)));

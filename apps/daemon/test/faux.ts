@@ -9,7 +9,7 @@ import {
 } from '@earendil-works/pi-ai/providers/faux';
 import { createMemoryKeySource } from '@moonbase/pi-runtime/credentials';
 import { localProviderIds } from '@moonbase/pi-runtime/providers';
-import type { LocalProviders } from '../src/daemon.ts';
+import type { DaemonProviders } from '../src/daemon.ts';
 
 export const fauxProviderId = 'moonbase-faux';
 export const fauxModelId = 'faux-model';
@@ -46,7 +46,7 @@ export function readFauxScript(directory: string): FauxScript {
  * Faux providers and an in-memory credential key, for a daemon that never reaches a real provider
  * or the Keychain. Each model call is recorded in `faux-calls.jsonl` in the data directory.
  */
-export function createFauxProviders(directory: string): LocalProviders {
+export function createFauxProviders(directory: string): DaemonProviders {
   const faux = fauxProvider({
     provider: fauxProviderId,
     models: [{ id: fauxModelId }],

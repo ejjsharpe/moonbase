@@ -16,7 +16,6 @@
   },
   "scripts": {
     "build": "tsc --noEmit -p tsconfig.json",
-    "build:host": "node --experimental-strip-types scripts/build-host.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint .",
     "test": "bun run test:node && bun run test:bun",

@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { createFolderApprovals } from '../src/folders.ts';
+import { createFolderApprovals, createRootFolders } from '../src/folders.ts';
 
 test('native folder approvals survive a restart and lapse when the folder is replaced', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-folders-')));
@@ -125,5 +125,69 @@ test('a use after a restart leads folders saved with a later clock reading', asy
     assert.deepEqual(await restarted.listRecent(), [beta, alpha]);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a host-mode daemon allows its roots and folders under them, and refuses escapes and replacements', async () => {
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-roots-')));
+  try {
+    const [root, other, outside] = ['root', 'other', 'outside'].map((name) => join(base, name));
+    for (const folder of [root, other, outside]) await mkdir(folder);
+    for (const name of ['beta', 'alpha', '.hidden']) await mkdir(join(root, name));
+    await mkdir(join(root, 'alpha', 'deep'));
+    await writeFile(join(root, 'file.txt'), '');
+    // A link inside a root that leads out of it.
+    await symlink(outside, join(root, 'escape'));
+
+    // Each root must be an existing folder named by its real path; errors name no path.
+    for (const roots of [[join(base, 'missing')], [join(root, 'escape')], [join(root, 'file.txt')]])
+      await assert.rejects(createRootFolders(roots), (error: Error) => {
+        assert.equal((error as { code?: string }).code, 'InvalidInput');
+        assert(!error.message.includes(base));
+        return true;
+      });
+
+    const folders = await createRootFolders([root, other]);
+    assert.equal(folders.refusal, 'folder-outside-roots');
+    for (const allowed of [root, other, join(root, 'alpha'), join(root, 'alpha', 'deep')])
+      assert.equal(await folders.has(allowed), true, allowed);
+    for (const refused of [
+      outside,
+      base,
+      join(root, 'escape'),
+      join(root, 'alpha', '..', '..', 'outside'),
+      join(root, 'file.txt'),
+      join(root, 'missing'),
+      `${root}-sibling`,
+    ])
+      assert.equal(await folders.has(refused), false, refused);
+    assert.equal(await folders.approve(join(root, 'alpha')), join(root, 'alpha'));
+    await assert.rejects(folders.approve(join(root, 'escape')), {
+      code: 'Unauthorized',
+    });
+    await assert.rejects(folders.approve(join(root, 'missing')), {
+      code: 'InvalidInput',
+    });
+    assert.deepEqual(await folders.listRecent(), []);
+    // Roots first, then each root's folders in order, without hidden folders, files or links.
+    assert.deepEqual(await folders.listFolders!(), [
+      root,
+      other,
+      join(root, 'alpha'),
+      join(root, 'beta'),
+    ]);
+
+    // A root replaced by another folder, or by a link, approves nothing under it.
+    await rename(root, `${root}-moved`);
+    await mkdir(root);
+    await mkdir(join(root, 'alpha'));
+    assert.equal(await folders.has(root), false);
+    assert.equal(await folders.has(join(root, 'alpha')), false);
+    await rm(root, { recursive: true });
+    await symlink(outside, root);
+    assert.equal(await folders.has(root), false);
+    assert.deepEqual(await folders.listFolders!(), [other]);
+  } finally {
+    await rm(base, { recursive: true, force: true });
   }
 });

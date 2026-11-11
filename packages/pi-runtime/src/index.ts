@@ -115,7 +115,10 @@ export type LocalHostConfiguration = {
   /** Where the runtime makes folders for chats without a project (its `chatFolders`). */
   chatFolders: string;
 };
-/** A local-mode host's folder approvals and control, over its `LocalPiControl`. */
+/**
+ * A local-mode host's folder approvals and control, over its `LocalPiControl`: folders a local
+ * client approved, or a host-mode daemon's approved roots.
+ */
 export const LocalHostLive = (
   config: LocalHostConfiguration,
 ): Layer.Layer<LocalHostService, never, LocalPiControl> =>
@@ -169,7 +172,17 @@ export const LocalHostLive = (
         checkApprovedFolder: handle('checkApprovedFolder', ({ path }) =>
           promise(async () => {
             if (!(await config.folders.has(path)))
-              throw new ApplicationError(daemonErrorReasons['folder-not-approved']);
+              throw new ApplicationError(daemonErrorReasons[config.folders.refusal]);
+          }),
+        ),
+        listHostFolders: handle('listHostFolders', () =>
+          promise(async () => {
+            if (!config.folders.listFolders)
+              throw new ApplicationError({
+                code: 'Incompatible',
+                message: 'This host has no approved roots to list.',
+              });
+            return { folders: await config.folders.listFolders() };
           }),
         ),
         getActiveWork: handle('getActiveWork', () =>

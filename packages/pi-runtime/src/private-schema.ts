@@ -39,11 +39,6 @@ const token = Schema.String.check(
   Schema.makeFilter((value) => /^[\x21-\x7e]{16,4096}$/.test(value)),
 );
 const port = integer.check(Schema.makeFilter((value) => value >= 0 && value <= 65535));
-const cli = Schema.Struct({
-  ...configuration,
-  token,
-  port: port.check(Schema.makeFilter((value) => value > 0)),
-});
 const programmatic = Schema.Struct({
   ...configuration,
   // Supplied public SDK capabilities retain their identity; their internals are not configuration.
@@ -54,21 +49,35 @@ const programmatic = Schema.Struct({
   ripgrepExecutable: Schema.optional(path),
 });
 const server = Schema.Struct({ host: ChatHostTargetSchema, token, port });
+const keyFile = Schema.Struct({ source: Schema.Literal('file'), path });
+// A root is named by its real path; one under another would only repeat its folders.
+const approvedRoots = Schema.Array(path).check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(64),
+  Schema.makeFilter((roots) =>
+    roots.every(
+      (root, index) =>
+        !/(?:^|\/)\.\.?(?:\/|$)|\/\/|.\/$/.test(root) &&
+        roots.every(
+          (other, at) =>
+            at === index || (other !== root && !root.startsWith(other === '/' ? '/' : `${other}/`)),
+        ),
+    ),
+  ),
+);
 const daemon = Schema.Union([
   Schema.Struct({
     mode: Schema.Literal('local'),
     credentialKey: Schema.optional(
-      Schema.Union([
-        Schema.Struct({ source: Schema.Literal('keychain') }),
-        Schema.Struct({ source: Schema.Literal('file'), path }),
-      ]),
+      Schema.Union([Schema.Struct({ source: Schema.Literal('keychain') }), keyFile]),
     ),
   }),
   Schema.Struct({
     mode: Schema.Literal('host'),
-    cwd: path,
-    model,
     port: port.check(Schema.makeFilter((value) => value > 0)),
+    approvedRoots,
+    // Without a GUI session the login keychain is usually locked, so a host uses a key file.
+    credentialKey: keyFile,
   }),
 ]);
 const storedTarget = Schema.Struct({ ...ChatTargetSchema.fields, conversationId: recordId });
@@ -158,7 +167,6 @@ function decode<S extends Schema.ConstraintDecoder<unknown, never>>(
     );
   }
 }
-export const cliConfiguration = (value: unknown) => decode(cli, value);
 export const runtimeConfiguration = (value: unknown) => decode(programmatic, value);
 export const localConfiguration = (value: unknown) => decode(localProgrammatic, value);
 export const serverConfiguration = (value: unknown) => decode(server, value);
