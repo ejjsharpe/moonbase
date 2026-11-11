@@ -155,6 +155,31 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     },
   };
 }
+test('a host refuses to serve when its public configuration repeats its private key', async () => {
+  const token = nonce(),
+    scope = Effect.runSync(Scope.make());
+  const client: ChatClient = {
+    command: async (operation) => {
+      if (operation !== 'getChatHost') throw Error('Unexpected ' + operation);
+      return { host, actorId: token, mode: 'local' } as never;
+    },
+    watch: () => async () => {},
+    watchChatList: () => async () => {},
+  };
+  try {
+    await assert.rejects(
+      Effect.runPromise(
+        serveChat({ host, token, port: 0 }, client).pipe(Effect.provideService(Scope.Scope, scope)),
+      ),
+      (error: unknown) =>
+        ApplicationError.is(error) &&
+        error.code === 'InvalidInput' &&
+        !error.message.includes(token),
+    );
+  } finally {
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+  }
+});
 test('production remote/server route shared commands and immutable retries without key disclosure', async (t) => {
   const f = await setup(t);
   assert.deepEqual(

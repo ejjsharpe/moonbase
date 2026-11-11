@@ -14,6 +14,7 @@ import {
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ChatTarget } from '@moonbase/contracts/chat';
+import { decodeDaemonSettings } from '@moonbase/pi-runtime/host-configuration';
 import {
   bounded,
   createFauxClient,
@@ -50,6 +51,20 @@ const writeHostSettings = async (directory: string, roots: string[], key: string
     }),
     { mode: 0o600 },
   );
+test('host settings name each approved root by an absolute path, none under another', () => {
+  const settings = (approvedRoots: string[]) => ({
+    mode: 'host',
+    port: 8787,
+    approvedRoots,
+    credentialKey: { source: 'file', path: '/keys/credential.key' },
+  });
+  assert.deepEqual(
+    decodeDaemonSettings(settings(['/work', '/other'])),
+    settings(['/work', '/other']),
+  );
+  for (const roots of [['work'], ['/work', '/work/inner']])
+    assert.throws(() => decodeDaemonSettings(settings(roots)), { code: 'InvalidInput' });
+});
 const writeScript = (directory: string, script: FauxScript) =>
   writeFile(join(directory, 'faux.json'), JSON.stringify(script));
 
@@ -305,6 +320,13 @@ const refusals: Refusal[] = [
     prepare: async (_root, directory, secret) => {
       await mkdir(directory, { mode: 0o700 });
       await writeFile(join(directory, 'identity.json'), secret, { mode: 0o644 });
+    },
+  },
+  {
+    name: 'a short token',
+    prepare: async (_root, directory) => {
+      await mkdir(directory, { mode: 0o700 });
+      await writeFile(join(directory, 'token'), 'too-short', { mode: 0o600 });
     },
   },
   {
