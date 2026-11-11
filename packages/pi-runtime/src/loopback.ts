@@ -94,32 +94,46 @@ async function readDaemonFiles(directory: string) {
     readPrivateFile(join(directory, 'token'), 8192),
   ]);
   const host = parseIdentity(identity);
-  const { port, protocol } = parse(endpoint, (value) => {
+  const { port, pid, protocol } = parse(endpoint, (value) => {
     const record = V.object(value, ['port', 'pid', 'version', 'protocol']);
     if (
       !Number.isSafeInteger(record.port) ||
       (record.port as number) < 1 ||
       (record.port as number) > 65535 ||
+      !Number.isSafeInteger(record.pid) ||
+      (record.pid as number) < 1 ||
       !Number.isSafeInteger(record.protocol)
     )
       throw Error();
-    return { port: record.port as number, protocol: record.protocol as number };
+    return {
+      port: record.port as number,
+      pid: record.pid as number,
+      protocol: record.protocol as number,
+    };
   });
   if (protocol !== chatProtocolVersion)
     throw failure('Incompatible', 'The daemon speaks another protocol version.');
   const key = token.trim();
   if (!/^[\x21-\x7e]{16,4096}$/.test(key)) throw malformed();
-  return { expected: host, origin: `http://127.0.0.1:${port}`, port, token: key };
+  return { expected: host, origin: `http://127.0.0.1:${port}`, port, pid, token: key };
 }
 
-type Generation = { id: string; origin: string; token: string; health: ChatHostHealth };
+/** A verified connection to one daemon process, which its endpoint's `pid` names. */
+type Generation = {
+  id: string;
+  origin: string;
+  pid: number;
+  token: string;
+  health: ChatHostHealth;
+};
 
 /**
  * A privileged `ConnectionService` for a daemon on this machine. It is built from the daemon's
  * `identity.json` alone and starts disconnected, so it builds while the daemon is stopped; each
  * connect reads `identity.json`, `endpoint.json` and `token` from its data directory, then verifies signed
- * health for that exact host and store. A connect that finds the same daemon keeps the current
- * generation; one that finds it restarted or replaced starts a new generation. The token never
+ * health for that exact host and store. A connect that finds the same daemon process (port and
+ * `pid` in `endpoint.json`) keeps the current generation; one that finds it restarted or replaced,
+ * even on the same port, starts a new generation. The token never
  * leaves this service's endpoint lookup, so keep it out of renderers.
  */
 export function LoopbackConnectionLive(
@@ -195,7 +209,13 @@ export function LoopbackConnectionLive(
           ),
         );
         const reuse = current;
-        if (reuse && reuse.origin === files.origin && reuse.token === files.token) {
+        // The token outlives a restart and the port can repeat, so the process tells daemons apart.
+        if (
+          reuse &&
+          reuse.origin === files.origin &&
+          reuse.pid === files.pid &&
+          reuse.token === files.token
+        ) {
           const healthy = yield* Effect.result(verify(reuse.origin, reuse.token));
           if (healthy._tag === 'Success' && current === reuse && state.state === 'connected')
             return structuredClone(state);
@@ -213,7 +233,7 @@ export function LoopbackConnectionLive(
           ),
         );
         yield* isOpen;
-        current = { id, origin: files.origin, token: files.token, health };
+        current = { id, origin: files.origin, pid: files.pid, token: files.token, health };
         publish({ profile, state: 'connected', connectionId: id, health });
         return structuredClone(state);
       });

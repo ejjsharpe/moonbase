@@ -99,8 +99,14 @@ export const serveChat = (
           const shape = input as { host?: ChatHostTarget; target?: { host: ChatHostTarget } };
           if (!V.sameHost(shape.host ?? shape.target!.host, expected))
             V.fail('Unauthorized', 'Daemon request target differs from this host.');
+          // Whether the daemon refused the request outright, so nothing of it applied.
+          let refused = false;
           const run = async () => {
-            const value = decodeDaemonOutput(operation, await daemon!.command(operation, input));
+            const reply = await daemon!.command(operation, input).catch((error: unknown) => {
+              refused = ApplicationError.is(error) && error.code !== 'Unavailable';
+              throw error;
+            });
+            const value = decodeDaemonOutput(operation, reply);
             const requestId = (input as { requestId?: string }).requestId;
             if (
               requestId !== undefined &&
@@ -125,9 +131,10 @@ export const serveChat = (
             if (daemonRequests.size <= rememberedDaemonRequests) break;
             daemonRequests.delete(key);
           }
-          // A refused request may be sent again; only an outcome that may have applied is kept.
+          // A refused request may be sent again. A failure that may have applied part of it
+          // (`Unavailable`, an unknown error, or a bad reply) is kept, so a repeat never reruns it.
           outcome.catch(() => {
-            if (daemonRequests.get(key)?.outcome === outcome) daemonRequests.delete(key);
+            if (refused && daemonRequests.get(key)?.outcome === outcome) daemonRequests.delete(key);
           });
           return outcome;
         };

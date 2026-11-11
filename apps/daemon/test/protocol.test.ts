@@ -139,6 +139,19 @@ test('a token holder drives a local-mode daemon completely over the loopback con
       // Connecting again to the same daemon keeps the generation.
       const again = await clients.connection.command('connect', { profileId: 'loopback' });
       assert.equal(again.connectionId, connected.connectionId);
+      // The token outlives a restart, so a daemon restarted on the same port is told apart by its
+      // process: an endpoint naming another pid starts a new generation.
+      const endpointPath = join(directory, 'endpoint.json');
+      const endpoint = await readJson(endpointPath);
+      await writeFile(endpointPath, JSON.stringify({ ...endpoint, pid: endpoint.pid + 1 }));
+      await chmod(endpointPath, 0o600);
+      const replaced = await clients.connection.command('connect', { profileId: 'loopback' });
+      assert.equal(replaced.state, 'connected');
+      assert.notEqual(replaced.connectionId, connected.connectionId);
+      await assert.rejects(
+        clients.connection.command('disconnect', { connectionId: connected.connectionId! }),
+        { code: 'Conflict' },
+      );
 
       const folders = await clients.runtime.runPromise(LocalHostService);
       const project = join(root, 'project');
@@ -258,7 +271,7 @@ test('a token holder drives a local-mode daemon completely over the loopback con
       await bounded(restarted.ready);
       const reconnected = await clients.connection.command('connect', { profileId: 'loopback' });
       assert.equal(reconnected.state, 'connected');
-      assert.notEqual(reconnected.connectionId, connected.connectionId);
+      assert.notEqual(reconnected.connectionId, replaced.connectionId);
       const listed = await clients.chat.command('listChats', { session });
       assert.equal(listed.conversations.length, 2);
       await clients.connection.command('disconnect', { connectionId: reconnected.connectionId! });

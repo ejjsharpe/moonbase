@@ -334,12 +334,18 @@ test('one sign-in per provider at a time, and owners that went quiet or exceed t
           ? {
               oauth: {
                 name: 'Controlled ChatGPT',
-                login: async (interaction) => ({
-                  type: 'oauth',
-                  access: await waitForKey(interaction),
-                  refresh: 'refresh',
-                  expires: 0,
-                }),
+                login: async (interaction) => {
+                  interaction.notify({
+                    type: 'auth_url',
+                    url: 'https://auth.openai.com/oauth/authorize?state=controlled',
+                  });
+                  return {
+                    type: 'oauth',
+                    access: await waitForKey(interaction),
+                    refresh: 'refresh',
+                    expires: 0,
+                  };
+                },
                 refresh: async () => {
                   throw Error('No refresh');
                 },
@@ -381,10 +387,18 @@ test('one sign-in per provider at a time, and owners that went quiet or exceed t
   assert.equal((await flowOf('other'))?.id, other.flow!.id, 'another provider is untouched');
   assert.equal((await flowOf('other'))?.state, 'running');
 
-  // An owner unheard from for the inactivity window loses its flow; one still polling keeps it.
+  // An owner unheard from for the inactivity window loses its flow; one still polling keeps it,
+  // and reading its sign-in URL counts as polling.
+  const providers = await runtime.runPromise(ProviderSetupService);
   time += inactiveProviderOwnerMs - 1;
   assert.equal((await flowOf('restarted'))?.id, taken.flow!.id);
+  time += inactiveProviderOwnerMs - 1;
+  assert.equal(
+    await runtime.runPromise(providers.getProviderUrl('restarted', taken.flow!.id)),
+    'https://auth.openai.com/oauth/authorize?state=controlled',
+  );
   time += 1;
+  assert.equal(await flowOf('observer'), null);
   assert.equal((await flowOf('restarted'))?.state, 'running');
   assert.deepEqual(aborted.sort(), ['google', 'openai']);
   assert.equal(await flowOf('other'), null);
@@ -402,7 +416,6 @@ test('one sign-in per provider at a time, and owners that went quiet or exceed t
   assert.equal((await flowOf('document-68'))?.state, 'cancelled');
 
   // Released owners stay refused within a bound; the oldest are forgotten.
-  const providers = await runtime.runPromise(ProviderSetupService);
   for (let index = 0; index < 300; index++)
     await runtime.runPromise(providers.releaseOwner(`released-${index}`));
   await assert.rejects(owner('released-299').command('getProviders', {}), {

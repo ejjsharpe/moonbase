@@ -420,9 +420,12 @@ export const ProviderSetupLive = (
             catch: unavailable,
           }),
         getProviderUrl: (owner, flowId) =>
-          Effect.try({
-            try: () => {
+          Effect.tryPromise({
+            try: async () => {
+              if (released.has(owner)) fail('owner-released');
               const { flowId: id } = decodeProviderInput('openProviderUrl', { flowId });
+              // Reading the URL is use: the owner keeps its flow as when it polls.
+              await sweepOwners(owner);
               return getProviderUrl(owner, id);
             },
             catch: (error) => (ApplicationError.is(error) ? error : unavailable()),

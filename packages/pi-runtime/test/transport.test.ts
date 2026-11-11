@@ -2125,6 +2125,33 @@ test('a folder approval is re-checked by identity on use; a replaced folder need
   f.afterDispatch = undefined;
 });
 
+test('a refused daemon mutation may be sent again; one that may have applied is never rerun', async (t) => {
+  const f = await setupLocal(t);
+  const folder = join(f.dir, 'later');
+  const approve = async (requestId: string) => {
+    const response = await post(f, await grant(f), 'approveFolder', {
+      host: localHost,
+      requestId,
+      path: folder,
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  // A refusal applied nothing, so the same request runs again once it can succeed.
+  const before = f.dispatched.length;
+  assert.equal((await approve('refused')).body.error.code, 'InvalidInput');
+  await mkdir(folder);
+  assert.deepEqual((await approve('refused')).body.value, { requestId: 'refused', path: folder });
+  assert.deepEqual(f.dispatched.slice(before), ['approveFolder', 'approveFolder']);
+  // A failure after the daemon applied the request answers its repeat without running it.
+  f.afterDispatch = async () => {
+    throw new ApplicationError({ code: 'Unavailable', message: 'Lost after applying.' });
+  };
+  assert.equal((await approve('applied')).body.error.code, 'Unavailable');
+  f.afterDispatch = undefined;
+  assert.equal((await approve('applied')).body.error.code, 'Unavailable');
+  assert.deepEqual(f.dispatched.slice(before), ['approveFolder', 'approveFolder', 'approveFolder']);
+});
+
 test('daemon refusals reach the client with fixed public messages, never host text', async (t) => {
   const f = await setupLocal(t);
   const owner = f.owner('document-reasons');
