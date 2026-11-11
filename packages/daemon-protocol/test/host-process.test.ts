@@ -254,7 +254,7 @@ test('compiled remote entry runs on Electron Node24 against the separate product
   const inputs = Object.keys(result.metafile!.inputs).map((path) => resolve(path));
   assert(
     !inputs.some((path) =>
-      /pi-durable|pi-ai|chord|packages\/(pi-runtime|workspace|workbench|editor)\//.test(path),
+      /pi-durable|pi-ai|chord|packages\/(chat-runtime|workspace|workbench|editor)\//.test(path),
     ),
   );
   const sourceDirectory = fileURLToPath(new URL('../src/', import.meta.url));

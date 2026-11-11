@@ -13,7 +13,7 @@ export default defineConfig({
         'packages/config/**',
         '**/{test,tests,scripts}/**',
         'apps/desktop/src/*.{js,ts,mjs,cjs,mts,cts}',
-        'packages/{workspace,pi-runtime,daemon-protocol,ssh}/**',
+        'packages/{workspace,chat-runtime,daemon-protocol,ssh}/**',
       ],
     },
     {

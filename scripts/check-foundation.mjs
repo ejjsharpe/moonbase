@@ -33,7 +33,7 @@ for (const entry of [
     'DTO/client entries must emit no Effect/platform dependency',
   );
   assert(
-    !/node:|electron|@moonbase\/(workspace|pi-runtime|daemon-protocol|ssh)/.test(
+    !/node:|electron|@moonbase\/(workspace|chat-runtime|daemon-protocol|ssh)/.test(
       result.outputFiles[0].text,
     ),
   );
@@ -108,7 +108,7 @@ assert(
 );
 for (const input of Object.keys(smoke.metafile.inputs)) {
   assert(
-    !/(?:^|\/)node_modules\/(?:react(?:-dom)?|monaco-editor|electron)\/|@earendil-works|node:|packages\/(?:workspace|pi-runtime|daemon-protocol|ssh)\//.test(
+    !/(?:^|\/)node_modules\/(?:react(?:-dom)?|monaco-editor|electron)\/|@earendil-works|node:|packages\/(?:workspace|chat-runtime|daemon-protocol|ssh)\//.test(
       input,
     ),
     `Forbidden dependency in public headless consumer: ${input}`,

@@ -7,7 +7,7 @@ assert.deepEqual(
   inputs.filter(
     (p) =>
       isPrivilegedDesktopInput(p) ||
-      /(?:^|\/)node_modules\/(?:electron|@moonbase\/(?:workspace|pi-runtime|daemon-protocol|ssh|connection))\/|packages\/(?:workspace|pi-runtime|daemon-protocol|ssh|connection)\/|packages\/workbench\/(?:demo|test)\/|packages\/contracts\/src\/services\.ts|packages\/application\/src\/testing\/|packages\/application\/src\/runtime\/(?:handlers|clients)\.ts|apps\/desktop\/src\/(?:main|session|preload|chat-preload|chat\/(?:config|session))\.ts|@earendil-works|pi-ai|pi-durable|node:sqlite|source-snapshot|node:/.test(
+      /(?:^|\/)node_modules\/(?:electron|@moonbase\/(?:workspace|chat-runtime|daemon-protocol|ssh|connection))\/|packages\/(?:workspace|chat-runtime|daemon-protocol|ssh|connection)\/|packages\/workbench\/(?:demo|test)\/|packages\/contracts\/src\/services\.ts|packages\/application\/src\/testing\/|packages\/application\/src\/runtime\/(?:handlers|clients)\.ts|apps\/desktop\/src\/(?:main|session|preload|chat-preload|chat\/(?:config|session))\.ts|@earendil-works|pi-ai|pi-durable|node:sqlite|source-snapshot|node:/.test(
         p,
       ),
   ),

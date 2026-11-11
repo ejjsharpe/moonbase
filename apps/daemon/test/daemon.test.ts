@@ -14,7 +14,7 @@ import {
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ChatTarget } from '@moonbase/contracts/chat';
-import { decodeDaemonSettings } from '@moonbase/pi-runtime/host-configuration';
+import { decodeDaemonSettings } from '@moonbase/chat-runtime/host-configuration';
 import {
   bounded,
   createFauxClient,

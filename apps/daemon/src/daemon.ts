@@ -6,16 +6,16 @@ import {
   LocalPiControl,
   LocalPiRuntimeLive,
   type LocalPiRuntimeConfiguration,
-} from '@moonbase/pi-runtime';
+} from '@moonbase/chat-runtime';
 import {
   createCredentialStore,
   createKeyEncryption,
   type CredentialKeySource,
-} from '@moonbase/pi-runtime/credentials';
+} from '@moonbase/chat-runtime/credentials';
 import { createFolderApprovals, createRootFolders } from '@moonbase/daemon-protocol/folders';
-import type { DaemonSettings } from '@moonbase/pi-runtime/host-configuration';
-import { createLocalModels } from '@moonbase/pi-runtime/local-models';
-import { ProviderSetupChanges, ProviderSetupLive } from '@moonbase/pi-runtime/providers';
+import type { DaemonSettings } from '@moonbase/chat-runtime/host-configuration';
+import { createLocalModels } from '@moonbase/chat-runtime/local-models';
+import { ProviderSetupChanges, ProviderSetupLive } from '@moonbase/chat-runtime/providers';
 import {
   hostDaemonCapabilities,
   localDaemonCapabilities,
@@ -23,7 +23,7 @@ import {
   serveChat,
   type SocketSources,
 } from '@moonbase/daemon-protocol/server';
-import type { ClaudeCodeSubscription } from '@moonbase/pi-runtime/claude-code';
+import type { ClaudeCodeSubscription } from '@moonbase/chat-runtime/claude-code';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import type { ChatClient, ChatCreationSettings, ChatSession } from '@moonbase/contracts/chat';
 import type { DaemonClient, FolderApprovals } from '@moonbase/contracts/daemon';

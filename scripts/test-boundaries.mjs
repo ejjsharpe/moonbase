@@ -22,8 +22,8 @@ const packages = new Map([
     },
   ],
   [
-    '@moonbase/pi-runtime',
-    { directory: 'packages/pi-runtime', exports: { '.': './src/index.ts' } },
+    '@moonbase/chat-runtime',
+    { directory: 'packages/chat-runtime', exports: { '.': './src/index.ts' } },
   ],
   [
     '@moonbase/daemon-protocol',
@@ -57,7 +57,7 @@ for (const source of [
   "await import('electron');",
   "import backend = require('node:fs');",
   "const backend = require('node:fs');",
-  "type Backend = import('@moonbase/pi-runtime').Backend;",
+  "type Backend = import('@moonbase/chat-runtime').Backend;",
 ]) {
   assert(check({ 'packages/application/src/index.ts': source }).length, source);
 }
@@ -73,9 +73,9 @@ for (const specifier of ['@moonbase/chat', '@moonbase/editor', '@moonbase/applic
     ),
   );
 assert(
-  check({ 'packages/workbench/src/index.ts': "import type {} from '@moonbase/pi-runtime';" }).some(
-    (error) => error.includes('presentation depends on infrastructure'),
-  ),
+  check({
+    'packages/workbench/src/index.ts': "import type {} from '@moonbase/chat-runtime';",
+  }).some((error) => error.includes('presentation depends on infrastructure')),
 );
 for (const source of [
   "import type {} from 'node:fs';",
@@ -147,15 +147,15 @@ assert(
 );
 assert(
   check({
-    'packages/pi-runtime/src/index.ts': "import './resources.ts';",
-    'packages/pi-runtime/src/resources.ts': "import './commands.ts';",
-    'packages/pi-runtime/src/commands.ts': "import type {} from '@moonbase/application';",
+    'packages/chat-runtime/src/index.ts': "import './resources.ts';",
+    'packages/chat-runtime/src/resources.ts': "import './commands.ts';",
+    'packages/chat-runtime/src/commands.ts': "import type {} from '@moonbase/application';",
     'packages/application/src/index.ts': '',
   }).some((error) => error.includes('reusable infrastructure')),
 );
 assert.deepEqual(
   check({
-    'packages/pi-runtime/src/index.ts': "import '@moonbase/ssh/host-health';",
+    'packages/chat-runtime/src/index.ts': "import '@moonbase/ssh/host-health';",
     'packages/ssh/src/host-health.ts':
       "import '@moonbase/contracts'; import '@moonbase/effect'; import 'node:crypto';",
     'packages/contracts/src/index.ts': '',
@@ -164,8 +164,8 @@ assert.deepEqual(
   [],
 );
 for (const [path, specifier] of [
-  ['packages/daemon-protocol/src/remote.ts', '@moonbase/pi-runtime'],
-  ['packages/pi-runtime/src/index.ts', '@moonbase/daemon-protocol/remote'],
+  ['packages/daemon-protocol/src/remote.ts', '@moonbase/chat-runtime'],
+  ['packages/chat-runtime/src/index.ts', '@moonbase/daemon-protocol/remote'],
 ])
   assert(
     check({ [path]: `import type {} from '${specifier}';` }).some((error) =>

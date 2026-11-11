@@ -1,6 +1,6 @@
 # Daemon
 
-`@moonbase/daemon` is the process root that runs chats on Bun 1.4.4. It owns one data directory and serves a Pi runtime over the authenticated WebSocket of [`@moonbase/daemon-protocol/server`](../../packages/daemon-protocol/README.md). It has no exports. The desktop app ships it (below) and starts it for each user-data profile, on `<user data>/daemon-v1` (see the [desktop README](../desktop/README.md#local-chat)).
+`@moonbase/daemon` is the process root that runs chats on Bun 1.4.4. It owns one data directory and serves a chat runtime over the authenticated WebSocket of [`@moonbase/daemon-protocol/server`](../../packages/daemon-protocol/README.md). It has no exports. The desktop app ships it (below) and starts it for each user-data profile, on `<user data>/daemon-v1` (see the [desktop README](../desktop/README.md#local-chat)).
 
 ```sh
 bun run --cwd apps/daemon dev /absolute/private/data-directory

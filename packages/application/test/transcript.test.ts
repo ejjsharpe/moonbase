@@ -368,7 +368,7 @@ test('complete-source iterator works with injected reads, reports progress, vali
   );
 });
 
-// The fixture client is trusted: the Pi runtime's ChatClient services own decoding and size bounds
+// The fixture client is trusted: the chat runtime's ChatClient services own decoding and size bounds
 // and test them. Shared code checks only meaning.
 test('trusted ChatClient replies and snapshots are not decoded or size-bounded again', async (t) => {
   const f = await transcriptController(t, 1);

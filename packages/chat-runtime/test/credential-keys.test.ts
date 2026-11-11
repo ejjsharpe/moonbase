@@ -25,7 +25,7 @@ import {
   createMemoryKeySource,
   type CredentialKeySource,
   type KeychainKeySourceOptions,
-} from '@moonbase/pi-runtime/credentials';
+} from '@moonbase/chat-runtime/credentials';
 
 const secret = { type: 'api_key' as const, key: 'sk-private-credential-value' };
 const macOnly =

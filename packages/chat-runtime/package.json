@@ -1,5 +1,5 @@
 {
-  "name": "@moonbase/pi-runtime",
+  "name": "@moonbase/chat-runtime",
   "private": true,
   "type": "module",
   "exports": {

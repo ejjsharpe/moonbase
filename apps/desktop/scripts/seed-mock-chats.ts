@@ -20,7 +20,7 @@ import {
 } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import type { ChatTarget } from '@moonbase/contracts/chat';
-import { LocalPiRuntimeLive } from '@moonbase/pi-runtime';
+import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 
 const userData = process.argv[2];
 if (!userData) throw Error('Pass the dev profile directory.');

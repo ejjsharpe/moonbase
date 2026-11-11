@@ -35,7 +35,7 @@ export async function buildDaemon(outdir, inputsPath, buildPath) {
     },
     logLevel: 'warning',
   };
-  const require = createRequire(join(root, '../../packages/pi-runtime/package.json'));
+  const require = createRequire(join(root, '../../packages/chat-runtime/package.json'));
   const helper = join(
     dirname(require.resolve('@earendil-works/pi-claude-code/package.json')),
     'src/inert-mcp.mjs',

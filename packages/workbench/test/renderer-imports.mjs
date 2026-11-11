@@ -17,7 +17,7 @@ const result = await build({
 });
 const inputs = Object.keys(result.metafile.inputs);
 const prohibited = inputs.filter((path) =>
-  /node_modules[/\\](?:electron|@moonbase[/\\](?:workspace|pi-runtime|daemon-protocol|ssh))[/\\]|packages[/\\](?:workspace|pi-runtime|daemon-protocol|ssh)[/\\]|workbench[/\\](?:demo|test)[/\\]|apps[/\\]desktop[/\\]|contracts[/\\]src[/\\]services\.ts|application[/\\]src[/\\]testing[/\\]|@earendil-works|source-snapshot|(?:^|[/\\])host[/\\]|node:/.test(
+  /node_modules[/\\](?:electron|@moonbase[/\\](?:workspace|chat-runtime|daemon-protocol|ssh))[/\\]|packages[/\\](?:workspace|chat-runtime|daemon-protocol|ssh)[/\\]|workbench[/\\](?:demo|test)[/\\]|apps[/\\]desktop[/\\]|contracts[/\\]src[/\\]services\.ts|application[/\\]src[/\\]testing[/\\]|@earendil-works|source-snapshot|(?:^|[/\\])host[/\\]|node:/.test(
     path,
   ),
 );

@@ -105,7 +105,7 @@ for (const inputs of [preloadInputs, rendererInputs]) {
   );
   assert.deepEqual(
     inputs.filter((p) =>
-      /@earendil-works|pi-runtime\/src\/(?:index|providers|credentials|local-models)\.ts|node:sqlite/.test(
+      /@earendil-works|chat-runtime\/src\/(?:index|providers|credentials|local-models)\.ts|node:sqlite/.test(
         p,
       ),
     ),
@@ -117,7 +117,7 @@ for (const inputs of [preloadInputs, rendererInputs]) {
 // runtime, provider setup, credentials, Claude Code or the protocol's server side.
 assert.deepEqual(
   mainInputs.filter((path) =>
-    /@earendil-works|pi-runtime\/src\/|daemon-protocol\/src\/(?!remote|loopback|protocol|validation|socket-client|socket-protocol)[^/]+\.ts$/.test(
+    /@earendil-works|chat-runtime\/src\/|daemon-protocol\/src\/(?!remote|loopback|protocol|validation|socket-client|socket-protocol)[^/]+\.ts$/.test(
       path,
     ),
   ),
@@ -147,8 +147,8 @@ for (const entry of ['native-actions', 'ipc', 'window-lifecycle', 'chat-backends
   assert(mainInputs.includes(`src/main/${entry}.ts`), `Missing main owner: ${entry}`);
 for (const entry of [
   'apps/daemon/src/main.ts',
-  'pi-runtime/src/index.ts',
-  'pi-runtime/src/claude-code.ts',
+  'chat-runtime/src/index.ts',
+  'chat-runtime/src/claude-code.ts',
   'daemon-protocol/src/server.ts',
 ])
   assert(
@@ -156,7 +156,7 @@ for (const entry of [
     `Missing daemon input: ${entry}`,
   );
 assert(
-  !daemonInputs.some((path) => /pi-runtime\/src\/host\.ts$|apps\/daemon\/test\//.test(path)),
+  !daemonInputs.some((path) => /chat-runtime\/src\/host\.ts$|apps\/daemon\/test\//.test(path)),
   'The standalone host or a daemon test entry reached the daemon bundle',
 );
 if (packaged) {

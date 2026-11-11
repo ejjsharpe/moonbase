@@ -4,7 +4,10 @@ import { link, lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 import type { ChatSession } from '@moonbase/contracts/chat';
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
-import { decodeDaemonSettings, type DaemonSettings } from '@moonbase/pi-runtime/host-configuration';
+import {
+  decodeDaemonSettings,
+  type DaemonSettings,
+} from '@moonbase/chat-runtime/host-configuration';
 import { DaemonFailure } from './failure.ts';
 
 export const unsafe = () =>

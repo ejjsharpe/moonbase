@@ -148,7 +148,7 @@ test('provider browser replies project private fields and reject malformed statu
   value = { providers: [], flow: { id: 'incomplete' } };
   await assert.rejects(client.command('getProviders', {}), { code: 'Incompatible' });
 });
-// Main's ChatClient is a Pi runtime service; its own tests reject oversized and malformed replies.
+// Main's ChatClient is a chat runtime service; its own tests reject oversized and malformed replies.
 test('renderer chat transport forwards main replies and snapshots without decoding them again', async () => {
   const value = { padding: 'x'.repeat(maximumChatReplyBytes) };
   let event: (id: string, result: Reply) => void = () => {},

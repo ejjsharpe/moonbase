@@ -32,4 +32,4 @@ bun run --cwd packages/daemon-protocol lint
 bun run --cwd packages/daemon-protocol test
 ```
 
-`test` runs under `bun test` against the real chat engine (`@moonbase/pi-runtime`, a dev dependency) with controlled providers and temporary stores. One case runs the compiled remote client in the pinned Electron, as desktop main runs it, which covers the client's Node path and that it bundles no engine. Host-process tests run a controlled local-mode host (`test/faux-host.mjs`) as a child process: crash recovery and parked work.
+`test` runs under `bun test` against the real chat engine (`@moonbase/chat-runtime`, a dev dependency) with controlled providers and temporary stores. One case runs the compiled remote client in the pinned Electron, as desktop main runs it, which covers the client's Node path and that it bundles no engine. Host-process tests run a controlled local-mode host (`test/faux-host.mjs`) as a child process: crash recovery and parked work.

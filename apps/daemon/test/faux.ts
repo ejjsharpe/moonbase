@@ -7,8 +7,8 @@ import {
   fauxThinking,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux';
-import { createMemoryKeySource } from '@moonbase/pi-runtime/credentials';
-import { localProviderIds } from '@moonbase/pi-runtime/providers';
+import { createMemoryKeySource } from '@moonbase/chat-runtime/credentials';
+import { localProviderIds } from '@moonbase/chat-runtime/providers';
 import type { DaemonProviders } from '../src/daemon.ts';
 
 export const fauxProviderId = 'moonbase-faux';

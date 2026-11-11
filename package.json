@@ -48,7 +48,7 @@
     "@moonbase/workspace": "workspace:*",
     "@moonbase/ssh": "workspace:*",
     "@earendil-works/pi-ai": "1.4.0",
-    "@moonbase/pi-runtime": "workspace:*",
+    "@moonbase/chat-runtime": "workspace:*",
     "@moonbase/daemon-protocol": "workspace:*",
     "oxlint": "1.90.0",
     "oxfmt": "0.75.0",

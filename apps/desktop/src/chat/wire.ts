@@ -146,7 +146,7 @@ export function browserClients(
     try {
       const value = unwrap(await bridge.call(kind, operation, input, id, backendId));
       if (kind === 'providers' && isProviderCommand(operation)) return value;
-      // Main's ChatClient boundary (Pi runtime) already decoded and bounded chat replies.
+      // Main's ChatClient boundary (chat runtime) already decoded and bounded chat replies.
       if (kind === 'chat' && isChatCommand(operation)) return value;
       if (kind === 'connection' && isConnectionCommand(operation))
         return decodeConnectionOutput(operation, value);
@@ -218,7 +218,7 @@ export function browserClients(
     },
   };
 }
-/** A watch event's value; main's ChatClient boundary (Pi runtime) already decoded chat values. */
+/** A watch event's value; main's ChatClient boundary (chat runtime) already decoded chat values. */
 function decodeWatchValue(kind: ChatWatchKind, value: unknown) {
   if (kind === 'watch-connection') return decodeConnectionSnapshot(value);
   if (kind === 'watch-providers') return decodeProviderOutput('getProviders', value);

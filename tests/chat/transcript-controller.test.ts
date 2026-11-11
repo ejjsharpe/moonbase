@@ -7,7 +7,7 @@ import { ManagedRuntime } from 'effect';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
-import { LocalPiRuntimeLive } from '@moonbase/pi-runtime';
+import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { createMoonbaseApplication } from '@moonbase/application';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import type { ChatState } from '@moonbase/application/chat';
