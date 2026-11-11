@@ -117,7 +117,9 @@ for (const inputs of [preloadInputs, rendererInputs]) {
 // provider setup, credentials or Claude Code.
 assert.deepEqual(
   mainInputs.filter((path) =>
-    /@earendil-works|pi-runtime\/src\/(?!remote|loopback|protocol|validation)[^/]+\.ts$/.test(path),
+    /@earendil-works|pi-runtime\/src\/(?!remote|loopback|protocol|validation|socket-client|socket-protocol)[^/]+\.ts$/.test(
+      path,
+    ),
   ),
   [],
   'The local chat runtime reached Electron main',

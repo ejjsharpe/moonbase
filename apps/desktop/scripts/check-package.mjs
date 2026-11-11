@@ -80,7 +80,9 @@ assert.deepEqual(
 // Local chat runs in the bundled daemon; packaged main holds only its loopback client.
 assert.deepEqual(
   main.filter((path) =>
-    /@earendil-works|pi-runtime\/src\/(?!remote|loopback|protocol|validation)[^/]+\.ts$/.test(path),
+    /@earendil-works|pi-runtime\/src\/(?!remote|loopback|protocol|validation|socket-client|socket-protocol)[^/]+\.ts$/.test(
+      path,
+    ),
   ),
   [],
   'The local chat runtime reached packaged main',
