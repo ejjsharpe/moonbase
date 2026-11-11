@@ -29,8 +29,14 @@ import {
   removeEndpoint,
   writeEndpoint,
 } from './data-directory.ts';
-import { describeFailure } from './failure.ts';
-import { createIdleMonitor, systemClock, type IdleClock, type IdleMonitor } from './idle.ts';
+import { DaemonFailure, describeFailure } from './failure.ts';
+import {
+  createIdleMonitor,
+  systemClock,
+  trackClientUse,
+  type IdleClock,
+  type IdleMonitor,
+} from './idle.ts';
 import { acquireDaemonLock } from './lock.ts';
 import { openDaemonLog, type DaemonLog } from './log.ts';
 
@@ -69,6 +75,8 @@ export type DaemonExit = 'stopped' | 'idle';
 export async function runDaemon(options: DaemonOptions): Promise<DaemonExit> {
   const directory = await openPrivateDirectory(options.directory);
   const lock = await acquireDaemonLock(directory);
+  // An endpoint left by a daemon that crashed names a port nothing serves.
+  await removeEndpoint(directory);
   let log: DaemonLog | undefined;
   try {
     log = await openDaemonLog(directory);
@@ -94,11 +102,16 @@ async function serveDaemon(
   const databasePath = join(directory, 'chat.sqlite');
   // SQLite gives its WAL files the store's mode, so the store starts private.
   await preparePrivateFile(databasePath);
-  let exit: DaemonExit = 'stopped';
-  let finish!: () => void, idle: IdleMonitor | undefined;
+  let exit: DaemonExit = 'stopped',
+    stopping = false;
+  let finish!: () => void, idle: IdleMonitor | undefined, closeAdmissions: (() => void) | undefined;
   const finished = new Promise<void>((resolve) => (finish = resolve));
+  // Stopping refuses new requests and runs at once; the server and runtime then close in order.
   const stop = () => {
+    if (stopping) return;
+    stopping = true;
     idle?.stop();
+    closeAdmissions?.();
     finish();
   };
   if (options.signal.aborted) stop();
@@ -122,13 +135,19 @@ async function serveDaemon(
         await runtime.dispose();
       }
     } else {
-      const runtime = ManagedRuntime.make(composeLocal(options, session, settings, databasePath));
+      const providers = options.local(settings, session);
+      if (settings.credentialKey?.source === 'file') await checkKeyFile(providers.keySource);
+      const runtime = ManagedRuntime.make(
+        composeLocal(options.directory, providers, session, databasePath),
+      );
       try {
         const control = await runtime.runPromise(
           Effect.gen(function* () {
             return yield* LocalPiControl;
           }),
         );
+        closeAdmissions = () => control.setAdmissionsOpen(false);
+        if (stopping) closeAdmissions();
         idle = createIdleMonitor({
           idleMs: options.idleMs ?? 5 * 60_000,
           pollMs: options.pollMs ?? 30_000,
@@ -139,10 +158,8 @@ async function serveDaemon(
             stop();
           },
         });
-        if (options.signal.aborted) idle.stop();
-        await serve(runtime, trackClient(makeChatClient(runtime), idle), 0, () =>
-          control.setAdmissionsOpen(false),
-        );
+        if (stopping) idle.stop();
+        await serve(runtime, trackClientUse(makeChatClient(runtime), idle), 0);
       } finally {
         await runtime.dispose();
       }
@@ -158,30 +175,32 @@ async function serveDaemon(
   log.write({ event: 'stopped', reason: exit });
   return exit;
 
-  /** Serves until stopped, then closes admissions before the server; the caller closes the runtime. */
+  /** Serves until stopped, then closes the server; the caller closes the runtime. */
   async function serve<R>(
     runtime: ManagedRuntime.ManagedRuntime<R, ApplicationError>,
     client: ChatClient,
     port: number,
-    closeAdmissions?: () => void,
   ) {
+    // A daemon told to stop while starting never listens or announces itself.
+    if (stopping) return;
     await runtime.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const server = yield* serveChat({ host: session.host, token, port }, client);
-          // Finalizers run in reverse, so admissions close before the server does.
-          if (closeAdmissions) yield* Effect.addFinalizer(() => Effect.sync(closeAdmissions));
           const listening = Number(new URL(server.origin).port);
-          yield* Effect.promise(() =>
-            writeEndpoint(directory, {
-              port: listening,
-              pid: process.pid,
-              version: chatHostVersion,
-              protocol: chatProtocolVersion,
-            }),
-          );
-          log.write({ event: 'ready', port: listening });
-          options.ready(JSON.stringify({ event: 'ready', host: session.host, port: listening }));
+          if (!stopping)
+            yield* Effect.promise(() =>
+              writeEndpoint(directory, {
+                port: listening,
+                pid: process.pid,
+                version: chatHostVersion,
+                protocol: chatProtocolVersion,
+              }),
+            );
+          if (!stopping) {
+            log.write({ event: 'ready', port: listening });
+            options.ready(JSON.stringify({ event: 'ready', host: session.host, port: listening }));
+          }
           yield* Effect.promise(() => finished);
           log.write({ event: 'stopping', reason: exit });
         }),
@@ -190,14 +209,25 @@ async function serveDaemon(
   }
 }
 
+/**
+ * Refuses an unsafe key file, or one that holds no key, before the daemon serves. Loading creates
+ * nothing; a missing key file is created at the first sign-in.
+ */
+async function checkKeyFile(keySource: CredentialKeySource) {
+  try {
+    await keySource.load();
+  } catch (error) {
+    // The key file's own messages name no path or contents.
+    throw ApplicationError.is(error) ? new DaemonFailure(error.code, error.message) : error;
+  }
+}
+
 function composeLocal(
-  options: DaemonOptions,
+  directory: string,
+  providers: LocalProviders,
   session: ChatSession,
-  settings: LocalSettings,
   databasePath: string,
 ) {
-  const directory = options.directory;
-  const providers = options.local(settings, session);
   const credentials = createCredentialStore(
     join(directory, 'credentials'),
     createKeyEncryption(providers.keySource),
@@ -240,36 +270,4 @@ function composeLocal(
         claudeCode && id === claudeCode.id ? claudeCode.getCheckProblem(signal) : undefined,
     }),
   );
-}
-
-/** Counts each request and open watch as a client using the daemon. */
-function trackClient(client: ChatClient, idle: IdleMonitor): ChatClient {
-  return {
-    command: async (operation, input, options) => {
-      idle.begin();
-      try {
-        return await client.command(operation, input, options);
-      } finally {
-        idle.end();
-      }
-    },
-    watch: (input, receive, onError) => {
-      idle.begin();
-      let open = true;
-      let close: ReturnType<ChatClient['watch']>;
-      try {
-        close = client.watch(input, receive, onError);
-      } catch (error) {
-        idle.end();
-        throw error;
-      }
-      return async () => {
-        if (open) {
-          open = false;
-          idle.end();
-        }
-        await close();
-      };
-    },
-  };
 }

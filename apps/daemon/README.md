@@ -14,7 +14,7 @@ The data directory is its only argument; everything else is read from files insi
 | `token` | 32 random bytes, base64url: a client's whole authority |
 | `daemon.json` | Optional settings (below); absent means local mode |
 | `daemon.lock` | One daemon per directory, taken before the store opens |
-| `endpoint.json` | `{port, pid, version, protocol}`, written once listening, removed on a clean exit |
+| `endpoint.json` | `{port, pid, version, protocol}`, written once listening, removed on a clean exit and, if a crash left one, once the lock is taken |
 | `chat.sqlite` | Pi Durable store |
 | `credentials/`, `approved-folders.json`, `chats/` | Local mode: encrypted provider credentials, approved folders, folders of chats without a project |
 | `logs/` | `daemon.log`, rotated at 1 MiB to `daemon.1.log`…`daemon.3.log` |
@@ -27,10 +27,10 @@ The data directory is its only argument; everything else is read from files insi
 { "mode": "host", "cwd": "/absolute/folder", "model": { "provider": "openai", "modelId": "gpt-6-sol" }, "port": 8787 }
 ```
 
-- **Local mode** listens on an ephemeral 127.0.0.1 port. It runs the local Pi runtime with the local provider catalog and the Claude Code subscription; credentials are encrypted under a key in the Keychain (the default) or a private key file. A chat may use only a folder in `approved-folders.json`. The daemon never opens a browser.
+- **Local mode** listens on an ephemeral 127.0.0.1 port. It runs the local Pi runtime with the local provider catalog and the Claude Code subscription; credentials are encrypted under a key in the Keychain (the default) or a private key file, which is checked at startup and created at the first sign-in. A chat may use only a folder in `approved-folders.json`. The daemon never opens a browser.
 - **Host mode** is the fixed-settings runtime of the standalone host (`host.ts`) on the configured port, with host-side provider keys.
 
-On start it prints one JSON `ready` line on stdout (`{"event":"ready","host":…,"port":…}`); failures print one `failed` line on stderr and exit 1, including "already running" when another daemon holds the lock. `SIGTERM` or `SIGINT` stops admitting, closes the server and runtime, closes Claude Code's workers, removes `endpoint.json` and exits 0; interrupted runs resume on the next start through Pi Durable. A local daemon also exits by itself after 5 minutes with no client request in flight, no open watch and no active work; host mode never idles out. Logs record only lifecycle events and failure codes: no token, credentials, request bodies or chat text.
+On start it prints one JSON `ready` line on stdout (`{"event":"ready","host":…,"port":…}`); failures print one `failed` line on stderr and exit 1, including "already running" when another daemon holds the lock. `SIGTERM` or `SIGINT` stops admitting (new requests and runs are refused at once), closes the server and runtime, closes Claude Code's workers, removes `endpoint.json` and exits 0; interrupted runs resume on the next start through Pi Durable. A local daemon also exits by itself after 5 minutes with no client request in flight, no open watch and no active work; host mode never idles out. Logs record only lifecycle events and failure codes: no token, credentials, request bodies or chat text.
 
 ## Checks
 
