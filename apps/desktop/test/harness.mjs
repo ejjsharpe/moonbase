@@ -1,6 +1,9 @@
 // Test-only Electron entry. Public ipcMain registration wraps delivery, never workspace effects.
 import { app, ipcMain } from 'electron';
 import { writeFileSync } from 'node:fs';
+import { installFauxDaemon } from './faux-daemon.mjs';
+// Local chat runs in the faux daemon, never the real one or the Keychain.
+installFauxDaemon();
 const register = ipcMain.handle.bind(ipcMain);
 const control = {
   startupFailure: process.env.MOONBASE_TEST_STARTUP_FAILURE ?? null,

@@ -69,6 +69,7 @@ test('daemon replies decode strictly, bounding folders and validating sign-in li
   const folders = Array.from({ length: maximumRecentFolders }, (_, i) => `/folder-${i}`);
   assert.deepEqual(decodeDaemonOutput('listRecentFolders', { folders }), { folders });
   assert.equal(decodeDaemonOutput('checkChatFolder', undefined), undefined);
+  assert.equal(decodeDaemonOutput('checkApprovedFolder', undefined), undefined);
   const url = 'https://auth.openai.com/api/accounts/authorize?state=1';
   assert.deepEqual(decodeDaemonOutput('openProviderUrl', { state, url }), { state, url });
   for (const [operation, output] of [

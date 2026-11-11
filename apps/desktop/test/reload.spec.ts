@@ -1,3 +1,4 @@
+import { findTestBun, prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
 import { saveFile, captureNative } from './editor-regressions.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron } from '@playwright/test';
@@ -29,6 +30,7 @@ test('native Reload retains text painted before ordinary recovery debounce', asy
   git('add', '.');
   git('commit', '-qm', 'Controlled reload fixture');
   const packaged = !!process.env.MOONBASE_PACKAGED_TEST;
+  await prepareDaemonData(join(base, 'user-data'));
   const app = await electron.launch({
     ...(packaged
       ? {
@@ -37,13 +39,20 @@ test('native Reload retains text painted before ordinary recovery debounce', asy
             resolve('release/mac-arm64/Moonbase.app/Contents/MacOS/Moonbase'),
         }
       : {}),
-    args: packaged ? [] : [process.env.MOONBASE_RELOAD_MAIN ?? resolve('dist/main.mjs')],
+    args: packaged
+      ? []
+      : [
+          '-r',
+          resolve('test/faux-daemon-preload.cjs'),
+          process.env.MOONBASE_RELOAD_MAIN ?? resolve('dist/main.mjs'),
+        ],
     env: {
       PATH: '/usr/bin:/bin',
       PI_CLAUDE_CODE_COMMAND: '/nonexistent/claude',
       HOME: process.env.HOME!,
       TMPDIR: process.env.TMPDIR!,
       MOONBASE_USER_DATA: join(base, 'user-data'),
+      MOONBASE_TEST_BUN: findTestBun(),
       GIT_CONFIG_GLOBAL: '/dev/null',
       GIT_CONFIG_NOSYSTEM: '1',
     },
@@ -206,6 +215,7 @@ test('native Reload retains text painted before ordinary recovery debounce', asy
           }
         })
         .toBe(true);
+    await stopDaemon(join(base, 'user-data', 'daemon-v1'));
     rmSync(base, { recursive: true });
     writeFileSync(
       test.info().outputPath('cleanup.json'),

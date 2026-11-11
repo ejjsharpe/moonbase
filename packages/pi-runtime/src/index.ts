@@ -166,6 +166,12 @@ export const LocalHostLive = (
         checkChatFolder: handle('checkChatFolder', ({ path }) =>
           promise(() => checkChatFolder(config.chatFolders, path)),
         ),
+        checkApprovedFolder: handle('checkApprovedFolder', ({ path }) =>
+          promise(async () => {
+            if (!(await config.folders.has(path)))
+              throw new ApplicationError(daemonErrorReasons['folder-not-approved']);
+          }),
+        ),
         getActiveWork: handle('getActiveWork', () =>
           Effect.map(control.hasActiveWork(), (active) => ({ active })),
         ),

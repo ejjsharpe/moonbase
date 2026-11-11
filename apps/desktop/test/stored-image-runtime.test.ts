@@ -84,7 +84,7 @@ for (const mode of ['local', 'remote'] as const)
           return reply;
         },
       };
-      const ipc = new ChatIpcSession(ipcRuntime, reader, null, session, () => {});
+      const ipc = new ChatIpcSession(ipcRuntime, reader, { mode: 'local' }, session, () => {});
       let id = 0;
       const serve = async (source: ChatTranscriptSource, part: ChatTranscriptPart) => {
         const reply = await ipc

@@ -76,7 +76,7 @@ async function installCopy(page: Page) {
       };
     },
   };
-  const owner = new ChatIpcSession(runtime, client, null, context, () => {}, {
+  const owner = new ChatIpcSession(runtime, client, { mode: 'local' }, context, () => {}, {
     transcript: {
       writeText: async (text) => {
         writes.push(text);

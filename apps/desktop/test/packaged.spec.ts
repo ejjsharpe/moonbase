@@ -1,3 +1,4 @@
+import { prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
 import { openSettings } from './chat-target.ts';
 import {
   saveFile,
@@ -43,6 +44,7 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
   const executablePath = resolve(
     `release/${process.arch === 'arm64' ? 'mac-arm64' : 'mac'}/Moonbase.app/Contents/MacOS/Moonbase`,
   );
+  await prepareDaemonData(join(base, 'fresh-user-data'));
   const launch = () =>
     electron.launch({
       executablePath,
@@ -144,9 +146,11 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
       page.getByRole('button', { name: 'Open sign-in page', exact: true }),
     ).toBeVisible();
     await expect(
-      page.getByLabel('Complete login in your browser, or paste the final redirect URL here:', {
-        exact: true,
-      }),
+      // The sign-in runs in the packaged daemon on this Mac, whose callback finishes it.
+      page.getByLabel(
+        'Finish signing in in your browser; Moonbase completes it by itself. If it does not, paste the final redirect URL here.',
+        { exact: true },
+      ),
     ).toBeVisible();
     await screen('local-oauth-loaded');
     await page.getByRole('button', { name: 'Cancel setup', exact: true }).click();
@@ -289,6 +293,7 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
     await closed;
   } finally {
     await stop();
+    await stopDaemon(join(base, 'fresh-user-data', 'daemon-v1'));
     rmSync(base, { recursive: true, force: true });
   }
 });

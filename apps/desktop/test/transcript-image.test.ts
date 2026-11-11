@@ -63,9 +63,16 @@ function fixture(
     },
     watch: () => () => Promise.resolve(),
   };
-  const session = new ChatIpcSession(runtime, chat, options.connection ?? null, context, () => {}, {
-    perf: options.perf,
-  });
+  const session = new ChatIpcSession(
+    runtime,
+    chat,
+    options.connection ? { mode: 'remote', connection: options.connection } : { mode: 'local' },
+    context,
+    () => {},
+    {
+      perf: options.perf,
+    },
+  );
   let id = 0;
   const issue = async (mimeType: string, value = selection) => {
     const reply = await session.call(

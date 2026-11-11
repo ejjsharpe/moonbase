@@ -1,3 +1,4 @@
+import { findTestBun, prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
 import { prepareCrashRecovery, recoverCrashedWorkbench } from './editor-regressions.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron } from '@playwright/test';
@@ -17,6 +18,7 @@ for (const mode of ['reload', 'veto', 'crash'])
     writeFileSync(join(checkout, 'a.ts'), 'original');
     execFileSync('/usr/bin/git', ['-C', checkout, 'init', '-q', '-b', 'main']);
     const packaged = !!process.env.MOONBASE_PACKAGED_TEST;
+    await prepareDaemonData(join(base, 'data'));
     const app = await electron.launch({
       ...(packaged
         ? {
@@ -32,6 +34,7 @@ for (const mode of ['reload', 'veto', 'crash'])
         HOME: process.env.HOME!,
         TMPDIR: process.env.TMPDIR!,
         MOONBASE_USER_DATA: join(base, 'data'),
+        MOONBASE_TEST_BUN: findTestBun(),
         GIT_CONFIG_GLOBAL: '/dev/null',
         GIT_CONFIG_NOSYSTEM: '1',
       },
@@ -289,6 +292,7 @@ for (const mode of ['reload', 'veto', 'crash'])
             }
           })
           .toBe(true);
+      await stopDaemon(join(base, 'data', 'daemon-v1'));
       rmSync(base, { recursive: true });
       writeFileSync(
         test.info().outputPath('cleanup.json'),

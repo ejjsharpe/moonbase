@@ -31,10 +31,6 @@ const bridge: ChatBridge = {
         conversationId,
       }),
     ) as never,
-  confirmQuit: async () =>
-    unwrap(
-      await ipcRenderer.invoke(channels.call, { kind: 'confirm-quit', backendId: 'local' }),
-    ) as never,
   context: async (backendId = 'remote') =>
     unwrap(await ipcRenderer.invoke(channels.call, { kind: 'context', backendId })) as never,
   async call(kind, operation, input, id, backendId = 'remote') {

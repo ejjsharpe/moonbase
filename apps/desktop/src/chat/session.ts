@@ -51,6 +51,7 @@ const makeImageReadsBusyError = () =>
 export class ChatIpcSession {
   private lifetime: IpcLifetime;
   private chat: ChatClient;
+  private mode: 'local' | 'remote';
   private connection: ConnectionClient | null;
   private capabilities: ChatIpcCapabilities;
   private copies = 0;
@@ -68,14 +69,15 @@ export class ChatIpcSession {
   constructor(
     runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>,
     chat: ChatClient,
-    connection: ConnectionClient | null,
+    backend: ChatIpcBackend,
     context: ChatSession,
     emit: (id: string, result: Reply) => void,
     capabilities: ChatIpcCapabilities = {},
   ) {
     this.lifetime = new IpcLifetime(runtime, 64, errorDTO);
     this.chat = chat;
-    this.connection = connection;
+    this.mode = backend.mode;
+    this.connection = backend.mode === 'remote' ? backend.connection : null;
     this.context = context;
     this.emit = emit;
     this.capabilities = capabilities;
@@ -161,14 +163,20 @@ export class ChatIpcSession {
         const receive = (value: unknown) => {
             if (live()) this.emit(id, { ok: true, value });
           },
-          error = (e: ApplicationError) => {
+          delivered = (e: ApplicationError) => {
+            failed = true;
             if (live()) this.emit(id, errorDTO(e));
           };
-        await request.acquireWatch(() =>
-          kind === 'watch-chat'
-            ? this.chat.watch(v as never, receive, error)
-            : this.connection!.watch(receive, error),
-        );
+        let failed = false;
+        await request.acquireWatch(() => {
+          const close =
+            kind === 'watch-chat'
+              ? this.chat.watch(v as never, receive, delivered)
+              : this.connection!.watch(receive, delivered);
+          // A failure the watch delivered is its outcome, not a failure to clean it up.
+          return () =>
+            close().catch((cause: unknown) => (failed ? undefined : Promise.reject(cause)));
+        });
         return { ok: true, value: null };
       }
       if (kind === 'transcript') {
@@ -199,8 +207,14 @@ export class ChatIpcSession {
         return { ok: true, value: null };
       }
       if (kind === 'chat' && operation === 'createChat') {
-        const settings = (v as { settings?: unknown }).settings;
-        if ((this.connection === null) !== (settings !== undefined)) return invalid();
+        // Only a local chat chooses its folder and model; a remote host fixes both.
+        const settings = (v as { settings?: { cwd?: string } }).settings;
+        if ((this.mode === 'local') !== (settings !== undefined)) return invalid();
+        if (settings?.cwd !== undefined) await this.capabilities.prepareFolder?.(settings.cwd);
+      }
+      if (kind === 'chat' && operation === 'findChatFiles') {
+        const cwd = (v as { cwd?: string }).cwd;
+        if (cwd !== undefined) await this.capabilities.prepareFolder?.(cwd);
       }
       let value: unknown;
       if (kind === 'providers')
@@ -316,8 +330,12 @@ export class ChatIpcSession {
     return this.lifetime.count;
   }
 }
+/** What a session's backend is: a local daemon's chat, or a remote host's with its connection. */
+export type ChatIpcBackend = { mode: 'local' } | { mode: 'remote'; connection: ConnectionClient };
 export type ChatIpcCapabilities = {
   providers?: ProviderSetupClient;
+  /** Prepares a folder a local chat request names, before the request is sent. */
+  prepareFolder?(path: string): Promise<void>;
   transcript?: NativeTranscriptActions;
   /** lru-cache clock for image URL expiry; tests inject one. */
   perf?: { now(): number };

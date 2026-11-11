@@ -1,3 +1,4 @@
+import { findTestBun, prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
 import { closeSettings, openSettings, selectRemoteChat } from './chat-target.ts';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { fixture } from '../../../tests/chat/tool-fixture.ts';
@@ -12,13 +13,20 @@ const executable = packaged
   ? (process.env.MOONBASE_RELOAD_EXECUTABLE ??
     resolve('release/mac-arm64/Moonbase.app/Contents/MacOS/Moonbase'))
   : require('electron');
-const args = packaged ? [] : [process.env.MOONBASE_RELOAD_MAIN ?? resolve('dist/main.mjs')];
+const args = packaged
+  ? []
+  : [
+      '-r',
+      resolve('test/faux-daemon-preload.cjs'),
+      process.env.MOONBASE_RELOAD_MAIN ?? resolve('dist/main.mjs'),
+    ];
 const platform = {
   PATH: '/usr/bin:/bin',
   HOME: process.env.HOME!,
   TMPDIR: process.env.TMPDIR!,
   // Never probe or use the developer's own Claude Code login.
   PI_CLAUDE_CODE_COMMAND: '/nonexistent/claude',
+  MOONBASE_TEST_BUN: findTestBun(),
 };
 
 test('every present invalid configuration including empty fails startup', async () => {
@@ -97,6 +105,7 @@ for (const configured of [false, true])
     const before = await f?.stats();
     const base =
       f?.directory ?? realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-config-absent-')));
+    await prepareDaemonData(join(base, 'desktop'));
     const app = await electron.launch({
       executablePath: executable,
       args,
@@ -185,6 +194,7 @@ for (const configured of [false, true])
             }
           })
           .toBe(true);
+      await stopDaemon(join(base, 'desktop', 'daemon-v1'));
       const host = await f?.close();
       if (!f) rmSync(base, { recursive: true });
       writeFileSync(

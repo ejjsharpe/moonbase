@@ -309,7 +309,7 @@ function fixture(live = false, text = '  **raw**\r\n\t🌔 é\r\n' + 'α'.repea
       };
     },
   };
-  const owner = new ChatIpcSession(runtime, chat, null, context, () => {}, {
+  const owner = new ChatIpcSession(runtime, chat, { mode: 'local' }, context, () => {}, {
     transcript: {
       writeText: async (value) => {
         await controls.write(value);
@@ -965,7 +965,7 @@ test('Copy accepts an empty authored text part', async () => {
     },
     watch: () => () => Promise.resolve(),
   };
-  const session = new ChatIpcSession(runtime, chat, null, context, () => {}, {
+  const session = new ChatIpcSession(runtime, chat, { mode: 'local' }, context, () => {}, {
     transcript: {
       writeText: async (text) => {
         writes.push(text);
@@ -1027,7 +1027,7 @@ function partsFixture(texts: string[], chunkBytes = 4) {
     },
     watch: () => () => Promise.resolve(),
   };
-  const owner = new ChatIpcSession(runtime, chat, null, context, () => {}, {
+  const owner = new ChatIpcSession(runtime, chat, { mode: 'local' }, context, () => {}, {
     transcript: {
       writeText: async (text) => {
         writes.push(text);

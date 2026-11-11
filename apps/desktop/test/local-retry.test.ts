@@ -36,7 +36,13 @@ test('desktop recovers an exact committed Create before renewed folder approval,
   };
   let runtime = ManagedRuntime.make(LocalPiRuntimeLive(config));
   await makeChatClient(runtime).command('getChatHost', { host: context.host });
-  let owner = new ChatIpcSession(runtime, makeChatClient(runtime), null, context, () => {});
+  let owner = new ChatIpcSession(
+    runtime,
+    makeChatClient(runtime),
+    { mode: 'local' },
+    context,
+    () => {},
+  );
   t.after(async () => {
     await owner.dispose();
     await runtime.dispose();
@@ -57,7 +63,13 @@ test('desktop recovers an exact committed Create before renewed folder approval,
   approved = false;
   runtime = ManagedRuntime.make(LocalPiRuntimeLive(config));
   await makeChatClient(runtime).command('getChatHost', { host: context.host });
-  owner = new ChatIpcSession(runtime, makeChatClient(runtime), null, context, () => {});
+  owner = new ChatIpcSession(
+    runtime,
+    makeChatClient(runtime),
+    { mode: 'local' },
+    context,
+    () => {},
+  );
   assert.deepEqual(await owner.call('chat', 'createChat', input, 'retry'), committed);
   assert.equal(validations, 1);
   await mkdir(cwd);

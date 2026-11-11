@@ -59,6 +59,10 @@ export const daemonErrorReasons = {
     code: 'Unauthorized',
     message: 'This chat’s folder is not one Moonbase made for it.',
   },
+  'folder-not-approved': {
+    code: 'Unauthorized',
+    message: 'Choose this working folder with the native picker first.',
+  },
   'folders-unavailable': {
     code: 'Unavailable',
     message: 'Local folder approvals are unavailable.',

@@ -445,6 +445,8 @@ export function makeDaemonClient(
       run(Effect.flatMap(LocalHostService, (s) => s.listRecentFolders(input))),
     checkChatFolder: (input) =>
       run(Effect.flatMap(LocalHostService, (s) => s.checkChatFolder(input))),
+    checkApprovedFolder: (input) =>
+      run(Effect.flatMap(LocalHostService, (s) => s.checkApprovedFolder(input))),
     getActiveWork: (input) => run(Effect.flatMap(LocalHostService, (s) => s.getActiveWork(input))),
     markFolderAsProject: (input) =>
       run(Effect.flatMap(LocalHostService, (s) => s.markFolderAsProject(input))),

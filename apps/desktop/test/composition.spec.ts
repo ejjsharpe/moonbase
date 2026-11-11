@@ -1,3 +1,4 @@
+import { findTestBun, prepareDaemonData } from './faux-daemon.mjs';
 import { expectSaveEnabled, saveFile, captureNative } from './editor-regressions.ts';
 import {
   closeSettings,
@@ -29,6 +30,7 @@ async function launch(
   data = 'desktop-data',
   startupFailure?: 'editor' | 'chat-context',
 ) {
+  await prepareDaemonData(join(f.directory, data));
   const app = await electron.launch({
     ...(packaged
       ? {
@@ -46,6 +48,7 @@ async function launch(
       HOME: process.env.HOME!,
       TMPDIR: process.env.TMPDIR!,
       MOONBASE_USER_DATA: join(f.directory, data),
+      MOONBASE_TEST_BUN: findTestBun(),
       MOONBASE_CHAT_CONFIG: f.clientConfig,
       ...(startupFailure ? { MOONBASE_TEST_STARTUP_FAILURE: startupFailure } : {}),
       ...(process.env.MOONBASE_TEST_MAIN

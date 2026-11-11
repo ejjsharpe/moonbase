@@ -1,6 +1,12 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux';
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxText,
+  fauxThinking,
+  fauxToolCall,
+} from '@earendil-works/pi-ai/providers/faux';
 import { createMemoryKeySource } from '@moonbase/pi-runtime/credentials';
 import { localProviderIds } from '@moonbase/pi-runtime/providers';
 import type { LocalProviders } from '../src/daemon.ts';
@@ -9,10 +15,15 @@ export const fauxProviderId = 'moonbase-faux';
 export const fauxModelId = 'faux-model';
 
 /**
- * A step a faux model call takes: reply with `reply`, or `hold` until the run is interrupted. The
- * test writes the steps to `faux.json` in the data directory; calls past them reply "Faux reply".
+ * A step a faux model call takes: reply with `reply` (after `thinking`, if given), call `tool`
+ * with `args`, or `hold` until the run is interrupted. The test writes the steps to `faux.json`
+ * in the data directory, and may change them while the daemon runs; calls past them reply
+ * "Faux reply". Every model of every provider takes the same steps in turn.
  */
-export type FauxStep = { reply: string } | { hold: true };
+export type FauxStep =
+  | { reply: string; thinking?: string }
+  | { tool: string; args: Record<string, unknown> }
+  | { hold: true };
 export type FauxScript = {
   steps?: FauxStep[];
   idleMs?: number;
@@ -52,13 +63,27 @@ export function createFauxProviders(directory: string): LocalProviders {
     if (current && 'hold' in current) {
       await new Promise<void>((resolve) => {
         if (options?.signal?.aborted) return resolve();
-        options?.signal?.addEventListener('abort', () => resolve(), { once: true });
+        options?.signal?.addEventListener('abort', () => resolve(), {
+          once: true,
+        });
       });
       throw Error('Faux model interrupted');
     }
-    return fauxAssistantMessage(current?.reply ?? 'Faux reply');
+    if (current && 'tool' in current)
+      return fauxAssistantMessage(
+        fauxToolCall(current.tool, current.args as Parameters<typeof fauxToolCall>[1]),
+        {
+          stopReason: 'toolUse',
+        },
+      );
+    const reply = current?.reply ?? 'Faux reply';
+    return fauxAssistantMessage(
+      current?.thinking ? [fauxThinking(current.thinking), fauxText(reply)] : reply,
+    );
   };
-  faux.setResponses(Array.from({ length: 256 }, () => (_context, options) => step(options)));
+  const script = (provider: ReturnType<typeof fauxProvider>) =>
+    provider.setResponses(Array.from({ length: 256 }, () => (_context, options) => step(options)));
+  script(faux);
   return {
     keySource: createMemoryKeySource(),
     installProviders: (models) => {
@@ -66,7 +91,13 @@ export function createFauxProviders(directory: string): LocalProviders {
       // Every provider setup offers is faux too: sign-ins prompt and store a credential, and none
       // reaches a provider, the callback port or the Claude Code CLI.
       for (const id of localProviderIds) {
-        const provider = fauxProvider({ provider: id }).provider;
+        const scripted = fauxProvider({
+          provider: id,
+          models: [{ id: `${id}-faux`, name: `Faux ${id}`, reasoning: true }],
+          tokensPerSecond: 100000,
+        });
+        script(scripted);
+        const provider = scripted.provider;
         const auth = (): typeof provider.auth => {
           if (id === 'claude-code') return {};
           if (id !== 'openai')
@@ -75,7 +106,10 @@ export function createFauxProviders(directory: string): LocalProviders {
                 name: 'Faux API key',
                 login: async (interaction) => ({
                   type: 'api_key',
-                  key: await interaction.prompt({ type: 'secret', message: 'Enter API key' }),
+                  key: await interaction.prompt({
+                    type: 'secret',
+                    message: 'Enter API key',
+                  }),
                 }),
                 resolve: async ({ credential }) =>
                   credential?.key ? { auth: { apiKey: credential.key } } : undefined,

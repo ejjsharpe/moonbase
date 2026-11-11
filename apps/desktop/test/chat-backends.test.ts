@@ -4,30 +4,49 @@ import { Effect, Layer, ManagedRuntime } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { createChatBackends } from '../src/main/chat-backends.ts';
 
+type Dependencies = Parameters<typeof createChatBackends>[0];
+type Backend = NonNullable<Dependencies['localResult']['backend']>;
+/** A daemon backend whose folder operations are the given handlers; others are never called. */
+function makeBackend(
+  session: Backend['session'],
+  folders: Partial<Record<keyof Backend['folders'], (input: never) => unknown>>,
+  rest: Partial<Record<'chat' | 'providers', unknown>> = {},
+) {
+  const effect = (run: (input: never) => unknown) => (input: never) =>
+    Effect.tryPromise({ try: async () => run(input), catch: (error) => error as ApplicationError });
+  return {
+    session,
+    chat: {},
+    providers: { releaseOwner: () => Effect.void },
+    ...rest,
+    folders: Object.fromEntries(Object.entries(folders).map(([name, run]) => [name, effect(run!)])),
+  } as unknown as Backend;
+}
+
 test('chat backends join explicit local retry and revoke pending folder selection on document replacement', async () => {
   const runtime = ManagedRuntime.make(Layer.empty);
   const session = { host: { hostId: 'local', storeId: 'store' }, actorId: 'owner' };
   const approved: string[] = [],
     released: string[] = [];
   let attempts = 0;
-  type Dependencies = Parameters<typeof createChatBackends>[0];
-  type Backend = NonNullable<Dependencies['localResult']['backend']>;
   // Only folder approval and owner release are exercised; no chat/provider command is dispatched.
-  const backend = {
+  const backend = makeBackend(
     session,
-    chat: {},
-    approveFolder: async (path: string) => {
-      approved.push(path);
-      return path;
+    {
+      approveFolder: ({ path }: { path: string }) => {
+        approved.push(path);
+        return { requestId: 'r', path };
+      },
     },
-    providers: {
-      releaseOwner: (owner: string) =>
-        Effect.sync(() => {
-          released.push(owner);
-        }),
+    {
+      providers: {
+        releaseOwner: (owner: string) =>
+          Effect.sync(() => {
+            released.push(owner);
+          }),
+      },
     },
-    control: { setAdmissionsOpen() {}, hasActiveWork: () => Effect.succeed(false) },
-  } as unknown as Backend;
+  );
   let completeRetry!: (result: Dependencies['localResult']) => void;
   let completePicker!: (path: string | null) => void;
   const owner = createChatBackends({
@@ -55,7 +74,6 @@ test('chat backends join explicit local retry and revoke pending folder selectio
   });
   try {
     assert.equal(attempts, 0);
-    assert.equal(owner.hasLocalChat(), false);
     assert.equal(owner.getSessions().length, 0);
     const first = owner.getContext('local'),
       second = owner.getContext('local');
@@ -63,7 +81,6 @@ test('chat backends join explicit local retry and revoke pending folder selectio
     completeRetry({ backend, error: null });
     assert.deepEqual(await first, session);
     assert.deepEqual(await second, session);
-    assert.equal(owner.hasLocalChat(), true);
     assert.deepEqual(owner.getTargets()[0].context, session);
     assert.equal(owner.getSessions().length, 1);
     const previous = owner.getSession('local');
@@ -94,7 +111,6 @@ for (const failure of [false, true])
     const runtime = ManagedRuntime.make(Layer.empty);
     const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' };
     const target = { ...context, conversationId: 'chat' };
-    type Dependencies = Parameters<typeof createChatBackends>[0];
     const releasing = Promise.withResolvers<void>(),
       gate = Promise.withResolvers<void>();
     const receives: ((snapshot: never) => void)[] = [],
@@ -173,21 +189,19 @@ test('a new worktree starts only from a folder local chat may use, and is approv
   const session = { host: { hostId: 'local', storeId: 'store' }, actorId: 'owner' };
   const approved: string[] = [],
     created: string[] = [];
-  type Backend = NonNullable<Parameters<typeof createChatBackends>[0]['localResult']['backend']>;
-  const backend = {
-    session,
-    chat: {},
-    approveFolder: async (path: string) => {
-      approved.push(path);
-      return path;
+  const grants: string[] = [];
+  const backend = makeBackend(session, {
+    approveFolder: ({ path, recent }: { path: string; recent?: boolean }) => {
+      (path.includes('-worktrees/') ? approved : grants).push(
+        `${path}${recent === false ? '' : ' recent'}`,
+      );
+      return { requestId: 'r', path };
     },
-    requireApprovedFolder: async (path: string) => {
+    checkApprovedFolder: ({ path }: { path: string }) => {
       if (path !== '/repo')
         throw new ApplicationError({ code: 'Unauthorized', message: 'Choose this folder.' });
     },
-    providers: { releaseOwner: () => Effect.void },
-    control: { setAdmissionsOpen() {}, hasActiveWork: () => Effect.succeed(false) },
-  } as unknown as Backend;
+  });
   const owner = createChatBackends({
     runtime,
     localResult: { backend, error: null },
@@ -197,6 +211,7 @@ test('a new worktree starts only from a folder local chat may use, and is approv
     connection: null,
     emit: () => {},
     pickFolder: async () => null,
+    isEditorFolder: (path) => path === '/editor',
     createWorktree: async (root, branch) => {
       created.push(`${root} ${branch}`);
       return `${root}-worktrees/${branch.replaceAll('/', '-')}`;
@@ -208,6 +223,10 @@ test('a new worktree starts only from a folder local chat may use, and is approv
     assert.equal(await owner.createWorktree('/repo', 'chat/a'), '/repo-worktrees/chat-a');
     assert.deepEqual(created, ['/repo chat/a']);
     assert.deepEqual(approved, ['/repo-worktrees/chat-a']);
+    // An editor checkout is granted to the daemon before a worktree starts from it.
+    assert.equal(await owner.createWorktree('/editor', 'b'), '/editor-worktrees/b');
+    assert.deepEqual(grants, ['/editor']);
+    assert.deepEqual(approved, ['/repo-worktrees/chat-a', '/editor-worktrees/b']);
     // Replacing the document cancels a creation in flight; its worktree is not approved.
     let finish!: () => void;
     let signal!: AbortSignal;
@@ -233,7 +252,8 @@ test('a new worktree starts only from a folder local chat may use, and is approv
     assert(signal.aborted);
     finish();
     await assert.rejects(pending, { code: 'Cancelled' });
-    assert.deepEqual(approved, ['/repo-worktrees/chat-a']);
+    assert.deepEqual(approved, ['/repo-worktrees/chat-a', '/editor-worktrees/b']);
+    assert.deepEqual(grants, ['/editor']);
   } finally {
     await owner.releaseDocument();
     await runtime.dispose();
@@ -242,7 +262,6 @@ test('a new worktree starts only from a folder local chat may use, and is approv
 test('turning a chat into a project opens only its own folder, then lists it under that project', async () => {
   const runtime = ManagedRuntime.make(Layer.empty);
   const session = { host: { hostId: 'local', storeId: 'store' }, actorId: 'owner' };
-  type Backend = NonNullable<Parameters<typeof createChatBackends>[0]['localResult']['backend']>;
   const chats: Record<string, { cwd: string; ownFolder?: true }> = {
     own: { cwd: '/profile/chats/2026-11-08-notes-a1b2c3d4', ownFolder: true },
     project: { cwd: '/repo' },
@@ -251,27 +270,32 @@ test('turning a chat into a project opens only its own folder, then lists it und
   const opened: string[] = [],
     marked: string[] = [];
   let failOpen = false;
-  const backend = {
+  const backend = makeBackend(
     session,
-    chat: {
-      getChat: ({ target }: { target: { conversationId: string } }) =>
-        Effect.succeed({ conversation: chats[target.conversationId] }),
+    {
+      checkChatFolder: ({ path }: { path: string }) => {
+        if (!path.startsWith('/profile/chats/'))
+          throw new ApplicationError({ code: 'Unauthorized', message: 'Not a chat folder.' });
+      },
+      markFolderAsProject: ({
+        requestId,
+        target,
+      }: {
+        requestId: string;
+        target: { conversationId: string };
+      }) => {
+        marked.push(target.conversationId);
+        delete chats[target.conversationId].ownFolder;
+        return { requestId };
+      },
     },
-    requireChatFolder: async (path: string) => {
-      if (!path.startsWith('/profile/chats/'))
-        throw new ApplicationError({ code: 'Unauthorized', message: 'Not a chat folder.' });
+    {
+      chat: {
+        getChat: ({ target }: { target: { conversationId: string } }) =>
+          Effect.succeed({ conversation: chats[target.conversationId] }),
+      },
     },
-    providers: { releaseOwner: () => Effect.void },
-    control: {
-      setAdmissionsOpen() {},
-      hasActiveWork: () => Effect.succeed(false),
-      markFolderAsProject: (target: { conversationId: string }) =>
-        Effect.sync(() => {
-          marked.push(target.conversationId);
-          delete chats[target.conversationId].ownFolder;
-        }),
-    },
-  } as unknown as Backend;
+  );
   const owner = createChatBackends({
     runtime,
     localResult: { backend, error: null },
@@ -299,6 +323,80 @@ test('turning a chat into a project opens only its own folder, then lists it und
     assert.deepEqual(opened, [chats.own.cwd]);
     assert.deepEqual(marked, ['own']);
     await assert.rejects(owner.turnIntoProject('own'), { code: 'InvalidInput' });
+  } finally {
+    await owner.releaseDocument();
+    await runtime.dispose();
+  }
+});
+
+test('editor checkouts are granted to the daemon once; a chat naming one waits for its grant', async () => {
+  const runtime = ManagedRuntime.make(Layer.empty);
+  const session = { host: { hostId: 'local', storeId: 'store' }, actorId: 'owner' };
+  const grants: { path: string; recent?: boolean }[] = [],
+    sent: unknown[] = [];
+  let fail = true;
+  const backend = makeBackend(
+    session,
+    {
+      approveFolder: ({ path, recent }: { path: string; recent?: boolean }) => {
+        grants.push({ path, recent });
+        if (fail) throw new ApplicationError({ code: 'Unavailable', message: 'Daemon down.' });
+        return { requestId: 'r', path };
+      },
+    },
+    {
+      chat: {
+        createChat: (input: unknown) =>
+          Effect.sync(() => {
+            sent.push(input);
+            return null;
+          }),
+        findChatFiles: (input: unknown) =>
+          Effect.sync(() => {
+            sent.push(input);
+            return null;
+          }),
+      },
+    },
+  );
+  const owner = createChatBackends({
+    runtime,
+    localResult: { backend, error: null },
+    acquireLocal: async () => ({ backend, error: null }),
+    isEditorFolder: (path) => path === '/editor',
+    chatConfiguration: null,
+    remoteChat: null,
+    connection: null,
+    emit: () => {},
+    pickFolder: async () => null,
+  });
+  const call = (operation: string, input: unknown) =>
+    owner.getSession('local')!.call('chat', operation, input, crypto.randomUUID());
+  const create = (cwd: string) =>
+    call('createChat', {
+      session,
+      requestId: crypto.randomUUID(),
+      title: 'Chat',
+      settings: { cwd, model: { provider: 'faux', modelId: 'faux' } },
+    });
+  try {
+    // A failed eager grant is retried when a chat uses the folder.
+    owner.grantEditorFolder('/editor');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(grants, [{ path: '/editor', recent: false }]);
+    fail = false;
+    assert((await create('/editor')).ok);
+    assert.deepEqual(grants, [
+      { path: '/editor', recent: false },
+      { path: '/editor', recent: false },
+    ]);
+    owner.grantEditorFolder('/editor');
+    assert((await call('findChatFiles', { session, cwd: '/editor', query: 'a' })).ok);
+    assert.equal(grants.length, 2, 'a granted folder is not granted again');
+    // A path the editor never approved is passed on as it is and gains nothing.
+    assert((await create('/elsewhere')).ok);
+    assert.equal(grants.length, 2);
+    assert.equal(sent.length, 3);
   } finally {
     await owner.releaseDocument();
     await runtime.dispose();

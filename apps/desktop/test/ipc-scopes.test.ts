@@ -59,7 +59,7 @@ for (const closing of ['cancel', 'dispose'] as const) {
     const owner = new ChatIpcSession(
       runtime,
       chat,
-      makeConnectionClient(runtime),
+      { mode: 'remote', connection: makeConnectionClient(runtime) },
       { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' },
       () => {},
     );

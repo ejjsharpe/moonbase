@@ -65,11 +65,14 @@ async function createSession(
           runtime,
           chat,
           {
-            command: async () => {
-              await commandGate;
-              return null as never;
+            mode: 'remote',
+            connection: {
+              command: async () => {
+                await commandGate;
+                return null as never;
+              },
+              watch: () => async () => {},
             },
-            watch: () => async () => {},
           },
           context,
           emit,

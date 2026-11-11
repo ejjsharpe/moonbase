@@ -17,11 +17,6 @@ export type ClaudeCodeConfiguration = {
    * environment; defaults to searching PATH, then its usual install locations.
    */
   findCommand?(): Promise<string | undefined>;
-  /**
-   * Added to the environment of Claude Code and the tool-inventory helper it starts with this
-   * process's executable, e.g. `ELECTRON_RUN_AS_NODE` so an Electron host runs it as Node.
-   */
-  helperEnv?: Record<string, string>;
 };
 
 export type ClaudeCodeSubscription = Provider & {
@@ -101,7 +96,6 @@ export function createClaudeCodeSubscription(
     (await findCommand());
   // Keyed by each check's own signal, so concurrent checks can't swap answers.
   const checkProblems = new WeakMap<AbortSignal, string>();
-  const helperEnv = config.helperEnv ?? {};
   return {
     ...provider,
     auth: {
@@ -147,13 +141,6 @@ export function createClaudeCodeSubscription(
         },
       },
     },
-    stream: (model, context, options) =>
-      provider.stream(model, context, {
-        ...options,
-        env: { ...options?.env, ...helperEnv },
-      } as typeof options),
-    streamSimple: (model, context, options) =>
-      provider.streamSimple(model, context, { ...options, env: { ...options?.env, ...helperEnv } }),
     getCheckProblem: (signal) => checkProblems.get(signal),
   };
 }

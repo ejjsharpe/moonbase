@@ -75,11 +75,6 @@ test('command IPC authenticates every channel, validates envelopes and tears dow
         void p.catch(() => {});
       },
       isQuitting: () => false,
-      isPreparingQuit: () => true,
-      confirmLocalQuit: async () => {
-        calls++;
-        return true;
-      },
     },
   };
   handlers.set('unrelated', async () => 'untouched');
@@ -167,6 +162,11 @@ test('command IPC authenticates every channel, validates envelopes and tears dow
     { ...turn, backendId: 'remote' },
   ])
     assert.equal((await invoke(chatChannels.call, f.event, input)).ok, false);
+  // Quit no longer asks main about local work: the old confirmation is an invalid request.
+  assert.equal(
+    (await invoke(chatChannels.call, f.event, { kind: 'confirm-quit', backendId: 'local' })).ok,
+    false,
+  );
   assert.deepEqual(await invoke(channels.cancel, f.event, 'id'), failure);
   await assert.rejects(cleanup[0], { message: failure.error.message });
   f.window.destroy();

@@ -159,7 +159,6 @@ try {
         };
       },
     })),
-    confirmQuit: () => window.moonbaseChat.confirmQuit!(),
   });
   window.addEventListener('beforeunload', (event) => {
     if (!application.canUnload()) {

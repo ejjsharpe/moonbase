@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { cp, mkdir, rm, writeFile, readFile, stat } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { notices } from '../../../scripts/notices.mjs';
 import { bunComponents, verifyBunRuntime } from '../../../scripts/prepare-bun.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url)),
@@ -108,16 +108,29 @@ for (const inputs of [preloadInputs, rendererInputs]) {
     'Local runtime reached a browser boundary',
   );
 }
+// Local chat runs in the daemon: main holds only its loopback client, never the chat runtime,
+// provider setup, credentials or Claude Code.
+assert.deepEqual(
+  mainInputs.filter((path) =>
+    /@earendil-works|pi-runtime\/src\/(?!remote|loopback|protocol|validation)[^/]+\.ts$/.test(path),
+  ),
+  [],
+  'The local chat runtime reached Electron main',
+);
+assert(
+  !/\bsafeStorage\b/.test(await readFile(join(root, 'dist/main.mjs'), 'utf8')),
+  'Electron main uses safeStorage',
+);
 for (const entry of [
-  'pi-runtime/src/index.ts',
-  'pi-runtime/src/local-models.ts',
-  'pi-runtime/src/claude-code.ts',
-  'pi-runtime/src/credentials.ts',
-  'pi-ai/dist/bun-oauth.js',
+  'pi-runtime/src/remote.ts',
+  'pi-runtime/src/loopback.ts',
+  'src/main/local-daemon.ts',
+  'src/main/daemon-command.ts',
+  'src/chat/daemon.ts',
 ])
   assert(
     mainInputs.some((path) => path.endsWith(entry)),
-    `Missing privileged local runtime input: ${entry}`,
+    `Missing local daemon client input: ${entry}`,
   );
 assert(
   mainInputs.includes('src/chat/transcript-native.ts'),
@@ -162,18 +175,6 @@ const packages = await notices(
     : [],
 );
 await writeFile(join(root, 'dist/main-inputs.json'), JSON.stringify(main.metafile.inputs));
-// Claude Code's tool-inventory helper resolves beside the bundle that imported it.
-await cp(
-  join(
-    dirname(
-      require.resolve('@earendil-works/pi-claude-code/package.json', {
-        paths: [join(root, '../../packages/pi-runtime')],
-      }),
-    ),
-    'src/inert-mcp.mjs',
-  ),
-  join(root, 'dist/inert-mcp.mjs'),
-);
 const resources = join(root, 'dist/workspace');
 await mkdir(resources, { recursive: true });
 await cp(require.resolve('@moonbase/workspace/filesystem'), join(resources, 'filesystem'));

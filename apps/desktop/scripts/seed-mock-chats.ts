@@ -1,11 +1,12 @@
 /**
- * Seeds a fresh dev profile with scripted local chats, so every transcript row kind is visible
- * without provider credentials. A faux model plays each turn; its tool calls run for real, so
- * edits and failing commands only touch a mock project created inside the profile, and the chat
- * in the repository itself only reads.
+ * Seeds a fresh dev profile's daemon directory with scripted local chats, before its daemon first
+ * starts, so every transcript row kind is visible without provider credentials. A faux model plays
+ * each turn against the daemon's own store; its tool calls run for real, so edits and failing
+ * commands only touch a mock project created inside the profile, and the chat in the repository
+ * itself only reads. The daemon then starts with this identity and these chats.
  */
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, open, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ManagedRuntime } from 'effect';
@@ -24,7 +25,7 @@ import { LocalPiRuntimeLive } from '@moonbase/pi-runtime';
 const userData = process.argv[2];
 if (!userData) throw Error('Pass the dev profile directory.');
 const repository = fileURLToPath(new URL('../../../', import.meta.url)).replace(/\/$/, '');
-const directory = join(userData, 'local-pi-v1');
+const directory = join(userData, 'daemon-v1');
 const project = join(userData, 'mock-project');
 
 const transcriptSource = `import { useScrollAnchor } from './transcript-geometry';
@@ -36,7 +37,9 @@ export function Transcript({ rows }: { rows: Row[] }) {
 }
 `;
 
-await mkdir(directory, { recursive: true, mode: 0o700 });
+await mkdir(userData, { recursive: true, mode: 0o700 });
+// `mkdir` without `recursive` refuses an existing directory, so a daemon's data is never seeded.
+await mkdir(directory, { mode: 0o700 });
 await mkdir(join(project, 'src'), { recursive: true });
 await writeFile(join(project, 'README.md'), '# Mock project\n\nScratch files for seeded chats.\n');
 await writeFile(join(project, 'src', 'transcript.tsx'), transcriptSource);
@@ -47,6 +50,8 @@ await writeFile(join(directory, 'identity.json'), JSON.stringify(session), {
   flag: 'wx',
 });
 
+// The daemon refuses a store that isn't private, and SQLite gives its WAL files the store's mode.
+await (await open(join(directory, 'chat.sqlite'), 'wx', 0o600)).close();
 const models = createModels(),
   faux = fauxProvider({ models: [{ id: 'mock-model', reasoning: true }], tokensPerSecond: 4000 });
 models.setProvider(faux.provider);

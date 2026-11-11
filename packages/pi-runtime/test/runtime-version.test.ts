@@ -89,13 +89,10 @@ test('Node 26.13 or newer opens both modes and older Node is refused', async () 
     assert.deepEqual(await openStores({ node }), { local: incompatible, host: incompatible }, node);
 });
 
-test('only the qualified Electron opens a store, and only in local mode', async () => {
-  assert.deepEqual(await openStores({ electron: '45.1.0', node: '24.22.1' }), {
-    local: 'opened',
-    host: incompatible,
-  });
-  assert.deepEqual(await openStores({ electron: '45.2.0', node: '24.22.1' }), {
-    local: incompatible,
-    host: incompatible,
-  });
+test('Electron opens no store: its Node is too old, and local chat runs in the daemon', async () => {
+  for (const electron of ['45.1.0', '45.2.0'])
+    assert.deepEqual(await openStores({ electron, node: '24.22.1' }), {
+      local: incompatible,
+      host: incompatible,
+    });
 });

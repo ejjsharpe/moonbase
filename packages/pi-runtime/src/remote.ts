@@ -452,6 +452,7 @@ export const RemoteLocalHostLive: Layer.Layer<LocalHostService, never, Connectio
         approveFolder: send('approveFolder'),
         listRecentFolders: send('listRecentFolders'),
         checkChatFolder: send('checkChatFolder'),
+        checkApprovedFolder: send('checkApprovedFolder'),
         getActiveWork: send('getActiveWork'),
         markFolderAsProject: send('markFolderAsProject'),
       } satisfies LocalHostHandlers;

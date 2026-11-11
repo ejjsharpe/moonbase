@@ -43,6 +43,8 @@ export const localHostInputSchemas = {
   listRecentFolders: struct({ host: ChatHostTargetSchema }),
   /** Refuses any folder but one the daemon made for a chat without a project. */
   checkChatFolder: struct({ host: ChatHostTargetSchema, path: FolderPathSchema }),
+  /** Refuses a folder that is not approved, or no longer the directory approved. */
+  checkApprovedFolder: struct({ host: ChatHostTargetSchema, path: FolderPathSchema }),
   getActiveWork: struct({ host: ChatHostTargetSchema }),
   markFolderAsProject: struct({ requestId: ChatIdentifierSchema, target: ChatTargetSchema }),
 };
@@ -52,6 +54,7 @@ export const localHostOutputSchemas = {
     folders: array(FolderPathSchema).check(Schema.isMaxLength(maximumRecentFolders)),
   }),
   checkChatFolder: voidResult,
+  checkApprovedFolder: voidResult,
   getActiveWork: struct({ active: Schema.Boolean }),
   markFolderAsProject: struct({ requestId: ChatIdentifierSchema }),
 } satisfies Record<keyof typeof localHostInputSchemas, Schema.Constraint>;
@@ -92,6 +95,7 @@ export const daemonCommandCapabilities: Record<DaemonCommand, ChatHostCapability
   approveFolder: chatHostCapabilities.folders,
   listRecentFolders: chatHostCapabilities.folders,
   checkChatFolder: chatHostCapabilities.folders,
+  checkApprovedFolder: chatHostCapabilities.folders,
   getActiveWork: chatHostCapabilities.local,
   markFolderAsProject: chatHostCapabilities.local,
   getProviders: chatHostCapabilities.providers,

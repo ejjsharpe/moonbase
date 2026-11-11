@@ -1,3 +1,4 @@
+import { findTestBun, prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
 import { closeSettings, openSettings } from './chat-target.ts';
 import {
   openTabMenu,
@@ -92,11 +93,13 @@ test.beforeEach(async () => {
   await launch();
 });
 async function launch() {
+  await prepareDaemonData(join(base, 'user-data'));
   errors.length = 0;
   consoleErrors.length = 0;
   const env = {
     ...process.env,
     MOONBASE_USER_DATA: join(base, 'user-data'),
+    MOONBASE_TEST_BUN: findTestBun(),
     MOONBASE_TEST_REPORT: join(base, 'quit-report.json'),
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_CONFIG_NOSYSTEM: '1',
@@ -135,6 +138,8 @@ test.afterEach(async ({}, info) => {
     ).toEqual([]);
   } finally {
     if (child && child.exitCode === null && child.signalCode === null) await forceStop();
+    await stopDaemon(join(base, 'user-data', 'daemon-v1'));
+    await stopDaemon(join(base, 'early-user-data', 'daemon-v1'));
     rmSync(base, { recursive: true, force: true });
   }
 });
@@ -1322,6 +1327,7 @@ test('an explicit native Quit arriving before renderer startup is not lost', asy
   const env = {
     ...process.env,
     MOONBASE_USER_DATA: join(base, 'early-user-data'),
+    MOONBASE_TEST_BUN: findTestBun(),
     MOONBASE_TEST_REPORT: join(base, 'early-quit.json'),
     MOONBASE_TEST_QUIT_EARLY: '1',
     GIT_CONFIG_GLOBAL: '/dev/null',

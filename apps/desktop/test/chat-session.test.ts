@@ -50,7 +50,13 @@ function fixture() {
     },
     watch: () => async () => {},
   };
-  const owner = new ChatIpcSession(runtime, chat, connection, context, () => {});
+  const owner = new ChatIpcSession(
+    runtime,
+    chat,
+    { mode: 'remote', connection },
+    context,
+    () => {},
+  );
   return {
     owner,
     inputs,
@@ -170,7 +176,7 @@ test('local provider waits use the shared document lifetime without a remote con
   const owner = new ChatIpcSession(
     runtime,
     { command: async () => null as never, watch: () => async () => {} },
-    null,
+    { mode: 'local' },
     context,
     () => {},
     {
@@ -290,7 +296,13 @@ test('chat cancellation waits for finalizers, fences callbacks and leaves comman
     command: async () => undefined as never,
     watch: () => async () => {},
   };
-  const owner = new ChatIpcSession(runtime, chat, connection, context, () => emitted++);
+  const owner = new ChatIpcSession(
+    runtime,
+    chat,
+    { mode: 'remote', connection },
+    context,
+    () => emitted++,
+  );
   await owner.call('watch-chat', '', { target }, 'watch');
   let done = false;
   const cleanup = owner.cancel('watch');
@@ -340,7 +352,7 @@ for (const failure of ['none', 'release', 'acquisition'] as const) {
       command: async () => undefined as never,
       watch: () => async () => {},
     };
-    const owner = new ChatIpcSession(runtime, chat, connection, context, () => {
+    const owner = new ChatIpcSession(runtime, chat, { mode: 'remote', connection }, context, () => {
       delivered++;
       acknowledgment = owner.cancel('watch');
     });
@@ -380,7 +392,7 @@ test('local IPC captures its command and cannot route a late reply to a replacem
     },
     watch: () => async () => {},
   };
-  const owner = new ChatIpcSession(runtime, chat, null, context, () => {});
+  const owner = new ChatIpcSession(runtime, chat, { mode: 'local' }, context, () => {});
   const missing = await owner.call(
     'chat',
     'createChat',
@@ -426,8 +438,12 @@ test('browser chat observation preserves reconnect status and document release f
     command: async () => undefined as never,
     watch: () => async () => {},
   };
-  const owner = new ChatIpcSession(runtime, chat, connection, context, (id, value) =>
-    event(id, value),
+  const owner = new ChatIpcSession(
+    runtime,
+    chat,
+    { mode: 'remote', connection },
+    context,
+    (id, value) => event(id, value),
   );
   const client = browserClients({
     context: async () => context,

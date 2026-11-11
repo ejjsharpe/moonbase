@@ -1820,6 +1820,13 @@ test('a local-mode host signs its daemon capabilities and serves folders, contro
   assert.deepEqual((await f.host(f.folders.listRecentFolders({ host: localHost }))).folders, [
     project,
   ]);
+  // Approved folders pass the check whether listed or not; any other folder is refused.
+  for (const path of [project, worktree])
+    await f.host(f.folders.checkApprovedFolder({ host: localHost, path }));
+  for (const path of [f.dir, join(f.dir, 'missing')])
+    await assert.rejects(f.host(f.folders.checkApprovedFolder({ host: localHost, path })), {
+      code: 'Unauthorized',
+    });
   const settings = { model: { provider: 'local-faux', modelId: 'local-model' } };
   const created = await f.remote.command('createChat', {
     session: localSession,
@@ -2212,6 +2219,10 @@ test('daemon refusals reach the client with fixed public messages, never host te
   await refusesWith(
     f.host(f.folders.checkChatFolder({ host: localHost, path: f.dir })),
     'not-chat-folder',
+  );
+  await refusesWith(
+    f.host(f.folders.checkApprovedFolder({ host: localHost, path: f.dir })),
+    'folder-not-approved',
   );
   // A refusal without a reason gets the client's own generic text, not chat wording.
   await assert.rejects(

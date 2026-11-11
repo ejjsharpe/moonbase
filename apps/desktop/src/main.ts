@@ -23,7 +23,7 @@ import {
 } from '@moonbase/application/runtime/clients';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { ChatService, ConnectionService } from '@moonbase/contracts/services';
-import { acquireLocalChat } from './chat/local.ts';
+import { acquireDaemonChat } from './chat/daemon.ts';
 import { realpathSync, mkdirSync } from 'node:fs';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -37,6 +37,8 @@ import { channels as chatChannels } from './chat/wire.ts';
 import { respondTranscriptImage, transcriptImagePath } from './chat/transcript-native.ts';
 import { createNativeActions } from './main/native-actions.ts';
 import { createChatBackends } from './main/chat-backends.ts';
+import { findDaemonCommand, type DaemonCommand } from './main/daemon-command.ts';
+import { findDaemonDirectory } from './main/local-daemon.ts';
 import { createTrustedDocumentGuard, installCommandIpc } from './main/ipc.ts';
 import { installWindowLifecycle } from './main/window-lifecycle.ts';
 
@@ -83,23 +85,40 @@ async function main() {
   const runtime = ManagedRuntime.make(workspace);
   const client = makeEditorClient(runtime);
   await runtime.runPromise(Effect.asVoid(WorkspaceNative));
-  // Local and remote backends are acquired once in separate scopes of this root.
-  // Local chat is acquired before the window's editor session, which approves checkouts, exists.
-  let isEditorFolder = (_path: string) => false;
+  // Local chat runs in this profile's daemon, which outlives the app; main finds or starts it and
+  // binds clients to it. Local and remote clients are acquired in separate scopes of this root.
+  const daemonDirectory = findDaemonDirectory(userData);
+  const daemonCommand: DaemonCommand =
+    (
+      globalThis as { moonbaseTestDaemonCommand?: (directory: string) => DaemonCommand }
+    ).moonbaseTestDaemonCommand?.(daemonDirectory) ??
+    findDaemonCommand(
+      {
+        packaged: app.isPackaged,
+        resourcesPath: process.resourcesPath,
+        bundleDirectory: directory,
+      },
+      daemonDirectory,
+      process.env,
+    );
   const acquireLocal = () =>
-    acquireLocalChat(runtime, userData, (url) => shell.openExternal(url), {
-      ripgrepExecutable: join(assets, 'ripgrep/rg'),
-      isEditorFolder: (path) => isEditorFolder(path),
+    acquireDaemonChat(runtime, {
+      directory: daemonDirectory,
+      command: daemonCommand,
+      openUrl: (url) => shell.openExternal(url),
     }).then(
       (backend) => ({ backend, error: null }),
-      () => ({
-        backend: null,
-        error: new ApplicationError({
-          code: 'Unavailable',
-          message:
-            'Local Pi could not initialize. Preserve local chat files, check the working folders and restart Moonbase. Editing remains available.',
-        }),
-      }),
+      (error: unknown) => {
+        console.error('Local chat is unavailable:', normalizeApplicationError(error).message);
+        return {
+          backend: null,
+          error: new ApplicationError({
+            code: 'Unavailable',
+            message:
+              'Moonbase could not start or reach its local chat daemon. Retry; editing remains available.',
+          }),
+        };
+      },
     );
   const localResult = await acquireLocal();
   const remote = chatConfiguration
@@ -162,10 +181,17 @@ async function main() {
         Effect.flatMap(WorkspaceNative, (service) => service.release(input)),
       ),
   });
-  const editorSession = new EditorSession(runtime, client, native, (id, value) => {
-    if (!window.isDestroyed()) window.webContents.send(channels.event, id, value);
-  });
-  isEditorFolder = (path) => editorSession.hasFolder(path);
+  // A checkout the editor approves is granted to the daemon, so a project's docked chat can use it.
+  let grantEditorFolder = (_root: string) => {};
+  const editorSession = new EditorSession(
+    runtime,
+    client,
+    native,
+    (id, value) => {
+      if (!window.isDestroyed()) window.webContents.send(channels.event, id, value);
+    },
+    (root) => grantEditorFolder(root),
+  );
   const chatBackends = createChatBackends({
     transcript: {
       writeText: async (text) => {
@@ -176,6 +202,7 @@ async function main() {
     runtime,
     localResult,
     acquireLocal,
+    isEditorFolder: (path) => editorSession.hasFolder(path),
     chatConfiguration,
     remoteChat,
     connection,
@@ -193,6 +220,7 @@ async function main() {
       return selection.canceled ? null : (selection.filePaths[0] ?? null);
     },
   });
+  grantEditorFolder = chatBackends.grantEditorFolder;
   const rendererRoot = join(directory, 'renderer');
   protocol.handle('moonbase', async (request) => {
     const url = new URL(request.url);

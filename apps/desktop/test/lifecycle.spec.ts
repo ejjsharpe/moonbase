@@ -1,3 +1,4 @@
+import { findTestBun, prepareDaemonData } from './faux-daemon.mjs';
 import {
   expectSaveEnabled,
   saveFile,
@@ -29,6 +30,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
     try {
       execFileSync('/usr/bin/git', ['-C', f.cwd, 'init', '-q', '-b', 'main']);
       await writeFile(join(f.cwd, 'a.ts'), 'original local text');
+      await prepareDaemonData(join(f.directory, 'lifecycle-data'));
       const current = await electron.launch({
         ...(packaged
           ? {
@@ -46,6 +48,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
           HOME: process.env.HOME!,
           TMPDIR: process.env.TMPDIR!,
           MOONBASE_USER_DATA: join(f.directory, 'lifecycle-data'),
+          MOONBASE_TEST_BUN: findTestBun(),
           MOONBASE_CHAT_CONFIG: f.clientConfig,
           MOONBASE_CHAT_FORWARD_LOG: f.log,
           MOONBASE_CHAT_DROP_SEND: f.drop,

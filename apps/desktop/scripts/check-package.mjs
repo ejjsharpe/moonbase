@@ -77,16 +77,23 @@ assert.deepEqual(
   renderer.filter((p) => /@earendil-works|pi-runtime\/src\/|node:sqlite/.test(p)),
   [],
 );
-for (const entry of [
-  'pi-runtime/src/index.ts',
-  'pi-runtime/src/local-models.ts',
-  'pi-runtime/src/credentials.ts',
-  'pi-ai/dist/bun-oauth.js',
-])
+// Local chat runs in the bundled daemon; packaged main holds only its loopback client.
+assert.deepEqual(
+  main.filter((path) =>
+    /@earendil-works|pi-runtime\/src\/(?!remote|loopback|protocol|validation)[^/]+\.ts$/.test(path),
+  ),
+  [],
+  'The local chat runtime reached packaged main',
+);
+for (const entry of ['pi-runtime/src/remote.ts', 'pi-runtime/src/loopback.ts'])
   assert(
     main.some((path) => path.endsWith(entry)),
-    `Missing packaged local runtime input: ${entry}`,
+    `Missing packaged daemon client input: ${entry}`,
   );
+assert(
+  !/\bsafeStorage\b/.test(asar.extractFile(archive, 'main.mjs').toString()),
+  'Packaged main uses safeStorage',
+);
 assert(
   !/@earendil-works|node:sqlite|safeStorage/.test(
     asar.extractFile(archive, 'preload.cjs').toString(),

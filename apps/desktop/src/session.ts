@@ -67,11 +67,14 @@ export class EditorSession {
   private client: EditorClient;
   private native: NativeActions;
   private send: (id: string, result: Reply<WorkspaceEvent>) => void;
+  private onFolderApproved: (root: string) => void;
   constructor(
     runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>,
     client: EditorClient,
     native: NativeActions,
     send: (id: string, result: Reply<WorkspaceEvent>) => void,
+    /** Told each checkout root, or worktree root Git listed for one, that becomes approved. */
+    onFolderApproved: (root: string) => void = () => {},
   ) {
     this.lifetime = new IpcLifetime(runtime, 128, (error) => ({
       ok: false,
@@ -80,6 +83,16 @@ export class EditorSession {
     this.client = client;
     this.native = native;
     this.send = send;
+    this.onFolderApproved = onFolderApproved;
+  }
+  private approve(target: CheckoutTarget) {
+    this.known.set(target.checkoutId, target);
+    this.onFolderApproved(target.root);
+  }
+  private approveWorktree(root: string) {
+    if (this.worktreeRoots.has(root)) return;
+    this.worktreeRoots.add(root);
+    this.onFolderApproved(root);
   }
   private own(value: unknown) {
     if (value !== this.clientId)
@@ -202,7 +215,7 @@ export class EditorSession {
         code: 'Unauthorized',
         message: 'The folder changed before it opened as a project. Inspect it.',
       });
-    this.known.set(target.checkoutId, target);
+    this.approve(target);
     return target;
   }
   /** Whether a root is a natively approved checkout, or a worktree Git listed for one. */
@@ -272,8 +285,8 @@ export class EditorSession {
           );
           // A released document's worktree stays on disk but grants nothing to the next document.
           if (!signal?.aborted) {
-            this.known.set(created.checkoutId, created);
-            this.worktreeRoots.add(created.root);
+            this.approve(created);
+            this.approveWorktree(created.root);
           }
           return created.root;
         } catch (error) {
@@ -324,11 +337,11 @@ export class EditorSession {
         // After `git init` the folder's Git target replaces its approval under the same ID.
         if ((operation === 'openCheckout' || operation === 'initializeRepository') && live()) {
           checkout(value);
-          this.known.set(value.checkoutId, value);
+          this.approve(value);
         }
         if (operation === 'listWorktrees' && live())
           for (const worktree of (value as { worktrees: { root: string }[] }).worktrees)
-            this.worktreeRoots.add(worktree.root);
+            this.approveWorktree(worktree.root);
         if (operation === 'loadRecovery' && live()) {
           const load = value as Awaited<ReturnType<EditorClient['command']>> & {
             state: { checkouts: CheckoutTarget[] };
@@ -336,7 +349,7 @@ export class EditorSession {
           };
           for (const target of load.state.checkouts) {
             checkout(target);
-            this.known.set(target.checkoutId, target);
+            this.approve(target);
           }
           for (const fact of load.operations)
             this.operations.add(JSON.stringify([fact.clientId, fact.id]));
