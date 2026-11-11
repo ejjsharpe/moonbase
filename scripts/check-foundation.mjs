@@ -55,8 +55,9 @@ for (const entry of [
     metafile: true,
   });
   for (const input of Object.keys(result.metafile.inputs))
+    // Effect may resolve outside the checkout, as it does from the foundation test's copy.
     assert(
-      /^(?:packages\/contracts\/|node_modules\/(?:\.bun\/[^/]+\/node_modules\/)?effect\/)/.test(
+      /^packages\/contracts\/|(?:^|\/)node_modules\/(?:\.bun\/[^/]+\/node_modules\/)?effect\//.test(
         input,
       ),
       `${entry} must bundle only contracts and portable Effect: ${input}`,
