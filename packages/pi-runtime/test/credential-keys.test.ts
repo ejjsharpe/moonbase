@@ -134,6 +134,137 @@ test('an unavailable key source fails visibly and leaves stored credentials unto
   });
 });
 
+test('signing in again replaces an unreadable credential and signing out removes it, but a locked keychain or private-file failure never does', async (t) => {
+  const directory = await makeDirectory(t, 'moonbase-unreadable-'),
+    path = join(directory, 'openai-api-key.encrypted'),
+    replacement = { type: 'api_key' as const, key: 'sk-replacement-value' };
+  const seal = async (key: Uint8Array) => {
+    await rm(path, { force: true });
+    await createCredentialStore(directory, createKeyEncryption(createMemoryKeySource(key))).modify(
+      'openai-api-key',
+      async () => secret,
+    );
+    return readFile(path);
+  };
+  const sealed = await seal(randomBytes(32)),
+    key = randomBytes(32);
+  const truncated = sealed.subarray(0, 20),
+    tampered = Buffer.from(sealed);
+  tampered[20]! ^= 1;
+
+  // Under another key, a tampered or truncated file, and a file that decrypts to no credential.
+  const plainKey = randomBytes(32),
+    garbage = createKeyEncryption(createMemoryKeySource(plainKey));
+  const notCredential = Buffer.from(await garbage.encrypt('{"type":"other"}', 'openai-api-key'));
+  for (const bytes of [sealed, tampered, truncated, notCredential]) {
+    const current = bytes === notCredential ? plainKey : key;
+    await writeFile(path, bytes, { mode: 0o600 });
+    const store = createCredentialStore(
+      directory,
+      createKeyEncryption(createMemoryKeySource(current)),
+    );
+    await assert.rejects(store.read('openai-api-key'), (error) => {
+      assertHidden(error, 'Persistence', secret.key);
+      assert.match((error as Error).message, /Sign in to that provider again/);
+      assert.doesNotMatch((error as Error).message, /keychain/i);
+      return true;
+    });
+    let seen: unknown = 'not called';
+    await store.modify('openai-api-key', async (value) => ((seen = value), replacement));
+    assert.equal(seen, undefined);
+    assert.deepEqual(await store.read('openai-api-key'), replacement);
+    await writeFile(path, bytes, { mode: 0o600 });
+    await store.delete('openai-api-key');
+    await assert.rejects(stat(path), { code: 'ENOENT' });
+    assert.equal(await store.read('openai-api-key'), undefined);
+  }
+
+  // With no key at all, signing in makes one and replaces the file, which no key can ever open.
+  await writeFile(path, sealed, { mode: 0o600 });
+  const fresh = createMemoryKeySource(),
+    unkeyed = createCredentialStore(directory, createKeyEncryption(fresh));
+  await unkeyed.modify('openai-api-key', async () => replacement);
+  assert((await fresh.load())?.byteLength === 32);
+  assert.deepEqual(await unkeyed.read('openai-api-key'), replacement);
+
+  // A locked keychain is Unavailable for every file, readable or not, and nothing changes.
+  const lockedCalls = { load: 0, create: 0 };
+  const locked = createKeyEncryption({
+    available: async () => true,
+    load: async () => {
+      lockedCalls.load++;
+      throw new ApplicationError({ code: 'Unavailable', message: 'Keychain locked.' });
+    },
+    create: async () => {
+      lockedCalls.create++;
+      throw new ApplicationError({ code: 'Unavailable', message: 'Keychain locked.' });
+    },
+  });
+  const lockedStore = createCredentialStore(directory, locked);
+  for (const bytes of [sealed, truncated]) {
+    await writeFile(path, bytes, { mode: 0o600 });
+    await assert.rejects(
+      lockedStore.modify('openai-api-key', async () => replacement),
+      { code: 'Unavailable' },
+    );
+    await assert.rejects(lockedStore.delete('openai-api-key'), { code: 'Unavailable' });
+    assert.deepEqual(await readFile(path), bytes);
+  }
+  assert.equal(lockedCalls.create, 0);
+  // A key that can't be created, such as a keychain that locks between read and write, keeps it.
+  const unwritable = createCredentialStore(
+    directory,
+    createKeyEncryption({
+      ...createMemoryKeySource(),
+      create: async () => {
+        throw new ApplicationError({ code: 'Unavailable', message: 'Keychain locked.' });
+      },
+    }),
+  );
+  await assert.rejects(
+    unwritable.modify('openai-api-key', async () => replacement),
+    { code: 'Unavailable' },
+  );
+  assert.deepEqual(await readFile(path), truncated);
+
+  // A file that fails the private-file checks, or encryption that fails for another reason, is kept.
+  const keyed = createCredentialStore(directory, createKeyEncryption(createMemoryKeySource(key)));
+  await chmod(path, 0o644);
+  await assert.rejects(
+    keyed.modify('openai-api-key', async () => replacement),
+    {
+      code: 'Persistence',
+    },
+  );
+  await assert.rejects(keyed.delete('openai-api-key'), { code: 'Persistence' });
+  assert.deepEqual(await readFile(path), truncated);
+  await chmod(path, 0o600);
+  await writeFile(path, Buffer.alloc(128 * 1024 + 1), { mode: 0o600 });
+  await assert.rejects(
+    keyed.modify('openai-api-key', async () => replacement),
+    {
+      code: 'Persistence',
+    },
+  );
+  assert.equal((await stat(path)).size, 128 * 1024 + 1);
+  await writeFile(path, sealed, { mode: 0o600 });
+  const failing = createCredentialStore(directory, {
+    available: async () => true,
+    encrypt: async () => Buffer.alloc(0),
+    decrypt: async () => {
+      throw Error('safeStorage could not decrypt');
+    },
+  });
+  await assert.rejects(
+    failing.modify('openai-api-key', async () => replacement),
+    {
+      code: 'Persistence',
+    },
+  );
+  await assert.rejects(failing.delete('openai-api-key'));
+  assert.deepEqual(await readFile(path), sealed);
+});
+
 test('parallel reads share one key load, parallel first writes one create, and a failed load is retried', async (t) => {
   const directory = await makeDirectory(t, 'moonbase-coalesce-'),
     key = randomBytes(32),
@@ -265,7 +396,11 @@ test('a key file is created privately once, read back by later sources and refus
   }
   // A root-owned folder that only root can change, such as a system directory, is private enough.
   assert.equal(await createKeyFileSource('/usr/bin/moonbase-absent.key').load(), undefined);
-  await refuse(join(directory, 'missing', 'credential.key'), 'create');
+  for (const operation of ['load', 'create'] as const)
+    await assert.rejects(
+      createKeyFileSource(join(directory, 'missing', 'credential.key'))[operation](),
+      { code: 'Unavailable', message: /folder doesn't exist/ },
+    );
   const shared = join(directory, 'shared');
   await mkdir(shared, { mode: 0o700 });
   await copyFile(manual, join(shared, 'credential.key'));
@@ -433,6 +568,8 @@ test(
     for (const keychain of [
       'relative.keychain-db',
       '/tmp/a"b.keychain-db',
+      "/tmp/a'b.keychain-db",
+      '/tmp/a\\b.keychain-db',
       '/tmp/a\nb',
       // Too long for one `security -i` line once the add command and key are included.
       '/' + 'k'.repeat(4000),
@@ -462,12 +599,38 @@ function runSecurity(line: string) {
     child.stdin.end(line + '\n');
   });
 }
+/** The user's keychain search list, read only; this suite never writes it. */
+function listUserKeychains() {
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn('/usr/bin/security', ['list-keychains', '-d', 'user'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    let output = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => (output += chunk));
+    child
+      .on('error', reject)
+      .on('close', (status) =>
+        status === 0 ? resolve(output) : reject(Error(`security list-keychains exited ${status}`)),
+      );
+  });
+}
+
+// `security create-keychain` may add the new keychain to the user's search list, and a crash
+// before cleanup would leave a dangling entry there, so this test runs only when asked, as on the
+// ephemeral macOS CI runners. It checks the search list is unchanged and never writes it.
+const realKeychain =
+  macOnly ||
+  (process.env.MOONBASE_TEST_KEYCHAIN === '1'
+    ? false
+    : 'set MOONBASE_TEST_KEYCHAIN=1 to create and delete a temporary macOS keychain');
+if (realKeychain && !macOnly) console.log(`Skipping the temporary-keychain test: ${realKeychain}.`);
 
 test(
   'a temporary keychain stores, reads back and keeps the credential key',
-  { skip: macOnly },
+  { skip: realKeychain },
   async (t) => {
-    const directory = await mkdtemp(join(tmpdir(), 'moonbase-keychain-')),
+    const searchList = await listUserKeychains(),
+      directory = await mkdtemp(join(tmpdir(), 'moonbase-keychain-')),
       keychain = join(directory, 'test.keychain-db');
     // Delete the keychain by its path before its folder goes, so nothing outlives the test.
     t.after(async () => {
@@ -476,6 +639,7 @@ test(
       } finally {
         await rm(directory, { recursive: true, force: true });
       }
+      assert.equal(await listUserKeychains(), searchList);
     });
     assert.equal(
       await runSecurity(`create-keychain -p "${randomBytes(24).toString('hex')}" "${keychain}"`),

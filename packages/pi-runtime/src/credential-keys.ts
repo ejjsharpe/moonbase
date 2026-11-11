@@ -57,11 +57,11 @@ export function createKeyFileSource(path: string): CredentialKeySource {
   // symlinks; a root-owned folder such as a system directory is accepted.
   const checkFolder = async () => {
     const info = await stat(dirname(path)).catch(() => undefined);
-    if (
-      !info?.isDirectory() ||
-      (info.uid !== process.getuid?.() && info.uid !== 0) ||
-      info.mode & 0o022
-    )
+    if (!info?.isDirectory())
+      throw unavailable(
+        "The credential key file's folder doesn't exist. Create it, private to you, or choose another path.",
+      );
+    if ((info.uid !== process.getuid?.() && info.uid !== 0) || info.mode & 0o022)
       throw notPrivate();
   };
   const load = async () => {
@@ -135,9 +135,10 @@ export type KeychainKeySourceOptions = {
   timeoutMs?: number;
 };
 const keychainService = 'Moonbase daemon credentials';
-// `security -i` splits lines on whitespace and quotes, so only quote-free values reach a command.
+// `security -i` splits lines on whitespace and quotes, so only values without quotes of either
+// kind, backslashes or control characters reach a command.
 const isQuotable = (value: string) =>
-  [...value].every((character) => !'"\\\x7f'.includes(character) && character >= ' ');
+  [...value].every((character) => !'"\'\\\x7f'.includes(character) && character >= ' ');
 
 /**
  * A generic-password item (service `Moonbase daemon credentials`, account `storeId`) read and
