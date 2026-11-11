@@ -8,6 +8,8 @@ import { dirname, join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { ChatService, ConnectionService } from '@moonbase/contracts/services';
+import type { ApplicationError } from '@moonbase/contracts/errors';
+import { LoopbackConnectionLive, loopbackProfileId } from '@moonbase/pi-runtime/loopback';
 import { RemoteChatLive } from '@moonbase/pi-runtime/remote';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
 import {
@@ -136,39 +138,47 @@ test('a daemon of another build is used while it has work, then replaced in a ne
   const older = (await readDaemonPid(directory))!;
   t.after(() => stopDaemon(directory, older));
   const session = await readDaemonSession(directory);
-  const daemon = createLocalDaemon({
-    directory,
-    command: makeFauxDaemonCommand(directory),
-    replaceMs: 50,
-  });
-  const runtime = ManagedRuntime.make(
-    RemoteChatLive.pipe(Layer.provideMerge(LocalDaemonConnectionLive(daemon))),
-  );
-  t.after(() => runtime.dispose());
-  const { chat, connection } = await runtime.runPromise(
-    Effect.gen(function* () {
-      return { chat: yield* ChatService, connection: yield* ConnectionService };
-    }),
-  );
-  const before = await runtime.runPromise(connection.endpoint({ host: session.host }));
-  assert.equal(await readDaemonPid(directory), older, 'the app works with the older daemon');
-  assert.equal(daemon.isOutdated(), true);
-  const { conversation } = await runtime.runPromise(
-    chat.createChat({
+  /** Chat over a connection to the directory's daemon. */
+  const chatOver = async (connection: Layer.Layer<ConnectionService, ApplicationError>) => {
+    const runtime = ManagedRuntime.make(RemoteChatLive.pipe(Layer.provideMerge(connection)));
+    t.after(() => runtime.dispose());
+    return {
+      runtime,
+      ...(await runtime.runPromise(
+        Effect.gen(function* () {
+          return { chat: yield* ChatService, connection: yield* ConnectionService };
+        }),
+      )),
+    };
+  };
+  // The older daemon has work before this app connects, which asks at once whether it is idle.
+  const direct = await chatOver(LoopbackConnectionLive({ directory }));
+  await direct.runtime.runPromise(direct.connection.connect({ profileId: loopbackProfileId }));
+  const { conversation } = await direct.runtime.runPromise(
+    direct.chat.createChat({
       session,
       requestId: 'create',
       title: 'Held',
       settings: { model: fauxModel },
     }),
   );
-  await runtime.runPromise(
-    chat.sendChat({ target: conversation.target, requestId: 'send', text: 'Hold on' }),
+  await direct.runtime.runPromise(
+    direct.chat.sendChat({ target: conversation.target, requestId: 'send', text: 'Hold on' }),
   );
   let running;
   await until(async () => {
-    running = await runtime.runPromise(chat.getChat({ target: conversation.target }));
+    running = await direct.runtime.runPromise(direct.chat.getChat({ target: conversation.target }));
     return !!running.run;
   });
+  const daemon = createLocalDaemon({
+    directory,
+    command: makeFauxDaemonCommand(directory),
+    replaceMs: 50,
+  });
+  const { runtime, chat, connection } = await chatOver(LocalDaemonConnectionLive(daemon));
+  const before = await runtime.runPromise(connection.endpoint({ host: session.host }));
+  assert.equal(await readDaemonPid(directory), older, 'the app works with the older daemon');
+  assert.equal(daemon.isOutdated(), true);
   // Many checks pass while the run goes on; the older daemon keeps it.
   await delay(500);
   assert(isAlive(older));
