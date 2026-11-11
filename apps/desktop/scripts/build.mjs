@@ -5,10 +5,14 @@ import { createRequire } from 'node:module';
 import { cp, mkdir, rm, writeFile, readFile, stat } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { notices } from '../../../scripts/notices.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url)),
+  repository = fileURLToPath(new URL('../../../', import.meta.url)),
   require = createRequire(import.meta.url);
+// Packaging also stages the Bun runtime the bundled daemon runs on; development runs the daemon
+// from source with the `bun` on PATH, so a plain build needs no runtime download.
+const packaged = process.argv.includes('--package');
 await rm(join(root, 'dist'), { recursive: true, force: true });
 const main = await build({
   absWorkingDir: root,
@@ -37,6 +41,17 @@ const preload = await build({
   legalComments: 'external',
   logLevel: 'warning',
 });
+// The daemon ships as a bundle for the Bun runtime, with Claude Code's helper beside it.
+execFileSync(
+  process.execPath,
+  [
+    join(repository, 'apps/daemon/scripts/build.mjs'),
+    join(root, 'dist/daemon'),
+    join(root, 'dist/daemon-inputs.json'),
+  ],
+  { stdio: 'inherit' },
+);
+const daemonInputs = JSON.parse(await readFile(join(root, 'dist/daemon-inputs.json'), 'utf8'));
 execFileSync('vp', ['build', '--config', join(root, 'vite.config.ts')], {
   cwd: root,
   stdio: 'inherit',
@@ -57,7 +72,12 @@ for (const entry of [
 assert(!rendererInputs.some((p) => /packages\/editor\/|desktop\/src\/chat\/view\.tsx$/.test(p)));
 const mainInputs = Object.keys(main.metafile.inputs),
   preloadInputs = Object.keys(preload.metafile.inputs);
-for (const inputs of [mainInputs, preloadInputs, rendererInputs]) {
+for (const inputs of [
+  mainInputs,
+  preloadInputs,
+  rendererInputs,
+  daemonInputs.map((path) => relative(repository, path)),
+]) {
   assert.deepEqual(
     inputs.filter((p) =>
       /(?:^|\/)(?:test|tests)\/|(?:packages\/workbench|apps\/desktop)\/demo\/|test-fixture|(?:^|\/)host\.mjs$/.test(
@@ -103,11 +123,51 @@ assert(
 );
 for (const entry of ['native-actions', 'ipc', 'window-lifecycle', 'chat-backends'])
   assert(mainInputs.includes(`src/main/${entry}.ts`), `Missing main owner: ${entry}`);
+for (const entry of [
+  'apps/daemon/src/main.ts',
+  'pi-runtime/src/index.ts',
+  'pi-runtime/src/claude-code.ts',
+  'pi-runtime/src/server.ts',
+])
+  assert(
+    daemonInputs.some((path) => path.endsWith(entry)),
+    `Missing daemon input: ${entry}`,
+  );
+assert(
+  !daemonInputs.some((path) => /pi-runtime\/src\/host\.ts$|apps\/daemon\/test\//.test(path)),
+  'The standalone host or a daemon test entry reached the daemon bundle',
+);
+// The packaged daemon's runtime and its notices, verified by `scripts/prepare-bun.mjs`.
+const bun = process.env.MOONBASE_BUN_RUNTIME
+  ? resolve(process.env.MOONBASE_BUN_RUNTIME)
+  : join(repository, 'dist/tools/bun');
+const bunNotices = [
+  'LICENSE.md',
+  'JavaScriptCore-COPYING.LIB',
+  'WebCore-LICENSE-LGPL-2',
+  'WebCore-LICENSE-LGPL-2.1',
+  'WebCore-LICENSE-APPLE',
+];
+if (packaged) {
+  for (const file of ['bun', ...bunNotices]) await stat(join(bun, file));
+  await mkdir(join(root, 'dist/helpers'), { recursive: true });
+  await cp(join(bun, 'bun'), join(root, 'dist/helpers/bun'));
+}
 const packages = await notices(
   [...Object.keys(main.metafile.inputs), ...Object.keys(preload.metafile.inputs)]
     .map((p) => resolve(root, p))
-    .concat(rendererInputs, require.resolve('electron/package.json')),
+    .concat(rendererInputs, daemonInputs, require.resolve('electron/package.json')),
   join(root, 'dist/dependency-notices.txt'),
+  packaged
+    ? [
+        {
+          label: 'Bun 1.4.4 runtime (statically links JavaScriptCore and WebCore from WebKit)',
+          license: 'MIT AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-2-Clause',
+          directory: bun,
+          files: bunNotices,
+        },
+      ]
+    : [],
 );
 await writeFile(join(root, 'dist/main-inputs.json'), JSON.stringify(main.metafile.inputs));
 // Claude Code's tool-inventory helper resolves beside the bundle that imported it.

@@ -1,6 +1,6 @@
 # Daemon
 
-`@moonbase/daemon` is the process root that runs chats on Bun 1.4.4. It owns one data directory and serves a Pi runtime over the authenticated HTTP host protocol of [`@moonbase/pi-runtime/server`](../../packages/pi-runtime/README.md). It has no exports, and the app does not use it yet.
+`@moonbase/daemon` is the process root that runs chats on Bun 1.4.4. It owns one data directory and serves a Pi runtime over the authenticated HTTP host protocol of [`@moonbase/pi-runtime/server`](../../packages/pi-runtime/README.md). It has no exports. The desktop app ships it (below) but does not start it yet.
 
 ```sh
 bun run --cwd apps/daemon dev /absolute/private/data-directory
@@ -31,6 +31,18 @@ The data directory is its only argument (a second one is refused); everything el
 - **Host mode** advertises only `chat-v0`. It is the fixed-settings runtime of the standalone host (`host.ts`) on the configured port, with host-side provider keys. Until remote hosts move to the daemon (DM-07), host mode still reads those keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) and `PI_CLAUDE_CODE_COMMAND` from its environment, as `host.ts` does; local mode reads none.
 
 On start it prints one JSON `ready` line on stdout (`{"event":"ready","host":…,"port":…}`); failures print one `failed` line on stderr and exit 1, including "already running" when another daemon holds the lock. `SIGTERM` or `SIGINT` stops admitting (new requests and runs are refused at once), closes the server and runtime, closes Claude Code's workers, removes `endpoint.json` and exits 0; interrupted runs resume on the next start through Pi Durable. A local daemon also exits by itself after 5 minutes with no authenticated client request in flight, no open watch and no active work; host mode never idles out. Logs record only lifecycle events and failure codes: no token, credentials, request bodies or chat text.
+
+## Build and package
+
+```sh
+bun run --cwd apps/daemon build   # dist/daemon/daemon.mjs and inert-mcp.mjs
+```
+
+The daemon ships as the Bun 1.4.4 runtime plus an esbuild bundle `daemon.mjs`, with Claude Code's tool-inventory helper `inert-mcp.mjs` beside it, run as `bun daemon.mjs <data directory>`. It is not a `bun build --compile` executable: Claude Code resolves its helper beside the bundle and starts it with `process.execPath` and `BUN_BE_BUN=1`, and inside a compiled executable that path is in Bun's virtual `/$bunfs`, which the helper process can't load.
+
+The desktop package puts the runtime at `Moonbase.app/Contents/Helpers/bun` and the bundle and helper in `Contents/Resources/daemon/`, outside the asar. `scripts/prepare-bun.mjs` downloads `bun-darwin-aarch64.zip` from Bun's GitHub release, with Bun's licence and the LGPL notices of the WebKit it statically links, into a fresh cache and refuses any file whose SHA-256 differs from the pinned one before unpacking or running it. In development the app would run `bun src/main.ts` from the `bun` on PATH, with no packaging step.
+
+The release runtime is signed by Oven. Signing Moonbase (not done yet) means re-signing it with Bun's JIT entitlements under the hardened runtime: `com.apple.security.cs.allow-jit`, `allow-unsigned-executable-memory`, `disable-executable-page-protection`, `allow-dyld-environment-variables` and `disable-library-validation` (Bun's own `entitlements.plist`).
 
 ## Checks
 

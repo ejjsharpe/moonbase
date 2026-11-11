@@ -27,6 +27,7 @@ NX_DAEMON=false bunx nx run @moonbase/desktop:dev
 ## Package
 
 ```sh
+node scripts/prepare-bun.mjs
 NX_DAEMON=false bunx nx run @moonbase/desktop:build
 bun run --cwd apps/desktop check:renderer
 NX_DAEMON=false bunx nx run @moonbase/desktop:package
@@ -34,7 +35,7 @@ MOONBASE_USER_DATA="$(mktemp -d -t moonbase-packaged)" \
   apps/desktop/release/mac-arm64/Moonbase.app/Contents/MacOS/Moonbase
 ```
 
-The app bundles Electron, the workspace native helper and ripgrep; system Git and plutil are required. Packages are unsigned and not notarized.
+The app bundles Electron, the workspace native helper, ripgrep and the [daemon](../daemon/README.md): the pinned Bun runtime in `Contents/Helpers/bun` and `daemon.mjs` with `inert-mcp.mjs` in `Contents/Resources/daemon` (about 95.5 MB, 88.7 MB of it Bun). Only packaging needs `prepare-bun.mjs`; a build bundles the daemon but not its runtime. The app does not start the daemon yet. System Git and plutil are required. Packages are unsigned and not notarized.
 
 ## Local chat
 
@@ -91,4 +92,4 @@ bun run --cwd apps/desktop check:package
 bun run --cwd apps/desktop test:package
 ```
 
-`test:browser` runs the shell in Chromium without Electron; set `MOONBASE_BROWSER_PORT` to isolate concurrent runs (default 4177). `test:native` and `test:package` drive real Electron with temporary repositories and user data. Tests inject clipboard and file-opening capabilities.
+`test:browser` runs the shell in Chromium without Electron; set `MOONBASE_BROWSER_PORT` to isolate concurrent runs (default 4177). `test:native` and `test:package` drive real Electron with temporary repositories and user data. `check:package` also checks the daemon's files against `dist`, that only they ship beside it, and that they embed no checkout or home path or key; `test:package` first starts the packaged daemon on temporary data with a faux `claude` (`test/packaged-daemon.smoke.ts`) and chats through Claude Code's helper. Tests inject clipboard and file-opening capabilities.

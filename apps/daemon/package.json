@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun src/main.ts",
+    "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint .",
     "test": "bun test --timeout 60000 ./test"

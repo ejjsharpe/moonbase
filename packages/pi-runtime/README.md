@@ -22,7 +22,7 @@ bun run --cwd packages/pi-runtime build:host
 node packages/pi-runtime/dist/host.mjs /absolute/private/moonbase-host.json
 ```
 
-`build:host` writes a self-contained `host.mjs` and the `inert-mcp.mjs` it needs to `dist/`, which can be built elsewhere and copied over as a pair.
+`build:host` writes a self-contained `host.mjs` and the `inert-mcp.mjs` it needs to `dist/`, which can be built elsewhere and copied over as a pair. The [daemon](../../apps/daemon/README.md) bundles the same way for Bun and supersedes it once remote hosts run the daemon.
 
 The private JSON file contains:
 

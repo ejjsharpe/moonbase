@@ -14,7 +14,7 @@
     "package": "node scripts/package.mjs",
     "test:desktop": "playwright test --project editor",
     "check:renderer": "node scripts/check-renderer.mjs",
-    "test:package": "MOONBASE_PACKAGED_TEST=1 playwright test --project packaged --project reload --project composition --project transcripts",
+    "test:package": "node --experimental-strip-types --test test/packaged-daemon.smoke.ts && MOONBASE_PACKAGED_TEST=1 playwright test --project packaged --project reload --project composition --project transcripts",
     "test:native": "playwright test --project editor --project configuration --project reload --project composition --project recovery --project local --project transcripts",
     "test:composition": "playwright test --project composition",
     "test:reload": "playwright test --project reload",
