@@ -832,14 +832,11 @@ test('a ping flood that never reads stops being read and is dropped, and held ha
   raw.socket.pause();
   const ping = encodeWebSocketFrame(9, Buffer.alloc(125, 1), true),
     batch = Buffer.concat(Array.from({ length: 1000 }, () => ping));
-  // About 21 MB: past the 1 MiB bound plus what loopback buffers absorb (up to 4 MiB on each
-  // side of each direction on macOS), so the daemon must stop reading.
-  for (let index = 0; index < 160; index++) raw.socket.write(batch);
-  // What the daemon has not read stays queued here instead of as answers in the daemon.
+  // Flood until the daemon's unread answers pass its bound and it stops reading, which arms its
+  // drain timer: however much the loopback buffers absorb, and however slowly it reads.
   await until(async () => {
-    const queued = raw.socket.writableLength;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    return queued > 0 && raw.socket.writableLength === queued;
+    while (raw.socket.writableLength < 1024 * 1024) raw.socket.write(batch);
+    return clock.hasTimer(socketLimits.drainMs);
   }, Boolean);
   // A flood left unread for `drainMs` is dropped.
   clock.advance(socketLimits.drainMs);

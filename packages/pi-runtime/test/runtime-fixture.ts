@@ -36,12 +36,14 @@ export function manualClock() {
       return next;
     },
     clearTimeout: (handle: unknown) => void timers.delete(handle as number),
+    /** Whether a timer is due `ms` from now. */
+    hasTimer: (ms: number) => [...timers.values()].some((timer) => timer.at === now + ms),
     advance(ms: number) {
       now += ms;
       for (const [handle, timer] of [...timers].sort(([, a], [, b]) => a.at - b.at))
         if (timer.at <= now && timers.delete(handle)) timer.run();
     },
-  } satisfies SocketClock & { advance(ms: number): void };
+  } satisfies SocketClock & { hasTimer(ms: number): boolean; advance(ms: number): void };
 }
 export const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function until<T>(get: () => Promise<T>, ready: (value: T) => boolean): Promise<T> {
