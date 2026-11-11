@@ -18,7 +18,9 @@
     "./lookup": "./src/lookup.ts",
     "./services": "./src/services.ts",
     "./providers": "./src/providers.ts",
-    "./providers-schema": "./src/providers-schema.ts"
+    "./providers-schema": "./src/providers-schema.ts",
+    "./daemon": "./src/daemon.ts",
+    "./daemon-schema": "./src/daemon-schema.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

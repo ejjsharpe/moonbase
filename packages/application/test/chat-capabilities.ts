@@ -96,7 +96,7 @@ export function chatCapabilities() {
           state: 'connected',
           connectionId: 'connection-' + ++connectionGeneration,
           profile,
-          health: { ...context.host, protocol: 1, version: '0.1.0', capabilities: ['chat-v0'] },
+          health: { ...context.host, protocol: 2, version: '0.1.0', capabilities: ['chat-v0'] },
         };
       if (operation === 'disconnect')
         connectionState = { state: 'disconnected', connectionId: null, profile };

@@ -11,7 +11,8 @@
     "./local-models": "./src/local-models.ts",
     "./claude-code": "./src/claude-code.ts",
     "./folders": "./src/folders.ts",
-    "./host-configuration": "./src/host-configuration.ts"
+    "./host-configuration": "./src/host-configuration.ts",
+    "./loopback": "./src/loopback.ts"
   },
   "scripts": {
     "build": "tsc --noEmit -p tsconfig.json",

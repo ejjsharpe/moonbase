@@ -97,7 +97,7 @@ export function startDaemon(
 const hash = (body: string | Uint8Array) => createHash('sha256').update(body).digest('hex');
 const mac = (token: string, ...parts: unknown[]) =>
   createHmac('sha256', token)
-    .update(JSON.stringify(['moonbase-chat-v1', ...parts]))
+    .update(JSON.stringify(['moonbase-daemon-v1', ...parts]))
     .digest('hex');
 
 /**
@@ -106,7 +106,7 @@ const mac = (token: string, ...parts: unknown[]) =>
  */
 const streamMac = (token: string, ...parts: unknown[]) =>
   createHmac('sha256', token)
-    .update(JSON.stringify(['moonbase-chat-stream-v1', ...parts]))
+    .update(JSON.stringify(['moonbase-daemon-stream-v1', ...parts]))
     .digest('hex');
 
 export function createFauxClient(port: number, token: string) {
@@ -196,7 +196,7 @@ export function createFauxClient(port: number, token: string) {
 export function probeHealth(origin: string, token: string) {
   const nonce = randomBytes(32).toString('base64url');
   const proof = createHmac('sha256', token)
-    .update(JSON.stringify(['moonbase-health-v1', 'request', nonce]))
+    .update(JSON.stringify(['moonbase-daemon-health-v1', 'request', nonce]))
     .digest('hex');
   return fetch(origin + '/v1/health', {
     headers: { 'X-Moonbase-Nonce': nonce, Authorization: 'Moonbase-HMAC-SHA256 ' + proof },

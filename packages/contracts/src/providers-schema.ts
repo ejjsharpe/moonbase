@@ -77,6 +77,30 @@ export const providerInputSchemas = {
   openProviderUrl: struct({ flowId: ChatIdentifierSchema }),
   logoutProvider: struct({ providerId: ChatIdentifierSchema }),
 };
+/** Origins a provider's sign-in page may be on; anything else never reaches a client or browser. */
+export const providerSignInOrigins = ['https://auth.openai.com'] as const;
+/** The normalized sign-in URL, when it is an https page on a provider's sign-in origin with no credentials. */
+export function readProviderSignInUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length > 8192) return undefined;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return undefined;
+  }
+  if (
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    url.port ||
+    !(providerSignInOrigins as readonly string[]).includes(url.origin)
+  )
+    return undefined;
+  return url.href;
+}
+export const ProviderSignInUrlSchema = Schema.String.check(
+  Schema.makeFilter((value) => readProviderSignInUrl(value) === value),
+);
 export const isProviderCommand = (value: unknown): value is ProviderCommand =>
   typeof value === 'string' && Object.hasOwn(providerInputSchemas, value);
 export function decodeProviderInput<K extends ProviderCommand>(

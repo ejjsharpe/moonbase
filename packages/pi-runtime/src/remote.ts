@@ -1,5 +1,10 @@
 import { Effect, Layer, Stream, Exit, Cause, Queue, Clock } from 'effect';
-import type { ChatHostTarget } from '@moonbase/contracts/host';
+import {
+  chatHostCapabilities,
+  type ChatHostCapability,
+  type ChatHostHealth,
+  type ChatHostTarget,
+} from '@moonbase/contracts/host';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import {
   type ChatCommand,
@@ -13,15 +18,204 @@ import { releaseResource } from '@moonbase/effect';
 import {
   ChatService,
   ConnectionService,
+  LocalHostService,
+  ProviderSetupService,
   type ChatServiceShape,
+  type LocalHostHandlers,
+  type ProviderSetupHandlers,
   type ConnectionServiceShape,
   type VerifiedChatEndpoint,
 } from '@moonbase/contracts/services';
 import { validateHostHealth } from '@moonbase/ssh/host-health';
+import { randomUUID } from 'node:crypto';
+import type {
+  DaemonCommand,
+  DaemonInput,
+  DaemonOutput,
+  HostProviderCommand,
+  LocalHostCommand,
+  LocalHostInput,
+} from '@moonbase/contracts/daemon';
+import {
+  daemonCommandCapabilities,
+  decodeDaemonInput,
+  decodeDaemonOutput,
+  isDaemonMutation,
+} from '@moonbase/contracts/daemon-schema';
+import { decodeChatHostTarget } from '@moonbase/contracts/host-schema';
+import type { ProviderCommand, ProviderInput, ProviderState } from '@moonbase/contracts/providers';
+import { decodeProviderInput, readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
 import * as P from './protocol.ts';
 import * as V from './validation.ts';
 
 const renewAfterNanos = BigInt(P.streamLimits.renewMs) * 1_000_000n;
+
+/** One authenticated RPC to the host an endpoint serves. */
+type ExchangeSpec<A> = {
+  operation: string;
+  /** Already decoded and bounded. */
+  input: unknown;
+  host: ChatHostTarget;
+  /** A lost or unproved reply is `Uncertain`. */
+  mutation: boolean;
+  /** A feature the host's signed health must advertise; checked before dispatch. */
+  capability?: ChatHostCapability;
+  /** Decodes the signed reply's value against the request; throws when it is invalid. */
+  decode(value: unknown, health: ChatHostHealth): A;
+};
+
+/**
+ * Sends one request through the connection's current generation: a single-use challenge whose
+ * signed health must name the host (and any capability the request needs), then the signed
+ * request and its signed reply. A mutation whose reply is lost or unproved is `Uncertain` and is
+ * never sent again.
+ */
+function exchange<A>(
+  connections: ConnectionServiceShape,
+  spec: ExchangeSpec<A>,
+): Effect.Effect<A, ApplicationError> {
+  return Effect.gen(function* () {
+    const { operation, input, host, mutation } = spec;
+    let dispatched = false;
+    const endpoint = yield* connections.endpoint({ host });
+    const changed = () =>
+      new ApplicationError({
+        code: mutation && dispatched ? 'Uncertain' : 'Unavailable',
+        message:
+          mutation && dispatched
+            ? 'Connection changed after a chat mutation may have dispatched. Preserve its original request and reconcile through its authority.'
+            : 'Connection generation changed; query through the selected authority again.',
+      });
+    const assertGeneration = makeGenerationCheck(connections, host, endpoint, changed, (error) =>
+      mutation && dispatched ? changed() : error,
+    );
+    const prepared = yield* Effect.try({
+      try: () => ({ origin: P.origin(endpoint), nonce: P.nonce() }),
+      catch: ApplicationError.fromUnknown,
+    });
+    const controller = new AbortController(),
+      timer = setTimeout(() => controller.abort(), P.requestDeadlineMs),
+      request = makeChatRequest(prepared.origin, controller.signal);
+    const attempt = yield* Effect.exit(
+      Effect.ensuring(
+        Effect.gen(function* () {
+          const { challenge, health } = yield* authenticateChallenge(
+            request,
+            endpoint.token,
+            prepared.nonce,
+            host,
+          );
+          if (spec.capability && !health.capabilities.includes(spec.capability))
+            return yield* Effect.fail(
+              new ApplicationError({
+                code: 'Incompatible',
+                message: 'The chat host does not offer this feature.',
+              }),
+            );
+          yield* assertGeneration;
+          const body = JSON.stringify({ operation, input });
+          if (Buffer.byteLength(body) > P.maximumChatRequestBytes)
+            return yield* Effect.fail(
+              new ApplicationError({
+                code: 'InvalidInput',
+                message: 'Chat input exceeds its transport limit.',
+              }),
+            );
+          const lost = () =>
+            new ApplicationError({
+              code: mutation ? 'Uncertain' : 'Unavailable',
+              message: mutation
+                ? 'Chat reply was lost. Query the original request; do not invent another Send.'
+                : 'Chat reply was lost. Retry the read through the selected authority.',
+            });
+          const response = yield* Effect.suspend(() => {
+            dispatched = true;
+            return request(
+              '/v1/chat',
+              {
+                method: 'POST',
+                body,
+                headers: {
+                  'content-type': 'application/json',
+                  'X-Moonbase-Nonce': prepared.nonce,
+                  'X-Moonbase-Challenge': challenge,
+                  Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.mac(endpoint.token, 'request', prepared.nonce, challenge, 'POST', '/v1/chat', P.hash(body))}`,
+                },
+              },
+              lost,
+            );
+          });
+          const bytes = yield* P.responseBytes(
+            response,
+            P.maximumChatReplyBytes,
+            mutation ? 'Uncertain' : 'Unavailable',
+            mutation,
+          );
+          const result = yield* Effect.try({
+            try: () => {
+              const invalid = (code: 'Unauthorized' | 'Incompatible', message: string): never =>
+                V.fail(
+                  mutation ? 'Uncertain' : code,
+                  mutation
+                    ? 'Chat mutation outcome could not be authenticated. Preserve its original request and query before retrying.'
+                    : message,
+                );
+              if (
+                response.headers.get('x-moonbase-nonce') !== prepared.nonce ||
+                response.headers.get('x-moonbase-challenge') !== challenge ||
+                !P.proof(
+                  response.headers.get('x-moonbase-proof'),
+                  P.mac(
+                    endpoint.token,
+                    'response',
+                    prepared.nonce,
+                    challenge,
+                    response.status,
+                    P.hash(bytes),
+                  ),
+                )
+              )
+                invalid('Unauthorized', 'Chat host did not prove its response.');
+              let envelope: Record<string, unknown>;
+              try {
+                envelope = V.object(P.json(bytes));
+              } catch {
+                return invalid('Incompatible', 'Chat returned invalid response data.');
+              }
+              if (envelope.ok === false)
+                throw (
+                  decodeErrorEnvelope(envelope.error, operation) ??
+                  invalid('Incompatible', 'Chat returned an invalid error.')
+                );
+              if (envelope.ok !== true || response.status !== 200)
+                return invalid('Incompatible', 'Chat reply has an unexpected status or shape.');
+              try {
+                return spec.decode(envelope.value, health);
+              } catch {
+                return invalid('Incompatible', 'Chat returned invalid response data.');
+              }
+            },
+            catch: (error) => (ApplicationError.is(error) ? error : lost()),
+          });
+          return result;
+        }),
+        Effect.sync(() => {
+          clearTimeout(timer);
+          controller.abort();
+        }),
+      ),
+    );
+    if (Exit.isFailure(attempt) && Cause.hasInterruptsOnly(attempt.cause))
+      return yield* Effect.failCause(attempt.cause);
+    const generation = yield* Effect.exit(assertGeneration);
+    if (Exit.isFailure(generation))
+      return yield* Effect.failCause(
+        Exit.isFailure(attempt) ? Cause.combine(generation.cause, attempt.cause) : generation.cause,
+      );
+    if (Exit.isFailure(attempt)) return yield* Effect.failCause(attempt.cause);
+    return attempt.value;
+  });
+}
 
 /** Client graph imports no engine, SQLite, provider or local workspace implementation. */
 export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> = Layer.effect(
@@ -37,15 +231,6 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
           try: () => V.input(operation, unknown),
           catch: ApplicationError.fromUnknown,
         });
-        if (operation === 'createChat' && (input as ChatInput<'createChat'>).settings !== undefined)
-          return yield* Effect.fail(
-            new ApplicationError({
-              code: 'InvalidInput',
-              message: 'Remote chats retain the host’s fixed working folder and model.',
-            }),
-          );
-        const mutation = V.isMutation(operation);
-        let dispatched = false;
         const shape = input as {
           host?: { hostId: string; storeId: string };
           session?: { host: { hostId: string; storeId: string } };
@@ -59,148 +244,28 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
           shape.target?.host ??
           shape.source?.target.host ??
           shape.stop!.target.host;
-        const endpoint = yield* connections.endpoint({ host });
-        const changed = () =>
-          new ApplicationError({
-            code: mutation && dispatched ? 'Uncertain' : 'Unavailable',
-            message:
-              mutation && dispatched
-                ? 'Connection changed after a chat mutation may have dispatched. Preserve its original request and reconcile through its authority.'
-                : 'Connection generation changed; query through the selected authority again.',
-          });
-        const assertGeneration = makeGenerationCheck(
-          connections,
+        return yield* exchange(connections, {
+          operation,
+          input,
           host,
-          endpoint,
-          changed,
-          (error) => (mutation && dispatched ? changed() : error),
-        );
-        const prepared = yield* Effect.try({
-          try: () => ({ origin: P.origin(endpoint), nonce: P.nonce() }),
-          catch: ApplicationError.fromUnknown,
+          mutation: V.isMutation(operation),
+          // Only a local-mode host chooses a chat's folder and model at creation.
+          ...(operation === 'createChat' &&
+          (input as ChatInput<'createChat'>).settings !== undefined
+            ? { capability: chatHostCapabilities.local }
+            : {}),
+          decode: (value, health) => {
+            const output = V.output(operation, value, input);
+            if (
+              operation === 'getChatHost' &&
+              output &&
+              'mode' in output &&
+              !health.capabilities.includes(chatHostCapabilities.local)
+            )
+              V.fail('Incompatible', 'An SSH host must supply its fixed working folder and model.');
+            return output;
+          },
         });
-        const controller = new AbortController(),
-          timer = setTimeout(() => controller.abort(), P.requestDeadlineMs),
-          request = makeChatRequest(prepared.origin, controller.signal);
-        const attempt = yield* Effect.exit(
-          Effect.ensuring(
-            Effect.gen(function* () {
-              const challenge = yield* authenticateChallenge(
-                request,
-                endpoint.token,
-                prepared.nonce,
-                host,
-              );
-              yield* assertGeneration;
-              const body = JSON.stringify({ operation, input });
-              if (Buffer.byteLength(body) > P.maximumChatRequestBytes)
-                return yield* Effect.fail(
-                  new ApplicationError({
-                    code: 'InvalidInput',
-                    message: 'Chat input exceeds its transport limit.',
-                  }),
-                );
-              const lost = () =>
-                new ApplicationError({
-                  code: mutation ? 'Uncertain' : 'Unavailable',
-                  message: mutation
-                    ? 'Chat reply was lost. Query the original request; do not invent another Send.'
-                    : 'Chat reply was lost. Retry the read through the selected authority.',
-                });
-              const response = yield* Effect.suspend(() => {
-                dispatched = true;
-                return request(
-                  '/v1/chat',
-                  {
-                    method: 'POST',
-                    body,
-                    headers: {
-                      'content-type': 'application/json',
-                      'X-Moonbase-Nonce': prepared.nonce,
-                      'X-Moonbase-Challenge': challenge,
-                      Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.mac(endpoint.token, 'request', prepared.nonce, challenge, 'POST', '/v1/chat', P.hash(body))}`,
-                    },
-                  },
-                  lost,
-                );
-              });
-              const bytes = yield* P.responseBytes(
-                response,
-                P.maximumChatReplyBytes,
-                mutation ? 'Uncertain' : 'Unavailable',
-                mutation,
-              );
-              const result = yield* Effect.try({
-                try: () => {
-                  const invalid = (code: 'Unauthorized' | 'Incompatible', message: string): never =>
-                    V.fail(
-                      mutation ? 'Uncertain' : code,
-                      mutation
-                        ? 'Chat mutation outcome could not be authenticated. Preserve its original request and query before retrying.'
-                        : message,
-                    );
-                  if (
-                    response.headers.get('x-moonbase-nonce') !== prepared.nonce ||
-                    response.headers.get('x-moonbase-challenge') !== challenge ||
-                    !P.proof(
-                      response.headers.get('x-moonbase-proof'),
-                      P.mac(
-                        endpoint.token,
-                        'response',
-                        prepared.nonce,
-                        challenge,
-                        response.status,
-                        P.hash(bytes),
-                      ),
-                    )
-                  )
-                    invalid('Unauthorized', 'Chat host did not prove its response.');
-                  let envelope: Record<string, unknown>;
-                  try {
-                    envelope = V.object(P.json(bytes));
-                  } catch {
-                    return invalid('Incompatible', 'Chat returned invalid response data.');
-                  }
-                  if (envelope.ok === false)
-                    throw (
-                      decodeErrorEnvelope(envelope.error, operation) ??
-                      invalid('Incompatible', 'Chat returned an invalid error.')
-                    );
-                  if (envelope.ok !== true || response.status !== 200)
-                    return invalid('Incompatible', 'Chat reply has an unexpected status or shape.');
-                  try {
-                    const output = V.output(operation, envelope.value, input);
-                    if (operation === 'getChatHost' && output && 'mode' in output)
-                      V.fail(
-                        'Incompatible',
-                        'An SSH host must supply its fixed working folder and model.',
-                      );
-                    return output;
-                  } catch {
-                    return invalid('Incompatible', 'Chat returned invalid response data.');
-                  }
-                },
-                catch: (error) => (ApplicationError.is(error) ? error : lost()),
-              });
-              return result;
-            }),
-            Effect.sync(() => {
-              clearTimeout(timer);
-              controller.abort();
-            }),
-          ),
-        );
-        if (Exit.isFailure(attempt) && Cause.hasInterruptsOnly(attempt.cause))
-          return yield* Effect.failCause(attempt.cause);
-        const generation = yield* Effect.exit(assertGeneration);
-        if (Exit.isFailure(generation))
-          return yield* Effect.failCause(
-            Exit.isFailure(attempt)
-              ? Cause.combine(generation.cause, attempt.cause)
-              : generation.cause,
-          );
-        if (Exit.isFailure(attempt)) return yield* Effect.failCause(attempt.cause);
-        return attempt.value;
       });
     let observers = 0;
     const watch = (target: ChatTarget) =>
@@ -335,6 +400,179 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
   }),
 );
 
+/**
+ * Sends one daemon operation: decoded and bounded before it leaves, refused unless the host's
+ * signed health advertises its capability, and its reply decoded strictly with any request ID it
+ * carried echoed back.
+ */
+function sendDaemonCommand<K extends DaemonCommand>(
+  connections: ConnectionServiceShape,
+  operation: K,
+  unknown: DaemonInput<K>,
+  check: (output: DaemonOutput<K>, input: DaemonInput<K>) => void = () => {},
+): Effect.Effect<DaemonOutput<K>, ApplicationError> {
+  return Effect.flatMap(
+    Effect.try({
+      try: () => decodeDaemonInput(operation, unknown),
+      catch: ApplicationError.fromUnknown,
+    }),
+    (input) => {
+      const shape = input as { host?: ChatHostTarget; target?: ChatTarget };
+      return exchange(connections, {
+        operation,
+        input,
+        host: shape.host ?? shape.target!.host,
+        mutation: isDaemonMutation(operation),
+        capability: daemonCommandCapabilities[operation],
+        decode: (value) => {
+          const output = decodeDaemonOutput(operation, value);
+          const requestId = (input as { requestId?: string }).requestId;
+          if (requestId !== undefined && (output as { requestId?: string }).requestId !== requestId)
+            V.fail('Incompatible', 'Daemon request identity changed.');
+          check(output, input);
+          return output;
+        },
+      });
+    },
+  );
+}
+
+/** A local-mode daemon's folder approvals and control, over an injected `ConnectionService`. */
+export const RemoteLocalHostLive: Layer.Layer<LocalHostService, never, ConnectionService> =
+  Layer.effect(
+    LocalHostService,
+    Effect.gen(function* () {
+      const connections = yield* ConnectionService;
+      const send =
+        <K extends LocalHostCommand>(operation: K) =>
+        (input: LocalHostInput<K>) =>
+          sendDaemonCommand(connections, operation, input);
+      return {
+        approveFolder: send('approveFolder'),
+        listRecentFolders: send('listRecentFolders'),
+        checkChatFolder: send('checkChatFolder'),
+        getActiveWork: send('getActiveWork'),
+        markFolderAsProject: send('markFolderAsProject'),
+      } satisfies LocalHostHandlers;
+    }),
+  );
+
+export type RemoteProviderSetupConfiguration = {
+  /** The local-mode host whose providers are set up. */
+  host: ChatHostTarget;
+  /** Opens a validated sign-in URL in the user's browser. */
+  openUrl(url: string): Promise<void>;
+  /**
+   * Whether that browser runs on the host's machine, where a provider's loopback sign-in callback
+   * (ChatGPT's `127.0.0.1:1455`) reaches the host and finishes sign-in by itself. Otherwise the
+   * user pastes the final redirect URL.
+   */
+  sameMachine: boolean;
+};
+const sameMachineCallback =
+  'Finish signing in in your browser; Moonbase completes it by itself. If it does not, paste the final redirect URL here.';
+const pastedCallback =
+  'Your browser cannot reach the host’s sign-in callback. After signing in, paste the final redirect URL here.';
+
+/**
+ * Provider setup on a local-mode host, scoped to owners the client names. Sign-in links come back
+ * validated and open through the client's `openUrl`; setup state is polled.
+ */
+export const RemoteProviderSetupLive = (
+  config: RemoteProviderSetupConfiguration,
+): Layer.Layer<ProviderSetupService, never, ConnectionService> =>
+  Layer.effect(
+    ProviderSetupService,
+    Effect.gen(function* () {
+      const connections = yield* ConnectionService;
+      const host = decodeChatHostTarget(config.host);
+      // Which sign-in path applies depends on where the browser is, which only the client knows.
+      const present = (state: ProviderState): ProviderState =>
+        state.flow?.prompt?.type === 'manual_code'
+          ? {
+              ...state,
+              flow: {
+                ...state.flow,
+                prompt: {
+                  ...state.flow.prompt,
+                  message: config.sameMachine ? sameMachineCallback : pastedCallback,
+                },
+              },
+            }
+          : state;
+      const checkUrl = (
+        output: DaemonOutput<'openProviderUrl'>,
+        input: DaemonInput<'openProviderUrl'>,
+      ) => {
+        if (
+          readProviderSignInUrl(output.url) !== output.url ||
+          output.state.flow?.id !== input.flowId
+        )
+          V.fail('Incompatible', 'Provider sign-in link is invalid.');
+      };
+      const openUrl = (url: string) =>
+        Effect.tryPromise({
+          try: () => config.openUrl(url),
+          catch: () =>
+            new ApplicationError({
+              code: 'Unavailable',
+              message: 'The provider sign-in page could not be opened.',
+            }),
+        });
+      const forOwner = (ownerId: string): ProviderSetupHandlers => {
+        const send = <K extends ProviderCommand & HostProviderCommand>(
+          operation: K,
+          unknown: ProviderInput<K>,
+        ) =>
+          Effect.flatMap(
+            Effect.try({
+              try: () => decodeProviderInput(operation, unknown),
+              catch: ApplicationError.fromUnknown,
+            }),
+            (input) =>
+              sendDaemonCommand(
+                connections,
+                operation,
+                {
+                  host,
+                  ownerId,
+                  ...(isDaemonMutation(operation) ? { requestId: randomUUID() } : {}),
+                  ...input,
+                } as DaemonInput<K>,
+                operation === 'openProviderUrl' ? (checkUrl as never) : undefined,
+              ),
+          );
+        const state =
+          <K extends ProviderCommand & HostProviderCommand>(operation: K) =>
+          (input: ProviderInput<K>) =>
+            Effect.map(send(operation, input), (output) =>
+              present((output as { state: ProviderState }).state),
+            );
+        return {
+          getProviders: state('getProviders'),
+          startProviderLogin: state('startProviderLogin'),
+          answerProviderPrompt: state('answerProviderPrompt'),
+          cancelProviderLogin: state('cancelProviderLogin'),
+          openProviderUrl: (input) =>
+            Effect.flatMap(send('openProviderUrl', input), (output) =>
+              Effect.as(openUrl(output.url), present(output.state)),
+            ),
+          logoutProvider: state('logoutProvider'),
+        };
+      };
+      return {
+        forOwner,
+        releaseOwner: (ownerId) =>
+          sendDaemonCommand(connections, 'releaseProviderOwner', { host, ownerId }),
+        getProviderUrl: (ownerId, flowId) =>
+          Effect.map(
+            sendDaemonCommand(connections, 'openProviderUrl', { host, ownerId, flowId }, checkUrl),
+            (output) => output.url,
+          ),
+      };
+    }),
+  );
+
 type ChatRequest = (
   path: string,
   init: RequestInit,
@@ -363,7 +601,7 @@ function authenticateChallenge(
   token: string,
   nonce: string,
   host: ChatHostTarget,
-): Effect.Effect<string, ApplicationError> {
+): Effect.Effect<{ challenge: string; health: ChatHostHealth }, ApplicationError> {
   return Effect.gen(function* () {
     const response = yield* request(
       '/v1/chat/challenge',
@@ -393,10 +631,10 @@ function authenticateChallenge(
         if (response.status !== 200)
           V.fail('Unavailable', 'Chat host could not issue a challenge.');
         const data = V.object(P.json(bytes));
-        validateHostHealth(data.health, host);
+        const health = validateHostHealth(data.health, host);
         if (!P.validNonce(data.challenge))
           V.fail('Incompatible', 'Chat host returned an invalid challenge.');
-        return data.challenge as string;
+        return { challenge: data.challenge as string, health };
       },
       catch: (error) =>
         ApplicationError.is(error)
@@ -473,7 +711,12 @@ function readStream(
               code: 'Unavailable',
               message: 'Chat stream transport was lost.',
             });
-        const challenge = yield* authenticateChallenge(request, endpoint.token, nonce, target.host);
+        const { challenge } = yield* authenticateChallenge(
+          request,
+          endpoint.token,
+          nonce,
+          target.host,
+        );
         yield* assertGeneration;
         const body = JSON.stringify({ target, connectionId: endpoint.connectionId });
         const stream = yield* request(

@@ -16,6 +16,7 @@ import type {
 } from './connection.ts';
 import type { ChatHostTarget, ChatHostHealth } from './host.ts';
 import type { ChatCommand, ChatInput, ChatOutput, ChatSnapshot, ChatTarget } from './chat.ts';
+import type { LocalHostCommand, LocalHostInput, LocalHostOutput } from './daemon.ts';
 
 export type WorkspaceHandler<K extends WorkspaceCommand> = (
   input: CommandInput<K>,
@@ -72,5 +73,20 @@ export class ProviderSetupService extends Context.Service<
   {
     forOwner(ownerId: string): ProviderSetupHandlers;
     releaseOwner(ownerId: string): Effect.Effect<void, ApplicationError>;
+    /**
+     * The validated sign-in URL of the owner's running flow, for a client to open itself. Unlike
+     * `openProviderUrl`, it opens nothing.
+     */
+    getProviderUrl(ownerId: string, flowId: string): Effect.Effect<string, ApplicationError>;
   }
 >()('moonbase/ProviderSetup') {}
+
+export type LocalHostHandlers = {
+  [K in LocalHostCommand]: (
+    input: LocalHostInput<K>,
+  ) => Effect.Effect<LocalHostOutput<K>, ApplicationError>;
+};
+/** Privileged: a local-mode host's folder approvals and control; only a token holder grants them. */
+export class LocalHostService extends Context.Service<LocalHostService, LocalHostHandlers>()(
+  'moonbase/LocalHost',
+) {}

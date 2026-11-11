@@ -5,6 +5,8 @@ import { Harness } from '@earendil-works/pi-durable';
 import { fixture as piFixture } from './runtime-fixture.ts';
 import { Clock, Effect, Exit, Layer, ManagedRuntime, Scope, Stream, Queue } from 'effect';
 import type { ChatClient, ChatSnapshot, ChatStreamFrame } from '@moonbase/contracts/chat';
+import type { DaemonClient } from '@moonbase/contracts/daemon';
+import { createHmac } from 'node:crypto';
 import { ChatService, ConnectionService } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
@@ -82,7 +84,7 @@ async function fixture(t: TestContext, holdInitial = false, clock?: Clock.Clock)
     token,
     expected: host,
     connectionId: 'one',
-    health: { ...host, protocol: 1 as const, version: '0.1.0' as const, capabilities: ['chat-v0'] },
+    health: { ...host, protocol: 2 as const, version: '0.1.0' as const, capabilities: ['chat-v0'] },
   };
   const unavailable = () =>
     Effect.fail(
@@ -535,6 +537,121 @@ test('stream challenges cannot authorize RPC or be reused across endpoint establ
   assert.equal(replay.status, 401);
 });
 
+test('a watch signed under the protocol 1 stream domain is refused before it reaches the service', async (t) => {
+  const f = await fixture(t);
+  const nonce = P.nonce();
+  const granted = await fetch(f.origin + '/v1/chat/challenge', {
+    headers: {
+      'X-Moonbase-Nonce': nonce,
+      Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.mac(f.token, 'challenge-request', nonce, 'GET', '/v1/chat/challenge')}`,
+    },
+  });
+  const { challenge } = (await granted.json()) as { challenge: string };
+  const body = JSON.stringify({ target, connectionId: 'one' });
+  const old = createHmac('sha256', f.token)
+    .update(
+      JSON.stringify([
+        'moonbase-chat-stream-v1',
+        'request',
+        nonce,
+        challenge,
+        'POST',
+        P.streamPath,
+        P.hash(body),
+      ]),
+    )
+    .digest('hex');
+  const response = await fetch(f.origin + P.streamPath, {
+    method: 'POST',
+    body,
+    headers: {
+      'content-type': 'application/json',
+      'X-Moonbase-Nonce': nonce,
+      'X-Moonbase-Challenge': challenge,
+      Authorization: `Moonbase-RPC-HMAC-SHA256 ${old}`,
+    },
+  });
+  assert.equal(response.status, 401);
+  await response.arrayBuffer();
+  assert.equal(f.acquisitions, 0);
+});
+
+test('a local-mode daemon streams local snapshots to a client that sees its signed capability', async (t) => {
+  const token = P.nonce(),
+    local = { ...target, actorId: 'local-owner' };
+  const localSnapshot: ChatSnapshot = {
+    ...snapshot,
+    conversation: { ...snapshot.conversation, target: local, ownFolder: true },
+  };
+  const bound: ChatClient = {
+    command: async (operation) => {
+      if (operation === 'getChatHost')
+        return { host, actorId: local.actorId, mode: 'local' } as never;
+      throw Error('Unexpected command');
+    },
+    watch: (_, receive) => {
+      queueMicrotask(() => receive(localSnapshot));
+      return async () => {};
+    },
+  };
+  const daemon: DaemonClient = {
+    command: async () => {
+      throw Error('Unexpected daemon command');
+    },
+  };
+  const scope = Effect.runSync(Scope.make());
+  t.after(() => Effect.runPromise(Scope.close(scope, Exit.void)));
+  const server = await Effect.runPromise(
+    serveChat({ host, token, port: 0 }, bound, daemon).pipe(
+      Effect.provideService(Scope.Scope, scope),
+    ),
+  );
+  const unavailable = () =>
+    Effect.fail(new ApplicationError({ code: 'Unavailable', message: 'Unused' }));
+  const runtime = ManagedRuntime.make(
+    RemoteChatLive.pipe(
+      Layer.provide(
+        Layer.succeed(ConnectionService, {
+          getConnection: unavailable,
+          connect: unavailable,
+          disconnect: unavailable,
+          watch: () => Stream.empty,
+          endpoint: () =>
+            Effect.succeed({
+              origin: server.origin,
+              token,
+              expected: host,
+              connectionId: 'local',
+              health: {
+                ...host,
+                protocol: 2 as const,
+                version: '0.1.0' as const,
+                capabilities: ['chat-v0', 'daemon-local-v1', 'providers-v1', 'folders-v1'],
+              },
+            }),
+        }),
+      ),
+    ),
+  );
+  t.after(() => runtime.dispose());
+  const client = makeChatClient(runtime);
+  assert.deepEqual(await client.command('getChatHost', { host }), {
+    host,
+    actorId: local.actorId,
+    mode: 'local',
+  });
+  const views: ChatSnapshot[] = [];
+  const close = client.watch(
+    { target: local },
+    (value) => views.push(value),
+    () => {},
+  );
+  t.after(() => close().catch(() => {}));
+  await wait(() => views.length === 1);
+  assert.equal(views[0].conversation.ownFolder, true);
+  assert.equal(views[0].observationStatus, 'connected');
+});
+
 test('64 subscriptions leave ordinary reads usable; excess observations fail and all slots release', async (t) => {
   const f = await fixture(t),
     observers = Array.from({ length: 64 }, () => f.observe());
@@ -749,7 +866,7 @@ test('closing a network observation releases listeners while a held SDK capture 
         connectionId: 'held',
         health: {
           ...target.host,
-          protocol: 1 as const,
+          protocol: 2 as const,
           version: '0.1.0' as const,
           capabilities: ['chat-v0'],
         },

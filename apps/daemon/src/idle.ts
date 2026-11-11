@@ -1,4 +1,5 @@
 import type { ChatClient } from '@moonbase/contracts/chat';
+import type { DaemonClient } from '@moonbase/contracts/daemon';
 
 export type IdleClock = {
   now(): number;
@@ -116,6 +117,20 @@ export function trackClientUse(client: ChatClient, idle: IdleMonitor): ChatClien
         }
         await close();
       };
+    },
+  };
+}
+
+/** Counts each daemon operation as a client using the daemon. */
+export function trackDaemonUse(client: DaemonClient, idle: IdleMonitor): DaemonClient {
+  return {
+    command: async (operation, input, options) => {
+      idle.begin();
+      try {
+        return await client.command(operation, input, options);
+      } finally {
+        idle.end();
+      }
     },
   };
 }

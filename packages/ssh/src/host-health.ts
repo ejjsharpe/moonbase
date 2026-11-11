@@ -9,6 +9,8 @@ import { decodeChatHostHealth } from '@moonbase/contracts/host-schema';
 export type { ChatHostEndpoint } from '@moonbase/contracts/services';
 export type { HostHealthReply } from '@moonbase/contracts/host';
 const maximumHealthBytes = 8 * 1024;
+/** The health proofs' HMAC domain for protocol 2; RPC and stream proofs use their own. */
+export const healthDomain = 'moonbase-daemon-health-v1';
 const fail = (code: 'InvalidInput' | 'Incompatible' | 'Unauthorized', message: string): never => {
   throw new ApplicationError({ code, message });
 };
@@ -32,7 +34,7 @@ function signature(
     ? [health.protocol, health.hostId, health.storeId, health.version, health.capabilities]
     : [];
   return createHmac('sha256', token)
-    .update(JSON.stringify(['moonbase-health-v1', phase, nonce, ...fields]))
+    .update(JSON.stringify([healthDomain, phase, nonce, ...fields]))
     .digest('hex');
 }
 function matchesProof(value: unknown, expected: string) {

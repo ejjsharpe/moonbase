@@ -1,7 +1,12 @@
 import { join } from 'node:path';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import type { MutableModels } from '@earendil-works/pi-ai/models';
-import { LocalPiControl, LocalPiRuntimeLive, PiRuntimeLive } from '@moonbase/pi-runtime';
+import {
+  LocalHostLive,
+  LocalPiControl,
+  LocalPiRuntimeLive,
+  PiRuntimeLive,
+} from '@moonbase/pi-runtime';
 import {
   createCredentialStore,
   createKeyEncryption,
@@ -14,10 +19,11 @@ import {
 } from '@moonbase/pi-runtime/host-configuration';
 import { createLocalModels } from '@moonbase/pi-runtime/local-models';
 import { ProviderSetupLive } from '@moonbase/pi-runtime/providers';
-import { serveChat } from '@moonbase/pi-runtime/server';
+import { makeDaemonClient, serveChat } from '@moonbase/pi-runtime/server';
 import type { ClaudeCodeSubscription } from '@moonbase/pi-runtime/claude-code';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import type { ChatClient, ChatCreationSettings, ChatSession } from '@moonbase/contracts/chat';
+import type { DaemonClient } from '@moonbase/contracts/daemon';
 import { chatHostVersion, chatProtocolVersion } from '@moonbase/contracts/host';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import {
@@ -34,10 +40,11 @@ import {
   createIdleMonitor,
   systemClock,
   trackClientUse,
+  trackDaemonUse,
   type IdleClock,
   type IdleMonitor,
 } from './idle.ts';
-import { refuseWhileStopping } from './admission.ts';
+import { refuseDaemonWhileStopping, refuseWhileStopping } from './admission.ts';
 import { acquireDaemonLock } from './lock.ts';
 import { openDaemonLog, type DaemonLog } from './log.ts';
 
@@ -160,7 +167,12 @@ async function serveDaemon(
           },
         });
         if (stopping) idle.stop();
-        await serve(runtime, trackClientUse(makeChatClient(runtime), idle), 0);
+        await serve(
+          runtime,
+          trackClientUse(makeChatClient(runtime), idle),
+          0,
+          trackDaemonUse(makeDaemonClient(runtime), idle),
+        );
       } finally {
         await runtime.dispose();
       }
@@ -181,6 +193,7 @@ async function serveDaemon(
     runtime: ManagedRuntime.ManagedRuntime<R, ApplicationError>,
     client: ChatClient,
     port: number,
+    daemon?: DaemonClient,
   ) {
     // A daemon told to stop while starting never listens or announces itself.
     if (stopping) return;
@@ -189,9 +202,11 @@ async function serveDaemon(
         Effect.gen(function* () {
           // The server's own startup read is let through; once it listens, stopping refuses.
           let listening = 0;
+          const refusing = () => stopping && listening > 0;
           const server = yield* serveChat(
             { host: session.host, token, port },
-            refuseWhileStopping(client, () => stopping && listening > 0),
+            refuseWhileStopping(client, refusing),
+            daemon && refuseDaemonWhileStopping(daemon, refusing),
           );
           listening = Number(new URL(server.origin).port);
           if (!stopping)
@@ -240,7 +255,8 @@ function composeLocal(
   );
   const models = createLocalModels(credentials);
   const claudeCode = providers.installProviders?.(models);
-  const folders = createFolderApprovals(join(directory, 'approved-folders.json'));
+  const folders = createFolderApprovals(join(directory, 'approved-folders.json')),
+    chatFolders = join(directory, 'chats');
   // A folder a client approved, still the same directory, may be searched and chatted in.
   const requireApprovedFolder = async (path: string, purpose: string) => {
     if (await folders.has(path)) return;
@@ -249,28 +265,23 @@ function composeLocal(
       message: `Approve this working folder before ${purpose}.`,
     });
   };
+  const runtime = LocalPiRuntimeLive({
+    ...session,
+    databasePath,
+    chatFolders,
+    models,
+    approveCreation: async (creation: ChatCreationSettings) => {
+      if (creation.cwd === undefined) return;
+      await requireApprovedFolder(creation.cwd, 'creating or retrying a local chat');
+      await folders.touch(creation.cwd);
+    },
+    approveFolder: (cwd: string) => requireApprovedFolder(cwd, 'searching its files'),
+  });
   return Layer.mergeAll(
-    LocalPiRuntimeLive({
-      ...session,
-      databasePath,
-      chatFolders: join(directory, 'chats'),
-      models,
-      approveCreation: async (creation: ChatCreationSettings) => {
-        if (creation.cwd === undefined) return;
-        await requireApprovedFolder(creation.cwd, 'creating or retrying a local chat');
-        await folders.touch(creation.cwd);
-      },
-      approveFolder: (cwd: string) => requireApprovedFolder(cwd, 'searching its files'),
-    }),
+    LocalHostLive({ host: session.host, folders, chatFolders }).pipe(Layer.provideMerge(runtime)),
+    // The daemon never opens a browser: without `openUrl`, clients read sign-in links to open.
     ProviderSetupLive({
       models,
-      // The daemon never opens a browser; a client opens sign-in links.
-      openUrl: async () => {
-        throw new ApplicationError({
-          code: 'Unavailable',
-          message: 'Open provider sign-in links from a Moonbase client.',
-        });
-      },
       deviceId: session.host.hostId,
       getCheckProblem: (id, signal) =>
         claudeCode && id === claudeCode.id ? claudeCode.getCheckProblem(signal) : undefined,

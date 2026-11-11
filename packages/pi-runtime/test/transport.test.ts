@@ -1,12 +1,13 @@
 import type { ConversationId, Harness as HarnessType } from '@earendil-works/pi-durable';
 import type { AddressInfo } from 'node:net';
 import type { ChatInput, ChatStopTarget } from '@moonbase/contracts/chat';
-import { maximumChatInputBytes } from '@moonbase/contracts/chat';
+import { maximumChatInputBytes, maximumChatRequestBytes } from '@moonbase/contracts/chat';
+import type { DaemonClient } from '@moonbase/contracts/daemon';
 import assert from 'node:assert/strict';
 import { test, mock } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { createHmac, createHash, randomBytes } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, request as httpRequest } from 'node:http';
@@ -14,22 +15,29 @@ import { connect as connectSocket } from 'node:net';
 import { Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from 'effect';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
-import { makeChatClient } from '@moonbase/application/runtime/clients';
-import { ConnectionService, type VerifiedChatEndpoint } from '@moonbase/contracts/services';
+import { makeChatClient, makeProviderSetupClient } from '@moonbase/application/runtime/clients';
+import {
+  ConnectionService,
+  LocalHostService,
+  ProviderSetupService,
+  type VerifiedChatEndpoint,
+} from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import type { ChatClient } from '@moonbase/contracts/chat';
-import { PiRuntimeLive } from '../src/index.ts';
-import { RemoteChatLive } from '../src/remote.ts';
-import { serveChat } from '../src/server.ts';
+import { LocalHostLive, LocalPiRuntimeLive, PiRuntimeLive } from '../src/index.ts';
+import { createFolderApprovals } from '../src/folders.ts';
+import { ProviderSetupLive, localProviderIds } from '../src/providers.ts';
+import { RemoteChatLive, RemoteLocalHostLive, RemoteProviderSetupLive } from '../src/remote.ts';
+import { makeDaemonClient, serveChat } from '../src/server.ts';
 
 const host = { hostId: 'transport-host', storeId: 'transport-store' },
   session = { host, actorId: 'personal' },
-  health = { ...host, protocol: 1 as const, version: '0.1.0' as const, capabilities: ['chat-v0'] };
+  health = { ...host, protocol: 2 as const, version: '0.1.0' as const, capabilities: ['chat-v0'] };
 const nonce = () => randomBytes(32).toString('base64url'),
   hash = (body: string | Uint8Array) => createHash('sha256').update(body).digest('hex');
 const mac = (key: string, ...parts: unknown[]) =>
   createHmac('sha256', key)
-    .update(JSON.stringify(['moonbase-chat-v1', ...parts]))
+    .update(JSON.stringify(['moonbase-daemon-v1', ...parts]))
     .digest('hex');
 const auth = (proof: string) => 'Moonbase-RPC-HMAC-SHA256 ' + proof;
 async function setup(t: { after: (fn: () => Promise<void>) => void }) {
@@ -1187,7 +1195,7 @@ test('unauthenticated health probes are refused before they reach the chat servi
   const f = await setup(t);
   const healthProof = (key: string, value: string) =>
     createHmac('sha256', key)
-      .update(JSON.stringify(['moonbase-health-v1', 'request', value]))
+      .update(JSON.stringify(['moonbase-daemon-health-v1', 'request', value]))
       .digest('hex');
   const probe = nonce(),
     before = f.calls.length;
@@ -1606,4 +1614,746 @@ test('authenticated Find and around-entry navigation reach all 1,100 retained ro
     }),
     { code: 'InvalidInput' },
   );
+});
+
+// Local-mode daemon operations: folders, control and provider setup over the same protocol.
+const localHost = { hostId: 'daemon-host', storeId: 'daemon-store' },
+  localSession = { host: localHost, actorId: 'daemon-owner' },
+  daemonCapabilities = ['chat-v0', 'daemon-local-v1', 'providers-v1', 'folders-v1'];
+const signInUrl = 'https://auth.openai.com/api/accounts/authorize?state=controlled';
+async function setupLocal(t: { after: (fn: () => Promise<void>) => void }) {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-daemon-http-'))),
+    token = nonce(),
+    models = createModels({
+      authContext: { env: async () => undefined, fileExists: async () => false },
+    }),
+    faux = fauxProvider({ provider: 'local-faux', models: [{ id: 'local-model' }] });
+  models.setProvider(faux.provider);
+  const state = { url: signInUrl };
+  for (const id of localProviderIds) {
+    const provider = fauxProvider({ provider: id }).provider;
+    const auth = (): typeof provider.auth => {
+      if (id === 'claude-code') return {};
+      if (id !== 'openai')
+        return {
+          apiKey: {
+            name: 'API key',
+            login: async (interaction) => ({
+              type: 'api_key',
+              key: await interaction.prompt({ type: 'secret', message: 'Enter API key' }),
+            }),
+            resolve: async ({ credential }) =>
+              credential?.key ? { auth: { apiKey: credential.key } } : undefined,
+          },
+        };
+      return {
+        oauth: {
+          name: 'Controlled ChatGPT',
+          login: async (interaction) => {
+            interaction.notify({ type: 'auth_url', url: state.url });
+            const code = await interaction.prompt({ type: 'manual_code', message: 'Code' });
+            if (code !== 'redirect-code') throw Error('Refused');
+            return {
+              type: 'oauth',
+              access: 'private-access',
+              refresh: 'private-refresh',
+              expires: Date.now() + 60000,
+            };
+          },
+          refresh: async () => {
+            throw Error('No refresh');
+          },
+          toAuth: async (value) => ({ apiKey: value.access }),
+        },
+      };
+    };
+    models.setProvider({
+      ...provider,
+      name: id,
+      auth: auth(),
+    });
+  }
+  const folders = createFolderApprovals(join(dir, 'approved-folders.json')),
+    chatFolders = join(dir, 'chats');
+  const requireApproved = async (path: string) => {
+    if (!(await folders.has(path)))
+      throw new ApplicationError({ code: 'Unauthorized', message: 'Approve this folder.' });
+  };
+  const local = LocalPiRuntimeLive({
+    ...localSession,
+    databasePath: join(dir, 'chat.sqlite'),
+    chatFolders,
+    models,
+    approveCreation: async (settings) => {
+      if (settings.cwd !== undefined) await requireApproved(settings.cwd);
+    },
+    approveFolder: requireApproved,
+  });
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      LocalHostLive({ host: localHost, folders, chatFolders }).pipe(Layer.provideMerge(local)),
+      ProviderSetupLive({ models, deviceId: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa' }),
+    ),
+  );
+  const client = makeChatClient(runtime),
+    daemonClient = makeDaemonClient(runtime),
+    dispatched: string[] = [];
+  let afterDispatch: ((operation: string) => Promise<void>) | undefined;
+  const daemon: DaemonClient = {
+    command: async (operation, input, options) => {
+      dispatched.push(operation);
+      const value = await daemonClient.command(operation, input, options);
+      await afterDispatch?.(operation);
+      return value;
+    },
+  };
+  const scope = Effect.runSync(Scope.make());
+  const server = await runtime.runPromise(
+    serveChat({ host: localHost, token, port: 0 }, client, daemon).pipe(
+      Effect.provideService(Scope.Scope, scope),
+    ),
+  );
+  let endpoint: VerifiedChatEndpoint = {
+    origin: server.origin,
+    token,
+    expected: localHost,
+    connectionId: 'local-one',
+    health: { ...localHost, protocol: 2, version: '0.1.0', capabilities: daemonCapabilities },
+  };
+  const unavailable = () =>
+    Effect.fail(new ApplicationError({ code: 'Unavailable', message: 'Disconnected' }));
+  const connections = Layer.succeed(ConnectionService, {
+    getConnection: unavailable,
+    connect: unavailable,
+    disconnect: unavailable,
+    watch: () => Stream.empty,
+    endpoint: () => Effect.sync(() => structuredClone(endpoint)),
+  });
+  const opened: string[] = [];
+  const remoteRuntime = ManagedRuntime.make(
+    Layer.mergeAll(
+      RemoteChatLive,
+      RemoteLocalHostLive,
+      RemoteProviderSetupLive({
+        host: localHost,
+        sameMachine: true,
+        openUrl: async (url) => {
+          opened.push(url);
+        },
+      }),
+    ).pipe(Layer.provide(connections)),
+  );
+  t.after(async () => {
+    await remoteRuntime.dispose();
+    await runtime.runPromise(Scope.close(scope, Exit.void));
+    await runtime.dispose();
+    await rm(dir, { recursive: true, force: true });
+  });
+  const localHostService = await remoteRuntime.runPromise(LocalHostService),
+    providers = await remoteRuntime.runPromise(ProviderSetupService);
+  return {
+    dir,
+    token,
+    faux,
+    state,
+    opened,
+    dispatched,
+    origin: server.origin,
+    remote: makeChatClient(remoteRuntime),
+    host: <A>(effect: Effect.Effect<A, ApplicationError>) => remoteRuntime.runPromise(effect),
+    folders: localHostService,
+    providers,
+    owner: (ownerId: string) => makeProviderSetupClient(remoteRuntime, ownerId),
+    set afterDispatch(value: typeof afterDispatch) {
+      afterDispatch = value;
+    },
+    reconnect() {
+      endpoint = { ...endpoint, connectionId: nonce() };
+    },
+  };
+}
+async function untilState<A>(read: () => Promise<A>, ready: (value: A) => boolean) {
+  for (let attempt = 0; attempt < 400; attempt++) {
+    const value = await read();
+    if (ready(value)) return value;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw Error('State did not settle');
+}
+
+test('a local-mode host signs its daemon capabilities and serves folders, control and chats with settings', async (t) => {
+  const f = await setupLocal(t);
+  const challengeNonce = nonce();
+  const challenge = await fetch(f.origin + '/v1/chat/challenge', {
+    headers: {
+      'X-Moonbase-Nonce': challengeNonce,
+      Authorization: auth(
+        mac(f.token, 'challenge-request', challengeNonce, 'GET', '/v1/chat/challenge'),
+      ),
+    },
+  });
+  assert.deepEqual((await challenge.json()).health.capabilities, daemonCapabilities);
+  assert.deepEqual(await f.remote.command('getChatHost', { host: localHost }), {
+    ...localSession,
+    mode: 'local',
+  });
+  const project = join(f.dir, 'project');
+  await mkdir(project);
+  await writeFile(join(project, 'notes.md'), 'notes');
+  const approved = await f.host(
+    f.folders.approveFolder({ host: localHost, requestId: 'approve-1', path: project }),
+  );
+  assert.deepEqual(approved, { requestId: 'approve-1', path: project });
+  assert.deepEqual(await f.host(f.folders.listRecentFolders({ host: localHost })), {
+    folders: [project],
+  });
+  const worktree = join(f.dir, 'worktree');
+  await mkdir(worktree);
+  await f.host(
+    f.folders.approveFolder({
+      host: localHost,
+      requestId: 'approve-2',
+      path: worktree,
+      recent: false,
+    }),
+  );
+  assert.deepEqual((await f.host(f.folders.listRecentFolders({ host: localHost }))).folders, [
+    project,
+  ]);
+  const settings = { model: { provider: 'local-faux', modelId: 'local-model' } };
+  const created = await f.remote.command('createChat', {
+    session: localSession,
+    requestId: 'create-local',
+    title: 'Local over the wire',
+    settings: { ...settings, cwd: project },
+  });
+  assert.equal(created.conversation.cwd, project);
+  const files = await f.remote.command('findChatFiles', {
+    session: localSession,
+    cwd: project,
+    query: 'notes',
+  });
+  assert.deepEqual(
+    files.matches.map((match) => match.path),
+    ['notes.md'],
+  );
+  await assert.rejects(
+    f.remote.command('findChatFiles', { session: localSession, cwd: f.dir, query: 'notes' }),
+    { code: 'Unauthorized' },
+  );
+  f.faux.setResponses([fauxAssistantMessage('Local reply')]);
+  const views: string[] = [];
+  const close = f.remote.watch(
+    { target: created.conversation.target },
+    (snapshot) => views.push(...snapshot.entries.map((entry) => entry.text)),
+    () => {},
+  );
+  t.after(() => close());
+  await f.remote.command('sendChat', {
+    target: created.conversation.target,
+    requestId: 'send-local',
+    text: 'Hello',
+  });
+  await untilState(
+    async () => views,
+    (value) => value.includes('Local reply'),
+  );
+  assert.deepEqual(await f.host(f.folders.getActiveWork({ host: localHost })), {
+    active: false,
+  });
+  const own = await f.remote.command('createChat', {
+    session: localSession,
+    requestId: 'create-own',
+    title: 'Without a project',
+    settings,
+  });
+  assert.equal(own.conversation.ownFolder, true);
+  await f.host(f.folders.checkChatFolder({ host: localHost, path: own.conversation.cwd }));
+  for (const path of [project, join(f.dir, 'chats'), join(own.conversation.cwd, 'missing')])
+    await assert.rejects(f.host(f.folders.checkChatFolder({ host: localHost, path })), {
+      code: 'Unauthorized',
+    });
+  assert.deepEqual(
+    await f.host(
+      f.folders.markFolderAsProject({ requestId: 'mark-own', target: own.conversation.target }),
+    ),
+    { requestId: 'mark-own' },
+  );
+  const marked = await f.remote.command('getChat', { target: own.conversation.target });
+  assert.equal(marked.conversation.ownFolder, undefined);
+});
+
+test('provider setup runs over the protocol per owner, returns validated sign-in links and never resends', async (t) => {
+  const f = await setupLocal(t);
+  const a = f.owner('document-a'),
+    b = f.owner('document-b');
+  assert.equal((await a.command('getProviders', {})).flow, null);
+  const started = await a.command('startProviderLogin', { providerId: 'openai' });
+  const flowId = started.flow!.id;
+  const ready = await untilState(
+    () => a.command('getProviders', {}),
+    (state) => !!state.flow?.canOpenUrl && state.flow.prompt?.type === 'manual_code',
+  );
+  // On the daemon's machine the loopback callback finishes sign-in; the prompt says so.
+  assert.match(ready.flow!.prompt!.message, /completes it by itself/);
+  assert.equal(await f.host(f.providers.getProviderUrl('document-a', flowId)), signInUrl);
+  assert.deepEqual(f.opened, []);
+  await a.command('openProviderUrl', { flowId });
+  assert.deepEqual(f.opened, [signInUrl]);
+  // Another owner sees no flow and cannot answer, open or cancel this one.
+  assert.equal((await b.command('getProviders', {})).flow, null);
+  for (const [operation, input] of [
+    ['answerProviderPrompt', { flowId, promptId: ready.flow!.prompt!.id, answer: 'redirect-code' }],
+    ['openProviderUrl', { flowId }],
+    ['cancelProviderLogin', { flowId }],
+  ] as const)
+    await assert.rejects(b.command(operation, input as never), (error: ApplicationError) => {
+      assert.equal(error.code, 'InvalidInput');
+      assert(!error.message.includes(flowId));
+      return true;
+    });
+  assert.deepEqual(f.opened, [signInUrl]);
+  await a.command('answerProviderPrompt', {
+    flowId,
+    promptId: ready.flow!.prompt!.id,
+    answer: 'redirect-code',
+  });
+  const done = await untilState(
+    () => a.command('getProviders', {}),
+    (state) => state.flow?.state === 'completed',
+  );
+  assert.equal(done.providers.find((provider) => provider.id === 'openai')?.configured, true);
+  assert(!/private-(?:access|refresh)|redirect-code/.test(JSON.stringify(done)));
+  const key = await b.command('startProviderLogin', { providerId: 'anthropic' });
+  const prompt = (
+    await untilState(
+      () => b.command('getProviders', {}),
+      (state) => !!state.flow?.prompt,
+    )
+  ).flow!.prompt!;
+  await b.command('answerProviderPrompt', {
+    flowId: key.flow!.id,
+    promptId: prompt.id,
+    answer: 'private-key',
+  });
+  await untilState(
+    () => b.command('getProviders', {}),
+    (state) => state.providers.find((provider) => provider.id === 'anthropic')!.configured,
+  );
+  const out = await b.command('logoutProvider', { providerId: 'anthropic' });
+  assert.equal(out.providers.find((provider) => provider.id === 'anthropic')?.configured, false);
+  const cancelled = await b.command('startProviderLogin', { providerId: 'google' });
+  assert.equal(
+    (await b.command('cancelProviderLogin', { flowId: cancelled.flow!.id })).flow?.state,
+    'cancelled',
+  );
+  await f.host(f.providers.releaseOwner('document-a'));
+  await assert.rejects(a.command('startProviderLogin', { providerId: 'openai' }), {
+    code: 'InvalidInput',
+  });
+  // A lost reply to a mutation is Uncertain, and the mutation was dispatched exactly once.
+  f.afterDispatch = async (operation) => {
+    if (operation === 'startProviderLogin') f.reconnect();
+  };
+  const before = f.dispatched.length;
+  await assert.rejects(b.command('startProviderLogin', { providerId: 'openrouter' }), {
+    code: 'Uncertain',
+  });
+  assert.deepEqual(f.dispatched.slice(before), ['startProviderLogin']);
+  f.afterDispatch = async (operation) => {
+    if (operation === 'getProviders') f.reconnect();
+  };
+  await assert.rejects(b.command('getProviders', {}), { code: 'Unavailable' });
+  f.afterDispatch = undefined;
+});
+
+test('a provider sign-in URL outside the expected origins never reaches the client', async (t) => {
+  const f = await setupLocal(t);
+  const a = f.owner('document-a');
+  for (const url of [
+    'https://auth.openai.com.example/authorize',
+    'http://auth.openai.com/authorize',
+    'https://user:pass@auth.openai.com/authorize',
+    'https://auth.openai.com:8443/authorize',
+    'javascript:alert(1)',
+  ]) {
+    f.state.url = url;
+    const started = await a.command('startProviderLogin', { providerId: 'openai' });
+    const failed = await untilState(
+      () => a.command('getProviders', {}),
+      (state) => state.flow?.state === 'failed',
+    );
+    assert.equal(failed.flow!.canOpenUrl, false);
+    assert(!JSON.stringify(failed).includes(url));
+    await assert.rejects(a.command('openProviderUrl', { flowId: started.flow!.id }), {
+      code: 'InvalidInput',
+    });
+  }
+  assert.deepEqual(f.opened, []);
+});
+
+test('daemon operations refuse wrong authority, replay, rebinding and oversized input before dispatch', async (t) => {
+  const f = await setupLocal(t);
+  const folder = join(f.dir, 'folder');
+  await mkdir(folder);
+  const input = { host: localHost, requestId: 'approve', path: folder };
+  // A wrong token gets no challenge, and no signed reply.
+  const wrong = await grant({ origin: f.origin, token: nonce() }).catch(() => undefined);
+  assert.equal(wrong, undefined);
+  const g = await grant(f);
+  const first = await post(f, g, 'approveFolder', input);
+  assert.equal(first.status, 200);
+  assert.deepEqual((await first.json()).value, { requestId: 'approve', path: folder });
+  const replay = await post(f, g, 'approveFolder', input);
+  assert.equal(replay.status, 401);
+  await replay.arrayBuffer();
+  const before = f.dispatched.length;
+  const refused = async (operation: string, value: unknown, code: string) => {
+    const response = await post(f, await grant(f), operation, value);
+    assert.equal(response.status, 400);
+    const body = await response.json();
+    assert.deepEqual(body.error.code, code);
+    assert(!JSON.stringify(body).includes(folder));
+  };
+  await refused('approveFolder', { ...input, host: host }, 'Unauthorized');
+  await refused('getActiveWork', { host: { ...localHost, storeId: 'other' } }, 'Unauthorized');
+  await refused(
+    'markFolderAsProject',
+    { requestId: 'mark', target: { ...session, conversationId: '1' } },
+    'Unauthorized',
+  );
+  await refused(
+    'getProviders',
+    { host: localHost, ownerId: 'document', extra: true },
+    'InvalidInput',
+  );
+  await refused('approveFolder', { ...input, path: 'relative' }, 'InvalidInput');
+  await refused('approveFolder', { ...input, path: '/' + 'x'.repeat(4096) }, 'InvalidInput');
+  await refused('setAdmissionsOpen', { host: localHost, open: false }, 'InvalidInput');
+  await refused(
+    'answerProviderPrompt',
+    {
+      host: localHost,
+      ownerId: 'document',
+      requestId: 'answer',
+      flowId: 'flow',
+      promptId: 'prompt',
+      answer: 'x'.repeat(16385),
+    },
+    'InvalidInput',
+  );
+  const oversized = await post(f, await grant(f), 'approveFolder', {
+    ...input,
+    path: '/' + 'x'.repeat(maximumChatRequestBytes),
+  });
+  assert.equal(oversized.status, 400);
+  await oversized.arrayBuffer();
+  assert.deepEqual(f.dispatched.slice(before), []);
+  // A request ID is bound to its operation and input: the same request returns its outcome
+  // without running again; another input under it is refused.
+  const other = join(f.dir, 'other');
+  await mkdir(other);
+  await refused('approveFolder', { ...input, path: other }, 'InvalidInput');
+  const repeated = await post(f, await grant(f), 'approveFolder', input);
+  assert.deepEqual((await repeated.json()).value, { requestId: 'approve', path: folder });
+  assert.deepEqual(f.dispatched.slice(before), []);
+  const old = await fetch(f.origin + '/v1/chat/challenge', {
+    headers: {
+      'X-Moonbase-Nonce': g.clientNonce,
+      Authorization: auth(
+        createHmac('sha256', f.token)
+          .update(
+            JSON.stringify([
+              'moonbase-chat-v1',
+              'challenge-request',
+              g.clientNonce,
+              'GET',
+              '/v1/chat/challenge',
+            ]),
+          )
+          .digest('hex'),
+      ),
+    },
+  });
+  assert.equal(old.status, 401, 'a protocol 1 proof is refused');
+  await old.arrayBuffer();
+});
+
+test('a folder approval is re-checked by identity on use; a replaced folder needs a new grant', async (t) => {
+  const f = await setupLocal(t);
+  const folder = join(f.dir, 'replaced');
+  await mkdir(folder);
+  await f.host(f.folders.approveFolder({ host: localHost, requestId: 'grant-1', path: folder }));
+  const create = (requestId: string) =>
+    f.remote.command('createChat', {
+      session: localSession,
+      requestId,
+      title: 'Replaced',
+      settings: { cwd: folder, model: { provider: 'local-faux', modelId: 'local-model' } },
+    });
+  await create('before-move');
+  await rename(folder, join(f.dir, 'moved'));
+  await mkdir(folder);
+  await assert.rejects(create('after-move'), { code: 'Unauthorized' });
+  await assert.rejects(
+    f.remote.command('findChatFiles', { session: localSession, cwd: folder, query: '' }),
+    { code: 'Unauthorized' },
+  );
+  assert.deepEqual((await f.host(f.folders.listRecentFolders({ host: localHost }))).folders, []);
+  await assert.rejects(
+    f.host(
+      f.folders.approveFolder({
+        host: localHost,
+        requestId: 'missing',
+        path: join(f.dir, 'missing'),
+      }),
+    ),
+    { code: 'InvalidInput' },
+  );
+  await f.host(f.folders.approveFolder({ host: localHost, requestId: 'grant-2', path: folder }));
+  await create('after-grant');
+  // A lost reply to an approval is Uncertain and is not sent again.
+  f.afterDispatch = async (operation) => {
+    if (operation === 'approveFolder') f.reconnect();
+  };
+  const before = f.dispatched.length;
+  await assert.rejects(
+    f.host(f.folders.approveFolder({ host: localHost, requestId: 'grant-3', path: folder })),
+    { code: 'Uncertain' },
+  );
+  assert.deepEqual(f.dispatched.slice(before), ['approveFolder']);
+  f.afterDispatch = undefined;
+});
+
+test('a client refuses local-mode features from a host that does not advertise them', async (t) => {
+  const f = await setup(t);
+  const unadvertised = ManagedRuntime.make(
+    Layer.mergeAll(
+      RemoteLocalHostLive,
+      RemoteProviderSetupLive({ host, sameMachine: false, openUrl: async () => {} }),
+    ).pipe(
+      Layer.provide(
+        Layer.succeed(ConnectionService, {
+          getConnection: () => Effect.die('unused'),
+          connect: () => Effect.die('unused'),
+          disconnect: () => Effect.die('unused'),
+          watch: () => Stream.empty,
+          endpoint: () => Effect.sync(() => structuredClone(f.endpoint)),
+        }),
+      ),
+    ),
+  );
+  t.after(() => unadvertised.dispose());
+  const before = f.calls.length;
+  const folders = await unadvertised.runPromise(LocalHostService);
+  await assert.rejects(unadvertised.runPromise(folders.getActiveWork({ host })), {
+    code: 'Incompatible',
+  });
+  await assert.rejects(
+    unadvertised.runPromise(folders.approveFolder({ host, requestId: 'approve', path: tmpdir() })),
+    { code: 'Incompatible' },
+  );
+  await assert.rejects(
+    makeProviderSetupClient(unadvertised, 'document').command('getProviders', {}),
+    { code: 'Incompatible' },
+  );
+  await assert.rejects(
+    f.remote.command('createChat', {
+      session,
+      requestId: 'with-settings',
+      title: 'Local settings',
+      settings: { model: { provider: 'faux', modelId: 'faux' } },
+    }),
+    { code: 'Incompatible' },
+  );
+  // Issuing a challenge reads the host; nothing else reached it.
+  assert.deepEqual(
+    f.calls.slice(before).filter((operation) => operation !== 'getChatHost'),
+    [],
+  );
+  // A local-mode chat host that serves no daemon operations advertises only chat-v0, so a
+  // client refuses its local-mode configuration.
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-local-only-'))),
+    runtime = ManagedRuntime.make(
+      LocalPiRuntimeLive({
+        ...localSession,
+        databasePath: join(dir, 'chat.sqlite'),
+        models: createModels(),
+      }),
+    ),
+    scope = Effect.runSync(Scope.make());
+  t.after(async () => {
+    await runtime.runPromise(Scope.close(scope, Exit.void));
+    await runtime.dispose();
+    await rm(dir, { recursive: true, force: true });
+  });
+  const server = await runtime.runPromise(
+    serveChat({ host: localHost, token: f.token, port: 0 }, makeChatClient(runtime)).pipe(
+      Effect.provideService(Scope.Scope, scope),
+    ),
+  );
+  f.endpoint = {
+    origin: server.origin,
+    token: f.token,
+    expected: localHost,
+    connectionId: 'local-only',
+    health: { ...localHost, protocol: 2, version: '0.1.0', capabilities: ['chat-v0'] },
+  };
+  const remote = ManagedRuntime.make(
+    RemoteChatLive.pipe(
+      Layer.provide(
+        Layer.succeed(ConnectionService, {
+          getConnection: () => Effect.die('unused'),
+          connect: () => Effect.die('unused'),
+          disconnect: () => Effect.die('unused'),
+          watch: () => Stream.empty,
+          endpoint: () => Effect.sync(() => structuredClone(f.endpoint)),
+        }),
+      ),
+    ),
+  );
+  t.after(() => remote.dispose());
+  await assert.rejects(makeChatClient(remote).command('getChatHost', { host: localHost }), {
+    code: 'Incompatible',
+  });
+});
+
+test('signed hostile daemon replies are refused, and a mutation’s becomes Uncertain', async (t) => {
+  const token = nonce();
+  let reply: { status: number; value: unknown; sign?: boolean } = { status: 200, value: null };
+  const health = {
+    ...localHost,
+    protocol: 2 as const,
+    version: '0.1.0' as const,
+    capabilities: daemonCapabilities,
+  };
+  const hostile = createServer((request, response) => {
+    const clientNonce = request.headers['x-moonbase-nonce'] as string;
+    if (request.url === '/v1/chat/challenge') {
+      const body = JSON.stringify({ challenge: nonce(), health });
+      response.setHeader('X-Moonbase-Nonce', clientNonce);
+      response.setHeader(
+        'X-Moonbase-Proof',
+        mac(token, 'challenge-response', clientNonce, 200, hash(body)),
+      );
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(body);
+      return;
+    }
+    request.resume();
+    request.on('end', () => {
+      const challenge = request.headers['x-moonbase-challenge'] as string;
+      const body = JSON.stringify(reply.value);
+      response.setHeader('X-Moonbase-Nonce', clientNonce);
+      response.setHeader('X-Moonbase-Challenge', challenge);
+      response.setHeader(
+        'X-Moonbase-Proof',
+        reply.sign === false
+          ? '0'.repeat(64)
+          : mac(token, 'response', clientNonce, challenge, reply.status, hash(body)),
+      );
+      response.writeHead(reply.status, { 'content-type': 'application/json' });
+      response.end(body);
+    });
+  });
+  await new Promise<void>((resolve) => hostile.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise<void>((resolve) => hostile.close(() => resolve())));
+  const opened: string[] = [];
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      RemoteLocalHostLive,
+      RemoteProviderSetupLive({
+        host: localHost,
+        sameMachine: false,
+        openUrl: async (url) => {
+          opened.push(url);
+        },
+      }),
+    ).pipe(
+      Layer.provide(
+        Layer.succeed(ConnectionService, {
+          getConnection: () => Effect.die('unused'),
+          connect: () => Effect.die('unused'),
+          disconnect: () => Effect.die('unused'),
+          watch: () => Stream.empty,
+          endpoint: () =>
+            Effect.succeed({
+              origin: `http://127.0.0.1:${(hostile.address() as AddressInfo).port}`,
+              token,
+              expected: localHost,
+              connectionId: 'hostile',
+              health,
+            }),
+        }),
+      ),
+    ),
+  );
+  t.after(() => runtime.dispose());
+  const folders = await runtime.runPromise(LocalHostService),
+    owner = makeProviderSetupClient(runtime, 'document');
+  const approve = () =>
+    runtime.runPromise(
+      folders.approveFolder({ host: localHost, requestId: 'approve', path: '/folder' }),
+    );
+  for (const value of [
+    { ok: true, value: { requestId: 'another', path: '/folder' } },
+    { ok: true, value: { requestId: 'approve', path: 'relative' } },
+    { ok: true, value: { requestId: 'approve', path: '/folder', extra: 1 } },
+    { ok: 'yes' },
+  ]) {
+    reply = { status: 200, value };
+    await assert.rejects(approve(), { code: 'Uncertain' });
+  }
+  reply = {
+    status: 200,
+    value: { ok: true, value: { requestId: 'approve', path: '/folder' } },
+    sign: false,
+  };
+  await assert.rejects(approve(), { code: 'Uncertain' });
+  reply = {
+    status: 400,
+    value: { ok: false, error: { code: 'Unauthorized', message: 'private' } },
+  };
+  await assert.rejects(approve(), (error: ApplicationError) => {
+    assert.equal(error.code, 'Unauthorized');
+    assert(!error.message.includes('private'));
+    return true;
+  });
+  reply = {
+    status: 200,
+    value: { ok: true, value: { folders: Array.from({ length: 9 }, (_, i) => `/folder-${i}`) } },
+  };
+  await assert.rejects(runtime.runPromise(folders.listRecentFolders({ host: localHost })), {
+    code: 'Incompatible',
+  });
+  const state = {
+    providers: [],
+    flow: {
+      id: 'flow',
+      providerId: 'openai',
+      state: 'running',
+      message: 'Open',
+      canOpenUrl: true,
+      prompt: { id: 'prompt', type: 'manual_code', message: 'Paste', options: [] },
+    },
+  };
+  for (const url of ['https://evil.example/authorize', 'http://auth.openai.com/', 'file:///etc']) {
+    reply = { status: 200, value: { ok: true, value: { state, url } } };
+    await assert.rejects(owner.command('openProviderUrl', { flowId: 'flow' }), {
+      code: 'Incompatible',
+    });
+  }
+  reply = { status: 200, value: { ok: true, value: { state, url: signInUrl } } };
+  await assert.rejects(owner.command('openProviderUrl', { flowId: 'other-flow' }), {
+    code: 'Incompatible',
+  });
+  assert.deepEqual(opened, []);
+  const presented = await owner.command('openProviderUrl', { flowId: 'flow' });
+  assert.deepEqual(opened, [signInUrl]);
+  // Off the daemon's machine, the pasted redirect URL is the path.
+  assert.match(presented.flow!.prompt!.message, /cannot reach the host’s sign-in callback/);
+  reply = { status: 200, value: { ok: true, value: { requestId: 'another', state } } };
+  await assert.rejects(owner.command('startProviderLogin', { providerId: 'openai' }), {
+    code: 'Uncertain',
+  });
 });

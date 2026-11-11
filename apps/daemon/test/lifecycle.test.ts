@@ -121,7 +121,7 @@ test('a stale endpoint.json from a crashed daemon is removed once the lock is ta
   const root = await temporaryRoot();
   try {
     const directory = await prepareDirectory(root, {
-      'endpoint.json': JSON.stringify({ port: 1, pid: 1, version: '0.1.0', protocol: 1 }),
+      'endpoint.json': JSON.stringify({ port: 1, pid: 1, version: '0.1.0', protocol: 2 }),
       // Startup fails after the lock, so only the lock step can have removed the endpoint.
       'daemon.json': '{ not json',
     });

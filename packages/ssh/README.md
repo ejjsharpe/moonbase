@@ -1,6 +1,6 @@
 # SSH
 
-`@moonbase/ssh` exports `SshLive(config)`, a scoped `ConnectionService` that forwards a local loopback port to a remote chat host over OpenSSH. `@moonbase/ssh/configuration` exports the configuration schema and decoder; `@moonbase/ssh/host-health` is the shared authenticated health check used by SSH and Pi.
+`@moonbase/ssh` exports `SshLive(config)`, a scoped `ConnectionService` that forwards a local loopback port to a remote chat host over OpenSSH. `@moonbase/ssh/configuration` exports the configuration schema and decoder; `@moonbase/ssh/host-health` is the shared authenticated health check used by SSH and Pi: HMAC-SHA256 proofs under `moonbase-daemon-health-v1` in both directions, over the host's identity, protocol version, version and capabilities.
 
 ## Configuration
 

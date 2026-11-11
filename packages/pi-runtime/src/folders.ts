@@ -1,5 +1,6 @@
 import { constants } from 'node:fs';
 import { open, realpath, rename, stat } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { ApplicationError } from '@moonbase/contracts/errors';
 
 type Approval = { path: string; dev: number; ino: number; at: string; recent: boolean };
@@ -110,6 +111,23 @@ export function createFolderApprovals(file: string) {
   };
 }
 export type FolderApprovals = ReturnType<typeof createFolderApprovals>;
+
+/**
+ * Refuses any folder but one the runtime made directly under `chatFolders` for a chat without a
+ * project, named by its real path.
+ */
+export async function checkChatFolder(chatFolders: string, path: string) {
+  const [parent, folder] = await Promise.all([
+    realpath(chatFolders).catch(() => ''),
+    realpath(path).catch(() => ''),
+  ]);
+  const info = folder ? await stat(folder).catch(() => null) : null;
+  if (!parent || !folder || folder !== path || dirname(folder) !== parent || !info?.isDirectory())
+    throw new ApplicationError({
+      code: 'Unauthorized',
+      message: 'This chat’s folder is not one Moonbase made for it.',
+    });
+}
 
 async function readApprovals(file: string) {
   const map = new Map<string, Approval>();

@@ -2,6 +2,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { createMemoryKeySource } from '@moonbase/pi-runtime/credentials';
+import { localProviderIds } from '@moonbase/pi-runtime/providers';
 import type { LocalProviders } from '../src/daemon.ts';
 
 export const fauxProviderId = 'moonbase-faux';
@@ -12,7 +13,15 @@ export const fauxModelId = 'faux-model';
  * test writes the steps to `faux.json` in the data directory; calls past them reply "Faux reply".
  */
 export type FauxStep = { reply: string } | { hold: true };
-export type FauxScript = { steps?: FauxStep[]; idleMs?: number; pollMs?: number };
+export type FauxScript = {
+  steps?: FauxStep[];
+  idleMs?: number;
+  pollMs?: number;
+  /** The sign-in URL the faux ChatGPT login offers; a valid one by default. */
+  signInUrl?: string;
+};
+/** The pasted code the faux ChatGPT login accepts. */
+export const fauxSignInCode = 'faux-redirect-code';
 
 export function readFauxScript(directory: string): FauxScript {
   try {
@@ -54,6 +63,59 @@ export function createFauxProviders(directory: string): LocalProviders {
     keySource: createMemoryKeySource(),
     installProviders: (models) => {
       models.setProvider(faux.provider);
+      // Every provider setup offers is faux too: sign-ins prompt and store a credential, and none
+      // reaches a provider, the callback port or the Claude Code CLI.
+      for (const id of localProviderIds) {
+        const provider = fauxProvider({ provider: id }).provider;
+        const auth = (): typeof provider.auth => {
+          if (id === 'claude-code') return {};
+          if (id !== 'openai')
+            return {
+              apiKey: {
+                name: 'Faux API key',
+                login: async (interaction) => ({
+                  type: 'api_key',
+                  key: await interaction.prompt({ type: 'secret', message: 'Enter API key' }),
+                }),
+                resolve: async ({ credential }) =>
+                  credential?.key ? { auth: { apiKey: credential.key } } : undefined,
+              },
+            };
+          return {
+            oauth: {
+              name: 'Faux ChatGPT',
+              login: async (interaction) => {
+                interaction.notify({
+                  type: 'auth_url',
+                  url:
+                    readFauxScript(directory).signInUrl ??
+                    'https://auth.openai.com/api/accounts/authorize?state=faux',
+                });
+                const code = await interaction.prompt({
+                  type: 'manual_code',
+                  message: 'Paste the final redirect URL here:',
+                });
+                if (code !== fauxSignInCode) throw Error('Faux sign-in refused the code');
+                return {
+                  type: 'oauth',
+                  access: 'faux-access',
+                  refresh: 'faux-refresh',
+                  expires: Date.now() + 3_600_000,
+                };
+              },
+              refresh: async () => {
+                throw Error('Faux sign-in never refreshes');
+              },
+              toAuth: async (value) => ({ apiKey: value.access }),
+            },
+          };
+        };
+        models.setProvider({
+          ...provider,
+          name: id,
+          auth: auth(),
+        });
+      }
       return undefined;
     },
   };

@@ -1,10 +1,20 @@
 import { createRegistry, defineExtension, section } from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { Context, Effect, Layer } from 'effect';
-import type { ApplicationError } from '@moonbase/contracts/workspace';
+import { ApplicationError } from '@moonbase/contracts/workspace';
 import type { ChatTarget } from '@moonbase/contracts/chat';
-import { ChatService, type ChatServiceShape } from '@moonbase/contracts/services';
+import type { ChatHostTarget } from '@moonbase/contracts/host';
+import type { LocalHostCommand, LocalHostInput } from '@moonbase/contracts/daemon';
+import { decodeLocalHostInput } from '@moonbase/contracts/daemon-schema';
+import {
+  ChatService,
+  LocalHostService,
+  type ChatServiceShape,
+  type LocalHostHandlers,
+} from '@moonbase/contracts/services';
 import { type Host, safeError } from './commands.ts';
+import { checkChatFolder, type FolderApprovals } from './folders.ts';
+import * as V from './validation.ts';
 import { openHost } from './resources.ts';
 import type { PiRuntimeConfiguration, LocalPiRuntimeConfiguration } from './runtime-types.ts';
 
@@ -92,5 +102,78 @@ export const LocalPiRuntimeLive = (
             }),
         }),
       );
+    }),
+  );
+
+export type LocalHostConfiguration = {
+  host: ChatHostTarget;
+  folders: FolderApprovals;
+  /** Where the runtime makes folders for chats without a project (its `chatFolders`). */
+  chatFolders: string;
+};
+/** A local-mode host's folder approvals and control, over its `LocalPiControl`. */
+export const LocalHostLive = (
+  config: LocalHostConfiguration,
+): Layer.Layer<LocalHostService, never, LocalPiControl> =>
+  Layer.effect(
+    LocalHostService,
+    Effect.gen(function* () {
+      const control = yield* LocalPiControl;
+      const failure = (error: unknown) =>
+        ApplicationError.is(error)
+          ? error
+          : new ApplicationError({
+              code: 'Unavailable',
+              message: 'Local folder approvals are unavailable.',
+            });
+      const handle =
+        <K extends LocalHostCommand, A>(
+          operation: K,
+          run: (input: LocalHostInput<K>) => Effect.Effect<A, ApplicationError>,
+        ) =>
+        (unknown: LocalHostInput<K>) =>
+          Effect.flatMap(
+            Effect.try({
+              try: () => {
+                const input = decodeLocalHostInput(operation, unknown);
+                const shape = input as { host?: ChatHostTarget; target?: { host: ChatHostTarget } };
+                if (!V.sameHost(shape.host ?? shape.target!.host, config.host))
+                  V.fail('Unauthorized', 'Local host request names another host.');
+                return input;
+              },
+              catch: failure,
+            }),
+            run,
+          );
+      const promise = <A>(run: () => Promise<A>) => Effect.tryPromise({ try: run, catch: failure });
+      return {
+        approveFolder: handle('approveFolder', ({ requestId, path, recent }) =>
+          promise(async () => {
+            const approved = await config.folders
+              .approve(path, { recent: recent ?? true })
+              .catch((error: unknown) => {
+                throw ApplicationError.is(error)
+                  ? error
+                  : new ApplicationError({
+                      code: 'InvalidInput',
+                      message: 'Choose an existing folder.',
+                    });
+              });
+            return { requestId, path: approved };
+          }),
+        ),
+        listRecentFolders: handle('listRecentFolders', () =>
+          promise(async () => ({ folders: await config.folders.listRecent() })),
+        ),
+        checkChatFolder: handle('checkChatFolder', ({ path }) =>
+          promise(() => checkChatFolder(config.chatFolders, path)),
+        ),
+        getActiveWork: handle('getActiveWork', () =>
+          Effect.map(control.hasActiveWork(), (active) => ({ active })),
+        ),
+        markFolderAsProject: handle('markFolderAsProject', ({ requestId, target }) =>
+          Effect.as(control.markFolderAsProject(target), { requestId }),
+        ),
+      } satisfies LocalHostHandlers;
     }),
   );

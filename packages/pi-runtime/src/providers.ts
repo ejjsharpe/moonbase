@@ -6,7 +6,11 @@ type AuthPrompt = Parameters<Interaction['prompt']>[0];
 type AuthEvent = Parameters<Interaction['notify']>[0];
 import { ProviderSetupService, type ProviderSetupHandlers } from '@moonbase/contracts/services';
 import type { ProviderCommand, ProviderInput, ProviderState } from '@moonbase/contracts/providers';
-import { decodeProviderInput, decodeProviderOutput } from '@moonbase/contracts/providers-schema';
+import {
+  decodeProviderInput,
+  decodeProviderOutput,
+  readProviderSignInUrl,
+} from '@moonbase/contracts/providers-schema';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatReasoningEffort } from '@moonbase/contracts/chat';
 
@@ -62,7 +66,11 @@ type Flow = {
 };
 export type ProviderSetupConfiguration = {
   models: Models;
-  openUrl(url: string): Promise<void>;
+  /**
+   * Opens a validated sign-in URL in the user's browser. Without it, `openProviderUrl` is refused
+   * and clients read the URL with `getProviderUrl` to open it themselves.
+   */
+  openUrl?(url: string): Promise<void>;
   deviceId: string;
   /** Why the auth check made with `signal` couldn't tell whether a provider is configured, if it says. */
   getCheckProblem?(providerId: string, signal: AbortSignal): string | undefined;
@@ -89,17 +97,8 @@ export const ProviderSetupLive = (
       const owners = new Map<string, Flow>();
       const revisions = new Map<string, number>();
       const released = new Set<string>();
-      const validateProviderUrl = (value: string) => {
-        const url = new URL(value);
-        if (
-          url.protocol !== 'https:' ||
-          url.username ||
-          url.password ||
-          url.hostname !== 'auth.openai.com'
-        )
-          fail('The provider supplied an unsupported sign-in URL.');
-        return url.href;
-      };
+      const validateProviderUrl = (value: string) =>
+        readProviderSignInUrl(value) ?? fail('The provider supplied an unsupported sign-in URL.');
       const cancelFlow = async (flow: Flow) => {
         flow.abort.abort();
         flow.answer?.reject(new Error('Cancelled'));
@@ -174,6 +173,12 @@ export const ProviderSetupLive = (
         if (!flow || flow.state.id !== id || flow.state.state !== 'running')
           return fail('This sign-in flow is no longer active.');
         return flow;
+      }
+      function getProviderUrl(owner: string, flowId: string) {
+        if (released.has(owner)) fail('The owning document was released.');
+        const flow = getCurrentFlow(owner, flowId);
+        if (!flow.url) fail('There is no active sign-in URL.');
+        return validateProviderUrl(flow.url!);
       }
       const invoke = async <K extends ProviderCommand>(
         owner: string,
@@ -314,9 +319,13 @@ export const ProviderSetupLive = (
         } else if (operation === 'cancelProviderLogin') {
           await cancel(owner, (value as ProviderInput<'cancelProviderLogin'>).flowId);
         } else if (operation === 'openProviderUrl') {
-          const flow = getCurrentFlow(owner, (value as ProviderInput<'openProviderUrl'>).flowId);
-          if (!flow.url) fail('There is no active sign-in URL.');
-          await config.openUrl(validateProviderUrl(flow.url));
+          const url = getProviderUrl(owner, (value as ProviderInput<'openProviderUrl'>).flowId);
+          if (!config.openUrl)
+            throw new ApplicationError({
+              code: 'Unavailable',
+              message: 'Open provider sign-in links from a Moonbase client.',
+            });
+          await config.openUrl(url);
         } else if (operation === 'logoutProvider') {
           const { providerId } = value as ProviderInput<'logoutProvider'>;
           if (!localProviderIds.includes(providerId as (typeof localProviderIds)[number]))
@@ -363,6 +372,14 @@ export const ProviderSetupLive = (
               owners.delete(owner);
             },
             catch: unavailable,
+          }),
+        getProviderUrl: (owner, flowId) =>
+          Effect.try({
+            try: () => {
+              const { flowId: id } = decodeProviderInput('openProviderUrl', { flowId });
+              return getProviderUrl(owner, id);
+            },
+            catch: (error) => (ApplicationError.is(error) ? error : unavailable()),
           }),
       };
     }),

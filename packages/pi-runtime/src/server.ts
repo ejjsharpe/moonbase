@@ -1,6 +1,6 @@
 import type { AddressInfo } from 'node:net';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { Effect } from 'effect';
+import { Cause, Effect, Exit, type ManagedRuntime } from 'effect';
 import {
   chatContentChunkBytes,
   type ChatClient,
@@ -8,8 +8,23 @@ import {
   type ChatStreamFrame,
 } from '@moonbase/contracts/chat';
 import { decodeChatStreamRequest } from '@moonbase/contracts/chat-schema';
+import type {
+  DaemonClient,
+  DaemonCommand,
+  DaemonInput,
+  DaemonOutput,
+} from '@moonbase/contracts/daemon';
+import {
+  decodeDaemonInput,
+  decodeDaemonOutput,
+  isDaemonCommand,
+  isDaemonMutation,
+} from '@moonbase/contracts/daemon-schema';
+import { LocalHostService, ProviderSetupService } from '@moonbase/contracts/services';
+import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import { createHostHealthReply, validateHostHealth } from '@moonbase/ssh/host-health';
 import {
+  chatHostCapabilities,
   chatHostVersion,
   chatProtocolVersion,
   type ChatHostTarget,
@@ -22,12 +37,20 @@ import * as V from './validation.ts';
 import * as S from './private-schema.ts';
 
 export type ChatServerConfiguration = { host: ChatHostTarget; token: string; port: number };
+/** Request IDs of recent daemon mutations; a repeat of one returns its outcome instead of rerunning. */
+const rememberedDaemonRequests = 256;
+
 /**
- * The injected client is bound to the consumer's process root and shared handlers. It is the
- * trusted local service, which already validates its replies and snapshots; only wire input is
- * decoded here.
+ * The injected clients are bound to the consumer's process root and shared handlers. They are the
+ * trusted local services, which already validate their replies and snapshots; only wire input is
+ * decoded here. A local-mode daemon also supplies `daemon`, its folder, control and provider setup
+ * operations, and its health then advertises them.
  */
-export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =>
+export const serveChat = (
+  config: ChatServerConfiguration,
+  client: ChatClient,
+  daemon?: DaemonClient,
+) =>
   Effect.acquireRelease(
     Effect.tryPromise({
       try: async () => {
@@ -39,7 +62,16 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
             ...expected,
             protocol: chatProtocolVersion,
             version: chatHostVersion,
-            capabilities: ['chat-v0'],
+            capabilities: [
+              chatHostCapabilities.chat,
+              ...(daemon
+                ? [
+                    chatHostCapabilities.local,
+                    chatHostCapabilities.providers,
+                    chatHostCapabilities.folders,
+                  ]
+                : []),
+            ],
           },
           expected,
         );
@@ -53,6 +85,51 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
             'InvalidInput',
             'Keep the private host key separate from public chat identities and settings.',
           );
+        if (daemon && !('mode' in configuration))
+          V.fail('InvalidInput', 'Serve daemon operations only for a local-mode chat host.');
+        const daemonRequests = new Map<
+          string,
+          { operation: DaemonCommand; input: unknown; outcome: Promise<unknown> }
+        >();
+        /** Runs one daemon operation; a mutation's request ID binds its whole input. */
+        const dispatchDaemon = async <K extends DaemonCommand>(
+          operation: K,
+          input: DaemonInput<K>,
+        ): Promise<DaemonOutput<K>> => {
+          const shape = input as { host?: ChatHostTarget; target?: { host: ChatHostTarget } };
+          if (!V.sameHost(shape.host ?? shape.target!.host, expected))
+            V.fail('Unauthorized', 'Daemon request target differs from this host.');
+          const run = async () => {
+            const value = decodeDaemonOutput(operation, await daemon!.command(operation, input));
+            const requestId = (input as { requestId?: string }).requestId;
+            if (
+              requestId !== undefined &&
+              (value as { requestId?: string }).requestId !== requestId
+            )
+              V.fail('Unavailable', 'Daemon request identity changed.');
+            return value;
+          };
+          if (!isDaemonMutation(operation)) return run();
+          const requestId = (input as { requestId: string }).requestId,
+            prior = daemonRequests.get(requestId);
+          if (prior) {
+            if (prior.operation !== operation || !areJsonValuesEqual(prior.input, input))
+              V.fail('InvalidInput', 'Request ID is bound to another operation or input.');
+            return prior.outcome as Promise<DaemonOutput<K>>;
+          }
+          const outcome = run();
+          daemonRequests.set(requestId, { operation, input, outcome });
+          for (const key of daemonRequests.keys()) {
+            if (daemonRequests.size <= rememberedDaemonRequests) break;
+            daemonRequests.delete(key);
+          }
+          // A refused request may be sent again; only an outcome that may have applied is kept.
+          outcome.catch(() => {
+            if (daemonRequests.get(requestId)?.outcome === outcome)
+              daemonRequests.delete(requestId);
+          });
+          return outcome;
+        };
         const streamClosures = new Set<Promise<void>>();
         let streamFailure: unknown;
         const grants = new Map<string, { nonce: string; expires: number }>();
@@ -244,8 +321,15 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
               }
               return;
             }
-            const envelope = V.object(P.json(bytes), ['operation', 'input']),
-              operation = V.command(envelope.operation),
+            const envelope = V.object(P.json(bytes), ['operation', 'input']);
+            if (daemon && isDaemonCommand(envelope.operation)) {
+              const operation = envelope.operation,
+                input = decodeDaemonInput(operation, envelope.input);
+              dispatchedOperation = operation;
+              send(200, { ok: true, value: await dispatchDaemon(operation, input) }, challenge);
+              return;
+            }
+            const operation = V.command(envelope.operation),
               input = V.input(operation, envelope.input);
             dispatchedOperation = operation;
             const controller = new AbortController();
@@ -316,6 +400,96 @@ export const serveChat = (config: ChatServerConfiguration, client: ChatClient) =
     }),
     (server) => releaseResource(() => server.close()),
   );
+
+/**
+ * Binds a process root's folder, control and provider setup services to the daemon operations
+ * `serveChat` serves; the server has checked each input's host.
+ */
+export function makeDaemonClient(
+  runtime: ManagedRuntime.ManagedRuntime<LocalHostService | ProviderSetupService, unknown>,
+): DaemonClient {
+  const run = async <A>(
+    effect: Effect.Effect<A, ApplicationError, LocalHostService | ProviderSetupService>,
+  ) => {
+    const exit = await runtime.runPromiseExit(effect);
+    if (Exit.isSuccess(exit)) return exit.value;
+    const error = exit.cause.reasons.find(Cause.isFailReason)?.error;
+    throw ApplicationError.is(error)
+      ? error
+      : new ApplicationError({ code: 'Unavailable', message: 'Daemon operation failed.' });
+  };
+  const handlers: { [K in DaemonCommand]: (input: DaemonInput<K>) => Promise<DaemonOutput<K>> } = {
+    approveFolder: (input) => run(Effect.flatMap(LocalHostService, (s) => s.approveFolder(input))),
+    listRecentFolders: (input) =>
+      run(Effect.flatMap(LocalHostService, (s) => s.listRecentFolders(input))),
+    checkChatFolder: (input) =>
+      run(Effect.flatMap(LocalHostService, (s) => s.checkChatFolder(input))),
+    getActiveWork: (input) => run(Effect.flatMap(LocalHostService, (s) => s.getActiveWork(input))),
+    markFolderAsProject: (input) =>
+      run(Effect.flatMap(LocalHostService, (s) => s.markFolderAsProject(input))),
+    getProviders: ({ ownerId }) =>
+      run(
+        Effect.flatMap(ProviderSetupService, (s) =>
+          Effect.map(s.forOwner(ownerId).getProviders({}), (state) => ({ state })),
+        ),
+      ),
+    startProviderLogin: ({ ownerId, requestId, providerId }) =>
+      run(
+        Effect.flatMap(ProviderSetupService, (s) =>
+          Effect.map(s.forOwner(ownerId).startProviderLogin({ providerId }), (state) => ({
+            requestId,
+            state,
+          })),
+        ),
+      ),
+    answerProviderPrompt: ({ ownerId, requestId, flowId, promptId, answer }) =>
+      run(
+        Effect.flatMap(ProviderSetupService, (s) =>
+          Effect.map(
+            s.forOwner(ownerId).answerProviderPrompt({ flowId, promptId, answer }),
+            (state) => ({ requestId, state }),
+          ),
+        ),
+      ),
+    cancelProviderLogin: ({ ownerId, requestId, flowId }) =>
+      run(
+        Effect.flatMap(ProviderSetupService, (s) =>
+          Effect.map(s.forOwner(ownerId).cancelProviderLogin({ flowId }), (state) => ({
+            requestId,
+            state,
+          })),
+        ),
+      ),
+    openProviderUrl: ({ ownerId, flowId }) =>
+      run(
+        Effect.flatMap(ProviderSetupService, (s) =>
+          Effect.flatMap(s.getProviderUrl(ownerId, flowId), (url) =>
+            Effect.map(s.forOwner(ownerId).getProviders({}), (state) => ({ state, url })),
+          ),
+        ),
+      ),
+    logoutProvider: ({ ownerId, requestId, providerId }) =>
+      run(
+        Effect.flatMap(ProviderSetupService, (s) =>
+          Effect.map(s.forOwner(ownerId).logoutProvider({ providerId }), (state) => ({
+            requestId,
+            state,
+          })),
+        ),
+      ),
+    releaseProviderOwner: ({ ownerId }) =>
+      run(Effect.flatMap(ProviderSetupService, (s) => s.releaseOwner(ownerId))),
+  };
+  return {
+    command: (operation, input) => {
+      if (!Object.hasOwn(handlers, operation))
+        return Promise.reject(
+          new ApplicationError({ code: 'InvalidInput', message: 'Unknown daemon operation.' }),
+        );
+      return (handlers[operation] as (input: unknown) => Promise<never>)(input);
+    },
+  };
+}
 
 /** One pending replacement and one being written; watches never trigger an RPC read. */
 async function streamChat(

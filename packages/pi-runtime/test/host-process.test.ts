@@ -14,10 +14,10 @@ import { createServer } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import { checkHostHealth } from '@moonbase/ssh/host-health';
-import { ConnectionService } from '@moonbase/contracts/services';
+import { ConnectionService, LocalHostService } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import { makeChatClient } from '@moonbase/application/runtime/clients';
-import { RemoteChatLive } from '../src/remote.ts';
+import { makeChatClient, makeProviderSetupClient } from '@moonbase/application/runtime/clients';
+import { RemoteChatLive, RemoteLocalHostLive, RemoteProviderSetupLive } from '../src/remote.ts';
 import { createRequire } from 'node:module';
 import { buildHost } from '../scripts/build-host.ts';
 import { writeFakeClaude } from './fake-claude.ts';
@@ -148,6 +148,9 @@ async function checkStoreOwnership(name: string, runtime: string) {
       checkHostHealth({ origin: `http://127.0.0.1:${listen}`, token, expected: host }),
     );
     assert.equal(health.hostId, host.hostId);
+    // A fixed-settings host signs protocol 2 and only the chat capability.
+    assert.equal(health.protocol, 2);
+    assert.deepEqual(health.capabilities, ['chat-v0']);
     assert.equal((await readRuntime(reported)).bun, name === 'bun' ? '1.4.4' : undefined);
     assert(!owner.output.includes(token));
     assert(!owner.errors.includes(token));
@@ -180,6 +183,91 @@ async function checkStoreOwnership(name: string, runtime: string) {
     await rm(dir, { recursive: true, force: true });
   }
 }
+test('a client refuses local-mode features from the bundled fixed-settings host before dispatch', async () => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-chat-fixed-'))),
+    token = randomBytes(32).toString('base64url'),
+    host = { hostId: 'fixed-host', storeId: 'fixed-store' },
+    listen = await port(),
+    file = join(dir, 'private.json');
+  await writeFile(
+    file,
+    JSON.stringify({
+      host,
+      actorId: 'personal',
+      cwd: dir,
+      databasePath: join(dir, 'chat.sqlite'),
+      model: { provider: 'openai', modelId: 'gpt-6-sol' },
+      port: listen,
+      token,
+    }),
+    { mode: 0o600 },
+  );
+  const child = start(file);
+  const unused = () =>
+    Effect.fail(
+      new ApplicationError({ code: 'Unavailable', message: 'Not a connection command.' }),
+    );
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      RemoteChatLive,
+      RemoteLocalHostLive,
+      RemoteProviderSetupLive({ host, sameMachine: false, openUrl: async () => {} }),
+    ).pipe(
+      Layer.provide(
+        Layer.succeed(ConnectionService, {
+          getConnection: unused,
+          connect: unused,
+          disconnect: unused,
+          watch: () => Stream.empty,
+          endpoint: () =>
+            Effect.succeed({
+              origin: `http://127.0.0.1:${listen}`,
+              token,
+              expected: host,
+              connectionId: 'fixed',
+              // The client trusts the signed health of each challenge, not this cached copy.
+              health: {
+                ...host,
+                protocol: 2,
+                version: '0.1.0',
+                capabilities: ['chat-v0', 'daemon-local-v1', 'providers-v1', 'folders-v1'],
+              },
+            }),
+        }),
+      ),
+    ),
+  );
+  try {
+    await bounded(child.ready);
+    const chat = makeChatClient(runtime),
+      session = { host, actorId: 'personal' };
+    const folders = await runtime.runPromise(LocalHostService);
+    for (const refused of [
+      runtime.runPromise(folders.getActiveWork({ host })),
+      runtime.runPromise(folders.approveFolder({ host, requestId: 'approve', path: dir })),
+      runtime.runPromise(
+        folders.markFolderAsProject({
+          requestId: 'mark',
+          target: { ...session, conversationId: '1' },
+        }),
+      ),
+      makeProviderSetupClient(runtime, 'document').command('getProviders', {}),
+      chat.command('createChat', {
+        session,
+        requestId: 'with-settings',
+        title: 'Local settings',
+        settings: { model: { provider: 'openai', modelId: 'gpt-6-sol' } },
+      }),
+    ])
+      await assert.rejects(refused, { code: 'Incompatible' });
+    // Nothing was created; the host still serves its fixed-settings chats.
+    assert.deepEqual((await chat.command('listChats', { session })).conversations, []);
+  } finally {
+    await runtime.dispose();
+    await cleanup(child.child, child.exited);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 test('CLI rejects malformed private config without echoing secrets or file paths', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'moonbase-chat-bad-')),
     file = join(dir, 'private.json'),
@@ -231,7 +319,7 @@ test('actual child host crash resumes Pi-owned work without resubmitting reserve
               token,
               expected: host,
               connectionId: 'controlled',
-              health: { ...host, protocol: 1, version: '0.1.0', capabilities: ['chat-v0'] },
+              health: { ...host, protocol: 2, version: '0.1.0', capabilities: ['chat-v0'] },
             }),
         }),
       ),
@@ -319,13 +407,13 @@ test('compiled remote entry runs on Electron Node24 against the separate product
   const entry = join(directory, 'remote.cjs');
   const source = `import {readFileSync} from 'node:fs';
     import {Effect,Layer,ManagedRuntime,Stream} from 'effect';
-    import { ConnectionService } from '@moonbase/contracts/services';
+    import { ConnectionService, LocalHostService } from '@moonbase/contracts/services';
     import {makeChatClient} from '@moonbase/application/runtime/clients';
     import {RemoteChatLive} from './src/remote.ts';
     async function main(){
       const config=JSON.parse(readFileSync(process.argv[2],'utf8'));
       const unavailable=()=>Effect.die('No implicit connection command');
-      const connection=Layer.succeed(ConnectionService,{getConnection:unavailable,connect:unavailable,disconnect:unavailable,watch:()=>Stream.empty,endpoint:()=>Effect.succeed({origin:'http://127.0.0.1:'+config.port,token:config.token,expected:config.host,connectionId:'controlled',health:{...config.host,protocol:1,version:'0.1.0',capabilities:['chat-v0']}})});
+      const connection=Layer.succeed(ConnectionService,{getConnection:unavailable,connect:unavailable,disconnect:unavailable,watch:()=>Stream.empty,endpoint:()=>Effect.succeed({origin:'http://127.0.0.1:'+config.port,token:config.token,expected:config.host,connectionId:'controlled',health:{...config.host,protocol:2,version:'0.1.0',capabilities:['chat-v0']}})});
       const runtime=ManagedRuntime.make(RemoteChatLive.pipe(Layer.provide(connection))),client=makeChatClient(runtime);
       try{const publicHost=await client.command('getChatHost',{host:config.host});const target=(await client.command('createChat',{session:{host:config.host,actorId:'personal'},requestId:'electron-create',title:'Electron remote'})).conversation.target;
         let off; await boundedWatch();
@@ -424,7 +512,7 @@ test('repeated actual process interruption parks Pi work visibly instead of repo
               token,
               expected: host,
               connectionId: 'controlled',
-              health: { ...host, protocol: 1, version: '0.1.0', capabilities: ['chat-v0'] },
+              health: { ...host, protocol: 2, version: '0.1.0', capabilities: ['chat-v0'] },
             }),
         }),
       ),
@@ -552,7 +640,7 @@ test('bundled host serves a Claude subscription through the host-side Claude Cod
               token,
               expected: host,
               connectionId: 'controlled',
-              health: { ...host, protocol: 1, version: '0.1.0', capabilities: ['chat-v0'] },
+              health: { ...host, protocol: 2, version: '0.1.0', capabilities: ['chat-v0'] },
             }),
         }),
       ),

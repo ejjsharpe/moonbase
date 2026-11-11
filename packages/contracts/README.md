@@ -4,7 +4,7 @@
 
 | Subpath | Contents |
 | --- | --- |
-| `workspace`, `chat`, `connection`, `host`, `providers` | Browser-safe DTOs, command/client interfaces and protocol constants |
+| `workspace`, `chat`, `connection`, `host`, `providers`, `daemon` | Browser-safe DTOs, command/client interfaces and protocol constants |
 | `errors`, `common` | `ApplicationError`, error codes, `CommandOptions`, `ObservationClose`, and `areJsonValuesEqual` / `getJsonKey` (key-order-safe equality and keys for plain decoded data) |
 | `lookup` | `matchPath` / `compareMatches`: the fuzzy path ranking shared by editor lookup and chat file search |
 | `*-schema`, `schema` | Request, saved-data and wire-reply decoders, and shared schema constructors |
@@ -15,6 +15,8 @@ Chat Find (`getChatFindExpression`) matches the literal query in original text w
 A message's file mentions are relative paths in its working folder, each spelled in the text by `formatChatMention` (`@path`, or `@"path"` with whitespace), so the text alone still names every file. `findChatFiles` searches an existing chat's folder, or a folder a new chat may use.
 
 A local chat's creation settings may leave out `cwd` for a chat without a project; the host gives it a folder of its own and lists it with `ownFolder: true`.
+
+The host protocol is version 2 (`chatProtocolVersion`). `chatHostCapabilities` names what a host's signed health may advertise: `chat-v0` on every host, and on a local-mode daemon `daemon-local-v1`, `providers-v1` and `folders-v1`. `daemon-schema` decodes the daemon's operations beyond chat, each mapped to the capability it needs (`daemonCommandCapabilities`): folder approvals and control (`LocalHostCommand`, served by the `LocalHostService` port) and provider setup on the wire (`HostProviderCommand`, naming a host and owner). Mutations carry request IDs that their replies echo. `readProviderSignInUrl` accepts only https pages on a provider's sign-in origin.
 
 `settleChat` settles or unsettles a chat (`{ target, settled }`) and returns its summary, whose `settledAt` says when it was settled.
 

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer, type RequestListener } from 'node:http';
 import { test, type TestContext } from 'node:test';
@@ -158,7 +159,7 @@ test('host, store, protocol, version and required capability mismatches fail clo
   for (const changed of [
     { hostId: 'other' },
     { storeId: 'other' },
-    { protocol: 2 },
+    { protocol: 1 },
     { version: 'next' },
     { capabilities: [] },
   ]) {
@@ -268,3 +269,56 @@ test(
     await closed;
   },
 );
+
+test('health proofs under the protocol 1 domain are refused both ways, and capabilities are signed', async (t) => {
+  const oldProof = (phase: string, nonce: string, ...fields: unknown[]) =>
+    createHmac('sha256', token)
+      .update(JSON.stringify(['moonbase-health-v1', phase, nonce, ...fields]))
+      .digest('hex');
+  const nonce = 'A'.repeat(43);
+  assert.throws(
+    () =>
+      createHostHealthReply({
+        token,
+        health,
+        nonce,
+        authorization: `Moonbase-HMAC-SHA256 ${oldProof('request', nonce)}`,
+      }),
+    { code: 'Unauthorized' },
+  );
+  const daemonHealth = {
+    ...health,
+    capabilities: ['chat-v0', 'daemon-local-v1', 'providers-v1', 'folders-v1'],
+  };
+  let reply: (nonce: string, authorization: string) => unknown = (nonce) => ({
+    ...daemonHealth,
+    nonce,
+    proof: oldProof(
+      'response',
+      nonce,
+      daemonHealth.protocol,
+      daemonHealth.hostId,
+      daemonHealth.storeId,
+      daemonHealth.version,
+      daemonHealth.capabilities,
+    ),
+  });
+  const input = await endpoint(t, (request, response) => {
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(
+      JSON.stringify(
+        reply(request.headers['x-moonbase-nonce'] as string, request.headers.authorization!),
+      ),
+    );
+  });
+  await fails(input, 'Unauthorized');
+  reply = (nonce, authorization) =>
+    createHostHealthReply({ token, health: daemonHealth, nonce, authorization });
+  assert.deepEqual(await Effect.runPromise(checkHostHealth(input)), daemonHealth);
+  // A reply that drops a capability it was signed with fails its proof.
+  reply = (nonce, authorization) => ({
+    ...createHostHealthReply({ token, health: daemonHealth, nonce, authorization }),
+    capabilities: ['chat-v0'],
+  });
+  await fails(input, 'Unauthorized');
+});

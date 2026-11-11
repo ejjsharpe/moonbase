@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
-const clients = ['workspace', 'chat', 'connection', 'host', 'errors', 'common', 'lookup'];
+const clients = ['workspace', 'chat', 'connection', 'host', 'daemon', 'errors', 'common', 'lookup'];
 
 for (const entry of clients)
   test(`${entry} has no Effect or platform runtime dependency`, async () => {
@@ -49,6 +49,8 @@ for (const entry of [
   'workspace-schema',
   'connection-schema',
   'host-schema',
+  'daemon-schema',
+  'providers-schema',
   'error-schema',
   'schema',
   'services',

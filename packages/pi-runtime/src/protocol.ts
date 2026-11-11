@@ -17,9 +17,12 @@ export const validNonce = (value: unknown): value is string =>
   /^[A-Za-z0-9_-]{43}$/.test(value) &&
   Buffer.from(value, 'base64url').toString('base64url') === value;
 export const hash = (body: Uint8Array | string) => createHash('sha256').update(body).digest('hex');
+/** HMAC domains of protocol 2; health proofs use `moonbase-daemon-health-v1` (`@moonbase/ssh/host-health`). */
+export const rpcDomain = 'moonbase-daemon-v1';
+export const streamDomain = 'moonbase-daemon-stream-v1';
 export const mac = (token: string, ...parts: unknown[]) =>
   createHmac('sha256', token)
-    .update(JSON.stringify(['moonbase-chat-v1', ...parts]))
+    .update(JSON.stringify([rpcDomain, ...parts]))
     .digest('hex');
 export const proof = (value: unknown, expected: string) =>
   typeof value === 'string' &&
@@ -171,7 +174,7 @@ export function responseBytes(
 // Stream proofs cannot be reflected into health/RPC or request proofs.
 export const streamMac = (token: string, ...parts: unknown[]) =>
   createHmac('sha256', token)
-    .update(JSON.stringify(['moonbase-chat-stream-v1', ...parts]))
+    .update(JSON.stringify([streamDomain, ...parts]))
     .digest('hex');
 export const streamPath = '/v1/chat/watch';
 export const streamLimits = {

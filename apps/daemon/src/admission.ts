@@ -1,4 +1,5 @@
 import type { ChatClient } from '@moonbase/contracts/chat';
+import type { DaemonClient } from '@moonbase/contracts/daemon';
 import { ApplicationError } from '@moonbase/contracts/errors';
 
 /**
@@ -18,6 +19,20 @@ export function refuseWhileStopping(client: ChatClient, isStopping: () => boolea
     watch: (input, receive, onError) => {
       refuse();
       return client.watch(input, receive, onError);
+    },
+  };
+}
+
+/** Refuses new daemon operations once `isStopping()` is true, as `refuseWhileStopping` does. */
+export function refuseDaemonWhileStopping(
+  client: DaemonClient,
+  isStopping: () => boolean,
+): DaemonClient {
+  return {
+    command: async (operation, input, options) => {
+      if (isStopping())
+        throw new ApplicationError({ code: 'Unavailable', message: 'The daemon is stopping.' });
+      return client.command(operation, input, options);
     },
   };
 }
