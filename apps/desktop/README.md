@@ -88,7 +88,7 @@ Configure SSH as described in the [SSH package](../../packages/ssh/README.md), t
 
 - A new chat picks its model and reasoning effort as a local one does. With no picker for the host's disk, its folder menu lists the host's approved roots and the folders directly inside them; without one, the chat runs in a new folder in the host's `chats/`. Editor projects, worktrees, the project dock's folder and Turn into project are local only.
 - **Settings › Providers** sets up the host's providers: API keys, and ChatGPT by pasting the final redirect URL after signing in, since the browser's callback can't reach the host. Claude Code uses `claude auth login`, run on the host.
-- Drafts are kept per host; ones saved for an older fixed-settings host (`moonbase.chat.v1`) are left in place, unused.
+- Remote drafts are kept under one key (`moonbase.chat.remote.v2`) for the configured host, so changing the host blocks sends until those drafts are cleared; ones saved for an older fixed-settings host (`moonbase.chat.v1`) are left in place, unused.
 
 The renderer never receives the endpoint or key, and a remote host's paths never grant access to local files.
 
