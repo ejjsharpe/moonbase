@@ -1,0 +1,67 @@
+# The slow Playwright suites, kept off PR checks: nightly on main and on demand (Actions > nightly > Run workflow).
+name: nightly
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  browser:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - { name: workbench, cwd: packages/workbench, script: test:ui }
+          - { name: desktop, cwd: apps/desktop, script: test:browser }
+    name: browser (${{ matrix.suite.name }})
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '26.13.0'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright install chromium
+      - run: bun run --cwd ${{ matrix.suite.cwd }} ${{ matrix.suite.script }}
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-${{ matrix.suite.name }}-results
+          path: ${{ matrix.suite.cwd }}/test-results
+          if-no-files-found: ignore
+
+  # Real Electron from source, then the packaged app's tagged subset.
+  electron:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      NX_DAEMON: 'false'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '26.13.0'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - run: node scripts/prepare-ripgrep.mjs
+      - run: bunx nx run @moonbase/desktop:build
+      - run: bun run --cwd apps/desktop test:native
+      - run: bunx nx run @moonbase/desktop:package
+      - run: bun run --cwd apps/desktop check:package
+      - run: bun run --cwd apps/desktop test:package
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: electron-results
+          path: apps/desktop/test-results
+          if-no-files-found: ignore
