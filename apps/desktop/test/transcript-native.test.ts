@@ -256,6 +256,7 @@ function fixture(live = false, text = '  **raw**\r\n\t🌔 é\r\n' + 'α'.repea
   };
   // Trusted ChatClient: it stands in for a boundary that already decoded and bounded replies.
   const chat: ChatClient = {
+    watchChatList: () => async () => {},
     async command(operation, input) {
       if (operation === 'getChat') return structuredClone(snapshot) as never;
       assert.equal(operation, 'getChatTranscriptContent');
@@ -939,6 +940,7 @@ test('Copy accepts an empty authored text part', async () => {
   };
   const writes: string[] = [];
   const chat: ChatClient = {
+    watchChatList: () => async () => {},
     async command(_operation, input) {
       const { selection } = input as { selection?: object };
       return (
@@ -998,6 +1000,7 @@ function partsFixture(texts: string[], chunkBytes = 4) {
   const reads: string[] = [],
     writes: string[] = [];
   const chat: ChatClient = {
+    watchChatList: () => async () => {},
     async command(_operation, input) {
       const { selection, cursor } = input as { selection?: { partId: string }; cursor?: string };
       if (!selection)

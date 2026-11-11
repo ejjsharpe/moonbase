@@ -20,6 +20,10 @@ export function refuseWhileStopping(client: ChatClient, isStopping: () => boolea
       refuse();
       return client.watch(input, receive, onError);
     },
+    watchChatList: (input, receive, onError) => {
+      refuse();
+      return client.watchChatList(input, receive, onError);
+    },
   };
 }
 

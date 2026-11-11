@@ -8,6 +8,7 @@ import {
   isDaemonMutation,
 } from '@moonbase/contracts/daemon-schema';
 import { chatHostCapabilities, type ChatHostHealth } from '@moonbase/contracts/host';
+import { chatReplyErrorCodes } from '@moonbase/contracts/chat-schema';
 import type { CommandOptions } from '@moonbase/contracts/common';
 import type { ChatHostEndpoint } from '@moonbase/contracts/services';
 import {
@@ -30,7 +31,6 @@ import { ApplicationError } from '@moonbase/contracts/workspace';
 import { validateHostHealth } from '@moonbase/ssh/host-health';
 import * as P from './protocol.ts';
 import * as V from './validation.ts';
-import { decodeErrorEnvelope } from './remote.ts';
 import {
   deriveSocketKeys,
   openSocketMessage,
@@ -77,15 +77,45 @@ export type DaemonSocket = {
     target: SocketSubscriptionTarget<K>,
     handlers: {
       receive(value: SocketSubscriptionValue<K>, update: 'snapshot' | 'delta'): void;
-      /** The subscription or its connection ended; it is never resubscribed by itself. */
-      onError(error: ApplicationError): void;
+      /**
+       * The subscription ended (`connectionClosed` false: the daemon ended it) or its connection
+       * did; it is never resubscribed by itself.
+       */
+      onError(error: ApplicationError, connectionClosed: boolean): void;
     },
     resume?: SocketSubscriptionState<K>,
   ): SocketSubscription<K>;
+  /** The clock time of the latest authenticated message, heartbeats included. */
+  readonly lastReceived: number;
   /** Resolves with why the connection closed. */
   readonly closed: Promise<ApplicationError>;
-  close(): void;
+  /** Closes the connection; resolves once its socket has closed, so the daemon has seen it end. */
+  close(): Promise<void>;
 };
+
+/** Rebuilds a daemon failure from its public code alone; its messages are never shown. */
+const publicFailure = (code: (typeof chatReplyErrorCodes)[number], operation?: string) =>
+  new ApplicationError({
+    code,
+    message: P.publicError(new ApplicationError({ code, message: '' }), operation).message,
+  });
+/**
+ * Decodes a signed reply's `error` field; undefined when it carries no public error code. A daemon
+ * operation's failure may name a reason, shown with the client's own fixed text.
+ */
+export function decodeErrorEnvelope(
+  error: unknown,
+  operation?: string,
+): ApplicationError | undefined {
+  try {
+    const record = V.object(error);
+    const code = chatReplyErrorCodes.find((value) => value === record.code);
+    if (code && isDaemonCommand(operation)) return P.daemonFailure(code, record.reason);
+    return code && publicFailure(code, operation);
+  } catch {
+    return undefined;
+  }
+}
 
 const unavailable = (message = 'The daemon connection closed.') =>
   new ApplicationError({ code: 'Unavailable', message });
@@ -137,7 +167,7 @@ export function connectDaemonSocket(
     target: SocketSubscriptionTarget<SocketSubscriptionKind>;
     state?: SocketSubscriptionState<SocketSubscriptionKind>;
     receive(value: unknown, update: 'snapshot' | 'delta'): void;
-    onError(error: ApplicationError): void;
+    onError(error: ApplicationError, connectionClosed: boolean): void;
   };
   const subscriptions = new Map<string, Subscription>();
   let settle!: (value: DaemonSocket) => void, refuse!: (error: ApplicationError) => void;
@@ -168,7 +198,7 @@ export function connectDaemonSocket(
           : error,
       );
     requests.clear();
-    for (const subscription of subscriptions.values()) subscription.onError(error);
+    for (const subscription of subscriptions.values()) subscription.onError(error, true);
     subscriptions.clear();
     resolveClosed(error);
   };
@@ -223,7 +253,7 @@ export function connectDaemonSocket(
     if (message.kind === 'error') {
       if (!subscription) return;
       subscriptions.delete(message.subscriptionId);
-      subscription.onError(P.daemonFailure(message.code, undefined));
+      subscription.onError(P.daemonFailure(message.code, undefined), false);
       return;
     }
     const sequence = message.sequence;
@@ -298,12 +328,20 @@ export function connectDaemonSocket(
       );
     }
   });
-  socket.addEventListener('close', () => end(unavailable()));
+  const socketClosed = new Promise<void>((resolve) =>
+    socket.addEventListener('close', () => {
+      end(unavailable());
+      resolve();
+    }),
+  );
   socket.addEventListener('error', () => end(unavailable()));
 
   const connection: DaemonSocket = {
     get health() {
       return health!;
+    },
+    get lastReceived() {
+      return lastReceived;
     },
     request(operation, input, requestOptions) {
       return new Promise((resolve, reject) => {
@@ -394,7 +432,7 @@ export function connectDaemonSocket(
         receive: handlers.receive as Subscription['receive'],
         onError: handlers.onError,
       };
-      if (reason) queueMicrotask(() => handlers.onError(reason!));
+      if (reason) queueMicrotask(() => handlers.onError(reason!, true));
       else {
         subscriptions.set(subscriptionId, subscription);
         try {
@@ -426,6 +464,7 @@ export function connectDaemonSocket(
     closed,
     close() {
       end(unavailable('The daemon connection was closed.'));
+      return socketClosed;
     },
   };
   return connected;

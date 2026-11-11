@@ -12,7 +12,6 @@ import {
   chatContentChunkBytes,
   chatManifestPageSize,
   maximumChatInputBytes,
-  maximumChatReplyBytes,
   maximumChatMentions,
   maximumChatFileQueryBytes,
   chatFileMatchLimit,
@@ -277,8 +276,8 @@ export const ChatSnapshotSchema = struct({
   transcriptBoundary: Schema.NullOr(ChatIdentifierSchema),
   observationStatus: optional(Schema.Literals(['connected', 'reconnecting'])),
 });
-/** Error codes a chat stream may sign; a stream never carries a mutation's `Uncertain` outcome. */
-const chatStreamErrorCodes = [
+/** Error codes a daemon may sign in a reply or a subscription's end. */
+export const chatReplyErrorCodes = [
   'InvalidInput',
   'Unauthorized',
   'Incompatible',
@@ -286,19 +285,8 @@ const chatStreamErrorCodes = [
   'Persistence',
   'Unavailable',
   'Cancelled',
+  'Uncertain',
 ] as const;
-/** Error codes a chat host may sign in an RPC reply. */
-export const chatReplyErrorCodes = [...chatStreamErrorCodes, 'Uncertain'] as const;
-// Network-only envelopes; ordinary snapshots/IPC remain browser-safe replacements.
-export const ChatStreamRequestSchema = struct({
-  target: ChatTargetSchema,
-  connectionId: ChatIdentifierSchema,
-});
-const streamIdentity = {
-  ...ChatStreamRequestSchema.fields,
-  streamId: unicode.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/)),
-  sequence: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
-};
 /** One chunk of a chunked payload: canonical base64 of 1 to `chatContentChunkBytes` bytes. */
 export const ChatContentChunkDataSchema = Schema.String.check(
   Schema.makeFilter((value) => {
@@ -312,29 +300,6 @@ export const ChatContentChunkDataSchema = Schema.String.check(
     }
   }),
 );
-export const ChatStreamFrameSchema = Schema.Union([
-  struct({
-    ...streamIdentity,
-    kind: Schema.Literal('snapshot'),
-    offset: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: maximumChatReplyBytes })),
-    total: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: maximumChatReplyBytes })),
-    data: ChatContentChunkDataSchema,
-  }),
-  struct({ ...streamIdentity, kind: Schema.Literal('heartbeat') }),
-  struct({
-    ...streamIdentity,
-    kind: Schema.Literal('error'),
-    code: Schema.Literals(chatStreamErrorCodes),
-  }),
-]);
-export const decodeChatStreamRequest = Schema.decodeUnknownSync(ChatStreamRequestSchema, {
-  onExcessProperty: 'error',
-  reportInput: false,
-});
-export const decodeChatStreamFrame = Schema.decodeUnknownSync(ChatStreamFrameSchema, {
-  onExcessProperty: 'error',
-  reportInput: false,
-});
 const receipt = { target: ChatTargetSchema, requestId: ChatIdentifierSchema };
 export const ChatSendReceiptSchema = Schema.Union([
   struct({ ...receipt, admission: Schema.Literal('reserved'), submissionId: Schema.Null }),

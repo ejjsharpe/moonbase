@@ -627,6 +627,8 @@ class ChatModelState {
           this.chatPages = listed.value.pages;
           this.listed(listed.value);
         }
+        // Changes to the list arrive from its watch from here on; nothing lists on a timer.
+        yield* this.followChats(owner);
         if (this.state.transcript.observation === 'failed') {
           void this.closeOwner(this.selection);
           this.selection = undefined;
@@ -754,6 +756,96 @@ class ChatModelState {
       })
       .catch(() => {});
   }
+  /** The owner whose chat list watch is open or waiting to reconnect. */
+  private chatsFollowed?: Owner;
+  /**
+   * Follows the chat list's watch for `owner`: each first page it delivers merges into the list
+   * on screen, and a reset (or the first page after a failed watch) lists again in the
+   * background, since pages past the first may have changed unseen. A retryable failure watches
+   * again after the transcript's backoff; once that runs out, the list stays as it is until
+   * `watchChats` or Refresh.
+   */
+  private followChats(owner: Owner, recovering = false): Effect.Effect<void, ApplicationError> {
+    type Attempt = { open: boolean; firstAt?: number; observation?: Observation };
+    let failures = 0;
+    this.chatsFollowed = owner;
+    // A selection changes the epoch but not the list, so only the owner bounds the watch.
+    const current = () => owner.alive && this.chatsFollowed === owner;
+    const follow = (reload: boolean): Effect.Effect<void, ApplicationError> =>
+      Effect.gen({ self: this }, function* () {
+        const attempt: Attempt = { open: true };
+        attempt.observation = yield* this.observe(
+          owner,
+          () =>
+            this.chat.watchChatList(
+              { session: this.session },
+              (update) => {
+                if (!attempt.open || !current()) return;
+                attempt.firstAt ??= performance.now();
+                this.mergeChats(update.list);
+                if (update.reset || reload) {
+                  reload = false;
+                  void this.reloadChats({ latest: true });
+                }
+              },
+              (error) => {
+                if (!attempt.open) return;
+                attempt.open = false;
+                recover(error, attempt);
+              },
+            ),
+          this.generation,
+        );
+        if (!attempt.open && attempt.observation) void this.closeObservation(attempt.observation);
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.sync(() => {
+            if (!Cause.hasInterruptsOnly(cause)) recover(Cause.squash(cause), { open: false });
+          }),
+        ),
+      );
+    const recover = (error: unknown, failed: Attempt) => {
+      if (failed.observation) void this.closeObservation(failed.observation);
+      if (!current()) return;
+      if (
+        failed.firstAt !== undefined &&
+        performance.now() - failed.firstAt >= this.transcriptWatchHealthyMs
+      )
+        failures = 0;
+      const delay = this.transcriptWatchRetryMs[failures];
+      if (normalizeApplicationError(error).code !== 'Unavailable' || delay === undefined) {
+        this.chatsFollowed = undefined;
+        return;
+      }
+      failures++;
+      const again = Effect.gen({ self: this }, function* () {
+        yield* Effect.sleep(delay);
+        if (current()) yield* follow(true);
+      });
+      void this.runEffect(Effect.forkIn(again, owner.scope)).catch(this.error);
+    };
+    return follow(recovering);
+  }
+  /** Merges the chat list's first page into the list on screen, keeping chats it did not reach. */
+  private mergeChats(page: ChatOutput<'listChats'>) {
+    const kept = keepUnreachedChats(this.state.chats, page.conversations);
+    // The list reaches past the page only when a chat it did not reach comes last.
+    const past = kept.length > 0 && !page.conversations.includes(kept.at(-1)!);
+    if (!past) this.chatPages = 1;
+    this.listed({ chats: kept, next: past ? this.state.nextChats : page.nextCursor });
+  }
+  /**
+   * Watches the chat list again if its watch stopped (as a window becomes visible), listing it
+   * again once the watch delivers. A watch that is open or reconnecting is left alone.
+   */
+  watchChats = (): Promise<void> => {
+    const owner = this.refreshOwner;
+    if (!this.admissionsOpen || this.closed || !owner?.alive || !this.state.ready) {
+      return Promise.resolve();
+    }
+    if (this.chatsFollowed === owner) return Promise.resolve();
+    return this.runEffect(this.followChats(owner, true)).catch(this.error);
+  };
   /** Records that you saw a chat as of its activity time; an older look never replaces a newer one. */
   markSeen(conversationId: string, at: string) {
     if (!this.admissionsOpen || this.closed || this.state.storageError) return;
@@ -1519,6 +1611,7 @@ export type ChatController = Pick<
   | 'moreChats'
   | 'firstChats'
   | 'reloadChats'
+  | 'watchChats'
   | 'markSeen'
   | 'setDraft'
   | 'findFiles'

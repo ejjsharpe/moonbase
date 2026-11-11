@@ -40,12 +40,10 @@ import {
   WebSocketReader,
 } from './websocket.ts';
 
-/** What the daemon pushes to subscriptions beyond chat watches, and how it counts connections. */
+/** What a daemon pushes to provider subscriptions, and how it counts connections. */
 export type SocketSources = {
-  /** Calls `listener` after a change that may alter a chat list; returns its unsubscribe. */
-  subscribeChatList(listener: () => void): () => void;
   /** Calls `listener` after any provider setup change; returns its unsubscribe. */
-  subscribeProviderSetup(listener: () => void): () => void;
+  subscribeProviderSetup?(listener: () => void): () => void;
   /** Called once a connection is authenticated; the function it returns, once that closes. */
   trackConnection?(): () => void;
 };
@@ -54,10 +52,11 @@ export type SocketServerContext = {
   host: ChatHostTarget;
   health: ChatHostHealth;
   client: ChatClient;
-  daemon: DaemonClient;
+  /** A daemon's operations; without them, provider setup subscriptions are refused. */
+  daemon?: DaemonClient;
   sources: SocketSources;
   clock: SocketClock;
-  /** Runs one request as the HTTP protocol does; resolves its reply, never rejects. */
+  /** Runs one request; resolves its reply, never rejects. */
   answer(operation: string, input: unknown, signal: AbortSignal): Promise<unknown>;
 };
 /** Authenticated connections open at once; the HTTP listener has its own bound. */
@@ -487,16 +486,25 @@ class Session {
     };
     try {
       if (feed.kind === 'chat') {
-        const close = this.context.client.watch(
+        feed.close = this.context.client.watch(
           { target: feed.target as SocketSubscriptionTarget<'chat'> },
           receive,
           end,
         );
-        feed.close = close;
         return;
       }
-      // A list or provider read follows each change, one at a time; changes during a read
-      // start one more.
+      if (feed.kind === 'chatList') {
+        feed.close = this.context.client.watchChatList(
+          { session: feed.target as SocketSubscriptionTarget<'chatList'> },
+          (update) => receive(update.list),
+          end,
+        );
+        return;
+      }
+      const daemon = this.context.daemon,
+        subscribe = this.context.sources.subscribeProviderSetup;
+      if (!daemon || !subscribe) V.fail('Incompatible', 'This host does not serve provider setup.');
+      // A provider read follows each change, one at a time; changes during a read start one more.
       let reading = false,
         again = false,
         stopped = false;
@@ -509,23 +517,15 @@ class Session {
         try {
           do {
             again = false;
-            if (feed.kind === 'chatList')
-              receive(
-                await this.context.client.command('listChats', {
-                  session: feed.target as SocketSubscriptionTarget<'chatList'>,
-                }),
-              );
-            else {
-              const target = feed.target as SocketSubscriptionTarget<'providerSetup'>;
-              receive(
-                (
-                  await this.context.daemon.command('getProviders', {
-                    host: target.host,
-                    ownerId: target.ownerId,
-                  })
-                ).state,
-              );
-            }
+            const target = feed.target as SocketSubscriptionTarget<'providerSetup'>;
+            receive(
+              (
+                await daemon!.command('getProviders', {
+                  host: target.host,
+                  ownerId: target.ownerId,
+                })
+              ).state,
+            );
           } while (again && !stopped);
         } catch (error) {
           end(error);
@@ -533,10 +533,7 @@ class Session {
           reading = false;
         }
       };
-      const off =
-        feed.kind === 'chatList'
-          ? this.context.sources.subscribeChatList(() => void read())
-          : this.context.sources.subscribeProviderSetup(() => void read());
+      const off = subscribe!(() => void read());
       feed.close = async () => {
         stopped = true;
         off();

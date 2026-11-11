@@ -4,6 +4,7 @@ import type {
   ProviderSetupClient,
   ProviderState,
 } from '@moonbase/contracts/providers';
+import type { ObservationClose } from '@moonbase/contracts/common';
 import { normalizeApplicationError } from '../../runtime/effect-client.ts';
 
 export type ProviderSetupSnapshot = {
@@ -11,12 +12,18 @@ export type ProviderSetupSnapshot = {
   busy: boolean;
   error: string | null;
 };
-/** Transient setup state only: answers never enter snapshots or draft storage. */
+/**
+ * Transient setup state only: answers never enter snapshots or draft storage. The state comes from
+ * the client's watch once it delivers, so a sign-in's progress appears without polling; until then
+ * (or after the watch fails, until the next refresh reopens it) command replies supply it.
+ */
 export function makeProviderSetupController(client: ProviderSetupClient) {
   let snapshot: ProviderSetupSnapshot = { status: null, busy: false, error: null };
   let closed = false,
     admissionsOpen = true;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  /** The open watch, and whether it has delivered; it is the state's source once it has. */
+  type Watching = { close?: ObservationClose; delivered: boolean };
+  let watching: Watching | undefined;
   let disposal: Promise<void> | undefined;
   const cleanupErrors: Error[] = [];
   let revision = 0,
@@ -43,7 +50,6 @@ export function makeProviderSetupController(client: ProviderSetupClient) {
     if (read && mutations) return Promise.resolve();
     const captured = read ? revision : ++revision;
     if (!read) mutations++;
-    if (timer) clearTimeout(timer);
     publish({ busy: true, error: null });
     const task = client
       .command(operation, input)
@@ -53,12 +59,8 @@ export function makeProviderSetupController(client: ProviderSetupClient) {
             await client.command('cancelProviderLogin', { flowId: status.flow.id });
           return;
         }
-        if (captured !== revision) return;
+        if (captured !== revision || watching?.delivered) return;
         publish({ status });
-        if (status.flow?.state === 'running')
-          timer = setTimeout(() => {
-            void command('getProviders', {});
-          }, 300);
       })
       .catch((error) => {
         if (closed) cleanupErrors.push(normalizeApplicationError(error));
@@ -73,6 +75,31 @@ export function makeProviderSetupController(client: ProviderSetupClient) {
     work.add(task);
     return task;
   };
+  const closeWatch = () => {
+    const current = watching;
+    watching = undefined;
+    void current?.close?.().catch(() => {});
+  };
+  /** Opens the watch unless one is open; a failed one closes, and the next refresh reopens it. */
+  const watch = () => {
+    if (closed || !admissionsOpen || watching) return;
+    const current: Watching = { delivered: false };
+    watching = current;
+    try {
+      current.close = client.watch(
+        (status) => {
+          if (closed || watching !== current) return;
+          current.delivered = true;
+          publish({ status });
+        },
+        () => {
+          if (watching === current) closeWatch();
+        },
+      );
+    } catch {
+      if (watching === current) watching = undefined;
+    }
+  };
   return {
     getSnapshot: () => snapshot,
     subscribe: (listener: () => void) => {
@@ -81,7 +108,10 @@ export function makeProviderSetupController(client: ProviderSetupClient) {
         listeners.delete(listener);
       };
     },
-    refresh: () => command('getProviders', {}),
+    refresh: () => {
+      watch();
+      return command('getProviders', {});
+    },
     login: (providerId: string) => command('startProviderLogin', { providerId }),
     answer: (flowId: string, promptId: string, answer: string) =>
       command('answerProviderPrompt', { flowId, promptId, answer }),
@@ -90,17 +120,11 @@ export function makeProviderSetupController(client: ProviderSetupClient) {
     logout: (providerId: string) => command('logoutProvider', { providerId }),
     setAdmissionsOpen(open: boolean) {
       admissionsOpen = open;
-      if (open && !closed && snapshot.status?.flow?.state === 'running') {
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(() => {
-          void command('getProviders', {});
-        }, 300);
-      }
     },
     dispose(): Promise<void> {
       if (disposal) return disposal;
       closed = true;
-      if (timer) clearTimeout(timer);
+      closeWatch();
       listeners.clear();
       disposal = (async () => {
         await Promise.all(work);

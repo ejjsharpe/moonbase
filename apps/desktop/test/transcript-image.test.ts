@@ -39,6 +39,7 @@ function fixture(
     hold: Promise<void> | undefined;
   // Trusted ChatClient: chunks past the selected size are rejected at the ChatClient boundary.
   const chat: ChatClient = {
+    watchChatList: () => async () => {},
     async command(operation, input, commandOptions) {
       if (operation === 'getChat') {
         await options.commands;

@@ -1,20 +1,11 @@
-import { Effect, Layer, Stream, Exit, Cause, Queue, Clock } from 'effect';
+import { Cause, Context, Effect, Exit, Layer, Queue, Stream } from 'effect';
 import {
   chatHostCapabilities,
-  type ChatHostCapability,
   type ChatHostHealth,
   type ChatHostTarget,
 } from '@moonbase/contracts/host';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import {
-  type ChatCommand,
-  type ChatInput,
-  type ChatOutput,
-  type ChatTarget,
-  type ChatSnapshot,
-} from '@moonbase/contracts/chat';
-import { chatReplyErrorCodes, decodeChatStreamFrame } from '@moonbase/contracts/chat-schema';
-import { releaseResource } from '@moonbase/effect';
+import type { ChatCommand, ChatInput, ChatOutput, ChatTarget } from '@moonbase/contracts/chat';
 import {
   ChatService,
   ConnectionService,
@@ -23,10 +14,8 @@ import {
   type ChatServiceShape,
   type LocalHostHandlers,
   type ProviderSetupHandlers,
-  type ConnectionServiceShape,
   type VerifiedChatEndpoint,
 } from '@moonbase/contracts/services';
-import { validateHostHealth } from '@moonbase/ssh/host-health';
 import { randomUUID } from 'node:crypto';
 import type {
   DaemonCommand,
@@ -36,193 +25,286 @@ import type {
   LocalHostCommand,
   LocalHostInput,
 } from '@moonbase/contracts/daemon';
-import {
-  daemonCommandCapabilities,
-  decodeDaemonInput,
-  decodeDaemonOutput,
-  isDaemonCommand,
-  isDaemonMutation,
-} from '@moonbase/contracts/daemon-schema';
+import { decodeDaemonInput, isDaemonMutation } from '@moonbase/contracts/daemon-schema';
 import { decodeChatHostTarget } from '@moonbase/contracts/host-schema';
 import type { ProviderCommand, ProviderInput, ProviderState } from '@moonbase/contracts/providers';
 import { decodeProviderInput, readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
+import type {
+  SocketSubscriptionKind,
+  SocketSubscriptionTarget,
+  SocketSubscriptionValue,
+} from '@moonbase/contracts/socket';
 import * as P from './protocol.ts';
 import * as V from './validation.ts';
+import {
+  connectDaemonSocket,
+  type DaemonSocket,
+  type SocketInput,
+  type SocketOperation,
+  type SocketOutput,
+  type SocketSubscriptionState,
+} from './socket-client.ts';
 
-const renewAfterNanos = BigInt(P.streamLimits.renewMs) * 1_000_000n;
-
-/** One authenticated RPC to the host an endpoint serves. */
-type ExchangeSpec<A> = {
-  operation: string;
-  /** Already decoded and bounded. */
-  input: unknown;
-  host: ChatHostTarget;
-  /** A lost or unproved reply is `Uncertain`. */
-  mutation: boolean;
-  /** A feature the host's signed health must advertise; checked before dispatch. */
-  capability?: ChatHostCapability;
-  /** Decodes the signed reply's value against the request; throws when it is invalid. */
-  decode(value: unknown, health: ChatHostHealth): A;
-};
-
+/** What a subscription delivers: a value (`reset` after one that replaced missed updates) or a gap. */
+type LinkUpdate<K extends SocketSubscriptionKind> =
+  | { value: SocketSubscriptionValue<K>; reset: boolean }
+  | { reconnecting: true };
 /**
- * Sends one request through the connection's current generation: a single-use challenge whose
- * signed health must name the host (and any capability the request needs), then the signed
- * request and its signed reply. A mutation whose reply is lost or unproved is `Uncertain` and is
- * never sent again.
+ * One authenticated WebSocket per connection generation, shared by every service built with it:
+ * requests and subscriptions to the daemon the connection serves.
  */
-function exchange<A>(
-  connections: ConnectionServiceShape,
-  spec: ExchangeSpec<A>,
-): Effect.Effect<A, ApplicationError> {
-  return Effect.gen(function* () {
-    const { operation, input, host, mutation } = spec;
-    let dispatched = false;
-    const endpoint = yield* connections.endpoint({ host });
-    const changed = () =>
-      new ApplicationError({
-        code: mutation && dispatched ? 'Uncertain' : 'Unavailable',
-        message:
-          mutation && dispatched
-            ? 'Connection changed after a chat mutation may have dispatched. Preserve its original request and reconcile through its authority.'
-            : 'Connection generation changed; query through the selected authority again.',
-      });
-    const assertGeneration = makeGenerationCheck(connections, host, endpoint, changed, (error) =>
-      mutation && dispatched ? changed() : error,
-    );
-    const prepared = yield* Effect.try({
-      try: () => ({ origin: P.origin(endpoint), nonce: P.nonce() }),
-      catch: ApplicationError.fromUnknown,
-    });
-    const controller = new AbortController(),
-      timer = setTimeout(() => controller.abort(), P.requestDeadlineMs),
-      request = makeChatRequest(prepared.origin, controller.signal);
-    const attempt = yield* Effect.exit(
-      Effect.ensuring(
-        Effect.gen(function* () {
-          const { challenge, health } = yield* authenticateChallenge(
-            request,
-            endpoint.token,
-            prepared.nonce,
-            host,
-          );
-          if (spec.capability && !health.capabilities.includes(spec.capability))
-            return yield* Effect.fail(
-              new ApplicationError({
-                code: 'Incompatible',
-                message: 'The chat host does not offer this feature.',
-              }),
-            );
-          yield* assertGeneration;
-          const body = JSON.stringify({ operation, input });
-          if (Buffer.byteLength(body) > P.maximumChatRequestBytes)
-            return yield* Effect.fail(
-              new ApplicationError({
-                code: 'InvalidInput',
-                message: 'Chat input exceeds its transport limit.',
-              }),
-            );
-          const lost = () =>
-            new ApplicationError({
-              code: mutation ? 'Uncertain' : 'Unavailable',
-              message: mutation
-                ? 'Chat reply was lost. Query the original request; do not invent another Send.'
-                : 'Chat reply was lost. Retry the read through the selected authority.',
-            });
-          const response = yield* Effect.suspend(() => {
-            dispatched = true;
-            return request(
-              '/v1/chat',
-              {
-                method: 'POST',
-                body,
-                headers: {
-                  'content-type': 'application/json',
-                  'X-Moonbase-Nonce': prepared.nonce,
-                  'X-Moonbase-Challenge': challenge,
-                  Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.mac(endpoint.token, 'request', prepared.nonce, challenge, 'POST', '/v1/chat', P.hash(body))}`,
-                },
-              },
-              lost,
-            );
-          });
-          const bytes = yield* P.responseBytes(
-            response,
-            P.maximumChatReplyBytes,
-            mutation ? 'Uncertain' : 'Unavailable',
-            mutation,
-          );
-          const result = yield* Effect.try({
-            try: () => {
-              const invalid = (code: 'Unauthorized' | 'Incompatible', message: string): never =>
-                V.fail(
-                  mutation ? 'Uncertain' : code,
-                  mutation
-                    ? 'Chat mutation outcome could not be authenticated. Preserve its original request and query before retrying.'
-                    : message,
-                );
-              if (
-                response.headers.get('x-moonbase-nonce') !== prepared.nonce ||
-                response.headers.get('x-moonbase-challenge') !== challenge ||
-                !P.proof(
-                  response.headers.get('x-moonbase-proof'),
-                  P.mac(
-                    endpoint.token,
-                    'response',
-                    prepared.nonce,
-                    challenge,
-                    response.status,
-                    P.hash(bytes),
-                  ),
-                )
-              )
-                invalid('Unauthorized', 'Chat host did not prove its response.');
-              let envelope: Record<string, unknown>;
-              try {
-                envelope = V.object(P.json(bytes));
-              } catch {
-                return invalid('Incompatible', 'Chat returned invalid response data.');
-              }
-              if (envelope.ok === false)
-                throw (
-                  decodeErrorEnvelope(envelope.error, operation) ??
-                  invalid('Incompatible', 'Chat returned an invalid error.')
-                );
-              if (envelope.ok !== true || response.status !== 200)
-                return invalid('Incompatible', 'Chat reply has an unexpected status or shape.');
-              try {
-                return spec.decode(envelope.value, health);
-              } catch {
-                return invalid('Incompatible', 'Chat returned invalid response data.');
-              }
-            },
-            catch: (error) => (ApplicationError.is(error) ? error : lost()),
-          });
-          return result;
-        }),
-        Effect.sync(() => {
-          clearTimeout(timer);
-          controller.abort();
-        }),
-      ),
-    );
-    if (Exit.isFailure(attempt) && Cause.hasInterruptsOnly(attempt.cause))
-      return yield* Effect.failCause(attempt.cause);
-    const generation = yield* Effect.exit(assertGeneration);
-    if (Exit.isFailure(generation))
-      return yield* Effect.failCause(
-        Exit.isFailure(attempt) ? Cause.combine(generation.cause, attempt.cause) : generation.cause,
-      );
-    if (Exit.isFailure(attempt)) return yield* Effect.failCause(attempt.cause);
-    return attempt.value;
+class DaemonLink extends Context.Service<
+  DaemonLink,
+  {
+    /**
+     * Sends one request. A mutation whose reply is lost, late or arrives after the connection
+     * changed is `Uncertain` and is never sent again; `check` refuses a reply against the
+     * daemon's authenticated health.
+     */
+    request<K extends SocketOperation>(
+      host: ChatHostTarget,
+      operation: K,
+      input: SocketInput<K>,
+      mutation: boolean,
+      check?: (output: SocketOutput<K>, health: ChatHostHealth) => void,
+    ): Effect.Effect<SocketOutput<K>, ApplicationError>;
+    /**
+     * Follows a subscription. When its connection drops it reconnects within a budget of
+     * `reconnectMs` per outage (renewed once a connection has carried traffic for `renewMs` after
+     * its first update) and resumes from the update it last applied. It fails when the daemon ends
+     * it, the connection generation changes or the budget runs out.
+     */
+    subscribe<K extends SocketSubscriptionKind>(
+      host: ChatHostTarget,
+      kind: K,
+      target: SocketSubscriptionTarget<K>,
+    ): Stream.Stream<LinkUpdate<K>, ApplicationError>;
+  }
+>()('moonbase/DaemonLink') {}
+
+const sameEndpoint = (a: VerifiedChatEndpoint, b: VerifiedChatEndpoint) =>
+  a.connectionId === b.connectionId &&
+  a.origin === b.origin &&
+  a.token === b.token &&
+  V.sameHost(a.expected, b.expected);
+const generationChanged = (mutation: boolean) =>
+  new ApplicationError({
+    code: mutation ? 'Uncertain' : 'Unavailable',
+    message: mutation
+      ? 'Connection changed after a chat mutation was sent. Preserve its original request and reconcile through its authority.'
+      : 'Connection generation changed; query through the selected authority again.',
   });
-}
+const lostReply = (mutation: boolean) =>
+  new ApplicationError({
+    code: mutation ? 'Uncertain' : 'Unavailable',
+    message: mutation
+      ? 'Chat reply was lost. Query the original request; do not invent another Send.'
+      : 'Chat reply was lost. Retry the read through the selected authority.',
+  });
+// Codes a request fails with before it is sent; such a request never reached the daemon.
+const refusedBeforeSending = new Set(['InvalidInput', 'Incompatible', 'Cancelled']);
+
+const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.effect(
+  DaemonLink,
+  Effect.gen(function* () {
+    const connections = yield* ConnectionService;
+    let current: { endpoint: VerifiedChatEndpoint; socket: Promise<DaemonSocket> } | undefined,
+      released = false;
+    const closeSocket = (socket: Promise<DaemonSocket>) =>
+      void socket.then(
+        (open) => open.close(),
+        () => {},
+      );
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        released = true;
+        if (current) closeSocket(current.socket);
+        current = undefined;
+      }),
+    );
+    /** The open socket for `endpoint`, or a new one; a socket of an older generation closes. */
+    const open = (endpoint: VerifiedChatEndpoint): Promise<DaemonSocket> => {
+      if (released)
+        return Promise.reject(
+          new ApplicationError({ code: 'Unavailable', message: 'The daemon client was released.' }),
+        );
+      if (current && sameEndpoint(current.endpoint, endpoint)) return current.socket;
+      if (current) closeSocket(current.socket);
+      const link = { endpoint, socket: connectDaemonSocket(endpoint) };
+      current = link;
+      const forget = () => {
+        if (current === link) current = undefined;
+      };
+      link.socket.then((socket) => socket.closed.then(forget), forget);
+      return link.socket;
+    };
+    const acquire = (host: ChatHostTarget) =>
+      Effect.gen(function* () {
+        const endpoint = yield* connections.endpoint({ host });
+        const socket = yield* Effect.tryPromise({
+          try: () => open(endpoint),
+          catch: (error) =>
+            ApplicationError.is(error)
+              ? error
+              : new ApplicationError({
+                  code: 'Unavailable',
+                  message: 'The daemon could not be reached.',
+                }),
+        });
+        return { endpoint, socket };
+      });
+    const isCurrent = (host: ChatHostTarget, endpoint: VerifiedChatEndpoint) =>
+      Effect.map(Effect.exit(connections.endpoint({ host })), (now) =>
+        Exit.isSuccess(now) ? sameEndpoint(now.value, endpoint) : false,
+      );
+
+    return {
+      request: (host, operation, input, mutation, check) =>
+        Effect.gen(function* () {
+          const { endpoint, socket } = yield* acquire(host);
+          const attempt = yield* Effect.exit(
+            Effect.tryPromise({
+              try: (signal) => socket.request(operation, input, { signal }),
+              catch: (error) => (ApplicationError.is(error) ? error : lostReply(mutation)),
+            }).pipe(
+              Effect.timeoutOrElse({
+                duration: P.requestDeadlineMs,
+                orElse: () => Effect.fail(lostReply(mutation)),
+              }),
+            ),
+          );
+          if (Exit.isFailure(attempt)) {
+            if (Cause.hasInterruptsOnly(attempt.cause)) return yield* attempt;
+            const error = Cause.squash(attempt.cause);
+            if (ApplicationError.is(error) && refusedBeforeSending.has(error.code))
+              return yield* attempt;
+          }
+          // A reply belongs to the generation it was sent on; one that changed since is stale.
+          if (!(yield* isCurrent(host, endpoint)))
+            return yield* Effect.fail(generationChanged(mutation));
+          const output = yield* attempt;
+          yield* Effect.try({
+            try: () => check?.(output, socket.health),
+            catch: (error) => {
+              if (mutation) return lostReply(true);
+              return ApplicationError.is(error)
+                ? error
+                : new ApplicationError({
+                    code: 'Incompatible',
+                    message: 'The daemon sent an invalid reply.',
+                  });
+            },
+          });
+          return output;
+        }),
+      subscribe: <K extends SocketSubscriptionKind>(
+        host: ChatHostTarget,
+        kind: K,
+        target: SocketSubscriptionTarget<K>,
+      ) => {
+        // Set when a snapshot replaced earlier updates, until the consumer takes the next value.
+        let resetPending = false;
+        return Stream.callback<LinkUpdate<K>, ApplicationError>(
+          (queue) =>
+            Effect.gen(function* () {
+              const first = yield* connections.endpoint({ host });
+              const stale = Effect.flatMap(isCurrent(host, first), (same) =>
+                same ? Effect.void : Effect.fail(generationChanged(false)),
+              );
+              const failWith = (effect: Effect.Effect<unknown, ApplicationError>) =>
+                effect.pipe(
+                  Effect.catchCause((cause) =>
+                    Cause.hasInterruptsOnly(cause) ? Effect.void : Queue.failCause(queue, cause),
+                  ),
+                  Effect.forkScoped,
+                );
+              // A connection publication fails the subscription once its generation is gone.
+              yield* failWith(connections.watch().pipe(Stream.runForEach(() => stale)));
+              let state: SocketSubscriptionState<K> | undefined,
+                delivered = false,
+                failures = 0;
+              type Ended = { error: ApplicationError; closed: boolean; renewed: boolean };
+              const follow = (socket: DaemonSocket) =>
+                Effect.callback<Ended>((resume) => {
+                  let firstAt: number | undefined;
+                  const subscription = socket.subscribe(
+                    kind,
+                    target,
+                    {
+                      receive(value, update) {
+                        firstAt ??= socket.lastReceived;
+                        if (update === 'snapshot' && delivered) resetPending = true;
+                        delivered = true;
+                        state = subscription.state;
+                        Queue.offerUnsafe(queue, { value, reset: false });
+                      },
+                      onError(error, closed) {
+                        state = subscription.state ?? state;
+                        resume(
+                          Effect.succeed({
+                            error,
+                            closed,
+                            renewed:
+                              firstAt !== undefined &&
+                              socket.lastReceived - firstAt >= P.streamLimits.renewMs,
+                          }),
+                        );
+                      },
+                    },
+                    state,
+                  );
+                  return Effect.sync(() => subscription.close());
+                });
+              const loop = Effect.gen(function* () {
+                for (;;) {
+                  const acquired = yield* Effect.exit(acquire(host));
+                  let ended: Ended;
+                  if (Exit.isSuccess(acquired)) {
+                    if (!sameEndpoint(acquired.value.endpoint, first))
+                      return yield* Effect.fail(generationChanged(false));
+                    ended = yield* follow(acquired.value.socket);
+                    if (!ended.closed) return yield* Effect.fail(ended.error);
+                  } else {
+                    const error = Cause.squash(acquired.cause);
+                    if (Cause.hasInterruptsOnly(acquired.cause)) return yield* acquired;
+                    ended = {
+                      error: ApplicationError.is(error) ? error : lostReply(false),
+                      closed: true,
+                      renewed: false,
+                    };
+                  }
+                  yield* stale;
+                  if (ended.renewed) failures = 0;
+                  if (
+                    ended.error.code !== 'Unavailable' ||
+                    failures >= P.streamLimits.reconnectMs.length
+                  )
+                    return yield* Effect.fail(ended.error);
+                  if (delivered) Queue.offerUnsafe(queue, { reconnecting: true });
+                  yield* Effect.sleep(P.streamLimits.reconnectMs[failures++]!);
+                }
+              });
+              yield* failWith(loop);
+            }),
+          { bufferSize: 1, strategy: 'sliding' },
+        ).pipe(
+          Stream.map((update) => {
+            if ('reconnecting' in update) return update;
+            const reset = resetPending;
+            resetPending = false;
+            return { ...update, reset };
+          }),
+        );
+      },
+    };
+  }),
+);
 
 /** Client graph imports no engine, SQLite, provider or local workspace implementation. */
 export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> = Layer.effect(
   ChatService,
   Effect.gen(function* () {
-    const connections = yield* ConnectionService;
+    const link = yield* DaemonLink;
     const call = <K extends ChatCommand>(
       operation: K,
       unknown: ChatInput<K>,
@@ -233,8 +315,8 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
           catch: ApplicationError.fromUnknown,
         });
         const shape = input as {
-          host?: { hostId: string; storeId: string };
-          session?: { host: { hostId: string; storeId: string } };
+          host?: ChatHostTarget;
+          session?: { host: ChatHostTarget };
           target?: ChatTarget;
           source?: { target: ChatTarget };
           stop?: { target: ChatTarget };
@@ -245,143 +327,24 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
           shape.target?.host ??
           shape.source?.target.host ??
           shape.stop!.target.host;
-        return yield* exchange(connections, {
-          operation,
-          input,
+        return (yield* link.request(
           host,
-          mutation: V.isMutation(operation),
-          // Only a local-mode host chooses a chat's folder and model at creation.
-          ...(operation === 'createChat' &&
-          (input as ChatInput<'createChat'>).settings !== undefined
-            ? { capability: chatHostCapabilities.local }
-            : {}),
-          decode: (value, health) => {
-            const output = V.output(operation, value, input);
+          operation,
+          input as never,
+          V.isMutation(operation),
+          (output, health) => {
             if (
               operation === 'getChatHost' &&
               output &&
-              'mode' in output &&
+              'mode' in (output as object) &&
               !health.capabilities.includes(chatHostCapabilities.local)
             )
               V.fail('Incompatible', 'An SSH host must supply its fixed working folder and model.');
-            return output;
           },
-        });
+        )) as ChatOutput<K>;
       });
-    let observers = 0;
-    const watch = (target: ChatTarget) =>
-      Stream.unwrap(
-        Effect.gen(function* () {
-          yield* Effect.try({ try: () => V.target(target), catch: ApplicationError.fromUnknown });
-          const endpoint = yield* connections.endpoint({ host: target.host });
-          const assertGeneration = makeGenerationCheck(
-            connections,
-            target.host,
-            endpoint,
-            () =>
-              new ApplicationError({
-                code: 'Unavailable',
-                message: 'Chat stream connection generation changed.',
-              }),
-          );
-          return Stream.callback<ChatSnapshot, ApplicationError>(
-            (queue) =>
-              Effect.gen(function* () {
-                yield* Effect.acquireRelease(
-                  Effect.try({
-                    try: () => {
-                      if (observers >= P.streamLimits.subscriptions)
-                        V.fail('Unavailable', 'Chat stream capacity is full.');
-                      observers++;
-                    },
-                    catch: ApplicationError.fromUnknown,
-                  }),
-                  () =>
-                    Effect.sync(() => {
-                      observers--;
-                    }),
-                );
-                let last: ChatSnapshot | undefined;
-                const publish = (snapshot: ChatSnapshot) => {
-                  last = snapshot;
-                  Queue.offerUnsafe(queue, snapshot);
-                };
-                let defects: Cause.Cause<never> = Cause.empty;
-                // Registered before child scopes so their actual cleanup settles before this check.
-                yield* Effect.addFinalizer(() =>
-                  defects.reasons.length ? Effect.failCause(defects) : Effect.void,
-                );
-                const forkObservation = (effect: Effect.Effect<unknown, ApplicationError>) =>
-                  effect.pipe(
-                    Effect.onExit((exit) =>
-                      Effect.sync(() => {
-                        if (Exit.isFailure(exit))
-                          defects = Cause.combine(
-                            defects,
-                            Cause.fromReasons<never>(exit.cause.reasons.filter(Cause.isDieReason)),
-                          );
-                      }),
-                    ),
-                    Effect.catchCause((cause) => {
-                      const failure = Cause.fromReasons(cause.reasons.filter(Cause.isFailReason));
-                      return failure.reasons.length
-                        ? Queue.failCause(queue, failure)
-                        : Queue.end(queue);
-                    }),
-                    Effect.forkScoped,
-                  );
-                // Connection publications abort a held read without introducing a polling timer.
-                yield* forkObservation(
-                  connections.watch().pipe(Stream.runForEach(() => assertGeneration)),
-                );
-                // The retry budget spans one outage: back-to-back drops and stalls exhaust it,
-                // while a connection proven healthy by a later authenticated frame renews it.
-                yield* forkObservation(
-                  Effect.gen(function* () {
-                    for (let failures = 0; ;) {
-                      yield* assertGeneration;
-                      let connectedAt: bigint | undefined,
-                        renewed = false;
-                      const frameArrived = (snapshot: boolean) =>
-                        Effect.map(Clock.monotonicTimeNanos, (now) => {
-                          if (connectedAt === undefined) {
-                            if (snapshot) connectedAt = now;
-                          } else if (now - connectedAt >= renewAfterNanos) renewed = true;
-                        });
-                      // A stream never completes; each end is a failure whose cause decides the retry.
-                      const failure = yield* readStream(
-                        endpoint,
-                        target,
-                        assertGeneration,
-                        publish,
-                        frameArrived,
-                      ).pipe(Effect.catchCause((cause) => Effect.succeed(cause)));
-                      if (Cause.hasInterruptsOnly(failure)) return yield* Effect.failCause(failure);
-                      yield* assertGeneration.pipe(
-                        Effect.catchCause((cause) =>
-                          Effect.failCause(Cause.combine(failure, cause)),
-                        ),
-                      );
-                      if (last) publish({ ...last, observationStatus: 'reconnecting' });
-                      if (renewed) failures = 0;
-                      const transient = failure.reasons.every(
-                        (reason) =>
-                          Cause.isFailReason(reason) && reason.error.code === 'Unavailable',
-                      );
-                      if (!transient || failures >= P.streamLimits.reconnectMs.length)
-                        return yield* Effect.failCause(failure);
-                      yield* Effect.sleep(P.streamLimits.reconnectMs[failures++]);
-                    }
-                  }),
-                );
-              }),
-            { bufferSize: 1, strategy: 'sliding' },
-          ).pipe(
-            // A failed queue drains buffered replacements before surfacing its error.
-            Stream.mapEffect((snapshot) => Effect.as(assertGeneration, snapshot)),
-          );
-        }),
-      );
+    const validate = <A>(read: () => A) =>
+      Effect.try({ try: read, catch: ApplicationError.fromUnknown });
     return {
       getChatHost: (d) => call('getChatHost', d),
       listChats: (d) => call('listChats', d),
@@ -396,21 +359,53 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
       stopChat: (d) => call('stopChat', d),
       settleChat: (d) => call('settleChat', d),
       findChatFiles: (d) => call('findChatFiles', d),
-      watch: ({ target }) => watch(target),
+      // While the connection is down the last snapshot is shown as reconnecting.
+      watch: ({ target }) =>
+        Stream.unwrap(
+          Effect.map(
+            validate(() => V.target(target)),
+            (checked) => {
+              let last: SocketSubscriptionValue<'chat'> | undefined;
+              return link.subscribe(checked.host, 'chat', checked).pipe(
+                Stream.filter((update) => !('reconnecting' in update) || last !== undefined),
+                Stream.map((update) => {
+                  if ('reconnecting' in update)
+                    return { ...last!, observationStatus: 'reconnecting' as const };
+                  last = update.value;
+                  return { ...update.value, observationStatus: 'connected' as const };
+                }),
+              );
+            },
+          ),
+        ),
+      watchChatList: ({ session }) =>
+        Stream.unwrap(
+          Effect.map(
+            validate(() => V.input('listChats', { session }).session),
+            (checked) =>
+              link.subscribe(checked.host, 'chatList', checked).pipe(
+                Stream.filter((update) => !('reconnecting' in update)),
+                Stream.map((update) => {
+                  const { value, reset } = update as Exclude<typeof update, { reconnecting: true }>;
+                  return { list: value, reset };
+                }),
+              ),
+          ),
+        ),
     } satisfies ChatServiceShape;
   }),
-);
+).pipe(Layer.provide(DaemonLinkLive));
 
 /**
- * Sends one daemon operation: decoded and bounded before it leaves, refused unless the host's
- * signed health advertises its capability, and its reply decoded strictly with any request ID it
- * carried echoed back.
+ * Sends one daemon operation: decoded and bounded before it leaves, refused unless the daemon's
+ * authenticated health advertises its capability, and its reply decoded strictly with any request
+ * ID it carried echoed back.
  */
 function sendDaemonCommand<K extends DaemonCommand>(
-  connections: ConnectionServiceShape,
+  link: DaemonLink['Service'],
   operation: K,
   unknown: DaemonInput<K>,
-  check: (output: DaemonOutput<K>, input: DaemonInput<K>) => void = () => {},
+  check?: (output: DaemonOutput<K>, input: DaemonInput<K>) => void,
 ): Effect.Effect<DaemonOutput<K>, ApplicationError> {
   return Effect.flatMap(
     Effect.try({
@@ -419,21 +414,13 @@ function sendDaemonCommand<K extends DaemonCommand>(
     }),
     (input) => {
       const shape = input as { host?: ChatHostTarget; target?: ChatTarget };
-      return exchange(connections, {
+      return link.request(
+        shape.host ?? shape.target!.host,
         operation,
-        input,
-        host: shape.host ?? shape.target!.host,
-        mutation: isDaemonMutation(operation),
-        capability: daemonCommandCapabilities[operation],
-        decode: (value) => {
-          const output = decodeDaemonOutput(operation, value);
-          const requestId = (input as { requestId?: string }).requestId;
-          if (requestId !== undefined && (output as { requestId?: string }).requestId !== requestId)
-            V.fail('Incompatible', 'Daemon request identity changed.');
-          check(output, input);
-          return output;
-        },
-      });
+        input as never,
+        isDaemonMutation(operation),
+        check && ((output) => check(output as DaemonOutput<K>, input)),
+      ) as Effect.Effect<DaemonOutput<K>, ApplicationError>;
     },
   );
 }
@@ -443,11 +430,11 @@ export const RemoteLocalHostLive: Layer.Layer<LocalHostService, never, Connectio
   Layer.effect(
     LocalHostService,
     Effect.gen(function* () {
-      const connections = yield* ConnectionService;
+      const link = yield* DaemonLink;
       const send =
         <K extends LocalHostCommand>(operation: K) =>
         (input: LocalHostInput<K>) =>
-          sendDaemonCommand(connections, operation, input);
+          sendDaemonCommand(link, operation, input);
       return {
         approveFolder: send('approveFolder'),
         listRecentFolders: send('listRecentFolders'),
@@ -458,7 +445,7 @@ export const RemoteLocalHostLive: Layer.Layer<LocalHostService, never, Connectio
         listHostFolders: send('listHostFolders'),
       } satisfies LocalHostHandlers;
     }),
-  );
+  ).pipe(Layer.provide(DaemonLinkLive));
 
 export type RemoteProviderSetupConfiguration = {
   /** The local-mode host whose providers are set up. */
@@ -479,7 +466,7 @@ const pastedCallback =
 
 /**
  * Provider setup on a local-mode host, scoped to owners the client names. Sign-in links come back
- * validated and open through the client's `openUrl`; setup state is polled.
+ * validated and open through the client's `openUrl`; setup state is pushed to `watch`.
  */
 export const RemoteProviderSetupLive = (
   config: RemoteProviderSetupConfiguration,
@@ -487,7 +474,7 @@ export const RemoteProviderSetupLive = (
   Layer.effect(
     ProviderSetupService,
     Effect.gen(function* () {
-      const connections = yield* ConnectionService;
+      const link = yield* DaemonLink;
       const host = decodeChatHostTarget(config.host);
       // Which ChatGPT sign-in path applies depends on where the browser is, which only the client
       // knows; its OAuth flow is the one whose callback listens on the host.
@@ -535,7 +522,7 @@ export const RemoteProviderSetupLive = (
             }),
             (input) =>
               sendDaemonCommand(
-                connections,
+                link,
                 operation,
                 {
                   host,
@@ -567,345 +554,26 @@ export const RemoteProviderSetupLive = (
       return {
         forOwner,
         releaseOwner: (ownerId) =>
-          sendDaemonCommand(connections, 'releaseProviderOwner', { host, ownerId }),
+          sendDaemonCommand(link, 'releaseProviderOwner', { host, ownerId }),
+        watch: (ownerId) =>
+          Stream.unwrap(
+            Effect.map(
+              Effect.try({
+                try: () => decodeDaemonInput('getProviders', { host, ownerId }),
+                catch: ApplicationError.fromUnknown,
+              }),
+              (target) =>
+                link.subscribe(host, 'providerSetup', target).pipe(
+                  Stream.filter((update) => !('reconnecting' in update)),
+                  Stream.map((update) => present((update as { value: ProviderState }).value)),
+                ),
+            ),
+          ),
         getProviderUrl: (ownerId, flowId) =>
           Effect.map(
-            sendDaemonCommand(connections, 'openProviderUrl', { host, ownerId, flowId }, checkUrl),
+            sendDaemonCommand(link, 'openProviderUrl', { host, ownerId, flowId }, checkUrl),
             (output) => output.url,
           ),
       };
     }),
-  );
-
-type ChatRequest = (
-  path: string,
-  init: RequestInit,
-  lost: () => ApplicationError,
-) => Effect.Effect<Response, ApplicationError>;
-
-/** Sends one request to a verified loopback origin; `lost` describes a transport failure. */
-const makeChatRequest =
-  (origin: string, abort: AbortSignal): ChatRequest =>
-  (path, init, lost) =>
-    Effect.tryPromise({
-      try: (signal) =>
-        fetch(origin + path, {
-          ...init,
-          redirect: 'error',
-          credentials: 'omit',
-          cache: 'no-store',
-          signal: AbortSignal.any([signal, abort]),
-        }),
-      catch: lost,
-    });
-
-/** Obtains a single-use challenge after verifying its proof and the host's health. */
-function authenticateChallenge(
-  request: ChatRequest,
-  token: string,
-  nonce: string,
-  host: ChatHostTarget,
-): Effect.Effect<{ challenge: string; health: ChatHostHealth }, ApplicationError> {
-  return Effect.gen(function* () {
-    const response = yield* request(
-      '/v1/chat/challenge',
-      {
-        headers: {
-          'X-Moonbase-Nonce': nonce,
-          Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.mac(token, 'challenge-request', nonce, 'GET', '/v1/chat/challenge')}`,
-        },
-      },
-      () =>
-        new ApplicationError({
-          code: 'Unavailable',
-          message: 'Chat challenge could not be reached.',
-        }),
-    );
-    const bytes = yield* P.responseBytes(response, 8192);
-    return yield* Effect.try({
-      try: () => {
-        if (
-          response.headers.get('x-moonbase-nonce') !== nonce ||
-          !P.proof(
-            response.headers.get('x-moonbase-proof'),
-            P.mac(token, 'challenge-response', nonce, response.status, P.hash(bytes)),
-          )
-        )
-          V.fail('Unauthorized', 'Chat host did not prove its challenge.');
-        if (response.status !== 200)
-          V.fail('Unavailable', 'Chat host could not issue a challenge.');
-        const data = V.object(P.json(bytes));
-        const health = validateHostHealth(data.health, host);
-        if (!P.validNonce(data.challenge))
-          V.fail('Incompatible', 'Chat host returned an invalid challenge.');
-        return { challenge: data.challenge as string, health };
-      },
-      catch: (error) =>
-        ApplicationError.is(error)
-          ? error
-          : new ApplicationError({
-              code: 'Unavailable',
-              message: 'Chat challenge could not be verified within its deadline.',
-            }),
-    });
-  });
-}
-
-/** Rebuilds a host failure from its public code alone; host-supplied messages are never shown. */
-const publicFailure = (code: (typeof chatReplyErrorCodes)[number], operation?: string) =>
-  new ApplicationError({
-    code,
-    message: P.publicError(new ApplicationError({ code, message: '' }), operation).message,
-  });
-
-/**
- * Decodes a signed reply's `error` field; undefined when it carries no public error code. A daemon
- * operation's failure may name a reason, shown with the client's own fixed text.
- */
-export function decodeErrorEnvelope(
-  error: unknown,
-  operation?: string,
-): ApplicationError | undefined {
-  try {
-    const record = V.object(error);
-    const code = chatReplyErrorCodes.find((value) => value === record.code);
-    if (code && isDaemonCommand(operation)) return P.daemonFailure(code, record.reason);
-    return code && publicFailure(code, operation);
-  } catch {
-    return undefined;
-  }
-}
-
-/** Fails once the connection no longer serves the endpoint an exchange authenticated against. */
-function makeGenerationCheck(
-  connections: ConnectionServiceShape,
-  host: ChatHostTarget,
-  endpoint: VerifiedChatEndpoint,
-  changed: () => ApplicationError,
-  lookupFailed: (error: ApplicationError) => ApplicationError = (error) => error,
-): Effect.Effect<void, ApplicationError> {
-  return Effect.flatMap(
-    connections.endpoint({ host }).pipe(Effect.mapError(lookupFailed)),
-    (current) =>
-      current.connectionId === endpoint.connectionId &&
-      current.origin === endpoint.origin &&
-      current.token === endpoint.token &&
-      V.sameHost(current.expected, endpoint.expected)
-        ? Effect.void
-        : Effect.fail(changed()),
-  );
-}
-
-function readStream(
-  endpoint: VerifiedChatEndpoint,
-  target: ChatTarget,
-  assertGeneration: Effect.Effect<void, ApplicationError>,
-  publish: (snapshot: ChatSnapshot) => void,
-  /** Observes each authenticated frame, noting whether it completed a snapshot. */
-  frameArrived: (snapshot: boolean) => Effect.Effect<void>,
-): Effect.Effect<never, ApplicationError> {
-  return Effect.acquireUseRelease(
-    Effect.sync(() => {
-      const controller = new AbortController();
-      const state = {
-        controller,
-        timer: setTimeout(() => controller.abort(), P.streamLimits.establishmentMs),
-      };
-      return state;
-    }),
-    (state) =>
-      Effect.gen(function* () {
-        const nonce = P.nonce(),
-          request = makeChatRequest(P.origin(endpoint), state.controller.signal),
-          lost = () =>
-            new ApplicationError({
-              code: 'Unavailable',
-              message: 'Chat stream transport was lost.',
-            });
-        const { challenge } = yield* authenticateChallenge(
-          request,
-          endpoint.token,
-          nonce,
-          target.host,
-        );
-        yield* assertGeneration;
-        const body = JSON.stringify({ target, connectionId: endpoint.connectionId });
-        const stream = yield* request(
-          P.streamPath,
-          {
-            method: 'POST',
-            body,
-            headers: {
-              'content-type': 'application/json',
-              'X-Moonbase-Nonce': nonce,
-              'X-Moonbase-Challenge': challenge,
-              Authorization: `Moonbase-RPC-HMAC-SHA256 ${P.streamMac(endpoint.token, 'request', nonce, challenge, 'POST', P.streamPath, P.hash(body))}`,
-            },
-          },
-          lost,
-        );
-        if (stream.status !== 200) {
-          const bytes = yield* P.responseBytes(stream, 8192);
-          yield* Effect.try({
-            try: () => {
-              if (
-                stream.headers.get('x-moonbase-nonce') !== nonce ||
-                stream.headers.get('x-moonbase-challenge') !== challenge ||
-                !P.proof(
-                  stream.headers.get('x-moonbase-proof'),
-                  P.mac(endpoint.token, 'response', nonce, challenge, stream.status, P.hash(bytes)),
-                )
-              )
-                V.fail('Unauthorized', 'Chat stream failure could not be authenticated.');
-              throw (
-                decodeErrorEnvelope(V.object(P.json(bytes)).error) ??
-                V.fail('Incompatible', 'Chat stream error is invalid.')
-              );
-            },
-            catch: ApplicationError.fromUnknown,
-          });
-        }
-        let readFailure: { error: unknown } | undefined;
-        return yield* Effect.acquireUseRelease(
-          Effect.try({
-            try: () => {
-              if (
-                stream.headers.get('content-type') !== 'application/vnd.moonbase.chat-stream-v1' ||
-                !stream.body
-              )
-                V.fail('Incompatible', 'Chat stream response is incompatible.');
-              return stream.body!.getReader();
-            },
-            catch: ApplicationError.fromUnknown,
-          }),
-          (reader) =>
-            Effect.gen(function* () {
-              const decoder = new P.FrameDecoder();
-              let sequence = 0,
-                streamId: string | undefined,
-                snapshot: Buffer | undefined,
-                used = 0,
-                initial = true;
-              while (true) {
-                const part = yield* Effect.tryPromise({
-                  try: () => reader.read(),
-                  catch: (error) => {
-                    readFailure = { error };
-                    return new ApplicationError({
-                      code: 'Unavailable',
-                      message: 'Chat stream was interrupted.',
-                    });
-                  },
-                });
-                if (part.done)
-                  return yield* Effect.fail(
-                    new ApplicationError({
-                      code: 'Unavailable',
-                      message: decoder.partial
-                        ? 'Chat stream ended in a partial frame.'
-                        : 'Chat stream ended; resynchronizing.',
-                    }),
-                  );
-                for (const frame of decoder.push(part.value)) {
-                  yield* assertGeneration;
-                  const update = yield* Effect.try({
-                    try: () => {
-                      if (
-                        !P.proof(
-                          frame.proof,
-                          P.streamMac(
-                            endpoint.token,
-                            'frame',
-                            nonce,
-                            challenge,
-                            P.hash(frame.body),
-                          ),
-                        )
-                      )
-                        V.fail('Unauthorized', 'Chat stream frame could not be authenticated.');
-                      let value;
-                      try {
-                        value = decodeChatStreamFrame(P.json(frame.body));
-                      } catch {
-                        return V.fail('Incompatible', 'Chat stream frame is invalid.');
-                      }
-                      if (
-                        !V.sameTarget(value.target, target) ||
-                        value.connectionId !== endpoint.connectionId ||
-                        value.sequence !== sequence++ ||
-                        (streamId !== undefined && value.streamId !== streamId)
-                      )
-                        V.fail('Incompatible', 'Chat stream authority or sequence changed.');
-                      streamId = value.streamId;
-                      if (value.kind === 'error') throw publicFailure(value.code);
-                      if (value.kind === 'heartbeat') {
-                        if (initial || snapshot)
-                          V.fail('Incompatible', 'Chat stream heartbeat interrupted a snapshot.');
-                        return;
-                      }
-                      if (!snapshot) {
-                        if (value.offset !== 0)
-                          V.fail(
-                            'Incompatible',
-                            'Chat stream snapshot starts with a missing fragment.',
-                          );
-                        snapshot = Buffer.allocUnsafe(value.total);
-                        used = 0;
-                      }
-                      const bytes = Buffer.from(value.data, 'base64');
-                      if (
-                        value.total !== snapshot.length ||
-                        value.offset !== used ||
-                        used + bytes.length > snapshot.length
-                      )
-                        V.fail('Incompatible', 'Chat stream snapshot fragments are discontinuous.');
-                      snapshot.set(bytes, used);
-                      used += bytes.length;
-                      if (used === snapshot.length) {
-                        const result = V.output('getChat', P.json(snapshot), { target });
-                        snapshot = undefined;
-                        initial = false;
-                        return { ...result, observationStatus: 'connected' as const };
-                      }
-                    },
-                    catch: (error) =>
-                      ApplicationError.is(error)
-                        ? error
-                        : new ApplicationError({
-                            code: 'Incompatible',
-                            message: 'Chat stream frame is invalid.',
-                          }),
-                  });
-                  if (!initial) {
-                    clearTimeout(state.timer);
-                    state.timer = setTimeout(() => state.controller.abort(), P.streamLimits.idleMs);
-                  }
-                  yield* frameArrived(update !== undefined);
-                  if (update) {
-                    yield* assertGeneration;
-                    yield* Effect.sync(() => publish(update));
-                  }
-                }
-              }
-            }),
-          (reader) =>
-            releaseResource(async () => {
-              const cancellation = reader.cancel();
-              state.controller.abort();
-              try {
-                await cancellation;
-              } catch (error) {
-                if (!readFailure || error !== readFailure.error) throw error;
-              } finally {
-                reader.releaseLock();
-              }
-            }),
-        );
-      }),
-    (state) =>
-      Effect.sync(() => {
-        clearTimeout(state.timer);
-        state.controller.abort();
-      }),
-  );
-}
+  ).pipe(Layer.provide(DaemonLinkLive));

@@ -47,8 +47,6 @@ export type ChatTranscriptMatch = typeof Contracts.ChatTranscriptMatchSchema.Typ
 /** A file in the chat's working folder that a message refers to, by relative path. */
 export type ChatMention = typeof Contracts.ChatMentionSchema.Type;
 export type ChatFileMatch = typeof Contracts.ChatFileMatchSchema.Type;
-export type ChatStreamRequest = typeof Contracts.ChatStreamRequestSchema.Type;
-export type ChatStreamFrame = typeof Contracts.ChatStreamFrameSchema.Type;
 export type ChatTranscriptSource = typeof Contracts.ChatTranscriptSourceSchema.Type;
 export type ChatTranscriptPart = typeof Contracts.ChatTranscriptPartSchema.Type;
 export type ChatTranscriptSelection = typeof Contracts.ChatTranscriptSelectionSchema.Type;
@@ -78,6 +76,12 @@ export type ChatCommands = {
 };
 export type ChatInput<K extends ChatCommand> = ChatCommands[K]['input'];
 export type ChatOutput<K extends ChatCommand> = ChatCommands[K]['output'];
+/**
+ * A chat list watch's first page of chats. `reset` marks a page that replaced the watch's state
+ * after updates may have been missed (a reconnect that could not resume), so pages past the first
+ * may have changed unseen too.
+ */
+export type ChatListUpdate = { list: ChatOutput<'listChats'>; reset: boolean };
 /** An implementation that receives untrusted data decodes and bounds every reply and snapshot. */
 export interface ChatClient {
   command<K extends ChatCommand>(
@@ -88,6 +92,12 @@ export interface ChatClient {
   watch(
     input: { target: ChatTarget },
     receive: (snapshot: ChatSnapshot) => void,
+    onError: (error: ApplicationError) => void,
+  ): ObservationClose;
+  /** The chat list's first page, again after each change to it. */
+  watchChatList(
+    input: { session: ChatSession },
+    receive: (update: ChatListUpdate) => void,
     onError: (error: ApplicationError) => void,
   ): ObservationClose;
 }

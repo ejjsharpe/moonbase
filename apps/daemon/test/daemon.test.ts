@@ -87,7 +87,7 @@ test('a daemon makes a private data directory, prints ready, writes endpoint.jso
     assert.ok(!second.output.includes('ready'));
     // The first daemon is untouched: still listening, same endpoint.
     assert.deepEqual(await readJson(join(directory, 'endpoint.json')), endpoint);
-    const client = createFauxClient(ready.port, token);
+    const client = createFauxClient(ready.port, token, identity.host);
     assert.deepEqual(await client.command('getChatHost', { host: identity.host }), {
       host: identity.host,
       actorId: identity.actorId,
@@ -95,18 +95,22 @@ test('a daemon makes a private data directory, prints ready, writes endpoint.jso
     });
 
     assert.deepEqual(await first.stop('SIGTERM'), [0, null]);
-    await assert.rejects(stat(join(directory, 'endpoint.json')), { code: 'ENOENT' });
+    await assert.rejects(stat(join(directory, 'endpoint.json')), {
+      code: 'ENOENT',
+    });
     // A restart keeps the identity and token it made once.
     const again = startDaemon([directory]);
     started.push(again);
     assert.deepEqual((await bounded(again.ready)).host, identity.host);
     assert.equal((await readFile(join(directory, 'token'), 'utf8')).trim(), token);
     assert.deepEqual(await again.stop('SIGINT'), [0, null]);
-    await assert.rejects(stat(join(directory, 'endpoint.json')), { code: 'ENOENT' });
+    await assert.rejects(stat(join(directory, 'endpoint.json')), {
+      code: 'ENOENT',
+    });
   });
 });
 
-test('existing chat commands work through the authenticated HTTP protocol, and logs keep no token or chat text', async () => {
+test('chat commands work through the authenticated WebSocket, and logs keep no token or chat text', async () => {
   await withRoot(async (root, started) => {
     const directory = join(root, 'data'),
       canary = 'private-chat-canary-' + randomBytes(8).toString('hex');
@@ -118,12 +122,15 @@ test('existing chat commands work through the authenticated HTTP protocol, and l
     const token = (await readFile(join(directory, 'token'), 'utf8')).trim(),
       identity = await readJson(join(directory, 'identity.json')),
       session = { host: identity.host, actorId: identity.actorId };
-    const client = createFauxClient(port, token);
+    const client = createFauxClient(port, token, identity.host);
 
-    // Wrong token: refused before any command runs.
-    await assert.rejects(createFauxClient(port, 'x'.repeat(43)).command('listChats', { session }), {
-      status: 401,
-    });
+    // Wrong token: the daemon closes the connection at its hello, before any command runs.
+    await assert.rejects(
+      createFauxClient(port, 'x'.repeat(43), identity.host).command('listChats', { session }),
+      {
+        code: 'Unavailable',
+      },
+    );
     const created = await client.command('createChat', {
       session,
       requestId: 'create-one',
@@ -189,7 +196,7 @@ for (const signal of ['SIGTERM', 'SIGKILL'] as const)
       const token = (await readFile(join(directory, 'token'), 'utf8')).trim(),
         identity = await readJson(join(directory, 'identity.json')),
         session = { host: identity.host, actorId: identity.actorId };
-      let client = createFauxClient(port, token);
+      let client = createFauxClient(port, token, identity.host);
       const target = (
         await client.command('createChat', {
           session,
@@ -214,7 +221,9 @@ for (const signal of ['SIGTERM', 'SIGKILL'] as const)
       const [code, killed] = await first.stop(signal);
       if (signal === 'SIGTERM') {
         assert.deepEqual([code, killed], [0, null]);
-        await assert.rejects(stat(join(directory, 'endpoint.json')), { code: 'ENOENT' });
+        await assert.rejects(stat(join(directory, 'endpoint.json')), {
+          code: 'ENOENT',
+        });
       } else assert.equal(killed, 'SIGKILL');
 
       await writeScript(directory, { steps: [] });
@@ -228,7 +237,7 @@ for (const signal of ['SIGTERM', 'SIGKILL'] as const)
         protocol: 2,
         build: 'development',
       });
-      client = createFauxClient(ready.port, token);
+      client = createFauxClient(ready.port, token, identity.host);
       assert.deepEqual(
         await client.command('getChatSend', { target, requestId: 'original' }),
         receipt,
@@ -252,7 +261,9 @@ test('a local daemon left unused exits by itself and removes endpoint.json', asy
     started.push(daemon);
     await bounded(daemon.ready);
     assert.deepEqual(await bounded(daemon.exited), [0, null]);
-    await assert.rejects(stat(join(directory, 'endpoint.json')), { code: 'ENOENT' });
+    await assert.rejects(stat(join(directory, 'endpoint.json')), {
+      code: 'ENOENT',
+    });
     assert.match(
       await readFile(join(directory, 'logs', 'daemon.log'), 'utf8'),
       /"event":"stopped","reason":"idle"/,
@@ -269,7 +280,10 @@ test('the real local entry starts with a private key file and never needs the Ke
     await writeFile(join(keys, 'key'), randomBytes(32).toString('base64') + '\n', { mode: 0o600 });
     await writeFile(
       join(directory, 'daemon.json'),
-      JSON.stringify({ mode: 'local', credentialKey: { source: 'file', path: join(keys, 'key') } }),
+      JSON.stringify({
+        mode: 'local',
+        credentialKey: { source: 'file', path: join(keys, 'key') },
+      }),
       { mode: 0o600 },
     );
     const daemon = startDaemon([directory], { entry: 'main' });
@@ -277,7 +291,7 @@ test('the real local entry starts with a private key file and never needs the Ke
     const { port } = await bounded(daemon.ready);
     const token = (await readFile(join(directory, 'token'), 'utf8')).trim(),
       identity = await readJson(join(directory, 'identity.json'));
-    const host = await createFauxClient(port, token).command('getChatHost', {
+    const host = await createFauxClient(port, token, identity.host).command('getChatHost', {
       host: identity.host,
     });
     assert.ok('mode' in host && host.mode === 'local');
@@ -316,7 +330,9 @@ const refusals: Refusal[] = [
     name: 'an identity others can read',
     prepare: async (_root, directory, secret) => {
       await mkdir(directory, { mode: 0o700 });
-      await writeFile(join(directory, 'identity.json'), secret, { mode: 0o644 });
+      await writeFile(join(directory, 'identity.json'), secret, {
+        mode: 0o644,
+      });
     },
   },
   {
@@ -338,7 +354,9 @@ const refusals: Refusal[] = [
     name: 'a malformed identity',
     prepare: async (_root, directory, secret) => {
       await mkdir(directory, { mode: 0o700 });
-      await writeFile(join(directory, 'identity.json'), '{"' + secret, { mode: 0o600 });
+      await writeFile(join(directory, 'identity.json'), '{"' + secret, {
+        mode: 0o600,
+      });
     },
   },
   {
@@ -361,7 +379,9 @@ const refusals: Refusal[] = [
     name: 'settings others can read',
     prepare: async (_root, directory) => {
       await mkdir(directory, { mode: 0o700 });
-      await writeFile(join(directory, 'daemon.json'), '{"mode":"local"}', { mode: 0o644 });
+      await writeFile(join(directory, 'daemon.json'), '{"mode":"local"}', {
+        mode: 0o644,
+      });
     },
   },
   {

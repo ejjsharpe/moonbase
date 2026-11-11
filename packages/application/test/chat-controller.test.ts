@@ -10,6 +10,7 @@ import type {
   ChatSummary,
   ChatTarget,
   ChatCommands,
+  ChatListUpdate,
 } from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { type DraftStorage } from '@moonbase/application/chat';
@@ -77,6 +78,11 @@ async function fixture(
   let subscriptions = 0,
     id = 0;
   const calls: { operation: string; input: unknown }[] = [];
+  const chatLists: {
+    receive: (update: ChatListUpdate) => void;
+    fail: (error: ApplicationError) => void;
+    closed: boolean;
+  }[] = [];
   const answers = new Map<string, (v: never) => Promise<unknown>>();
   const signals = new Map<string, AbortSignal[]>();
   // Trusted ChatClient: it stands in for a boundary that already decoded and bounded replies.
@@ -118,6 +124,13 @@ async function fixture(
       subscriptions++;
       return async () => {
         subscriptions--;
+      };
+    },
+    watchChatList: (_i, receive, fail) => {
+      const watch = { receive, fail, closed: false };
+      chatLists.push(watch);
+      return async () => {
+        watch.closed = true;
       };
     },
   };
@@ -165,6 +178,7 @@ async function fixture(
       connectionState = v;
       receiveConnection(v);
     },
+    chatLists,
     get subscriptions() {
       return subscriptions;
     },
@@ -568,6 +582,7 @@ test('a local-mode host over a connection waits for an explicit Connect, then ch
         providerReads.push(operation);
         return { providers: [], flow: null } as never;
       },
+      watch: () => async () => {},
     },
     chat: {
       ...f.chat,
@@ -2906,4 +2921,65 @@ test('a reload asked for during another joins it, and one asked for the latest l
   assert.equal(f.controller.getSnapshot().chats[0]!.title, 'After the run ended');
   await f.controller.reloadChats();
   assert.equal(listings, 4);
+});
+
+test('the chat list follows its watch: changes merge without listing, and a reset or a reconnected watch lists again', async (t) => {
+  const f = await fixture(t);
+  const controller = await f.root.make({
+    chat: f.chat,
+    connection: f.connection,
+    context,
+    storage: new Storage(),
+    transcriptWatchRetryMs: [0],
+  });
+  await controller.start();
+  await controller.connect();
+  await turn();
+  const until = async (done: () => boolean) => {
+    while (!done()) await turn();
+  };
+  const lists = () => f.calls.filter((call) => call.operation === 'listChats').length;
+  const listed = lists();
+  // The open watch: each refresh replaces the one before it.
+  const open = () => {
+    const watches = f.chatLists.filter((watch) => !watch.closed);
+    assert.equal(watches.length, 1);
+    return watches[0]!;
+  };
+  const first = open();
+  const other: ChatSummary = {
+    ...summary,
+    target: { ...target, conversationId: 'other' },
+    title: 'Made by another client',
+  };
+  const page = (conversations: ChatSummary[]) => ({
+    list: { conversations, nextCursor: null },
+    reset: false,
+  });
+  first.receive(page([other, summary]));
+  assert.deepEqual(
+    controller.getSnapshot().chats.map((chat) => chat.target.conversationId),
+    ['other', target.conversationId],
+  );
+  assert.equal(lists(), listed);
+  // A reset may have missed changes past the first page, so the list is read again.
+  first.receive({ ...page([other, summary]), reset: true });
+  await until(() => lists() === listed + 1);
+  // A dropped watch watches again after its backoff and lists once it delivers.
+  first.fail(new ApplicationError({ code: 'Unavailable', message: 'Dropped.' }));
+  await until(() => f.chatLists.at(-1) !== first);
+  assert.equal(first.closed, true);
+  const second = open();
+  second.receive(page([summary, other]));
+  await until(() => lists() === listed + 2);
+  // A refused watch stops; becoming visible watches again, and an open one is left alone.
+  second.fail(new ApplicationError({ code: 'Incompatible', message: 'Refused.' }));
+  await until(() => second.closed);
+  const watches = f.chatLists.length;
+  await controller.watchChats();
+  await controller.watchChats();
+  assert.equal(f.chatLists.length, watches + 1);
+  const third = open();
+  await controller.disconnect();
+  assert.equal(third.closed, true);
 });

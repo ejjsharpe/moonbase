@@ -58,7 +58,6 @@ export type ChatDock = {
 };
 
 const settledKey = 'moonbase.chats.settled';
-const chatReloadMs = 10_000;
 function readSettledOpen() {
   try {
     return localStorage.getItem(settledKey) === 'open';
@@ -336,17 +335,16 @@ export function ChatView({
     if (!visible || !openListing || !openSeenAt || document.visibilityState !== 'visible') return;
     controller.markSeen(openListing.target.conversationId, openSeenAt);
   }, [controller, visible, openListing, openSeenAt]);
-  // Other chats change on the host without a stream here, so the list is read again on a timer
-  // and as soon as the open chat starts or stops running.
-  const openRunning = !!state.snapshot?.run;
+  // The list follows the host's chat list watch. Becoming visible watches it again if that watch
+  // stopped, and lists again once it delivers.
   useEffect(() => {
     if (!connected) return;
-    void controller.reloadChats({ latest: true });
-    const timer = setInterval(() => {
-      if (document.visibilityState === 'visible') void controller.reloadChats();
-    }, chatReloadMs);
-    return () => clearInterval(timer);
-  }, [controller, connected, openRunning]);
+    const resume = () => {
+      if (document.visibilityState === 'visible') void controller.watchChats();
+    };
+    document.addEventListener('visibilitychange', resume);
+    return () => document.removeEventListener('visibilitychange', resume);
+  }, [controller, connected]);
   // Files sent from the file tree join the draft as mentions relative to the chat's folder.
   const mentionRequest = dock?.mention;
   const mentionHandled = dock?.mentionHandled;

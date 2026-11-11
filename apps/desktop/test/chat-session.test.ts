@@ -21,6 +21,7 @@ function fixture() {
     observers = 0,
     stop = 0;
   const chat: ChatClient = {
+    watchChatList: () => async () => {},
     command: async (_op, _input, options) => {
       calls++;
       inputs.push(_input);
@@ -175,12 +176,17 @@ test('local provider waits use the shared document lifetime without a remote con
   const started = Promise.withResolvers<AbortSignal>();
   const owner = new ChatIpcSession(
     runtime,
-    { command: async () => null as never, watch: () => async () => {} },
+    {
+      command: async () => null as never,
+      watch: () => async () => {},
+      watchChatList: () => async () => {},
+    },
     { mode: 'local' },
     context,
     () => {},
     {
       providers: {
+        watch: () => async () => {},
         command: async (_operation, _input, options) => {
           assert(options?.signal);
           const signal = options.signal;
@@ -283,6 +289,7 @@ test('chat cancellation waits for finalizers, fences callbacks and leaves comman
     emitted = 0,
     closes = 0;
   const chat: ChatClient = {
+    watchChatList: () => async () => {},
     command: async () => null as never,
     watch: (_input, next) => {
       receive = next;
@@ -336,6 +343,7 @@ for (const failure of ['none', 'release', 'acquisition'] as const) {
       message: 'Owned reentrant chat watch failure',
     });
     const chat: ChatClient = {
+      watchChatList: () => async () => {},
       command: async () => null as never,
       watch: (_input, receive) => {
         receive({} as never);
@@ -386,6 +394,7 @@ for (const failure of ['none', 'release', 'acquisition'] as const) {
 test('local IPC captures its command and cannot route a late reply to a replacement document', async () => {
   const gate = Promise.withResolvers<void>();
   const chat: ChatClient = {
+    watchChatList: () => async () => {},
     command: async () => {
       await gate.promise;
       return null as never;
@@ -425,6 +434,7 @@ test('browser chat observation preserves reconnect status and document release f
   let event: Parameters<ChatBridge['events']>[0] = () => {},
     releases = 0;
   const chat: ChatClient = {
+    watchChatList: () => async () => {},
     command: async () => null as never,
     watch: (_input, next) => {
       receive = next;
@@ -487,5 +497,69 @@ test('browser chat observation preserves reconnect status and document release f
   assert.equal(releases, 1);
   assert.deepEqual(errors, []);
   await close();
+  await owner.dispose();
+});
+test('chat list and provider watches reach the renderer through main, scoped to the configured session', async () => {
+  const lists: ((update: unknown) => void)[] = [],
+    states: ((state: unknown) => void)[] = [];
+  let closed = 0;
+  const listeners = new Set<(id: string, result: Reply, backendId: string) => void>();
+  const owner = new ChatIpcSession(
+    runtime,
+    {
+      command: async () => null as never,
+      watch: () => async () => {},
+      watchChatList: (_input, receive) => {
+        lists.push(receive as never);
+        return async () => void closed++;
+      },
+    },
+    { mode: 'local' },
+    context,
+    (id, result) => listeners.forEach((receive) => receive(id, result, 'local')),
+    {
+      providers: {
+        command: async () => null as never,
+        watch: (receive) => {
+          states.push(receive as never);
+          return async () => void closed++;
+        },
+      },
+    },
+  );
+  const bridge: ChatBridge = {
+    context: async () => context,
+    call: (kind, operation, input, id) => owner.call(kind, operation, input, id),
+    cancel: (id) => owner.cancel(id),
+    events: (receive) => {
+      listeners.add(receive);
+      return () => void listeners.delete(receive);
+    },
+  };
+  const clients = browserClients(bridge, 'local');
+  const turn = () => new Promise((resolve) => setTimeout(resolve, 1));
+  // A list watch for another actor is refused before it reaches the chat client.
+  const refused: string[] = [];
+  const other = clients.chat.watchChatList(
+    { session: { ...context, actorId: 'someone-else' } },
+    () => assert.fail('A foreign list reached the renderer.'),
+    (error) => refused.push(error.code),
+  );
+  const listed: unknown[] = [],
+    provided: unknown[] = [];
+  const closeList = clients.chat.watchChatList(
+    { session: context },
+    (update) => listed.push(update),
+    assert.fail,
+  );
+  const closeProviders = clients.providers.watch((state) => provided.push(state), assert.fail);
+  while (!lists.length || !states.length || !refused.length) await turn();
+  const update = { list: { conversations: [], nextCursor: null }, reset: false },
+    state = { providers: [], flow: null };
+  lists[0]!(update);
+  states[0]!(state);
+  assert.deepEqual([listed, provided, refused], [[update], [state], ['Unauthorized']]);
+  await Promise.all([closeList(), closeProviders(), other().catch(() => {})]);
+  assert.equal(closed, 2);
   await owner.dispose();
 });

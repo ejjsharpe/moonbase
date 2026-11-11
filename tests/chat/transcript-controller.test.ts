@@ -55,6 +55,7 @@ test('public local controller receives successive Pi text before held completion
       storage: storage(),
       chat: {
         watch: client.watch,
+        watchChatList: client.watchChatList,
         async command(operation, input, options) {
           if (hold && operation === 'getChatTranscriptContent') {
             entered.resolve();
@@ -202,4 +203,95 @@ test('public remote controller consumes authenticated successive replacements be
       .length,
     1,
   );
+});
+
+test('two clients of one daemon see the same chat list changes and streamed text without listing again', async (t) => {
+  const fixture = await controlledHostFixture(new URL('./faux-stream.mjs', import.meta.url), true);
+  const open = async () => {
+    const root = fixture.root(),
+      calls = { listings: 0 };
+    const app = await createMoonbaseApplication({
+      chat: async () => ({
+        // Counts this client's own listings.
+        chat: {
+          ...root.chat,
+          command: (operation, input, options) => {
+            if (operation === 'listChats') calls.listings++;
+            return root.chat.command(operation, input, options);
+          },
+        },
+        mode: 'local',
+        connection: root.connection,
+        context: fixture.session,
+        storage: storage(),
+      }),
+    });
+    const controller = app.chat!;
+    await controller.start();
+    await controller.connect();
+    await until(
+      async () => controller.getSnapshot(),
+      (state) => state.ready,
+    );
+    return { app, controller, calls };
+  };
+  const a = await open(),
+    b = await open();
+  t.after(async () => {
+    fixture.release();
+    await Promise.all([a.app.dispose(), b.app.dispose()]);
+    await fixture.close();
+  });
+  const listed = a.calls.listings;
+  const row = (state: ChatState) => state.chats.find((chat) => chat.title === 'Shared chat');
+  // A creates and sends; B's list shows the chat appear and start running.
+  await a.controller.create('Shared chat', fixture.settings);
+  await until(
+    async () => a.controller.getSnapshot(),
+    (state) => !!state.snapshot,
+  );
+  a.controller.setDraft('shared progress');
+  await a.controller.send();
+  const running = await until(
+    async () => b.controller.getSnapshot(),
+    (state) => row(state)?.activity?.state === 'running',
+  );
+  // B opens it and streams the same text as A, before the run completes.
+  await b.controller.select(row(running)!.target);
+  for (const { controller } of [a, b])
+    await until(
+      async () => controller.getSnapshot(),
+      (state) => state.snapshot?.run?.text === 'first remote text 0',
+    );
+  fixture.nextChunk();
+  for (const { controller } of [a, b])
+    await until(
+      async () => controller.getSnapshot(),
+      (state) => state.snapshot?.run?.text === 'first remote text 4',
+    );
+  // Finishing the run, then settling and unsettling from B, reach A's list.
+  fixture.release();
+  await until(
+    async () => a.controller.getSnapshot(),
+    (state) => row(state)?.activity?.state === 'idle',
+  );
+  await b.controller.settle(row(running)!.target, true);
+  await until(
+    async () => a.controller.getSnapshot(),
+    (state) => !!row(state)?.settledAt,
+  );
+  await b.controller.settle(row(running)!.target, false);
+  await until(
+    async () => a.controller.getSnapshot(),
+    (state) => !!row(state) && !row(state)!.settledAt,
+  );
+  for (const { controller } of [a, b])
+    assert.equal(
+      controller
+        .getSnapshot()
+        .transcript.entries.filter((entry) => entry.text === 'REMOTE COMPLETED').length,
+      1,
+    );
+  // A saw every change from its list watch and never listed again; nothing lists on a timer.
+  assert.equal(a.calls.listings, listed);
 });

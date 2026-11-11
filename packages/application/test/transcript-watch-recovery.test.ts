@@ -35,6 +35,7 @@ async function recoveryController(
   }[] = [];
   let watchCalls = 0;
   const chat: ChatClient = {
+    watchChatList: () => async () => {},
     command(operation, input, options) {
       const target = (input as { target?: ChatTarget }).target;
       if (operation === 'getChat' && target?.conversationId !== fixture.target.conversationId) {

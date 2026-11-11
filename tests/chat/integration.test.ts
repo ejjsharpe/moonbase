@@ -169,7 +169,7 @@ test('through the forward, a remote client chooses host folders from approved ro
   assert.equal((await f.stats()).calls, 1);
 });
 
-test('lost HTTP Send response and client closure retain original receipt; reconnect/store reopen do not Send again', async (t) => {
+test('a lost Send response and client closure retain original receipt; reconnect/store reopen do not Send again', async (t) => {
   const f = await fixture(t, true),
     first = f.root();
   await first.connection.command('connect', { profileId: first.profile.id });

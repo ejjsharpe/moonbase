@@ -29,7 +29,7 @@ function storeIsClosed(directory: string) {
 }
 async function serverRefuses(port: number) {
   try {
-    await fetch(`http://127.0.0.1:${port}/v1/chat/challenge`);
+    await fetch(`http://127.0.0.1:${port}/v1/health`);
     return false;
   } catch {
     return true;

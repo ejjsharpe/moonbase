@@ -1,6 +1,6 @@
 import { createRegistry, defineExtension, section } from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
-import { Context, Effect, Layer } from 'effect';
+import { Context, Effect, Layer, Stream } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import type { ChatTarget } from '@moonbase/contracts/chat';
 import type { ChatHostTarget } from '@moonbase/contracts/host';
@@ -17,6 +17,7 @@ import {
   type LocalHostHandlers,
 } from '@moonbase/contracts/services';
 import { type Host, safeError } from './commands.ts';
+import { readOnChange } from './changes.ts';
 import { checkChatFolder, type FolderApprovals } from './folders.ts';
 import * as V from './validation.ts';
 import { openHost } from './resources.ts';
@@ -32,8 +33,6 @@ export class LocalPiControl extends Context.Service<
     hasActiveWork(): Effect.Effect<boolean, ApplicationError>;
     /** Clears `ownFolder` once a chat's own folder has become a project where it is. */
     markFolderAsProject(target: ChatTarget): Effect.Effect<void, ApplicationError>;
-    /** Calls `listener` after a change that may alter a chat list; returns its unsubscribe. */
-    subscribeChatList(listener: () => void): () => void;
   }
 >()('moonbase/LocalPiControl') {}
 function makeChatService(host: Host): ChatServiceShape {
@@ -55,6 +54,24 @@ function makeChatService(host: Host): ChatServiceShape {
     settleChat: (d) => host.run('settleChat', d, (input) => host.settle(input)),
     findChatFiles: (d) => host.run('findChatFiles', d, (input) => host.findFiles(input)),
     watch: ({ target }) => host.watch(target),
+    watchChatList: (d) =>
+      Stream.unwrap(
+        Effect.map(
+          Effect.try({
+            try: () => {
+              const input = V.input('listChats', d);
+              host.session(input.session);
+              return input;
+            },
+            catch: ApplicationError.fromUnknown,
+          }),
+          (input) =>
+            readOnChange(
+              (listener) => host.subscribeChatList(listener),
+              () => host.list({ session: input.session }),
+            ).pipe(Stream.map((list) => ({ list, reset: false }))),
+        ),
+      ),
   };
 }
 export const PiRuntimeLive = (
@@ -101,7 +118,6 @@ export const LocalPiRuntimeLive = (
           },
           hasActiveWork: () =>
             Effect.tryPromise({ try: () => host.hasActiveWork(), catch: safeError }),
-          subscribeChatList: (listener) => host.subscribeChatList(listener),
           markFolderAsProject: (target) =>
             Effect.tryPromise({
               try: () => host.markFolderAsProject(target),

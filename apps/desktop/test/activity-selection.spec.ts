@@ -58,6 +58,7 @@ async function installCopy(page: Page) {
   const writes: string[] = [],
     inputs: TranscriptCopy[] = [];
   const client: ChatClient = {
+    watchChatList: () => async () => {},
     command: (operation, input) =>
       page.evaluate(
         async ({ operation, input }) =>

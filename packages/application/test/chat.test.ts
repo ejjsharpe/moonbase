@@ -129,6 +129,7 @@ function fixture(options: { slowSend?: boolean; cleanupFailure?: boolean } = {})
       Effect.fail(
         new ApplicationError({ code: 'Incompatible', message: 'Not served by this fixture.' }),
       ),
+    watchChatList: () => Stream.never,
     watch: (input) =>
       Stream.unwrap(
         Effect.as(

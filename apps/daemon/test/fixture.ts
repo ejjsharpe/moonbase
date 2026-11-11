@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdtemp, readFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -19,6 +19,8 @@ import {
   RemoteProviderSetupLive,
 } from '@moonbase/pi-runtime/remote';
 import { LoopbackConnectionLive } from '@moonbase/pi-runtime/loopback';
+import { connectDaemonSocket } from '@moonbase/pi-runtime/socket';
+import type { ChatHostTarget } from '@moonbase/contracts/host';
 import { runDaemon, type DaemonExit } from '../src/daemon.ts';
 import type { IdleClock } from '../src/idle.ts';
 import { createFauxProviders } from './faux.ts';
@@ -126,100 +128,36 @@ export function startDaemon(
   };
 }
 
-const hash = (body: string | Uint8Array) => createHash('sha256').update(body).digest('hex');
-const mac = (token: string, ...parts: unknown[]) =>
-  createHmac('sha256', token)
-    .update(JSON.stringify(['moonbase-daemon-v1', ...parts]))
-    .digest('hex');
-
 /**
- * A faux client of the existing authenticated HTTP protocol: a single-use challenge, then an
- * HMAC-signed request whose signed reply it checks.
+ * A faux client of the daemon's WebSocket. Each command runs on a connection of its own, and each
+ * watch holds one until it closes, so neither keeps the daemon in use afterwards.
  */
-const streamMac = (token: string, ...parts: unknown[]) =>
-  createHmac('sha256', token)
-    .update(JSON.stringify(['moonbase-daemon-stream-v1', ...parts]))
-    .digest('hex');
-
-export function createFauxClient(port: number, token: string) {
+export function createFauxClient(port: number, token: string, host: ChatHostTarget) {
   const origin = `http://127.0.0.1:${port}`;
-  async function grant() {
-    const nonce = randomBytes(32).toString('base64url');
-    const granted = await fetch(origin + '/v1/chat/challenge', {
-      headers: {
-        'X-Moonbase-Nonce': nonce,
-        Authorization:
-          'Moonbase-RPC-HMAC-SHA256 ' +
-          mac(token, 'challenge-request', nonce, 'GET', '/v1/chat/challenge'),
-      },
-    });
-    if (granted.status !== 200)
-      throw Object.assign(Error('Challenge refused'), { status: granted.status });
-    const text = await granted.text();
-    if (
-      granted.headers.get('x-moonbase-proof') !==
-      mac(token, 'challenge-response', nonce, granted.status, hash(text))
-    )
-      throw Error('Challenge proof did not verify');
-    return { nonce, challenge: (JSON.parse(text) as { challenge: string }).challenge };
-  }
+  const connect = () => connectDaemonSocket({ origin, token, expected: host });
   async function command<K extends ChatCommand>(
     operation: K,
     input: ChatInput<K>,
   ): Promise<ChatOutput<K>> {
-    const { nonce, challenge } = await grant();
-    const body = JSON.stringify({ operation, input });
-    const response = await fetch(origin + '/v1/chat', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'X-Moonbase-Nonce': nonce,
-        'X-Moonbase-Challenge': challenge,
-        Authorization:
-          'Moonbase-RPC-HMAC-SHA256 ' +
-          mac(token, 'request', nonce, challenge, 'POST', '/v1/chat', hash(body)),
-      },
-      body,
-    });
-    const text = await response.text();
-    if (
-      response.headers.get('x-moonbase-proof') !==
-      mac(token, 'response', nonce, challenge, response.status, hash(text))
-    )
-      throw Error('Reply proof did not verify');
-    const reply = JSON.parse(text) as
-      | { ok: true; value: ChatOutput<K> }
-      | { ok: false; error: { code: string } };
-    if (!reply.ok) throw Object.assign(Error(reply.error.code), { code: reply.error.code });
-    return reply.value;
+    const socket = await connect();
+    try {
+      return (await socket.request(operation, input as never)) as ChatOutput<K>;
+    } finally {
+      await socket.close();
+    }
   }
-  /** Opens a watch and resolves once its first frame arrives; `close` ends it. */
+  /** Opens a watch and resolves once its first update arrives; `close` ends it. */
   async function watch(target: ChatTarget) {
-    const { nonce, challenge } = await grant();
-    const body = JSON.stringify({ target, connectionId: 'faux-client' });
-    const controller = new AbortController();
-    const response = await fetch(origin + '/v1/chat/watch', {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        'content-type': 'application/json',
-        'X-Moonbase-Nonce': nonce,
-        'X-Moonbase-Challenge': challenge,
-        Authorization:
-          'Moonbase-RPC-HMAC-SHA256 ' +
-          streamMac(token, 'request', nonce, challenge, 'POST', '/v1/chat/watch', hash(body)),
-      },
-      body,
-    });
-    if (response.status !== 200) throw Error('Watch refused');
-    const reader = response.body!.getReader();
-    await reader.read();
-    return {
-      async close() {
-        controller.abort();
-        await reader.cancel().catch(() => {});
-      },
-    };
+    const socket = await connect(),
+      first = Promise.withResolvers<void>();
+    socket.subscribe('chat', target, { receive: () => first.resolve(), onError: first.reject });
+    try {
+      await first.promise;
+    } catch (error) {
+      await socket.close();
+      throw error;
+    }
+    return { close: () => socket.close() };
   }
   return { origin, command, watch };
 }
@@ -318,7 +256,7 @@ export async function startInProcess(
   return {
     directory,
     port,
-    client: createFauxClient(port, token),
+    client: createFauxClient(port, token, identity.host),
     session: { host: identity.host, actorId: identity.actorId },
     get settled() {
       return settled;

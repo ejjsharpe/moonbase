@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { connect } from 'node:net';
 import { createServer } from 'node:http';
 import { test, type TestContext } from 'node:test';
-import { Effect, Exit, Scope, type ManagedRuntime } from 'effect';
+import { Effect, Exit, Scope } from 'effect';
 import { GenerationTask, createRegistry, defineExtension, hook } from '@earendil-works/pi-durable';
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
 import type { ChatClient, ChatSnapshot } from '@moonbase/contracts/chat';
@@ -12,7 +12,6 @@ import type { DaemonClient } from '@moonbase/contracts/daemon';
 import type { ProviderState } from '@moonbase/contracts/providers';
 import { socketLimits, socketPath } from '@moonbase/contracts/socket';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { LocalPiControl } from '../src/index.ts';
 import { localDaemonCapabilities, serveChat, type SocketSources } from '../src/server.ts';
 import { connectDaemonSocket } from '../src/socket-client.ts';
 import {
@@ -116,6 +115,7 @@ function controlledClient() {
         ends.delete(receive);
       };
     },
+    watchChatList: () => async () => {},
   };
   return {
     client,
@@ -173,7 +173,6 @@ async function serve(
       localDaemonCapabilities,
       {
         sources: {
-          subscribeChatList: () => () => {},
           subscribeProviderSetup: () => () => {},
           ...options.sources,
         },
@@ -301,9 +300,6 @@ test('one connection serves requests and chat, chat-list and provider subscripti
     }),
   );
   const f = await runtimeFixture(t, registry, { tokensPerSecond: 2000 }, true);
-  const control = await (
-    f.runtime as unknown as ManagedRuntime.ManagedRuntime<LocalPiControl, never>
-  ).runPromise(LocalPiControl);
   const sessionOf = { host: f.config.host, actorId: f.config.actorId };
   const providerSetup = emitter();
   let state: ProviderState = providers;
@@ -317,7 +313,6 @@ test('one connection serves requests and chat, chat-list and provider subscripti
       localDaemonCapabilities,
       {
         sources: {
-          subscribeChatList: (listener) => control.subscribeChatList(listener),
           subscribeProviderSetup: providerSetup.subscribe,
         },
       },

@@ -44,6 +44,7 @@ async function createSession(
     watch: (_input, receive) => acquire(() => receive({ checkout, paths: [] })),
   };
   const chat: ChatClient = {
+    watchChatList: () => async () => {},
     command: async () => null as never,
     watch: (_input, receive) => acquire(() => receive({} as never)),
   };

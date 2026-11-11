@@ -339,7 +339,9 @@ test('compiled remote entry runs on Electron Node24 against the separate product
   const sourceDirectory = fileURLToPath(new URL('../src/', import.meta.url));
   assert.deepEqual(
     inputs.filter((path) => path.startsWith(sourceDirectory)).sort(),
-    ['remote.ts', 'protocol.ts', 'validation.ts'].map((name) => join(sourceDirectory, name)).sort(),
+    ['remote.ts', 'protocol.ts', 'socket-client.ts', 'socket-protocol.ts', 'validation.ts']
+      .map((name) => join(sourceDirectory, name))
+      .sort(),
     'The remote bundle must contain only its transport, protocol and validation leaves.',
   );
   assert(

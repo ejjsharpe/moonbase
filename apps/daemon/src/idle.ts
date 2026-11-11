@@ -91,6 +91,27 @@ export type IdleMonitor = ReturnType<typeof createIdleMonitor>;
 
 /** Counts each request and open watch as a client using the daemon. */
 export function trackClientUse(client: ChatClient, idle: IdleMonitor): ChatClient {
+  /** Counts an open watch as use until it closes. */
+  const tracked = (
+    open: () => ReturnType<ChatClient['watch']>,
+  ): ReturnType<ChatClient['watch']> => {
+    idle.begin();
+    let counted = true;
+    let close: ReturnType<ChatClient['watch']>;
+    try {
+      close = open();
+    } catch (error) {
+      idle.end();
+      throw error;
+    }
+    return async () => {
+      if (counted) {
+        counted = false;
+        idle.end();
+      }
+      await close();
+    };
+  };
   return {
     command: async (operation, input, options) => {
       idle.begin();
@@ -100,24 +121,9 @@ export function trackClientUse(client: ChatClient, idle: IdleMonitor): ChatClien
         idle.end();
       }
     },
-    watch: (input, receive, onError) => {
-      idle.begin();
-      let open = true;
-      let close: ReturnType<ChatClient['watch']>;
-      try {
-        close = client.watch(input, receive, onError);
-      } catch (error) {
-        idle.end();
-        throw error;
-      }
-      return async () => {
-        if (open) {
-          open = false;
-          idle.end();
-        }
-        await close();
-      };
-    },
+    watch: (input, receive, onError) => tracked(() => client.watch(input, receive, onError)),
+    watchChatList: (input, receive, onError) =>
+      tracked(() => client.watchChatList(input, receive, onError)),
   };
 }
 

@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { ManagedRuntime } from 'effect';
+import type { ObservationClose } from '@moonbase/contracts/common';
 import { LRUCache } from 'lru-cache';
 import { decodeConnectionInput, isConnectionCommand } from '@moonbase/contracts/connection-schema';
 import type { ProviderSetupClient } from '@moonbase/contracts/providers';
@@ -108,7 +109,11 @@ export class ChatIpcSession {
   }
   async call(kind: unknown, operation: unknown, input: unknown, id: unknown): Promise<Reply> {
     requestId(id);
-    const watch = kind === 'watch-chat' || kind === 'watch-connection';
+    const watch =
+      kind === 'watch-chat' ||
+      kind === 'watch-chat-list' ||
+      kind === 'watch-connection' ||
+      kind === 'watch-providers';
     if (this.lifetime.getAdmissionError(id, watch)) invalid();
     if (typeof operation !== 'string') invalid();
     try {
@@ -149,15 +154,20 @@ export class ChatIpcSession {
       if (operation !== '') invalid();
       v = decodeChatInput('getChat', v);
       this.authority(v);
-    } else if (kind === 'watch-connection') {
-      if (!this.connection) return invalid();
+    } else if (kind === 'watch-chat-list') {
+      if (operation !== '') invalid();
+      v = { session: decodeChatInput('listChats', v).session };
+      this.authority(v);
+    } else if (kind === 'watch-connection' || kind === 'watch-providers') {
+      if (kind === 'watch-connection' ? !this.connection : !this.capabilities.providers)
+        return invalid();
       if (operation !== '') invalid();
       fields(v, []);
     } else invalid();
     const request = this.lifetime.reserveRequest(id, watch);
     const live = request.isLive;
     try {
-      if (kind === 'watch-chat' || kind === 'watch-connection') {
+      if (watch) {
         const receive = (value: unknown) => {
             if (live()) this.emit(id, { ok: true, value });
           },
@@ -167,10 +177,13 @@ export class ChatIpcSession {
           };
         let failed = false;
         await request.acquireWatch(() => {
-          const close =
-            kind === 'watch-chat'
-              ? this.chat.watch(v as never, receive, delivered)
-              : this.connection!.watch(receive, delivered);
+          let close: ObservationClose;
+          if (kind === 'watch-chat') close = this.chat.watch(v as never, receive, delivered);
+          else if (kind === 'watch-chat-list')
+            close = this.chat.watchChatList(v as never, receive, delivered);
+          else if (kind === 'watch-providers')
+            close = this.capabilities.providers!.watch(receive, delivered);
+          else close = this.connection!.watch(receive, delivered);
           // A failure the watch delivered is its outcome, not a failure to clean it up.
           return () =>
             close().catch((cause: unknown) => (failed ? undefined : Promise.reject(cause)));

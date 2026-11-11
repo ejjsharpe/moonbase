@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Context, Effect, Layer } from 'effect';
+import { readOnChange } from './changes.ts';
 import { getSupportedThinkingLevels, type Models } from '@earendil-works/pi-ai/models';
 type Interaction = Parameters<Models['login']>[2];
 type AuthPrompt = Parameters<Interaction['prompt']>[0];
@@ -435,6 +436,16 @@ export const ProviderSetupLive = (
             },
             catch: unavailable,
           }),
+        watch: (owner) =>
+          readOnChange(
+            (listener) => {
+              listeners.add(listener);
+              return () => {
+                listeners.delete(listener);
+              };
+            },
+            () => invoke(owner, 'getProviders', {} as never),
+          ),
         getProviderUrl: (owner, flowId) =>
           Effect.tryPromise({
             try: async () => {

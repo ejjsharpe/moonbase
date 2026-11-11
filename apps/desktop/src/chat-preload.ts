@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { channels, unwrap, type ChatBridge, type Reply } from './chat/wire.ts';
+import { channels, isChatWatchKind, unwrap, type ChatBridge, type Reply } from './chat/wire.ts';
 
 // The reviewed bridge uses separate channels; the main process still authenticates every request.
 const active = new Map<string, string>();
@@ -41,7 +41,7 @@ const bridge: ChatBridge = {
         id,
         backendId,
       });
-      if ((kind !== 'watch-chat' && kind !== 'watch-connection') || !reply.ok) active.delete(id);
+      if (!isChatWatchKind(kind) || !reply.ok) active.delete(id);
       return reply;
     } catch (error) {
       active.delete(id);

@@ -260,6 +260,17 @@ export function chatCapabilities(local = false, activity = false) {
       controls.observations++;
       return close();
     },
+    // The list watch delivers the first page once after subscribing, so `?activity` shows the
+    // chats it adds after the first listing.
+    watchChatList(input, receive) {
+      let open = true;
+      void chat.command('listChats', input).then((list) => {
+        if (open) receive({ list, reset: false });
+      });
+      return async () => {
+        open = false;
+      };
+    },
   };
   const connection: ConnectionClient = {
     async command(operation) {
@@ -288,6 +299,7 @@ export function chatCapabilities(local = false, activity = false) {
       ? {
           mode: 'local' as const,
           providers: {
+            watch: () => async () => {},
             command: async (operation: string) => {
               if (operation !== 'getProviders') throw Error('Demo provider setup is read-only.');
               return {

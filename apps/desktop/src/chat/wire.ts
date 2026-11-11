@@ -55,6 +55,18 @@ export type TranscriptNative = {
   imageUrl(input: TranscriptImage, signal?: AbortSignal): Promise<string>;
 };
 
+/** Watches deliver values as events under their request ID until cancelled. */
+export type ChatWatchKind =
+  | 'watch-chat'
+  | 'watch-chat-list'
+  | 'watch-connection'
+  | 'watch-providers';
+export type ChatCallKind = 'chat' | 'connection' | 'providers' | 'transcript' | ChatWatchKind;
+export const isChatWatchKind = (kind: unknown): kind is ChatWatchKind =>
+  kind === 'watch-chat' ||
+  kind === 'watch-chat-list' ||
+  kind === 'watch-connection' ||
+  kind === 'watch-providers';
 export interface ChatBridge {
   targets?(): Promise<DesktopChatTarget[]>;
   chooseFolder?(): Promise<string | null>;
@@ -69,7 +81,7 @@ export interface ChatBridge {
   turnIntoProject?(conversationId: string): Promise<string>;
   context(backendId?: string): Promise<ChatSession>;
   call(
-    kind: 'chat' | 'connection' | 'watch-chat' | 'watch-connection' | 'providers' | 'transcript',
+    kind: ChatCallKind,
     operation: string,
     input: unknown,
     id: string,
@@ -146,7 +158,7 @@ export function browserClients(
     }
   };
   const watch = (
-    kind: 'watch-chat' | 'watch-connection',
+    kind: ChatWatchKind,
     input: unknown,
     receive: (v: never) => void,
     onError: (e: ApplicationError) => void,
@@ -156,11 +168,7 @@ export function browserClients(
     const off = bridge.events((eventId, result, eventBackend = 'remote') => {
       if (active && eventId === id && eventBackend === backendId)
         try {
-          receive(
-            (kind === 'watch-chat'
-              ? unwrap(result)
-              : decodeConnectionSnapshot(unwrap(result))) as never,
-          );
+          receive(decodeWatchValue(kind, unwrap(result)) as never);
         } catch (e) {
           onError(normalizeApplicationError(e));
         }
@@ -197,16 +205,24 @@ export function browserClients(
     providers: {
       command: async (op, input, options) =>
         decodeProviderOutput(op, await command('providers', op, input, options)),
+      watch: (receive, error) => watch('watch-providers', {}, receive, error),
     },
     chat: {
       command: (op, input, options) => command('chat', op, input, options) as never,
       watch: (input, receive, error) => watch('watch-chat', input, receive, error),
+      watchChatList: (input, receive, error) => watch('watch-chat-list', input, receive, error),
     },
     connection: {
       command: (op, input, options) => command('connection', op, input, options) as never,
       watch: (receive, error) => watch('watch-connection', {}, receive, error),
     },
   };
+}
+/** A watch event's value; main's ChatClient boundary (Pi runtime) already decoded chat values. */
+function decodeWatchValue(kind: ChatWatchKind, value: unknown) {
+  if (kind === 'watch-connection') return decodeConnectionSnapshot(value);
+  if (kind === 'watch-providers') return decodeProviderOutput('getProviders', value);
+  return value;
 }
 function unwrapError(r: Reply) {
   try {

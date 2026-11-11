@@ -191,6 +191,7 @@ export function transcriptFixture(count = 640, local = true) {
   }
   // Trusted ChatClient: it stands in for a boundary that already decoded and bounded replies.
   const chat: ChatClient = {
+    watchChatList: () => async () => {},
     async command(operation, input, options) {
       calls.push({ operation, input: structuredClone(input), signal: options?.signal });
       return structuredClone(

@@ -87,6 +87,7 @@ export function chatCapabilities() {
       controls.observations++;
       return close();
     },
+    watchChatList: () => async () => {},
   };
   const connection: ConnectionClient = {
     async command(operation) {

@@ -23,6 +23,7 @@ export function hostControl(
     publications = 0,
     activeWatches = 0;
   const bound: ChatClient = {
+    watchChatList: client.watchChatList,
     command: async (...args) => {
       commands.push(args[0]);
       const result = await client.command(...args);

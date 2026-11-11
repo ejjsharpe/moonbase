@@ -21,7 +21,6 @@ import {
 import { fauxModelId, fauxProviderId } from './faux.ts';
 
 const minute = 60_000;
-const randomNonce = () => randomBytes(32).toString('base64url');
 
 test('the idle monitor waits for every user to end, and treats an unreadable work check as work', async () => {
   const time = createControlledClock();
@@ -133,30 +132,19 @@ test('unauthenticated requests never delay a local daemon going idle; an authent
     const unauthenticated = [
       () => fetch(origin + '/v1/health'),
       () => probeHealth(origin, wrongKey),
-      () =>
-        fetch(origin + '/v1/chat/challenge', { headers: { 'X-Moonbase-Nonce': randomNonce() } }),
-      () =>
-        fetch(origin + '/v1/chat', {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            'X-Moonbase-Nonce': randomNonce(),
-            'X-Moonbase-Challenge': randomNonce(),
-            Authorization: 'Moonbase-RPC-HMAC-SHA256 ' + '0'.repeat(64),
-          },
-          body: JSON.stringify({ operation: 'listChats', input: { session: daemon!.session } }),
-        }),
     ];
-    for (const request of unauthenticated) {
+    for (const request of [...unauthenticated, ...unauthenticated]) {
       await time.advance(minute);
       const response = await request();
       assert.equal(response.status, 401);
       await response.arrayBuffer();
     }
-    // A client holding the wrong key is refused its challenge.
+    // A client holding the wrong key is refused at its hello.
     await assert.rejects(
-      createFauxClient(daemon.port, wrongKey).command('listChats', { session: daemon.session }),
-      { status: 401 },
+      createFauxClient(daemon.port, wrongKey, daemon.session.host).command('listChats', {
+        session: daemon.session,
+      }),
+      { code: 'Unavailable' },
     );
     await time.advance(minute + 30_000);
     assert.equal(

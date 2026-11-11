@@ -123,6 +123,7 @@ for (const failure of [false, true])
       releases = [0, 0],
       emitted: [string, string][] = [];
     const remoteChat: NonNullable<Dependencies['remote']>['chat'] = {
+      watchChatList: () => async () => {},
       command: async () => null as never,
       watch: (_input, receive) => {
         const index = receives.length;

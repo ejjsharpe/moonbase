@@ -55,7 +55,11 @@ for (const closing of ['cancel', 'dispose'] as const) {
           ),
       }),
     );
-    const chat: ChatClient = { command: async () => null as never, watch: () => async () => {} };
+    const chat: ChatClient = {
+      command: async () => null as never,
+      watch: () => async () => {},
+      watchChatList: () => async () => {},
+    };
     const owner = new ChatIpcSession(
       runtime,
       chat,

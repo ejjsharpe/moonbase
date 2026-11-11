@@ -166,9 +166,8 @@ async function serveDaemon(
           return { control: yield* LocalPiControl, providerChanges: yield* ProviderSetupChanges };
         }),
       );
-      // The WebSocket pushes chat list and provider setup changes beside chat watches.
+      // The WebSocket pushes provider setup changes beside chat and chat list watches.
       const sources: SocketSources = {
-        subscribeChatList: (listener) => control.subscribeChatList(listener),
         subscribeProviderSetup: (listener) => providerChanges.subscribe(listener),
       };
       closeAdmissions = () => control.setAdmissionsOpen(false);

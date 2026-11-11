@@ -1,4 +1,4 @@
-import type { ProviderCommand, ProviderInput, ProviderOutput } from './providers.ts';
+import type { ProviderCommand, ProviderInput, ProviderOutput, ProviderState } from './providers.ts';
 import { Context, type Effect, type Stream } from 'effect';
 import {
   type ApplicationError,
@@ -15,7 +15,15 @@ import type {
   ConnectionSnapshot,
 } from './connection.ts';
 import type { ChatHostTarget, ChatHostHealth } from './host.ts';
-import type { ChatCommand, ChatInput, ChatOutput, ChatSnapshot, ChatTarget } from './chat.ts';
+import type {
+  ChatCommand,
+  ChatInput,
+  ChatListUpdate,
+  ChatOutput,
+  ChatSession,
+  ChatSnapshot,
+  ChatTarget,
+} from './chat.ts';
 import type { LocalHostCommand, LocalHostInput, LocalHostOutput } from './daemon.ts';
 
 export type WorkspaceHandler<K extends WorkspaceCommand> = (
@@ -57,6 +65,8 @@ export type ChatHandlers = {
 };
 export type ChatServiceShape = ChatHandlers & {
   watch(input: { target: ChatTarget }): Stream.Stream<ChatSnapshot, ApplicationError>;
+  /** The chat list's first page, then again after each change to it. */
+  watchChatList(input: { session: ChatSession }): Stream.Stream<ChatListUpdate, ApplicationError>;
 };
 export class ChatService extends Context.Service<ChatService, ChatServiceShape>()(
   'moonbase/Chat',
@@ -73,6 +83,8 @@ export class ProviderSetupService extends Context.Service<
   {
     forOwner(ownerId: string): ProviderSetupHandlers;
     releaseOwner(ownerId: string): Effect.Effect<void, ApplicationError>;
+    /** The owner's setup state, then again after each change to it. */
+    watch(ownerId: string): Stream.Stream<ProviderState, ApplicationError>;
     /**
      * The validated sign-in URL of the owner's running flow, for a client to open itself. Unlike
      * `openProviderUrl`, it opens nothing.

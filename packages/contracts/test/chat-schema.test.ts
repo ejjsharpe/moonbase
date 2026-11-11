@@ -370,32 +370,7 @@ test('transcript schemas bound decoded chunks, canonical base64, identities and 
   assert.equal(isChatCommand('findChatTranscript'), true);
 });
 
-test('stream envelopes are strict and bound authority, sequences and decoded fragments', async () => {
-  const { decodeChatStreamRequest, decodeChatStreamFrame } =
-    await import('@moonbase/contracts/chat-schema');
-  const request = { target, connectionId: 'generation' };
-  assert.deepEqual(decodeChatStreamRequest(request), request);
-  assert.throws(() => decodeChatStreamRequest({ ...request, token: 'private' }));
-  const frame = {
-    ...request,
-    streamId: 'a'.repeat(43),
-    sequence: 0,
-    kind: 'snapshot',
-    offset: 0,
-    total: 32768,
-    data: Buffer.alloc(32768).toString('base64'),
-  };
-  assert.deepEqual(decodeChatStreamFrame(frame), frame);
-  for (const change of [
-    { sequence: -1 },
-    { sequence: Number.MAX_SAFE_INTEGER + 1 },
-    { data: Buffer.alloc(32769).toString('base64') },
-    { data: 'bad!' },
-    { total: 262145 },
-    { extra: true },
-    { target: { ...target, path: '/' } },
-  ])
-    assert.throws(() => decodeChatStreamFrame({ ...frame, ...change }));
+test('a snapshot may say it is reconnecting', () => {
   assert.equal(
     decodeChatOutput('getChat', { ...outputs.getChat, observationStatus: 'reconnecting' })
       .observationStatus,
