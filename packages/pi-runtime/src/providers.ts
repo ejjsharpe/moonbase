@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Context, Effect, Layer } from 'effect';
-import { readOnChange } from './changes.ts';
+import { readOnChange } from '@moonbase/effect/changes';
 import { getSupportedThinkingLevels, type Models } from '@earendil-works/pi-ai/models';
 type Interaction = Parameters<Models['login']>[2];
 type AuthPrompt = Parameters<Interaction['prompt']>[0];

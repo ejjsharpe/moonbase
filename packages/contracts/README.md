@@ -8,6 +8,7 @@
 | `errors`, `common` | `ApplicationError`, error codes, `CommandOptions`, `ObservationClose`, and `areJsonValuesEqual` / `getJsonKey` (key-order-safe equality and keys for plain decoded data) |
 | `lookup` | `matchPath` / `compareMatches`: the fuzzy path ranking shared by editor lookup and chat file search |
 | `*-schema`, `schema` | Request, saved-data and wire-reply decoders, and shared schema constructors |
+| `chat-validation` | `checkChatOutput`: a decoded chat reply's authority checks (its target, host, sources and request identity match the request) and size bound, applied by the chat engine and both ends of the daemon protocol; `isChatMutation`, `isCancellableChatRead`, `isSameChatHost` / `isSameChatTarget`, `decodeChatTarget` |
 | `services` | Privileged Effect service ports and endpoint types |
 
 Chat Find (`getChatFindExpression`) matches the literal query in original text with simple Unicode case folding and no normalization: ẞ matches ß and Σ matches ς, but ß never matches SS and NFC/NFD spellings differ.

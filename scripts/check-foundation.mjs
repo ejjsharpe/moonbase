@@ -38,6 +38,7 @@ console.log('Verified browser-only command contracts.');
 
 for (const entry of [
   'chat-schema',
+  'chat-validation',
   'workspace-schema',
   'connection-schema',
   'host-schema',

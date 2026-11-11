@@ -24,7 +24,7 @@ import {
   type LocalHostHandlers,
 } from '@moonbase/contracts/services';
 import { type Host, safeError } from './commands.ts';
-import { readOnChange } from './changes.ts';
+import { readOnChange } from '@moonbase/effect/changes';
 import { checkChatFolder, type FolderApprovals } from './folders.ts';
 import * as V from './validation.ts';
 import { openHost } from './resources.ts';
