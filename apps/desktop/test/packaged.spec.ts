@@ -1,5 +1,5 @@
 import { prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
-import { openSettings } from './chat-target.ts';
+import { closeSettings, openSettings } from './chat-target.ts';
 import {
   saveFile,
   selectFileView,
@@ -155,6 +155,7 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
     await screen('local-oauth-loaded');
     await page.getByRole('button', { name: 'Cancel setup', exact: true }).click();
     await expect(page.getByText('Setup cancelled.', { exact: true })).toBeVisible();
+    await closeSettings(page);
     expect(resource.notices).toContain('@earendil-works/pi-durable@1.4.0');
     expect(resource.notices).toContain('@earendil-works/pi-ai@1.4.0');
 
