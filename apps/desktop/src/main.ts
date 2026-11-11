@@ -190,17 +190,9 @@ async function main() {
         Effect.flatMap(WorkspaceNative, (service) => service.release(input)),
       ),
   });
-  // A checkout the editor approves is granted to the daemon, so a project's docked chat can use it.
-  let grantEditorFolder = (_root: string) => {};
-  const editorSession = new EditorSession(
-    runtime,
-    client,
-    native,
-    (id, value) => {
-      if (!window.isDestroyed()) window.webContents.send(channels.event, id, value);
-    },
-    (root) => grantEditorFolder(root),
-  );
+  const editorSession = new EditorSession(runtime, client, native, (id, value) => {
+    if (!window.isDestroyed()) window.webContents.send(channels.event, id, value);
+  });
   const chatBackends = createChatBackends({
     transcript: {
       writeText: async (text) => {
@@ -215,6 +207,8 @@ async function main() {
       error: new ApplicationError({ code: 'Unavailable', message: 'Local chat is starting.' }),
     },
     acquireLocal,
+    // A checkout or worktree the editor approved is granted to the daemon when a chat first uses
+    // it, so a project's docked chat needs no picker.
     isEditorFolder: (path) => editorSession.hasFolder(path),
     chatConfiguration,
     remoteChat,
@@ -233,7 +227,6 @@ async function main() {
       return selection.canceled ? null : (selection.filePaths[0] ?? null);
     },
   });
-  grantEditorFolder = chatBackends.grantEditorFolder;
   const rendererRoot = join(directory, 'renderer');
   protocol.handle('moonbase', async (request) => {
     const url = new URL(request.url);

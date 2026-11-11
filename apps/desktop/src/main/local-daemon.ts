@@ -94,15 +94,25 @@ export async function readDaemonSession(directory: string): Promise<ChatSession>
 }
 
 /**
- * Whether `pid` runs a daemon on `directory`: its command line ends with the directory, the
- * daemon's only argument. A crashed daemon's endpoint can name an ID another process has reused.
+ * The daemon entries a running daemon may have been started on, besides this app's own: another
+ * version's packaged bundle, or the source entry in development.
  */
-async function runsDaemon(pid: number, directory: string) {
+const daemonEntries = ['/Contents/Resources/daemon/daemon.mjs', '/apps/daemon/src/main.ts'];
+
+/**
+ * Whether `pid` runs a daemon on `directory`: its command line ends with a daemon entry followed
+ * by the directory, the daemon's only argument. A crashed daemon's endpoint can name an ID another
+ * process has reused.
+ */
+async function runsDaemon(pid: number, directory: string, entry: string | undefined) {
   try {
     const { stdout } = await promisify(execFile)('/bin/ps', ['-p', String(pid), '-o', 'args='], {
       timeout: 5000,
     });
-    return stdout.trimEnd().endsWith(` ${directory}`);
+    const args = stdout.trimEnd();
+    if (!args.endsWith(` ${directory}`)) return false;
+    const head = args.slice(0, -directory.length - 1);
+    return [...(entry ? [entry] : []), ...daemonEntries].some((known) => head.endsWith(known));
   } catch {
     return false;
   }
@@ -126,6 +136,9 @@ export function createLocalDaemon({
   stopMs = 30_000,
   replaceMs = 30_000,
 }: LocalDaemonOptions) {
+  // The entry this app starts, the argument before the directory.
+  const entry = command.args.at(-2);
+  const isDaemon = (candidate: number) => runsDaemon(candidate, directory, entry);
   let pid: number | undefined,
     child: ChildProcess | undefined,
     outdated = false,
@@ -142,14 +155,17 @@ export function createLocalDaemon({
     outdated = endpoint.build !== command.build;
   };
 
-  /** Stops an outdated daemon of this directory, and waits for it. */
+  /**
+   * Stops an outdated daemon of this directory, and waits for it; false, signalling nothing, when
+   * that process no longer runs a daemon here (it exited, and its ID was reused).
+   */
   async function stopOutdated(outdatedPid: number) {
-    if (!(await runsDaemon(outdatedPid, directory))) return;
+    if (!(await isDaemon(outdatedPid))) return false;
     // A daemon stops cleanly on SIGTERM; Pi Durable resumes its interrupted runs in the next one.
     try {
       process.kill(outdatedPid, 'SIGTERM');
     } catch {
-      return;
+      return true;
     }
     const deadline = Date.now() + stopMs;
     while (isAlive(outdatedPid)) {
@@ -157,6 +173,7 @@ export function createLocalDaemon({
         throw unavailable('An older Moonbase chat daemon is still stopping. Try again shortly.');
       await delay(50);
     }
+    return true;
   }
 
   /** Starts a daemon and waits until its endpoint names it, which it writes once listening. */
@@ -200,7 +217,7 @@ export function createLocalDaemon({
           endpoint &&
           endpoint.protocol === chatProtocolVersion &&
           isAlive(endpoint.pid) &&
-          (await runsDaemon(endpoint.pid, directory))
+          (await isDaemon(endpoint.pid))
         )
           return adopt(endpoint);
       }
@@ -220,7 +237,7 @@ export function createLocalDaemon({
     if (endpoint && isAlive(endpoint.pid)) {
       if (endpoint.protocol === chatProtocolVersion) return adopt(endpoint);
       // An older app's daemon may be running its agents; it exits once idle with nobody connected.
-      if (await runsDaemon(endpoint.pid, directory)) throw unavailable(olderDaemonMessage);
+      if (await isDaemon(endpoint.pid)) throw unavailable(olderDaemonMessage);
     }
     await start();
   }
@@ -241,8 +258,9 @@ export function createLocalDaemon({
     replace: () =>
       serialize(async () => {
         if (!outdated || pid === undefined) return;
-        await stopOutdated(pid);
-        await find();
+        // Its endpoint still names a process that isn't the daemon; this app's starts instead.
+        if (await stopOutdated(pid)) await find();
+        else await start();
       }),
   };
 }

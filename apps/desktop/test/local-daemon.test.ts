@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { ChatService, ConnectionService } from '@moonbase/contracts/services';
@@ -209,22 +209,46 @@ test('a daemon of another build is used while it has work, then replaced in a ne
   assert.equal(await readDaemonPid(directory), current);
 });
 
-test('a daemon speaking another protocol is never signalled; local chat waits for it to exit', async (t) => {
-  const { directory, command } = await profile(t);
-  const marker = join(directory, 'signalled');
-  // Stands in for an older daemon: alive, with the data directory as its last argument; it notes
-  // any SIGTERM rather than stopping.
-  const older = spawn(
+/**
+ * Starts a process that notes any SIGTERM in `marker` rather than stopping, its command line
+ * ending with `args`, and waits until it handles the signal.
+ */
+async function spawnStandIn(t: TestContext, marker: string, args: string[]) {
+  const standIn = spawn(
     process.execPath,
     [
-      '-e',
-      `process.on('SIGTERM', () => require('node:fs').writeFileSync(${JSON.stringify(marker)}, '')); setInterval(() => {}, 1000)`,
-      directory,
+      ...(args[0]?.endsWith('.mjs')
+        ? []
+        : [
+            '-e',
+            `process.on('SIGTERM', () => require('node:fs').writeFileSync(process.env.STAND_IN_MARKER, '')); setInterval(() => {}, 1000); process.stdout.write('ready')`,
+          ]),
+      ...args,
     ],
-    { stdio: 'ignore' },
+    { stdio: ['ignore', 'pipe', 'ignore'], env: { STAND_IN_MARKER: marker } },
   );
-  t.after(() => older.kill('SIGKILL'));
-  await once(older, 'spawn');
+  t.after(() => standIn.kill('SIGKILL'));
+  await once(standIn.stdout!, 'data');
+  standIn.stdout!.destroy();
+  return standIn;
+}
+
+test('a daemon speaking another protocol is never signalled; local chat waits for it to exit', async (t) => {
+  const { userData, directory, command } = await profile(t);
+  const marker = join(directory, 'signalled');
+  // Stands in for an older app's packaged daemon on this directory; it notes any SIGTERM rather
+  // than stopping.
+  const entry = join(userData, 'Older.app', 'Contents', 'Resources', 'daemon', 'daemon.mjs');
+  await mkdir(dirname(entry), { recursive: true });
+  await writeFile(
+    entry,
+    `import { writeFileSync } from 'node:fs';
+process.on('SIGTERM', () => writeFileSync(process.env.STAND_IN_MARKER, ''));
+setInterval(() => {}, 1000);
+process.stdout.write('ready');
+`,
+  );
+  const older = await spawnStandIn(t, marker, [entry, directory]);
   const endpoint = JSON.stringify({
     port: 9,
     pid: older.pid,
@@ -271,6 +295,38 @@ test('a daemon speaking another protocol is never signalled; local chat waits fo
   await createLocalDaemon({ directory, command }).ensure();
   assert.equal(other.exitCode, null);
   assert.notEqual(await readDaemonPid(directory), other.pid);
+});
+
+test('an outdated daemon whose process ID now runs something else is never signalled', async (t) => {
+  const { directory, command } = await profile(t);
+  const marker = join(directory, 'signalled');
+  // The outdated daemon crashed and its ID was reused by a process that isn't a daemon, even one
+  // whose command line also ends with the data directory.
+  const other = await spawnStandIn(t, marker, [directory]);
+  await writeFile(
+    join(directory, 'endpoint.json'),
+    JSON.stringify({
+      port: 9,
+      pid: other.pid,
+      version: '0.1.0',
+      protocol: chatProtocolVersion,
+      build: 'older-build',
+    }),
+    { mode: 0o600 },
+  );
+  const daemon = createLocalDaemon({ directory, command, stopMs: 500 });
+  await daemon.ensure();
+  assert.equal(daemon.isOutdated(), true);
+  await daemon.replace();
+  await delay(100);
+  await assert.rejects(stat(marker), { code: 'ENOENT' });
+  assert.equal(other.exitCode, null);
+  // This app's daemon runs in its place.
+  const current = (await readDaemonPid(directory))!;
+  assert.notEqual(current, other.pid);
+  assert(isAlive(current));
+  assert.equal(daemon.isOutdated(), false);
+  assert.equal(daemon.isRunning(), true);
 });
 
 test('a start that finds the lock held adopts only a daemon of this directory and protocol', async (t) => {

@@ -144,7 +144,14 @@ try {
             ? { providers: clients.providers }
             : { connection: clients.connection }),
           mode: target.mode,
-          context: await window.moonbaseChat.context(target.id),
+          context: await window.moonbaseChat.context(target.id).catch((error: unknown) => {
+            // An error crosses the context bridge as a plain Error that keeps only its message,
+            // which main already made safe to show (why local chat is Unavailable, say).
+            throw failure({
+              code: 'Unavailable',
+              message: String((error as Error | undefined)?.message ?? '').slice(0, 512),
+            });
+          }),
           storage: {
             read: () =>
               localStorage.getItem(

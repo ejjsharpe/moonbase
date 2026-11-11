@@ -123,12 +123,32 @@ export async function readFauxCalls(directory) {
 }
 
 /**
+ * The faux daemon `command`, held back until the folder `gate` holds `start`; it exits at once,
+ * failing to start, while `gate` holds `fail`.
+ */
+function gateDaemonCommand(command, gate) {
+  const quote = (value) => `'${value.replaceAll("'", `'\\''`)}'`;
+  return {
+    ...command,
+    command: '/bin/sh',
+    args: [
+      '-c',
+      `while [ ! -e ${quote(join(gate, 'start'))} ]; do [ -e ${quote(join(gate, 'fail'))} ] && exit 1; sleep 0.05; done; exec "$0" "$@"`,
+      command.command,
+      ...command.args,
+    ],
+  };
+}
+
+/**
  * Makes main start the faux daemon rather than the real one, from a test-only entry that runs
  * before main. Unless the test wrote its own `faux.json`, the daemon exits 5 seconds after its
- * last client, so none outlives its test for long; main restarts it on demand.
+ * last client, so none outlives its test for long; main restarts it on demand. With
+ * `MOONBASE_TEST_DAEMON_GATE`, each start waits on that folder (see `gateDaemonCommand`).
  */
 export function installFauxDaemon() {
   const bun = findTestBun();
+  const gate = process.env.MOONBASE_TEST_DAEMON_GATE;
   globalThis.moonbaseTestDaemonCommand = (directory) => {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     try {
@@ -139,7 +159,8 @@ export function installFauxDaemon() {
     } catch {
       // The test's own script.
     }
-    return makeFauxDaemonCommand(directory, bun);
+    const command = makeFauxDaemonCommand(directory, bun);
+    return gate ? gateDaemonCommand(command, gate) : command;
   };
 }
 

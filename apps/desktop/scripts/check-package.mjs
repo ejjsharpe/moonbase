@@ -168,11 +168,14 @@ const daemonInputs = JSON.parse(await readFile(join(root, 'dist/daemon-inputs.js
 // Main expects the build of the daemon bundle it ships, which writes that build to its endpoint.
 const daemonBuild = JSON.parse(await readFile(join(root, 'dist/daemon-build.json'), 'utf8'));
 assert.match(daemonBuild, /^[0-9a-f]{64}$/, 'The daemon bundle has no build identifier');
-for (const file of [join(resources, 'daemon/daemon.mjs'), join(root, 'dist/main.mjs')])
-  assert(
-    (await readFile(file, 'utf8')).includes(JSON.stringify(daemonBuild)),
-    `${file} lacks the daemon build identifier`,
-  );
+for (const [file, text] of [
+  [
+    join(resources, 'daemon/daemon.mjs'),
+    await readFile(join(resources, 'daemon/daemon.mjs'), 'utf8'),
+  ],
+  [`${archive}/main.mjs`, asar.extractFile(archive, 'main.mjs').toString()],
+])
+  assert(text.includes(JSON.stringify(daemonBuild)), `${file} lacks the daemon build identifier`);
 assert(!daemonInputs.some((path) => path.startsWith('/')), 'Daemon inputs record absolute paths');
 assert(daemonInputs.includes('apps/daemon/src/main.ts'), 'The daemon bundle lost its entry');
 assert.deepEqual(

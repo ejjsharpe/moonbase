@@ -48,7 +48,7 @@ export function createChatBackends({
   const sessions = new Map<string, ChatIpcSession>();
   /** Worktree creations for the current document; replacing the document cancels them. */
   const worktreeCreations = new Set<AbortController>();
-  /** Editor folders granted to the daemon by this process, or being granted. */
+  /** Editor folders granted to the daemon by this process, or being granted, once each. */
   const grants = new Map<string, Promise<void>>();
   let documentId = randomUUID();
   const run = <A>(effect: Effect.Effect<A, ApplicationError>) =>
@@ -57,8 +57,9 @@ export function createChatBackends({
     emit(backendId, id, result);
   };
   /**
-   * Grants the daemon a checkout the editor approved, so local chat may use it. The daemon keeps
-   * the grant (unlisted among recent folders) and re-checks the folder's identity on use.
+   * Grants the daemon a checkout or worktree the editor approved, when a chat first uses it, so a
+   * folder no chat used gains no lasting authority. The daemon keeps the grant (unlisted among
+   * recent folders) and re-checks the folder's identity on use.
    */
   const grantEditorFolder = (path: string) => {
     if (!local) return Promise.resolve();
@@ -183,10 +184,6 @@ export function createChatBackends({
       }
       if (backendId === 'local' && !local) throw localResult.error;
       return targets.find((target) => target.id === backendId)!.context;
-    },
-    /** Grants the daemon a checkout the editor just approved; failures wait for its next use. */
-    grantEditorFolder: (path: string) => {
-      void grantEditorFolder(path).catch(() => {});
     },
     async chooseFolder() {
       const backend = requireBackend('Folder selection is unavailable.');

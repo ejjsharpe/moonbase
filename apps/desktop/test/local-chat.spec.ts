@@ -326,6 +326,63 @@ test('a crashed daemon restarts on the next request, and the chat shows it recon
   }
 });
 
+test('the editor works while the daemon starts; a failed first start shows a retryable Unavailable state that recovers', async () => {
+  test.setTimeout(60_000);
+  const profile = await localProfile('moonbase-local-startup-', {
+    steps: [{ reply: 'Started after the retry' }],
+  });
+  const gate = join(profile.root, 'gate'),
+    checkout = join(profile.root, 'checkout');
+  await mkdir(gate);
+  await mkdir(checkout);
+  await writeFile(join(checkout, 'notes.md'), 'draft\n');
+  // Every daemon start waits on the gate, so the first stays starting until the test fails it.
+  const launched = await profile.launch({ MOONBASE_TEST_DAEMON_GATE: gate });
+  const { app, page } = launched;
+  try {
+    // The window and editor work while the daemon is still starting.
+    await pickWith(app, checkout);
+    await page.getByRole('button', { name: 'Open checkout', exact: true }).click();
+    const opener = page.getByRole('dialog', { name: 'Open project', exact: true });
+    const treeItem = page.getByRole('treeitem', { name: /^notes\.md/ });
+    await expect(opener.or(treeItem)).toBeVisible();
+    if (await opener.isVisible())
+      await opener.getByRole('button', { name: 'Open folder…' }).click();
+    await treeItem.dblclick();
+    const editor = page.getByRole('textbox', { name: 'notes.md editor', exact: true });
+    await editor.focus();
+    await editor.press('Meta+a');
+    await editor.pressSequentially('edited while the daemon starts');
+    await editor.press('Meta+s');
+    await expect
+      .poll(() => readFile(join(checkout, 'notes.md'), 'utf8'))
+      .toBe('edited while the daemon starts');
+    expect(await readDaemonPid(profile.daemon)).toBeUndefined();
+    // The first start fails: local chat is Unavailable, and says it can be retried.
+    await writeFile(join(gate, 'fail'), '');
+    await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+    const unavailable = page.getByLabel('Chat configuration');
+    await expect(unavailable).toContainText(
+      'Moonbase could not start or reach its local chat daemon. Retry; editing remains available.',
+    );
+    // Once the daemon can start, a retry reaches it.
+    await rm(join(gate, 'fail'));
+    await writeFile(join(gate, 'start'), '');
+    await page.getByRole('tab', { name: /^checkout/ }).click();
+    await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
+    await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+    await expect(unavailable).toHaveCount(0);
+    await addProviderKey(page, 'sk-controlled-startup');
+    await page.getByLabel('Message', { exact: true }).fill('Start now');
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    await expect(page.getByText('Started after the retry', { exact: true })).toBeVisible();
+    expect(isAlive((await readDaemonPid(profile.daemon))!)).toBe(true);
+  } finally {
+    await profile.exit(launched);
+    await profile.release();
+  }
+});
+
 test('folder grants: a chat without a project becomes one, an editor checkout and a new worktree are granted to the daemon', async () => {
   test.setTimeout(90_000);
   const profile = await localProfile('moonbase-local-grants-', {
@@ -351,6 +408,11 @@ test('folder grants: a chat without a project becomes one, an editor checkout an
   await writeFile(join(repository, 'README.md'), '# Editor checkout\n');
   git('add', '.');
   git('commit', '-qm', 'Grant fixture');
+  // A worktree Git lists for the checkout, which no chat uses.
+  const unused = join(profile.root, 'editor-repo-unused');
+  git('worktree', 'add', '-q', '-b', 'unused', unused);
+  const approvals = () =>
+    readFile(join(profile.daemon, 'approved-folders.json'), 'utf8').catch(() => '');
   const launched = await profile.launch({
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_CONFIG_NOSYSTEM: '1',
@@ -398,6 +460,8 @@ test('folder grants: a chat without a project becomes one, an editor checkout an
     if (await opener.isVisible())
       await opener.getByRole('button', { name: 'Open folder…' }).click();
     await expect(page.getByRole('tab', { name: 'editor-repo · main', exact: true })).toBeVisible();
+    // Opening it grants the daemon nothing; a chat's first use of it does.
+    expect(await approvals()).not.toContain(JSON.stringify(repository));
     await page.getByRole('tab', { name: 'Agents', exact: true }).click();
     await page.getByRole('button', { name: 'New chat', exact: true }).click();
     await app.evaluate(({ dialog }) => {
@@ -426,9 +490,13 @@ test('folder grants: a chat without a project becomes one, an editor checkout an
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     await expect(page.getByText('Worktree reply', { exact: true })).toBeVisible();
     await access(join(`${repository}-worktrees`, 'chat-tidy-the-readme', 'README.md'));
-    const approvals = await readFile(join(profile.daemon, 'approved-folders.json'), 'utf8');
-    expect(approvals).toContain(repository);
-    expect(approvals).toContain(join(`${repository}-worktrees`, 'chat-tidy-the-readme'));
+    const granted = await approvals();
+    expect(granted).toContain(JSON.stringify(repository));
+    expect(granted).toContain(
+      JSON.stringify(join(`${repository}-worktrees`, 'chat-tidy-the-readme')),
+    );
+    // The listed worktree no chat used was never granted.
+    expect(granted).not.toContain(JSON.stringify(unused));
   } finally {
     await profile.exit(launched);
     await profile.release();

@@ -329,7 +329,7 @@ test('turning a chat into a project opens only its own folder, then lists it und
   }
 });
 
-test('editor checkouts are granted to the daemon once; a chat naming one waits for its grant', async () => {
+test('an editor folder is granted to the daemon only when a chat first uses it, then once', async () => {
   const runtime = ManagedRuntime.make(Layer.empty);
   const session = { host: { hostId: 'local', storeId: 'store' }, actorId: 'owner' };
   const grants: { path: string; recent?: boolean }[] = [],
@@ -359,11 +359,13 @@ test('editor checkouts are granted to the daemon once; a chat naming one waits f
       },
     },
   );
+  // The editor approved a checkout and listed two of its worktrees; no chat has used any yet.
+  const editorFolders = new Set(['/editor', '/editor-worktrees/a', '/editor-worktrees/unused']);
   const owner = createChatBackends({
     runtime,
     localResult: { backend, error: null },
     acquireLocal: async () => ({ backend, error: null }),
-    isEditorFolder: (path) => path === '/editor',
+    isEditorFolder: (path) => editorFolders.has(path),
     chatConfiguration: null,
     remoteChat: null,
     connection: null,
@@ -380,23 +382,27 @@ test('editor checkouts are granted to the daemon once; a chat naming one waits f
       settings: { cwd, model: { provider: 'faux', modelId: 'faux' } },
     });
   try {
-    // A failed eager grant is retried when a chat uses the folder.
-    owner.grantEditorFolder('/editor');
-    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal('grantEditorFolder' in owner, false, 'nothing grants an editor folder eagerly');
+    assert.equal(grants.length, 0);
+    // A failed grant fails the chat's request and is tried again on the folder's next use.
+    const failed = await create('/editor');
+    assert(!failed.ok && failed.error.code === 'Unavailable');
     assert.deepEqual(grants, [{ path: '/editor', recent: false }]);
+    assert.equal(sent.length, 0);
     fail = false;
     assert((await create('/editor')).ok);
-    assert.deepEqual(grants, [
-      { path: '/editor', recent: false },
-      { path: '/editor', recent: false },
-    ]);
-    owner.grantEditorFolder('/editor');
+    assert.equal(grants.length, 2);
     assert((await call('findChatFiles', { session, cwd: '/editor', query: 'a' })).ok);
+    assert((await create('/editor')).ok);
     assert.equal(grants.length, 2, 'a granted folder is not granted again');
+    assert((await create('/editor-worktrees/a')).ok);
+    assert.deepEqual(grants.slice(2), [{ path: '/editor-worktrees/a', recent: false }]);
     // A path the editor never approved is passed on as it is and gains nothing.
     assert((await create('/elsewhere')).ok);
-    assert.equal(grants.length, 2);
-    assert.equal(sent.length, 3);
+    assert.equal(grants.length, 3);
+    assert.equal(sent.length, 5);
+    // The listed worktree no chat used was never granted.
+    assert(!grants.some((grant) => grant.path === '/editor-worktrees/unused'));
   } finally {
     await owner.releaseDocument();
     await runtime.dispose();
