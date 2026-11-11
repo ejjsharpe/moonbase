@@ -28,7 +28,7 @@ The data directory is its only argument (a second one is refused); everything el
 ```
 
 - **Local mode** listens on an ephemeral 127.0.0.1 port. It runs the local Pi runtime with the local provider catalog and the Claude Code subscription; credentials are encrypted under a key in the Keychain (the default) or a private key file, which is checked at startup and created at the first sign-in. A chat may use only a folder in `approved-folders.json`. The daemon never opens a browser.
-- **Host mode** is the fixed-settings runtime of the standalone host (`host.ts`) on the configured port, with host-side provider keys.
+- **Host mode** is the fixed-settings runtime of the standalone host (`host.ts`) on the configured port, with host-side provider keys. Until remote hosts move to the daemon (DM-07), host mode still reads those keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) and `PI_CLAUDE_CODE_COMMAND` from its environment, as `host.ts` does; local mode reads none.
 
 On start it prints one JSON `ready` line on stdout (`{"event":"ready","host":…,"port":…}`); failures print one `failed` line on stderr and exit 1, including "already running" when another daemon holds the lock. `SIGTERM` or `SIGINT` stops admitting (new requests and runs are refused at once), closes the server and runtime, closes Claude Code's workers, removes `endpoint.json` and exits 0; interrupted runs resume on the next start through Pi Durable. A local daemon also exits by itself after 5 minutes with no authenticated client request in flight, no open watch and no active work; host mode never idles out. Logs record only lifecycle events and failure codes: no token, credentials, request bodies or chat text.
 
