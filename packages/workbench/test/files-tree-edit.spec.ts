@@ -76,7 +76,6 @@ test('F2 renames in place with the stem selected, and the tree and open file fol
   await expect(input).toHaveValue('welcome.ts');
   expect(await selection(input)).toEqual([0, 'welcome'.length]);
   await expect(row(page, 'welcome.ts')).toHaveCSS('height', '28px');
-  await page.screenshot({ path: 'test-results/tree-rename.png' });
   await input.pressSequentially('hello');
   await input.press('Enter');
   await expect(input).toHaveCount(0);
@@ -239,7 +238,6 @@ test('Enter shows errors beside the field and keeps it open', async ({ page }) =
   await expect(input).toBeFocused();
   await expect(input).toHaveAttribute('aria-invalid', 'true');
   await expect(input).toHaveAccessibleDescription('A name can’t contain “/”.');
-  await page.screenshot({ path: 'test-results/tree-rename-error.png' });
   // Typing clears the error; the backend's own refusals show the same way.
   await input.fill('..');
   await expect(error).toHaveCount(0);
@@ -273,7 +271,6 @@ test('replacing an existing entry asks first; Cancel returns to the name', async
   const prompt = page.getByRole('dialog', { name: 'Replace ignored.txt?', exact: true });
   await expect(prompt).toContainText('ignored.txt already exists and will be replaced.');
   await expect(prompt.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
-  await page.screenshot({ path: 'test-results/tree-replace.png' });
   await prompt.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(prompt).toHaveCount(0);
   await expect(input).toBeFocused();
@@ -406,7 +403,6 @@ test('New File… and New Folder… on a folder type the name first among its ch
   const placeholder = tree(page).getByRole('treeitem', { name: 'New file', exact: true });
   await expect(placeholder).toHaveAttribute('aria-level', '2');
   await expect(placeholder).toHaveAttribute('aria-posinset', '1');
-  await page.screenshot({ path: 'test-results/tree-new-file.png' });
   await file.fill('made.ts');
   await file.press('Enter');
   await expect(file).toHaveCount(0);

@@ -61,7 +61,6 @@ test('first folder open displays every file before Git finishes and then fades i
       'color',
       'rgb(139, 144, 160)',
     );
-    await page.screenshot({ path: 'test-results/explorer-ignored-files.png', fullPage: true });
   } finally {
     await page.evaluate(() => window.ignoreProbe.release?.());
   }
@@ -151,7 +150,6 @@ test('collapse skips filesystem reads and reopening shows cached children during
     await tree.press('ArrowRight');
     await expect(child).toBeVisible();
     expect(await page.evaluate(() => window.explorerProbe.calls)).toEqual(['src', 'src']);
-    await page.screenshot({ path: 'test-results/explorer-cached-navigation.png', fullPage: true });
   } finally {
     await page.evaluate(() => window.explorerProbe.release?.());
   }
@@ -200,7 +198,6 @@ test('large expanded trees keep navigation and selection virtualized', async ({ 
   ).toBe(10000);
   expect(await tree.getByRole('treeitem').count()).toBeLessThan(80);
   await expect(firstFolder).toHaveAttribute('aria-selected', 'true');
-  await page.screenshot({ path: 'test-results/explorer-large-tree.png', fullPage: true });
 });
 
 test('Git status colours changed files, marks them with a letter and dots folders above them', async ({
@@ -261,7 +258,6 @@ test('Git status colours changed files, marks them with a letter and dots folder
   });
   await expect(dirty).toBeVisible();
   await expect(dirty.locator('[aria-hidden="true"]').last()).toHaveText('•M');
-  await page.screenshot({ path: 'test-results/explorer-git-status.png', fullPage: true });
 
   await region.getByRole('button', { name: 'Changes', exact: true }).click();
   const changes = region.getByRole('region', { name: 'Changes', exact: true });

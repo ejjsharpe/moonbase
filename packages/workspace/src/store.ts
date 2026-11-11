@@ -42,7 +42,7 @@ export class Store {
         'PRAGMA application_id=1296193363; CREATE TABLE IF NOT EXISTS records (bucket TEXT NOT NULL, key TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(bucket,key)); CREATE TABLE IF NOT EXISTS recovery (client TEXT PRIMARY KEY, revision INTEGER NOT NULL, body TEXT NOT NULL);',
       );
       this.db.exec(
-        `CREATE INDEX IF NOT EXISTS pending_saves_v2 ON records(bucket) WHERE bucket='saves' AND ${pendingSaves}; DROP INDEX IF EXISTS pending_saves;`,
+        `CREATE INDEX IF NOT EXISTS pending_saves_v2 ON records(bucket) WHERE bucket='saves' AND ${pendingSaves};`,
       );
       chmodSync(file, 0o600);
       const identity = this.get<string>('meta', 'host');

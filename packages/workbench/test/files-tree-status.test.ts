@@ -1,4 +1,5 @@
-import { test, expect } from '@playwright/test';
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
 import type { GitChange } from '@moonbase/contracts/workspace';
 import { rollUpGitStatus, selectStrongerKind } from '../src/editor/files-tree-status.ts';
 
@@ -13,7 +14,7 @@ test('a path shows its strongest kind and each folder its strongest descendant',
     { path: 'merge/x.ts', area: 'untracked', kind: 'untracked' },
     { path: 'merge/y.ts', area: 'conflicted', kind: 'conflicted' },
   ];
-  expect(Object.fromEntries(rollUpGitStatus(changes))).toEqual({
+  assert.deepEqual(Object.fromEntries(rollUpGitStatus(changes)), {
     'README.md': 'untracked',
     // A new file edited since it was staged is still added.
     'src/lib/util.ts': 'added',
@@ -30,10 +31,11 @@ test('a path shows its strongest kind and each folder its strongest descendant',
     merge: 'conflicted',
   });
   // Order does not matter: a weaker change below a stronger folder leaves it as it is.
-  expect(Object.fromEntries(rollUpGitStatus([...changes].reverse()))).toEqual(
+  assert.deepEqual(
+    Object.fromEntries(rollUpGitStatus([...changes].reverse())),
     Object.fromEntries(rollUpGitStatus(changes)),
   );
-  expect(rollUpGitStatus([]).size).toBe(0);
+  assert.equal(rollUpGitStatus([]).size, 0);
 });
 
 test('a path staged and unstaged shows what happened to it, else its strongest kind', () => {
@@ -59,7 +61,7 @@ test('a path staged and unstaged shows what happened to it, else its strongest k
     change('mt.ts', 'unstaged', 'typechange'),
   ];
   const kinds = rollUpGitStatus(changes);
-  expect(Object.fromEntries(kinds)).toEqual({
+  assert.deepEqual(Object.fromEntries(kinds), {
     'am.ts': 'added',
     'cached.ts': 'untracked',
     'ad.ts': 'deleted',
@@ -67,25 +69,26 @@ test('a path staged and unstaged shows what happened to it, else its strongest k
     'mm.ts': 'modified',
     'mt.ts': 'modified',
   });
-  expect(rollUpGitStatus([...changes].reverse())).toEqual(kinds);
+  assert.deepEqual(rollUpGitStatus([...changes].reverse()), kinds);
   // Folders still take the strongest of their descendants' kinds.
-  expect(
+  assert.equal(
     rollUpGitStatus([
       change('a/am.ts', 'staged', 'added'),
       change('a/am.ts', 'unstaged', 'modified'),
       change('a/cached.ts', 'staged', 'deleted'),
       change('a/cached.ts', 'untracked', 'untracked'),
     ]).get('a'),
-  ).toBe('added');
+    'added',
+  );
 });
 
 test('kinds rank conflicted, deleted, modified, typechange, added, then untracked', () => {
   const ranked = ['conflicted', 'deleted', 'modified', 'typechange', 'added', 'untracked'] as const;
   ranked.forEach((stronger, index) => {
-    expect(selectStrongerKind(undefined, stronger)).toBe(stronger);
+    assert.equal(selectStrongerKind(undefined, stronger), stronger);
     for (const weaker of ranked.slice(index)) {
-      expect(selectStrongerKind(stronger, weaker)).toBe(stronger);
-      expect(selectStrongerKind(weaker, stronger)).toBe(stronger);
+      assert.equal(selectStrongerKind(stronger, weaker), stronger);
+      assert.equal(selectStrongerKind(weaker, stronger), stronger);
     }
   });
 });

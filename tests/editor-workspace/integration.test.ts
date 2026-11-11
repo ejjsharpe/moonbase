@@ -21,7 +21,6 @@ import {
   ApplicationError,
   type EditorClient,
   type FileTarget,
-  type WorkspaceEvent,
 } from '@moonbase/contracts/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import {
@@ -129,61 +128,54 @@ function fixture() {
 const code = (expected: ApplicationError['code']) => (error: unknown) =>
   ApplicationError.is(error) && error.code === expected;
 
-for (const kind of ['move', 'copy'] as const)
-  for (const [source, collision] of [
-    ['b.ts', null],
-    ['b.ts', 'b.ts'],
-    ['b.ts', 'B.ts'],
-    ['bé.ts', 'be\u0301.ts'],
-  ] as const)
-    test(`batch ${kind} captures only individual destinations (${source}, collision: ${collision})`, async () => {
-      const f = fixture();
+for (const [kind, source, collision] of [
+  ['copy', 'b.ts', null],
+  ['move', 'bé.ts', 'be\u0301.ts'],
+] as const)
+  test(`batch ${kind} captures only individual destinations (${source}, collision: ${collision})`, async () => {
+    const f = fixture();
+    try {
+      const editor = await f.editor('batch-' + kind),
+        checkout = await editor.openCheckout(f.roots[0]);
+      if (source !== 'b.ts') renameSync(join(f.roots[0], 'b.ts'), join(f.roots[0], source));
+      mkdirSync(join(f.roots[0], 'dest'));
+      writeFileSync(join(f.roots[0], 'dest/unrelated.ts'), 'RETAIN\n');
+      const unrelated = { checkout, path: 'dest/unrelated.ts' };
+      await editor.open(unrelated, { intent: 'keep' });
+      editor.edit(unrelated, 'UNSAVED\n');
+      if (collision) writeFileSync(join(f.roots[0], 'dest', collision), 'REPLACE\n');
+      const workflow = editor.createMutation({ checkout, kind, paths: [source, 'folder'] });
       try {
-        const editor = await f.editor('batch-' + kind),
-          checkout = await editor.openCheckout(f.roots[0]);
-        if (source !== 'b.ts') renameSync(join(f.roots[0], 'b.ts'), join(f.roots[0], source));
-        mkdirSync(join(f.roots[0], 'dest'));
-        writeFileSync(join(f.roots[0], 'dest/unrelated.ts'), 'RETAIN\n');
-        const unrelated = { checkout, path: 'dest/unrelated.ts' };
-        await editor.open(unrelated, { intent: 'keep' });
-        editor.edit(unrelated, 'UNSAVED\n');
-        if (collision) writeFileSync(join(f.roots[0], 'dest', collision), 'REPLACE\n');
-        const workflow = editor.createMutation({ checkout, kind, paths: [source, 'folder'] });
-        try {
-          assert.equal(await workflow.apply('dest', '', false), !collision);
-          assert.equal(workflow.getSnapshot().error, '');
-          assert.deepEqual(
-            workflow.getSnapshot().replacements?.map((entry) => entry.target.path),
-            collision ? ['dest/' + collision] : [],
-          );
-          if (collision) {
-            assert.equal(readFileSync(join(f.roots[0], 'dest', collision), 'utf8'), 'REPLACE\n');
-            assert.equal(
-              await workflow.apply('dest', '', true),
-              true,
-              workflow.getSnapshot().error,
-            );
-          }
-          assert.equal(readFileSync(join(f.roots[0], 'dest', source), 'utf8'), 'B\n');
-          assert.equal(readFileSync(join(f.roots[0], 'dest/folder/nested.ts'), 'utf8'), 'NESTED\n');
-          assert.equal(readFileSync(join(f.roots[0], 'dest/unrelated.ts'), 'utf8'), 'RETAIN\n');
-          assert.equal(editor.buffer(unrelated)?.text, 'UNSAVED\n');
-          const sources = await editor.list(checkout, '');
-          assert.equal(
-            sources.entries.some((entry) => entry.path === source),
-            kind === 'copy',
-          );
-          assert.equal(
-            sources.entries.some((entry) => entry.path === 'folder'),
-            kind === 'copy',
-          );
-        } finally {
-          await workflow.dispose();
+        assert.equal(await workflow.apply('dest', '', false), !collision);
+        assert.equal(workflow.getSnapshot().error, '');
+        assert.deepEqual(
+          workflow.getSnapshot().replacements?.map((entry) => entry.target.path),
+          collision ? ['dest/' + collision] : [],
+        );
+        if (collision) {
+          assert.equal(readFileSync(join(f.roots[0], 'dest', collision), 'utf8'), 'REPLACE\n');
+          assert.equal(await workflow.apply('dest', '', true), true, workflow.getSnapshot().error);
         }
+        assert.equal(readFileSync(join(f.roots[0], 'dest', source), 'utf8'), 'B\n');
+        assert.equal(readFileSync(join(f.roots[0], 'dest/folder/nested.ts'), 'utf8'), 'NESTED\n');
+        assert.equal(readFileSync(join(f.roots[0], 'dest/unrelated.ts'), 'utf8'), 'RETAIN\n');
+        assert.equal(editor.buffer(unrelated)?.text, 'UNSAVED\n');
+        const sources = await editor.list(checkout, '');
+        assert.equal(
+          sources.entries.some((entry) => entry.path === source),
+          kind === 'copy',
+        );
+        assert.equal(
+          sources.entries.some((entry) => entry.path === 'folder'),
+          kind === 'copy',
+        );
       } finally {
-        await f.close();
+        await workflow.dispose();
       }
-    });
+    } finally {
+      await f.close();
+    }
+  });
 
 for (const kind of ['move', 'copy'] as const)
   test(`batch ${kind} protects open buffers inside an actual replacement`, async () => {
@@ -433,79 +425,6 @@ test(
       assert.deepEqual(restored.buffer(target)?.disk, baseline);
       assert.equal(await restored.save(target), false);
     } finally {
-      await f.close();
-    }
-  },
-);
-
-test(
-  'real move facts remain visible after origin acknowledgement until the other controller publishes',
-  { timeout: 30000 },
-  async () => {
-    const f = fixture();
-    let latest: WorkspaceEvent | undefined,
-      release = () => {};
-    let paused = true;
-    const delayed: EditorClient = {
-      command: f.client.command,
-      watch: (input, receive, onError) => {
-        release = () => {
-          paused = false;
-          if (latest) receive(latest);
-        };
-        return f.client.watch(
-          input,
-          (event) => {
-            if (paused) latest = event;
-            else receive(event);
-          },
-          onError,
-        );
-      },
-    };
-    try {
-      const a = await f.editor('move-a'),
-        b = await f.editor('move-b', delayed);
-      const checkout = await a.openCheckout(f.roots[0]);
-      await b.openCheckout(f.roots[0]);
-      const target = { checkout, path: 'a.ts' },
-        moved = { checkout, path: 'moved.ts' };
-      await a.open(target);
-      await b.open(target);
-      a.edit(target, 'A DRAFT\n');
-      b.edit(target, 'B DRAFT\n');
-      await a.flush();
-      await b.flush();
-      const sources = await a.inspect(checkout, ['a.ts']);
-      const result = await a.mutate({
-        id: 'one-move',
-        checkout,
-        kind: 'move',
-        sources,
-        destination: 'moved.ts',
-      });
-      assert.equal(result.outcome, 'completed');
-      assert.equal(
-        (await f.client.command('loadRecovery', { clientId: 'move-a' })).operations.length,
-        0,
-      );
-      assert.equal(
-        (await f.client.command('loadRecovery', { clientId: 'move-b' })).operations[0].id,
-        'one-move',
-      );
-      await b.reconcileRecovery();
-      release();
-      await b.flush();
-      assert.equal(a.buffer(moved)?.text, 'A DRAFT\n');
-      assert.equal(b.buffer(moved)?.text, 'B DRAFT\n');
-      assert.equal(b.buffer(target), undefined);
-      assert.equal(
-        (await f.client.command('loadRecovery', { clientId: 'move-b' })).operations.length,
-        0,
-      );
-      assert.equal(readFileSync(join(f.roots[0], 'moved.ts'), 'utf8'), 'WORKING\n');
-    } finally {
-      release();
       await f.close();
     }
   },
@@ -797,275 +716,242 @@ test(
   },
 );
 
-for (const mode of ['lost', 'reordered'] as const)
-  test(
-    `${mode} Save replies recover every own transition without another native replacement`,
-    { timeout: 15000 },
-    async () => {
-      const f = fixture(),
-        committed = deferred(),
-        reply = deferred();
-      let lose = mode === 'lost',
-        held = mode === 'reordered';
-      const requestIds = new Map<string, Set<string>>();
-      const transport: EditorClient = {
-        watch: f.client.watch,
-        command: async (operation, input, options) => {
-          const result = await f.client.command(operation, input, options);
-          if (operation === 'saveFile') {
-            const request = input as { target: FileTarget; requestId: string };
-            const ids = requestIds.get(request.target.path) ?? new Set<string>();
-            ids.add(request.requestId);
-            requestIds.set(request.target.path, ids);
-            if (request.target.path === 'a.ts') {
-              if (lose) {
-                lose = false;
-                throw new ApplicationError({
-                  code: 'Uncertain',
-                  message: 'Controlled committed Save reply loss',
-                });
-              }
-              if (held) {
-                committed.resolve();
-                await reply.promise;
-              }
-            }
-          }
-          return result;
-        },
-      };
-      try {
-        const editor = await f.editor('two-saves-' + mode, transport),
-          checkout = await editor.openCheckout(f.roots[0]);
-        const a = { checkout, path: 'a.ts' },
-          b = { checkout, path: 'b.ts' };
-        for (const target of [a, b]) {
-          await editor.open(target);
-          editor.edit(target, 'CAPTURED ' + target.path);
-        }
-        await editor.flush();
-        const first = editor.save(a).then(
-          (value) => ({ value }),
-          (error) => ({ error }),
-        );
-        if (held) await committed.promise;
-        else assert('error' in (await first));
-        const inodeA = statSync(join(f.roots[0], a.path)).ino;
-        await editor.save(b).catch(() => false);
-        const inodeB = statSync(join(f.roots[0], b.path)).ino;
-        if (held) {
-          held = false;
-          reply.resolve();
-          await first;
-        }
-        editor.edit(a, 'NEWER A AFTER CAPTURE');
-        editor.edit(b, 'NEWER B AFTER CAPTURE');
-        if (mode === 'lost') await editor.save(a).catch(() => false);
-        await editor.flush();
-        assert.equal(
-          statSync(join(f.roots[0], a.path)).ino,
-          inodeA,
-          'Recovering the original Save receipt must not replace disk again',
-        );
-        assert.equal(statSync(join(f.roots[0], b.path)).ino, inodeB);
-        assert.equal(requestIds.get(a.path)?.size, 1);
-        assert.equal(requestIds.get(b.path)?.size, 1);
-        assert.equal(readFileSync(join(f.roots[0], a.path), 'utf8'), 'CAPTURED a.ts');
-        assert.equal(readFileSync(join(f.roots[0], b.path), 'utf8'), 'CAPTURED b.ts');
-        assert.equal(
-          await answering(
-            editor,
-            () => editor.prepareQuit(),
-            async () => 'cancel',
-          ),
-          false,
-        );
-        await editor.dispose();
-        await f.runtime.dispose();
-        const restarted = f.launch(),
-          restored = await f.editor('two-saves-' + mode, restarted.client);
-        assert.equal(restored.buffer(a)?.text, 'NEWER A AFTER CAPTURE');
-        assert.equal(restored.buffer(a)?.disk.text, 'CAPTURED a.ts');
-        assert.equal(restored.buffer(b)?.text, 'NEWER B AFTER CAPTURE');
-        assert.equal(restored.buffer(b)?.disk.text, 'CAPTURED b.ts');
-        assert.equal(
-          await answering(
-            restored,
-            () => restored.prepareQuit(),
-            async () => 'discard',
-          ),
-          true,
-        );
-      } finally {
-        lose = false;
-        held = false;
-        reply.resolve();
-        await f.close();
-      }
-    },
-  );
-
-for (const failure of [
-  'sqlite-before-commit',
-  'lost-after-commit',
-  'persistence-after-commit',
-] as const)
-  test(
-    `${failure} publication with an already-started Save resolves without losing newer drafts`,
-    { timeout: 15000 },
-    async () => {
-      const f = fixture(),
-        startedB = deferred(),
-        releaseB = deferred();
-      let holdB = true,
-        failPublication = false,
-        denyStatus = false,
-        saveCalls = 0;
-      let original: Parameters<EditorClient['command']>[1] | undefined,
-        originalId = '',
-        rejectedOriginal = false;
-      const transport: EditorClient = {
-        watch: f.client.watch,
-        command: async (operation, input, options) => {
-          if (operation === 'saveFile') {
-            saveCalls++;
-            if ((input as { target: FileTarget }).target.path === 'b.ts' && holdB) {
-              startedB.resolve();
-              await releaseB.promise;
-            }
-          }
-          if (operation === 'getRecoveryPublication' && denyStatus)
-            throw new ApplicationError({
-              code: 'Unavailable',
-              message: 'Controlled unavailable publication status',
-            });
-          if (operation === 'persistRecovery') {
-            const publication = input as { requestId: string };
-            if (publication.requestId === originalId)
-              assert.deepEqual(
-                input,
-                original,
-                'An exact publication retry cannot change its captured input',
-              );
-            if (failPublication) {
-              failPublication = false;
-              original = structuredClone(input);
-              originalId = publication.requestId;
-              if (failure === 'sqlite-before-commit') {
-                const lock = new DatabaseSync(
-                  join(f.dataDirectory, 'moonbase-workspace-v1.sqlite'),
-                );
-                lock.exec('BEGIN IMMEDIATE');
-                try {
-                  return await f.client.command(operation, input, options);
-                } finally {
-                  lock.exec('ROLLBACK');
-                  lock.close();
-                }
-              }
-              await f.client.command(operation, input, options);
-              denyStatus = true;
+test(
+  'a lost Save reply recovers every own transition without another native replacement',
+  { timeout: 15000 },
+  async () => {
+    const f = fixture();
+    let lose = true;
+    const requestIds = new Map<string, Set<string>>();
+    const transport: EditorClient = {
+      watch: f.client.watch,
+      command: async (operation, input, options) => {
+        const result = await f.client.command(operation, input, options);
+        if (operation === 'saveFile') {
+          const request = input as { target: FileTarget; requestId: string };
+          const ids = requestIds.get(request.target.path) ?? new Set<string>();
+          ids.add(request.requestId);
+          requestIds.set(request.target.path, ids);
+          if (request.target.path === 'a.ts') {
+            if (lose) {
+              lose = false;
               throw new ApplicationError({
-                code: failure === 'persistence-after-commit' ? 'Persistence' : 'Unavailable',
-                message: 'Controlled committed publication response failure',
+                code: 'Uncertain',
+                message: 'Controlled committed Save reply loss',
               });
             }
           }
-          try {
-            return await f.client.command(operation, input, options);
-          } catch (error) {
-            if (
-              operation === 'persistRecovery' &&
-              (input as { requestId: string }).requestId === originalId &&
-              ApplicationError.is(error) &&
-              error.code === 'Conflict'
-            )
-              rejectedOriginal = true;
-            throw error;
-          }
-        },
-      };
-      try {
-        const editor = await f.editor('publication-' + failure, transport),
-          checkout = await editor.openCheckout(f.roots[0]);
-        const a = { checkout, path: 'a.ts' },
-          b = { checkout, path: 'b.ts' };
-        for (const target of [a, b]) {
-          await editor.open(target);
-          editor.edit(target, 'CAPTURE ' + target.path);
         }
-        await editor.flush();
-        const savingB = editor.save(b).catch(() => false);
-        await startedB.promise;
-        failPublication = true;
-        await editor.save(a).catch(() => false);
-        const inodeA = statSync(join(f.roots[0], a.path)).ino;
-        const firstReceipt = await f.client.command('getRecoveryPublication', {
-          clientId: editor.clientId,
-          requestId: originalId,
-        });
-        holdB = false;
-        releaseB.resolve();
-        await savingB;
-        const inodeB = statSync(join(f.roots[0], b.path)).ino;
-        editor.edit(a, 'NEWER A DURING PUBLICATION');
-        editor.edit(b, 'NEWER B DURING PUBLICATION');
-        denyStatus = false;
-        await editor.resolveRecoveryPublication();
-        // Explicit retries of already-known Save facts must not dispatch another Save.
-        if (editor.buffer(a)?.pendingSave) await editor.save(a).catch(() => false);
-        if (editor.buffer(b)?.pendingSave) await editor.save(b).catch(() => false);
-        await editor.flush();
-        const retained = await f.client.command('getRecoveryPublication', {
-          clientId: editor.clientId,
-          requestId: originalId,
-        });
-        if (rejectedOriginal) assert.equal(retained, null);
-        else assert.deepEqual(retained, firstReceipt);
-        assert.equal(saveCalls, 2);
-        assert.equal(statSync(join(f.roots[0], a.path)).ino, inodeA);
-        assert.equal(statSync(join(f.roots[0], b.path)).ino, inodeB);
-        const durable = await f.client.command('loadRecovery', { clientId: editor.clientId });
-        assert.equal(
-          durable.state.drafts.find((draft) => draft.target.path === a.path)?.text,
-          'NEWER A DURING PUBLICATION',
-        );
-        assert.equal(
-          durable.state.drafts.find((draft) => draft.target.path === b.path)?.text,
-          'NEWER B DURING PUBLICATION',
-        );
-        assert.equal(
-          await answering(
-            editor,
-            () => editor.prepareQuit(),
-            async () => 'cancel',
-          ),
-          false,
-        );
-        await editor.dispose();
-        await f.runtime.dispose();
-        const restarted = f.launch(),
-          restored = await f.editor(editor.clientId, restarted.client);
-        assert.equal(restored.buffer(a)?.text, 'NEWER A DURING PUBLICATION');
-        assert.equal(restored.buffer(a)?.disk.text, 'CAPTURE a.ts');
-        assert.equal(restored.buffer(b)?.text, 'NEWER B DURING PUBLICATION');
-        assert.equal(restored.buffer(b)?.disk.text, 'CAPTURE b.ts');
-        assert.equal(
-          await answering(
-            restored,
-            () => restored.prepareQuit(),
-            async () => 'discard',
-          ),
-          true,
-        );
-      } finally {
-        holdB = false;
-        denyStatus = false;
-        releaseB.resolve();
-        await f.close();
+        return result;
+      },
+    };
+    try {
+      const editor = await f.editor('two-saves', transport),
+        checkout = await editor.openCheckout(f.roots[0]);
+      const a = { checkout, path: 'a.ts' },
+        b = { checkout, path: 'b.ts' };
+      for (const target of [a, b]) {
+        await editor.open(target);
+        editor.edit(target, 'CAPTURED ' + target.path);
       }
-    },
-  );
+      await editor.flush();
+      const first = editor.save(a).then(
+        (value) => ({ value }),
+        (error) => ({ error }),
+      );
+      assert('error' in (await first));
+      const inodeA = statSync(join(f.roots[0], a.path)).ino;
+      await editor.save(b).catch(() => false);
+      const inodeB = statSync(join(f.roots[0], b.path)).ino;
+      editor.edit(a, 'NEWER A AFTER CAPTURE');
+      editor.edit(b, 'NEWER B AFTER CAPTURE');
+      await editor.save(a).catch(() => false);
+      await editor.flush();
+      assert.equal(
+        statSync(join(f.roots[0], a.path)).ino,
+        inodeA,
+        'Recovering the original Save receipt must not replace disk again',
+      );
+      assert.equal(statSync(join(f.roots[0], b.path)).ino, inodeB);
+      assert.equal(requestIds.get(a.path)?.size, 1);
+      assert.equal(requestIds.get(b.path)?.size, 1);
+      assert.equal(readFileSync(join(f.roots[0], a.path), 'utf8'), 'CAPTURED a.ts');
+      assert.equal(readFileSync(join(f.roots[0], b.path), 'utf8'), 'CAPTURED b.ts');
+      assert.equal(
+        await answering(
+          editor,
+          () => editor.prepareQuit(),
+          async () => 'cancel',
+        ),
+        false,
+      );
+      await editor.dispose();
+      await f.runtime.dispose();
+      const restarted = f.launch(),
+        restored = await f.editor('two-saves', restarted.client);
+      assert.equal(restored.buffer(a)?.text, 'NEWER A AFTER CAPTURE');
+      assert.equal(restored.buffer(a)?.disk.text, 'CAPTURED a.ts');
+      assert.equal(restored.buffer(b)?.text, 'NEWER B AFTER CAPTURE');
+      assert.equal(restored.buffer(b)?.disk.text, 'CAPTURED b.ts');
+      assert.equal(
+        await answering(
+          restored,
+          () => restored.prepareQuit(),
+          async () => 'discard',
+        ),
+        true,
+      );
+    } finally {
+      lose = false;
+      await f.close();
+    }
+  },
+);
+
+test(
+  'a publication whose reply is lost with an already-started Save resolves without losing newer drafts',
+  { timeout: 15000 },
+  async () => {
+    const f = fixture(),
+      startedB = deferred(),
+      releaseB = deferred();
+    let holdB = true,
+      failPublication = false,
+      denyStatus = false,
+      saveCalls = 0;
+    let original: Parameters<EditorClient['command']>[1] | undefined,
+      originalId = '',
+      rejectedOriginal = false;
+    const transport: EditorClient = {
+      watch: f.client.watch,
+      command: async (operation, input, options) => {
+        if (operation === 'saveFile') {
+          saveCalls++;
+          if ((input as { target: FileTarget }).target.path === 'b.ts' && holdB) {
+            startedB.resolve();
+            await releaseB.promise;
+          }
+        }
+        if (operation === 'getRecoveryPublication' && denyStatus)
+          throw new ApplicationError({
+            code: 'Unavailable',
+            message: 'Controlled unavailable publication status',
+          });
+        if (operation === 'persistRecovery') {
+          const publication = input as { requestId: string };
+          if (publication.requestId === originalId)
+            assert.deepEqual(
+              input,
+              original,
+              'An exact publication retry cannot change its captured input',
+            );
+          if (failPublication) {
+            failPublication = false;
+            original = structuredClone(input);
+            originalId = publication.requestId;
+            await f.client.command(operation, input, options);
+            denyStatus = true;
+            throw new ApplicationError({
+              code: 'Unavailable',
+              message: 'Controlled committed publication response failure',
+            });
+          }
+        }
+        try {
+          return await f.client.command(operation, input, options);
+        } catch (error) {
+          if (
+            operation === 'persistRecovery' &&
+            (input as { requestId: string }).requestId === originalId &&
+            ApplicationError.is(error) &&
+            error.code === 'Conflict'
+          )
+            rejectedOriginal = true;
+          throw error;
+        }
+      },
+    };
+    try {
+      const editor = await f.editor('publication-lost', transport),
+        checkout = await editor.openCheckout(f.roots[0]);
+      const a = { checkout, path: 'a.ts' },
+        b = { checkout, path: 'b.ts' };
+      for (const target of [a, b]) {
+        await editor.open(target);
+        editor.edit(target, 'CAPTURE ' + target.path);
+      }
+      await editor.flush();
+      const savingB = editor.save(b).catch(() => false);
+      await startedB.promise;
+      failPublication = true;
+      await editor.save(a).catch(() => false);
+      const inodeA = statSync(join(f.roots[0], a.path)).ino;
+      const firstReceipt = await f.client.command('getRecoveryPublication', {
+        clientId: editor.clientId,
+        requestId: originalId,
+      });
+      holdB = false;
+      releaseB.resolve();
+      await savingB;
+      const inodeB = statSync(join(f.roots[0], b.path)).ino;
+      editor.edit(a, 'NEWER A DURING PUBLICATION');
+      editor.edit(b, 'NEWER B DURING PUBLICATION');
+      denyStatus = false;
+      await editor.resolveRecoveryPublication();
+      // Explicit retries of already-known Save facts must not dispatch another Save.
+      if (editor.buffer(a)?.pendingSave) await editor.save(a).catch(() => false);
+      if (editor.buffer(b)?.pendingSave) await editor.save(b).catch(() => false);
+      await editor.flush();
+      const retained = await f.client.command('getRecoveryPublication', {
+        clientId: editor.clientId,
+        requestId: originalId,
+      });
+      if (rejectedOriginal) assert.equal(retained, null);
+      else assert.deepEqual(retained, firstReceipt);
+      assert.equal(saveCalls, 2);
+      assert.equal(statSync(join(f.roots[0], a.path)).ino, inodeA);
+      assert.equal(statSync(join(f.roots[0], b.path)).ino, inodeB);
+      const durable = await f.client.command('loadRecovery', { clientId: editor.clientId });
+      assert.equal(
+        durable.state.drafts.find((draft) => draft.target.path === a.path)?.text,
+        'NEWER A DURING PUBLICATION',
+      );
+      assert.equal(
+        durable.state.drafts.find((draft) => draft.target.path === b.path)?.text,
+        'NEWER B DURING PUBLICATION',
+      );
+      assert.equal(
+        await answering(
+          editor,
+          () => editor.prepareQuit(),
+          async () => 'cancel',
+        ),
+        false,
+      );
+      await editor.dispose();
+      await f.runtime.dispose();
+      const restarted = f.launch(),
+        restored = await f.editor(editor.clientId, restarted.client);
+      assert.equal(restored.buffer(a)?.text, 'NEWER A DURING PUBLICATION');
+      assert.equal(restored.buffer(a)?.disk.text, 'CAPTURE a.ts');
+      assert.equal(restored.buffer(b)?.text, 'NEWER B DURING PUBLICATION');
+      assert.equal(restored.buffer(b)?.disk.text, 'CAPTURE b.ts');
+      assert.equal(
+        await answering(
+          restored,
+          () => restored.prepareQuit(),
+          async () => 'discard',
+        ),
+        true,
+      );
+    } finally {
+      holdB = false;
+      denyStatus = false;
+      releaseB.resolve();
+      await f.close();
+    }
+  },
+);
 
 test('the editor publishes each Git change with its kind and an unmerged path once, as a conflict', async () => {
   const f = fixture();

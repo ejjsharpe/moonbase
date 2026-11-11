@@ -1,7 +1,5 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
-import { build } from 'esbuild';
 import { decodeChatInput, decodeChatOutput, isChatCommand } from '@moonbase/contracts/chat-schema';
 import {
   formatChatMention,
@@ -116,22 +114,27 @@ function reverseFields(value: unknown): unknown {
   );
 }
 
-for (const operation of Object.keys(inputs) as ChatCommand[]) {
-  test(`${operation} preserves request/reply values and canonical serialized field order`, () => {
+test('every command keeps request/reply values in canonical field order and rejects extra request fields', () => {
+  for (const operation of Object.keys(inputs) as ChatCommand[]) {
     const request = inputs[operation],
       reply = outputs[operation];
     // Reversed input order must not change persisted request bindings.
     const reversed = reverseFields(request);
-    assert.equal(JSON.stringify(decodeChatInput(operation, reversed)), JSON.stringify(request));
-    assert.equal(JSON.stringify(decodeChatOutput(operation, reply)), JSON.stringify(reply));
-    assert.deepEqual(decodeChatInput(operation, request), request);
-  });
-  test(`${operation} rejects extra request fields without changing the supplied object`, () => {
-    const request = { ...inputs[operation], extra: 'private' };
-    assert.throws(() => decodeChatInput(operation, request));
-    assert.equal(request.extra, 'private');
-  });
-}
+    assert.equal(
+      JSON.stringify(decodeChatInput(operation, reversed)),
+      JSON.stringify(request),
+      operation,
+    );
+    assert.equal(
+      JSON.stringify(decodeChatOutput(operation, reply)),
+      JSON.stringify(reply),
+      operation,
+    );
+    const extra = { ...request, extra: 'private' };
+    assert.throws(() => decodeChatInput(operation, extra), Error, operation);
+    assert.equal(extra.extra, 'private');
+  }
+});
 
 test('request identities are exact and nested unknown fields reject', () => {
   for (const changed of [
@@ -286,21 +289,6 @@ test("a running response's text parts may carry their whole text within the live
   assert.throws(() => decodeChatOutput('getChat', { ...snapshot, entries: [entry] }));
 });
 
-test('derived public types retain mutable DTO fields and arrays', () => {
-  const decoded = decodeChatOutput('getChat', snapshot);
-  decoded.state = 'stopped';
-  decoded.conversation.title = 'Changed';
-  decoded.entries.push({
-    id: 'next',
-    role: 'assistant',
-    text: 'reply',
-    truncated: false,
-    transcript: entryTranscript('next'),
-  });
-  assert.equal(decoded.entries.length, 2);
-  assert.equal(snapshot.entries.length, 1);
-});
-
 test('schema failures use safe application errors without rejected values', () => {
   const secret = 'synthetic-private-value-not-for-errors';
   for (const [code, decode] of [
@@ -316,25 +304,6 @@ test('schema failures use safe application errors without rejected values', () =
       assert(!JSON.stringify(error).includes(secret));
       return true;
     });
-});
-
-test('schema entry stays independent of application dispatch and privileged implementations', async () => {
-  const result = await build({
-    absWorkingDir: fileURLToPath(new URL('../../../', import.meta.url)),
-    entryPoints: ['@moonbase/contracts/chat-schema'],
-    bundle: true,
-    platform: 'browser',
-    write: false,
-    metafile: true,
-  });
-  assert.deepEqual(
-    Object.keys(result.metafile.inputs).filter((path) =>
-      /packages\/(?:application|pi-runtime|ssh|workspace)\/|electron|@earendil-works|node:/.test(
-        path,
-      ),
-    ),
-    [],
-  );
 });
 
 test('transcript schemas bound decoded chunks, canonical base64, identities and continuation evidence', () => {

@@ -164,7 +164,6 @@ test('files dropped from Finder on a folder import there without a dialog, and a
   // Hovering a collapsed folder for a moment expands it.
   await expect(row(page, 'dest/inner.ts')).toBeVisible();
   await expect.poll(() => dropTargets(page)).toEqual(['dest', 'dest/inner.ts']);
-  await page.screenshot({ path: 'test-results/tree-finder-drop-region.png' });
   await drag.drop();
   await expect(row(page, 'dest/a.txt')).toBeVisible();
   expect(await page.evaluate(() => window.approved)).toEqual([['a.txt']]);

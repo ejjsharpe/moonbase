@@ -234,7 +234,6 @@ test('Hide Ignored Files hides ignored rows, moves the selection off them and sh
   await expect(
     menu.getByRole('menuitemcheckbox', { name: 'Hide Ignored Files', exact: true }),
   ).toHaveAttribute('aria-checked', 'true');
-  await page.screenshot({ path: 'test-results/tree-hide-ignored.png' });
   await page.keyboard.press('Escape');
   await toggle(page, 'Hide Ignored Files', false);
   await expect(row(page, 'ignored.txt')).toBeVisible();
