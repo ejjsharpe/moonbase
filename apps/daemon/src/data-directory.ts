@@ -193,7 +193,14 @@ export async function readSettings(directory: string): Promise<DaemonSettings> {
   return parse(bytes, decodeDaemonSettings);
 }
 
-export type Endpoint = { port: number; pid: number; version: string; protocol: number };
+/** `build` identifies the daemon's code: its bundle's digest, or `development` from source. */
+export type Endpoint = {
+  port: number;
+  pid: number;
+  version: string;
+  protocol: number;
+  build: string;
+};
 
 /** `endpoint.json`, written atomically once the daemon listens. */
 export const writeEndpoint = (directory: string, endpoint: Endpoint) =>

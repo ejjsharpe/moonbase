@@ -23,6 +23,7 @@ await build({
       '!helpers/**',
       '!main-inputs.json',
       '!daemon-inputs.json',
+      '!daemon-build.json',
       '!renderer/module-inputs.json',
     ],
     // The daemon's runtime is a helper executable; its bundle and Claude Code's helper script are

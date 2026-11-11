@@ -29,8 +29,6 @@ export type MoonbaseApplicationOptions = {
   chat?: () => Promise<ChatDependencies | null>;
   chatTargets?: readonly NamedChatTarget[];
   defaultChatTargetId?: string;
-  /** Final head confirmation runs only after all client admissions are fenced. */
-  confirmQuit?: () => Promise<boolean>;
 };
 export type ApplicationPhase =
   | 'live'
@@ -99,7 +97,6 @@ class Application {
       editors: options.editors?.map((editor) => ({ ...editor })),
       chat: options.chat,
       chatTargets: options.chatTargets?.map((target) => ({ ...target })),
-      confirmQuit: options.confirmQuit,
     };
     this.targetId = options.defaultChatTargetId ?? options.chatTargets?.[0]?.id ?? null;
     this.cleanup.subscribe(() => this.publish());
@@ -401,11 +398,6 @@ class Application {
       (this.chat && !this.chat.preserve()) ||
       this.instances.some(({ controller }) => !controller.getSnapshot().recoveryReady)
     ) {
-      this.restore();
-      return false;
-    }
-    if (this.phase !== 'preparing') return false;
-    if (this.options.confirmQuit && !(await this.options.confirmQuit())) {
       this.restore();
       return false;
     }

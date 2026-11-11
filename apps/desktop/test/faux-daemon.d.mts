@@ -13,7 +13,11 @@ export type FauxScript = {
 };
 
 export function findTestBun(): string;
-export function makeFauxDaemonCommand(directory: string, bun?: string): DaemonCommand;
+export function makeFauxDaemonCommand(
+  directory: string,
+  bun?: string,
+  build?: string,
+): DaemonCommand;
 export function prepareDaemonData(userData: string, script?: FauxScript): Promise<string>;
 export function writeFauxScript(directory: string, script: FauxScript): Promise<void>;
 export function readDaemonPid(directory: string): Promise<number | undefined>;

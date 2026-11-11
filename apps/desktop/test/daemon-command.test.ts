@@ -22,6 +22,7 @@ const development = {
   packaged: false,
   resourcesPath: '/unused',
   bundleDirectory: dist,
+  build: 'unused',
 };
 const options = ['--no-env-file', '--config=/dev/null', '--no-install'];
 const ws = { WS_NO_BUFFER_UTIL: '1', WS_NO_UTF_8_VALIDATE: '1' };
@@ -34,6 +35,7 @@ test('a packaged app runs its own Bun runtime on the bundled daemon, from its da
         packaged: true,
         resourcesPath: resources,
         bundleDirectory: join(resources, 'app.asar'),
+        build: 'bundle-digest',
       },
       '/private/data',
       {
@@ -51,6 +53,7 @@ test('a packaged app runs its own Bun runtime on the bundled daemon, from its da
       args: [...options, join(resources, 'daemon/daemon.mjs'), '/private/data'],
       cwd: '/private/data',
       env: { PATH: '/usr/bin:/bin', HOME: '/Users/someone', ...ws },
+      build: 'bundle-digest',
     },
   );
 });
@@ -132,6 +135,7 @@ test('development runs the daemon from source with the bun on PATH, with no pack
   assert.deepEqual(daemon.args, [...options, source, '/private/data']);
   assert.equal(daemon.cwd, '/private/data');
   assert.deepEqual(daemon.env, { PATH: '/usr/bin', ...ws });
+  assert.equal(daemon.build, 'development');
   await access(source);
 
   const { root, directory } = await prepareDaemonRoot();
@@ -153,6 +157,7 @@ test('development runs the daemon from source with the bun on PATH, with no pack
     const ready = await bounded(started.ready);
     const endpoint = JSON.parse(await readFile(join(directory, 'endpoint.json'), 'utf8'));
     assert.equal(endpoint.port, ready.port);
+    assert.equal(endpoint.build, 'development', 'the source entry is the development build');
     assert.deepEqual(await started.stop(), [0, null]);
     await assert.rejects(access(join(directory, 'endpoint.json')), {
       code: 'ENOENT',

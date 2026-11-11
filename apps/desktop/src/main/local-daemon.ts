@@ -3,13 +3,18 @@ import { constants } from 'node:fs';
 import { mkdir, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { Effect, Layer, Semaphore } from 'effect';
+import { Context, Effect, Layer, Semaphore } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatSession } from '@moonbase/contracts/chat';
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
-import { chatHostVersion, chatProtocolVersion } from '@moonbase/contracts/host';
-import { ConnectionService, type ConnectionServiceShape } from '@moonbase/contracts/services';
+import { chatProtocolVersion } from '@moonbase/contracts/host';
+import {
+  ConnectionService,
+  LocalHostService,
+  type ConnectionServiceShape,
+} from '@moonbase/contracts/services';
 import { LoopbackConnectionLive, loopbackProfileId } from '@moonbase/pi-runtime/loopback';
+import { RemoteLocalHostLive } from '@moonbase/pi-runtime/remote';
 import type { DaemonCommand } from './daemon-command.ts';
 
 /** A local daemon's data directory inside a Moonbase user-data directory (one per profile). */
@@ -24,8 +29,13 @@ export type LocalDaemonOptions = {
   startMs?: number;
   /** How long an outdated daemon may take to stop; 30 seconds. */
   stopMs?: number;
+  /** How often an outdated daemon is asked whether it still has work; 30 seconds. */
+  replaceMs?: number;
 };
 
+/** Why local chat is Unavailable while an older app's daemon, of another protocol, still runs. */
+export const olderDaemonMessage =
+  'An older Moonbase daemon is still finishing its work. Local chat starts once it stops.';
 const unavailable = (message: string) => new ApplicationError({ code: 'Unavailable', message });
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -62,13 +72,13 @@ async function readDaemonFile(path: string) {
   }
 }
 
-type Endpoint = { pid: number; version: unknown; protocol: unknown };
+type Endpoint = { pid: number; protocol: unknown; build: unknown };
 async function readEndpoint(directory: string): Promise<Endpoint | undefined> {
   const value = await readDaemonFile(join(directory, 'endpoint.json'));
   if (!value || typeof value !== 'object') return undefined;
-  const { pid, version, protocol } = value as Record<string, unknown>;
+  const { pid, protocol, build } = value as Record<string, unknown>;
   return Number.isSafeInteger(pid) && (pid as number) > 0
-    ? { pid: pid as number, version, protocol }
+    ? { pid: pid as number, protocol, build }
     : undefined;
 }
 
@@ -102,32 +112,47 @@ export type LocalDaemon = ReturnType<typeof createLocalDaemon>;
 /**
  * Finds or starts the local daemon on one data directory. A daemon outlives the app: it is
  * started detached with no stdio (it logs to its own files) and is never stopped here, except an
- * outdated one, which is replaced. Finding and starting run one at a time.
+ * outdated one, which is replaced once it has no work. Finding, starting and replacing run one at
+ * a time.
+ *
+ * A daemon of another build that speaks this protocol is used while it runs and marked outdated;
+ * `replace` stops it (`SIGTERM`) and starts this app's. One that speaks another protocol is never
+ * signalled: local chat is Unavailable until it exits by itself, idle with no client connected.
  */
 export function createLocalDaemon({
   directory,
   command,
   startMs = 20_000,
   stopMs = 30_000,
+  replaceMs = 30_000,
 }: LocalDaemonOptions) {
-  let pid: number | undefined, child: ChildProcess | undefined, busy: Promise<void> | undefined;
+  let pid: number | undefined,
+    child: ChildProcess | undefined,
+    outdated = false,
+    busy: Promise<void> | undefined;
   const serialize = (run: () => Promise<void>) => {
     const next = (busy ?? Promise.resolve()).then(run, run);
     busy = next.catch(() => {});
     return next;
   };
+  /** Uses the running daemon `endpoint` names, which speaks this protocol. */
+  const adopt = (endpoint: Endpoint) => {
+    if (endpoint.pid !== pid) child = undefined;
+    pid = endpoint.pid;
+    outdated = endpoint.build !== command.build;
+  };
 
-  /** Stops a daemon from another app version, which this app can't talk to, and waits for it. */
-  async function stopOutdated(outdated: number) {
-    if (!(await runsDaemon(outdated, directory))) return;
+  /** Stops an outdated daemon of this directory, and waits for it. */
+  async function stopOutdated(outdatedPid: number) {
+    if (!(await runsDaemon(outdatedPid, directory))) return;
     // A daemon stops cleanly on SIGTERM; Pi Durable resumes its interrupted runs in the next one.
     try {
-      process.kill(outdated, 'SIGTERM');
+      process.kill(outdatedPid, 'SIGTERM');
     } catch {
       return;
     }
     const deadline = Date.now() + stopMs;
-    while (isAlive(outdated)) {
+    while (isAlive(outdatedPid)) {
       if (Date.now() > deadline)
         throw unavailable('An older Moonbase chat daemon is still stopping. Try again shortly.');
       await delay(50);
@@ -169,44 +194,57 @@ export function createLocalDaemon({
       }
     } catch (error) {
       if (exited) {
+        // Only a running daemon of this directory that speaks this protocol, not a reused ID.
         const endpoint = await readEndpoint(directory);
-        if (endpoint && isAlive(endpoint.pid) && endpoint.version === chatHostVersion) {
-          pid = endpoint.pid;
-          child = undefined;
-          return;
-        }
+        if (
+          endpoint &&
+          endpoint.protocol === chatProtocolVersion &&
+          isAlive(endpoint.pid) &&
+          (await runsDaemon(endpoint.pid, directory))
+        )
+          return adopt(endpoint);
       }
       throw error;
     }
     pid = started.pid;
     child = started;
+    outdated = false;
+  }
+
+  /**
+   * Makes sure a daemon this app can use runs: the one `endpoint.json` names if it is alive and
+   * speaks this protocol (outdated if another build), else a new one.
+   */
+  async function find() {
+    const endpoint = await readEndpoint(directory);
+    if (endpoint && isAlive(endpoint.pid)) {
+      if (endpoint.protocol === chatProtocolVersion) return adopt(endpoint);
+      // An older app's daemon may be running its agents; it exits once idle with nobody connected.
+      if (await runsDaemon(endpoint.pid, directory))
+        throw unavailable(olderDaemonMessage);
+    }
+    await start();
   }
 
   return {
     directory,
+    replaceMs,
     /** Whether the daemon last found or started is still running. */
     isRunning: () =>
       pid !== undefined &&
       (child ? child.exitCode === null && child.signalCode === null : isAlive(pid)),
-    /**
-     * Makes sure a current daemon runs: the one `endpoint.json` names if it is alive and this
-     * app's version, else a new one, after stopping an outdated one.
-     */
-    ensure: () =>
-      serialize(async () => {
-        const endpoint = await readEndpoint(directory);
-        if (endpoint && isAlive(endpoint.pid)) {
-          if (endpoint.version === chatHostVersion && endpoint.protocol === chatProtocolVersion) {
-            if (endpoint.pid !== pid) child = undefined;
-            pid = endpoint.pid;
-            return;
-          }
-          await stopOutdated(endpoint.pid);
-        }
-        await start();
-      }),
+    /** Whether the daemon in use is of another build, to be replaced once it has no work. */
+    isOutdated: () => outdated,
+    ensure: () => serialize(find),
     /** Starts a new daemon even though one seems to run, for a daemon that stopped answering. */
     restart: () => serialize(start),
+    /** Stops the outdated daemon in use, which reported no work, and starts this app's. */
+    replace: () =>
+      serialize(async () => {
+        if (!outdated || pid === undefined) return;
+        await stopOutdated(pid);
+        await find();
+      }),
   };
 }
 
@@ -215,6 +253,9 @@ export function createLocalDaemon({
  * lookup, a daemon that exited (crashed, or stopped once idle) is found or started again and
  * reconnected, so the next request reaches a running daemon in a new connection generation. Chat
  * watches of the old generation fail as `Unavailable` and their clients reconnect them.
+ *
+ * While the daemon in use is outdated, it is asked every `replaceMs` whether it has active work;
+ * once it has none, it is replaced by this app's daemon and reconnected the same way.
  */
 export const LocalDaemonConnectionLive = (
   daemon: LocalDaemon,
@@ -229,7 +270,7 @@ export const LocalDaemonConnectionLive = (
         (state) => state.state === 'connected' && daemon.isRunning(),
       );
       const connect = inner.connect({ profileId: loopbackProfileId });
-      const promise = (run: () => Promise<void>) =>
+      const promise = <A>(run: () => Promise<A>) =>
         Effect.tryPromise({
           try: run,
           catch: (error) =>
@@ -237,6 +278,12 @@ export const LocalDaemonConnectionLive = (
               ? error
               : unavailable('Moonbase could not start its local chat daemon.'),
         });
+      const replace = lock.withPermits(1)(
+        Effect.gen(function* () {
+          yield* promise(daemon.replace);
+          yield* connect;
+        }),
+      );
       const recover = lock.withPermits(1)(
         Effect.gen(function* () {
           // Another lookup may have recovered while this one waited.
@@ -250,12 +297,31 @@ export const LocalDaemonConnectionLive = (
           yield* connect;
         }),
       );
-      return {
+      const connection = {
         ...inner,
         endpoint: (input) =>
           Effect.flatMap(connected, (ready) =>
             Effect.flatMap(ready ? Effect.void : recover, () => inner.endpoint(input)),
           ),
       } satisfies ConnectionServiceShape;
+      const host = Context.get(
+        yield* Layer.build(
+          RemoteLocalHostLive.pipe(Layer.provide(Layer.succeed(ConnectionService, connection))),
+        ),
+        LocalHostService,
+      );
+      // Asking keeps the outdated daemon from idling out, so it is replaced rather than left.
+      const replaceOnceIdle = Effect.gen(function* () {
+        if (!daemon.isOutdated() || !daemon.isRunning()) return;
+        const session = yield* promise(() => readDaemonSession(daemon.directory));
+        const { active } = yield* host.getActiveWork({ host: session.host });
+        if (!active && daemon.isOutdated()) yield* replace;
+      });
+      yield* Effect.sleep(daemon.replaceMs).pipe(
+        Effect.andThen(Effect.ignore(replaceOnceIdle)),
+        Effect.forever,
+        Effect.forkScoped,
+      );
+      return connection;
     }),
   ).pipe(Layer.provide(LoopbackConnectionLive({ directory: daemon.directory })));

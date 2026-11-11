@@ -14,7 +14,7 @@ The data directory is its only argument (a second one is refused); everything el
 | `token` | 32 random bytes, base64url: a client's whole authority |
 | `daemon.json` | Optional settings (below); absent means local mode |
 | `daemon.lock` | One daemon per directory, taken before the store opens |
-| `endpoint.json` | `{port, pid, version, protocol}`, written once listening, removed on a clean exit and, if a crash left one, once the lock is taken |
+| `endpoint.json` | `{port, pid, version, protocol, build}` (`build`: the bundle's SHA-256, or `development` from source), written once listening, removed on a clean exit and, if a crash left one, once the lock is taken |
 | `chat.sqlite` | Pi Durable store |
 | `credentials/`, `approved-folders.json`, `chats/` | Local mode: encrypted provider credentials, approved folders, folders of chats without a project |
 | `logs/` | `daemon.log`, rotated at 1 MiB to `daemon.1.log`…`daemon.3.log` |

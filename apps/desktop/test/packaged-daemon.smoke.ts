@@ -37,6 +37,8 @@ const packaged = {
   packaged: true,
   resourcesPath: join(contents, 'Resources'),
   bundleDirectory: join(contents, 'Resources/app.asar'),
+  // The packaged bundle's digest, which the build embedded in main.
+  build: JSON.parse(await readFile(resolve('dist/daemon-build.json'), 'utf8')) as string,
 };
 
 // A stand-in for the Claude Code CLI, the chat's faux provider: it reports a subscription login,
@@ -120,6 +122,11 @@ test('the packaged daemon serves a chat from temporary data, and its Claude Code
   let runtime: ManagedRuntime.ManagedRuntime<unknown, unknown> | undefined;
   try {
     const ready = await bounded(started.ready);
+    // The packaged daemon names the build main expects, so the app keeps using it.
+    assert.equal(
+      JSON.parse(await readFile(join(directory, 'endpoint.json'), 'utf8')).build,
+      packaged.build,
+    );
     const identity = JSON.parse(await readFile(join(directory, 'identity.json'), 'utf8'));
     const session = { host: identity.host, actorId: identity.actorId };
     assert.deepEqual(ready.host, identity.host);

@@ -21,6 +21,7 @@ import {
   prepareDaemonData,
   readDaemonPid,
   stopDaemon,
+  writeFauxScript,
 } from './faux-daemon.mjs';
 
 const isAlive = (pid: number) => {
@@ -83,6 +84,7 @@ test('with no daemon running one is started detached; another app finds and reus
   await second.ensure();
   assert.equal(await readDaemonPid(directory), pid);
   assert.equal(second.isRunning(), true);
+  assert.equal(second.isOutdated(), false, 'a daemon of the same build is current');
   assert.deepEqual(await readDaemonSession(directory), session);
   // Both connect to it and verify its signed health for the expected host and store.
   for (const daemon of [first, second]) {
@@ -133,39 +135,173 @@ test('an endpoint naming a live process that does not answer starts a daemon tha
   assert(isAlive(restarted));
 });
 
-test('an outdated daemon of this directory is stopped and replaced; an unrelated process is left alone', async (t) => {
-  const { directory, command } = await profile(t);
-  // Stands in for an older daemon: alive, with the data directory as its last argument.
-  const older = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', directory], {
-    stdio: 'ignore',
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const fauxModel = { provider: 'moonbase-faux', modelId: 'faux-model' };
+
+test('a daemon of another build is used while it has work, then replaced in a new generation', async (t) => {
+  const { directory } = await profile(t);
+  // The faux model holds its first run until it is stopped.
+  await writeFauxScript(directory, { idleMs: 5000, pollMs: 500, steps: [{ hold: true }] });
+  // Another app version's daemon, of this protocol.
+  await createLocalDaemon({
+    directory,
+    command: makeFauxDaemonCommand(directory, undefined, 'older-build'),
+  }).ensure();
+  const older = (await readDaemonPid(directory))!;
+  t.after(() => stopDaemon(directory, older));
+  const session = await readDaemonSession(directory);
+  const daemon = createLocalDaemon({
+    directory,
+    command: makeFauxDaemonCommand(directory),
+    replaceMs: 50,
   });
+  const runtime = ManagedRuntime.make(
+    RemoteChatLive.pipe(Layer.provideMerge(LocalDaemonConnectionLive(daemon))),
+  );
+  t.after(() => runtime.dispose());
+  const { chat, connection } = await runtime.runPromise(
+    Effect.gen(function* () {
+      return { chat: yield* ChatService, connection: yield* ConnectionService };
+    }),
+  );
+  const before = await runtime.runPromise(connection.endpoint({ host: session.host }));
+  assert.equal(await readDaemonPid(directory), older, 'the app works with the older daemon');
+  assert.equal(daemon.isOutdated(), true);
+  const { conversation } = await runtime.runPromise(
+    chat.createChat({
+      session,
+      requestId: 'create',
+      title: 'Held',
+      settings: { model: fauxModel },
+    }),
+  );
+  await runtime.runPromise(
+    chat.sendChat({ target: conversation.target, requestId: 'send', text: 'Hold on' }),
+  );
+  let running;
+  await until(async () => {
+    running = await runtime.runPromise(chat.getChat({ target: conversation.target }));
+    return !!running.run;
+  });
+  // Many checks pass while the run goes on; the older daemon keeps it.
+  await delay(500);
+  assert(isAlive(older));
+  assert.equal(await readDaemonPid(directory), older);
+  await runtime.runPromise(chat.stopChat({ stop: running!.run!.stop, requestId: 'stop' }));
+  // With no work left, it is stopped and this app's daemon starts on the same store.
+  await until(async () => !isAlive(older) && !daemon.isOutdated());
+  const current = (await readDaemonPid(directory))!;
+  assert.notEqual(current, older);
+  assert.equal(
+    JSON.parse(await readFile(join(directory, 'endpoint.json'), 'utf8')).build,
+    'development',
+  );
+  assert.equal(daemon.isRunning(), true);
+  const after = await runtime.runPromise(connection.endpoint({ host: session.host }));
+  assert.notEqual(after.connectionId, before.connectionId);
+  const { conversations } = await runtime.runPromise(chat.listChats({ session }));
+  assert.deepEqual(
+    conversations.map((listed) => listed.title),
+    ['Held'],
+  );
+  // The current daemon is never replaced.
+  await delay(200);
+  assert.equal(await readDaemonPid(directory), current);
+});
+
+test('a daemon speaking another protocol is never signalled; local chat waits for it to exit', async (t) => {
+  const { directory, command } = await profile(t);
+  const marker = join(directory, 'signalled');
+  // Stands in for an older daemon: alive, with the data directory as its last argument; it notes
+  // any SIGTERM rather than stopping.
+  const older = spawn(
+    process.execPath,
+    [
+      '-e',
+      `process.on('SIGTERM', () => require('node:fs').writeFileSync(${JSON.stringify(marker)}, '')); setInterval(() => {}, 1000)`,
+      directory,
+    ],
+    { stdio: 'ignore' },
+  );
   t.after(() => older.kill('SIGKILL'));
   await once(older, 'spawn');
-  await writeFile(
-    join(directory, 'endpoint.json'),
-    JSON.stringify({ port: 9, pid: older.pid, version: '0.0.1', protocol: chatProtocolVersion }),
-    { mode: 0o600 },
-  );
+  const endpoint = JSON.stringify({
+    port: 9,
+    pid: older.pid,
+    version: '0.1.0',
+    protocol: chatProtocolVersion - 1,
+  });
+  await writeFile(join(directory, 'endpoint.json'), endpoint, { mode: 0o600 });
   const daemon = createLocalDaemon({ directory, command });
+  const busy = {
+    code: 'Unavailable',
+    message:
+      'An older Moonbase daemon is still finishing its work. Local chat starts once it stops.',
+  };
+  await assert.rejects(daemon.ensure(), busy);
+  const session = await readDaemonSession(directory).catch(() => undefined);
+  assert.equal(session, undefined, 'nothing was started on its directory');
+  await delay(200);
+  await assert.rejects(daemon.ensure(), busy);
+  assert.equal(older.exitCode, null);
+  await assert.rejects(stat(marker), { code: 'ENOENT' });
+  // Once it exits (idle, with nobody connected), the next request starts this app's daemon.
+  older.kill('SIGKILL');
+  await once(older, 'exit');
   await daemon.ensure();
-  await until(() => older.exitCode !== null || older.signalCode !== null);
-  assert.equal(older.signalCode, 'SIGTERM');
   const current = (await readDaemonPid(directory))!;
-  assert.notEqual(current, older.pid);
+  assert(isAlive(current));
+  assert.equal(daemon.isOutdated(), false);
   await stopDaemon(directory, current);
-  // A process that isn't a daemon on this directory is never signalled.
+  // An endpoint naming a process that isn't a daemon on this directory doesn't block starting,
+  // and that process is never signalled.
   const other = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
   t.after(() => other.kill('SIGKILL'));
   await once(other, 'spawn');
   await writeFile(
     join(directory, 'endpoint.json'),
-    JSON.stringify({ port: 9, pid: other.pid, version: '0.0.1', protocol: chatProtocolVersion }),
+    JSON.stringify({
+      port: 9,
+      pid: other.pid,
+      version: '0.1.0',
+      protocol: chatProtocolVersion - 1,
+    }),
     { mode: 0o600 },
   );
   await createLocalDaemon({ directory, command }).ensure();
   assert.equal(other.exitCode, null);
-  assert(isAlive(other.pid!));
   assert.notEqual(await readDaemonPid(directory), other.pid);
+});
+
+test('a start that finds the lock held adopts only a daemon of this directory and protocol', async (t) => {
+  const { directory, command } = await profile(t);
+  await createLocalDaemon({ directory, command }).ensure();
+  const running = (await readDaemonPid(directory))!;
+  const file = join(directory, 'endpoint.json'),
+    original = await readFile(file, 'utf8');
+  try {
+    // The started daemon exits because `running` holds the lock; the endpoint it then finds
+    // speaks another protocol, or names a reused process ID.
+    for (const endpoint of [
+      { ...JSON.parse(original), protocol: chatProtocolVersion - 1 },
+      { ...JSON.parse(original), pid: process.pid },
+    ]) {
+      await writeFile(file, JSON.stringify(endpoint), { mode: 0o600 });
+      const daemon = createLocalDaemon({ directory, command });
+      await assert.rejects(daemon.restart(), {
+        code: 'Unavailable',
+        message: 'The local chat daemon stopped while starting.',
+      });
+      assert.equal(daemon.isRunning(), false);
+    }
+    await writeFile(file, original, { mode: 0o600 });
+    const daemon = createLocalDaemon({ directory, command });
+    await daemon.restart();
+    assert.equal(daemon.isRunning(), true, 'the running daemon of this protocol is adopted');
+    assert.equal(await readDaemonPid(directory), running);
+  } finally {
+    await writeFile(file, original, { mode: 0o600 });
+  }
 });
 
 test('a daemon that cannot start, exits while starting or never listens is Unavailable', async (t) => {

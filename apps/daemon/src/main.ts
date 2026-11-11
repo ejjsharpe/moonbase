@@ -9,6 +9,9 @@ import { describeFailure } from './failure.ts';
 import { findBundledRipgrep } from './ripgrep.ts';
 import { onShutdownSignal } from './signals.ts';
 
+/** The bundle's digest, which `scripts/build.mjs` defines; undefined when run from source. */
+declare const MOONBASE_DAEMON_BUILD: string | undefined;
+
 /**
  * The daemon process root: `bun src/main.ts <absolute data directory>`. Its only argument is the
  * data directory; all other configuration comes from files inside it.
@@ -21,6 +24,7 @@ async function main() {
     closeClaudeCode: closeClaudeCodeProcesses,
     // The app's ripgrep beside the packaged bundle; from source, the one on PATH.
     ripgrepExecutable: findBundledRipgrep(import.meta.url),
+    build: typeof MOONBASE_DAEMON_BUILD === 'string' ? MOONBASE_DAEMON_BUILD : 'development',
     local: (settings, session) => ({
       keySource:
         settings.credentialKey?.source === 'file'

@@ -6,6 +6,8 @@ export type DaemonCommand = {
   args: string[];
   cwd: string;
   env: Record<string, string>;
+  /** The build identifier the started daemon writes to `endpoint.json`. */
+  build: string;
 };
 export type DaemonLocation = {
   /** Electron's `app.isPackaged`. */
@@ -14,6 +16,8 @@ export type DaemonLocation = {
   resourcesPath: string;
   /** The folder of main's own bundle, `apps/desktop/dist` in development. */
   bundleDirectory: string;
+  /** The packaged daemon bundle's build identifier, which main's own bundle embeds. */
+  build: string;
 };
 
 /**
@@ -55,6 +59,7 @@ export function findDaemonCommand(
       args: [...bunOptions, join(location.resourcesPath, 'daemon', 'daemon.mjs'), directory],
       cwd: directory,
       env,
+      build: location.build,
     };
   return {
     command: 'bun',
@@ -65,5 +70,7 @@ export function findDaemonCommand(
     ],
     cwd: directory,
     env,
+    // The daemon's source entry identifies itself so.
+    build: 'development',
   };
 }

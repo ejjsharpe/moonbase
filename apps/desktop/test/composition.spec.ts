@@ -1,4 +1,4 @@
-import { findTestBun, prepareDaemonData } from './faux-daemon.mjs';
+import { findTestBun, prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
 import { expectSaveEnabled, saveFile, captureNative } from './editor-regressions.ts';
 import {
   closeSettings,
@@ -17,7 +17,7 @@ import {
 } from '@playwright/test';
 import { fixture, until } from '../../../tests/chat/tool-fixture.ts';
 import { openCallCard } from './transcript-list.ts';
-import { mkdir, writeFile, readFile, appendFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, appendFile, readdir } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 
@@ -219,6 +219,9 @@ async function stop(app: ElectronApplication, fault = false) {
   );
 }
 async function close(f: Fixture) {
+  // A daemon outlives its app: stop each profile's before the fixture goes.
+  for (const entry of await readdir(f.directory).catch(() => []))
+    await stopDaemon(join(f.directory, entry, 'daemon-v1'));
   const report = await f.close();
   await mkdir(output, { recursive: true });
   await appendFile(join(output, 'cleanup.jsonl'), JSON.stringify(report) + '\n');

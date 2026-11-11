@@ -95,7 +95,7 @@ async function readDaemonFiles(directory: string) {
   ]);
   const host = parseIdentity(identity);
   const { port, pid, protocol } = parse(endpoint, (value) => {
-    const record = V.object(value, ['port', 'pid', 'version', 'protocol']);
+    const record = V.object(value, ['port', 'pid', 'version', 'protocol', 'build']);
     if (
       !Number.isSafeInteger(record.port) ||
       (record.port as number) < 1 ||

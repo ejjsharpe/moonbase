@@ -26,6 +26,10 @@ try {
     }),
     ...(script.idleMs ? { idleMs: script.idleMs } : {}),
     ...(script.pollMs ? { pollMs: script.pollMs } : {}),
+    // A test stands in for another app version's daemon with its own build.
+    ...(process.env.MOONBASE_TEST_DAEMON_BUILD
+      ? { build: process.env.MOONBASE_TEST_DAEMON_BUILD }
+      : {}),
   });
 } catch (error) {
   console.error(JSON.stringify({ event: 'failed', error: describeFailure(error) }));

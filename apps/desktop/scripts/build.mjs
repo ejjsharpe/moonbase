@@ -21,6 +21,21 @@ const bun = process.env.MOONBASE_BUN_RUNTIME
   : join(repository, 'dist/tools/bun');
 if (packaged) await verifyBunRuntime(bun);
 await rm(join(root, 'dist'), { recursive: true, force: true });
+// The daemon ships as a bundle for the Bun runtime, with Claude Code's helper beside it. Main
+// embeds the bundle's build identifier, so a packaged app replaces a daemon of another build.
+execFileSync(
+  process.execPath,
+  [
+    join(repository, 'apps/daemon/scripts/build.mjs'),
+    join(root, 'dist/daemon'),
+    join(root, 'dist/daemon-inputs.json'),
+    join(root, 'dist/daemon-build.json'),
+  ],
+  { stdio: 'inherit' },
+);
+const daemonInputs = JSON.parse(await readFile(join(root, 'dist/daemon-inputs.json'), 'utf8'));
+const daemonBuild = JSON.parse(await readFile(join(root, 'dist/daemon-build.json'), 'utf8'));
+assert.match(daemonBuild, /^[0-9a-f]{64}$/, 'The daemon bundle has no build identifier');
 const main = await build({
   absWorkingDir: root,
   entryPoints: ['src/main.ts'],
@@ -29,6 +44,7 @@ const main = await build({
   platform: 'node',
   format: 'esm',
   external: ['electron'],
+  define: { MOONBASE_DAEMON_BUILD: JSON.stringify(daemonBuild) },
   banner: {
     js: "import { createRequire as moonbaseCreateRequire } from 'node:module'; const require = moonbaseCreateRequire(import.meta.url);",
   },
@@ -48,17 +64,6 @@ const preload = await build({
   legalComments: 'external',
   logLevel: 'warning',
 });
-// The daemon ships as a bundle for the Bun runtime, with Claude Code's helper beside it.
-execFileSync(
-  process.execPath,
-  [
-    join(repository, 'apps/daemon/scripts/build.mjs'),
-    join(root, 'dist/daemon'),
-    join(root, 'dist/daemon-inputs.json'),
-  ],
-  { stdio: 'inherit' },
-);
-const daemonInputs = JSON.parse(await readFile(join(root, 'dist/daemon-inputs.json'), 'utf8'));
 execFileSync('vp', ['build', '--config', join(root, 'vite.config.ts')], {
   cwd: root,
   stdio: 'inherit',

@@ -165,6 +165,14 @@ const daemonRipgrep = fileURLToPath(
 assert.equal(daemonRipgrep, join(resources, 'workspace/ripgrep/rg'));
 assert((await stat(daemonRipgrep)).mode & 0o111, 'The daemon finds no executable ripgrep');
 const daemonInputs = JSON.parse(await readFile(join(root, 'dist/daemon-inputs.json'), 'utf8'));
+// Main expects the build of the daemon bundle it ships, which writes that build to its endpoint.
+const daemonBuild = JSON.parse(await readFile(join(root, 'dist/daemon-build.json'), 'utf8'));
+assert.match(daemonBuild, /^[0-9a-f]{64}$/, 'The daemon bundle has no build identifier');
+for (const file of [join(resources, 'daemon/daemon.mjs'), join(root, 'dist/main.mjs')])
+  assert(
+    (await readFile(file, 'utf8')).includes(JSON.stringify(daemonBuild)),
+    `${file} lacks the daemon build identifier`,
+  );
 assert(!daemonInputs.some((path) => path.startsWith('/')), 'Daemon inputs record absolute paths');
 assert(daemonInputs.includes('apps/daemon/src/main.ts'), 'The daemon bundle lost its entry');
 assert.deepEqual(

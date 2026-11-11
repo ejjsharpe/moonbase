@@ -59,6 +59,7 @@ test('a daemon makes a private data directory, prints ready, writes endpoint.jso
       pid: first.child.pid,
       version: '0.1.0',
       protocol: 2,
+      build: 'development',
     });
     const identity = await readJson(join(directory, 'identity.json'));
     assert.deepEqual(ready.host, identity.host);
@@ -214,6 +215,7 @@ for (const signal of ['SIGTERM', 'SIGKILL'] as const)
         pid: second.child.pid,
         version: '0.1.0',
         protocol: 2,
+        build: 'development',
       });
       client = createFauxClient(ready.port, token);
       assert.deepEqual(

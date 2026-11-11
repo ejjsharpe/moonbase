@@ -96,6 +96,13 @@ export function createChatBackends({
             prepareFolder: async (path) => {
               if (isEditorFolder(path)) await grantEditorFolder(path);
             },
+            // The daemon refused a folder this process granted: grant it once more, uncached.
+            regrantFolder: async (path) => {
+              if (!isEditorFolder(path)) return false;
+              grants.delete(path);
+              await grantEditorFolder(path);
+              return true;
+            },
           },
         ),
       );

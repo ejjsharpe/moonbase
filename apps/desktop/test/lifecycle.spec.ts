@@ -1,4 +1,4 @@
-import { findTestBun, prepareDaemonData } from './faux-daemon.mjs';
+import { findTestBun, prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
 import {
   expectSaveEnabled,
   saveFile,
@@ -474,6 +474,8 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
             }
           }
         } finally {
+          // A daemon outlives its app: stop this profile's before the fixture goes.
+          await stopDaemon(join(f.directory, 'lifecycle-data', 'daemon-v1'));
           const cleanup = await f.close();
           for (const pid of pids)
             await until(async () => {

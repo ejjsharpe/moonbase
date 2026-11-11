@@ -402,3 +402,99 @@ test('editor checkouts are granted to the daemon once; a chat naming one waits f
     await runtime.dispose();
   }
 });
+
+test('an editor folder the daemon no longer holds is granted again once, and the request retried once', async () => {
+  const runtime = ManagedRuntime.make(Layer.empty);
+  const session = { host: { hostId: 'local', storeId: 'store' }, actorId: 'owner' };
+  const grants: string[] = [],
+    sent: { operation: string; requestId?: string }[] = [];
+  // The daemon's grants: what it holds now, which a reset or a replaced folder empties.
+  const held = new Set<string>();
+  const refuse = (operation: string, input: { requestId?: string; cwd?: string }, cwd: string) =>
+    Effect.suspend(() => {
+      sent.push({ operation, requestId: input.requestId });
+      return held.has(cwd)
+        ? Effect.succeed(null)
+        : Effect.fail(
+            new ApplicationError({
+              code: 'Unauthorized',
+              message: 'Approve this working folder before creating or retrying a local chat.',
+            }),
+          );
+    });
+  const backend = makeBackend(
+    session,
+    {
+      approveFolder: ({ path }: { path: string }) => {
+        grants.push(path);
+        held.add(path);
+        return { requestId: 'r', path };
+      },
+    },
+    {
+      chat: {
+        createChat: (input: { requestId: string; settings: { cwd: string } }) =>
+          refuse('createChat', input, input.settings.cwd),
+        findChatFiles: (input: { cwd: string }) => refuse('findChatFiles', input, input.cwd),
+      },
+    },
+  );
+  const owner = createChatBackends({
+    runtime,
+    localResult: { backend, error: null },
+    acquireLocal: async () => ({ backend, error: null }),
+    isEditorFolder: (path) => path === '/editor',
+    chatConfiguration: null,
+    remoteChat: null,
+    connection: null,
+    emit: () => {},
+    pickFolder: async () => null,
+  });
+  const call = (operation: string, input: unknown) =>
+    owner.getSession('local')!.call('chat', operation, input, crypto.randomUUID());
+  const create = (cwd: string, requestId: string = crypto.randomUUID()) =>
+    call('createChat', {
+      session,
+      requestId,
+      title: 'Chat',
+      settings: { cwd, model: { provider: 'faux', modelId: 'faux' } },
+    });
+  try {
+    assert((await create('/editor')).ok);
+    assert.deepEqual(grants, ['/editor']);
+    // The daemon lost the grant; this process still remembers giving it.
+    held.clear();
+    sent.length = 0;
+    assert((await create('/editor', 'same')).ok);
+    assert.deepEqual(grants, ['/editor', '/editor'], 'granted again, uncached');
+    assert.deepEqual(sent, [
+      { operation: 'createChat', requestId: 'same' },
+      { operation: 'createChat', requestId: 'same' },
+    ]);
+    held.clear();
+    sent.length = 0;
+    assert((await call('findChatFiles', { session, cwd: '/editor', query: 'a' })).ok);
+    assert.equal(sent.length, 2);
+    assert.equal(grants.length, 3);
+    // A folder main may not grant is refused as it is, and not retried.
+    sent.length = 0;
+    const refused = await create('/elsewhere');
+    assert(!refused.ok);
+    assert.equal(refused.error.code, 'Unauthorized');
+    assert.equal(sent.length, 1);
+    // An editor folder refused again after its new grant is retried only once.
+    const approveAgain = backend.folders.approveFolder;
+    (backend.folders as { approveFolder: unknown }).approveFolder = (input: never) =>
+      Effect.map(approveAgain(input), (value) => {
+        held.clear();
+        return value;
+      });
+    held.clear();
+    sent.length = 0;
+    assert(!(await create('/editor')).ok);
+    assert.equal(sent.length, 2);
+  } finally {
+    await owner.releaseDocument();
+    await runtime.dispose();
+  }
+});

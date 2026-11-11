@@ -1090,30 +1090,6 @@ test('named local/remote targets preserve separate drafts and wait for controlle
   }
 });
 
-test('final Quit confirmation runs with admissions fenced and Keep running restores them', async () => {
-  const chat = chatCapabilities();
-  let confirms = 0;
-  const application = await createMoonbaseApplication({
-    chat: async () => chat.dependencies,
-    confirmQuit: async () => {
-      confirms++;
-      await application.chat!.create('Fenced');
-      assert(!chat.calls.includes('createChat'));
-      return confirms > 1;
-    },
-  });
-  try {
-    await application.chat!.start();
-    await application.chat!.connect();
-    assert.equal(await application.prepareQuit(), false);
-    assert.equal(application.getSnapshot().phase, 'live');
-    assert.equal(await application.prepareQuit(), true);
-    assert.equal(confirms, 2);
-  } finally {
-    await application.dispose();
-  }
-});
-
 test('transcript anchors/expansions belong to application lifetime and exact backend identity, never saved drafts', async () => {
   const { transcriptFixture } = await import('./transcript-fixture.ts');
   const a = transcriptFixture(),

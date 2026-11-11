@@ -73,6 +73,8 @@ export type DaemonOptions = {
   pollMs?: number;
   /** Absolute ripgrep for chat file search; otherwise `rg` on PATH, then Git. */
   ripgrepExecutable?: string;
+  /** Identifies this daemon's code in `endpoint.json`, so a client can tell an outdated one. */
+  build?: string;
 };
 export type DaemonExit = 'stopped' | 'idle';
 
@@ -220,6 +222,7 @@ async function serveDaemon(
                 pid: process.pid,
                 version: chatHostVersion,
                 protocol: chatProtocolVersion,
+                build: options.build ?? 'development',
               }),
             );
           if (!stopping) {

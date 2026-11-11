@@ -283,7 +283,8 @@ export class EditorSession {
               options,
             ),
           );
-          // A released document's worktree stays on disk but grants nothing to the next document.
+          // A released document's worktree stays on disk unapproved. An approved one is granted to
+          // the daemon too, which keeps that grant beyond this document.
           if (!signal?.aborted) {
             this.approve(created);
             this.approveWorktree(created.root);

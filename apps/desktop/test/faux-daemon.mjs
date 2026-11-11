@@ -19,8 +19,11 @@ export function findTestBun() {
   return found.stdout.trim();
 }
 
-/** Starts the faux daemon on `directory` with Bun's options as the app passes them. */
-export function makeFauxDaemonCommand(directory, bun = findTestBun()) {
+/**
+ * Starts the faux daemon on `directory` with Bun's options as the app passes them. It reports
+ * `build`, as another app version's daemon would report its own.
+ */
+export function makeFauxDaemonCommand(directory, bun = findTestBun(), build = 'development') {
   return {
     command: bun,
     args: [
@@ -39,7 +42,9 @@ export function makeFauxDaemonCommand(directory, bun = findTestBun()) {
       TMPDIR: process.env.TMPDIR ?? '/tmp',
       WS_NO_BUFFER_UTIL: '1',
       WS_NO_UTF_8_VALIDATE: '1',
+      ...(build === 'development' ? {} : { MOONBASE_TEST_DAEMON_BUILD: build }),
     },
+    build,
   };
 }
 
