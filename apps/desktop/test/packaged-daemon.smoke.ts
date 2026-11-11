@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -17,7 +18,13 @@ import {
   RemoteProviderSetupLive,
 } from '@moonbase/pi-runtime/remote';
 import { findDaemonCommand } from '../src/main/daemon-command.ts';
-import { bounded, prepareDaemonRoot, startDaemonCommand } from './daemon-process.ts';
+import {
+  bounded,
+  launchFrom,
+  plantHostileBunFiles,
+  prepareDaemonRoot,
+  startDaemonCommand,
+} from './daemon-process.ts';
 
 // Runs against the package that `bun run package` made; `test:package` runs it.
 const contents = resolve(
@@ -45,7 +52,7 @@ const tools = await new Promise((resolve, reject) => {
   mcp.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }) + '\\n');
   mcp.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) + '\\n');
 });
-appendFileSync(logs + '/helpers.jsonl', JSON.stringify({ command: server.command, args: server.args, env: server.env, tools: tools.map((tool) => tool.name) }) + '\\n');
+appendFileSync(logs + '/helpers.jsonl', JSON.stringify({ command: server.command, args: server.args, env: server.env, tools: tools.map((tool) => tool.name), hostile: process.env.MOONBASE_HOSTILE ?? null }) + '\\n');
 const usage = { input_tokens: 3, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
 const send = (value) => console.log(JSON.stringify(value));
 for await (const line of readline.createInterface({ input: process.stdin, crlfDelay: Infinity })) {
@@ -86,7 +93,7 @@ test('the packaged daemon serves a chat from temporary data, and its Claude Code
     directory,
   );
   await access(daemon.command);
-  await access(daemon.args[0]!);
+  await access(daemon.args.at(-2)!);
   const bin = join(root, 'bin'),
     project = join(root, 'project');
   await mkdir(bin);
@@ -96,13 +103,19 @@ test('the packaged daemon serves a chat from temporary data, and its Claude Code
   await chmod(claude, 0o755);
   // Like an npm install, the faux CLI runs through `env node`, with its `node` beside it.
   await symlink(process.execPath, join(bin, 'node'));
-  const started = startDaemonCommand(daemon, {
-    // Only the system PATH, as an app launched from Finder has: no `rg` on it.
-    PATH: '/usr/bin:/bin',
-    HOME: root,
-    TMPDIR: root,
-    PI_CLAUDE_CODE_COMMAND: claude,
-  });
+  // Bun would load these from the folder the app was launched from.
+  const launch = join(root, 'launch');
+  await mkdir(launch);
+  await plantHostileBunFiles(launch, join(root, 'preloaded'));
+  const started = launchFrom(launch, () =>
+    startDaemonCommand(daemon, {
+      // Only the system PATH, as an app launched from Finder has: no `rg` on it.
+      PATH: '/usr/bin:/bin',
+      HOME: root,
+      TMPDIR: root,
+      PI_CLAUDE_CODE_COMMAND: claude,
+    }),
+  );
   let runtime: ManagedRuntime.ManagedRuntime<unknown, unknown> | undefined;
   try {
     const ready = await bounded(started.ready);
@@ -113,7 +126,11 @@ test('the packaged daemon serves a chat from temporary data, and its Claude Code
       Layer.mergeAll(
         RemoteChatLive,
         RemoteLocalHostLive,
-        RemoteProviderSetupLive({ host: ready.host, sameMachine: true, openUrl: async () => {} }),
+        RemoteProviderSetupLive({
+          host: ready.host,
+          sameMachine: true,
+          openUrl: async () => {},
+        }),
       ).pipe(Layer.provideMerge(LoopbackConnectionLive({ directory }))),
     );
     runtime = clients as ManagedRuntime.ManagedRuntime<unknown, unknown>;
@@ -127,12 +144,20 @@ test('the packaged daemon serves a chat from temporary data, and its Claude Code
     assert.equal(subscription?.configured, true, JSON.stringify(subscription));
     const folders = await clients.runPromise(LocalHostService);
     await clients.runPromise(
-      folders.approveFolder({ host: session.host, requestId: 'approve', path: project }),
+      folders.approveFolder({
+        host: session.host,
+        requestId: 'approve',
+        path: project,
+      }),
     );
     const chat = makeChatClient(clients);
     // The project is no Git repository and PATH has no `rg`, so only the app's ripgrep lists it.
     await writeFile(join(project, 'readme.md'), 'hello');
-    const found = await chat.command('findChatFiles', { session, cwd: project, query: 'readme' });
+    const found = await chat.command('findChatFiles', {
+      session,
+      cwd: project,
+      query: 'readme',
+    });
     assert.deepEqual(
       found.matches.map((match) => match.path),
       ['readme.md'],
@@ -141,10 +166,17 @@ test('the packaged daemon serves a chat from temporary data, and its Claude Code
       session,
       requestId: 'create',
       title: 'Packaged smoke',
-      settings: { cwd: project, model: { provider: 'claude-code', modelId: 'claude-opus-5-5' } },
+      settings: {
+        cwd: project,
+        model: { provider: 'claude-code', modelId: 'claude-opus-5-5' },
+      },
     });
     const target = created.conversation.target;
-    await chat.command('sendChat', { target, requestId: 'send', text: 'Hello packaged daemon' });
+    await chat.command('sendChat', {
+      target,
+      requestId: 'send',
+      text: 'Hello packaged daemon',
+    });
     let snapshot: ChatSnapshot | undefined;
     for (let i = 0; i < 1000; i++) {
       snapshot = await chat.command('getChat', { target });
@@ -163,6 +195,8 @@ test('the packaged daemon serves a chat from temporary data, and its Claude Code
       assert.equal(helper.args[0], join(contents, 'Resources/daemon/inert-mcp.mjs'));
       assert.deepEqual(helper.env, { BUN_BE_BUN: '1' });
       assert(helper.tools.includes('read'), JSON.stringify(helper.tools));
+      // The daemon's environment, which Claude Code inherits, took nothing from a `.env`.
+      assert.equal(helper.hostile, null);
     }
     assert(
       snapshot?.entries.some(
@@ -175,10 +209,41 @@ test('the packaged daemon serves a chat from temporary data, and its Claude Code
     await clients.dispose();
     runtime = undefined;
     assert.deepEqual(await started.stop(), [0, null]);
-    await assert.rejects(access(join(directory, 'endpoint.json')), { code: 'ENOENT' });
+    await assert.rejects(access(join(directory, 'endpoint.json')), {
+      code: 'ENOENT',
+    });
+    await assert.rejects(access(join(root, 'preloaded')), { code: 'ENOENT' });
   } finally {
     await runtime?.dispose();
     await started.stop('SIGKILL');
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('the packaged runtime loads no .env or bunfig.toml from the daemon data directory', async () => {
+  const { root, directory } = await prepareDaemonRoot();
+  try {
+    await plantHostileBunFiles(directory, join(root, 'preloaded'));
+    const daemon = findDaemonCommand(
+      {
+        packaged: true,
+        resourcesPath: join(contents, 'Resources'),
+        bundleDirectory: join(contents, 'Resources/app.asar'),
+      },
+      directory,
+    );
+    const bundle = daemon.args.at(-2)!;
+    const probe = join(root, 'probe.mjs');
+    await writeFile(probe, 'console.log(JSON.stringify(process.env.MOONBASE_HOSTILE ?? null))');
+    const run = spawnSync(
+      daemon.command,
+      daemon.args.map((arg) => (arg === bundle ? probe : arg)),
+      { cwd: daemon.cwd, env: { PATH: '/usr/bin:/bin', HOME: root }, encoding: 'utf8' },
+    );
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(run.stdout.trim(), 'null');
+    await assert.rejects(access(join(root, 'preloaded')), { code: 'ENOENT' });
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });

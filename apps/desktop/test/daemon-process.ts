@@ -29,7 +29,10 @@ export async function prepareDaemonRoot() {
   await mkdir(directory, { mode: 0o700 });
   await writeFile(
     join(directory, 'daemon.json'),
-    JSON.stringify({ mode: 'local', credentialKey: { source: 'file', path: join(root, 'key') } }),
+    JSON.stringify({
+      mode: 'local',
+      credentialKey: { source: 'file', path: join(root, 'key') },
+    }),
     { mode: 0o600 },
   );
   return { root, directory };
@@ -37,25 +40,30 @@ export async function prepareDaemonRoot() {
 
 /** Starts a daemon command and resolves `ready` with its ready line. */
 export function startDaemonCommand(daemon: DaemonCommand, env: Record<string, string>) {
-  const child = spawn(daemon.command, daemon.args, { stdio: ['ignore', 'pipe', 'pipe'], env });
+  const child = spawn(daemon.command, daemon.args, {
+    cwd: daemon.cwd,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env,
+  });
   let output = '',
     errors = '';
   child.stdout.on('data', (bytes) => (output += bytes));
   child.stderr.on('data', (bytes) => (errors += bytes));
   const exited = once(child, 'exit') as Promise<[number | null, NodeJS.Signals | null]>;
-  const ready = new Promise<{ port: number; host: { hostId: string; storeId: string } }>(
-    (resolve, reject) => {
-      const data = () => {
-        const line = output.split('\n').find((text) => text.includes('"event":"ready"'));
-        if (!line) return;
-        child.stdout.off('data', data);
-        resolve(JSON.parse(line));
-      };
-      child.stdout.on('data', data);
-      child.once('error', reject);
-      void exited.then(() => reject(Error('Daemon exited before ready: ' + errors)));
-    },
-  );
+  const ready = new Promise<{
+    port: number;
+    host: { hostId: string; storeId: string };
+  }>((resolve, reject) => {
+    const data = () => {
+      const line = output.split('\n').find((text) => text.includes('"event":"ready"'));
+      if (!line) return;
+      child.stdout.off('data', data);
+      resolve(JSON.parse(line));
+    };
+    child.stdout.on('data', data);
+    child.once('error', reject);
+    void exited.then(() => reject(Error('Daemon exited before ready: ' + errors)));
+  });
   ready.catch(() => {});
   return {
     child,
@@ -77,4 +85,33 @@ export function startDaemonCommand(daemon: DaemonCommand, env: Record<string, st
       }
     },
   };
+}
+
+/**
+ * Plants what Bun would load from its working folder: a `.env` setting `MOONBASE_HOSTILE` and a
+ * `bunfig.toml` whose preload writes `marker`. A daemon command must ignore both.
+ */
+export async function plantHostileBunFiles(folder: string, marker: string) {
+  await writeFile(join(folder, '.env'), 'MOONBASE_HOSTILE=loaded\n', {
+    mode: 0o600,
+  });
+  await writeFile(
+    join(folder, 'hostile-preload.ts'),
+    `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran');\n`,
+    { mode: 0o600 },
+  );
+  await writeFile(join(folder, 'bunfig.toml'), 'preload = ["./hostile-preload.ts"]\n', {
+    mode: 0o600,
+  });
+}
+
+/** Runs `start` with the process working folder set to `folder`, as a launch from there would. */
+export function launchFrom<T>(folder: string, start: () => T): T {
+  const previous = process.cwd();
+  process.chdir(folder);
+  try {
+    return start();
+  } finally {
+    process.chdir(previous);
+  }
 }
