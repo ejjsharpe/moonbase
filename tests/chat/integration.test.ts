@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { test } from 'node:test';
 import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -82,6 +83,8 @@ test('through the forward, a remote client chooses host folders from approved ro
   await mkdir(project);
   await mkdir(outside);
   await writeFile(join(project, 'notes.md'), 'remote notes');
+  // Git lists the folder whether or not this machine has ripgrep on PATH.
+  execFileSync('git', ['init', '-q'], { cwd: project });
   await symlink(outside, join(f.cwd, 'escape'));
   const folders = await client.folders();
   const host = f.session.host;
