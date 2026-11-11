@@ -5,9 +5,7 @@ import {
   ChatHostTargetSchema,
   ChatSessionSchema,
   decodeChatInput,
-  isChatCommand,
 } from '@moonbase/contracts/chat-schema';
-import type { ChatCommand } from '@moonbase/contracts/chat';
 export {
   checkChatOutput as output,
   checkChatReplySize as sized,
@@ -58,10 +56,6 @@ export const session = checked(
 );
 export function cursor(value: unknown): string {
   return string(value, 1024);
-}
-export function command(value: unknown): ChatCommand {
-  if (!isChatCommand(value)) return fail('InvalidInput', 'Unknown chat operation.');
-  return value;
 }
 export const input = decodeChatInput;
 export function preview(text: string, bytes = 4096) {

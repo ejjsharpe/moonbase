@@ -26,7 +26,7 @@ import {
   makeDaemonClient,
   serveChat,
   type SocketSources,
-} from '@moonbase/pi-runtime/server';
+} from '@moonbase/daemon-protocol/server';
 import type { ClaudeCodeSubscription } from '@moonbase/pi-runtime/claude-code';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import type { ChatClient, ChatCreationSettings, ChatSession } from '@moonbase/contracts/chat';

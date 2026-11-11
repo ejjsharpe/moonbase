@@ -32,7 +32,11 @@ for (const entry of [
     Object.keys(result.metafile.inputs).every((input) => input.startsWith('packages/contracts/')),
     'DTO/client entries must emit no Effect/platform dependency',
   );
-  assert(!/node:|electron|@moonbase\/(workspace|pi-runtime|ssh)/.test(result.outputFiles[0].text));
+  assert(
+    !/node:|electron|@moonbase\/(workspace|pi-runtime|daemon-protocol|ssh)/.test(
+      result.outputFiles[0].text,
+    ),
+  );
 }
 console.log('Verified browser-only command contracts.');
 
@@ -104,7 +108,7 @@ assert(
 );
 for (const input of Object.keys(smoke.metafile.inputs)) {
   assert(
-    !/(?:^|\/)node_modules\/(?:react(?:-dom)?|monaco-editor|electron)\/|@earendil-works|node:|packages\/(?:workspace|pi-runtime|ssh)\//.test(
+    !/(?:^|\/)node_modules\/(?:react(?:-dom)?|monaco-editor|electron)\/|@earendil-works|node:|packages\/(?:workspace|pi-runtime|daemon-protocol|ssh)\//.test(
       input,
     ),
     `Forbidden dependency in public headless consumer: ${input}`,

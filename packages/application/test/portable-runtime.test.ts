@@ -21,7 +21,7 @@ for (const entry of [
     });
     assert.deepEqual(
       Object.keys(bundle.metafile.inputs).filter((path) =>
-        /packages\/(?:pi-runtime|ssh|workspace)\/|node_modules\/(?:\.bun\/[^/]+\/node_modules\/)?(?:react(?:-dom)?|monaco-editor)\/|electron|@earendil-works|node:/.test(
+        /packages\/(?:pi-runtime|daemon-protocol|ssh|workspace)\/|node_modules\/(?:\.bun\/[^/]+\/node_modules\/)?(?:react(?:-dom)?|monaco-editor)\/|electron|@earendil-works|node:/.test(
           path,
         ),
       ),

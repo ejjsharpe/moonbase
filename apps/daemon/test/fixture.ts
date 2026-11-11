@@ -17,9 +17,9 @@ import {
   RemoteChatLive,
   RemoteLocalHostLive,
   RemoteProviderSetupLive,
-} from '@moonbase/pi-runtime/remote';
-import { LoopbackConnectionLive } from '@moonbase/pi-runtime/loopback';
-import { connectDaemonSocket } from '@moonbase/pi-runtime/socket';
+} from '@moonbase/daemon-protocol/remote';
+import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
+import { connectDaemonSocket } from '@moonbase/daemon-protocol/socket';
 import type { ChatHostTarget } from '@moonbase/contracts/host';
 import { runDaemon, type DaemonExit } from '../src/daemon.ts';
 import type { IdleClock } from '../src/idle.ts';

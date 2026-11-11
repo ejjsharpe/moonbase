@@ -5,7 +5,6 @@ import type { Models } from '@earendil-works/pi-ai/models';
 import type { Registry } from '@earendil-works/pi-durable';
 import {
   ChatIdentifierSchema,
-  ChatHostTargetSchema,
   ChatSessionSchema,
   ChatTargetSchema,
   ChatStopTargetSchema,
@@ -30,11 +29,7 @@ const recordId = Schema.String.check(
   Schema.makeFilter((value) => /^[1-9][0-9]*$/.test(value) && Number.isSafeInteger(Number(value))),
 );
 const model = Schema.Struct({ provider: ChatIdentifierSchema, modelId: text(256) });
-const token = Schema.String.check(
-  Schema.makeFilter((value) => /^[\x21-\x7e]{16,4096}$/.test(value)),
-);
 const port = integer.check(Schema.makeFilter((value) => value >= 0 && value <= 65535));
-const server = Schema.Struct({ host: ChatHostTargetSchema, token, port });
 const keyFile = Schema.Struct({ source: Schema.Literal('file'), path });
 // A root is named by its real path; one under another would only repeat its folders.
 const approvedRoots = Schema.Array(path).check(
@@ -157,7 +152,6 @@ function decode<S extends Schema.ConstraintDecoder<unknown, never>>(
   }
 }
 export const localConfiguration = (value: unknown) => decode(localProgrammatic, value);
-export const serverConfiguration = (value: unknown) => decode(server, value);
 export const daemonSettings = (value: unknown) => decode(daemon, value);
 export type DaemonSettings = typeof daemon.Type;
 export function cursorEnvelope(value: unknown) {

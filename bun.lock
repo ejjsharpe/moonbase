@@ -12,6 +12,7 @@
         "@moonbase/application": "workspace:*",
         "@moonbase/config": "workspace:*",
         "@moonbase/contracts": "workspace:*",
+        "@moonbase/daemon-protocol": "workspace:*",
         "@moonbase/effect": "workspace:*",
         "@moonbase/pi-runtime": "workspace:*",
         "@moonbase/ssh": "workspace:*",
@@ -46,6 +47,7 @@
         "@earendil-works/pi-ai": "1.4.0",
         "@moonbase/application": "workspace:*",
         "@moonbase/contracts": "workspace:*",
+        "@moonbase/daemon-protocol": "workspace:*",
         "@moonbase/pi-runtime": "workspace:*",
         "effect": "4.1.0",
       },
@@ -58,6 +60,7 @@
         "@legendapp/list": "3.7.1",
         "@moonbase/application": "workspace:*",
         "@moonbase/contracts": "workspace:*",
+        "@moonbase/daemon-protocol": "workspace:*",
         "@moonbase/pi-runtime": "workspace:*",
         "@moonbase/ssh": "workspace:*",
         "@moonbase/ui": "workspace:*",
@@ -111,6 +114,23 @@
         "@moonbase/config": "workspace:*",
       },
     },
+    "packages/daemon-protocol": {
+      "name": "@moonbase/daemon-protocol",
+      "dependencies": {
+        "@moonbase/contracts": "workspace:*",
+        "@moonbase/effect": "workspace:*",
+        "@moonbase/ssh": "workspace:*",
+        "effect": "4.1.0",
+      },
+      "devDependencies": {
+        "@earendil-works/chord": "1.4.0",
+        "@earendil-works/pi-ai": "1.4.0",
+        "@earendil-works/pi-durable": "1.4.0",
+        "@moonbase/application": "workspace:*",
+        "@moonbase/pi-runtime": "workspace:*",
+        "typebox": "1.3.27",
+      },
+    },
     "packages/effect": {
       "name": "@moonbase/effect",
       "dependencies": {
@@ -130,7 +150,6 @@
         "@earendil-works/pi-durable": "1.4.0",
         "@moonbase/contracts": "workspace:*",
         "@moonbase/effect": "workspace:*",
-        "@moonbase/ssh": "workspace:*",
         "effect": "4.1.0",
         "lru-cache": "11.5.3",
       },
@@ -424,6 +443,8 @@
     "@moonbase/contracts": ["@moonbase/contracts@workspace:packages/contracts"],
 
     "@moonbase/daemon": ["@moonbase/daemon@workspace:apps/daemon"],
+
+    "@moonbase/daemon-protocol": ["@moonbase/daemon-protocol@workspace:packages/daemon-protocol"],
 
     "@moonbase/desktop": ["@moonbase/desktop@workspace:apps/desktop"],
 

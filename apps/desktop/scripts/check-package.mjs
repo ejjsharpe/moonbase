@@ -74,20 +74,22 @@ assert.deepEqual(
   [],
 );
 assert.deepEqual(
-  renderer.filter((p) => /@earendil-works|pi-runtime\/src\/|node:sqlite/.test(p)),
+  renderer.filter((p) =>
+    /@earendil-works|(?:pi-runtime|daemon-protocol)\/src\/|node:sqlite/.test(p),
+  ),
   [],
 );
-// Local chat runs in the bundled daemon; packaged main holds only its loopback client.
+// Local chat runs in the bundled daemon; packaged main holds only the protocol's client side.
 assert.deepEqual(
   main.filter((path) =>
-    /@earendil-works|pi-runtime\/src\/(?!remote|loopback|protocol|validation|socket-client|socket-protocol)[^/]+\.ts$/.test(
+    /@earendil-works|pi-runtime\/src\/|daemon-protocol\/src\/(?!remote|loopback|protocol|validation|socket-client|socket-protocol)[^/]+\.ts$/.test(
       path,
     ),
   ),
   [],
   'The local chat runtime reached packaged main',
 );
-for (const entry of ['pi-runtime/src/remote.ts', 'pi-runtime/src/loopback.ts'])
+for (const entry of ['daemon-protocol/src/remote.ts', 'daemon-protocol/src/loopback.ts'])
   assert(
     main.some((path) => path.endsWith(entry)),
     `Missing packaged daemon client input: ${entry}`,

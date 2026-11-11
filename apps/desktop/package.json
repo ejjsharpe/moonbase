@@ -27,6 +27,7 @@
     "@legendapp/list": "3.7.1",
     "@moonbase/application": "workspace:*",
     "@moonbase/contracts": "workspace:*",
+    "@moonbase/daemon-protocol": "workspace:*",
     "@moonbase/pi-runtime": "workspace:*",
     "@moonbase/ssh": "workspace:*",
     "@moonbase/ui": "workspace:*",

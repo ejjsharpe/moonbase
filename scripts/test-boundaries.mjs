@@ -26,6 +26,10 @@ const packages = new Map([
     { directory: 'packages/pi-runtime', exports: { '.': './src/index.ts' } },
   ],
   [
+    '@moonbase/daemon-protocol',
+    { directory: 'packages/daemon-protocol', exports: { './remote': './src/remote.ts' } },
+  ],
+  [
     '@moonbase/ssh',
     { directory: 'packages/ssh', exports: { './host-health': './src/host-health.ts' } },
   ],
@@ -127,16 +131,17 @@ assert(
 );
 assert.deepEqual(
   check({
-    'packages/pi-runtime/examples/remote.ts': "import '@moonbase/application/runtime/clients';",
+    'packages/daemon-protocol/examples/remote.ts':
+      "import '@moonbase/application/runtime/clients';",
   }),
   [],
 );
 assert(
   check({
-    'packages/pi-runtime/src/index.ts': "import './resources.ts';",
-    'packages/pi-runtime/src/resources.ts': "import './commands.ts';",
-    'packages/pi-runtime/src/commands.ts': "import '../examples/remote.ts';",
-    'packages/pi-runtime/examples/remote.ts': "import '@moonbase/application';",
+    'packages/daemon-protocol/src/remote.ts': "import './socket-client.ts';",
+    'packages/daemon-protocol/src/socket-client.ts': "import './protocol.ts';",
+    'packages/daemon-protocol/src/protocol.ts': "import '../examples/remote.ts';",
+    'packages/daemon-protocol/examples/remote.ts': "import '@moonbase/application';",
     'packages/application/src/index.ts': '',
   }).some((error) => error.includes('reusable export reaches process root')),
 );
@@ -158,6 +163,16 @@ assert.deepEqual(
   }),
   [],
 );
+for (const [path, specifier] of [
+  ['packages/daemon-protocol/src/remote.ts', '@moonbase/pi-runtime'],
+  ['packages/pi-runtime/src/index.ts', '@moonbase/daemon-protocol/remote'],
+])
+  assert(
+    check({ [path]: `import type {} from '${specifier}';` }).some((error) =>
+      error.includes('infrastructure imports another implementation'),
+    ),
+    `${path} -> ${specifier}`,
+  );
 assert(
   check({
     'packages/ssh/src/host-health.ts': "import type {} from './process.ts';",

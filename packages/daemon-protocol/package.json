@@ -1,0 +1,31 @@
+{
+  "name": "@moonbase/daemon-protocol",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./remote": "./src/remote.ts",
+    "./server": "./src/server.ts",
+    "./loopback": "./src/loopback.ts",
+    "./socket": "./src/socket-client.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "oxlint .",
+    "test": "bun test --timeout 60000 ./test"
+  },
+  "dependencies": {
+    "effect": "4.1.0",
+    "@moonbase/contracts": "workspace:*",
+    "@moonbase/effect": "workspace:*",
+    "@moonbase/ssh": "workspace:*"
+  },
+  "devDependencies": {
+    "@earendil-works/chord": "1.4.0",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-durable": "1.4.0",
+    "@moonbase/application": "workspace:*",
+    "@moonbase/pi-runtime": "workspace:*",
+    "typebox": "1.3.27"
+  }
+}
