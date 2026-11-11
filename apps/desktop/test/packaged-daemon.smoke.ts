@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -21,15 +20,24 @@ import { findDaemonCommand } from '../src/main/daemon-command.ts';
 import {
   bounded,
   launchFrom,
+  missingPackageProbe,
   plantHostileBunFiles,
   prepareDaemonRoot,
+  runProbe,
   startDaemonCommand,
+  withLocalRegistry,
+  writeHostilePreload,
 } from './daemon-process.ts';
 
 // Runs against the package that `bun run package` made; `test:package` runs it.
 const contents = resolve(
   `release/${process.arch === 'arm64' ? 'mac-arm64' : 'mac'}/Moonbase.app/Contents`,
 );
+const packaged = {
+  packaged: true,
+  resourcesPath: join(contents, 'Resources'),
+  bundleDirectory: join(contents, 'Resources/app.asar'),
+};
 
 // A stand-in for the Claude Code CLI, the chat's faux provider: it reports a subscription login,
 // starts the tool-inventory helper from the MCP config exactly as Claude Code would, records what
@@ -84,16 +92,6 @@ mcp.kill();
 
 test('the packaged daemon serves a chat from temporary data, and its Claude Code helper starts from the bundle', async () => {
   const { root, directory } = await prepareDaemonRoot();
-  const daemon = findDaemonCommand(
-    {
-      packaged: true,
-      resourcesPath: join(contents, 'Resources'),
-      bundleDirectory: join(contents, 'Resources/app.asar'),
-    },
-    directory,
-  );
-  await access(daemon.command);
-  await access(daemon.args.at(-2)!);
   const bin = join(root, 'bin'),
     project = join(root, 'project');
   await mkdir(bin);
@@ -103,19 +101,22 @@ test('the packaged daemon serves a chat from temporary data, and its Claude Code
   await chmod(claude, 0o755);
   // Like an npm install, the faux CLI runs through `env node`, with its `node` beside it.
   await symlink(process.execPath, join(bin, 'node'));
+  const daemon = findDaemonCommand(packaged, directory, {
+    // Only the system PATH, as an app launched from Finder has: no `rg` on it.
+    PATH: '/usr/bin:/bin',
+    HOME: root,
+    TMPDIR: root,
+    PI_CLAUDE_CODE_COMMAND: claude,
+    // A hostile environment the daemon command must drop.
+    BUN_OPTIONS: await writeHostilePreload(root, join(root, 'preloaded')),
+  });
+  await access(daemon.command);
+  await access(daemon.args.at(-2)!);
   // Bun would load these from the folder the app was launched from.
   const launch = join(root, 'launch');
   await mkdir(launch);
   await plantHostileBunFiles(launch, join(root, 'preloaded'));
-  const started = launchFrom(launch, () =>
-    startDaemonCommand(daemon, {
-      // Only the system PATH, as an app launched from Finder has: no `rg` on it.
-      PATH: '/usr/bin:/bin',
-      HOME: root,
-      TMPDIR: root,
-      PI_CLAUDE_CODE_COMMAND: claude,
-    }),
-  );
+  const started = launchFrom(launch, () => startDaemonCommand(daemon));
   let runtime: ManagedRuntime.ManagedRuntime<unknown, unknown> | undefined;
   try {
     const ready = await bounded(started.ready);
@@ -224,25 +225,42 @@ test('the packaged runtime loads no .env or bunfig.toml from the daemon data dir
   const { root, directory } = await prepareDaemonRoot();
   try {
     await plantHostileBunFiles(directory, join(root, 'preloaded'));
-    const daemon = findDaemonCommand(
-      {
-        packaged: true,
-        resourcesPath: join(contents, 'Resources'),
-        bundleDirectory: join(contents, 'Resources/app.asar'),
-      },
-      directory,
-    );
-    const bundle = daemon.args.at(-2)!;
+    const daemon = findDaemonCommand(packaged, directory, {
+      PATH: '/usr/bin:/bin',
+      HOME: root,
+    });
     const probe = join(root, 'probe.mjs');
     await writeFile(probe, 'console.log(JSON.stringify(process.env.MOONBASE_HOSTILE ?? null))');
-    const run = spawnSync(
-      daemon.command,
-      daemon.args.map((arg) => (arg === bundle ? probe : arg)),
-      { cwd: daemon.cwd, env: { PATH: '/usr/bin:/bin', HOME: root }, encoding: 'utf8' },
-    );
+    const run = await runProbe(daemon, probe);
     assert.equal(run.status, 0, run.stderr);
     assert.equal(run.stdout.trim(), 'null');
     await assert.rejects(access(join(root, 'preloaded')), { code: 'ENOENT' });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('the packaged runtime never asks a registry for a package the bundle lacks', async () => {
+  const { root, directory } = await prepareDaemonRoot();
+  try {
+    const daemon = findDaemonCommand(packaged, directory, {
+      PATH: '/usr/bin:/bin',
+      HOME: root,
+    });
+    // Beside the bundle's own folder layout: no `node_modules` above the probe.
+    const probe = join(root, 'probe.mjs');
+    await writeFile(probe, missingPackageProbe);
+    const { result: run, requests } = await withLocalRegistry((registry) =>
+      runProbe(daemon, probe, {
+        ...daemon.env,
+        // Only a local listener: were auto-install on, it would ask this, never npm.
+        BUN_CONFIG_REGISTRY: registry,
+        BUN_INSTALL_CACHE_DIR: join(root, 'cache'),
+      }),
+    );
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(run.stdout.trim(), 'missing');
+    assert.deepEqual(requests, []);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -59,11 +59,17 @@ export function startDaemon(
   const path = entry in entries ? entries[entry as keyof typeof entries] : entry;
   const child = spawn(
     process.execPath,
-    // As the app runs it: no `.env` or `bunfig.toml` from the working folder.
-    ['--no-env-file', '--config=/dev/null', '--preload', noNetwork, path, ...args],
+    // As the app runs it: no `.env`, `bunfig.toml` or auto-install.
+    ['--no-env-file', '--config=/dev/null', '--no-install', '--preload', noNetwork, path, ...args],
     {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ...env },
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: process.env.HOME ?? '',
+        WS_NO_BUFFER_UTIL: '1',
+        WS_NO_UTF_8_VALIDATE: '1',
+        ...env,
+      },
     },
   );
   let output = '',

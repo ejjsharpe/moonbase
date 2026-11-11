@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { spawnSync } from 'node:child_process';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,13 +7,24 @@ import { findDaemonCommand } from '../src/main/daemon-command.ts';
 import {
   bounded,
   launchFrom,
+  missingPackageProbe,
   plantHostileBunFiles,
   prepareDaemonRoot,
+  runProbe,
   startDaemonCommand,
+  withLocalRegistry,
+  writeHostilePreload,
 } from './daemon-process.ts';
 
 const dist = fileURLToPath(new URL('../dist', import.meta.url));
 const source = fileURLToPath(new URL('../../daemon/src/main.ts', import.meta.url));
+const development = {
+  packaged: false,
+  resourcesPath: '/unused',
+  bundleDirectory: dist,
+};
+const options = ['--no-env-file', '--config=/dev/null', '--no-install'];
+const ws = { WS_NO_BUFFER_UTIL: '1', WS_NO_UTF_8_VALIDATE: '1' };
 
 test('a packaged app runs its own Bun runtime on the bundled daemon, from its data directory', () => {
   const resources = '/Applications/Moonbase.app/Contents/Resources';
@@ -26,16 +36,21 @@ test('a packaged app runs its own Bun runtime on the bundled daemon, from its da
         bundleDirectory: join(resources, 'app.asar'),
       },
       '/private/data',
+      {
+        PATH: '/usr/bin:/bin',
+        HOME: '/Users/someone',
+        BUN_OPTIONS: '--preload /tmp/x.ts',
+        BUN_CONFIG_REGISTRY: 'http://127.0.0.1:1/',
+        BUN_INSTALL: '/tmp/bun',
+        NODE_OPTIONS: '--require /tmp/x.js',
+        UNSET: undefined,
+      },
     ),
     {
       command: '/Applications/Moonbase.app/Contents/Helpers/bun',
-      args: [
-        '--no-env-file',
-        '--config=/dev/null',
-        join(resources, 'daemon/daemon.mjs'),
-        '/private/data',
-      ],
+      args: [...options, join(resources, 'daemon/daemon.mjs'), '/private/data'],
       cwd: '/private/data',
+      env: { PATH: '/usr/bin:/bin', HOME: '/Users/someone', ...ws },
     },
   );
 });
@@ -44,24 +59,13 @@ test('the daemon command loads no .env or bunfig.toml from its working folder', 
   const { root, directory } = await prepareDaemonRoot();
   try {
     await plantHostileBunFiles(directory, join(root, 'preloaded'));
-    const daemon = findDaemonCommand(
-      { packaged: false, resourcesPath: '/unused', bundleDirectory: dist },
-      directory,
-    );
-    // The same runtime options on a probe in place of the daemon's entry.
+    const daemon = findDaemonCommand(development, directory, {
+      PATH: process.env.PATH ?? '',
+      HOME: root,
+    });
     const probe = join(root, 'probe.mjs');
     await writeFile(probe, 'console.log(JSON.stringify(process.env.MOONBASE_HOSTILE ?? null))');
-    const run = launchFrom(directory, () =>
-      spawnSync(
-        daemon.command,
-        daemon.args.map((arg) => (arg === source ? probe : arg)),
-        {
-          cwd: daemon.cwd,
-          env: { PATH: process.env.PATH ?? '', HOME: root },
-          encoding: 'utf8',
-        },
-      ),
-    );
+    const run = await launchFrom(directory, () => runProbe(daemon, probe));
     assert.equal(run.status, 0, run.stderr);
     assert.equal(run.stdout.trim(), 'null');
     await assert.rejects(access(join(root, 'preloaded')), { code: 'ENOENT' });
@@ -70,14 +74,64 @@ test('the daemon command loads no .env or bunfig.toml from its working folder', 
   }
 });
 
+test('the daemon command drops BUN_OPTIONS and NODE_OPTIONS from the caller environment', async () => {
+  const { root, directory } = await prepareDaemonRoot();
+  try {
+    const marker = join(root, 'preloaded');
+    const daemon = findDaemonCommand(development, directory, {
+      PATH: process.env.PATH ?? '',
+      HOME: root,
+      BUN_OPTIONS: await writeHostilePreload(root, marker),
+      NODE_OPTIONS: `--require ${join(root, 'options-preload.ts')}`,
+    });
+    const probe = join(root, 'probe.mjs');
+    await writeFile(
+      probe,
+      'console.log(JSON.stringify([process.env.BUN_OPTIONS ?? null, process.env.NODE_OPTIONS ?? null]))',
+    );
+    const run = await runProbe(daemon, probe);
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(run.stdout.trim(), '[null,null]');
+    await assert.rejects(access(marker), { code: 'ENOENT' });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('the daemon command never asks a registry for a package it cannot resolve', async () => {
+  const { root, directory } = await prepareDaemonRoot();
+  try {
+    const daemon = findDaemonCommand(development, directory, {
+      PATH: process.env.PATH ?? '',
+      HOME: root,
+    });
+    // The probe sits in a temporary folder with no `node_modules` above it, as the bundle does.
+    const probe = join(root, 'probe.mjs');
+    await writeFile(probe, missingPackageProbe);
+    const { result: run, requests } = await withLocalRegistry((registry) =>
+      runProbe(daemon, probe, {
+        ...daemon.env,
+        // Only a local listener: were auto-install on, it would ask this, never npm.
+        BUN_CONFIG_REGISTRY: registry,
+        BUN_INSTALL_CACHE_DIR: join(root, 'cache'),
+      }),
+    );
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(run.stdout.trim(), 'missing');
+    assert.deepEqual(requests, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('development runs the daemon from source with the bun on PATH, with no packaging step', async () => {
-  const daemon = findDaemonCommand(
-    { packaged: false, resourcesPath: '/unused', bundleDirectory: dist },
-    '/private/data',
-  );
+  const daemon = findDaemonCommand(development, '/private/data', {
+    PATH: '/usr/bin',
+  });
   assert.equal(daemon.command, 'bun');
-  assert.deepEqual(daemon.args, ['--no-env-file', '--config=/dev/null', source, '/private/data']);
+  assert.deepEqual(daemon.args, [...options, source, '/private/data']);
   assert.equal(daemon.cwd, '/private/data');
+  assert.deepEqual(daemon.env, { PATH: '/usr/bin', ...ws });
   await access(source);
 
   const { root, directory } = await prepareDaemonRoot();
@@ -88,15 +142,11 @@ test('development runs the daemon from source with the bun on PATH, with no pack
   await plantHostileBunFiles(directory, join(root, 'preloaded'));
   const started = launchFrom(launch, () =>
     startDaemonCommand(
-      findDaemonCommand(
-        { packaged: false, resourcesPath: '/unused', bundleDirectory: dist },
-        directory,
-      ),
-      {
+      findDaemonCommand(development, directory, {
         PATH: process.env.PATH ?? '',
         HOME: root,
         PI_CLAUDE_CODE_COMMAND: '/nonexistent/claude',
-      },
+      }),
     ),
   );
   try {
