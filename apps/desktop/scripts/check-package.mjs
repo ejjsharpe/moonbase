@@ -168,6 +168,13 @@ const daemonRipgrep = fileURLToPath(
 );
 assert.equal(daemonRipgrep, join(resources, 'workspace/ripgrep/rg'));
 assert((await stat(daemonRipgrep)).mode & 0o111, 'The daemon finds no executable ripgrep');
+// Likewise the workspace's native helper (`apps/daemon/src/workspace.ts`): without it the daemon
+// composes no file host.
+const daemonHelper = fileURLToPath(
+  new URL('../workspace/filesystem', pathToFileURL(join(resources, 'daemon/daemon.mjs'))),
+);
+assert.equal(daemonHelper, join(resources, 'workspace/filesystem'));
+assert((await stat(daemonHelper)).mode & 0o111, 'The daemon finds no executable workspace helper');
 const daemonInputs = JSON.parse(await readFile(join(root, 'dist/daemon-inputs.json'), 'utf8'));
 // Main expects the build of the daemon bundle it ships, which writes that build to its endpoint.
 const daemonBuild = JSON.parse(await readFile(join(root, 'dist/daemon-build.json'), 'utf8'));

@@ -8,7 +8,9 @@
 - `WorkspaceRecoveryLive({dataDirectory, installationId}, host)` provides today's full `WorkspaceService` over a host service. It keeps drafts and editor state in `moonbase-workspace-v1.sqlite`, so existing drafts carry.
 - `WorkspaceLocalLive(config)` composes both in one process, as Electron main does; see [`examples/local.ts`](examples/local.ts).
 
-Compose each once in a process root's runtime. The workspace opens only on macOS with Node 26.13 or newer, the pinned Electron (45.1.0) or exactly Bun 1.4.4, and is refused as `Incompatible` otherwise. Configure a stable `hostId` and a `dataDirectory` outside approved checkouts. Packaged apps must supply absolute `filesystemHelper` and `ripgrepExecutable` paths. System Git defaults to `/usr/bin/git`.
+Compose each once in a process root's runtime. The workspace opens only on macOS with Node 26.13 or newer, the pinned Electron (45.1.0) or exactly Bun 1.4.4, and is refused as `Incompatible` otherwise. Configure a stable `hostId` and a `dataDirectory` outside approved checkouts. Packaged apps must supply absolute `filesystemHelper` and `ripgrepExecutable` paths. System Git defaults to `/usr/bin/git`; when the Xcode command-line tools are missing, Git runs fail as `Unavailable` and the macOS installer prompt is never triggered.
+
+**Root policy.** `reserved` lists paths (such as a daemon's token and credentials) that no checkout root, worktree location or import source may hold or sit inside, compared by real path, folded for case, whether or not they exist yet. `allowRoot(real, requested)` is an optional predicate for a host's owner: it runs when a root is opened (`requested` is the path as named, so a link can be refused), for the parent of a new worktree's location, and on every later use of an approved checkout, so a root replaced since, or one a narrower policy no longer allows, grants nothing. A refusal or throw denies as `Unauthorized`.
 
 ## File host and recovery
 

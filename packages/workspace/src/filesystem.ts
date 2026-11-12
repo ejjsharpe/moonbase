@@ -1,5 +1,5 @@
 import { type Cause, Deferred, Effect, Exit } from 'effect';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs, { constants, fstatSync, openSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import type { FileDocument } from '@moonbase/contracts/workspace';
@@ -230,13 +230,39 @@ export function makeRunner(
       ),
     );
 }
+const systemGit = '/usr/bin/git';
+/** Whether the Xcode command-line tools (or Xcode) are selected; asking never opens an installer. */
+const developerToolsInstalled = () =>
+  spawnSync('/usr/bin/xcode-select', ['-p'], { stdio: 'ignore', timeout: 5000 }).status === 0;
+/**
+ * Guards a Git run. macOS's `/usr/bin/git` is a stub that offers to install the command-line tools
+ * when they are missing, which a daemon must never trigger, so a missing install is `Unavailable`
+ * and the stub is never run. A found install is remembered; a missing one is looked for again.
+ */
+export function createGitGate(gitExecutable: string, probe = developerToolsInstalled) {
+  let found = gitExecutable !== systemGit;
+  return () => {
+    if (found) return;
+    if (!probe())
+      fail('Unavailable', 'Git is unavailable. Install the Xcode command-line tools on this Mac.');
+    found = true;
+  };
+}
 export class Directory {
   readonly fd: number;
   readonly root: string;
   readonly expected: string;
   readonly run: Run;
   readonly gitExecutable: string;
-  constructor(root: string, expected: string, run: Run, gitExecutable: string) {
+  readonly gitReady: () => void;
+  constructor(
+    root: string,
+    expected: string,
+    run: Run,
+    gitExecutable: string,
+    gitReady: () => void = () => {},
+  ) {
+    this.gitReady = gitReady;
     this.root = root;
     this.expected = expected;
     this.run = run;
@@ -290,6 +316,7 @@ export class Directory {
    */
   git(args: string[], input?: string, signal?: AbortSignal, { untranslated = false } = {}) {
     this.check();
+    this.gitReady();
     return this.run(
       [
         'git',
@@ -307,6 +334,7 @@ export class Directory {
   }
   /** Makes the root a new repository; `git` above names a work tree, which needs one already. */
   initializeGit(signal?: AbortSignal) {
+    this.gitReady();
     return this.io(['git', this.gitExecutable, 'init', '--quiet'], undefined, signal);
   }
   async entry(p: string, signal?: AbortSignal, spellings?: Map<string, Set<string>>) {

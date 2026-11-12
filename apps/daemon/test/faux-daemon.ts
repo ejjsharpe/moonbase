@@ -3,6 +3,7 @@ import { runDaemon } from '../src/daemon.ts';
 import { readDirectoryArgument } from '../src/data-directory.ts';
 import { describeFailure } from '../src/failure.ts';
 import { onShutdownSignal } from '../src/signals.ts';
+import { findFilesystemHelper } from '../src/workspace.ts';
 import { createFauxProviders, readFauxScript } from './faux.ts';
 
 /**
@@ -18,6 +19,7 @@ try {
     signal: onShutdownSignal(),
     ready: (line) => console.log(line),
     closeClaudeCode: async () => {},
+    filesystemHelper: findFilesystemHelper(import.meta.url),
     providers: (settings) => ({
       ...createFauxProviders(directory),
       ...(settings.credentialKey?.source === 'file'

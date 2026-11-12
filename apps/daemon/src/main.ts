@@ -8,6 +8,7 @@ import { readDirectoryArgument } from './data-directory.ts';
 import { describeFailure } from './failure.ts';
 import { findBundledRipgrep } from './ripgrep.ts';
 import { onShutdownSignal } from './signals.ts';
+import { findFilesystemHelper } from './workspace.ts';
 
 /** The bundle's digest, which `scripts/build.mjs` defines; undefined when run from source. */
 declare const MOONBASE_DAEMON_BUILD: string | undefined;
@@ -24,6 +25,8 @@ async function main() {
     closeClaudeCode: closeClaudeCodeProcesses,
     // The app's ripgrep beside the packaged bundle; from source, the one on PATH.
     ripgrepExecutable: findBundledRipgrep(import.meta.url),
+    // The app's native helper beside the packaged bundle; from source, the workspace package's.
+    filesystemHelper: findFilesystemHelper(import.meta.url),
     build: typeof MOONBASE_DAEMON_BUILD === 'string' ? MOONBASE_DAEMON_BUILD : 'development',
     providers: (settings, session) => ({
       // A host always names a key file: without a GUI session the login keychain is locked.

@@ -105,7 +105,7 @@ export class WorkspaceWorktrees {
     source: CheckoutTarget,
     signal: AbortSignal,
   ) => Promise<CheckoutTarget>;
-  private readonly protect: (root: string) => void;
+  private readonly protect: (location: string) => void | Promise<void>;
   /** Reports a failure that does not undo a finished creation, such as a lock left behind. */
   private readonly report: (message: string) => void;
   /** Creations run one at a time per project, so none mistakes another's worktree for its own. */
@@ -113,7 +113,7 @@ export class WorkspaceWorktrees {
   constructor(
     directory: (target: CheckoutTarget) => Promise<Directory>,
     open: (root: string, source: CheckoutTarget, signal: AbortSignal) => Promise<CheckoutTarget>,
-    protect: (root: string) => void,
+    protect: (location: string) => void | Promise<void>,
     report: (message: string) => void,
   ) {
     this.directory = directory;
@@ -176,7 +176,7 @@ export class WorkspaceWorktrees {
     ensure(lstatSync(parent).isDirectory(), 'The worktree location parent must be a folder.');
     // Git precomposes the paths it is given, so the folder it makes is named in NFC.
     const location = join(parent, basename(input.location).normalize('NFC'));
-    this.protect(location);
+    await this.protect(location);
     if (exists(location)) fail('Conflict', 'The worktree location already exists.');
     // A worktree whose folder is missing (moved, or on an unmounted drive) still owns its location.
     const before = readWorktrees(
