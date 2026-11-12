@@ -1,5 +1,5 @@
 import { normalizeApplicationError } from '@moonbase/effect';
-import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
+import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
 import { chmodSync, constants, closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { ApplicationError } from '@moonbase/contracts/workspace';
@@ -20,6 +20,7 @@ export class Store {
   readonly directory: string;
   readonly db: DatabaseSync;
   private readonly decoders: Decoders;
+  private readonly statements = new Map<string, StatementSync>();
   constructor(
     directory: string,
     options: {
@@ -73,26 +74,36 @@ export class Store {
       throw invalidStored();
     }
   }
+  /** One prepared statement per SQL text, prepared once. */
+  statement(sql: string) {
+    let statement = this.statements.get(sql);
+    if (!statement) this.statements.set(sql, (statement = this.db.prepare(sql)));
+    return statement;
+  }
   get<T>(bucket: string, key: string): T | null {
-    const row = this.db
-      .prepare('SELECT body FROM records WHERE bucket=? AND key=?')
-      .get(bucket, key);
+    const row = this.statement('SELECT body FROM records WHERE bucket=? AND key=?').get(
+      bucket,
+      key,
+    );
     return row ? this.parse<T>(bucket, row.body) : null;
   }
   all<T>(bucket: string, predicate = '1', parameters: SQLInputValue[] = [], limit = -1): T[] {
-    return this.db
-      .prepare(`SELECT body FROM records WHERE bucket=? AND (${predicate}) ORDER BY rowid LIMIT ?`)
+    return this.statement(
+      `SELECT body FROM records WHERE bucket=? AND (${predicate}) ORDER BY rowid LIMIT ?`,
+    )
       .all(bucket, ...parameters, limit)
       .map((r) => this.parse<T>(bucket, r.body));
   }
   put(bucket: string, key: string, value: unknown) {
+    this.write(
+      'INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO UPDATE SET body=excluded.body',
+      [bucket, key, JSON.stringify(value)],
+    );
+  }
+  /** Runs one write; a failure is `Persistence`. */
+  write(sql: string, parameters: SQLInputValue[]) {
     try {
-      this.get(bucket, key);
-      this.db
-        .prepare(
-          'INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO UPDATE SET body=excluded.body',
-        )
-        .run(bucket, key, JSON.stringify(value));
+      return this.statement(sql).run(...parameters);
     } catch (error) {
       throw new ApplicationError({
         code: 'Persistence',
@@ -104,9 +115,9 @@ export class Store {
   }
   reserve<T>(bucket: string, key: string, value: T): T | null {
     try {
-      const result = this.db
-        .prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO NOTHING')
-        .run(bucket, key, JSON.stringify(value));
+      const result = this.statement(
+        'INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO NOTHING',
+      ).run(bucket, key, JSON.stringify(value));
       return Number(result.changes) === 0 ? this.get<T>(bucket, key) : null;
     } catch (error) {
       throw new ApplicationError({
@@ -118,7 +129,7 @@ export class Store {
     }
   }
   delete(bucket: string, key: string) {
-    this.db.prepare('DELETE FROM records WHERE bucket=? AND key=?').run(bucket, key);
+    this.statement('DELETE FROM records WHERE bucket=? AND key=?').run(bucket, key);
   }
   /** Runs `fn` in one write transaction; a throw rolls everything back. */
   transaction<T>(fn: () => T): T {

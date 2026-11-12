@@ -283,19 +283,6 @@ export const chatReplyErrorCodes = [
   'Cancelled',
   'Uncertain',
 ] as const;
-/** One chunk of a chunked payload: canonical base64 of 1 to `chatContentChunkBytes` bytes. */
-export const ChatContentChunkDataSchema = Schema.String.check(
-  Schema.makeFilter((value) => {
-    try {
-      const decoded = atob(value);
-      return (
-        decoded.length > 0 && decoded.length <= chatContentChunkBytes && btoa(decoded) === value
-      );
-    } catch {
-      return false;
-    }
-  }),
-);
 const receipt = { target: ChatTargetSchema, requestId: ChatIdentifierSchema };
 export const ChatSendReceiptSchema = Schema.Union([
   struct({ ...receipt, admission: Schema.Literal('reserved'), submissionId: Schema.Null }),

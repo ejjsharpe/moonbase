@@ -33,7 +33,6 @@ export type DesktopChatTarget = {
   id: string;
   label: string;
   mode: 'local' | 'remote';
-  context: ChatSession;
 };
 export type TranscriptCopy = {
   source: ChatTranscriptSource;
@@ -75,8 +74,11 @@ export interface ChatBridge {
    * remote host's approved roots and their folders.
    */
   recentFolders?(backendId?: string): Promise<string[]>;
-  /** Creates a new local chat's linked worktree beside the repository, returning its root. */
-  createWorktree?(root: string, branch: string): Promise<string>;
+  /**
+   * Creates a new local chat's linked worktree beside the repository; the reply is its root. A
+   * repeat with the same `requestId` gets the first one's outcome.
+   */
+  createWorktree?(root: string, branch: string, requestId: string): Promise<Reply>;
   /** Opens a local chat without a project's folder as a project where it is, returning its root. */
   turnIntoProject?(conversationId: string): Promise<string>;
   context(backendId?: string): Promise<ChatSession>;

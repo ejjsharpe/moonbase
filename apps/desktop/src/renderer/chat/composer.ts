@@ -48,6 +48,13 @@ export class ChatComposer {
   private readonly chat: ComposerChat;
   /** The folder each of the new chat draft's mentions was picked in, by its path. */
   private folders = new Map<string, string>();
+  /**
+   * The send in a new worktree whose outcome is unknown (its reply was lost, or it was cancelled),
+   * so sending the same draft from the same place and folder again asks for that worktree.
+   */
+  private worktreeRequest:
+    | { key: string; cwd: string; branch: string; requestId: string }
+    | undefined;
   /** Worktrees a place made, kept as its folder until a chat is created in one. */
   private readonly worktrees = new Map<
     string,
@@ -180,20 +187,29 @@ export class ChatComposer {
   /**
    * Makes a linked worktree of the place's folder and sends the new chat's first message in it.
    * Until a chat is created there the place keeps the worktree as its folder, so a retried send
-   * never makes a second one; then the place goes back to the folder it was made from.
+   * never makes a second one; then the place goes back to the folder it was made from. A send whose
+   * worktree's outcome is unknown is retried under the same request.
    */
   sendInWorktree(
     key: string,
     initialCwd: string,
-    createWorktree: (root: string, branch: string) => Promise<string>,
+    createWorktree: (root: string, branch: string, requestId: string) => Promise<string>,
     settings: ChatModelPreference,
   ) {
     if (this.snapshot.creatingWorktree) return;
     const cwd = this.readPlace(key, initialCwd).cwd;
+    const branch = chatWorktreeBranch(this.chat.getSnapshot().draft);
+    const unknown = this.worktreeRequest;
+    const request =
+      unknown && unknown.key === key && unknown.cwd === cwd && unknown.branch === branch
+        ? unknown
+        : { key, cwd, branch, requestId: crypto.randomUUID() };
+    this.worktreeRequest = request;
     this.clearMessages(key);
     this.publish({ creatingWorktree: true });
-    void createWorktree(cwd, chatWorktreeBranch(this.chat.getSnapshot().draft)).then(
+    void createWorktree(cwd, branch, request.requestId).then(
       (root) => {
+        this.worktreeRequest = undefined;
         this.worktrees.set(key, { initialCwd, root, from: cwd });
         this.updatePlace(key, initialCwd, { cwd: root, newWorktree: false });
         // `cwd` is a repository root (main refuses others), and the worktree holds its committed
@@ -217,6 +233,8 @@ export class ChatComposer {
         this.publish({ creatingWorktree: false });
       },
       (error: unknown) => {
+        const code = (error as { code?: unknown } | undefined)?.code;
+        if (code !== 'Uncertain' && code !== 'Cancelled') this.worktreeRequest = undefined;
         this.publish({
           creatingWorktree: false,
           notice:

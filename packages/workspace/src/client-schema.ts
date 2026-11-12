@@ -1,5 +1,5 @@
 import { Schema } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/workspace';
+import { ApplicationError, type EditorRecovery } from '@moonbase/contracts/workspace';
 import { hash, recovery } from './validation.ts';
 import {
   OperationResultSchema,
@@ -8,7 +8,6 @@ import {
   WorkspaceIdentifierSchema,
   WorkspaceOperationSchema,
   workspaceInputSchemas,
-  decodeEditorRecovery,
 } from '@moonbase/contracts/workspace-schema';
 import { invalidStored } from './store.ts';
 import {
@@ -23,7 +22,8 @@ import {
 
 export const ClientConfigurationSchema = struct({
   dataDirectory: absolute,
-  installationId: WorkspaceIdentifierSchema,
+  /** The store's identity to a file host; when absent the store adopts the one it holds or mints one. */
+  installationId: optional(WorkspaceIdentifierSchema),
   /** How long loading recovery waits on the host before it gives up on it for this load. */
   hostWaitMs: optional(natural),
 });
@@ -38,16 +38,16 @@ export function decodeClientConfiguration(value: unknown) {
     });
   }
 }
-/** A save the client sent (or is about to send), kept until its outcome is in the recovery. */
+/**
+ * A save the client sent (or is about to send). `state` is `sent` while its outcome is unknown,
+ * `restored` once its text is back in the recovery as a draft while the outcome is still unknown,
+ * `settled` once its outcome is in the recovery but the host has not been told, and `done` after.
+ */
 export const SaveRecordSchema = struct({
-  restorePending: optional(Schema.Boolean),
-  recoveryRestored: optional(Schema.Boolean),
-  recoveryPublication: optional(natural),
-  baseline: optional(storedDocument),
-  published: optional(Schema.Boolean),
-  /** The host never admitted the request; its text was restored as a draft. */
-  notStarted: optional(Schema.Boolean),
-  hostAcknowledged: optional(Schema.Boolean),
+  state: Schema.Literals(['sent', 'restored', 'settled', 'done']),
+  /** The client's publication count when the save began; text is restored only while it holds. */
+  recoveryPublication: natural,
+  baseline: storedDocument,
   input: workspaceInputSchemas.saveFile,
   result: optional(
     SaveResultSchema.check(
@@ -58,6 +58,8 @@ export const SaveRecordSchema = struct({
 });
 /** An operation the client sent, or one the host's feed reported from another client. */
 export const OperationRecordSchema = struct({
+  /** Something is left to do: an outcome, a publication or an acknowledgement (indexed). */
+  open: Schema.Boolean,
   publicationError: optional(Schema.String),
   publishedItems: optional(array(Schema.String)),
   input: WorkspaceOperationSchema,
@@ -72,18 +74,19 @@ const PublicationRecordSchema = struct({
   digest: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
   receipt: RecoveryPublicationSchema,
 });
-export const FeedCursorSchema = struct({ sequence: natural, epoch: optional(Schema.String) });
-export const FeedGapSchema = struct({ since: natural, checkoutId: Schema.String });
+export const FeedCursorSchema = struct({ sequence: natural, epoch: Schema.String });
+export const FeedGapSchema = struct({ hostId: Schema.String, checkoutId: Schema.String });
 export type SaveRecord = typeof SaveRecordSchema.Type;
 export type OperationRecord = typeof OperationRecordSchema.Type;
+export type FeedCursor = typeof FeedCursorSchema.Type;
 export const clientDecoders = {
   ...strictDecoders({
     publications: natural,
     'recovery-publications': PublicationRecordSchema,
-    /** Per host, the last operation-feed sequence this client has applied. */
-    cursors: FeedCursorSchema,
+    /** Per host and checkout, the last operation-feed sequence applied to the recovery. */
+    'feed-cursors': FeedCursorSchema,
     /** Per host and checkout, a feed gap that left drafts at their old paths. */
-    gaps: FeedGapSchema,
+    'feed-gaps': FeedGapSchema,
     meta: WorkspaceIdentifierSchema,
     /** Per call, the request ID its host operation was (or is to be) sent under. */
     requests: struct({ requestId: WorkspaceIdentifierSchema }),
@@ -95,12 +98,10 @@ export function savedRevision(value: unknown): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw invalidStored();
   return value;
 }
-export function parseRecovery(body: unknown, clientId: string) {
+export function parseRecovery(body: unknown, clientId: string): EditorRecovery {
   try {
     if (typeof body !== 'string') throw Error();
-    const state = decodeEditorRecovery(JSON.parse(body));
-    recovery(state, clientId);
-    return state;
+    return recovery(JSON.parse(body), clientId);
   } catch {
     throw invalidStored();
   }

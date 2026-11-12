@@ -303,7 +303,7 @@ test('strict private saved request rejection leaves pending journal data untouch
     try {
       const row = db.prepare("SELECT key,body FROM records WHERE bucket='saves'").get()!;
       const stored = JSON.parse(row.body as string);
-      stored.published = false;
+      stored.state = 'sent';
       stored.input.futureRequest = 'private evidence';
       const original = JSON.stringify(stored);
       db.prepare("UPDATE records SET body=? WHERE bucket='saves' AND key=?").run(
@@ -440,14 +440,13 @@ test('private configuration rejects unsafe shapes before creating a state direct
   }
 });
 
-test('admitted cancellation retains its overlap lease and root resources until the helper actually closes', async () => {
+test('admitted cancellation retains its overlap lease and root resources until the helper actually exits', async () => {
   const f = fixture(),
     ready = join(f.base, 'admitted'),
     release = join(f.base, 'release-descendant');
-  // Job control gives the descendant its own process group, so it outlives stopping the helper's
-  // group and holds the helper's pipes open.
+  // The helper ignores the stop request, so it keeps running until released.
   const helper = f.wrapper(
-    `if [ "$1" = copy ]; then\n set -m\n (while [ ! -e ${quote(release)} ]; do /bin/sleep 0.01; done) &\n /usr/bin/touch ${quote(ready)}\n while :; do /bin/sleep 0.01; done\nfi`,
+    `if [ "$1" = copy ]; then\n trap '' TERM\n /usr/bin/touch ${quote(ready)}\n while [ ! -e ${quote(release)} ]; do /bin/sleep 0.01; done\n exit 1\nfi`,
   );
   const { runtime, client } = f.start(helper),
     abort = new AbortController();
@@ -500,7 +499,7 @@ test('admitted cancellation retains its overlap lease and root resources until t
     assert.equal(
       disposed,
       false,
-      'root shutdown must join actual helper close before closing Store/FDs',
+      'root shutdown must join actual helper exit before closing Store/FDs',
     );
     writeFileSync(release, 'continue');
     await closing;
@@ -511,7 +510,7 @@ test('admitted cancellation retains its overlap lease and root resources until t
       assert.equal(
         (await reopened.client.command('operationStatus', { clientId: 'alice', id: 'held-copy' }))
           ?.outcome,
-        'uncertain',
+        'failed',
       );
     } finally {
       await reopened.runtime.dispose();
@@ -530,9 +529,9 @@ test('root disposal retains claimed native descriptors and journal ownership unt
   const f = fixture(),
     ready = join(f.base, 'import-admitted'),
     release = join(f.base, 'release-import');
-  // The descendant has its own process group, as above.
+  // The helper ignores the stop request, as above.
   const helper = f.wrapper(
-    `if [ "$1" = import ]; then\n set -m\n (while [ ! -e ${quote(release)} ]; do /bin/sleep 0.01; done) &\n /usr/bin/touch ${quote(ready)}\n while :; do /bin/sleep 0.01; done\nfi`,
+    `if [ "$1" = import ]; then\n trap '' TERM\n /usr/bin/touch ${quote(ready)}\n while [ ! -e ${quote(release)} ]; do /bin/sleep 0.01; done\n exit 1\nfi`,
   );
   const { runtime, client } = f.start(helper);
   let mutation: Promise<unknown> | undefined, closing: Promise<void> | undefined;
@@ -597,7 +596,7 @@ test('root disposal retains claimed native descriptors and journal ownership unt
       assert.equal(
         (await reopened.client.command('operationStatus', { clientId: 'alice', id: 'held-import' }))
           ?.outcome,
-        'uncertain',
+        'failed',
       );
     } finally {
       await reopened.runtime.dispose();
@@ -606,6 +605,29 @@ test('root disposal retains claimed native descriptors and journal ownership unt
     writeFileSync(release, 'continue');
     await mutation?.catch(() => {});
     await closing?.catch(() => {});
+    await runtime.dispose();
+    f.cleanup();
+  }
+});
+
+test('a process the helper left running outside its group holding its output delays neither a reply nor shutdown', async () => {
+  const f = fixture(),
+    release = join(f.base, 'release-escaped');
+  // Job control gives the descendant its own process group, so stopping the helper's group never
+  // reaches it, and it holds the helper's stdout and stderr open.
+  const helper = f.wrapper(
+    `if [ "$1" = read ]; then\n set -m\n (while [ ! -e ${quote(release)} ]; do /bin/sleep 0.01; done) &\nfi`,
+  );
+  const { runtime, client } = f.start(helper);
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    assert.equal(
+      (await client.command('readFile', { checkout, path: 'file.txt' })).text,
+      'original',
+    );
+    await runtime.dispose();
+  } finally {
+    writeFileSync(release, 'continue');
     await runtime.dispose();
     f.cleanup();
   }
@@ -794,14 +816,12 @@ test('mutation cancellation during preflight reserves no ID and consumes no nati
       queueMicrotask(() => abort.abort());
       await rejected;
       await client.command('readFile', { checkout, path: 'file.txt' });
+      // The host reserved nothing, but a status query fences the ID, so the selection runs again
+      // under a new one.
       assert.equal(
-        await client.command('operationStatus', { clientId: 'alice', id: input.id }),
-        null,
-      );
-      assert.equal(
-        (await client.command('mutate', input)).outcome,
+        (await client.command('mutate', { ...input, id: input.id + '-again' })).outcome,
         'completed',
-        'original ID and native selection must remain usable after preflight cancellation',
+        'the native selection must remain usable after preflight cancellation',
       );
       assert.equal(
         readFileSync(join(f.root, input.destination), 'utf8'),

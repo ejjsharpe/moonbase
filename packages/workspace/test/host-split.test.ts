@@ -18,7 +18,7 @@ import { Effect, ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { WorkspaceHostService, type WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
-import { WorkspaceHostLive, WorkspaceRecoveryLive } from '../src/index.ts';
+import { readInstallationId, WorkspaceHostLive, WorkspaceRecoveryLive } from '../src/index.ts';
 import { draft } from './workspace-fixture.ts';
 
 /** One file host and any number of client stores over it, as a daemon and its clients are. */
@@ -238,12 +238,41 @@ test('a move whose reply is lost before publication resolves through operationSt
     });
     assert.equal(loaded.state.drafts[0].target.path, 'moved.txt');
     assert.equal(loaded.state.drafts[0].text, 'dirty');
+    // A move left without any answer, which never reached the host: a repeat finds it never ran
+    // (its ID is now retired there), drops the intent and is refused, never sent again.
+    writeFileSync(join(h.root, 'other.txt'), 'other');
+    await alice.runtime.dispose();
+    alice = h.startClient('alice', host, (inner) => ({
+      ...inner,
+      mutate: () => Effect.fail(lost),
+      operationStatus: () => Effect.fail(lost),
+    }));
+    const unsent = {
+      ...move,
+      id: 'unsent',
+      sources: await alice.client.command('inspectEntries', { checkout, paths: ['other.txt'] }),
+      destination: 'unsent.txt',
+    };
+    await assert.rejects(alice.client.command('mutate', unsent));
+    await alice.runtime.dispose();
+    alice = h.startClient('alice', host);
+    await assert.rejects(
+      alice.client.command('mutate', unsent),
+      (error: unknown) => ApplicationError.is(error) && error.code === 'Conflict',
+    );
+    assert(!existsSync(join(h.root, 'unsent.txt')));
+    assert.equal(
+      await alice.client.command('operationStatus', { clientId: 'window', id: 'unsent' }),
+      null,
+    );
+    const again = await alice.client.command('mutate', { ...unsent, id: 'unsent-again' });
+    assert.equal(again.outcome, 'completed');
   } finally {
     await h.close();
   }
 });
 
-test("one client's move re-paths another client's draft on its next load, and its Trash leaves the draft", async () => {
+test("one client's move re-paths another client's draft on its next load, even its first, and its Trash leaves the draft", async () => {
   const h = harness();
   let trashed = '';
   try {
@@ -280,10 +309,7 @@ test("one client's move re-paths another client's draft on its next load, and it
       ...draft('b', checkout, '', moving.disk),
       drafts: [moving, trashing],
     });
-    assert.equal(
-      (await bob.client.command('loadRecovery', { clientId: 'b' })).state.drafts.length,
-      2,
-    );
+    // Bob has not loaded since adding the checkout: its feed is followed from when it was added.
     const run = async (id: string, kind: 'move' | 'trash', path: string, destination?: string) =>
       alice.client.command('mutate', {
         id,
@@ -368,6 +394,77 @@ test('a checkout the host refuses does not stop the feed for the others', async 
   }
 });
 
+test("a checkout's failed listing is retried later, and a move onto a drafted path keeps both drafts without stopping the feed", async () => {
+  const h = harness();
+  try {
+    for (const path of ['a.txt', 'c.txt']) writeFileSync(join(h.root, path), path);
+    const { host } = await h.startHost();
+    mkdirSync(join(h.base, 'other'));
+    const checkout = await openCheckout(host, h.root),
+      other = await openCheckout(host, join(h.base, 'other'));
+    const read = (path: string) => Effect.runPromise(host.readFile({ checkout, path }));
+    let failing = false;
+    const alice = h.startClient('alice', host),
+      bob = h.startClient('bob', host, (inner) => ({
+        ...inner,
+        listOperations: (input) =>
+          failing && input.checkout.checkoutId === checkout.checkoutId
+            ? Effect.fail(lost)
+            : inner.listOperations(input),
+      }));
+    const a = await read('a.txt'),
+      c = await read('c.txt');
+    await bob.client.command('persistRecovery', {
+      requestId: randomUUID(),
+      clientId: 'b',
+      expectedRevision: 0,
+      state: {
+        ...draft('b', checkout, '', a),
+        checkouts: [checkout, other],
+        drafts: [
+          { target: { checkout, path: 'a.txt' }, text: 'bob a', disk: a },
+          // A draft of a file not on disk (yet): a move may land there.
+          { target: { checkout, path: 'b.txt' }, text: 'bob b', disk: a },
+          { target: { checkout, path: 'c.txt' }, text: 'bob c', disk: c },
+        ],
+      },
+    });
+    const move = async (id: string, path: string, destination: string) =>
+      alice.client.command('mutate', {
+        id,
+        clientId: 'a',
+        checkout,
+        kind: 'move',
+        sources: await alice.client.command('inspectEntries', { checkout, paths: [path] }),
+        destination,
+      });
+    await move('onto-draft', 'a.txt', 'b.txt');
+    await move('later', 'c.txt', 'd.txt');
+    const paths = (state: { drafts: { target: { path: string }; text: string }[] }) =>
+      state.drafts.map((d) => [d.target.path, d.text]).sort();
+    // The checkout's listing fails while the other's succeeds: nothing is skipped or marked.
+    failing = true;
+    const failed = await bob.client.command('loadRecovery', { clientId: 'b' });
+    assert.deepEqual(paths(failed.state), [
+      ['a.txt', 'bob a'],
+      ['b.txt', 'bob b'],
+      ['c.txt', 'bob c'],
+    ]);
+    assert(failed.errors.some((e) => e.includes('history unavailable')));
+    assert(!failed.errors.some((e) => e.includes('incomplete')));
+    failing = false;
+    const loaded = await bob.client.command('loadRecovery', { clientId: 'b' });
+    assert.deepEqual(paths(loaded.state), [
+      ['a.txt', 'bob a'],
+      ['b.txt', 'bob b'],
+      ['d.txt', 'bob c'],
+    ]);
+    assert(loaded.errors.some((e) => e.includes('incomplete')));
+  } finally {
+    await h.close();
+  }
+});
+
 test('journal entries leave after acknowledgement and the window; a feed gap keeps drafts and marks them', async () => {
   const h = harness();
   try {
@@ -421,6 +518,14 @@ test('journal entries leave after acknowledgement and the window; a feed gap kee
         text: '',
       }),
     );
+    // `null` for an ID the host never saw is a promise: a mutation with it that arrives later
+    // never runs, as the client has already discarded its intent.
+    assert.equal(await status('overtaken'), null);
+    await assert.rejects(
+      move('overtaken', 'back.txt', 'overtaken.txt'),
+      (error: unknown) => ApplicationError.is(error) && error.code === 'Conflict',
+    );
+    assert(existsSync(join(h.root, 'back.txt')));
     // Within the window an acknowledged entry is still replayable.
     h.advance(4_000);
     assert.equal((await status('first'))?.outcome, 'completed');
@@ -577,6 +682,30 @@ test('a worktree whose reply was lost is asked for again under its first request
       alice.client.command('createWorktree', input),
       (error: unknown) => ApplicationError.is(error) && error.code === 'Conflict',
     );
+    // A repeat that is Uncertain again (the host reports the first request interrupted) ends the
+    // ID once reported, so the call after is a new request; concurrent duplicates share one.
+    await alice.runtime.dispose();
+    const sent: string[] = [];
+    let interrupted = true;
+    alice = h.startClient('alice', host, (inner) => ({
+      ...inner,
+      createWorktree: (request) => {
+        sent.push(request.requestId);
+        return interrupted ? Effect.fail(uncertain) : inner.createWorktree(request);
+      },
+    }));
+    const second = { ...input, branch: 'feature/two', location: join(h.base, 'two') };
+    const isUncertain = (error: unknown) =>
+      ApplicationError.is(error) && error.code === 'Uncertain';
+    await assert.rejects(alice.client.command('createWorktree', second), isUncertain);
+    await Promise.all(
+      [1, 2].map(() => assert.rejects(alice.client.command('createWorktree', second), isUncertain)),
+    );
+    interrupted = false;
+    assert.equal((await alice.client.command('createWorktree', second)).root, join(h.base, 'two'));
+    assert.equal(sent.length, 3);
+    assert.equal(sent[1], sent[0]);
+    assert.notEqual(sent[2], sent[0]);
   } finally {
     await h.close();
   }
@@ -652,11 +781,40 @@ test('loading recovery stops waiting on a host that does not answer and still re
     // The skipped row may hold a draft at a moved path, so the checkout is marked incomplete.
     const marks = new DatabaseSync(join(h.base, 'alice', 'moonbase-workspace-v1.sqlite'));
     try {
-      const gaps = marks.prepare("SELECT body FROM records WHERE bucket='gaps'").all();
+      const gaps = marks.prepare("SELECT body FROM records WHERE bucket='feed-gaps'").all();
       assert(gaps.some((row) => String(row.body).includes(checkout.checkoutId)));
     } finally {
       marks.close();
     }
+  } finally {
+    await h.close();
+  }
+});
+
+test('the client store mints its installation ID once and names itself to the host with it', async () => {
+  const h = harness();
+  try {
+    writeFileSync(join(h.root, 'file.txt'), 'original');
+    const { host } = await h.startHost();
+    const checkout = await openCheckout(host, h.root),
+      disk = await Effect.runPromise(host.readFile({ checkout, path: 'file.txt' }));
+    const dataDirectory = join(h.base, 'profile');
+    const installationId = readInstallationId(dataDirectory);
+    assert.equal(readInstallationId(dataDirectory), installationId);
+    const runtime = ManagedRuntime.make(WorkspaceRecoveryLive({ dataDirectory }, host));
+    try {
+      await makeEditorClient(runtime).command('saveFile', {
+        target: { checkout, path: 'file.txt' },
+        clientId: 'window',
+        requestId: 'save',
+        text: 'saved',
+        expectedVersion: disk.version,
+      });
+    } finally {
+      await runtime.dispose();
+    }
+    const status = host.saveStatus({ installationId, clientId: 'window', requestId: 'save' });
+    assert.equal((await Effect.runPromise(status)).kind, 'saved');
   } finally {
     await h.close();
   }

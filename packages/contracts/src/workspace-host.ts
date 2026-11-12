@@ -22,9 +22,8 @@ export type WorkspaceWatchTarget = typeof Contracts.WorkspaceWatchTargetSchema.T
 /** What a `workspace` subscription describes: see `WorkspaceWatchValueSchema`. */
 export type WorkspaceWatchValue = typeof Contracts.WorkspaceWatchValueSchema.Type;
 /**
- * The file host as the socket server calls it: promise-shaped, with the watch already combined
- * with the operation feed. A daemon builds it from its file host and injects it into the server,
- * which then advertises `workspace-v1`.
+ * The file host as the socket server calls it: promise-shaped. A daemon builds it from its file
+ * host and injects it into the server, which then advertises `workspace-v1`.
  */
 export type WorkspaceHostClient = {
   /** Runs one host operation; `signal` cancels a read, and is not passed to a mutation. */
@@ -33,7 +32,10 @@ export type WorkspaceHostClient = {
     input: HostInput<K>,
     options?: CommandOptions,
   ): Promise<HostOutput<K>>;
-  /** Follows a checkout; `receive` gets a fresh value after each change. Returns its stop. */
+  /**
+   * Follows a checkout; `receive` gets a fresh value after each change, and `onError` ends it,
+   * also when the host's watch finishes. Returns its stop.
+   */
   watch(
     input: { checkout: CheckoutTarget },
     receive: (value: WorkspaceWatchValue) => void,

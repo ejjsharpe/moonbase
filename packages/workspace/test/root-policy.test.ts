@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -24,24 +25,31 @@ function setup({
 }: { reserved?: (base: string) => string[]; allowRoot?: RootPredicate } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-roots-')));
   const calls: [string, string][] = [];
-  const runtime = ManagedRuntime.make(
-    WorkspaceHostLive({
-      dataDirectory: join(base, 'state'),
-      hostId: 'root-policy-host',
-      reserved: reserved(base),
-      ...(allowRoot
-        ? {
-            allowRoot: (real, requested) => {
-              calls.push([real, requested]);
-              return allowRoot(real, requested);
-            },
-          }
-        : {}),
-    }),
-  );
+  const start = (paths: string[]) =>
+    ManagedRuntime.make(
+      WorkspaceHostLive({
+        dataDirectory: join(base, 'state'),
+        hostId: 'root-policy-host',
+        reserved: paths,
+        ...(allowRoot
+          ? {
+              allowRoot: (real, requested) => {
+                calls.push([real, requested]);
+                return allowRoot(real, requested);
+              },
+            }
+          : {}),
+      }),
+    );
+  let runtime = start(reserved(base));
   return {
     base,
     calls,
+    /** Starts the host again over the same state with other reserved paths. */
+    async restart(paths: string[]) {
+      await runtime.dispose();
+      runtime = start(paths);
+    },
     folder(...names: string[]) {
       const path = join(base, ...names);
       mkdirSync(path, { recursive: true });
@@ -76,6 +84,10 @@ test('a root that holds, is or sits inside a reserved path is refused, whether o
     // A reserved path that does not exist yet is held by its folder all the same.
     f.folder('data', 'later.key', 'x');
     assert.equal(await code(open(join(f.base, 'data', 'later.key', 'x'))), 'InvalidInput');
+    // A checkout approved before a path in it was reserved is refused on its next use.
+    const checkout = await Effect.runPromise(open(f.folder('project')));
+    await f.restart([join(f.base, 'project', 'key')]);
+    assert.equal(await code((await f.host()).verifyCheckout({ checkout })), 'InvalidInput');
   } finally {
     await f.close();
   }
@@ -106,8 +118,14 @@ test('the root predicate sees the real and requested path, denies on refusal or 
   }
 });
 
-test('a worktree location is made only inside a folder the predicate allows', async () => {
-  const f = setup({ allowRoot: (real) => !real.includes('forbidden') });
+test('a worktree location is made only inside a folder the predicate allows, and never through one swapped since', async () => {
+  let swap = () => {};
+  const f = setup({
+    allowRoot: (real) => {
+      if (real.endsWith('swapped')) swap();
+      return !real.includes('forbidden');
+    },
+  });
   try {
     const host = await f.host(),
       root = f.folder('repo');
@@ -145,6 +163,19 @@ test('a worktree location is made only inside a folder the predicate allows', as
       host.createWorktree(request(join(f.base, 'wt'), 'f/two')),
     );
     assert.equal(created.root, join(f.base, 'wt'));
+    // The parent becomes a link to a forbidden folder once the policy has allowed it.
+    const swapped = f.folder('swapped');
+    swap = () => {
+      swap = () => {};
+      renameSync(swapped, join(f.base, 'moved'));
+      symlinkSync(forbidden, swapped);
+    };
+    assert.equal(
+      await code(host.createWorktree(request(join(swapped, 'wt'), 'f/three'))),
+      'InvalidInput',
+    );
+    assert.equal(existsSync(join(forbidden, 'wt')), false);
+    assert.equal(git('branch', '--list', 'f/three').toString(), '');
   } finally {
     await f.close();
   }

@@ -18,29 +18,38 @@ export const socketLimits = {
   frameBytes: 256 * 1024,
   /** A reply's or snapshot's JSON before chunking, as an HTTP reply's. */
   payloadBytes: maximumChatReplyBytes,
-  /** Raw bytes per chunk of a reply or snapshot. */
-  chunkBytes: chatContentChunkBytes,
+  /**
+   * Raw bytes per chunk of a reply, snapshot or request: base64 and the message around it stay
+   * well within a frame.
+   */
+  chunkBytes: 128 * 1024,
   /** A delta's JSON; a larger change is sent as a fresh snapshot. */
   deltaBytes: chatContentChunkBytes,
   /** Subscriptions open on one connection, of every kind. */
   subscriptions: 64,
   /** Requests in flight on one connection. */
   requests: 32,
-  /** Replies and refusals waiting to be written; a client that leaves more unread is dropped. */
+  /**
+   * Chat and daemon replies, refusals and subscription errors waiting to be written; a client that
+   * leaves more unread is dropped.
+   */
   queuedReplies: 64,
   /** Workspace requests and replies: JSON before chunking, as one operation's bound. */
   workspaceRequestBytes: 16 * 1024 * 1024,
   workspaceReplyBytes: 16 * 1024 * 1024,
-  /** Chunked request input in flight on one connection; a request past it closes the connection. */
+  /**
+   * Chunked request input in flight on one connection: a request that would pass it is read,
+   * discarded and refused `Unavailable`.
+   */
   workspaceInFlightBytes: 32 * 1024 * 1024,
+  /** Encoded workspace replies waiting to be written; while more are, workspace requests are refused `Unavailable`. */
+  workspaceQueuedBytes: 64 * 1024 * 1024,
   /** Workspace subscriptions on one connection, apart from `subscriptions`. */
   workspaceSubscriptions: 64,
   /** Workspace requests a client keeps in flight, leaving room for chat below `requests`. */
   workspaceRequests: 16,
   /** Further places only `saveStatus` and `operationStatus` use, so a wedged host cannot block them. */
   workspaceStatusRequests: 2,
-  /** Chunks of one workspace reply written before pending updates get a turn. */
-  workspaceBurstChunks: 4,
   /** The server's bound on the hello arriving after its challenge. */
   handshakeMs: 5_000,
   /**

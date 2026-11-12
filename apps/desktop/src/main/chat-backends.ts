@@ -7,13 +7,12 @@ import type { ChatClient } from '@moonbase/contracts/chat';
 import type { ConnectionClient } from '@moonbase/contracts/connection';
 import { bindChatClient, bindProviderSetupClient } from '@moonbase/application/runtime/clients';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
-import type { DaemonChat } from '../chat/daemon.ts';
+import type { DaemonChat, LocalDaemonClient } from '../chat/daemon.ts';
 import type { ChatConfiguration } from '../chat/config.ts';
 import { ChatIpcSession } from '../chat/session.ts';
 import type { Reply, DesktopChatTarget } from '../chat/wire.ts';
-import { createMemoryRequestIds, type RequestIds } from './request-ids.ts';
+import type { RequestIds } from './request-ids.ts';
 
-type LocalResult = { backend: DaemonChat | null; error: ApplicationError | null };
 /** A remote host's daemon in host mode, over its SSH connection. */
 export type RemoteChat = {
   configuration: ChatConfiguration;
@@ -25,35 +24,29 @@ export type RemoteChat = {
 
 export function createChatBackends({
   runtime,
-  localResult,
-  acquireLocal,
+  local,
   remote = null,
   emit,
   pickFolder,
-  isEditorFolder = () => false,
   installationId,
   adoptCheckout = () => {},
   transcript,
-  requestIds = createMemoryRequestIds(),
+  requestIds,
 }: {
   runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>;
-  localResult: LocalResult;
-  acquireLocal(): Promise<LocalResult>;
+  /** The local daemon, found or started on demand; local chat is installed once it is reached. */
+  local: Pick<LocalDaemonClient, 'get' | 'peek'>;
   remote?: RemoteChat | null;
   emit(backendId: string, id: string, result: Reply): void;
   pickFolder(): Promise<string | null>;
-  /** Whether a folder is a checkout or worktree the editor approved natively. */
-  isEditorFolder?(path: string): boolean;
   /** The identity this profile's workspace store has to the daemon. */
   installationId: string;
   /** Lets the editor open a checkout the daemon made for a chat. */
   adoptCheckout?(checkout: CheckoutTarget): void;
   transcript?: NativeTranscriptActions;
   /** Request IDs of chat operations left unknown, kept across reloads and restarts. */
-  requestIds?: RequestIds;
+  requestIds: RequestIds;
 }) {
-  let local = localResult.backend;
-  let localRetry: Promise<void> | undefined;
   const sessions = new Map<string, ChatIpcSession>();
   /** Worktree creations for the current document; replacing the document cancels them. */
   const worktreeCreations = new Set<AbortController>();
@@ -64,18 +57,19 @@ export function createChatBackends({
     emit(backendId, id, result);
   };
   const installChatSessions = () => {
-    if (local && !sessions.has('local'))
+    const backend = local.peek();
+    if (backend && !sessions.has('local'))
       sessions.set(
         'local',
         new ChatIpcSession(
           runtime,
-          bindChatClient(runtime, local.chat),
+          bindChatClient(runtime, backend.chat),
           { mode: 'local' },
-          local.session,
+          backend.session,
           emitChat('local'),
           {
             transcript,
-            providers: bindProviderSetupClient(runtime, local.providers, documentId),
+            providers: bindProviderSetupClient(runtime, backend.providers, documentId),
           },
         ),
       );
@@ -99,56 +93,34 @@ export function createChatBackends({
   };
   installChatSessions();
   const targets: DesktopChatTarget[] = [
-    {
-      id: 'local',
-      label: 'Local',
-      mode: 'local',
-      context: local?.session ?? {
-        host: { hostId: 'unavailable-local', storeId: 'unavailable-local' },
-        actorId: 'unavailable-local',
-      },
-    },
+    { id: 'local', label: 'Local', mode: 'local' },
     ...(remote
-      ? [
-          {
-            id: 'remote',
-            label: remote.configuration.ssh.profile.label,
-            mode: 'remote' as const,
-            context: remote.configuration.context,
-          },
-        ]
+      ? [{ id: 'remote', label: remote.configuration.ssh.profile.label, mode: 'remote' as const }]
       : []),
   ];
   /**
    * Sends under a request ID kept durably before it is sent, so a repeat after a lost reply, a
    * reload or a restart asks for the first outcome. The ID is kept only while the outcome is
-   * unknown (`Uncertain`, or cancelled) and for a limited time; an answer, a refusal included, is
-   * final. Concurrent calls with the same key share one call, so one cannot end the ID the other
-   * still needs.
+   * unknown (`Uncertain`, or cancelled); an answer, a refusal included, is final.
    */
-  const inFlight = new Map<string, Promise<unknown>>();
-  const withRequestId = <A>(key: string, send: (requestId: string) => Promise<A>): Promise<A> => {
-    const running = inFlight.get(key);
-    if (running) return running as Promise<A>;
-    const call = (async () => {
-      const requestId = requestIds.get(key) ?? randomUUID();
-      requestIds.put(key, requestId);
-      try {
-        const output = await send(requestId);
+  const withRequestId = async <A>(key: string, send: (requestId: string) => Promise<A>) => {
+    const requestId = requestIds.get(key) ?? randomUUID();
+    requestIds.put(key, requestId);
+    try {
+      const output = await send(requestId);
+      requestIds.delete(key);
+      return output;
+    } catch (error) {
+      if (!ApplicationError.is(error) || !['Uncertain', 'Cancelled'].includes(error.code))
         requestIds.delete(key);
-        return output;
-      } catch (error) {
-        if (!ApplicationError.is(error) || !['Uncertain', 'Cancelled'].includes(error.code))
-          requestIds.delete(key);
-        throw error;
-      }
-    })().finally(() => inFlight.delete(key));
-    inFlight.set(key, call);
-    return call;
+      throw error;
+    }
   };
-  const requireBackend = (message: string) => {
-    if (!local) throw new ApplicationError({ code: 'Unavailable', message });
-    return local;
+  /** The local daemon's clients, finding or starting it, with local chat installed. */
+  const reachLocal = async (): Promise<DaemonChat> => {
+    const backend = await local.get();
+    installChatSessions();
+    return backend;
   };
   const releaseChatDocument = async () => {
     const owner = documentId;
@@ -160,7 +132,7 @@ export function createChatBackends({
     installChatSessions();
     const results = await Promise.allSettled([
       ...closing,
-      ...(local ? [run(local.providers.releaseOwner(owner))] : []),
+      ...(local.peek() ? [run(local.peek()!.providers.releaseOwner(owner))] : []),
       // A remote host may be disconnected or unreachable; it drops an owner it hasn't heard
       // from in 30 minutes, so releasing it there is best effort.
       ...(remote ? [run(remote.providers.releaseOwner(owner)).catch(() => {})] : []),
@@ -171,30 +143,21 @@ export function createChatBackends({
 
   return {
     getTargets: () => targets,
-    getSession: (backendId: string) => sessions.get(backendId),
+    getSession: (backendId: string) => {
+      // The daemon may have been reached for files before local chat asked for it.
+      installChatSessions();
+      return sessions.get(backendId);
+    },
     getSessions: (): Pick<ChatIpcSession, 'dispose'>[] => [...sessions.values()],
     findTranscriptImage: (token: string) =>
       [...sessions.values()].map((session) => session.findImage(token)).find(Boolean),
     async getContext(backendId: string) {
-      if (backendId === 'local' && !local) {
-        localRetry ??= (async () => {
-          localResult = await acquireLocal();
-          local = localResult.backend;
-          if (local) {
-            targets[0] = { ...targets[0], context: local.session };
-            installChatSessions();
-          }
-        })().finally(() => {
-          localRetry = undefined;
-        });
-        await localRetry;
-      }
-      if (backendId === 'local' && !local) throw localResult.error;
-      return targets.find((target) => target.id === backendId)!.context;
+      if (backendId === 'local') return (await reachLocal()).session;
+      return remote!.configuration.context;
     },
     async chooseFolder() {
-      const backend = requireBackend('Folder selection is unavailable.');
       const owner = documentId;
+      const backend = await reachLocal();
       const selection = await pickFolder();
       if (owner !== documentId || !selection) return null;
       const { path } = await run(
@@ -217,32 +180,28 @@ export function createChatBackends({
         const { host } = remote.configuration.context;
         return (await run(remote.folders.listHostFolders({ host }))).folders;
       }
-      if (!local) return [];
-      return (await run(local.folders.listRecentFolders({ host: local.session.host }))).folders;
+      const backend = local.peek();
+      if (!backend) return [];
+      return (await run(backend.folders.listRecentFolders({ host: backend.session.host }))).folders;
     },
     /**
-     * Starts a new local chat's worktree from a folder local chat may use: the daemon derives its
-     * location and makes it, and the editor may then open it. The daemon lets a chat use a worktree
-     * of an approved checkout, so nothing more is approved here.
+     * Starts a new local chat's worktree from a folder the daemon lets local chat use: it derives
+     * the location and makes the worktree, which it opens as a checkout, so the chat may use it and
+     * the editor may then open it. `requestId` is the renderer's for this new chat's send in a
+     * worktree, kept until it learns the outcome, so a repeat after a lost reply gets the first
+     * worktree and another chat never does.
      */
-    async createWorktree(root: string, branch: string) {
-      const backend = requireBackend('New worktrees are unavailable.');
+    async createWorktree(root: string, branch: string, requestId: string) {
       const owner = documentId,
         creation = new AbortController();
       worktreeCreations.add(creation);
-      const pending = JSON.stringify(['createChatWorktree', root, branch]);
       try {
-        // An editor project is trusted natively; any other folder must be one the daemon approved.
-        if (!isEditorFolder(root))
-          await run(
-            backend.folders.checkApprovedFolder({ host: backend.session.host, path: root }),
-          );
-        const created = await withRequestId(pending, (requestId) =>
-          runApplicationEffect(
-            runtime,
-            backend.workspace.createChatWorktree({ installationId, requestId, root, branch }),
-            { signal: creation.signal },
-          ),
+        const backend = await reachLocal();
+        await run(backend.folders.checkApprovedFolder({ host: backend.session.host, path: root }));
+        const created = await runApplicationEffect(
+          runtime,
+          backend.workspace.createChatWorktree({ installationId, requestId, root, branch }),
+          { signal: creation.signal },
         );
         // A replaced document's worktree is left on disk but not offered to the new document.
         if (owner !== documentId)
@@ -262,8 +221,8 @@ export function createChatBackends({
      * does both steps as one operation.
      */
     async turnIntoProject(conversationId: string) {
-      const backend = requireBackend('Turning a chat into a project is unavailable.');
       const owner = documentId;
+      const backend = await reachLocal();
       const created = await withRequestId(
         JSON.stringify(['turnChatIntoProject', conversationId]),
         (requestId) =>
@@ -282,16 +241,6 @@ export function createChatBackends({
         });
       adoptCheckout(created);
       return created.root;
-    },
-    /** The local daemon's file host, finding or starting the daemon first. */
-    async getLocalBackend() {
-      await this.getContext('local');
-      return local!;
-    },
-    /** The local daemon's workspace if local chat already reached it; never finds or starts one. */
-    peekLocalWorkspace: () => local?.workspace ?? null,
-    requireLocal(backendId: string) {
-      if (backendId === 'local' && !local) throw localResult.error;
     },
     releaseDocument: releaseChatDocument,
   };

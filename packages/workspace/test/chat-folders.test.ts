@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
-  readFileSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -13,19 +13,12 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { Effect, ManagedRuntime } from 'effect';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
 import type { ChatTarget } from '@moonbase/contracts/chat';
-import {
-  ApplicationError,
-  type CheckoutTarget,
-  type Worktree,
-} from '@moonbase/contracts/workspace';
-import { ChatWorktrees } from '../src/chat-worktrees.ts';
-import { CheckoutFolders } from '../src/checkout-folders.ts';
-import type { Approval } from '../src/schema.ts';
+import { ApplicationError } from '@moonbase/contracts/workspace';
 import {
   WorkspaceFolders,
   WorkspaceHostLive,
@@ -128,7 +121,7 @@ test('a chat worktree is made beside the repository, numbered when taken, and it
   }
 });
 
-test('a branch that blocks a nested name falls back to a flat one, and a failed creation removes the folder it made', async () => {
+test('a branch named like a folder of the name falls back to a flat one; branches inside the name number it; other Git failures stay failures', async () => {
   const f = setup();
   try {
     const host = await f.host(),
@@ -137,10 +130,25 @@ test('a branch that blocks a nested name falls back to a flat one, and a failed 
     const flat = await run(host.createChatWorktree(request('one', root, 'chat/topic')));
     assert.equal(flat.vcs === 'git' && flat.branch, 'chat-topic');
     assert.equal(flat.root, join(f.base, 'repo-worktrees', 'chat-topic'));
-    // A repository with no commit has nothing to branch from; its new parent folder goes again.
+    f.git(root, 'branch', 'nest/inner');
+    const numbered = await run(host.createChatWorktree(request('two', root, 'nest')));
+    assert.equal(numbered.vcs === 'git' && numbered.branch, 'nest-2');
+    // A hook that fails for a nested branch is that creation's failure, not a flat retry.
+    const hook = join(root, '.git', 'hooks', 'post-checkout');
+    writeFileSync(
+      hook,
+      '#!/bin/sh\ncase "$(git symbolic-ref --short HEAD)" in */*) exit 1;; esac\n',
+    );
+    chmodSync(hook, 0o755);
+    assert.equal(
+      await code(host.createChatWorktree(request('three', root, 'feature/x'))),
+      'Unavailable',
+    );
+    assert.equal(existsSync(join(f.base, 'repo-worktrees', 'feature-x')), false);
+    assert.equal(f.git(root, 'branch', '--list', 'feature*'), '');
+    // A repository with no commit has nothing to branch from.
     const empty = f.repository('empty', false);
-    assert.equal(await code(host.createChatWorktree(request('two', empty, 'x'))), 'InvalidInput');
-    assert.equal(existsSync(join(f.base, 'empty-worktrees')), false);
+    assert.equal(await code(host.createChatWorktree(request('four', empty, 'x'))), 'InvalidInput');
     assert.equal(await code(host.createChatWorktree(request('bad', root, 'a..b'))), 'InvalidInput');
   } finally {
     await f.close();
@@ -190,7 +198,7 @@ test('turning a chat into a project opens its own folder once, and leaves the ch
         return folder;
       },
       markAsProject: async (requestId) => {
-        if (failMark) throw new ApplicationError({ code: 'Unavailable', message: 'Down.' });
+        if (failMark) throw new Error('Down.');
         marked.push(requestId);
       },
     },
@@ -205,11 +213,17 @@ test('turning a chat into a project opens its own folder once, and leaves the ch
     // A folder the daemon didn't make is refused before anything opens or is marked.
     assert.equal(await code(host.turnChatIntoProject(input('refused'))), 'Unauthorized');
     folder = f.repository('chats/one');
+    // A failure that is not an `ApplicationError` is `Unavailable` and frees the ID for a retry.
     failMark = true;
-    assert.equal(await code(host.turnChatIntoProject(input('down'))), 'Unavailable');
+    assert.equal(await code(host.turnChatIntoProject(input('first'))), 'Unavailable');
     assert.deepEqual(marked, []);
     failMark = false;
-    const target = await run(host.turnChatIntoProject(input('first')));
+    // A duplicate sent while the first runs waits for it instead of being reported interrupted.
+    const [target, duplicate] = await Promise.all([
+      run(host.turnChatIntoProject(input('first'))),
+      run(host.turnChatIntoProject(input('first'))),
+    ]);
+    assert.deepEqual(duplicate, target);
     assert.equal(target.root, folder);
     assert.deepEqual(await run(host.turnChatIntoProject(input('first'))), target);
     assert.deepEqual(marked, ['first']);
@@ -218,6 +232,11 @@ test('turning a chat into a project opens its own folder once, and leaves the ch
     symlinkSync(real, join(f.base, 'chats', 'link'));
     folder = join(f.base, 'chats', 'link');
     assert.equal(await code(host.turnChatIntoProject(input('linked'))), 'Unauthorized');
+    // A `.git` file naming another repository would make the folder that repository's checkout.
+    folder = join(f.base, 'chats', 'foreign');
+    mkdirSync(folder);
+    writeFileSync(join(folder, '.git'), `gitdir: ${join(f.repository('other'), '.git')}\n`);
+    assert.equal(await code(host.turnChatIntoProject(input('foreign'))), 'Unauthorized');
     assert.deepEqual(marked, ['first']);
   } finally {
     await f.close();
@@ -243,9 +262,9 @@ test('a host without chats cannot turn one into a project', async () => {
   }
 });
 
-test('a folder is an approved checkout root or a worktree Git lists for one, checked again on every use', async () => {
+test('a folder is the root of an approved checkout, checked again on every use', async () => {
   let allowed = true;
-  const f = setup({ allowRoot: (real) => allowed && !real.endsWith('denied') });
+  const f = setup({ allowRoot: () => allowed });
   try {
     const host = await f.host(),
       folders = await f.folders();
@@ -253,28 +272,16 @@ test('a folder is an approved checkout root or a worktree Git lists for one, che
     const root = f.repository('repo');
     const linked = join(f.base, 'linked');
     f.git(root, 'worktree', 'add', '-q', '-b', 'linked', linked);
-    const stray = join(f.base, 'stray');
-    mkdirSync(stray);
-    // Nothing is approved yet, so nothing is a folder, listed or not.
     assert.equal(await has(root), false);
-    assert.equal(await has(linked), false);
     const checkout = await run(host.openCheckout({ root }));
     assert.equal(await has(root), true);
-    // A worktree Git lists for the approved checkout needs no approval of its own.
-    assert.equal(await has(linked), true);
-    // Listing for a folder check borrows a descriptor: it is not kept against the retained cap.
+    // A worktree is a folder only once it is opened itself.
+    assert.equal(await has(linked), false);
+    await run(host.openCheckout({ root: linked }));
+    // A folder check borrows a descriptor: it is not kept against the retained cap.
     const open = readdirSync('/dev/fd').length;
     assert.equal(await has(linked), true);
     assert.equal(readdirSync('/dev/fd').length, open);
-    assert.equal(await has(stray), false);
-    // A worktree Git lists inside the host's own state is refused like an opened one.
-    const inState = join(f.base, 'state', 'listed');
-    f.git(root, 'worktree', 'add', '-q', '-b', 'listed', inState);
-    assert.equal(await has(inState), false);
-    // So is one the host's root policy does not allow.
-    const denied = join(f.base, 'denied');
-    f.git(root, 'worktree', 'add', '-q', '-b', 'denied', denied);
-    assert.equal(await has(denied), false);
     assert.equal(await has(join(root, '.git')), false);
     symlinkSync(root, join(f.base, 'link'));
     assert.equal(await has(join(f.base, 'link')), false);
@@ -282,20 +289,9 @@ test('a folder is an approved checkout root or a worktree Git lists for one, che
     renameSync(linked, join(f.base, 'moved'));
     mkdirSync(linked);
     assert.equal(await has(linked), false);
-    // A directory whose .git names another worktree of the same repository is not that worktree.
-    const sibling = join(f.base, 'sibling');
-    f.git(root, 'worktree', 'add', '-q', '-b', 'sibling', sibling);
-    assert.equal(await has(sibling), true);
-    writeFileSync(join(linked, '.git'), readFileSync(join(sibling, '.git')));
-    assert.equal(await has(linked), false);
-    // A checkout replaced after approval is refused, and takes its worktrees with it.
-    rmSync(linked, { recursive: true });
-    renameSync(join(f.base, 'moved'), linked);
-    assert.equal(await has(linked), true);
     renameSync(root, join(f.base, 'old'));
     mkdirSync(root);
     assert.equal(await has(root), false);
-    assert.equal(await has(linked), false);
     assert.ok(await code(host.verifyCheckout({ checkout })));
     // A plain folder checkout is a folder while the host's root policy allows it.
     const plain = join(f.base, 'plain');
@@ -304,24 +300,6 @@ test('a folder is an approved checkout root or a worktree Git lists for one, che
     assert.equal(await has(plain), true);
     allowed = false;
     assert.equal(await has(plain), false);
-  } finally {
-    await f.close();
-  }
-});
-
-test('a valid approval of a repository counts although an earlier approval of it went stale', async () => {
-  const f = setup({});
-  try {
-    const host = await f.host(),
-      folders = await f.folders();
-    const root = f.repository('repo');
-    const [gone, kept, listed] = ['gone', 'kept', 'listed'].map((name) => join(f.base, name));
-    for (const path of [gone!, kept!, listed!])
-      f.git(root, 'worktree', 'add', '-q', '-b', basename(path), path);
-    await run(host.openCheckout({ root: gone! }));
-    await run(host.openCheckout({ root: kept! }));
-    f.git(root, 'worktree', 'remove', '--force', gone!);
-    assert.equal(await run(folders.has(listed!)), true);
   } finally {
     await f.close();
   }
@@ -346,87 +324,5 @@ test('a host that takes no native imports refuses to hold or release them', asyn
     );
   } finally {
     await f.close();
-  }
-});
-
-test('a chat worktree cancelled while queued is Cancelled, starts nothing and leaves the project free', async () => {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-chat-queue-')));
-  try {
-    const target = {
-      vcs: 'git',
-      projectId: 'p',
-      root: join(base, 'repo'),
-    } as CheckoutTarget;
-    let release = () => {};
-    const gate = new Promise<void>((done) => (release = done));
-    let listed = 0;
-    const worktrees = new ChatWorktrees({
-      open: async () => target,
-      list: async () => {
-        if (++listed === 1) await gate;
-        return { worktrees: [] } as never;
-      },
-      create: async () => target,
-      permitParent: async () => {},
-    });
-    const running = worktrees.create(
-      { root: target.root, branch: 'a' },
-      new AbortController().signal,
-    );
-    const abort = new AbortController();
-    const queued = worktrees.create({ root: target.root, branch: 'b' }, abort.signal);
-    abort.abort();
-    await assert.rejects(queued, { code: 'Cancelled' });
-    release();
-    await running;
-    assert.equal(listed, 1);
-    await worktrees.create({ root: target.root, branch: 'c' }, new AbortController().signal);
-    assert.equal(listed, 2);
-  } finally {
-    rmSync(base, { recursive: true, force: true });
-  }
-});
-
-test('a repository that does not answer in its budget finds no folder and starves no other', async () => {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-folder-deadline-')));
-  try {
-    const wanted = join(base, 'wanted');
-    mkdirSync(join(wanted, '.git'), { recursive: true });
-    const hungApproval = {
-      target: { vcs: 'git', root: join(base, 'hung') },
-      common: { path: join(base, 'hung', '.git') },
-    } as Approval;
-    const healthyApproval = {
-      target: { vcs: 'git', root: join(base, 'healthy') },
-      common: { path: join(wanted, '.git') },
-    } as Approval;
-    const folders = (approvals: Approval[], hang: 'list' | 'verify') =>
-      new CheckoutFolders(
-        {
-          approvals: () => approvals,
-          verify: (target) =>
-            hang === 'verify' && target.root.endsWith('hung')
-              ? new Promise(() => {})
-              : Promise.resolve(),
-          list: (target, signal) =>
-            hang === 'list' && target.root.endsWith('hung')
-              ? new Promise((_, refuse) =>
-                  signal.addEventListener('abort', () => refuse(signal.reason)),
-                )
-              : Promise.resolve([{ root: wanted, main: true } as Worktree]),
-          permit: async () => {},
-          gitEntry: () => ({ pointer: null }),
-        },
-        20,
-      );
-    const signal = new AbortController().signal;
-    // A hung listing or a hung identity check ends within its budget; the next repository is
-    // still asked.
-    for (const hang of ['list', 'verify'] as const)
-      assert.equal(await folders([hungApproval, healthyApproval], hang).has(wanted, signal), true);
-    // Nothing healthy to find: the check ends, closed.
-    assert.equal(await folders([hungApproval], 'list').has(wanted, signal), false);
-  } finally {
-    rmSync(base, { recursive: true, force: true });
   }
 });

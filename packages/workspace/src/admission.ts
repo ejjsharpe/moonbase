@@ -45,7 +45,6 @@ export function admit<A>(
             fail('Cancelled', 'Workspace command cancelled before admission.');
           const value = await fn(abort.signal);
           result = { value };
-          if (abort.signal.aborted) abandoned?.(value);
           return value;
         },
         catch: (error) => applicationError(error, persistence ? 'Persistence' : 'Unavailable'),

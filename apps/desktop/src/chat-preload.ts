@@ -12,15 +12,15 @@ const bridge: ChatBridge = {
     ) as never,
   recentFolders: async (backendId = 'local') =>
     unwrap(await ipcRenderer.invoke(channels.call, { kind: 'recent-folders', backendId })) as never,
-  createWorktree: async (root, branch) =>
-    unwrap(
-      await ipcRenderer.invoke(channels.call, {
-        kind: 'create-worktree',
-        backendId: 'local',
-        root,
-        branch,
-      }),
-    ) as never,
+  // A reply, not a thrown error, so its code (`Uncertain`, say) survives the context bridge.
+  createWorktree: (root, branch, requestId) =>
+    ipcRenderer.invoke(channels.call, {
+      kind: 'create-worktree',
+      backendId: 'local',
+      root,
+      branch,
+      requestId,
+    }),
   turnIntoProject: async (conversationId) =>
     unwrap(
       await ipcRenderer.invoke(channels.call, {

@@ -131,7 +131,7 @@ export function ChatView({
   /** The editor's checkouts, which local chat may use without the picker. */
   folderProjects?: readonly ChatFolderProject[];
   /** Creates a linked worktree of a local folder, named for the branch, and returns its root. */
-  createWorktree?: (root: string, branch: string) => Promise<string>;
+  createWorktree?: (root: string, branch: string, requestId: string) => Promise<string>;
   /** Opens a local chat without a project's folder as a project where it is. */
   turnIntoProject?: (conversationId: string) => Promise<void>;
   transcriptNative?: TranscriptNative;

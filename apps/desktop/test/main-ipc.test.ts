@@ -43,7 +43,6 @@ test('command IPC authenticates every channel, validates envelopes and tears dow
           id: 'local',
           label: 'Local',
           mode: 'local',
-          context: { host: { hostId: 'h', storeId: 's' }, actorId: 'a' },
         },
       ],
       getContext: async () => {
@@ -58,7 +57,8 @@ test('command IPC authenticates every channel, validates envelopes and tears dow
         calls++;
         return ['/chosen'];
       },
-      createWorktree: async (root, branch) => {
+      createWorktree: async (root, branch, requestId) => {
+        assert.equal(requestId, 'worktree-request');
         calls++;
         return `${root}-worktrees/${branch.replaceAll('/', '-')}`;
       },
@@ -66,7 +66,6 @@ test('command IPC authenticates every channel, validates envelopes and tears dow
         calls++;
         return `/chats/${conversationId}`;
       },
-      requireLocal: () => {},
       getSession: () => undefined,
     },
     lifecycle: {
@@ -103,7 +102,13 @@ test('command IPC authenticates every channel, validates envelopes and tears dow
     [chatChannels.cancel, { backendId: 'local', id: 'call' }],
     [
       chatChannels.call,
-      { kind: 'create-worktree', backendId: 'local', root: '/repo', branch: 'chat/task' },
+      {
+        kind: 'create-worktree',
+        backendId: 'local',
+        root: '/repo',
+        branch: 'chat/task',
+        requestId: 'worktree-request',
+      },
     ],
     [chatChannels.call, { kind: 'turn-into-project', backendId: 'local', conversationId: '7' }],
   ] as const;
@@ -142,7 +147,13 @@ test('command IPC authenticates every channel, validates envelopes and tears dow
     (await invoke(chatChannels.call, f.event, { kind: 'context', backendId: 'local' })).ok,
     true,
   );
-  const worktree = { kind: 'create-worktree', backendId: 'local', root: '/repo', branch: 'chat/a' };
+  const worktree = {
+    kind: 'create-worktree',
+    backendId: 'local',
+    root: '/repo',
+    branch: 'chat/a',
+    requestId: 'worktree-request',
+  };
   assert.deepEqual(await invoke(chatChannels.call, f.event, worktree), {
     ok: true,
     value: '/repo-worktrees/chat-a',
@@ -150,6 +161,7 @@ test('command IPC authenticates every channel, validates envelopes and tears dow
   for (const input of [
     { ...worktree, location: '/elsewhere' },
     { ...worktree, branch: 1 },
+    { ...worktree, requestId: 'not a request id' },
     { ...worktree, backendId: 'remote' },
   ])
     assert.equal((await invoke(chatChannels.call, f.event, input)).ok, false);
