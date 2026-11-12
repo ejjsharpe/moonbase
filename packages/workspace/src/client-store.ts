@@ -44,11 +44,13 @@ export class ClientStore extends Store {
     super(directory, {
       file: 'moonbase-workspace-v1.sqlite',
       applicationId: 1296193363,
-      // A save's text and its baseline's, apart from its record (`part` is `text` or `baseline`).
+      // Save records live in the `save-records` bucket (a store's older `saves` rows are left
+      // unread), and a save's text and its baseline's apart (`part` is `text` or `baseline`).
       schema: `CREATE TABLE IF NOT EXISTS recovery (client TEXT PRIMARY KEY, revision INTEGER NOT NULL, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS save_texts (id TEXT NOT NULL, part TEXT NOT NULL, text TEXT NOT NULL, PRIMARY KEY(id, part));
         DROP INDEX IF EXISTS pending_saves_v3;
-        CREATE INDEX IF NOT EXISTS pending_saves ON records(bucket) WHERE bucket='saves' AND ${pendingSaves};
+        DROP INDEX IF EXISTS pending_saves;
+        CREATE INDEX IF NOT EXISTS pending_save_records ON records(bucket) WHERE bucket='save-records' AND ${pendingSaves};
         CREATE INDEX IF NOT EXISTS open_operations ON records(bucket) WHERE bucket='operations' AND ${openOperations};`,
       decoders: clientDecoders,
     });
@@ -187,7 +189,7 @@ export class ClientStore extends Store {
       reserved = this.transaction(() => {
         const inserted = this.statement(
           'INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO NOTHING',
-        ).run('saves', id, JSON.stringify(toStoredSave(record)));
+        ).run('save-records', id, JSON.stringify(toStoredSave(record)));
         if (Number(inserted.changes) === 0) return false;
         const write = this.statement('INSERT OR REPLACE INTO save_texts VALUES(?,?,?)');
         write.run(id, 'text', record.input.text);
@@ -206,12 +208,12 @@ export class ClientStore extends Store {
   }
   /** A save's record with its text, and its baseline's while the save keeps it. */
   readSave(id: string): SaveRecord | null {
-    const stored = this.get<StoredSave>('saves', id);
+    const stored = this.get<StoredSave>('save-records', id);
     return stored && this.withText(id, stored);
   }
   /** The saves whose records match `predicate` (over `body`), with their texts. */
   readSaves(predicate: string, parameters: SQLInputValue[] = []): SaveRecord[] {
-    return this.all<StoredSave>('saves', predicate, parameters).map((stored) =>
+    return this.all<StoredSave>('save-records', predicate, parameters).map((stored) =>
       this.withText(key(stored.request.clientId, stored.request.requestId), stored),
     );
   }
@@ -237,7 +239,7 @@ export class ClientStore extends Store {
    * restore its text, so its baseline's text goes.
    */
   writeSave(id: string, record: SaveRecord) {
-    this.put('saves', id, toStoredSave(record));
+    this.put('save-records', id, toStoredSave(record));
     if (record.state !== 'sent')
       this.write("DELETE FROM save_texts WHERE id=? AND part='baseline'", [id]);
   }
@@ -248,7 +250,7 @@ export class ClientStore extends Store {
    */
   keepBaseline(client: string, disk: FileDocument, except: string[]) {
     const saves = this.statement(
-      `SELECT key FROM records WHERE bucket='saves' AND ${pendingSaves} AND json_extract(body, '$.state')='sent' AND json_extract(body, '$.request.clientId')=? AND json_extract(body, '$.baseline')=? AND key NOT IN (SELECT value FROM json_each(?))`,
+      `SELECT key FROM records WHERE bucket='save-records' AND ${pendingSaves} AND json_extract(body, '$.state')='sent' AND json_extract(body, '$.request.clientId')=? AND json_extract(body, '$.baseline')=? AND key NOT IN (SELECT value FROM json_each(?))`,
     ).all(client, disk.version, JSON.stringify(except));
     for (const { key: id } of saves)
       this.write("INSERT OR IGNORE INTO save_texts VALUES(?, 'baseline', ?)", [
@@ -259,13 +261,13 @@ export class ClientStore extends Store {
   /** Marks a settled save as acknowledged by the host. */
   markSaveDone(id: string) {
     this.write(
-      "UPDATE records SET body=json_set(body, '$.state', 'done') WHERE bucket='saves' AND key=? AND json_extract(body, '$.state')='settled'",
+      "UPDATE records SET body=json_set(body, '$.state', 'done') WHERE bucket='save-records' AND key=? AND json_extract(body, '$.state')='settled'",
       [id],
     );
   }
   deleteSave(id: string) {
     this.transaction(() => {
-      this.delete('saves', id);
+      this.delete('save-records', id);
       this.write('DELETE FROM save_texts WHERE id=?', [id]);
     });
   }

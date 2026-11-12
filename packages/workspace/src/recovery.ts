@@ -258,7 +258,7 @@ export class WorkspaceRecovery {
   getPendingSaves(target: CheckoutTarget) {
     return this.store
       .all<StoredSave>(
-        'saves',
+        'save-records',
         unresolvedSaves + " AND json_extract(body, '$.request.target.checkout.checkoutId') = ?",
         [target.checkoutId],
       )
@@ -870,7 +870,7 @@ export class WorkspaceRecovery {
       const replaced: FileDocument[] = [];
       const updates = records.map((record) => {
         const id = saveKey(record.input),
-          committed = this.store.get<StoredSave>('saves', id);
+          committed = this.store.get<StoredSave>('save-records', id);
         if (!committed || !same(committed.request, toStoredSave(record).request))
           return fail('Conflict', 'Save identity changed before recovery publication.');
         // The stored record says how far the save got; its text is the one it was reserved with.
@@ -1008,7 +1008,10 @@ export class WorkspaceRecovery {
     });
     await this.acknowledgeSaves(
       this.store
-        .all<StoredSave>('saves', pendingSaves + " AND json_extract(body, '$.state') = 'settled'")
+        .all<StoredSave>(
+          'save-records',
+          pendingSaves + " AND json_extract(body, '$.state') = 'settled'",
+        )
         .map((r) => ({ state: r.state, input: r.request })),
       signal,
     );
@@ -1215,7 +1218,7 @@ export class WorkspaceRecovery {
               'inspect original, destination, staging and Finder Trash; drafts retained.'),
         );
     for (const record of this.store.all<StoredSave>(
-      'saves',
+      'save-records',
       unresolvedSaves + " AND json_extract(body, '$.request.clientId') = ?",
       [clientId],
     ))

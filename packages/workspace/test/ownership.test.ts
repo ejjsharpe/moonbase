@@ -210,7 +210,7 @@ test('cancelled queued Save releases its lease without admission and successors 
       assert.equal(
         db
           .prepare(
-            "SELECT count(*) AS n FROM records WHERE bucket='saves' AND json_extract(body,'$.request.requestId')='cancelled'",
+            "SELECT count(*) AS n FROM records WHERE bucket='save-records' AND json_extract(body,'$.request.requestId')='cancelled'",
           )
           .get()!.n,
         0,
@@ -301,12 +301,12 @@ test('strict private saved request rejection leaves pending journal data untouch
     await client.command('saveFile', input);
     const db = new DatabaseSync(join(f.base, 'state/moonbase-workspace-v1.sqlite'));
     try {
-      const row = db.prepare("SELECT key,body FROM records WHERE bucket='saves'").get()!;
+      const row = db.prepare("SELECT key,body FROM records WHERE bucket='save-records'").get()!;
       const stored = JSON.parse(row.body as string);
       stored.state = 'sent';
       stored.request.futureRequest = 'private evidence';
       const original = JSON.stringify(stored);
-      db.prepare("UPDATE records SET body=? WHERE bucket='saves' AND key=?").run(
+      db.prepare("UPDATE records SET body=? WHERE bucket='save-records' AND key=?").run(
         original,
         row.key!,
       );
@@ -316,7 +316,8 @@ test('strict private saved request rejection leaves pending journal data untouch
       );
       await assert.rejects(client.command('saveFile', input), isError('Persistence'));
       assert.equal(
-        db.prepare("SELECT body FROM records WHERE bucket='saves' AND key=?").get(row.key!)!.body,
+        db.prepare("SELECT body FROM records WHERE bucket='save-records' AND key=?").get(row.key!)!
+          .body,
         original,
       );
       assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'confirmed');
