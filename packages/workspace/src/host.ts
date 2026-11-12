@@ -880,10 +880,11 @@ export class FileHost implements AdmissionOwner {
   }
   /**
    * Runs a reserved request. A success or a deterministic refusal is recorded and replayed for
-   * the ID. A transient failure (`Unavailable`, `Cancelled`, `Persistence`) releases the
-   * reservation so a retry runs again. `Uncertain` (incomplete cleanup) and any other failure keep
-   * it, so a replay reports the request interrupted instead of retrying over leftovers; the
-   * reservation also stays while the request runs, so a concurrent duplicate never runs it twice.
+   * the ID. Every other `ApplicationError` except `Uncertain` (for example `Unavailable`,
+   * `Cancelled`, `Persistence`) releases the reservation so a retry runs again. `Uncertain`
+   * (incomplete cleanup) and any non-`ApplicationError` failure keep it, so a replay reports the
+   * request interrupted instead of retrying over leftovers; the reservation also stays while the
+   * request runs, so a concurrent duplicate never runs it twice.
    */
   private async settleRequest<T extends CheckoutTarget>(
     id: string,
