@@ -21,10 +21,12 @@ import type { OperationRecord, SaveRecord } from './client-schema.ts';
 import { WorkspaceRecovery, type HostPorts } from './recovery.ts';
 import {
   affected,
+  canonical,
   ensure,
   errorText,
   fail,
   folded,
+  hash,
   identifier,
   key,
   path,
@@ -67,7 +69,11 @@ export class ClientWorkspace implements AdmissionOwner {
     return this.ownership.operations;
   }
   constructor(
-    config: { dataDirectory: string; installationId: string },
+    config: {
+      dataDirectory: string;
+      installationId: string;
+      hostWaitMs?: number;
+    },
     ownership: ClientOwnership,
     host: WorkspaceHostServiceShape,
   ) {
@@ -87,7 +93,7 @@ export class ClientWorkspace implements AdmissionOwner {
         run(host.acknowledgeOperation({ installationId, ...input }), signal),
       listOperations: (input, signal) => run(host.listOperations(input), signal),
     };
-    this.recovery = new WorkspaceRecovery(this.store, ports, installationId);
+    this.recovery = new WorkspaceRecovery(this.store, ports, installationId, config.hostWaitMs);
     const call =
       <K extends WorkspaceCommand>(
         operation: K,
@@ -135,9 +141,10 @@ export class ClientWorkspace implements AdmissionOwner {
       inspectEntries: call<'inspectEntries'>('inspectEntries', (input, signal) =>
         run(host.inspectEntries(input), signal),
       ),
-      // A retry of the same call is a new request; only a client that keeps an ID can replay one.
       createWorktree: call<'createWorktree'>('createWorktree', (input, signal) =>
-        run(host.createWorktree({ installationId, requestId: randomUUID(), ...input }), signal),
+        this.withRequestId('createWorktree', input, (requestId) =>
+          run(host.createWorktree({ installationId, requestId, ...input }), signal),
+        ),
       ),
       initializeRepository: call<'initializeRepository'>('initializeRepository', (input, signal) =>
         this.initializeRepository(input.checkout, signal, host),
@@ -207,14 +214,43 @@ export class ClientWorkspace implements AdmissionOwner {
       !this.recovery.getUnsettledCheckoutOperations(target).length,
       'A file operation awaits recovery publication or inspection. Resolve it before initializing Git.',
     );
-    return run(
-      host.initializeRepository({
-        installationId: this.installationId,
-        requestId: randomUUID(),
-        checkout: target,
-      }),
-      signal,
+    return this.withRequestId('initializeRepository', target, (requestId) =>
+      run(
+        host.initializeRepository({
+          installationId: this.installationId,
+          requestId,
+          checkout: target,
+        }),
+        signal,
+      ),
     );
+  }
+
+  /**
+   * Sends a host operation under a request ID kept durably before it is sent, so a repeat of the
+   * same call after a lost reply or a crash asks for the first outcome instead of starting a
+   * second one. The ID is kept only while the outcome is unknown (`Uncertain`, or cancelled after
+   * sending); an answer, including a refusal, ends it, since the host replays a refusal for the
+   * same ID and a retry then has to be a new request.
+   */
+  private async withRequestId<A>(
+    operation: string,
+    input: unknown,
+    send: (requestId: string) => Promise<A>,
+  ) {
+    const name = hash(canonical([operation, input]));
+    const requestId =
+      this.store.get<{ requestId: string }>('requests', name)?.requestId ?? randomUUID();
+    this.store.put('requests', name, { requestId });
+    try {
+      const output = await send(requestId);
+      this.store.delete('requests', name);
+      return output;
+    } catch (error) {
+      if (!ApplicationError.is(error) || !['Uncertain', 'Cancelled'].includes(error.code))
+        this.store.delete('requests', name);
+      throw error;
+    }
   }
 
   private async saveFile(

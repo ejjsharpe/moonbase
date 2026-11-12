@@ -4,6 +4,12 @@ import { acquireEditor } from './editor-model-fixture.ts';
 import { checkout, second, fixture, held, target } from './editor-fixture.ts';
 import { fileKey, type EditorSnapshot } from '@moonbase/application/editor';
 import { Effect } from 'effect';
+import { ApplicationError, type WorkspaceEvent } from '@moonbase/contracts/workspace';
+
+async function until(check: () => unknown) {
+  for (let i = 0; i < 200 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert(check());
+}
 
 test('overlapping folder reads share one request and later navigation reads fresh entries', async () => {
   const f = await fixture('listing-source', false);
@@ -208,6 +214,67 @@ test('filesystem changes refresh past a held folder read and older replies canno
   } finally {
     release.release();
     await pending;
+    off();
+    await editor.dispose();
+    await f.dispose();
+  }
+});
+
+test('a watch that fails as Unavailable is watched again after the backoff and read again, and a refused one is reported until a refresh watches again', async () => {
+  const f = await fixture('listing-rewatch-source', false);
+  const watches: {
+    receive: (event: WorkspaceEvent) => void;
+    fail: (error: ApplicationError) => void;
+  }[] = [];
+  const reports: unknown[] = [];
+  const editor = await acquireEditor(f.runtime, {
+    clientId: 'listing-rewatch',
+    watchRetryMs: [0],
+    client: {
+      ...f.client,
+      watch(input, receive, fail) {
+        watches.push({ receive, fail });
+        return async () => {};
+      },
+    },
+  });
+  const off = editor.subscribe(() => {
+    const errors = editor.getSnapshot().errors;
+    if (errors.length) reports.push(...errors);
+  });
+  try {
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    editor.tree(checkout, { expanded: ['folder'] });
+    await editor.list(checkout, 'folder');
+    await f.client.command('mutate', {
+      checkout,
+      clientId: 'listing-rewatch-source',
+      id: 'missed-while-down',
+      kind: 'create-file',
+      sources: [],
+      destination: 'folder/missed.ts',
+      text: 'new',
+    });
+    watches[0].fail(new ApplicationError({ code: 'Unavailable', message: 'Daemon restarted.' }));
+    // The second watch replaces the failed one, and the change it missed is read.
+    await until(() => watches.length === 2);
+    await until(() =>
+      editor
+        .getSnapshot()
+        .listings[fileKey(target('folder'))]?.entries.some(
+          (entry) => entry.path === 'folder/missed.ts',
+        ),
+    );
+    assert.equal(reports.length, 0);
+    // The backoff has run out: the next failure is reported instead of watched again.
+    watches[1].fail(new ApplicationError({ code: 'Unavailable', message: 'Still down.' }));
+    await until(() => reports.length > 0);
+    assert.equal(watches.length, 2);
+    // An explicit refresh watches again, so a daemon that returns later revives live updates.
+    await editor.refresh(checkout);
+    assert.equal(watches.length, 3);
+  } finally {
     off();
     await editor.dispose();
     await f.dispose();

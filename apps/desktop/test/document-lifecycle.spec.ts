@@ -2,7 +2,7 @@ import { findTestBun, prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
 import { prepareCrashRecovery, recoverCrashedWorkbench } from './editor-regressions.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron } from '@playwright/test';
-import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -19,6 +19,9 @@ for (const mode of ['reload', 'veto', 'crash'])
     execFileSync('/usr/bin/git', ['-C', checkout, 'init', '-q', '-b', 'main']);
     const packaged = !!process.env.MOONBASE_PACKAGED_TEST;
     await prepareDaemonData(join(base, 'data'));
+    // The read helper runs in the daemon: this folder lets the test stop one read in flight there.
+    const hold = join(base, 'hold');
+    mkdirSync(hold);
     const app = await electron.launch({
       ...(packaged
         ? {
@@ -35,6 +38,7 @@ for (const mode of ['reload', 'veto', 'crash'])
         TMPDIR: process.env.TMPDIR!,
         MOONBASE_USER_DATA: join(base, 'data'),
         MOONBASE_TEST_BUN: findTestBun(),
+        ...(packaged ? {} : { MOONBASE_TEST_HOLD_READ: hold }),
         GIT_CONFIG_GLOBAL: '/dev/null',
         GIT_CONFIG_NOSYSTEM: '1',
       },
@@ -100,27 +104,9 @@ for (const mode of ['reload', 'veto', 'crash'])
       const observers = await page.evaluate(
         () => (window as unknown as { oldEditorObservers: string[] }).oldEditorObservers,
       );
-      // Hold one actual read helper; normal command cancellation still owns its SIGKILL and close.
-      await app.evaluate(async () => {
-        const processes = process.getBuiltinModule('child_process'),
-          module = process.getBuiltinModule('module'),
-          spawn = processes.spawn;
-        processes.spawn = ((...args: Parameters<typeof spawn>) => {
-          const child = spawn(...args);
-          if (
-            !globalThis.reloadProbe.stopped &&
-            Array.isArray(args[1]) &&
-            args[1][0] === 'read' &&
-            args[1][1] === 'a.ts'
-          ) {
-            globalThis.reloadProbe.stopped = true;
-            globalThis.reloadProbe.held = child.pid!;
-            child.kill('SIGSTOP');
-          }
-          return child;
-        }) as typeof spawn;
-        module.syncBuiltinESMExports();
-      });
+      // Hold one actual read helper, in the daemon; normal command cancellation still owns its
+      // SIGKILL and close.
+      writeFileSync(join(hold, 'arm'), '');
       const waitId = 'old-document-read';
       await page.evaluate(
         ({ target, id }) => {
@@ -130,8 +116,17 @@ for (const mode of ['reload', 'veto', 'crash'])
         },
         { target, id: waitId },
       );
-      await expect.poll(() => app.evaluate(() => globalThis.reloadProbe.held)).not.toBeNull();
-      const heldPid = (await app.evaluate(() => globalThis.reloadProbe.held))!;
+      await expect
+        .poll(() => {
+          try {
+            return Number(readFileSync(join(hold, 'held'), 'utf8')) || null;
+          } catch {
+            return null;
+          }
+        })
+        .not.toBeNull();
+      const heldPid = Number(readFileSync(join(hold, 'held'), 'utf8'));
+      await app.evaluate((_, pid) => void (globalThis.reloadProbe.held = pid), heldPid);
       pids.add(heldPid);
       for (const pid of await app.evaluate(({ app }) =>
         app.getAppMetrics().map((value) => value.pid),

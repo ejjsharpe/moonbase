@@ -156,10 +156,10 @@ export function createLocalDaemon({
   };
 
   /**
-   * Stops an outdated daemon of this directory, and waits for it; false, signalling nothing, when
+   * Stops a daemon of this directory, and waits for it; false, signalling nothing, when
    * that process no longer runs a daemon here (it exited, and its ID was reused).
    */
-  async function stopOutdated(outdatedPid: number) {
+  async function stopDaemon(outdatedPid: number) {
     if (!(await isDaemon(outdatedPid))) return false;
     // A daemon stops cleanly on SIGTERM; Pi Durable resumes its interrupted runs in the next one.
     try {
@@ -170,7 +170,7 @@ export function createLocalDaemon({
     const deadline = Date.now() + stopMs;
     while (isAlive(outdatedPid)) {
       if (Date.now() > deadline)
-        throw unavailable('An older Moonbase chat daemon is still stopping. Try again shortly.');
+        throw unavailable('The Moonbase chat daemon is still stopping. Try again shortly.');
       await delay(50);
     }
     return true;
@@ -254,12 +254,24 @@ export function createLocalDaemon({
     ensure: () => serialize(find),
     /** Starts a new daemon even though one seems to run, for a daemon that stopped answering. */
     restart: () => serialize(start),
+    /**
+     * Stops the daemon of this directory (`SIGTERM`, so its runs resume in the next one), whether
+     * or not it is outdated or busy, and waits for it. The next request starts a new one. False,
+     * signalling nothing, when no process runs a daemon here.
+     */
+    stop: () => {
+      let stopped = false;
+      return serialize(async () => {
+        const running = pid ?? (await readEndpoint(directory))?.pid;
+        stopped = running !== undefined && (await stopDaemon(running));
+      }).then(() => stopped);
+    },
     /** Stops the outdated daemon in use, which reported no work, and starts this app's. */
     replace: () =>
       serialize(async () => {
         if (!outdated || pid === undefined) return;
         // Its endpoint still names a process that isn't the daemon; this app's starts instead.
-        if (await stopOutdated(pid)) await find();
+        if (await stopDaemon(pid)) await find();
         else await start();
       }),
   };
@@ -344,3 +356,25 @@ export const LocalDaemonConnectionLive = (
       return connection;
     }),
   ).pipe(Layer.provide(LoopbackConnectionLive({ directory: daemon.directory })));
+
+/**
+ * The Restart daemon action: after the user confirms, stops the local daemon with `SIGTERM`. Its
+ * runs resume in the next daemon, which the next request starts. A failure is reported, never
+ * thrown.
+ */
+export async function restartDaemon({
+  daemon,
+  confirm,
+  report,
+}: {
+  daemon: Pick<LocalDaemon, 'stop'>;
+  confirm(): Promise<boolean>;
+  report(message: string): void;
+}) {
+  if (!(await confirm())) return;
+  try {
+    if (!(await daemon.stop())) report('No Moonbase daemon was running, so nothing was restarted.');
+  } catch (error) {
+    report(error instanceof Error ? error.message : 'The daemon could not be restarted.');
+  }
+}

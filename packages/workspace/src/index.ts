@@ -14,7 +14,16 @@ export type {
   WorkspaceConfiguration,
   WorkspaceHostConfiguration,
 } from './schema.ts';
-export type WorkspaceRecoveryConfiguration = { dataDirectory: string; installationId: string };
+export type WorkspaceRecoveryConfiguration = {
+  dataDirectory: string;
+  installationId: string;
+  /**
+   * How long loading recovery waits on the host before it stops asking it for this load, so a
+   * host that is slow to start never holds back drafts; what was skipped is retried on the next
+   * load. Default 5000.
+   */
+  hostWaitMs?: number;
+};
 
 /**
  * The file host: approvals, reads, saves, file operations, Git, search and watching, with the

@@ -5,8 +5,8 @@
 ## Integration
 
 - `WorkspaceHostLive(config)` provides `WorkspaceHostService` (everything except recovery, plus `saveStatus`, `acknowledgeSave` and `listOperations`), the privileged `WorkspaceNative` service for approved native imports, and `WorkspaceFolders` (see Chat folders). It keeps approvals and journals in `workspace-host.sqlite` in `dataDirectory`.
-- `WorkspaceRecoveryLive({dataDirectory, installationId}, host)` provides today's full `WorkspaceService` over a host service. It keeps drafts and editor state in `moonbase-workspace-v1.sqlite`, so existing drafts carry.
-- `WorkspaceLocalLive(config)` composes both in one process, as Electron main does; see [`examples/local.ts`](examples/local.ts).
+- `WorkspaceRecoveryLive({dataDirectory, installationId, hostWaitMs?}, host)` provides today's full `WorkspaceService` over a host service, local or remote. It keeps drafts and editor state in `moonbase-workspace-v1.sqlite`, so existing drafts carry. Loading recovery gives its host phases (feed, evidence, verification) `hostWaitMs` (5 s) together; once it runs out they stop their host calls and are retried on the next load. Local work (drafting unsettled saves) still runs, and a failing phase or another client's unreadable recovery is reported in `errors` without hiding drafts.
+- `WorkspaceLocalLive(config)` composes both in one process (Electron main no longer does: it runs only the recovery store over the daemon's host); see [`examples/local.ts`](examples/local.ts).
 
 Compose each once in a process root's runtime. The workspace opens only on macOS with Node 26.13 or newer, the pinned Electron (45.1.0) or exactly Bun 1.4.4, and is refused as `Incompatible` otherwise. Configure a stable `hostId` and a `dataDirectory` outside approved checkouts. Packaged apps must supply absolute `filesystemHelper` and `ripgrepExecutable` paths. System Git defaults to `/usr/bin/git`; when the Xcode command-line tools are missing, Git runs fail as `Unavailable` and the macOS installer prompt is never triggered. Without them even a plain folder can't be opened (`Unavailable`).
 
@@ -19,6 +19,10 @@ The host journals each save and operation under `(installationId, clientId, requ
 Completed moves, copies and Trash also enter an operation feed with a store-wide, increasing sequence. `listOperations({checkout, after})` returns one bounded page after a sequence (at most 64 entries and about 4 MiB of JSON beyond the first entry, so a page always fits a socket reply), with `through`, `floor` (entries up to it may have been discarded) and `more`.
 
 The client records a save or operation intent (text, baseline) before sending it, and applies the reply, `saveStatus`, `operationStatus` or feed entry to its recovery in one local transaction. `loadRecovery` resolves open intents through the host: `saved` and `conflict` settle them, `not-started` restores the text as a draft, `uncertain` keeps the draft and reports it. A lost reply is never sent again as new work. `loadRecovery` also reads the feed after its per-host cursor and reconciles drafts and views of its checkouts, so another client's move re-paths a draft and its Trash leaves it. A gap past the host's retention leaves drafts where they are and reports them. This client's own results are applied as they return, so its own feed entries are skipped. The feed carries the host store's epoch and a floor per checkout: a different epoch (a recreated store) resets the cursor and marks every checkout's drafts as a gap, and a checkout the host refuses is skipped and reported while the others advance. A settled save or operation whose acknowledgement did not reach the host is acknowledged again on the next load.
+
+## Repeated requests
+
+`createWorktree` and `initializeRepository` are sent under a request ID stored in the client store before sending, keyed by the call. A repeat of the same call after a lost reply (or a restart) asks the host for the first outcome. The ID is kept only while the outcome is unknown (`Uncertain`, or cancelled); an answer, a refusal included, ends it, because the host replays a refusal for the same ID.
 
 ## Search
 

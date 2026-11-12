@@ -919,8 +919,9 @@ for (const outcome of ['success', 'held-failure', 'throw'] as const)
       raw = makeEditorClient(runtime);
     const entered = gate(),
       release = gate();
+    // A failure the editor reports (an Unavailable one is watched again first).
     const trigger = new ApplicationError({
-      code: 'Unavailable',
+      code: 'Incompatible',
       message: 'Reentrant observation disposal',
     });
     const failure = new ApplicationError({

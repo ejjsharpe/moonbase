@@ -10,7 +10,6 @@ import { ApplicationError } from '@moonbase/contracts/workspace';
 import {
   maximumChatRequestBytes,
   type ChatClient,
-  type ChatInput,
   type ChatCommand,
   type ChatSession,
 } from '@moonbase/contracts/chat';
@@ -215,38 +214,16 @@ export class ChatIpcSession {
         }
         return { ok: true, value: null };
       }
-      // The folder a local chat request names, which the host must have approved.
-      let folder: string | undefined;
-      if (kind === 'chat' && operation === 'createChat') {
-        // Every host is a daemon, local or remote, whose chats choose their folder and model.
-        folder = (v as ChatInput<'createChat'>).settings.cwd;
-      }
-      if (kind === 'chat' && operation === 'findChatFiles') folder = (v as { cwd?: string }).cwd;
-      if (folder !== undefined) await this.capabilities.prepareFolder?.(folder);
       let value: unknown;
       if (kind === 'providers')
         value = await this.capabilities.providers!.command(operation as never, v as never, {
           signal: request.signal,
         });
-      else if (kind === 'chat') {
-        const send = () =>
-          this.chat.command(operation as ChatCommand, v as never, { signal: request.signal });
-        try {
-          value = await send();
-        } catch (error) {
-          // A refused folder is granted again once if main may still grant it (the daemon lost
-          // its grant, or the folder was replaced), and the request is retried once. A refused
-          // request was never admitted, so its request ID is unused.
-          if (
-            folder === undefined ||
-            (error as { code?: unknown }).code !== 'Unauthorized' ||
-            !live() ||
-            !(await this.capabilities.regrantFolder?.(folder))
-          )
-            throw error;
-          value = await send();
-        }
-      } else if (operation === 'getConnection')
+      else if (kind === 'chat')
+        value = await this.chat.command(operation as ChatCommand, v as never, {
+          signal: request.signal,
+        });
+      else if (operation === 'getConnection')
         value = await this.connection!.command(operation, v as never, { signal: request.signal });
       else {
         // Image URLs belong to the connection that issued them, including ones issued mid-change.
@@ -355,10 +332,6 @@ export class ChatIpcSession {
 export type ChatIpcBackend = { mode: 'local' } | { mode: 'remote'; connection: ConnectionClient };
 export type ChatIpcCapabilities = {
   providers?: ProviderSetupClient;
-  /** Prepares a folder a local chat request names, before the request is sent. */
-  prepareFolder?(path: string): Promise<void>;
-  /** Grants a folder the host refused again, if main may; whether it did. */
-  regrantFolder?(path: string): Promise<boolean>;
   transcript?: NativeTranscriptActions;
   /** lru-cache clock for image URL expiry; tests inject one. */
   perf?: { now(): number };

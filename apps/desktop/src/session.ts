@@ -1,4 +1,4 @@
-import { mkdir, realpath, rmdir } from 'node:fs/promises';
+import { realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import type { ManagedRuntime } from 'effect';
 import {
@@ -67,12 +67,19 @@ export class EditorSession {
   private client: EditorClient;
   private native: NativeActions;
   private send: (id: string, result: Reply<WorkspaceEvent>) => void;
+  private localHostId: () => Promise<string | undefined>;
+  /**
+   * `localHostId` names the host of this machine's own files, the only one Reveal in Finder can
+   * show; a checkout of any other host is refused.
+   */
   constructor(
     runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>,
     client: EditorClient,
     native: NativeActions,
     send: (id: string, result: Reply<WorkspaceEvent>) => void,
+    localHostId: () => Promise<string | undefined>,
   ) {
+    this.localHostId = localHostId;
     this.lifetime = new IpcLifetime(runtime, 128, (error) => ({
       ok: false,
       error: errorDTO(error),
@@ -83,7 +90,10 @@ export class EditorSession {
   }
   private own(value: unknown) {
     if (value !== this.clientId)
-      throw new ApplicationError({ code: 'Unauthorized', message: 'Foreign editor identity.' });
+      throw new ApplicationError({
+        code: 'Unauthorized',
+        message: 'Foreign editor identity.',
+      });
   }
   private approved(value: unknown) {
     checkout(value);
@@ -187,112 +197,17 @@ export class EditorSession {
     return v;
   }
   /**
-   * Opens a root main trusts, such as a chat's own folder becoming a project, and approves the
-   * checkout for the renderer, which may then open it. The caller authorizes `root`.
+   * Approves a checkout the daemon made for a chat, such as a new chat worktree or a chat's own
+   * folder turned into a project, so the renderer may open it. The caller trusts the daemon's
+   * answer to a request main made.
    */
-  async openFolderProject(root: string): Promise<CheckoutTarget> {
-    string(root);
-    const target = decodeWorkspaceOutput(
-      'openCheckout',
-      await this.client.command('openCheckout', { root }),
-    );
-    // The workspace resolves links: a folder replaced by one since main checked it opens elsewhere.
-    if (target.root !== root)
-      throw new ApplicationError({
-        code: 'Unauthorized',
-        message: 'The folder changed before it opened as a project. Inspect it.',
-      });
+  adoptCheckout(target: CheckoutTarget) {
+    checkout(target);
     this.known.set(target.checkoutId, target);
-    return target;
   }
   /** Whether a root is a natively approved checkout, or a worktree Git listed for one. */
   hasFolder(root: string) {
     return this.worktreeRoots.has(root) || [...this.known.values()].some((t) => t.root === root);
-  }
-  /**
-   * Creates `branch` from the current commit of the checkout at `root`, in a new linked worktree
-   * beside the repository at `<main worktree>-worktrees/<branch>`. Main derives the location, so a
-   * renderer never names where directories are made. A taken branch or location gets a numbered
-   * suffix. The caller authorizes `root`. Creations run one at a time, so two can't race for a name.
-   */
-  createChatWorktree(root: string, branch: string, signal?: AbortSignal) {
-    const created = this.worktreeCreation.then(() => this.createWorktreeNow(root, branch, signal));
-    this.worktreeCreation = created.catch(() => {});
-    return created;
-  }
-  private worktreeCreation: Promise<unknown> = Promise.resolve();
-  private async createWorktreeNow(root: string, branch: string, signal?: AbortSignal) {
-    string(root);
-    if (
-      typeof branch !== 'string' ||
-      !/^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)*$/i.test(branch) ||
-      branch.length > 100 ||
-      branch.includes('..') ||
-      branch.endsWith('.lock')
-    )
-      invalid('Choose a simple branch name for the worktree.');
-    signal?.throwIfAborted();
-    const options = signal ? { signal } : undefined;
-    const target =
-      [...this.known.values()].find((t) => t.root === root) ??
-      decodeWorkspaceOutput(
-        'openCheckout',
-        await this.client.command('openCheckout', { root }, options),
-      );
-    const { worktrees } = decodeWorkspaceOutput(
-      'listWorktrees',
-      await this.client.command('listWorktrees', { checkout: target }, options),
-    );
-    const parent = `${worktrees.find((worktree) => worktree.main)?.root ?? target.root}-worktrees`;
-    signal?.throwIfAborted();
-    const madeParent = await mkdir(parent).then(
-      () => true,
-      (error: NodeJS.ErrnoException) => {
-        if (error.code !== 'EEXIST') throw error;
-        return false;
-      },
-    );
-    let prefix = branch;
-    try {
-      for (let attempt = 1; ; attempt++) {
-        const name = attempt === 1 ? prefix : `${prefix}-${attempt}`;
-        try {
-          const created = decodeWorkspaceOutput(
-            'createWorktree',
-            await this.client.command(
-              'createWorktree',
-              {
-                checkout: target,
-                base: 'HEAD',
-                branch: name,
-                location: join(parent, name.replaceAll('/', '-')),
-              },
-              options,
-            ),
-          );
-          // A released document's worktree stays on disk but grants nothing to the next document.
-          if (!signal?.aborted) {
-            this.known.set(created.checkoutId, created);
-            this.worktreeRoots.add(created.root);
-          }
-          return created.root;
-        } catch (error) {
-          if (!ApplicationError.is(error) || ['Cancelled', 'Uncertain'].includes(error.code))
-            throw error;
-          if (error.code === 'Conflict' && attempt < 20) continue;
-          // A branch named like the prefix (`chat`) blocks every `chat/…` branch, which Git
-          // refuses (Unavailable): use `chat-…`. That maps to the same location, so any other
-          // refusal of it would only repeat.
-          if (error.code !== 'Unavailable' || !prefix.includes('/')) throw error;
-          prefix = prefix.replaceAll('/', '-');
-          attempt = 0;
-        }
-      }
-    } catch (error) {
-      // An empty folder this attempt made is removed; one holding other worktrees is kept.
-      if (madeParent) await rmdir(parent).catch(() => {});
-      throw error;
-    }
   }
   async call(method: unknown, input: unknown, id: unknown): Promise<Reply> {
     let reserved: IpcRequest | undefined;
@@ -300,7 +215,10 @@ export class EditorSession {
       requestId(id);
       const admission = this.lifetime.getAdmissionError(id, method === 'watch');
       if (admission === 'closed')
-        throw new ApplicationError({ code: 'Unavailable', message: 'Editor session disposed.' });
+        throw new ApplicationError({
+          code: 'Unavailable',
+          message: 'Editor session disposed.',
+        });
       if (admission === 'active') invalid('Request is already active.');
       if (admission === 'capacity') invalid('Too many active requests of this kind.');
       reserved = this.lifetime.reserveRequest(id, method === 'watch');
@@ -308,7 +226,10 @@ export class EditorSession {
       const live = request.isLive;
       const requireLive = () => {
         if (!live())
-          throw new ApplicationError({ code: 'Cancelled', message: 'Editor document released.' });
+          throw new ApplicationError({
+            code: 'Cancelled',
+            message: 'Editor document released.',
+          });
       };
       let value: unknown;
       if (method === 'command') {
@@ -319,7 +240,9 @@ export class EditorSession {
         const validated = this.validate(operation, envelope.input);
         value = decodeWorkspaceOutput(
           operation,
-          await this.client.command(operation, validated as never, { signal: request.signal }),
+          await this.client.command(operation, validated as never, {
+            signal: request.signal,
+          }),
         );
         // After `git init` the folder's Git target replaces its approval under the same ID.
         if ((operation === 'openCheckout' || operation === 'initializeRepository') && live()) {
@@ -395,6 +318,10 @@ export class EditorSession {
         const v = record(input);
         keys(v, ['checkout', 'path']);
         const target = this.checkoutPath(v.checkout, v.path);
+        // Another host's files are not on this Mac, and a path that is only spelled like one of
+        // its own would show the wrong file.
+        if ((v.checkout as CheckoutTarget).hostId !== (await this.localHostId()))
+          invalid('Only files on this Mac can be shown in Finder.');
         // Follow links before checking again, so a link inside the checkout can't point out of it.
         const [root, real] = await Promise.all([
           realpath((v.checkout as CheckoutTarget).root),

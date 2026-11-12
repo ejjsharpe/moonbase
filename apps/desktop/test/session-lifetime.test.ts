@@ -21,7 +21,10 @@ const checkout = {
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };
-const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' };
+const context = {
+  host: { hostId: 'host', storeId: 'store' },
+  actorId: 'actor',
+};
 
 async function createSession(
   kind: 'editor' | 'chat',
@@ -61,6 +64,7 @@ async function createSession(
             release: async () => {},
           },
           emit,
+          async () => 'local',
         )
       : new ChatIpcSession(
           runtime,
@@ -126,7 +130,10 @@ for (const kind of ['editor', 'chat'] as const) {
       kind,
       (receive) => {
         queueMicrotask(receive);
-        throw new ApplicationError({ code: 'Persistence', message: 'Acquisition failed' });
+        throw new ApplicationError({
+          code: 'Persistence',
+          message: 'Acquisition failed',
+        });
       },
       () => {
         delivered++;
@@ -269,7 +276,12 @@ for (const failure of [false, true]) {
       receives[1]();
       assert.equal(delivered, 3);
       if (failure)
-        gate.reject(new ApplicationError({ code: 'Persistence', message: 'Old release failed' }));
+        gate.reject(
+          new ApplicationError({
+            code: 'Persistence',
+            message: 'Old release failed',
+          }),
+        );
       else gate.resolve();
       assert((await oldWatch).ok);
       const error = await outcome;

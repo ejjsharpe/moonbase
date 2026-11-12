@@ -149,7 +149,9 @@ export class WorkspaceRecovery {
   private readonly store: ClientStore;
   private readonly host: HostPorts;
   private readonly installationId: string;
-  constructor(store: ClientStore, host: HostPorts, installationId: string) {
+  private readonly hostWaitMs: number;
+  constructor(store: ClientStore, host: HostPorts, installationId: string, hostWaitMs = 5000) {
+    this.hostWaitMs = hostWaitMs;
     this.store = store;
     this.host = host;
     this.installationId = installationId;
@@ -305,14 +307,38 @@ export class WorkspaceRecovery {
     for (const [id, record] of this.volatileOperations) records.set(id, record);
     return [...records.values()];
   }
+  /**
+   * Every client's stored recovery, split into those that read and those that don't. Each loop
+   * over the clients uses this, so one unreadable row is skipped (and reported where it matters)
+   * and never stalls the others.
+   */
+  private readableRecoveries() {
+    const readable: { client: string; revision: number; body: string; state: EditorRecovery }[] =
+      [];
+    const unreadable: { client: string; error: string }[] = [];
+    for (const row of this.store.db.prepare('SELECT client, revision, body FROM recovery').all()) {
+      const client = row.client as string;
+      try {
+        readable.push({
+          client,
+          revision: savedRevision(row.revision),
+          body: row.body as string,
+          state: parseRecovery(row.body, client),
+        });
+      } catch (error) {
+        unreadable.push({ client, error: errorText(error) });
+      }
+    }
+    return { readable, unreadable };
+  }
   /** Revisions of every local recovery that names the checkout, as the operation begins. */
   getPublicationRevisions(checkout: CheckoutTarget, clientId?: string) {
     const revisions: Record<string, number> = clientId
       ? { [clientId]: this.store.readRecovery(clientId)?.revision ?? 0 }
       : {};
-    for (const row of this.store.db.prepare('SELECT client, revision, body FROM recovery').all())
-      if (parseRecovery(row.body, row.client as string).checkouts.some((c) => same(c, checkout)))
-        revisions[row.client as string] = savedRevision(row.revision);
+    // Another client's unreadable recovery is reported when that client loads.
+    for (const { client, revision, state } of this.readableRecoveries().readable)
+      if (state.checkouts.some((c) => same(c, checkout))) revisions[client] = revision;
     return revisions;
   }
   /** Where a local record touches: its sources and destinations, or its items when reported by the feed. */
@@ -374,19 +400,29 @@ export class WorkspaceRecovery {
       );
   }
   assertDestinationAvailable(target: CheckoutTarget, conflicts: (draftPath: string) => boolean) {
-    for (const row of this.store.db.prepare('SELECT client, body FROM recovery').all()) {
-      const state = parseRecovery(row.body, row.client as string);
+    const { readable, unreadable } = this.readableRecoveries();
+    // An unreadable recovery may hold a draft here.
+    ensure(
+      !unreadable.length,
+      'Recovery of ' +
+        unreadable[0]?.client +
+        ' is unreadable and may hold drafts at the destination.',
+    );
+    for (const { state } of readable)
       ensure(
         !state.drafts.some(
           (d) => d.target.checkout.checkoutId === target.checkoutId && conflicts(d.target.path),
         ),
         'Destination has recovery drafts. Preserve them before replacement.',
       );
-    }
   }
   /** Takes the host's items and outcome into the client's record, ahead of publishing it. */
   adoptHostResult(record: OperationRecord, host: HostOperationResult) {
-    record.result = { ...record.result, items: host.items, outcome: host.outcome };
+    record.result = {
+      ...record.result,
+      items: host.items,
+      outcome: host.outcome,
+    };
     if (host.message === undefined) delete record.result.message;
     else record.result.message = host.message;
   }
@@ -604,23 +640,33 @@ export class WorkspaceRecovery {
         ...record.publicationRevisions,
         ...committed?.publicationRevisions,
       };
-      for (const row of this.store.db
-        .prepare('SELECT client, revision, body FROM recovery')
-        .all()) {
-        const clientId = row.client as string,
-          state = parseRecovery(row.body, clientId);
+      const { readable, unreadable } = this.readableRecoveries();
+      // An unreadable client recovery is skipped here, so its draft may stay at a moved path:
+      // the checkout's history is marked incomplete (every feed sync reports the row).
+      if (unreadable.length) {
+        const { hostId, checkoutId } = record.input.checkout;
+        this.store.put('gaps', key(hostId, checkoutId), {
+          since: this.store.get<{ sequence: number }>('cursors', hostId)?.sequence ?? 0,
+          checkoutId,
+        });
+      }
+      for (const { client: clientId, state, body, revision: current } of readable) {
         if (
           clientId !== record.input.clientId &&
           !state.checkouts.some((c) => same(c, record.input.checkout))
         )
           continue;
-        let revision = savedRevision(row.revision);
+        let revision = current;
         if (fresh.length)
           reconcile(state, [{ ...record, result: { ...record.result, items: fresh } }]);
         recovery(state, clientId);
-        if (JSON.stringify(state) !== row.body) {
+        if (JSON.stringify(state) !== body) {
           this.store.writeInternalRecovery(clientId, revision, state);
-          changes.push({ clientId, previousRevision: revision, revision: revision + 1 });
+          changes.push({
+            clientId,
+            previousRevision: revision,
+            revision: revision + 1,
+          });
           revision++;
         }
         publicationRevisions[clientId] = revision;
@@ -641,7 +687,12 @@ export class WorkspaceRecovery {
           ...new Set([...(committed?.acknowledgedBy ?? []), ...record.acknowledgedBy]),
         ],
         publishedItems: [...published, ...fresh.map(canonical)],
-        result: { ...record.result, items: mergedItems, outcome, recoveryChanges: retained },
+        result: {
+          ...record.result,
+          items: mergedItems,
+          outcome,
+          recoveryChanges: retained,
+        },
       };
       delete updated.publicationError;
       if (
@@ -740,7 +791,13 @@ export class WorkspaceRecovery {
           recoveryRestored: !!committed?.recoveryRestored || restored,
           restorePending: !!wantsRestore && !committed?.recoveryRestored && !restored,
         };
-        return { id, record, committed, updated, changed: entryBefore !== JSON.stringify(state) };
+        return {
+          id,
+          record,
+          committed,
+          updated,
+          changed: entryBefore !== JSON.stringify(state),
+        };
       });
       recovery(state, clientId);
       const changed = JSON.stringify(state) !== before;
@@ -787,11 +844,18 @@ export class WorkspaceRecovery {
         ) {
           try {
             const status = await this.host.saveStatus(
-              { clientId: record.input.clientId, requestId: record.input.requestId },
+              {
+                clientId: record.input.clientId,
+                requestId: record.input.requestId,
+              },
               signal,
             );
             if (status.kind === 'saved')
-              record.result = { kind: 'saved', disk: status.disk, recoveryChanges: [] };
+              record.result = {
+                kind: 'saved',
+                disk: status.disk,
+                recoveryChanges: [],
+              };
             else if (status.kind === 'conflict')
               record.result = { kind: 'conflict', disk: status.disk };
             else if (status.kind === 'not-started') record.notStarted = true;
@@ -850,9 +914,11 @@ export class WorkspaceRecovery {
   async syncFeed(signal: AbortSignal) {
     const errors: string[] = [];
     const checkouts = new Map<string, CheckoutTarget>();
-    for (const row of this.store.db.prepare('SELECT client, body FROM recovery').all())
-      for (const target of parseRecovery(row.body, row.client as string).checkouts)
-        checkouts.set(target.checkoutId, target);
+    const { readable, unreadable } = this.readableRecoveries();
+    for (const { state } of readable)
+      for (const target of state.checkouts) checkouts.set(target.checkoutId, target);
+    for (const { client, error } of unreadable)
+      errors.push('Recovery of ' + client + ' is unreadable: ' + error);
     const byHost = new Map<string, CheckoutTarget[]>();
     for (const target of checkouts.values())
       byHost.set(target.hostId, [...(byHost.get(target.hostId) ?? []), target]);
@@ -875,7 +941,10 @@ export class WorkspaceRecovery {
       for (const checkout of targets) {
         try {
           const feed = await this.host.listOperations({ checkout, after: null }, signal);
-          this.store.put('cursors', hostId, { sequence: feed.through, epoch: feed.epoch });
+          this.store.put('cursors', hostId, {
+            sequence: feed.through,
+            epoch: feed.epoch,
+          });
           return;
         } catch (error) {
           failure = error;
@@ -941,7 +1010,10 @@ export class WorkspaceRecovery {
         return errors;
       }
     }
-    this.store.put('cursors', hostId, { sequence: through, epoch: cursor.epoch });
+    this.store.put('cursors', hostId, {
+      sequence: through,
+      epoch: cursor.epoch,
+    });
     return errors;
   }
   private applyFeedEntry(entry: OperationFeedEntry): boolean {
@@ -988,10 +1060,25 @@ export class WorkspaceRecovery {
     identifier(clientId);
     const before = this.store.readRecovery(clientId);
     if (before) recovery(before.state as EditorRecovery, clientId);
-    const errors: string[] = await this.syncFeed(signal);
-    await this.recoverEvidence(
-      signal,
-      new Set((before?.state as EditorRecovery | undefined)?.openCheckoutIds ?? []),
+    // A host that is slow to answer (such as a daemon still starting) is given `hostWaitMs` for all
+    // its phases together. What it did not answer is retried on the next load, and local work
+    // (drafting unsettled saves) needs no host.
+    const hostSignal = AbortSignal.any([signal, AbortSignal.timeout(this.hostWaitMs)]);
+    const errors: string[] = [];
+    const withHost = async (phase: () => Promise<string[] | void>) => {
+      try {
+        errors.push(...((await phase()) ?? []));
+      } catch (error) {
+        if (signal.aborted) throw error;
+        if (!hostSignal.aborted) errors.push(errorText(error));
+      }
+    };
+    await withHost(() => this.syncFeed(hostSignal));
+    await withHost(() =>
+      this.recoverEvidence(
+        hostSignal,
+        new Set((before?.state as EditorRecovery | undefined)?.openCheckoutIds ?? []),
+      ),
     );
     const stored = this.store.readRecovery(clientId),
       state = (stored?.state ?? emptyRecovery(clientId)) as EditorRecovery;
@@ -1000,11 +1087,17 @@ export class WorkspaceRecovery {
       state.openCheckoutIds.includes(c.checkoutId),
     )) {
       try {
-        await this.host.verifyCheckout(target, signal);
+        if (hostSignal.aborted) break;
+        await this.host.verifyCheckout(target, hostSignal);
       } catch (error) {
-        errors.push(target.root + ': ' + errorText(error));
+        if (!hostSignal.aborted) errors.push(target.root + ': ' + errorText(error));
       }
     }
+    signal.throwIfAborted();
+    if (hostSignal.aborted && !signal.aborted)
+      errors.push(
+        'The local host did not answer in time; files are checked again on the next load.',
+      );
     const relevant = this.getOperations(
       "NOT EXISTS (SELECT 1 FROM json_each(body, '$.acknowledgedBy') WHERE value = ?) AND (json_extract(body, '$.input.clientId') = ? OR json_extract(body, '$.input.checkout.checkoutId') IN (SELECT value FROM json_each(?)))",
       [clientId, clientId, JSON.stringify(state.checkouts.map((c) => c.checkoutId))],
@@ -1054,16 +1147,18 @@ export class WorkspaceRecovery {
   /** A gap's mark stays while any local recovery still holds a draft in its checkout. */
   private getFeedGapErrors(state: EditorRecovery) {
     const errors: string[] = [];
+    const { readable, unreadable } = this.readableRecoveries();
+    // An unreadable recovery may hold a draft in any gapped checkout: its marks stay (the sync
+    // that precedes this reports the unreadable row).
     for (const row of this.store.db
       .prepare("SELECT key, body FROM records WHERE bucket='gaps'")
       .all()) {
       const gap = this.store.parse<{ since: number; checkoutId: string }>('gaps', row.body);
-      const holders = [...this.store.db.prepare('SELECT client, body FROM recovery').all()].filter(
-        (r) =>
-          parseRecovery(r.body, r.client as string).drafts.some(
-            (d) => d.target.checkout.checkoutId === gap.checkoutId,
-          ),
-      );
+      const holders = unreadable.length
+        ? [true]
+        : readable.filter((r) =>
+            r.state.drafts.some((d) => d.target.checkout.checkoutId === gap.checkoutId),
+          );
       if (!holders.length) this.store.delete('gaps', row.key as string);
       else if (state.drafts.some((d) => d.target.checkout.checkoutId === gap.checkoutId))
         errors.push(

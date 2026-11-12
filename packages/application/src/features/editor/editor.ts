@@ -9,6 +9,7 @@ import {
   type MutationAction,
 } from './workflows.ts';
 import { Deferred, Effect, Exit, Fiber, Scope, Semaphore, type ManagedRuntime } from 'effect';
+import { watchRetry } from '../../runtime/watch-retry.ts';
 import { normalizeApplicationError, runApplicationEffect } from '../../runtime/effect-client.ts';
 import { decodeEditorRecovery } from '@moonbase/contracts/workspace-schema';
 import {
@@ -227,6 +228,7 @@ class EditorModelState {
     this.discovery = new EditorDiscovery(scope, {
       execute: (effect) => this.runEffect(effect),
       watch: (...args) => this.client.watch(...args),
+      watchRetryMs: options.watchRetryMs ?? watchRetry.retryMs,
       listDirectory: (input, scope, report) => this.command('listDirectory', input, scope, report),
       readFile: (target, scope) => this.command('readFile', target, scope),
       readComparison: (input, scope) => this.command('readComparison', input, scope),
@@ -647,7 +649,7 @@ class EditorModelState {
     if (reopening) {
       this.recovery.openCheckoutIds.push(target.checkoutId);
       await this.observe(target);
-    }
+    } else await this.rewatchLost(target);
     await this.selectOpenCheckout(target);
     await this.refreshCheckout(target);
     return target;
@@ -1480,9 +1482,20 @@ class EditorModelState {
         .map((item) => item.path),
     });
   }
-  refresh(checkout: CheckoutTarget): Promise<void> {
+  async refresh(checkout: CheckoutTarget): Promise<void> {
     this.assertAdmission();
+    await this.rewatchLost(checkout);
     return this.refreshCheckout(checkout);
+  }
+  /** Watches an open checkout again once its watch gave up, so live updates return with the daemon. */
+  private async rewatchLost(checkout: CheckoutTarget) {
+    if (
+      this.closing ||
+      !this.discovery.isWatchLost(checkout) ||
+      !this.recovery.openCheckoutIds.includes(checkout.checkoutId)
+    )
+      return;
+    await this.observe(checkout).catch(this.report);
   }
   private refreshCheckout(checkout: CheckoutTarget): Promise<void> {
     this.checkout(checkout);
@@ -2068,7 +2081,12 @@ export type RevealOptions = {
   /** Rejects on failure without reporting it, for a reveal the user didn't ask for. */
   quiet?: boolean;
 };
-export type EditorDependencies = { client: EditorClient; clientId?: string };
+export type EditorDependencies = {
+  client: EditorClient;
+  clientId?: string;
+  /** Backoff before each re-watch of a checkout; defaults to the transcript's. Its length is the cap. */
+  watchRetryMs?: readonly number[];
+};
 export type EditorModel = EditorModelState;
 export interface EditorController {
   readonly clientId: string;

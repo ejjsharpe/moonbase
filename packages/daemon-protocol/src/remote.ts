@@ -881,15 +881,25 @@ export const RemoteWorkspaceHostLive = (config: {
               (target) =>
                 link.subscribe(host, 'workspace', target).pipe(
                   Stream.filter((update) => !('reconnecting' in update)),
-                  Stream.map((update) => {
-                    const { value } = update as Exclude<typeof update, { reconnecting: true }>;
-                    return {
-                      checkout,
-                      paths: [''],
-                      ready: value.ready,
-                      ...(value.error ? { error: 'The workspace watch failed.' } : {}),
-                    };
-                  }),
+                  // Only the value that first says the watch is ready is `ready`; every later one,
+                  // a snapshot after a reconnect included, is a change to read again from.
+                  Stream.mapAccum(
+                    () => false,
+                    (readySeen, update) => {
+                      const { value } = update as Exclude<typeof update, { reconnecting: true }>;
+                      return [
+                        readySeen || value.ready,
+                        [
+                          {
+                            checkout,
+                            paths: [''],
+                            ...(!readySeen && value.ready ? { ready: true } : {}),
+                            ...(value.error ? { error: 'The workspace watch failed.' } : {}),
+                          },
+                        ],
+                      ] as const;
+                    },
+                  ),
                 ),
             ),
           ),

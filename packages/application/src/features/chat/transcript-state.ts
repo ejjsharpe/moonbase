@@ -8,6 +8,7 @@ import type {
 import type { TranscriptView } from './view-memory.ts';
 import type { TranscriptRow } from './transcript-rows.ts';
 import { countTranscriptBytes, type TranscriptChunk } from './transcript-read.ts';
+import { watchRetry } from '../../runtime/watch-retry.ts';
 
 export const transcriptLimits = {
   /** Retained history: entry summaries (each a 4 KiB text preview) and part descriptors. */
@@ -18,9 +19,9 @@ export const transcriptLimits = {
   /** How long closing waits for cancelled ChatClient reads to settle before releasing anyway. */
   closeGraceMs: 1000,
   /** Backoff before each re-watch after a retryable live-stream failure; its length is the cap. */
-  watchRetryMs: [1000, 5000, 15000],
+  watchRetryMs: watchRetry.retryMs,
   /** How long a watch must stay up after its first snapshot before its failure renews the cap. */
-  watchHealthyMs: 15000,
+  watchHealthyMs: watchRetry.healthyMs,
 } as const;
 export type TranscriptReadStatus = 'partial' | 'loading' | 'complete' | 'error' | 'source-changed';
 export type TranscriptContentState = {

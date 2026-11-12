@@ -24,6 +24,8 @@ import {
 export const ClientConfigurationSchema = struct({
   dataDirectory: absolute,
   installationId: WorkspaceIdentifierSchema,
+  /** How long loading recovery waits on the host before it gives up on it for this load. */
+  hostWaitMs: optional(natural),
 });
 const configuration = Schema.decodeUnknownSync(ClientConfigurationSchema, { reportInput: false });
 export function decodeClientConfiguration(value: unknown) {
@@ -83,6 +85,8 @@ export const clientDecoders = {
     /** Per host and checkout, a feed gap that left drafts at their old paths. */
     gaps: FeedGapSchema,
     meta: WorkspaceIdentifierSchema,
+    /** Per call, the request ID its host operation was (or is to be) sent under. */
+    requests: struct({ requestId: WorkspaceIdentifierSchema }),
     saves: SaveRecordSchema,
     operations: OperationRecordSchema,
   }),

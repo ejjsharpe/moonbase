@@ -14,8 +14,9 @@ import {
   session,
   shell,
 } from 'electron';
-import { ManagedRuntime, Effect } from 'effect';
-import { WorkspaceLocalLive, WorkspaceNative } from '@moonbase/workspace';
+import { Effect, ManagedRuntime } from 'effect';
+import { WorkspaceService, type WorkspaceHostServiceShape } from '@moonbase/contracts/services';
+import { WorkspaceRecoveryLive } from '@moonbase/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { acquireDaemonChat } from './chat/daemon.ts';
@@ -32,8 +33,16 @@ import { channels as chatChannels } from './chat/wire.ts';
 import { respondTranscriptImage, transcriptImagePath } from './chat/transcript-native.ts';
 import { createNativeActions } from './main/native-actions.ts';
 import { createChatBackends } from './main/chat-backends.ts';
+import { createFileRequestIds } from './main/request-ids.ts';
+import { createDaemonWorkspaceHost } from './main/workspace-host.ts';
 import { findDaemonCommand, type DaemonCommand } from './main/daemon-command.ts';
-import { findDaemonDirectory, olderDaemonMessage } from './main/local-daemon.ts';
+import {
+  createLocalDaemon,
+  findDaemonDirectory,
+  olderDaemonMessage,
+  readDaemonSession,
+  restartDaemon,
+} from './main/local-daemon.ts';
 import { createTrustedDocumentGuard, installCommandIpc } from './main/ipc.ts';
 import { installWindowLifecycle } from './main/window-lifecycle.ts';
 
@@ -98,26 +107,28 @@ async function main() {
   const csp =
     "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; worker-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'";
   await app.whenReady();
-  const assets = app.isPackaged
-    ? join(process.resourcesPath, 'workspace')
-    : join(directory, 'workspace');
   const chatConfiguration =
     process.env.MOONBASE_CHAT_CONFIG === undefined
       ? null
       : await readConfiguration(process.env.MOONBASE_CHAT_CONFIG);
-  // The file host and this installation's recovery store run in this process; the renderer and
-  // application see one workspace.
-  const workspace = WorkspaceLocalLive({
-    hostId: 'moonbase-local',
-    dataDirectory: join(userData, 'workspace-v1'),
-    installationId: readInstallationId(join(userData, 'workspace-v1')),
-    filesystemHelper: join(assets, 'filesystem'),
-    ripgrepExecutable: join(assets, 'ripgrep/rg'),
-    gitExecutable: '/usr/bin/git',
-  });
-  const runtime = ManagedRuntime.make(workspace);
+  // Files, Git and search are served by the profile's daemon, which main reaches on demand; this
+  // process keeps only this installation's recovery store (drafts and editor state), so the
+  // window opens and drafts are kept without the daemon.
+  const installationId = readInstallationId(join(userData, 'workspace-v1'));
+  let reachWorkspace = (): Promise<WorkspaceHostServiceShape> =>
+    Promise.reject(new ApplicationError({ code: 'Unavailable', message: 'Moonbase is starting.' }));
+  const host = createDaemonWorkspaceHost(() => reachWorkspace());
+  const runtime = ManagedRuntime.make(
+    WorkspaceRecoveryLive(
+      {
+        dataDirectory: join(userData, 'workspace-v1'),
+        installationId,
+      },
+      host,
+    ),
+  );
   const client = makeEditorClient(runtime);
-  await runtime.runPromise(Effect.asVoid(WorkspaceNative));
+  await runtime.runPromise(Effect.asVoid(WorkspaceService));
   // Local chat runs in this profile's daemon, which outlives the app; main finds or starts it and
   // binds clients to it. Local and remote clients are acquired in separate scopes of this root.
   const daemonDirectory = findDaemonDirectory(userData);
@@ -138,10 +149,12 @@ async function main() {
       daemonDirectory,
       process.env,
     );
+  const daemon = createLocalDaemon({ directory: daemonDirectory, command: daemonCommand });
   const acquireLocal = () =>
     acquireDaemonChat(runtime, {
       directory: daemonDirectory,
       command: daemonCommand,
+      daemon,
       openUrl: (url) => shell.openExternal(url),
     }).then(
       (backend) => ({ backend, error: null }),
@@ -155,8 +168,8 @@ async function main() {
             // The daemon's own reason when it is still busy; otherwise the generic one.
             message:
               code === 'Unavailable' && message === olderDaemonMessage
-                ? `${message} Editing remains available.`
-                : 'Moonbase could not start or reach its local chat daemon. Retry; editing remains available.',
+                ? message
+                : 'Moonbase could not start or reach its local daemon. Retry; drafts are kept.',
           }),
         };
       },
@@ -193,26 +206,33 @@ async function main() {
   );
   session.defaultSession.setPermissionCheckHandler(() => false);
 
+  let peekWorkspace = (): WorkspaceHostServiceShape | null => null;
   const requireTrusted = createTrustedDocumentGuard(window, appURL);
   const native = createNativeActions({
     window,
     dialog,
     clipboard,
     shell,
-    capture: (input) =>
-      runApplicationEffect(
-        runtime,
-        Effect.flatMap(WorkspaceNative, (service) => service.capture(input)),
-      ),
-    release: (input) =>
-      runApplicationEffect(
-        runtime,
-        Effect.flatMap(WorkspaceNative, (service) => service.release(input)),
-      ),
+    // Picker and clipboard paths are native; a drop's paths come from the renderer (webUtils), so
+    // the daemon's reserved-path and root-policy check on every import is the authority.
+    capture: async (input) =>
+      (await runApplicationEffect(runtime, host.captureImports(input))).references,
+    // Releasing never starts a daemon: references of one that is not running expire on their own.
+    release: async (input) => {
+      const running = daemon.isRunning() ? peekWorkspace() : null;
+      if (running) await runApplicationEffect(runtime, running.releaseImports(input));
+    },
   });
-  const editorSession = new EditorSession(runtime, client, native, (id, value) => {
-    if (!window.isDestroyed()) window.webContents.send(channels.event, id, value);
-  });
+  const editorSession = new EditorSession(
+    runtime,
+    client,
+    native,
+    (id, value) => {
+      if (!window.isDestroyed()) window.webContents.send(channels.event, id, value);
+    },
+    // Reveal in Finder applies only to files on this Mac, which are the local daemon's.
+    async () => (await readDaemonSession(daemonDirectory).catch(() => undefined))?.host.hostId,
+  );
   const chatBackends = createChatBackends({
     transcript: {
       writeText: async (text) => {
@@ -227,16 +247,16 @@ async function main() {
       error: new ApplicationError({ code: 'Unavailable', message: 'Local chat is starting.' }),
     },
     acquireLocal,
-    // A checkout or worktree the editor approved is granted to the daemon when a chat first uses
-    // it, so a project's docked chat needs no picker.
+    // A project's checkout or worktree is a folder the daemon lets a chat use, so its docked chat
+    // needs no picker; main trusts these for a chat's new worktree.
     isEditorFolder: (path) => editorSession.hasFolder(path),
+    installationId,
+    requestIds: createFileRequestIds(join(userData, 'workspace-v1', 'chat-requests.json')),
+    adoptCheckout: (target) => editorSession.adoptCheckout(target),
     remote,
     emit: (backendId, id, result) => {
       if (!window.isDestroyed()) window.webContents.send(chatChannels.event, id, result, backendId);
     },
-    createWorktree: (root, branch, signal) =>
-      editorSession.createChatWorktree(root, branch, signal),
-    openFolderProject: async (root) => (await editorSession.openFolderProject(root)).root,
     pickFolder: async () => {
       const selection = await dialog.showOpenDialog(window, {
         title: 'Choose a local chat working folder',
@@ -245,6 +265,8 @@ async function main() {
       return selection.canceled ? null : (selection.filePaths[0] ?? null);
     },
   });
+  reachWorkspace = async () => (await chatBackends.getLocalBackend()).workspace;
+  peekWorkspace = () => chatBackends.peekLocalWorkspace();
   const rendererRoot = join(directory, 'renderer');
   protocol.handle('moonbase', async (request) => {
     const url = new URL(request.url);
@@ -300,6 +322,27 @@ async function main() {
           { role: 'hide' },
           { role: 'hideOthers' },
           { role: 'unhide' },
+          { type: 'separator' },
+          {
+            label: 'Restart Daemon…',
+            click: () =>
+              void restartDaemon({
+                daemon,
+                confirm: async () =>
+                  (
+                    await dialog.showMessageBox(window, {
+                      type: 'question',
+                      message: 'Restart the Moonbase daemon?',
+                      detail:
+                        'Running agents stop and resume once it is back. Files and chats are unavailable until then.',
+                      buttons: ['Cancel', 'Restart'],
+                      defaultId: 0,
+                      cancelId: 0,
+                    })
+                  ).response === 1,
+                report: (message) => dialog.showErrorBox('Moonbase daemon', message),
+              }),
+          },
           { type: 'separator' },
           { label: 'Quit Moonbase', accelerator: 'CmdOrCtrl+Q', click: requestQuit },
         ],
