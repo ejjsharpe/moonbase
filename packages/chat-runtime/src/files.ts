@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { chatFileMatchLimit, isChatMentionPath, type ChatOutput } from '@moonbase/contracts/chat';
 import { matchPath, compareMatches } from '@moonbase/contracts/lookup';
@@ -118,6 +118,16 @@ const runListing: ChatFileListingRun = (executable, args, cwd, signal) =>
       settle(Object.assign(Error(`${executable} exited with ${code ?? exitSignal}`), { code }));
     });
   });
+/**
+ * Whether Git can run without side effects. On macOS without the Xcode command-line tools,
+ * `/usr/bin/git` is a stub that offers to install them; `xcode-select -p` only asks.
+ */
+const checkGit = () =>
+  process.platform !== 'darwin'
+    ? Promise.resolve(true)
+    : new Promise<boolean>((resolve) =>
+        execFile('/usr/bin/xcode-select', ['-p'], { timeout: 5000 }, (error) => resolve(!error)),
+      );
 const isNotFound = (error: unknown) => (error as ListingFailure).code === 'ENOENT';
 /** A listing cut short by its size or time budget: what it printed is a partial listing. */
 const isTruncated = (error: unknown) =>
@@ -142,13 +152,14 @@ const makeUnavailableError = () =>
 
 /**
  * Lists a working folder's files the way coding agents do: ripgrep's ignore rules when ripgrep is
- * installed, otherwise Git's tracked and unignored files. The listing is the agent's view of the
- * folder, so it runs on the chat's host.
+ * installed, otherwise Git's tracked and unignored files, when Git can run without prompting to
+ * install anything. The listing is the agent's view of the folder, so it runs on the chat's host.
  */
 export class ChatFileIndex {
   private readonly ripgrep: string;
   private readonly git: string;
   private readonly run: ChatFileListingRun;
+  private readonly canRunGit: () => Promise<boolean>;
   private readonly now: () => number;
   private readonly listings = new Map<string, { at: number; listing: Promise<Listing> }>();
   private readonly closing = new AbortController();
@@ -158,12 +169,15 @@ export class ChatFileIndex {
       ripgrepExecutable?: string;
       gitExecutable?: string;
       run?: ChatFileListingRun;
+      /** Whether Git may run; on macOS, whether the command-line tools are installed. */
+      canRunGit?: () => Promise<boolean>;
       now?: () => number;
     } = {},
   ) {
     this.ripgrep = options.ripgrepExecutable ?? 'rg';
     this.git = options.gitExecutable ?? 'git';
     this.run = options.run ?? runListing;
+    this.canRunGit = options.canRunGit ?? checkGit;
     this.now = options.now ?? Date.now;
   }
   private list(cwd: string): Promise<Listing> {
@@ -206,7 +220,7 @@ export class ChatFileIndex {
       const status = (error as ListingFailure).code;
       if (status === 1) output = { bytes: Buffer.alloc(0), truncated: false };
       else if (status === 2 && stdout?.length) output = { bytes: stdout, truncated: true };
-      else if (!isNotFound(error)) throw makeUnavailableError();
+      else if (!isNotFound(error) || !(await this.canRunGit())) throw makeUnavailableError();
       else
         try {
           output = await this.runPartial(
