@@ -4,7 +4,6 @@ import { ApplicationError } from './errors.ts';
 import { chatManifestPageSize, chatPageSize, chatPreviewBytes } from './chat.ts';
 import { chatProtocolVersion } from './host.ts';
 import {
-  ChatContentChunkDataSchema,
   ChatIdentifierSchema,
   ChatHostTargetSchema,
   ChatLiveTranscriptPartSchema,
@@ -43,6 +42,23 @@ const bytes = (limit: number) =>
   );
 const count = (maximum: number) => Schema.Int.check(Schema.isBetween({ minimum: 0, maximum }));
 const sequence = count(Number.MAX_SAFE_INTEGER);
+const base64 = /^[A-Za-z0-9+/]+={0,2}$/,
+  base64Alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+/**
+ * One chunk of a chunked payload: canonical base64 of 1 to `socketLimits.chunkBytes` bytes,
+ * checked without decoding it.
+ */
+const SocketChunkDataSchema = Schema.String.check(
+  Schema.makeFilter((value) => {
+    if (value.length % 4 || !base64.test(value)) return false;
+    const padding = Number(value.at(-1) === '=') + Number(value.at(-2) === '=');
+    const length = (value.length / 4) * 3 - padding;
+    if (length < 1 || length > socketLimits.chunkBytes) return false;
+    // Canonical: the bits of the last character that the padding leaves unused are zero.
+    const last = base64Alphabet.indexOf(value.at(-1 - padding)!);
+    return (last & ((1 << (2 * padding)) - 1)) === 0;
+  }),
+);
 const digest = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/));
 const cursor = bytes(1024).check(Schema.makeFilter((value) => !!value.trim()));
 /** 32 random bytes in canonical base64url: challenges, nonces and subscription IDs. */
@@ -151,7 +167,7 @@ export const SocketClientMessageSchema = Schema.Union([
     total: Schema.Int.check(
       Schema.isBetween({ minimum: 1, maximum: socketLimits.workspaceRequestBytes }),
     ),
-    data: ChatContentChunkDataSchema,
+    data: SocketChunkDataSchema,
   }),
   struct({ ...seq, type: Schema.Literal('cancel'), id: SocketRequestIdSchema }),
   struct({
@@ -195,7 +211,7 @@ export const SocketChallengeSchema = struct({
 const chunkOf = (limit: number) => ({
   offset: count(limit - 1),
   total: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: limit })),
-  data: ChatContentChunkDataSchema,
+  data: SocketChunkDataSchema,
 });
 const chunk = chunkOf(socketLimits.payloadBytes);
 const update = { ...seq, type: Schema.Literal('update'), subscriptionId: SocketNonceSchema };
