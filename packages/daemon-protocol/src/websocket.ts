@@ -52,6 +52,15 @@ export const encodeWebSocketClose = (code: number, masked = false) => {
 };
 
 const violation = (): never => fail('InvalidInput', 'WebSocket framing is invalid.');
+/** Unmasks a payload in place, four bytes at a time; `payload` must start its own buffer. */
+function unmask(payload: Buffer, mask: Buffer) {
+  const words = payload.length >>> 2;
+  // The mask as a word in this platform's byte order, like the payload's words.
+  const word = new Uint32Array(Uint8Array.from(mask).buffer)[0]!;
+  const view = new Uint32Array(payload.buffer, payload.byteOffset, words);
+  for (let i = 0; i < words; i++) view[i]! ^= word;
+  for (let i = words << 2; i < payload.length; i++) payload[i]! ^= mask[i & 3]!;
+}
 /**
  * Reads frames from received bytes, holding at most one frame of `maximum` bytes. Messages are
  * never fragmented: a data frame without FIN, or a continuation, is refused, so nothing is held
@@ -119,11 +128,9 @@ export class WebSocketReader {
       const start = offset + (masked ? 4 : 0);
       if (this.buffered < start + length) return;
       buffer = this.peek(start + length);
-      const payload = Buffer.from(buffer.subarray(start, start + length));
-      if (masked) {
-        const mask = buffer.subarray(offset, offset + 4);
-        for (let i = 0; i < payload.length; i++) payload[i]! ^= mask[i & 3]!;
-      }
+      const payload = Buffer.allocUnsafeSlow(length);
+      buffer.copy(payload, 0, start, start + length);
+      if (masked) unmask(payload, buffer.subarray(offset, offset + 4));
       this.consume(start + length);
       yield { opcode, payload };
     }
