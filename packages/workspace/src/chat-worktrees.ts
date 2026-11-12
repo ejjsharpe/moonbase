@@ -1,123 +1,99 @@
-import { mkdir, rmdir } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import {
-  ApplicationError,
-  type CheckoutTarget,
-  type CommandInput,
-  type CommandOutput,
-} from '@moonbase/contracts/workspace';
+import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
 import { maximumBranchName } from '@moonbase/contracts/workspace-host-schema';
-import { ensure, requireGit } from './validation.ts';
+import type { Directory } from './filesystem.ts';
+import type { FileHost } from './host.ts';
+import { ensure, fail, requireGit } from './validation.ts';
 
 const branchPattern = /^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)*$/i;
 /** Numbered names tried for a taken branch or location before giving up. */
 const maximumAttempts = 20;
 
-export type ChatWorktreeSteps = {
-  /** Opens (approves) the checkout at `root`, as `openCheckout` does. */
-  open(root: string, signal: AbortSignal): Promise<CheckoutTarget>;
-  list(target: CheckoutTarget, signal: AbortSignal): Promise<CommandOutput<'listWorktrees'>>;
-  create(input: CommandInput<'createWorktree'>, signal: AbortSignal): Promise<CheckoutTarget>;
-  /** Refuses a parent folder the host may not make worktrees in; it may not exist yet. */
-  permitParent(parent: string): Promise<void>;
-};
-
 /**
- * Where a chat's worktrees go: `<main worktree>-worktrees/<branch>`, with `/` in the branch
- * written `-` in the folder. The host derives it, so a client never names where directories are
- * made. A taken branch or location gets a numbered suffix.
+ * Makes a chat's worktree at `<main worktree>-worktrees/<branch>`, with `/` in the branch written
+ * `-` in the folder. The host derives the location, so a client never names where directories are
+ * made. A taken branch or location gets a numbered suffix; `createWorktree` runs one creation per
+ * project at a time, so two never race for a name.
  */
-export class ChatWorktrees {
-  private readonly steps: ChatWorktreeSteps;
-  /** Attempts run one at a time per project, so two never race for a name or a parent folder. */
-  private readonly attempts = new Map<string, Promise<unknown>>();
-  constructor(steps: ChatWorktreeSteps) {
-    this.steps = steps;
-  }
-  async create(
-    { root, branch }: { root: string; branch: string },
-    signal: AbortSignal,
-  ): Promise<CheckoutTarget> {
-    ensure(
-      branchPattern.test(branch) &&
-        branch.length <= maximumBranchName &&
-        !branch.includes('..') &&
-        !branch.endsWith('.lock'),
-      'Choose a simple branch name for the worktree.',
-    );
-    const target = await this.steps.open(root, signal);
-    requireGit(target);
-    const previous = this.attempts.get(target.projectId) ?? Promise.resolve();
-    // Cancelling while queued ends the wait; the next attempt still waits for the one running.
-    const turn = new Promise<void>((done, refuse) => {
-      const cancel = () => refuse(cancelledError());
-      if (signal.aborted) return cancel();
-      signal.addEventListener('abort', cancel, { once: true });
-      void previous.then(() => {
-        signal.removeEventListener('abort', cancel);
-        done();
-      });
-    });
-    const attempt = turn.then(() => this.attempt(target, branch, signal));
-    const settled = Promise.all([previous, attempt.catch(() => {})]).then(() => {});
-    this.attempts.set(target.projectId, settled);
-    void settled.then(() => {
-      if (this.attempts.get(target.projectId) === settled) this.attempts.delete(target.projectId);
-    });
-    return attempt;
-  }
-  private async attempt(target: CheckoutTarget, branch: string, signal: AbortSignal) {
-    cancelled(signal);
-    const { worktrees } = await this.steps.list(target, signal);
-    const parent = `${worktrees.find((worktree) => worktree.main)?.root ?? target.root}-worktrees`;
-    // Checked before anything is made, since the folder doesn't exist yet to check itself.
-    await this.steps.permitParent(parent);
-    cancelled(signal);
-    const madeParent = await mkdir(parent).then(
-      () => true,
-      (error: NodeJS.ErrnoException) => {
-        if (error.code !== 'EEXIST') throw error;
-        return false;
-      },
-    );
-    let prefix = branch;
+export async function makeChatWorktree(
+  host: Pick<FileHost, 'open' | 'directory' | 'worktrees' | 'permitContainer'>,
+  { root, branch }: { root: string; branch: string },
+  signal: AbortSignal,
+): Promise<CheckoutTarget> {
+  ensure(
+    branchPattern.test(branch) &&
+      branch.length <= maximumBranchName &&
+      !branch.includes('..') &&
+      !branch.endsWith('.lock'),
+    'Choose a simple branch name for the worktree.',
+  );
+  const target = await host.open(root, signal);
+  requireGit(target);
+  const { worktrees } = await host.worktrees.listWorktrees(target, signal);
+  const parent = `${worktrees.find((worktree) => worktree.main)?.root ?? target.root}-worktrees`;
+  // Checked before anything is made, since the folder doesn't exist yet to check itself. An empty
+  // one left by a failed creation is kept for the next.
+  await host.permitContainer(parent);
+  if (signal.aborted) fail('Cancelled', 'The worktree was not created.');
+  await mkdir(parent).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'EEXIST') throw error;
+  });
+  const directory = await host.directory(target);
+  let prefix = branch;
+  for (let attempt = 1; ; attempt++) {
+    const name = attempt === 1 ? prefix : `${prefix}-${attempt}`;
+    const clash = await findRefClash(directory, name, signal);
+    // A branch named like one of the name's folders (`chat` for `chat/topic`) blocks it in Git:
+    // use `chat-topic`, which has no folders to clash with.
+    if (clash === 'folder') {
+      prefix = prefix.replaceAll('/', '-');
+      attempt = 0;
+      continue;
+    }
     try {
-      for (let attempt = 1; ; attempt++) {
-        const name = attempt === 1 ? prefix : `${prefix}-${attempt}`;
-        try {
-          return await this.steps.create(
-            {
-              checkout: target,
-              base: 'HEAD',
-              branch: name,
-              location: join(parent, name.replaceAll('/', '-')),
-            },
-            signal,
-          );
-        } catch (error) {
-          if (!ApplicationError.is(error) || ['Cancelled', 'Uncertain'].includes(error.code))
-            throw error;
-          if (error.code === 'Conflict' && attempt < maximumAttempts) continue;
-          // A branch named like the prefix (`chat`) blocks every `chat/…` branch, which Git
-          // refuses (Unavailable): use `chat-…`. That maps to the same location, so any other
-          // refusal of it would only repeat.
-          if (error.code !== 'Unavailable' || !prefix.includes('/')) throw error;
-          prefix = prefix.replaceAll('/', '-');
-          attempt = 0;
-        }
-      }
+      // Branches inside the name (`chat/topic` for `chat`) block it as a taken one would.
+      if (clash === 'inside') fail('Conflict', `Branches inside ${name}/ already exist.`);
+      return await host.worktrees.createWorktree(
+        {
+          checkout: target,
+          base: 'HEAD',
+          branch: name,
+          location: join(parent, name.replaceAll('/', '-')),
+        },
+        signal,
+      );
     } catch (error) {
-      // An empty folder this attempt made is removed; one holding other worktrees is kept.
-      if (madeParent) await rmdir(parent).catch(() => {});
+      if (ApplicationError.is(error) && error.code === 'Conflict' && attempt < maximumAttempts)
+        continue;
       throw error;
     }
   }
 }
 
-function cancelledError() {
-  return new ApplicationError({ code: 'Cancelled', message: 'The worktree was not created.' });
-}
-
-function cancelled(signal: AbortSignal) {
-  if (signal.aborted) throw cancelledError();
+/**
+ * How existing branches block `name` as a folder/file clash in Git's ref store: one named like a
+ * folder of it (`folder`), or ones inside it (`inside`).
+ */
+async function findRefClash(
+  directory: Directory,
+  name: string,
+  signal: AbortSignal,
+): Promise<'folder' | 'inside' | undefined> {
+  const parts = name.split('/');
+  const folders = parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join('/'));
+  // A pattern matches its ref and every ref inside it.
+  const listed = (
+    await directory.git(
+      ['for-each-ref', '--format=%(refname)', ...[...folders, name].map((n) => `refs/heads/${n}`)],
+      undefined,
+      signal,
+    )
+  )
+    .toString()
+    .split('\n');
+  if (listed.some((ref) => folders.some((folder) => ref === `refs/heads/${folder}`)))
+    return 'folder';
+  if (listed.some((ref) => ref.startsWith(`refs/heads/${name}/`))) return 'inside';
+  return undefined;
 }

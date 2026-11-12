@@ -1,14 +1,12 @@
 import { accessSync, constants, statSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Effect, Stream } from 'effect';
-import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
-import { ApplicationError } from '@moonbase/contracts/errors';
 import type { FolderApprovals } from '@moonbase/contracts/daemon';
 import type { RootPredicate } from '@moonbase/workspace';
 import type { DaemonSettings } from '@moonbase/chat-runtime/host-configuration';
-import type { IdleMonitor } from './idle.ts';
+import { describeFailure } from './failure.ts';
+import type { DaemonLog } from './log.ts';
 
 const executable = (path: string) => {
   try {
@@ -38,6 +36,26 @@ export function findFilesystemHelper(
   ].find(executable);
 }
 
+/**
+ * The ripgrep that chat file search and the workspace both use: the app's `workspace/ripgrep/rg`
+ * beside the `daemon/` folder of the bundle that `entry` names, else the first `rg` on `path`'s
+ * absolute folders, as when run from source or on a host without the app. Absent when neither
+ * holds an executable file: chat search then lists with Git and the workspace has no search.
+ */
+export function findRipgrep(
+  entry: string | URL,
+  path = process.env.PATH ?? '',
+): string | undefined {
+  return [
+    fileURLToPath(new URL('../workspace/ripgrep/rg', entry)),
+    ...path
+      .split(':')
+      .filter((folder) => isAbsolute(folder))
+      .map((folder) => join(folder, 'rg')),
+  ].find(executable);
+}
+
+// Folded as APFS compares names: a worktree location's parent need not be spelled as its real path.
 const isInside = (outer: string, path: string) => {
   const [a, b] = [outer.normalize('NFC').toLowerCase(), path.normalize('NFC').toLowerCase()];
   return b === a || b.startsWith(a === '/' ? '/' : `${a}/`);
@@ -64,61 +82,41 @@ export async function createRootPolicy(
     join(data, 'workspace'),
     ...(settings.credentialKey?.source === 'file' ? [settings.credentialKey.path] : []),
   ];
-  const withinData = (real: string) => isInside(data, real) && !isInside(chats, real);
   return {
     reserved,
+    // A host's roots neither hold nor sit inside the data directory (checked at startup), and
+    // `folders` has only real paths under them, so nothing it allows is inside the data directory.
     allowRoot:
       settings.mode === 'host'
-        ? async (real, requested) =>
-            real === requested && !withinData(real) && (await folders.has(real))
-        : (real) => !withinData(real),
+        ? (real, requested) => real === requested && folders.has(real)
+        : (real) => !isInside(data, real) || isInside(chats, real),
   };
 }
 
 /**
- * Counts each workspace call as a client using the daemon and refuses new calls and watches once
- * `isStopping()` is true; calls already running carry on until the workspace closes.
+ * Closes the workspace file host, waiting at most `deadlineMs`. A close that fails (a stale lock,
+ * say) or never finishes (a helper that never exits) is logged by code and shutdown goes on, so it
+ * can't keep the daemon, and with it the directory's lock, from exiting.
  */
-export function guardWorkspace(
-  host: WorkspaceHostServiceShape,
-  { isStopping, idle }: { isStopping(): boolean; idle?: IdleMonitor },
-): WorkspaceHostServiceShape {
-  const stopping = () =>
-    Effect.fail(
-      new ApplicationError({
-        code: 'Unavailable',
-        message: 'The daemon is stopping.',
-      }),
-    );
-  const counted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.suspend(() => {
-      if (!idle) return effect;
-      idle.begin();
-      return effect.pipe(Effect.ensuring(Effect.sync(() => idle.end())));
-    });
-  const guarded = Object.fromEntries(
-    Object.entries(host).map(([name, call]) => [
-      name,
-      name === 'watch'
-        ? (input: never) =>
-            Stream.unwrap(
-              Effect.suspend(() => {
-                if (isStopping()) return stopping();
-                idle?.begin();
-                return Effect.succeed(
-                  (call as WorkspaceHostServiceShape['watch'])(input).pipe(
-                    Stream.ensuring(Effect.sync(() => idle?.end())),
-                  ),
-                );
-              }),
-            )
-        : (input: never) =>
-            Effect.suspend(() =>
-              isStopping()
-                ? stopping()
-                : counted((call as unknown as (input: never) => Effect.Effect<unknown>)(input)),
-            ),
-    ]),
+export async function closeWorkspace(
+  dispose: () => Promise<void>,
+  { deadlineMs, log }: { deadlineMs: number; log: Pick<DaemonLog, 'write'> },
+) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => resolve('timeout'), deadlineMs);
+  });
+  const closing = dispose().then(
+    () => 'closed' as const,
+    (error: unknown) => {
+      log.write({ event: 'workspace', reason: 'close-failed', code: describeFailure(error).code });
+      return 'closed' as const;
+    },
   );
-  return guarded as WorkspaceHostServiceShape;
+  try {
+    if ((await Promise.race([closing, deadline])) === 'timeout')
+      log.write({ event: 'workspace', reason: 'close-timeout' });
+  } finally {
+    clearTimeout(timer);
+  }
 }

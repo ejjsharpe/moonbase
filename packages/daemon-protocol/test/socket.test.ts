@@ -170,6 +170,7 @@ async function serve(
     sources?: Partial<SocketSources>;
     clock?: SocketClock;
     workspace?: WorkspaceHostClient;
+    admit?: () => () => void;
   } = {},
 ) {
   const token = P.nonce(),
@@ -187,6 +188,7 @@ async function serve(
         },
         ...(options.clock ? { clock: options.clock } : {}),
         ...(options.workspace ? { workspace: options.workspace } : {}),
+        ...(options.admit ? { admit: options.admit } : {}),
       },
     ).pipe(Effect.provideService(Scope.Scope, scope)),
   );
@@ -1629,4 +1631,48 @@ test('a cancelled read frees its place on the daemon at once and the client’s 
   assert.equal(replies.get('large')!.value!.text!.length, 15 * 1024 * 1024);
   // One reply per request: the dropped one never follows.
   assert.deepEqual(order.toSorted(), ['after', 'large', 'small']);
+});
+
+test('a daemon admits each request and health probe until it is answered, past its connection, and its refusal is the reply', async (t) => {
+  const source = controlledClient(),
+    held = Promise.withResolvers<void>();
+  source.handlers.sendChat = () => held.promise;
+  let admissions = 0,
+    open = 0,
+    refusing = false;
+  const admit = () => {
+    if (refusing) throw new ApplicationError({ code: 'Unavailable', message: 'Stopping.' });
+    admissions++;
+    open++;
+    return () => void open--;
+  };
+  const { endpoint, token } = await serve(t, source.client, { admit });
+  const socket = await connectDaemonSocket(endpoint);
+  // A mutation runs to completion after its connection closes, and stays admitted until then.
+  const sending = socket
+    .request('sendChat', { target, requestId: 'held', text: 'Hold this' })
+    .catch(() => {});
+  await until(async () => source.calls.includes('sendChat'), Boolean);
+  socket.close();
+  await sending;
+  assert.equal(open, 1);
+  held.resolve();
+  await until(
+    async () => open,
+    (count) => count === 0,
+  );
+  await Effect.runPromise(checkHostHealth({ origin: endpoint.origin, token, expected: host }));
+  assert.equal(admissions, 2);
+  assert.equal(open, 0);
+
+  // A refused request or probe never reaches the service.
+  refusing = true;
+  const before = source.calls.length;
+  const second = await connectDaemonSocket(endpoint);
+  t.after(() => second.close());
+  await assert.rejects(second.request('getChat', { target }), { code: 'Unavailable' });
+  await assert.rejects(
+    Effect.runPromise(checkHostHealth({ origin: endpoint.origin, token, expected: host })),
+  );
+  assert.deepEqual(source.calls.slice(before), []);
 });
