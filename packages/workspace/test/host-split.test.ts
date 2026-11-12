@@ -433,6 +433,22 @@ test('createWorktree and initializeRepository replay their first outcome for one
       Effect.runPromise(host.createWorktree(retried), { signal: AbortSignal.abort() }),
     );
     assert.equal((await Effect.runPromise(host.createWorktree(retried))).vcs, 'git');
+    // A failure after Git already added the worktree is cleaned up and equally retryable.
+    const hook = join(h.root, '.git', 'hooks', 'post-checkout');
+    writeFileSync(hook, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    const flaky = {
+      ...request,
+      requestId: 'flaky-1',
+      branch: 'feature/five',
+      location: join(h.base, 'five'),
+    };
+    await assert.rejects(Effect.runPromise(host.createWorktree(flaky)), (error: unknown) => {
+      assert.ok(ApplicationError.is(error));
+      assert.equal(error.code, 'Unavailable');
+      return true;
+    });
+    rmSync(hook);
+    assert.equal((await Effect.runPromise(host.createWorktree(flaky))).vcs, 'git');
   } finally {
     await h.close();
   }
