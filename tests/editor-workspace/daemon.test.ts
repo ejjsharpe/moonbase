@@ -74,10 +74,7 @@ test("two clients of one daemon share a checkout: a move re-paths the other draf
     await makeConnectionClient(connection).command('connect', { profileId: 'loopback' });
     const host = await connection.runPromise(WorkspaceHostService);
     const runtime = ManagedRuntime.make(
-      WorkspaceRecoveryLive(
-        { dataDirectory: join(base, name), installationId: name },
-        host,
-      ),
+      WorkspaceRecoveryLive({ dataDirectory: join(base, name), installationId: name }, host),
     );
     disposers.push(() => runtime.dispose());
     const model = await runtime.runPromise(
