@@ -500,6 +500,22 @@ test('createWorktree and initializeRepository replay their first outcome for one
       Effect.runPromise(host.createWorktree(retried), { signal: AbortSignal.abort() }),
     );
     assert.equal((await Effect.runPromise(host.createWorktree(retried))).vcs, 'git');
+    // A failure after Git already added the worktree is cleaned up and equally retryable.
+    const hook = join(h.root, '.git', 'hooks', 'post-checkout');
+    writeFileSync(hook, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    const flaky = {
+      ...request,
+      requestId: 'flaky-1',
+      branch: 'feature/five',
+      location: join(h.base, 'five'),
+    };
+    await assert.rejects(Effect.runPromise(host.createWorktree(flaky)), (error: unknown) => {
+      assert.ok(ApplicationError.is(error));
+      assert.equal(error.code, 'Unavailable');
+      return true;
+    });
+    rmSync(hook);
+    assert.equal((await Effect.runPromise(host.createWorktree(flaky))).vcs, 'git');
   } finally {
     await h.close();
   }
@@ -610,6 +626,14 @@ test('loading recovery stops waiting on a host that does not answer and still re
       sources,
     });
     assert.equal(trashed.outcome, 'completed');
+    // The skipped row may hold a draft at a moved path, so the checkout is marked incomplete.
+    const marks = new DatabaseSync(join(h.base, 'alice', 'moonbase-workspace-v1.sqlite'));
+    try {
+      const gaps = marks.prepare("SELECT body FROM records WHERE bucket='gaps'").all();
+      assert(gaps.some((row) => String(row.body).includes(checkout.checkoutId)));
+    } finally {
+      marks.close();
+    }
   } finally {
     await h.close();
   }

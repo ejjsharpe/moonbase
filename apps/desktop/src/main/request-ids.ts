@@ -14,15 +14,24 @@ export type RequestIds = {
 
 type Entry = { requestId: string; at: number };
 
+/** An entry from the future (the clock moved back) is expired too. */
+const isLive = (entry: Entry, now: number) => {
+  const age = now - entry.at;
+  return age >= 0 && age < requestIdLifetimeMs;
+};
+
 export function createMemoryRequestIds(now: () => number = Date.now): RequestIds {
   const ids = new Map<string, Entry>();
   return {
     get: (key) => {
       const entry = ids.get(key);
-      if (entry && now() - entry.at >= requestIdLifetimeMs) ids.delete(key);
+      if (entry && !isLive(entry, now())) ids.delete(key);
       return ids.get(key)?.requestId;
     },
-    put: (key, requestId) => void ids.set(key, { requestId, at: now() }),
+    put: (key, requestId) => {
+      // Reusing an ID leaves its window where it started.
+      if (ids.get(key)?.requestId !== requestId) ids.set(key, { requestId, at: now() });
+    },
     delete: (key) => void ids.delete(key),
   };
 }
@@ -38,7 +47,7 @@ export function createFileRequestIds(file: string, now: () => number = Date.now)
           (entry): entry is [string, Entry] =>
             typeof entry[1]?.requestId === 'string' &&
             typeof entry[1]?.at === 'number' &&
-            now() - entry[1].at < requestIdLifetimeMs,
+            isLive(entry[1], now()),
         ),
       );
     } catch {
@@ -53,7 +62,11 @@ export function createFileRequestIds(file: string, now: () => number = Date.now)
   };
   return {
     get: (key) => read()[key]?.requestId,
-    put: (key, requestId) => write({ ...read(), [key]: { requestId, at: now() } }),
+    put: (key, requestId) => {
+      const ids = read();
+      if (ids[key]?.requestId === requestId) return;
+      write({ ...ids, [key]: { requestId, at: now() } });
+    },
     delete: (key) => {
       const ids = read();
       if (!(key in ids)) return;

@@ -64,7 +64,11 @@ export class CheckoutFolders {
       signal,
       AbortSignal.timeout(this.deadlineMs * repositoriesPerCheck),
     ]);
-    for (const approval of named) if (await this.holds(approval.target, total)) return true;
+    for (const approval of named) {
+      if (total.aborted) return false;
+      const budget = AbortSignal.any([total, AbortSignal.timeout(this.deadlineMs)]);
+      if (await this.holds(approval.target, budget)) return true;
+    }
     // One approved checkout per repository is enough to ask Git for its worktrees.
     const asked = new Set<string>();
     for (const approval of approvals) {
@@ -72,10 +76,11 @@ export class CheckoutFolders {
       if (!common || asked.has(common.path) || approval.target.vcs !== 'git') continue;
       if (total.aborted) return false;
       const budget = AbortSignal.any([total, AbortSignal.timeout(this.deadlineMs)]);
-      const found = await until(budget, this.findIn(approval, common, path, budget), false);
-      if (found) return true;
-      // A repository that ran out of its budget is not asked again by a later approval.
+      // An approval that no longer holds says nothing about the repository: a later approval of
+      // it may still be valid, so it is not marked as asked.
+      if (!(await this.holds(approval.target, budget))) continue;
       asked.add(common.path);
+      if (await until(budget, this.findIn(approval, common, path, budget), false)) return true;
     }
     return false;
   }
@@ -85,7 +90,6 @@ export class CheckoutFolders {
     path: string,
     budget: AbortSignal,
   ) {
-    if (!(await this.holds(approval.target, budget))) return false;
     const listed = await this.steps.list(approval.target, budget).catch(() => []);
     for (const worktree of listed)
       if (worktree.root === path && (await this.belongs(path, worktree, common, budget)))
@@ -95,7 +99,9 @@ export class CheckoutFolders {
   private holds(target: CheckoutTarget, deadline: AbortSignal) {
     return until(
       deadline,
-      this.steps.verify(target).then(() => true),
+      Promise.resolve()
+        .then(() => this.steps.verify(target))
+        .then(() => true),
       false,
     );
   }

@@ -28,7 +28,10 @@ import { fixture as runtimeFixture, manualClock, session, until } from './runtim
 // The daemon serves chat; these cases need none of its other operations.
 const unserved: DaemonClient = {
   command: async () => {
-    throw new ApplicationError({ code: 'Unavailable', message: 'Not served here.' });
+    throw new ApplicationError({
+      code: 'Unavailable',
+      message: 'Not served here.',
+    });
   },
 };
 /** A daemon over a local-mode runtime that can stop and start again on its port. */
@@ -98,7 +101,12 @@ async function daemon(t: TestContext, workspace?: WorkspaceHostClient) {
       token,
       expected: session.host,
       connectionId: 'one',
-      health: { ...session.host, protocol: 2, version: '0.1.0', capabilities: [] },
+      health: {
+        ...session.host,
+        protocol: 2,
+        version: '0.1.0',
+        capabilities: [],
+      },
     }),
   };
 }
@@ -116,7 +124,12 @@ function remote(
   let endpoint = d.endpoint();
   const changes = new Set<() => void>();
   const unavailable = () =>
-    Effect.fail(new ApplicationError({ code: 'Unavailable', message: 'Not served here.' }));
+    Effect.fail(
+      new ApplicationError({
+        code: 'Unavailable',
+        message: 'Not served here.',
+      }),
+    );
   const connection = Layer.succeed(ConnectionService, {
     getConnection: unavailable,
     connect: unavailable,
@@ -126,7 +139,10 @@ function remote(
         Effect.acquireRelease(
           Effect.sync(() => {
             const publish = () =>
-              void Queue.offerUnsafe(queue, { state: 'disconnected', connectionId: null } as never);
+              void Queue.offerUnsafe(queue, {
+                state: 'disconnected',
+                connectionId: null,
+              } as never);
             changes.add(publish);
             return publish;
           }),
@@ -185,7 +201,11 @@ test('one client shares one socket and one list watch, and chats another client 
   const closeOther = b.chat.watchChatList({ session }, other.receive, other.fail);
   t.after(() => closeOther().catch(() => {}));
   await until(async () => other.values.length, Boolean);
-  const empty = { list: { conversations: [], nextCursor: null }, changed: [], dropped: 0 };
+  const empty = {
+    list: { conversations: [], nextCursor: null },
+    changed: [],
+    dropped: 0,
+  };
   assert.deepEqual(list.values[0], { ...empty, reset: false });
   assert.deepEqual(other.values[0], { ...empty, reset: false });
   const created = await a.chat.command('createChat', {
@@ -330,50 +350,59 @@ test('a workspace call or watch for another host is refused before it is sent, a
   assert.deepEqual(calls, ['openCheckout']);
 });
 
-test('a mutation past its deadline keeps its place until the daemon replies, so chat keeps its room', async (t) => {
+test('a mutation past its deadline keeps its place until the daemon replies, status calls keep theirs, a wait for a place ends at its deadline, and closing the connection frees them', async (t) => {
   const answers: (() => void)[] = [];
   const workspace: WorkspaceHostClient = {
-    command: () => new Promise<never>((resolve) => answers.push(() => resolve(undefined as never))),
+    command: (operation) =>
+      operation === 'saveStatus'
+        ? Promise.resolve({ kind: 'not-started' } as never)
+        : new Promise<never>((resolve) => answers.push(() => resolve(undefined as never))),
     watch: () => () => Promise.resolve(),
   };
   const d = await daemon(t, workspace);
   const client = remote(t, d, undefined, true, true);
   const host = await client.workspace();
   const limit = socketLimits.workspaceRequests;
+  const ownCheckout = {
+    vcs: 'none',
+    hostId: session.host.hostId,
+    checkoutId: 'checkout-1',
+    projectId: 'project-1',
+    root: '/work',
+  } as const;
+  const identity = { installationId: 'install', clientId: 'client' };
   const acknowledge = (requestId: string) =>
-    client.run(
-      Effect.flip(
-        host.acknowledgeSave({ installationId: 'install', clientId: 'client', requestId }),
-      ),
-    );
+    client.run(Effect.flip(host.acknowledgeSave({ ...identity, requestId })));
   const hung = Array.from({ length: limit }, (_, i) => acknowledge(`hung-${i}`));
   await until(
     async () => answers.length,
     (count) => count === limit,
   );
-  const waiting = client.run(
-    host.acknowledgeSave({ installationId: 'install', clientId: 'client', requestId: 'waiting' }),
-  );
+  const read = () =>
+    client.run(Effect.flip(host.readFile({ checkout: ownCheckout, path: 'a.txt' })));
+  const waitingRead = read();
+  // A status call runs although every other place is held.
+  assert.deepEqual(await client.run(host.saveStatus({ ...identity, requestId: 'hung-0' })), {
+    kind: 'not-started',
+  });
   await client.advance(120_000);
   assert.deepEqual(
     (await Promise.all(hung)).map((error) => error.code),
     Array(limit).fill('Uncertain'),
   );
-  // The caller gave up, yet the daemon still counts them: the next one is not sent.
+  // The place was never obtained, so the read was never sent.
+  assert.equal((await waitingRead).code, 'Unavailable');
   assert.equal(answers.length, limit);
-  const created = await client.chat.command('createChat', {
-    session,
-    requestId: 'create',
-    title: 'Beside hung mutations',
-    settings: d.f.settings,
-  });
-  assert.ok(created.conversation.target);
-  // Late replies free their places.
-  for (const answer of answers.splice(0)) answer();
+  // A late reply frees its place.
+  answers.shift()!();
+  const after = acknowledge('after');
   await until(
     async () => answers.length,
-    (count) => count === 1,
+    (count) => count === limit,
   );
-  answers.splice(0).forEach((answer) => answer());
-  await waiting;
+  // Closing the connection frees the rest: the waiting read gets a place and fails at once.
+  const waiting = read();
+  await d.stop();
+  assert.ok((await waiting).code);
+  await after;
 });

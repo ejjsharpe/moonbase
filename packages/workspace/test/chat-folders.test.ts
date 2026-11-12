@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { test } from 'node:test';
 import { Effect, ManagedRuntime } from 'effect';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
@@ -304,6 +304,24 @@ test('a folder is an approved checkout root or a worktree Git lists for one, che
     assert.equal(await has(plain), true);
     allowed = false;
     assert.equal(await has(plain), false);
+  } finally {
+    await f.close();
+  }
+});
+
+test('a valid approval of a repository counts although an earlier approval of it went stale', async () => {
+  const f = setup({});
+  try {
+    const host = await f.host(),
+      folders = await f.folders();
+    const root = f.repository('repo');
+    const [gone, kept, listed] = ['gone', 'kept', 'listed'].map((name) => join(f.base, name));
+    for (const path of [gone!, kept!, listed!])
+      f.git(root, 'worktree', 'add', '-q', '-b', basename(path), path);
+    await run(host.openCheckout({ root: gone! }));
+    await run(host.openCheckout({ root: kept! }));
+    f.git(root, 'worktree', 'remove', '--force', gone!);
+    assert.equal(await run(folders.has(listed!)), true);
   } finally {
     await f.close();
   }
