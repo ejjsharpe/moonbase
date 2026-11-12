@@ -15,8 +15,21 @@ export type CheckoutFolderSteps = {
   gitEntry(root: string): { pointer: string | null } | null;
 };
 
-/** How long one folder check may spend asking Git, across every approved repository. */
+/** How long one approved repository may take to answer; a check allows three such budgets in all. */
 const defaultDeadlineMs = 10_000;
+const repositoriesPerCheck = 3;
+
+/** Settles with `fallback` once `signal` aborts, so a step that never answers cannot hold the check. */
+function until<T>(signal: AbortSignal, promise: Promise<T>, fallback: T): Promise<T> {
+  if (signal.aborted) return Promise.resolve(fallback);
+  return new Promise<T>((resolve) => {
+    const abort = () => resolve(fallback);
+    signal.addEventListener('abort', abort, { once: true });
+    promise
+      .then(resolve, () => resolve(fallback))
+      .finally(() => signal.removeEventListener('abort', abort));
+  });
+}
 
 const realPath = (path: string) => {
   try {
@@ -44,38 +57,62 @@ export class CheckoutFolders {
     const named = approvals.filter((approval) => approval.target.root === path);
     // A root spelled differently from its real path, or no longer a directory, is not a folder.
     if (!isDirectoryNamedByRealPath(path)) return false;
-    for (const approval of named) if (await this.holds(approval.target)) return true;
-    // One deadline bounds the whole check, so many approvals cannot stall it; running out of time
+    // A total cap bounds the whole check and each repository has its own budget, so a hung
+    // repository cannot starve a healthy one yet many cannot stall the check. Running out of time
     // is "not a folder".
-    const deadline = AbortSignal.any([signal, AbortSignal.timeout(this.deadlineMs)]);
+    const total = AbortSignal.any([
+      signal,
+      AbortSignal.timeout(this.deadlineMs * repositoriesPerCheck),
+    ]);
+    for (const approval of named) if (await this.holds(approval.target, total)) return true;
     // One approved checkout per repository is enough to ask Git for its worktrees.
     const asked = new Set<string>();
     for (const approval of approvals) {
       const common = approval.common;
       if (!common || asked.has(common.path) || approval.target.vcs !== 'git') continue;
-      if (deadline.aborted) return false;
-      if (!(await this.holds(approval.target))) continue;
+      if (total.aborted) return false;
+      const budget = AbortSignal.any([total, AbortSignal.timeout(this.deadlineMs)]);
+      const found = await until(budget, this.findIn(approval, common, path, budget), false);
+      if (found) return true;
+      // A repository that ran out of its budget is not asked again by a later approval.
       asked.add(common.path);
-      const listed = await this.steps.list(approval.target, deadline).catch(() => []);
-      for (const worktree of listed)
-        if (worktree.root === path && (await this.belongs(path, worktree, common))) return true;
     }
     return false;
   }
-  private async holds(target: CheckoutTarget) {
-    try {
-      await this.steps.verify(target);
-      return true;
-    } catch {
-      return false;
-    }
+  private async findIn(
+    approval: Approval,
+    common: { path: string },
+    path: string,
+    budget: AbortSignal,
+  ) {
+    if (!(await this.holds(approval.target, budget))) return false;
+    const listed = await this.steps.list(approval.target, budget).catch(() => []);
+    for (const worktree of listed)
+      if (worktree.root === path && (await this.belongs(path, worktree, common, budget)))
+        return true;
+    return false;
+  }
+  private holds(target: CheckoutTarget, deadline: AbortSignal) {
+    return until(
+      deadline,
+      this.steps.verify(target).then(() => true),
+      false,
+    );
   }
   /**
    * Whether the folder Git lists is still that worktree of the repository: its main working tree
    * has the repository's own `.git` folder, a linked one a `.git` file pointing into the
    * repository's `worktrees/` folder whose `gitdir` points back at this folder.
    */
-  private async belongs(path: string, worktree: Worktree, common: { path: string }) {
+  private belongs(
+    path: string,
+    worktree: Worktree,
+    common: { path: string },
+    deadline: AbortSignal,
+  ) {
+    return until(deadline, this.checkBelongs(path, worktree, common), false);
+  }
+  private async checkBelongs(path: string, worktree: Worktree, common: { path: string }) {
     try {
       // Git lists what a repository's files say, so the folder meets the same policy as an opened one.
       await this.steps.permit(path);

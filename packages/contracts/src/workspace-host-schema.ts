@@ -1,7 +1,7 @@
 import * as Schema from 'effect/Schema';
 import { ApplicationError } from './errors.ts';
 import { ChatTargetSchema, chatReplyErrorCodes } from './chat-schema.ts';
-import { AbsolutePathSchema, FolderPathSchema } from './daemon-schema.ts';
+import { AbsolutePathSchema } from './daemon-schema.ts';
 import type { HostCommand, HostInput, HostOutput } from './workspace-host.ts';
 import { array, optional, struct, voidResult } from './schema.ts';
 import {
@@ -133,7 +133,7 @@ export const hostInputSchemas = {
   createChatWorktree: struct({
     installationId,
     requestId: WorkspaceIdentifierSchema,
-    root: FolderPathSchema,
+    root: AbsolutePathSchema,
     branch: Schema.String.check(Schema.isMaxLength(maximumBranchName)),
   }),
   /** Opens the folder the daemon made for a chat as a checkout, then marks the chat as in a project. */
