@@ -1,36 +1,64 @@
-import assert from 'node:assert/strict';
-import { build } from 'esbuild';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { checkBoundaries, readRepository } from './boundaries.mjs';
-import './test-boundaries.mjs';
+import assert from "node:assert/strict";
+import { build } from "esbuild";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { checkBoundaries, readRepository } from "./boundaries.mjs";
+import "./test-boundaries.mjs";
 
-const root = fileURLToPath(new URL('../', import.meta.url));
+const root = fileURLToPath(new URL("../", import.meta.url));
 assert.deepEqual(checkBoundaries(readRepository(root)), []);
-console.log('Verified final source ownership, public exports and cycles; no migration exceptions.');
+console.log(
+  "Verified final source ownership, public exports and cycles; no migration exceptions.",
+);
+
+{
+  const read = (path) => readFileSync(new URL(path, `file://${root}`), "utf8");
+  const pins = {
+    "package.json": JSON.parse(read("package.json")).devDependencies?.electron,
+    "apps/desktop/package.json": JSON.parse(read("apps/desktop/package.json"))
+      .devDependencies?.electron,
+    "apps/desktop/scripts/package.mjs": read(
+      "apps/desktop/scripts/package.mjs",
+    ).match(/electronVersion:\s*'([^']+)'/)?.[1],
+    "packages/workspace/src/workspace.ts": read(
+      "packages/workspace/src/workspace.ts",
+    ).match(/versions\.electron === '([^']+)'/)?.[1],
+  };
+  assert(
+    Object.values(pins).every(
+      (version) => version !== undefined && version === pins["package.json"],
+    ),
+    `Electron pins must all match; update them together: ${JSON.stringify(pins)}`,
+  );
+  console.log(
+    "Verified the Electron version pins agree, including the workspace runtime gate.",
+  );
+}
 
 for (const entry of [
-  'workspace',
-  'host',
-  'connection',
-  'chat',
-  'providers',
-  'daemon',
-  'errors',
-  'common',
-  'lookup',
+  "workspace",
+  "host",
+  "connection",
+  "chat",
+  "providers",
+  "daemon",
+  "errors",
+  "common",
+  "lookup",
 ]) {
   const path = `@moonbase/contracts/${entry}`;
   const result = await build({
     entryPoints: [path],
     bundle: true,
-    platform: 'browser',
+    platform: "browser",
     write: false,
     metafile: true,
   });
   assert(
-    Object.keys(result.metafile.inputs).every((input) => input.startsWith('packages/contracts/')),
-    'DTO/client entries must emit no Effect/platform dependency',
+    Object.keys(result.metafile.inputs).every((input) =>
+      input.startsWith("packages/contracts/"),
+    ),
+    "DTO/client entries must emit no Effect/platform dependency",
   );
   assert(
     !/node:|electron|@moonbase\/(workspace|chat-runtime|daemon-protocol|ssh)/.test(
@@ -38,24 +66,24 @@ for (const entry of [
     ),
   );
 }
-console.log('Verified browser-only command contracts.');
+console.log("Verified browser-only command contracts.");
 
 for (const entry of [
-  'chat-schema',
-  'chat-validation',
-  'workspace-schema',
-  'connection-schema',
-  'host-schema',
-  'daemon-schema',
-  'providers-schema',
-  'error-schema',
-  'schema',
-  'services',
+  "chat-schema",
+  "chat-validation",
+  "workspace-schema",
+  "connection-schema",
+  "host-schema",
+  "daemon-schema",
+  "providers-schema",
+  "error-schema",
+  "schema",
+  "services",
 ]) {
   const result = await build({
     entryPoints: [`@moonbase/contracts/${entry}`],
     bundle: true,
-    platform: 'browser',
+    platform: "browser",
     write: false,
     metafile: true,
   });
@@ -78,33 +106,37 @@ const typeOnly = await build({
       export type Clients = [EditorClient, ChatClient, ConnectionClient];
     `,
     resolveDir: root,
-    loader: 'ts',
+    loader: "ts",
   },
   bundle: true,
-  platform: 'browser',
-  format: 'esm',
+  platform: "browser",
+  format: "esm",
   write: false,
   metafile: true,
 });
-assert.deepEqual(Object.keys(typeOnly.metafile.inputs), ['<stdin>']);
+assert.deepEqual(Object.keys(typeOnly.metafile.inputs), ["<stdin>"]);
 assert.equal(
   typeOnly.outputFiles[0].text,
-  '',
-  'type-only client imports must emit no runtime code',
+  "",
+  "type-only client imports must emit no runtime code",
 );
-console.log('Verified schema entries bundle only contracts and portable Effect.');
+console.log(
+  "Verified schema entries bundle only contracts and portable Effect.",
+);
 
 const smoke = await build({
   absWorkingDir: root,
-  entryPoints: ['scripts/fixtures/headless.ts'],
+  entryPoints: ["scripts/fixtures/headless.ts"],
   bundle: true,
-  platform: 'browser',
-  format: 'esm',
+  platform: "browser",
+  format: "esm",
   write: false,
   metafile: true,
 });
 assert(
-  Object.keys(smoke.metafile.inputs).some((input) => input.includes('packages/application/src/')),
+  Object.keys(smoke.metafile.inputs).some((input) =>
+    input.includes("packages/application/src/"),
+  ),
 );
 for (const input of Object.keys(smoke.metafile.inputs)) {
   assert(
@@ -117,26 +149,28 @@ for (const input of Object.keys(smoke.metafile.inputs)) {
 console.log(
   `Verified public headless browser consumer (${Object.keys(smoke.metafile.inputs).length} actual bundle inputs).`,
 );
-const consumer = new URL('../test-results/headless/consumer.mjs', import.meta.url);
-mkdirSync(new URL('./', consumer), { recursive: true });
+const consumer = new URL(
+  "../test-results/headless/consumer.mjs",
+  import.meta.url,
+);
+mkdirSync(new URL("./", consumer), { recursive: true });
 writeFileSync(consumer, smoke.outputFiles[0].text);
-assert.deepEqual(await (await import(consumer.href)).checkHeadlessApplication(), [
-  'editor',
-  'chat',
-  'combined',
-]);
+assert.deepEqual(
+  await (await import(consumer.href)).checkHeadlessApplication(),
+  ["editor", "chat", "combined"],
+);
 console.log(
   `Executed emitted headless JavaScript: editor-only, chat-only and combined; ${smoke.outputFiles[0].contents.length} emitted bytes.`,
 );
 
 for (const [entry, owner] of [
-  ['@moonbase/application/chat', 'application'],
-  ['@moonbase/application/editor', 'application'],
+  ["@moonbase/application/chat", "application"],
+  ["@moonbase/application/editor", "application"],
 ]) {
   const result = await build({
     entryPoints: [entry],
     bundle: true,
-    platform: 'browser',
+    platform: "browser",
     write: false,
     metafile: true,
   });
@@ -151,11 +185,13 @@ for (const [entry, owner] of [
     assert(
       module === undefined ||
         module === owner ||
-        ['application', 'contracts', 'effect'].includes(module),
+        ["application", "contracts", "effect"].includes(module),
       `Foreign package reached ${entry}: ${input}`,
     );
     assert(
-      !/packages\/application\/src\/runtime\/(?:handlers|clients)\.ts$/.test(input),
+      !/packages\/application\/src\/runtime\/(?:handlers|clients)\.ts$/.test(
+        input,
+      ),
       `Privileged application implementation reached ${entry}: ${input}`,
     );
   }
