@@ -4,7 +4,7 @@
 
 ## Integration
 
-- `WorkspaceHostLive(config)` provides `WorkspaceHostService` (everything except recovery, plus `saveStatus`, `acknowledgeSave` and `listOperations`) and the privileged `WorkspaceNative` service for approved native imports. It keeps approvals and journals in `workspace-host.sqlite` in `dataDirectory`.
+- `WorkspaceHostLive(config)` provides `WorkspaceHostService` (everything except recovery, plus `saveStatus`, `acknowledgeSave` and `listOperations`) the privileged `WorkspaceNative` service for approved native imports, and `WorkspaceFolders` (see Chat folders). It keeps approvals and journals in `workspace-host.sqlite` in `dataDirectory`.
 - `WorkspaceRecoveryLive({dataDirectory, installationId}, host)` provides today's full `WorkspaceService` over a host service. It keeps drafts and editor state in `moonbase-workspace-v1.sqlite`, so existing drafts carry.
 - `WorkspaceLocalLive(config)` composes both in one process, as Electron main does; see [`examples/local.ts`](examples/local.ts).
 
@@ -35,6 +35,16 @@ A folder in no Git repository opens as a plain-folder checkout (`vcs: 'none'`), 
 ## Watching
 
 `watch` reports changes under the checkout and, for a repository, in its Git folder, at most every 100 ms. It skips changes that belong to other worktrees of the same repository: files in a worktree nested inside the checkout, another worktree's private Git folder or index, new objects and lock files. Shared refs still count.
+
+## Chat folders
+
+`createChatWorktree({installationId, requestId, root, branch})` opens the checkout at `root`, then makes `branch` from its current commit in a linked worktree at `<main worktree>-worktrees/<branch>` (a `/` in the branch is `-` in the folder). The host derives the location, so a client never names where directories are made. It accepts a simple branch name only; a taken branch or location gets `-2`, `-3` and so on (up to 20 tries), and a branch that blocks a nested name (`chat` blocks `chat/topic`) falls back to `chat-topic`. Creations in one project run one at a time, the policy (`allowRoot`, reserved paths) is applied to the parent of `<main worktree>-worktrees` before anything is made, and a `-worktrees` folder this attempt made is removed if it ends empty. The request is journalled like `createWorktree`: a repeat with the same request ID returns the same checkout, an interrupted one is `Uncertain`.
+
+`turnChatIntoProject({installationId, requestId, target})` asks the injected `chats` (`ChatFolders`) for the chat's own folder, which refuses any folder the daemon didn't make; opens that folder as a checkout (refused if it opens elsewhere, as through a link); and only then marks the chat as in a project, so a failure leaves the chat as it was. It is journalled by request ID, and `Incompatible` without `chats`.
+
+`WorkspaceFolders.has(path)` is true for the root of an approved checkout, or a worktree `git worktree list` gives for an approved Git checkout, when its `.git` entry still belongs to that repository. It re-checks the approval's identity and the root policy on every call, approves nothing and holds no state, so a checkout replaced since it was approved, or a worktree folder swapped for another directory, is not a folder. A daemon uses it so chats need no other grant for the editor's projects.
+
+`captureImports({checkout, clientId, paths})` and `releaseImports` hold native files as single-use references for five minutes, bound to the client and checkout. A source is held to the reserved paths only, not the root policy, so a host-mode daemon sets `nativeImports: false` and both answer `Incompatible`.
 
 ## Worktrees
 

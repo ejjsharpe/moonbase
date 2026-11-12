@@ -20,12 +20,16 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { Store } from './store.ts';
 import { admit, applicationError, type AdmissionOwner } from './admission.ts';
-import { HostJournal } from './host-journal.ts';
+import { HostJournal, type RequestOperation } from './host-journal.ts';
+import { ChatWorktrees } from './chat-worktrees.ts';
+import { CheckoutFolders } from './checkout-folders.ts';
 import {
   hostDecoders,
   type Approval,
   type HostOperationRecord,
+  type HostRequestRecord,
   type HostSaveRecord,
+  type ChatFolders,
   type RootPredicate,
   type WorkspaceConfiguration,
 } from './schema.ts';
@@ -138,15 +142,20 @@ export class FileHost implements AdmissionOwner {
     return this.ownership.operations;
   }
   private readonly allowRoot: RootPredicate | undefined;
+  private readonly chats: ChatFolders | undefined;
+  readonly chatWorktrees: ChatWorktrees;
+  readonly checkoutFolders: CheckoutFolders;
   readonly gitReady: () => Promise<void>;
   constructor(
     config: WorkspaceConfiguration,
     ownership: WorkspaceOwnership,
     now = Date.now,
     allowRoot?: RootPredicate,
+    chats?: ChatFolders,
   ) {
     this.config = config;
     this.allowRoot = allowRoot;
+    this.chats = chats;
     this.gitReady = createGitGate(config.gitExecutable ?? '/usr/bin/git');
     this.ownership = ownership;
     ensureQualifiedRuntime(process.platform, process.versions);
@@ -172,6 +181,21 @@ export class FileHost implements AdmissionOwner {
       (message) =>
         this.cleanupFailures.push(Cause.die(new ApplicationError({ code: 'Uncertain', message }))),
     );
+    this.chatWorktrees = new ChatWorktrees({
+      open: (root, signal) => this.open(root, signal),
+      list: (target, signal) => this.worktrees.listWorktrees(target, signal),
+      create: (input, signal) => this.worktrees.createWorktree(input, signal),
+      permitParent: (parent) => this.permitContainer(parent),
+    });
+    this.checkoutFolders = new CheckoutFolders({
+      approvals: () => this.store.all<Approval>('approvals'),
+      verify: async (target) => {
+        await this.directory(target);
+      },
+      list: async (target, signal) =>
+        (await this.worktrees.listWorktrees(target, signal)).worktrees,
+      gitEntry: (root) => this.gitEntry(root),
+    });
     this.store = new Store(config.dataDirectory, {
       file: 'workspace-host.sqlite',
       applicationId: 1296193364,
@@ -217,6 +241,8 @@ export class FileHost implements AdmissionOwner {
         fn: (input: HostInput<K>, signal: AbortSignal) => Promise<HostOutput<K>>,
         persistence = false,
         lease?: (input: HostInput<K>) => { checkoutId: string; paths: string[] },
+        /** Undoes an output nobody will receive, such as a reply to a cancelled request. */
+        abandoned?: (output: HostOutput<K>, input: HostInput<K>) => void,
       ) =>
       (input: HostInput<K>) =>
         Effect.flatMap(
@@ -226,6 +252,7 @@ export class FileHost implements AdmissionOwner {
               async (signal) => decodeHostOutput(operation, await fn(captured, signal)),
               persistence,
               lease?.(captured),
+              abandoned && ((output) => abandoned(output, captured)),
             ),
         );
     this.service = {
@@ -325,8 +352,32 @@ export class FileHost implements AdmissionOwner {
         },
         true,
       ),
+      createChatWorktree: call<'createChatWorktree'>('createChatWorktree', (input, signal) =>
+        this.createChatWorktree(input, signal),
+      ),
+      turnChatIntoProject: call<'turnChatIntoProject'>('turnChatIntoProject', (input, signal) =>
+        this.turnChatIntoProject(input, signal),
+      ),
+      captureImports: call<'captureImports'>(
+        'captureImports',
+        async (input, signal) => {
+          this.requireNativeImports();
+          return { references: await this.references.capture(input, signal) };
+        },
+        false,
+        undefined,
+        (output, input) => this.references.release({ ...input, references: output.references }),
+      ),
+      releaseImports: call<'releaseImports'>('releaseImports', async (input) => {
+        this.requireNativeImports();
+        this.references.release(input);
+      }),
       watch: (input) => this.observations.watch(input),
     };
+  }
+  private requireNativeImports() {
+    if (this.config.nativeImports === false)
+      fail('Incompatible', 'This host does not accept native imports.');
   }
   effect<A>(
     fn: (signal: AbortSignal) => Promise<A>,
@@ -719,6 +770,53 @@ export class FileHost implements AdmissionOwner {
     if (occupied) return this.journal.replayRequest(id, 'createWorktree', input)!;
     return this.settleRequest(id, input, () => this.worktrees.createWorktree(input, signal));
   }
+  /**
+   * Replays the first outcome of a `createChatWorktree` request ID; a new ID makes the worktree
+   * at the location derived from `root`'s repository.
+   */
+  async createChatWorktree(input: HostInput<'createChatWorktree'>, signal: AbortSignal) {
+    return this.once('createChatWorktree', input, () => this.chatWorktrees.create(input, signal));
+  }
+  /**
+   * Replays the first outcome of a `turnChatIntoProject` request ID. A new ID checks the chat's own
+   * folder is one the daemon made, opens it as a checkout and only then marks the chat, so a
+   * failure leaves the chat as it was; the checkout it returns is the folder's.
+   */
+  async turnChatIntoProject(input: HostInput<'turnChatIntoProject'>, signal: AbortSignal) {
+    return this.once('turnChatIntoProject', input, async () => {
+      const chats = this.chats;
+      if (!chats) return fail('Incompatible', 'This host cannot turn a chat into a project.');
+      const folder = await chats.findOwnFolder(input.target);
+      const target = await this.open(folder, signal);
+      // `open` resolves links: a folder replaced by one since it was checked opens elsewhere.
+      if (target.root !== folder)
+        fail('Unauthorized', 'The folder changed before it opened as a project. Inspect it.');
+      await chats.markAsProject(input.requestId, input.target);
+      return target;
+    });
+  }
+  /** Runs a request not seen before and records its outcome; a repeat gets that outcome. */
+  private async once(
+    operation: 'createChatWorktree' | 'turnChatIntoProject',
+    input: HostInput<'createChatWorktree'> | HostInput<'turnChatIntoProject'>,
+    run: () => Promise<CheckoutTarget>,
+  ) {
+    const id = this.journal.requestId(operation, input);
+    const replay = () =>
+      this.journal.replayRequest(id, operation as RequestOperation, input as never)!;
+    if (this.journal.getRequest(id)) return replay();
+    if (this.journal.reserveRequest(id, { input })) return replay();
+    return this.settleRequest(id, input, run);
+  }
+  /** The parent folder a chat's worktrees go in: reserved paths are refused, and so is a folder
+   *  whose own parent (where it would be made) is outside what the host may open. */
+  async permitContainer(parent: string) {
+    this.protected(parent);
+    if (this.allowRoot) {
+      const container = dirname(parent);
+      await this.permit(container, container);
+    }
+  }
   /** Replays the first outcome of an `initializeRepository` request ID; a new ID runs `git init`. */
   async initializeRepositoryOnce(input: HostInput<'initializeRepository'>, signal: AbortSignal) {
     const id = this.journal.requestId('initializeRepository', input);
@@ -735,7 +833,7 @@ export class FileHost implements AdmissionOwner {
   /** Runs a reserved request and records its outcome, success or failure, for replay. */
   private async settleRequest<T extends CheckoutTarget>(
     id: string,
-    input: HostInput<'createWorktree'> | HostInput<'initializeRepository'>,
+    input: HostRequestRecord['input'],
     run: () => Promise<T>,
   ) {
     try {

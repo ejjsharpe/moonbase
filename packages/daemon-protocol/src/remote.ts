@@ -717,6 +717,8 @@ export const RemoteWorkspaceHostLive = (config: {
         'openCheckout',
         'createWorktree',
         'initializeRepository',
+        'createChatWorktree',
+        'turnChatIntoProject',
       ]);
       const ownHost = (value: unknown) => {
         const checkout = hostInputCheckout(value);

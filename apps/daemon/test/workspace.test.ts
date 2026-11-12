@@ -21,7 +21,7 @@ import {
   until,
   type ControlledClock,
 } from './fixture.ts';
-import { createFauxProviders } from './faux.ts';
+import { createFauxProviders, fauxModelId, fauxProviderId } from './faux.ts';
 
 const minute = 60_000;
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
@@ -216,11 +216,16 @@ test('a host-mode daemon opens only roots under approvedRoots by real path, and 
     await symlink(join(work, 'b'), join(work, 'in-link'));
     const keyFile = join(root, 'keys', 'credential.key');
     await mkdir(join(root, 'keys'), { mode: 0o700 });
+    // A root that is itself a repository has its `-worktrees` folder outside every root.
+    const solo = join(root, 'solo');
+    await mkdir(solo);
+    git(solo, 'init', '-q', '-b', 'main');
+    git(solo, 'commit', '-q', '--allow-empty', '-m', 'initial');
     const daemon = await startDaemon(root, {
       settings: {
         mode: 'host',
         port: await findFreePort(),
-        approvedRoots: [work],
+        approvedRoots: [work, solo],
         credentialKey: { source: 'file', path: keyFile },
       },
     });
@@ -253,12 +258,123 @@ test('a host-mode daemon opens only roots under approvedRoots by real path, and 
         'Unauthorized',
       );
 
+      // A chat worktree is made inside a root, never beside a root that is itself the repository.
+      const chatWorktree = (requestId: string, root: string) =>
+        daemon.host.createChatWorktree({ installationId: 'test', requestId, root, branch: 'chat' });
+      assert.equal(
+        (await run(chatWorktree('inside', join(work, 'a')))).root,
+        join(work, 'a-worktrees', 'chat'),
+      );
+      assert.equal(await refusal(chatWorktree('beside', solo)), 'Unauthorized');
+      await assert.rejects(stat(join(root, 'solo-worktrees')));
+      // Native imports are never held for a host: their sources are held to no root.
+      assert.equal(
+        await refusal(daemon.host.captureImports({ checkout: a, clientId: 'w', paths: [outside] })),
+        'Incompatible',
+      );
+
       // The root becomes another folder: it approves nothing new and nothing opened under it.
       await rename(work, join(root, 'work-old'));
       await mkdir(join(work, 'a'), { recursive: true });
       assert.equal(await refusal(open(join(work, 'a'))), 'Unauthorized');
       assert.equal(await refusal(daemon.host.verifyCheckout({ checkout: a })), 'Unauthorized');
     } finally {
+      await daemon.stop();
+    }
+  });
+});
+
+test('a local daemon lets chats use its checkouts and worktrees, makes chat worktrees and turns a chat into a project', async () => {
+  await withRoot(async (root) => {
+    const repo = join(root, 'repo'),
+      stray = join(root, 'stray');
+    await mkdir(repo);
+    await mkdir(stray);
+    git(repo, 'init', '-q', '-b', 'main');
+    git(repo, 'commit', '-q', '--allow-empty', '-m', 'initial');
+    const daemon = await startDaemon(root);
+    const identity = await readJson(join(daemon.directory, 'identity.json'));
+    const host = identity.host,
+      session = { host, actorId: identity.actorId };
+    const socket = await connectDaemonSocket({
+      origin: `http://127.0.0.1:${await portOf(daemon.directory)}`,
+      token: (await readFile(join(daemon.directory, 'token'), 'utf8')).trim(),
+      expected: host,
+    });
+    const model = { provider: fauxProviderId, modelId: fauxModelId };
+    const approved = (path: string) =>
+      socket.request('checkApprovedFolder', { host, path }).then(
+        () => true,
+        () => false,
+      );
+    try {
+      assert.equal(await approved(repo), false);
+      const checkout = await run(daemon.host.openCheckout({ root: repo }));
+      // The editor's checkout needs no grant from the picker.
+      assert.equal(await approved(repo), true);
+      assert.equal(await approved(stray), false);
+      await socket.request('createChat', {
+        session,
+        requestId: 'in-checkout',
+        title: 'In the checkout',
+        settings: { cwd: repo, model },
+      });
+
+      const request = {
+        installationId: 'test',
+        requestId: 'worktree',
+        root: repo,
+        branch: 'chat/a',
+      };
+      const made = await run(daemon.host.createChatWorktree(request));
+      assert.equal(made.root, join(root, 'repo-worktrees', 'chat-a'));
+      assert.deepEqual(await run(daemon.host.createChatWorktree(request)), made);
+      assert.equal(await approved(made.root), true);
+      await socket.request('createChat', {
+        session,
+        requestId: 'in-worktree',
+        title: 'In the worktree',
+        settings: { cwd: made.root, model },
+      });
+
+      // A chat's own folder opens where it is; a chat in a project is not one the daemon made.
+      const own = await socket.request('createChat', {
+        session,
+        requestId: 'own',
+        title: 'Own folder',
+        settings: { model },
+      });
+      const turn = (requestId: string, target: typeof own.conversation.target) =>
+        daemon.host.turnChatIntoProject({ installationId: 'test', requestId, target });
+      const inProject = await socket.request('createChat', {
+        session,
+        requestId: 'project-chat',
+        title: 'In a project',
+        settings: { cwd: repo, model },
+      });
+      assert.equal(await refusal(turn('refused', inProject.conversation.target)), 'Unauthorized');
+      const turned = await run(turn('turn', own.conversation.target));
+      assert.equal(turned.root, own.conversation.cwd);
+      assert.deepEqual(await run(turn('turn', own.conversation.target)), turned);
+      const { conversation } = await socket.request('getChat', { target: own.conversation.target });
+      assert.equal(conversation.ownFolder, undefined);
+
+      // A checkout replaced after it was approved grants chats nothing, nor do its worktrees.
+      await rename(repo, join(root, 'repo-old'));
+      await mkdir(repo);
+      assert.equal(await approved(repo), false);
+      await assert.rejects(
+        socket.request('createChat', {
+          session,
+          requestId: 'replaced',
+          title: 'Replaced',
+          settings: { cwd: repo, model },
+        }),
+        { code: 'Unauthorized' },
+      );
+      assert.equal(await refusal(daemon.host.verifyCheckout({ checkout })), 'Unauthorized');
+    } finally {
+      socket.close();
       await daemon.stop();
     }
   });

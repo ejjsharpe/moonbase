@@ -5912,6 +5912,316 @@
             "after"
           ],
           "additionalProperties": false
+        },
+        "createChatWorktree": {
+          "type": "object",
+          "properties": {
+            "installationId": {
+              "type": "string"
+            },
+            "requestId": {
+              "type": "string"
+            },
+            "root": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          "required": [
+            "installationId",
+            "requestId",
+            "root",
+            "branch"
+          ],
+          "additionalProperties": false
+        },
+        "turnChatIntoProject": {
+          "type": "object",
+          "properties": {
+            "installationId": {
+              "type": "string"
+            },
+            "requestId": {
+              "type": "string"
+            },
+            "target": {
+              "type": "object",
+              "properties": {
+                "host": {
+                  "type": "object",
+                  "properties": {
+                    "hostId": {
+                      "type": "string"
+                    },
+                    "storeId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "hostId",
+                    "storeId"
+                  ],
+                  "additionalProperties": false
+                },
+                "actorId": {
+                  "type": "string"
+                },
+                "conversationId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "host",
+                "actorId",
+                "conversationId"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "installationId",
+            "requestId",
+            "target"
+          ],
+          "additionalProperties": false
+        },
+        "captureImports": {
+          "type": "object",
+          "properties": {
+            "checkout": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "git"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "branch": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "worktree": {
+                      "type": "string",
+                      "enum": [
+                        "main",
+                        "linked"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root",
+                    "branch",
+                    "worktree"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "none"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "vcs",
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "clientId": {
+              "type": "string"
+            },
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "maxItems": 128
+            }
+          },
+          "required": [
+            "checkout",
+            "clientId",
+            "paths"
+          ],
+          "additionalProperties": false
+        },
+        "releaseImports": {
+          "type": "object",
+          "properties": {
+            "checkout": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "git"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "branch": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "worktree": {
+                      "type": "string",
+                      "enum": [
+                        "main",
+                        "linked"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root",
+                    "branch",
+                    "worktree"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "none"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "vcs",
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "clientId": {
+              "type": "string"
+            },
+            "references": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "maxItems": 128
+            }
+          },
+          "required": [
+            "checkout",
+            "clientId",
+            "references"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -5934,7 +6244,11 @@
         "acknowledgeOperation",
         "saveStatus",
         "acknowledgeSave",
-        "listOperations"
+        "listOperations",
+        "createChatWorktree",
+        "turnChatIntoProject",
+        "captureImports",
+        "releaseImports"
       ],
       "additionalProperties": false
     },
@@ -7557,7 +7871,213 @@
             "more"
           ],
           "additionalProperties": false
-        }
+        },
+        "createChatWorktree": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "vcs": {
+                  "type": "string",
+                  "enum": [
+                    "git"
+                  ]
+                },
+                "hostId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "checkoutId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "projectId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "root": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "branch": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "worktree": {
+                  "type": "string",
+                  "enum": [
+                    "main",
+                    "linked"
+                  ]
+                }
+              },
+              "required": [
+                "hostId",
+                "checkoutId",
+                "projectId",
+                "root",
+                "branch",
+                "worktree"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "vcs": {
+                  "type": "string",
+                  "enum": [
+                    "none"
+                  ]
+                },
+                "hostId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "checkoutId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "projectId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "root": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "vcs",
+                "hostId",
+                "checkoutId",
+                "projectId",
+                "root"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "turnChatIntoProject": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "vcs": {
+                  "type": "string",
+                  "enum": [
+                    "git"
+                  ]
+                },
+                "hostId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "checkoutId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "projectId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "root": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "branch": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "worktree": {
+                  "type": "string",
+                  "enum": [
+                    "main",
+                    "linked"
+                  ]
+                }
+              },
+              "required": [
+                "hostId",
+                "checkoutId",
+                "projectId",
+                "root",
+                "branch",
+                "worktree"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "vcs": {
+                  "type": "string",
+                  "enum": [
+                    "none"
+                  ]
+                },
+                "hostId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "checkoutId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "projectId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "root": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "vcs",
+                "hostId",
+                "checkoutId",
+                "projectId",
+                "root"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "captureImports": {
+          "type": "object",
+          "properties": {
+            "references": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "references"
+          ],
+          "additionalProperties": false
+        },
+        "releaseImports": {}
       },
       "required": [
         "openCheckout",
@@ -7579,7 +8099,11 @@
         "acknowledgeOperation",
         "saveStatus",
         "acknowledgeSave",
-        "listOperations"
+        "listOperations",
+        "createChatWorktree",
+        "turnChatIntoProject",
+        "captureImports",
+        "releaseImports"
       ],
       "additionalProperties": false
     }
