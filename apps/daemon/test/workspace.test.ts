@@ -44,6 +44,15 @@ async function startDaemon(
 ) {
   const directory = join(root, 'data'),
     controller = new AbortController();
+  const helper = findFilesystemHelper(import.meta.url, { fromSource: true });
+  assert.ok(
+    helper &&
+      (await stat(helper).then(
+        () => true,
+        () => false,
+      )),
+    'the prebuilt filesystem helper is missing: build packages/workspace first (dist/filesystem)',
+  );
   await mkdir(directory, { mode: 0o700, recursive: true });
   if (settings)
     await writeFile(join(directory, 'daemon.json'), JSON.stringify(settings), { mode: 0o600 });
@@ -56,7 +65,7 @@ async function startDaemon(
     signal: controller.signal,
     ready: () => ready.resolve(),
     closeClaudeCode: async () => {},
-    filesystemHelper: findFilesystemHelper(import.meta.url, { fromSource: true }),
+    filesystemHelper: helper,
     receiveWorkspace: host.resolve,
     ...(time ? { clock: time.clock } : {}),
     providers: (loaded) => ({

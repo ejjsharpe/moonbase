@@ -240,7 +240,14 @@ async function serveDaemon(
       try {
         await serveModes(workspace.host);
       } finally {
-        await workspace.dispose();
+        // A failed close (a stale lock, say) must not stop the shutdown below or the exit code.
+        await workspace.dispose().catch((error: unknown) => {
+          log.write({
+            event: 'workspace',
+            reason: 'close-failed',
+            code: describeFailure(error).code,
+          });
+        });
       }
     } finally {
       await runtime.dispose();
