@@ -192,8 +192,13 @@ export class FileHost implements AdmissionOwner {
       verify: async (target) => {
         await this.directory(target, false);
       },
-      list: async (target, signal) =>
-        (await this.worktrees.listWorktrees(target, signal)).worktrees,
+      // Through a borrowed descriptor, so checking many approvals never fills the retained cap.
+      list: (target, signal) =>
+        this.borrow(
+          target,
+          async (directory) =>
+            (await this.worktrees.listWorktrees(target, signal, directory)).worktrees,
+        ),
       gitEntry: (root) => this.gitEntry(root),
     });
     this.store = new Store(config.dataDirectory, {
@@ -557,6 +562,20 @@ export class FileHost implements AdmissionOwner {
    * checked through a descriptor that is closed again, so folder checks never use up the cap.
    */
   async directory(target: CheckoutTarget, retain = true) {
+    const { directory, transient } = await this.checked(target, retain);
+    transient?.close();
+    return directory;
+  }
+  /** Runs `operate` on the re-checked checkout through a descriptor that is closed afterwards. */
+  async borrow<T>(target: CheckoutTarget, operate: (directory: Directory) => Promise<T>) {
+    const { directory, transient } = await this.checked(target, false);
+    try {
+      return await operate(directory);
+    } finally {
+      transient?.close();
+    }
+  }
+  private async checked(target: CheckoutTarget, retain: boolean) {
     const approved = this.approval(target);
     // Every use re-checks the root policy, so a root replaced since it was approved, or one that
     // a smaller policy no longer allows, grants nothing.
@@ -588,7 +607,7 @@ export class FileHost implements AdmissionOwner {
     try {
       directory.check();
       // A plain folder runs no Git, so only its own identity matters.
-      if (!approved.common) return directory;
+      if (!approved.common) return { directory, transient };
       ensure(
         same(this.gitEntry(target.root), approved.gitEntry),
         'Checkout Git metadata identity changed. Restore the original repository.',
@@ -605,9 +624,10 @@ export class FileHost implements AdmissionOwner {
       } finally {
         closeSync(fd);
       }
-      return directory;
-    } finally {
+      return { directory, transient };
+    } catch (error) {
       transient?.close();
+      throw error;
     }
   }
   /** The root's `.git` entry, or null when it has none. */

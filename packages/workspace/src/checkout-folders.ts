@@ -7,10 +7,14 @@ export type CheckoutFolderSteps = {
   approvals(): Approval[];
   /** Re-checks an approved checkout's identity and policy; throws once it no longer holds. */
   verify(target: CheckoutTarget): Promise<void>;
+  /** Lists the worktrees without keeping the checkout open. */
   list(target: CheckoutTarget, signal: AbortSignal): Promise<Worktree[]>;
   /** The root's `.git` entry: a folder (`pointer: null`) or a file naming the repository. */
   gitEntry(root: string): { pointer: string | null } | null;
 };
+
+/** How long Git may take to list one repository's worktrees for a folder check. */
+const listDeadlineMs = 10_000;
 
 const realPath = (path: string) => {
   try {
@@ -32,7 +36,10 @@ export class CheckoutFolders {
     this.steps = steps;
   }
   async has(path: string, signal: AbortSignal): Promise<boolean> {
-    const approvals = this.steps.approvals();
+    // A newer approval of the same root supersedes the older ones, which match nothing.
+    const newest = new Map<string, Approval>();
+    for (const approval of this.steps.approvals()) newest.set(approval.target.root, approval);
+    const approvals = [...newest.values()];
     const named = approvals.filter((approval) => approval.target.root === path);
     // A root spelled differently from its real path, or no longer a directory, is not a folder.
     if (!isDirectoryNamedByRealPath(path)) return false;
@@ -44,7 +51,9 @@ export class CheckoutFolders {
       if (!common || asked.has(common.path) || approval.target.vcs !== 'git') continue;
       if (!(await this.holds(approval.target))) continue;
       asked.add(common.path);
-      const listed = await this.steps.list(approval.target, signal).catch(() => []);
+      // A repository that does not answer in time is not a folder source; it must not stall the check.
+      const deadline = AbortSignal.any([signal, AbortSignal.timeout(listDeadlineMs)]);
+      const listed = await this.steps.list(approval.target, deadline).catch(() => []);
       if (listed.some((worktree) => worktree.root === path && this.belongs(path, worktree, common)))
         return true;
     }

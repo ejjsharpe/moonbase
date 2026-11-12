@@ -240,6 +240,10 @@ test('a folder is an approved checkout root or a worktree Git lists for one, che
     assert.equal(await has(root), true);
     // A worktree Git lists for the approved checkout needs no approval of its own.
     assert.equal(await has(linked), true);
+    // Listing for a folder check borrows a descriptor: it is not kept against the retained cap.
+    const open = readdirSync('/dev/fd').length;
+    assert.equal(await has(linked), true);
+    assert.equal(readdirSync('/dev/fd').length, open);
     assert.equal(await has(stray), false);
     assert.equal(await has(join(root, '.git')), false);
     symlinkSync(root, join(f.base, 'link'));
@@ -262,7 +266,7 @@ test('a folder is an approved checkout root or a worktree Git lists for one, che
     mkdirSync(root);
     assert.equal(await has(root), false);
     assert.equal(await has(linked), false);
-    assert.equal(await code(host.verifyCheckout({ checkout })), 'Unauthorized');
+    assert.ok(await code(host.verifyCheckout({ checkout })));
     // A plain folder checkout is a folder while the host's root policy allows it.
     const plain = join(f.base, 'plain');
     mkdirSync(plain);

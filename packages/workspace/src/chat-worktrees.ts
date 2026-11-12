@@ -48,11 +48,18 @@ export class ChatWorktrees {
     const target = await this.steps.open(root, signal);
     requireGit(target);
     const previous = this.attempts.get(target.projectId) ?? Promise.resolve();
-    const attempt = previous.then(() => this.attempt(target, branch, signal));
-    const settled = attempt.then(
-      () => {},
-      () => {},
-    );
+    // Cancelling while queued ends the wait; the next attempt still waits for the one running.
+    const turn = new Promise<void>((done, refuse) => {
+      const cancel = () => refuse(cancelledError());
+      if (signal.aborted) return cancel();
+      signal.addEventListener('abort', cancel, { once: true });
+      void previous.then(() => {
+        signal.removeEventListener('abort', cancel);
+        done();
+      });
+    });
+    const attempt = turn.then(() => this.attempt(target, branch, signal));
+    const settled = Promise.all([previous, attempt.catch(() => {})]).then(() => {});
     this.attempts.set(target.projectId, settled);
     void settled.then(() => {
       if (this.attempts.get(target.projectId) === settled) this.attempts.delete(target.projectId);
@@ -107,7 +114,10 @@ export class ChatWorktrees {
   }
 }
 
+function cancelledError() {
+  return new ApplicationError({ code: 'Cancelled', message: 'The worktree was not created.' });
+}
+
 function cancelled(signal: AbortSignal) {
-  if (signal.aborted)
-    throw new ApplicationError({ code: 'Cancelled', message: 'The worktree was not created.' });
+  if (signal.aborted) throw cancelledError();
 }

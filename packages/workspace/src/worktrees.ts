@@ -122,8 +122,8 @@ export class WorkspaceWorktrees {
     this.report = report;
   }
   /** A plain folder has no worktrees, like a bare repository. */
-  async listWorktrees(target: CheckoutTarget, signal: AbortSignal) {
-    const directory = await this.directory(target);
+  async listWorktrees(target: CheckoutTarget, signal: AbortSignal, open?: Directory) {
+    const directory = open ?? (await this.directory(target));
     if (target.vcs === 'none') return { worktrees: [] };
     const output = await directory.git(listArgs, undefined, signal, { untranslated: true });
     return { worktrees: parseWorktrees(output.toString()).slice(0, 1000) };
