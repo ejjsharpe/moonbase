@@ -7,7 +7,7 @@ import {
   type CommandInput,
   type Worktree,
 } from '@moonbase/contracts/workspace';
-import type { Directory } from './filesystem.ts';
+import { identity, type Directory } from './filesystem.ts';
 import { ensure, errorText, fail, requireGit } from './validation.ts';
 
 const gitFailure = (error: unknown) =>
@@ -173,7 +173,8 @@ export class WorkspaceWorktrees {
     } catch {
       return fail('InvalidInput', 'The worktree location parent folder does not exist.');
     }
-    ensure(lstatSync(parent).isDirectory(), 'The worktree location parent must be a folder.');
+    const parentIdentity = folderIdentity(parent);
+    ensure(parentIdentity, 'The worktree location parent must be a folder.');
     // Git precomposes the paths it is given, so the folder it makes is named in NFC.
     const location = join(parent, basename(input.location).normalize('NFC'));
     await this.protect(location);
@@ -238,6 +239,11 @@ export class WorkspaceWorktrees {
     }
     let target: CheckoutTarget;
     try {
+      // A parent swapped for a link since it was checked would put the worktree elsewhere.
+      ensure(
+        folderIdentity(parent) === parentIdentity,
+        'The worktree location parent changed. Choose the location again.',
+      );
       // Locked from its start until approved, with a reason only this creation knows.
       await directory.git(
         ['worktree', 'add', '--quiet', '--lock', '--reason', created.nonce, '--', location, branch],
@@ -246,7 +252,13 @@ export class WorkspaceWorktrees {
       );
       target = await this.open(location, input.checkout, signal);
     } catch (error) {
-      const cleanup = await this.removeCreated(directory, location, before, created);
+      const cleanup = await this.removeCreated(
+        directory,
+        location,
+        parentIdentity,
+        before,
+        created,
+      );
       if (cleanup)
         fail(
           'Uncertain',
@@ -274,6 +286,7 @@ export class WorkspaceWorktrees {
   private async removeCreated(
     directory: Directory,
     location: string,
+    parentIdentity: string,
     before: WorktreeRecord[],
     created: CreatedBranch,
   ): Promise<string | undefined> {
@@ -291,6 +304,9 @@ export class WorkspaceWorktrees {
           registered.head !== created.commit
         )
           return 'another worktree is at the location';
+        // Through a parent swapped for a link, the removal would reach another folder.
+        if (folderIdentity(dirname(location)) !== parentIdentity)
+          return 'the location parent changed';
         // Still locked by this creation, it holds nothing but this creation's checkout (perhaps
         // partial) and what its hooks wrote: remove it despite the lock and any changes.
         await directory.git(['worktree', 'remove', '--force', '--force', '--', location]);
@@ -341,6 +357,16 @@ export class WorkspaceWorktrees {
     } catch (error) {
       return failureText(error);
     }
+  }
+}
+
+/** A folder's identity, or undefined when the path is not a folder itself (a link, say). */
+function folderIdentity(path: string) {
+  try {
+    const info = lstatSync(path);
+    return info.isDirectory() ? identity(info) : undefined;
+  } catch {
+    return undefined;
   }
 }
 

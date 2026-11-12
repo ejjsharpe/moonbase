@@ -179,7 +179,13 @@ test('a host-mode daemon allows its roots and folders under them, and refuses es
       });
 
     // No root holds or sits in the daemon's data or its credential key, even one not made yet.
-    for (const reserved of [join(root, 'alpha'), join(root, 'keys', 'credential.key'), base])
+    // A reserved path spelled in another case is the same place on a case-insensitive volume.
+    for (const reserved of [
+      join(root, 'alpha'),
+      join(root, 'keys', 'credential.key'),
+      join(root.toUpperCase(), 'missing', 'token'),
+      base,
+    ])
       await assert.rejects(createRootFolders([root], { reserved: [reserved] }), {
         code: 'InvalidInput',
       });

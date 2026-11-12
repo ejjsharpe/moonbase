@@ -36,6 +36,8 @@ const helperEnvironment = (overrides: Record<string, string | undefined> = {}) =
   return env;
 };
 const outputLimit = 16 * 1024 * 1024;
+/** How long output a helper wrote before it exited has to be read when something holds its pipes. */
+const outputDrainMs = 100;
 /** How long a stopped process group has to clean up after SIGTERM before SIGKILL. */
 export const stopGrace = 2000;
 const groupAlive = (group: number) => {
@@ -151,8 +153,17 @@ export function makeRunner(
               child.once('error', (error) => {
                 spawnError = error;
               });
-              child.once('close', (code, killed) => {
+              // A process the helper started outside its group (a hook's daemon, say) can hold
+              // stdout open long after the helper exits, so the run settles once the helper exits
+              // and its last output has had a moment to arrive, not when every holder of the pipes
+              // has let go.
+              let draining: NodeJS.Timeout | undefined;
+              const settle = (code: number | null, killed: NodeJS.Signals | null) => {
+                if (state.settled) return;
                 state.settled = true;
+                clearTimeout(draining);
+                child.stdout!.destroy();
+                child.stderr!.destroy();
                 // A final line without a newline.
                 if (onLine && code === 0 && length && !state.finished && !state.capped)
                   deliver(Buffer.concat(chunks));
@@ -182,7 +193,11 @@ export function makeRunner(
                     ),
                   );
                 }
+              };
+              child.once('exit', (code, killed) => {
+                draining = setTimeout(() => settle(code, killed), outputDrainMs);
               });
+              child.once('close', settle);
               signal?.addEventListener('abort', state.stop, { once: true });
               if (signal?.aborted) state.stop();
               child.stdin!.end(input);
@@ -195,7 +210,7 @@ export function makeRunner(
                     if (!state.settled) state.stop();
                   }),
                 );
-                // Child error/abort is not exit: descriptors remain owned until close.
+                // Child error/abort is not exit: descriptors remain owned until the helper exits.
                 yield* Effect.exit(Deferred.await(state.completion));
                 if (state.stoppedAt !== undefined && state.child.pid !== undefined)
                   yield* awaitGroupExit(state.child.pid, state.stoppedAt);
