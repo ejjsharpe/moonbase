@@ -205,10 +205,6 @@ export class EditorSession {
     checkout(target);
     this.known.set(target.checkoutId, target);
   }
-  /** Whether a root is a natively approved checkout, or a worktree Git listed for one. */
-  hasFolder(root: string) {
-    return this.worktreeRoots.has(root) || [...this.known.values()].some((t) => t.root === root);
-  }
   async call(method: unknown, input: unknown, id: unknown): Promise<Reply> {
     let reserved: IpcRequest | undefined;
     try {

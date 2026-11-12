@@ -56,8 +56,12 @@ async function profile(t: TestContext) {
 }
 
 /** The loopback connection to a daemon, as main builds it. */
-async function connect(t: TestContext, daemon: ReturnType<typeof createLocalDaemon>) {
-  const runtime = ManagedRuntime.make(LocalDaemonConnectionLive(daemon));
+async function connect(
+  t: TestContext,
+  daemon: ReturnType<typeof createLocalDaemon>,
+  now?: () => number,
+) {
+  const runtime = ManagedRuntime.make(LocalDaemonConnectionLive(daemon, now));
   t.after(() => runtime.dispose());
   const connection = await runtime.runPromise(
     Effect.gen(function* () {
@@ -376,25 +380,36 @@ test('a daemon that never listens is Unavailable and is not left running', async
   await until(() => !isAlive(slow));
 });
 
-test('the connection fails as Unavailable when no daemon can be started, and recovers later', async (t) => {
+test('the connection fails as Unavailable when no daemon can be started, answers that for a moment without starting one, and recovers later', async (t) => {
   const { directory, command } = await profile(t);
-  let broken = false;
+  let broken = false,
+    attempts = 0,
+    clock = 0;
   const daemon = createLocalDaemon({ directory, command });
   await daemon.ensure();
   const session = await readDaemonSession(directory);
   const failing = {
     ...daemon,
-    ensure: () => (broken ? Promise.reject(Error('spawn failed')) : daemon.ensure()),
+    ensure: () => {
+      attempts++;
+      return broken ? Promise.reject(Error('spawn failed')) : daemon.ensure();
+    },
   };
-  const { runtime, connection } = await connect(t, failing);
+  const { runtime, connection } = await connect(t, failing, () => clock);
   await runtime.runPromise(connection.endpoint({ host: session.host }));
   broken = true;
   await stopDaemon(directory);
-  await assert.rejects(runtime.runPromise(connection.endpoint({ host: session.host })), {
-    code: 'Unavailable',
-  });
+  const lookup = () => runtime.runPromise(connection.endpoint({ host: session.host }));
+  // Lookups waiting together share one recovery; one just after its failure gets that failure.
+  attempts = 0;
+  for (const result of await Promise.allSettled([lookup(), lookup(), lookup()]))
+    assert.equal(result.status === 'rejected' && result.reason.code, 'Unavailable');
+  await assert.rejects(lookup(), { code: 'Unavailable' });
+  assert.equal(attempts, 1);
   broken = false;
-  const endpoint = await runtime.runPromise(connection.endpoint({ host: session.host }));
+  clock += 2000;
+  const endpoint = await lookup();
+  assert.equal(attempts, 2);
   assert.deepEqual(endpoint.expected, session.host);
 });
 

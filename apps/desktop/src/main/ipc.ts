@@ -9,6 +9,7 @@ import {
   record as chatRecord,
   fields,
   errorDTO as chatError,
+  requestId,
 } from '../chat/wire.ts';
 
 export function createTrustedDocumentGuard(window: BrowserWindow, appURL: string) {
@@ -44,7 +45,6 @@ export function installCommandIpc({
     | 'recentFolders'
     | 'createWorktree'
     | 'turnIntoProject'
-    | 'requireLocal'
     | 'getSession'
   >;
   lifecycle: Pick<WindowLifecycle, 'reportCleanup' | 'isQuitting'>;
@@ -100,7 +100,6 @@ export function installCommandIpc({
           message: 'Choose an installed chat target.',
         });
       const backendId = v.backendId;
-      if (v.kind !== 'context') chatBackends.requireLocal(backendId);
       if (v.kind === 'context') {
         fields(v, ['kind', 'backendId']);
         return { ok: true, value: await chatBackends.getContext(backendId) };
@@ -134,7 +133,7 @@ export function installCommandIpc({
         return { ok: true, value: await chatBackends.turnIntoProject(v.conversationId) };
       }
       if (v.kind === 'create-worktree') {
-        fields(v, ['kind', 'backendId', 'root', 'branch']);
+        fields(v, ['kind', 'backendId', 'root', 'branch', 'requestId']);
         if (backendId !== 'local' || lifecycle.isQuitting())
           throw new ApplicationError({
             code: 'Unavailable',
@@ -145,7 +144,11 @@ export function installCommandIpc({
             code: 'InvalidInput',
             message: 'Choose a folder and branch for the worktree.',
           });
-        return { ok: true, value: await chatBackends.createWorktree(v.root, v.branch) };
+        requestId(v.requestId);
+        return {
+          ok: true,
+          value: await chatBackends.createWorktree(v.root, v.branch, v.requestId),
+        };
       }
       fields(v, ['kind', 'operation', 'input', 'id', 'backendId']);
       const owner = chatBackends.getSession(backendId);
