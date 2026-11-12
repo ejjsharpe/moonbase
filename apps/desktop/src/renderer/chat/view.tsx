@@ -1,3 +1,4 @@
+import { useStoredToggle } from '../hooks/use-stored-toggle.ts';
 import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { Dialog } from '@base-ui/react/dialog';
@@ -24,7 +25,7 @@ import { ModelPicker } from './model-picker.tsx';
 import { FolderPicker, type ChatFolderProject } from './folder-picker.tsx';
 import { appendMentions } from './mention-text.ts';
 import { getChatComposer, type ChatComposerPlace } from './composer.ts';
-import { Icon } from '../icon.tsx';
+import { Icon } from '@moonbase/ui/icons';
 import { MessageInput } from './message-input.tsx';
 import {
   listChatCommands,
@@ -57,14 +58,6 @@ export type ChatDock = {
   collapse(): void;
 };
 
-const settledKey = 'moonbase.chats.settled';
-function readSettledOpen() {
-  try {
-    return localStorage.getItem(settledKey) === 'open';
-  } catch {
-    return false;
-  }
-}
 const glyphs: Record<ChatActivityReason, string> = {
   unconfirmed: '?',
   failed: '✕',
@@ -154,15 +147,8 @@ export function ChatView({
   const compact = useSyncExternalStore(subscribeLayout, () => compactLayout.matches);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const titleId = useId();
-  const [settledOpen, setSettledOpen] = useState(readSettledOpen);
-  const showSettled = (open: boolean) => {
-    setSettledOpen(open);
-    try {
-      localStorage.setItem(settledKey, open ? 'open' : 'closed');
-    } catch {
-      /* The toggle still works for this window. */
-    }
-  };
+  const [settledOpen, toggleSettled] = useStoredToggle('moonbase.chats.settled');
+
   const findInput = useRef<HTMLInputElement>(null);
   const [dockList, setDockList] = useState(false),
     // An error belongs to the command line it was about; editing it or changing chat hides it.
@@ -622,7 +608,7 @@ export function ChatView({
                     groups.idle.length > 0) &&
                     styles.settledSeparated,
                 )}
-                onClick={() => showSettled(!settledOpen)}>
+                onClick={toggleSettled}>
                 <span
                   aria-hidden="true"
                   {...stylex.props(

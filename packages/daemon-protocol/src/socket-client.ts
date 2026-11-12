@@ -1,3 +1,8 @@
+import {
+  chatReplyErrorCodes,
+  decodeChatInput,
+  isChatCommand,
+} from '@moonbase/contracts/chat-schema';
 import type { ChatCommand, ChatInput, ChatOutput } from '@moonbase/contracts/chat';
 import type { DaemonCommand, DaemonInput, DaemonOutput } from '@moonbase/contracts/daemon';
 import {
@@ -15,7 +20,6 @@ import {
   isHostCommand,
   isHostMutation,
 } from '@moonbase/contracts/workspace-host-schema';
-import { chatReplyErrorCodes } from '@moonbase/contracts/chat-schema';
 import type { CommandOptions } from '@moonbase/contracts/common';
 import type { ChatHostEndpoint } from '@moonbase/contracts/services';
 import {
@@ -37,7 +41,9 @@ import {
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { validateHostHealth } from '@moonbase/ssh/host-health';
 import * as P from './protocol.ts';
-import * as V from './validation.ts';
+import { checkChatOutput, isChatMutation } from '@moonbase/contracts/chat-validation';
+import { readObject } from '@moonbase/contracts/common';
+import { fail } from '@moonbase/contracts/errors';
 import {
   deriveSocketKeys,
   openSocketMessage,
@@ -130,7 +136,7 @@ export function decodeErrorEnvelope(
   operation?: string,
 ): ApplicationError | undefined {
   try {
-    const record = V.object(error);
+    const record = readObject(error);
     const code = chatReplyErrorCodes.find((value) => value === record.code);
     if (code && (isDaemonCommand(operation) || isHostCommand(operation)))
       return P.daemonFailure(code, record.reason);
@@ -250,7 +256,7 @@ export function connectDaemonSocket(
 
   const receive = (message: SocketServerMessage) => {
     if (message.type === 'heartbeat') return;
-    if (message.type === 'welcome') return V.fail('Incompatible', 'Unexpected welcome.');
+    if (message.type === 'welcome') return fail('Incompatible', 'Unexpected welcome.');
     if (message.type === 'reply') {
       const pending = requests.get(message.id);
       // Only a workspace reply may exceed a chat reply's bound.
@@ -278,7 +284,7 @@ export function connectDaemonSocket(
     }
     // A delta cannot follow a snapshot of its own subscription that is still arriving.
     if (message.kind !== 'snapshot' && assembler.partial(`update:${message.subscriptionId}:`))
-      V.fail('Incompatible', 'Socket payload was interrupted.');
+      fail('Incompatible', 'Socket payload was interrupted.');
     const subscription = subscriptions.get(message.subscriptionId);
     if (message.kind === 'error') {
       if (!subscription) return;
@@ -297,7 +303,7 @@ export function connectDaemonSocket(
       if (!subscription) return;
       const state = subscription.state;
       if (!state || state.sequence !== message.base)
-        V.fail('Incompatible', 'Socket delta does not follow the update before it.');
+        fail('Incompatible', 'Socket delta does not follow the update before it.');
       value = applySocketDelta(
         subscription.kind,
         state!.value,
@@ -307,15 +313,15 @@ export function connectDaemonSocket(
     }
     const decoded = decodeSocketSubscriptionValue(subscription.kind, value);
     if (subscription.kind === 'chat')
-      V.output('getChat', decoded, {
+      checkChatOutput('getChat', decoded, {
         target: subscription.target as SocketSubscriptionTarget<'chat'>,
       });
     if (subscription.kind === 'chatList') {
       // Every row, on the first page or past it, stays within the watched host and actor.
       const { list, changed } = decoded as SocketSubscriptionValue<'chatList'>,
         session = subscription.target as SocketSubscriptionTarget<'chatList'>;
-      V.output('listChats', list, { session });
-      V.output('listChats', { conversations: changed, nextCursor: null }, { session });
+      checkChatOutput('listChats', list, { session });
+      checkChatOutput('listChats', { conversations: changed, nextCursor: null }, { session });
     }
     subscription.state = {
       subscriptionId: message.subscriptionId,
@@ -330,7 +336,7 @@ export function connectDaemonSocket(
     try {
       const bytes = new Uint8Array(event.data as ArrayBuffer);
       if (bytes.length > socketLimits.frameBytes)
-        V.fail('Incompatible', 'Socket message is too large.');
+        fail('Incompatible', 'Socket message is too large.');
       lastReceived = clock.now();
       if (!keys) {
         // The challenge, unauthenticated: the hello answers it under keys it binds.
@@ -340,13 +346,13 @@ export function connectDaemonSocket(
         return;
       }
       const message = decodeSocketServerMessage(openSocketMessage(keys.server, bytes));
-      if (message.seq !== received++) V.fail('Unauthorized', 'Socket message is out of sequence.');
+      if (message.seq !== received++) fail('Unauthorized', 'Socket message is out of sequence.');
       if (!health) {
-        if (message.type !== 'welcome') V.fail('Incompatible', 'Expected a welcome.');
+        if (message.type !== 'welcome') fail('Incompatible', 'Expected a welcome.');
         const welcome = message as Extract<SocketServerMessage, { type: 'welcome' }>;
         health = validateHostHealth(welcome.health, expected);
         if (!health.capabilities.includes(chatHostCapabilities.socket))
-          V.fail('Incompatible', 'The daemon does not serve this socket.');
+          fail('Incompatible', 'The daemon does not serve this socket.');
         clock.clearTimeout(timer);
         schedule();
         settle(connection);
@@ -401,14 +407,15 @@ export function connectDaemonSocket(
             mutation = isDaemonMutation(operation);
             capability = daemonCommandCapabilities[operation];
           } else {
-            const command = V.command(operation);
-            decoded = V.input(command, input);
-            mutation = V.isMutation(command);
+            if (!isChatCommand(operation)) fail('InvalidInput', 'Unknown chat operation.');
+            const command = operation;
+            decoded = decodeChatInput(command, input);
+            mutation = isChatMutation(command);
             capability =
               command === 'createChat' ? chatHostCapabilities.local : chatHostCapabilities.chat;
           }
           if (!health!.capabilities.includes(capability as never))
-            V.fail('Incompatible', 'The daemon does not offer this feature.');
+            fail('Incompatible', 'The daemon does not offer this feature.');
           body = Buffer.from(JSON.stringify({ operation, input: decoded }));
           if (
             body.length >
@@ -416,8 +423,8 @@ export function connectDaemonSocket(
               ? socketLimits.workspaceRequestBytes
               : P.maximumChatRequestBytes)
           )
-            V.fail('InvalidInput', 'Request input exceeds its transport limit.');
-          if (signal?.aborted) V.fail('Cancelled', 'The request was cancelled.');
+            fail('InvalidInput', 'Request input exceeds its transport limit.');
+          if (signal?.aborted) fail('Cancelled', 'The request was cancelled.');
         } catch (error) {
           return refuse(error);
         }
@@ -431,10 +438,10 @@ export function connectDaemonSocket(
               requestId !== undefined &&
               (output as { requestId?: string }).requestId !== requestId
             )
-              V.fail('Incompatible', 'Daemon request identity changed.');
+              fail('Incompatible', 'Daemon request identity changed.');
             return output;
           }
-          return V.output(operation as ChatCommand, value, decoded as never);
+          return checkChatOutput(operation as ChatCommand, value, decoded as never);
         };
         // A cancelled read fails at once but stays pending until the daemon answers it, so
         // `settled` still says when its place on the daemon is free.

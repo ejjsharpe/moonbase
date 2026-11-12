@@ -1029,8 +1029,7 @@ test(`${packaged ? 'packaged' : 'source'} new-chat draft survives reload and ref
 });
 
 for (const failsWrite of [false, true])
-  test(`R1 ${packaged ? 'packaged' : 'source'} reserved Send retry must veto ${failsWrite ? 'failing writes during query' : 'a changed snapshot'} before production admission`, async () => {
-    await mkdir(output, { recursive: true });
+  test(`${packaged ? 'packaged' : 'source'} Retry Send sends nothing when the draft cannot be preserved (${failsWrite ? 'storage write fails' : 'snapshot changed'})`, async () => {
     const f = await fixture(true);
     let current: ElectronApplication | undefined;
     try {
@@ -1114,19 +1113,6 @@ for (const failsWrite of [false, true])
             ),
           pending,
         );
-      await page.screenshot({
-        path: join(
-          output,
-          `r1-${packaged ? 'packaged' : 'source'}-retry-veto-${failsWrite ? 'write-fails' : 'changed'}.png`,
-        ),
-      });
-      await writeFile(
-        join(
-          output,
-          `r1-${packaged ? 'packaged' : 'source'}-retry-veto-${failsWrite ? 'write-fails' : 'changed'}.json`,
-        ),
-        JSON.stringify({ pending, reserved, receipt, before, after, replacement, stored }, null, 2),
-      );
       expect(stored).toBe(replacement);
       await expect(page.getByLabel('Message', { exact: true })).toHaveValue(
         'Newer live draft remains',

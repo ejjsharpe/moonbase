@@ -1,5 +1,5 @@
 import type { GitChange, GitChangeKind } from '@moonbase/contracts/workspace';
-import { fail } from './validation.ts';
+import { fail } from '@moonbase/contracts/errors';
 
 /** XY pairs Git prints for an unmerged path. */
 const unmergedCodes = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);

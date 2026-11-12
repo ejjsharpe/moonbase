@@ -3,7 +3,8 @@ import type { ReactNode } from 'react';
 import type { GitChangeKind } from '@moonbase/contracts/workspace';
 import { filesUI, gitStatusHues, gitStatusUI } from '@moonbase/ui/files';
 import { styles } from './styles.ts';
-import { FileIcon, Icon } from './icon.tsx';
+import { Icon } from '@moonbase/ui/icons';
+import { FileIcon } from '@moonbase/ui/file-icons';
 import { rowHeight, type VisibleRow } from './files-tree-rows.ts';
 import { gitStatusMarks } from './files-tree-status.ts';
 

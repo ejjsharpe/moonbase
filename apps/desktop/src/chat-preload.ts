@@ -1,7 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { channels, isChatWatchKind, unwrap, type ChatBridge, type Reply } from './chat/wire.ts';
 
-// The reviewed bridge uses separate channels; the main process still authenticates every request.
 const active = new Map<string, string>();
 const bridge: ChatBridge = {
   targets: async () =>

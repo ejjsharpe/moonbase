@@ -1,3 +1,4 @@
+import { hostTokenPattern } from '@moonbase/contracts/host';
 import { randomBytes } from 'node:crypto';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 export { maximumChatRequestBytes, maximumChatReplyBytes } from '@moonbase/contracts/chat';
@@ -8,14 +9,14 @@ import {
   findDaemonErrorReason,
   readDaemonErrorReason,
 } from '@moonbase/contracts/daemon';
-import { fail } from './validation.ts';
+import { fail } from '@moonbase/contracts/errors';
 
 /** Bounds one request: the client's wait for its reply and the health listener's request read. */
 export const requestDeadlineMs = 20000;
 
 export const nonce = () => randomBytes(32).toString('base64url');
 export function token(value: unknown): string {
-  if (typeof value !== 'string' || !/^[\x21-\x7e]{16,4096}$/.test(value))
+  if (typeof value !== 'string' || !hostTokenPattern.test(value))
     return fail('InvalidInput', 'Configure a private chat host key.');
   return value;
 }

@@ -232,7 +232,7 @@ test('selected Pi coding-tool runtime executes in the fixed cwd once and retaine
 });
 
 for (const typed of [false, true])
-  test(`R1 create reply-read failure after real commit is uncertain (${typed ? 'typed' : 'unknown'}) and exact retry survives restart`, async (t) => {
+  test(`create reply-read failure after real commit is uncertain (${typed ? 'typed' : 'unknown'}) and exact retry survives restart`, async (t) => {
     const original = Harness.open;
     let harness: Harness | undefined;
     mock.method(
@@ -294,7 +294,7 @@ for (const typed of [false, true])
     );
   });
 
-test('R1 lost typed commit acknowledgement stays uncertain while proven create validation stays definite', async (t) => {
+test('lost typed commit acknowledgement stays uncertain while proven create validation stays definite', async (t) => {
   const original = Harness.open;
   let harness: Harness | undefined;
   mock.method(

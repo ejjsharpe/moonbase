@@ -3,7 +3,7 @@ import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { projectHue, projectInitials, projectTiles } from '@moonbase/ui/projects';
 import { colors, radius, shadow, space, type } from '@moonbase/ui/tokens.stylex';
-import { Icon } from './icon.tsx';
+import { Icon } from '@moonbase/ui/icons';
 
 export type FolderMenuItem = {
   path: string;

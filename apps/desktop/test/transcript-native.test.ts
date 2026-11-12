@@ -51,7 +51,7 @@ for (const [name, text, body] of [
     '\t🌔 é\t  ',
   ],
 ] as const) {
-  test(`R2 renderer-selected native Copy: ${name}`, async () => {
+  test(`renderer-selected native Copy: ${name}`, async () => {
     const f = fixture(false, text);
     try {
       const blocks = new MarkdownCache().parse(name, '1', text);
@@ -72,7 +72,7 @@ for (const [name, text, body] of [
       await f.owner.dispose();
     }
   });
-  test(`R2 native derives the parser-selected block: ${name}`, async () => {
+  test(`native derives the parser-selected block: ${name}`, async () => {
     const f = fixture(false, text);
     try {
       await f.actions.copy({

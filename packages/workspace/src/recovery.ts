@@ -1,3 +1,4 @@
+import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { basename, join } from 'node:path';
 import {
   emptyRecovery,
@@ -31,11 +32,9 @@ import {
 } from './client-store.ts';
 import { invalidStored } from './store.ts';
 import {
-  affected,
   canonical,
   ensure,
   errorText,
-  fail,
   identifier,
   isOriginalResult,
   key,
@@ -44,6 +43,7 @@ import {
   same,
   hash,
 } from './validation.ts';
+import { fail } from '@moonbase/contracts/errors';
 
 /**
  * Applies completed moves, copies and Trash to one recovery. A move onto a path that already holds
@@ -59,7 +59,7 @@ export function reconcile(state: EditorRecovery, records: OperationRecord[]) {
       if (!['move', 'copy', 'trash'].includes(kind)) continue;
       if (kind !== 'trash' && !item.destination) continue;
       const matches = (target: { checkout: CheckoutTarget; path: string }) =>
-        same(target.checkout, record.input.checkout) && affected(target.path, item.source);
+        same(target.checkout, record.input.checkout) && isPathAtOrInside(target.path, item.source);
       const move = (p: string) => item.destination! + p.slice(item.source.length);
       const occupied = (path: string) =>
         state.drafts.some(
@@ -92,7 +92,7 @@ export function reconcile(state: EditorRecovery, records: OperationRecord[]) {
         );
         const view = state.views[record.input.checkout.checkoutId];
         if (view) {
-          const rename = (p: string) => (affected(p, item.source) ? move(p) : p);
+          const rename = (p: string) => (isPathAtOrInside(p, item.source) ? move(p) : p);
           view.openFiles = [...new Set(view.openFiles.map(rename))];
           view.active = rename(view.active);
           if (view.preview) view.preview = rename(view.preview);
@@ -616,7 +616,7 @@ export class WorkspaceRecovery {
       for (const draft of retained?.drafts ?? [])
         if (
           same(draft.target.checkout, record.input.checkout) &&
-          record.input.sources.some((s) => affected(draft.target.path, s.target.path)) &&
+          record.input.sources.some((s) => isPathAtOrInside(draft.target.path, s.target.path)) &&
           !state.drafts.some((d) => same(d.target, draft.target))
         )
           fail(

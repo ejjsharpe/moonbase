@@ -4,7 +4,8 @@ import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/works
 import { maximumBranchName } from '@moonbase/contracts/workspace-host-schema';
 import type { Directory } from './filesystem.ts';
 import type { FileHost } from './host.ts';
-import { ensure, fail, requireGit } from './validation.ts';
+import { ensure, requireGit } from './validation.ts';
+import { fail } from '@moonbase/contracts/errors';
 
 const branchPattern = /^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)*$/i;
 /** Numbered names tried for a taken branch or location before giving up. */

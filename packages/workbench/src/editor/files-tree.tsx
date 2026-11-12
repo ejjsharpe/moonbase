@@ -1,7 +1,8 @@
+import { getParentPath, getPathName, joinPath } from '@moonbase/contracts/paths';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { styles } from './styles.ts';
-import { Icon } from './icon.tsx';
+import { Icon } from '@moonbase/ui/icons';
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { filesUI } from '@moonbase/ui/files';
 import { overlays } from '@moonbase/ui/overlays';
@@ -104,9 +105,6 @@ const isFileDrag = (dataTransfer: DataTransfer) =>
   dataTransfer.types.includes('Files') && !dataTransfer.types.includes(entriesType);
 const isNameField = (target: EventTarget) =>
   target instanceof HTMLElement && target.tagName === 'INPUT';
-const parentOf = (path: string) => path.split('/').slice(0, -1).join('/');
-const join = (folder: string, name: string) => (folder ? `${folder}/${name}` : name);
-const nameOf = (path: string) => path.split('/').at(-1)!;
 /** Whether an element that took focus can take it again. */
 const canRefocus = (element: Element | null): element is HTMLElement =>
   element instanceof HTMLElement &&
@@ -116,8 +114,8 @@ const canRefocus = (element: Element | null): element is HTMLElement =>
   !element.closest('[inert]');
 /** The name a field starts with: an entry's own, its copy's, or none for a new one. */
 function startingName(edit: TreeEdit) {
-  if (edit.kind === 'rename') return nameOf(edit.path);
-  return edit.kind === 'duplicate' ? copyName(nameOf(edit.path), false) : '';
+  if (edit.kind === 'rename') return getPathName(edit.path);
+  return edit.kind === 'duplicate' ? copyName(getPathName(edit.path), false) : '';
 }
 const editLabels: Record<TreeEditKind, string> = {
   rename: 'Rename',
@@ -269,7 +267,7 @@ export function FilesTree({
     pressing = useRef(false),
     releasePressRef = useRef(() => {});
   const creating = edit?.kind === 'create-file' || edit?.kind === 'create-directory';
-  const editParent = edit && (creating ? edit.path : parentOf(edit.path));
+  const editParent = edit && (creating ? edit.path : getParentPath(edit.path));
   let placeholder: RowPlaceholder | undefined;
   if (edit && edit.kind !== 'rename')
     placeholder = {
@@ -414,7 +412,7 @@ export function FilesTree({
   ) {
     const enter = how === 'enter',
       create = current.kind === 'create-file' || current.kind === 'create-directory',
-      parent = create ? current.path : parentOf(current.path);
+      parent = create ? current.path : getParentPath(current.path);
     const end = (focusPath?: string) => {
       endEdit(current, focusPath, enter);
       return null;
@@ -427,7 +425,7 @@ export function FilesTree({
     // Names are taken as typed, spaces included, but one of only spaces is no name.
     if (!name.trim()) return current.kind === 'rename' && enter ? 'Enter a name.' : end();
     if (name.includes('/')) return invalid('A name can’t contain “/”.');
-    if (current.kind === 'rename' && name === nameOf(current.path)) return end(current.path);
+    if (current.kind === 'rename' && name === getPathName(current.path)) return end(current.path);
     const destination = parent ? `${parent}/${name}` : name;
     const directory = isDirectory(current.path);
     let error = '';
@@ -637,7 +635,7 @@ export function FilesTree({
   }
   /** Whether a listed entry of this checkout is a folder. */
   function isDirectory(path: string) {
-    const listing = state.listings[JSON.stringify([checkoutIdentity, parentOf(path)])];
+    const listing = state.listings[JSON.stringify([checkoutIdentity, getParentPath(path)])];
     return !!listing?.entries.find((entry) => entry.path === path)?.directory;
   }
   const rowsById = new Map(rows.map((row) => [rowId(row.path), row]));
@@ -809,7 +807,7 @@ export function FilesTree({
         nativeReferences: references,
         nativeNames: names,
       },
-      references.length > 1 ? folder : join(folder, names[0]),
+      references.length > 1 ? folder : joinPath(folder, names[0]),
       { finalFocus: returnTreeFocus },
     );
     const landed = result.items.flatMap((item) =>

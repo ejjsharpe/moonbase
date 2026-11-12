@@ -99,6 +99,15 @@ export type ChatDependencies = {
    */
   transcriptWatchHealthyMs?: number;
 };
+/**
+ * A unit of work that ends together. Owners nest: the attachment (Start until Detach) holds the
+ * connection owner (one per connected host), which holds the refresh owner and the selection (the
+ * open chat). Closing one closes its scope, interrupting its fibers and watches, and those beneath it.
+ *
+ * `alive` turns false the moment an owner closes, before its scope finishes closing. Callbacks from
+ * watches run outside Effect and can't be interrupted, so they check it, as does code that resumes
+ * between the close and the interruption.
+ */
 type Owner = {
   scope: Scope.Closeable;
   alive: boolean;
@@ -108,7 +117,8 @@ type Owner = {
 };
 type Observation = {
   ready: Deferred.Deferred<Exit.Exit<ObservationClose>>;
-  generation?: Owner;
+  /** The connection the watch belongs to, so Disconnect can close exactly its watches. */
+  connectionOwner?: Owner;
   outcome?: Promise<Exit.Exit<void>>;
 };
 /** One watch of the selected chat; it stops delivering once it fails. */
@@ -158,13 +168,15 @@ class ChatModelState {
   private scope: Scope.Closeable;
   private attachment?: Owner;
   private detaching?: Promise<void>;
-  private generation?: Owner;
+  private connectionOwner?: Owner;
   private selection?: Owner & { target: ChatTarget };
   private refreshOwner?: Owner;
   private observations = new Set<Observation>();
   // A closing child scope detaches from its parent, so disposal joins already-closing owners here.
   private transcripts = new Set<TranscriptOwner>();
+  /** Bumped whenever what the view shows changes (connection, selection, close, detach). */
   private epoch = 0;
+  /** Counts connection states the watch delivered, so a slower read never overwrites one. */
   private connectionRevision = 0;
   private closed = false;
   private admissionsOpen = true;
@@ -250,6 +262,10 @@ class ChatModelState {
         ? 'Disconnected. Connect explicitly; reconnect never resends a message.'
         : 'Local chat. Tools run on this computer; a working folder is not a filesystem sandbox.',
     };
+  }
+  /** Whether new work may start: admissions are open and the model is not disposed. */
+  private get accepting() {
+    return this.admissionsOpen && !this.closed;
   }
   /** Composition fences admissions; retained command results may still reconcile. */
   setAdmissionsOpen(open: boolean) {
@@ -364,12 +380,12 @@ class ChatModelState {
   private observe(
     owner: Owner,
     acquire: () => ObservationClose,
-    generation?: Owner,
+    connectionOwner?: Owner,
   ): Effect.Effect<Observation | undefined, ApplicationError> {
     return Effect.gen({ self: this }, function* () {
       if (!owner.alive || this.closed) return undefined;
       // A synchronous watch callback can reenter disposal before acquisition returns.
-      const observation: Observation = { ready: Deferred.makeUnsafe(), generation };
+      const observation: Observation = { ready: Deferred.makeUnsafe(), connectionOwner };
       this.observations.add(observation);
       owner.observations.add(observation);
       const acquired = yield* Effect.exit(
@@ -416,12 +432,7 @@ class ChatModelState {
     duplicate = true,
     current: () => boolean = () => true,
   ): Promise<void> {
-    if (
-      !this.admissionsOpen ||
-      this.closed ||
-      (owner && !owner.alive) ||
-      (duplicate && this.actions.has(name))
-    )
+    if (!this.accepting || (owner && !owner.alive) || (duplicate && this.actions.has(name)))
       return Promise.resolve();
     this.actions.set(name, (this.actions.get(name) ?? 0) + 1);
     this.update({ active: [...this.actions.keys()], error: null });
@@ -442,10 +453,10 @@ class ChatModelState {
       });
   }
   start(): Promise<void> {
-    if (!this.admissionsOpen || this.attachment?.alive || this.closed) return Promise.resolve();
+    if (!this.accepting || this.attachment?.alive) return Promise.resolve();
     const owner = (this.attachment = this.owner());
     if (!this.connection) {
-      this.generation = this.owner(owner);
+      this.connectionOwner = this.owner(owner);
       return Promise.all([this.refresh(), this.providers?.refresh()]).then(() => {});
     }
     let received = false;
@@ -485,14 +496,14 @@ class ChatModelState {
     const changed =
       previous?.connectionId !== state.connectionId ||
       previous?.state !== state.state ||
-      (state.state === 'connected' && !this.generation?.alive);
-    // A repeated event is ready only once refresh has verified this generation's host.
+      (state.state === 'connected' && !this.connectionOwner?.alive);
+    // A repeated event is ready only once refresh has verified this connection's host.
     this.update({ connection: state, ready: state.state === 'connected' && !!this.state.host });
     if (!changed) return;
     this.epoch++;
     void this.selection?.transcript?.close();
-    void this.closeOwner(this.generation);
-    if (state.state === 'connected') this.generation = this.owner(this.attachment);
+    void this.closeOwner(this.connectionOwner);
+    if (state.state === 'connected') this.connectionOwner = this.owner(this.attachment);
     this.selection = undefined;
     this.refreshOwner = undefined;
     this.update({
@@ -503,6 +514,15 @@ class ChatModelState {
     });
     if (state.state === 'connected') void this.refresh();
   }
+  /**
+   * Whether a connection state read now is still the latest when its reply arrives: the same
+   * attachment, and no watch event delivered in between.
+   */
+  private captureConnectionState() {
+    const attachment = this.attachment,
+      revision = this.connectionRevision;
+    return () => attachment === this.attachment && revision === this.connectionRevision;
+  }
   connect = () =>
     this.action(
       'connect',
@@ -510,19 +530,17 @@ class ChatModelState {
         if (!this.connection) return;
         const state = this.state.connection;
         if (!state) return;
-        const attachment = this.attachment,
-          revision = this.connectionRevision;
+        const isLatest = this.captureConnectionState();
         const connected = yield* Effect.tryPromise({
           try: (signal) =>
             this.connection!.command('connect', { profileId: state.profile.id }, { signal }),
           catch: normalizeApplicationError,
         });
-        if (attachment === this.attachment && revision === this.connectionRevision)
-          this.onConnection(connected);
+        if (isLatest()) this.onConnection(connected);
       }),
     );
   disconnect = () => {
-    const generation = this.generation,
+    const connection = this.connectionOwner,
       id = this.state.connection?.connectionId;
     return this.action(
       'disconnect',
@@ -530,47 +548,47 @@ class ChatModelState {
         if (
           !this.connection ||
           !id ||
-          this.generation !== generation ||
+          this.connectionOwner !== connection ||
           this.state.connection?.connectionId !== id
         )
           return;
         const selection = this.selection;
-        void this.closeOwner(generation);
+        void this.closeOwner(connection);
         void selection?.transcript?.close();
-        if (this.generation === generation) this.update({ ready: false });
+        if (this.connectionOwner === connection) this.update({ ready: false });
         const outcomes = yield* Effect.promise(() =>
           Promise.all(
             [...this.observations]
               .filter(
                 (observation) =>
-                  observation.generation !== undefined && observation.generation === generation,
+                  observation.connectionOwner !== undefined &&
+                  observation.connectionOwner === connection,
               )
               .map((observation) => this.closeObservation(observation)),
           ),
         );
         for (const outcome of outcomes) yield* outcome;
-        if (this.generation !== generation || this.state.connection?.connectionId !== id) return;
+        if (this.connectionOwner !== connection || this.state.connection?.connectionId !== id)
+          return;
         yield* Effect.tryPromise({
           try: (signal) => this.connection!.command('disconnect', { connectionId: id }, { signal }),
           catch: normalizeApplicationError,
         });
-        const attachment = this.attachment,
-          revision = this.connectionRevision;
+        const isLatest = this.captureConnectionState();
         const state = yield* Effect.tryPromise({
           try: (signal) => this.connection!.command('getConnection', {}, { signal }),
           catch: normalizeApplicationError,
         });
-        if (attachment === this.attachment && revision === this.connectionRevision)
-          this.onConnection(state);
+        if (isLatest()) this.onConnection(state);
       }),
       undefined,
       true,
-      () => this.generation === generation,
+      () => this.connectionOwner === connection,
     );
   };
   private connected() {
     if (
-      !this.generation?.alive ||
+      !this.connectionOwner?.alive ||
       (this.connection && this.state.connection?.state !== 'connected')
     )
       throw new ApplicationError({
@@ -580,8 +598,8 @@ class ChatModelState {
     return this.epoch;
   }
   refresh = (): Promise<void> => {
-    if (!this.admissionsOpen || this.closed) return Promise.resolve();
-    if (!this.generation?.alive)
+    if (!this.accepting) return Promise.resolve();
+    if (!this.connectionOwner?.alive)
       return this.action(
         'refresh',
         Effect.sync(() => {
@@ -589,7 +607,7 @@ class ChatModelState {
         }),
       );
     void this.closeOwner(this.refreshOwner);
-    const owner = (this.refreshOwner = this.owner(this.generation));
+    const owner = (this.refreshOwner = this.owner(this.connectionOwner));
     const epoch = this.epoch;
     return this.action(
       'refresh',
@@ -642,7 +660,7 @@ class ChatModelState {
     );
   };
   moreChats = () => {
-    const owner = this.generation;
+    const owner = this.connectionOwner;
     return this.action(
       'chats',
       Effect.gen({ self: this }, function* () {
@@ -726,8 +744,8 @@ class ChatModelState {
     }));
   };
   private listAgain(): Promise<void> | undefined {
-    const owner = this.generation;
-    if (!this.admissionsOpen || this.closed || !owner?.alive || !this.state.ready) return;
+    const owner = this.connectionOwner;
+    if (!this.accepting || !owner?.alive || !this.state.ready) return;
     let epoch: number;
     try {
       epoch = this.connected();
@@ -812,7 +830,7 @@ class ChatModelState {
                 recover(error, attempt);
               },
             ),
-          this.generation,
+          this.connectionOwner,
         );
         if (!attempt.open && attempt.observation) void this.closeObservation(attempt.observation);
       }).pipe(
@@ -865,7 +883,7 @@ class ChatModelState {
    */
   watchChats = (): Promise<void> => {
     const owner = this.refreshOwner;
-    if (!this.admissionsOpen || this.closed || !owner?.alive || !this.state.ready) {
+    if (!this.accepting || !owner?.alive || !this.state.ready) {
       return Promise.resolve();
     }
     if (this.chatsFollowed === owner) return Promise.resolve();
@@ -873,7 +891,7 @@ class ChatModelState {
   };
   /** Records that you saw a chat as of its activity time; an older look never replaces a newer one. */
   markSeen(conversationId: string, at: string) {
-    if (!this.admissionsOpen || this.closed || this.state.storageError) return;
+    if (!this.accepting || this.state.storageError) return;
     const seen = this.saved.seen ?? [];
     const current = seen.find((item) => item.conversationId === conversationId);
     if (current && Date.parse(current.at) >= Date.parse(at)) return;
@@ -891,7 +909,7 @@ class ChatModelState {
   }
   firstChats = () => this.refresh();
   setModelPreference(value: ChatModelPreference) {
-    if (!this.admissionsOpen || this.closed) return;
+    if (!this.accepting) return;
     try {
       const preference = Schema.decodeUnknownSync(ChatModelPreferenceSchema, {
         onExcessProperty: 'error',
@@ -909,7 +927,7 @@ class ChatModelState {
    * its text still spells, so deleting a mention's text drops the mention.
    */
   setDraft(value: string, mentions?: readonly ChatMention[]) {
-    if (!this.admissionsOpen || this.closed) return;
+    if (!this.accepting) return;
     if (!text(value, 32768)) {
       this.update({ error: 'Message must contain valid Unicode and at most 32 KiB.' });
       return;
@@ -994,7 +1012,7 @@ class ChatModelState {
     return new ChatFileSearch((query, options) => this.findFiles(query, options));
   }
   select = (target: ChatTarget): Promise<void> => {
-    if (!this.admissionsOpen || this.closed) return Promise.resolve();
+    if (!this.accepting) return Promise.resolve();
     try {
       const captured = decodeChatInput('getChat', { target }).target;
       if (!sameSession(captured, this.session)) throw invalid('Chat belongs to another context.');
@@ -1015,7 +1033,7 @@ class ChatModelState {
       const opening = this.action(
         'open',
         this.openSelected(captured),
-        this.generation,
+        this.connectionOwner,
         false,
         () => epoch === this.epoch && sameTarget(this.saved.selected, captured),
       );
@@ -1026,7 +1044,7 @@ class ChatModelState {
     }
   };
   closeView(): Promise<void> {
-    if (!this.admissionsOpen || this.closed) return Promise.resolve();
+    if (!this.accepting) return Promise.resolve();
     try {
       this.commit({ ...structuredClone(this.saved), selected: null });
       this.epoch++;
@@ -1042,12 +1060,12 @@ class ChatModelState {
   }
   private openSelected(target: ChatTarget): Effect.Effect<void, ApplicationError> {
     return Effect.gen({ self: this }, function* () {
-      if (!this.attachment?.alive || !this.generation?.alive || this.closed) return;
+      if (!this.attachment?.alive || !this.connectionOwner?.alive || this.closed) return;
       // A chat opens only on a host that refresh has verified.
       if (!this.state.host) return;
       if (this.selection?.alive && sameTarget(this.selection.target, target)) return;
       void this.closeOwner(this.selection);
-      const owner = (this.selection = Object.assign(this.owner(this.generation), {
+      const owner = (this.selection = Object.assign(this.owner(this.connectionOwner), {
         target: structuredClone(target),
       }));
       const epoch = this.epoch;
@@ -1114,7 +1132,7 @@ class ChatModelState {
                   recover(error, attempt);
                 },
               ),
-            this.generation,
+            this.connectionOwner,
           );
           // A watch that failed while subscribing still holds its subscription.
           if (!attempt.open && attempt.observation) void this.closeObservation(attempt.observation);
@@ -1180,7 +1198,7 @@ class ChatModelState {
     });
   }
   private transcriptOwner() {
-    if (!this.admissionsOpen || this.closed) return undefined;
+    if (!this.accepting) return undefined;
     return this.selection?.alive ? this.selection.transcript : undefined;
   }
   openFind = () => this.transcriptOwner()?.openFind();
@@ -1344,7 +1362,7 @@ class ChatModelState {
           this.selection.transcript?.updateConversation(summary);
         if (this.chatsFollowed !== this.refreshOwner) void this.reloadChats({ latest: true });
       }),
-      this.generation,
+      this.connectionOwner,
     );
   retry = (id: string) =>
     this.action(
@@ -1366,7 +1384,7 @@ class ChatModelState {
         const pending = this.saved.pending.find((item) => item.input.requestId === id);
         if (pending) yield* this.queryPending(pending);
       }),
-      this.generation,
+      this.connectionOwner,
     );
   private queryPending(pending: Pending): Effect.Effect<void, ApplicationError> {
     return Effect.gen({ self: this }, function* () {
@@ -1489,11 +1507,11 @@ class ChatModelState {
             ],
           });
           if (
-            this.generation?.alive &&
+            this.connectionOwner?.alive &&
             sameTarget(this.saved.selected, receipt.conversation.target)
           ) {
             const target = receipt.conversation.target;
-            void this.action('open', this.openSelected(target), this.generation, false, () =>
+            void this.action('open', this.openSelected(target), this.connectionOwner, false, () =>
               sameTarget(this.saved.selected, target),
             );
           }

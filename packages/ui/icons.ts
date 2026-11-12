@@ -1,3 +1,4 @@
+import { createElement } from 'react';
 import {
   IconArchive,
   IconArchiveRestore,
@@ -101,3 +102,8 @@ export const icons = {
   check: IconCheck,
   follow: IconCrosshair,
 } as const;
+
+/** A named icon at the shared size and stroke, hidden from assistive technology. */
+export function Icon({ name }: { name: keyof typeof icons }) {
+  return createElement(icons[name], { size: 16, stroke: 1.5, 'aria-hidden': true });
+}

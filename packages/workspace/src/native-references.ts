@@ -4,7 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
 import type { Directory } from './filesystem.ts';
 import { NativeImport } from './native-import.ts';
-import { checkout, ensure, fail, identifier, same } from './validation.ts';
+import { checkout, ensure, identifier, same } from './validation.ts';
+import { fail } from '@moonbase/contracts/errors';
 
 type NativeReference = {
   source: NativeImport;

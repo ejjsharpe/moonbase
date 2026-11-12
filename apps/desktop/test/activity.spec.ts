@@ -7,11 +7,8 @@ import {
   transcriptList,
 } from './transcript-list.ts';
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { mkdir } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { readFindHighlight } from './find-highlight.ts';
 
-const output = resolve('../../test-results/transcript-112');
 async function open(page: Page) {
   await page.goto('/?local&design&transcript');
   await page.getByRole('button', { name: /^Conversation/ }).click();
@@ -21,7 +18,7 @@ const live = (page: Page) => page.locator('[data-transcript-live]');
 for (const source of ['durable', 'live'] as const)
   test(`${source} failed result keeps originating call evidence through a held and failed first manifest read`, async ({
     page,
-  }, testInfo) => {
+  }) => {
     await open(page);
     await page.evaluate(async (source) => {
       const result = [
@@ -106,7 +103,6 @@ for (const source of ['durable', 'live'] as const)
     await expect(
       result.locator('[data-transcript-step]').filter({ hasText: 'Partial failed' }),
     ).toHaveCount(0);
-    await page.screenshot({ path: testInfo.outputPath('failed-first-manifest.png') });
     await expect(origin).toContainText('Read failed.txt · failed');
     // Opening the call's card opens its output beneath it, retained failure and all.
     await openActivity(origin);
@@ -303,15 +299,13 @@ test('requested and executed arguments, unknown JSON and interrupted partial res
   expect(await page.evaluate(() => window.demo.transcript!.copied.at(-1))).toBe(
     '{"published":"inert details"}',
   );
-  await mkdir(output, { recursive: true });
-  for (const [name, width, height] of [
+  for (const [, width, height] of [
     ['normal', 1440, 900],
     ['compact', 540, 844],
     ['zoom-200', 720, 450],
   ] as const) {
     await page.setViewportSize({ width, height });
     await row.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: resolve(output, `${name}.png`) });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
       true,
     );
@@ -321,7 +315,7 @@ for (const manifest of [false, true])
   for (const focus of [false, true])
     test(`same-source thinking/tool appends after loaded manifest=${manifest} focus=${focus}`, async ({
       page,
-    }, testInfo) => {
+    }) => {
       await open(page);
       await page.evaluate(async () => {
         await window.demo.transcript!.record([
@@ -444,7 +438,6 @@ for (const manifest of [false, true])
       await update('first and next again, held locally', true);
       await expect(group).toHaveAttribute('aria-expanded', 'false');
       await expect(thought.locator('pre')).not.toBeVisible();
-      await page.screenshot({ path: testInfo.outputPath('same-source-progress.png') });
     });
 for (const outcome of ['success', 'error'] as const)
   test(`same-source current content and complete Copy survive held old content ${outcome}`, async ({
@@ -938,7 +931,7 @@ test("Find revealing a match in a call's output shows the call's card open, and 
 for (const valid of [false, true])
   test(`EOF patch source without terminal newline stays exact in Copy: ${valid ? 'valid replacement' : 'truncated replacement'}`, async ({
     page,
-  }, testInfo) => {
+  }) => {
     await open(page);
     const source = '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old' + (valid ? '\n+new' : '');
     await page.evaluate(async (source) => {
@@ -959,7 +952,6 @@ for (const valid of [false, true])
     await expect
       .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
       .toBe(source);
-    await page.screenshot({ path: testInfo.outputPath('patch.png') });
     if (valid) {
       const table = row.getByRole('table');
       await expect(table.getByRole('row').filter({ hasText: '-old' })).toHaveText('1-old');
@@ -1010,9 +1002,7 @@ test('historical patches retain real coordinates, malformed/numbered/large fallb
   const table = first.getByRole('table');
   await expect(table.getByRole('row').filter({ hasText: '-old 🌔' })).toHaveText('42-old 🌔');
   await expect(table.getByRole('row').filter({ hasText: '+new 🌔' })).toHaveText('81+new 🌔');
-  await mkdir(output, { recursive: true });
   await first.getByRole('region', { name: 'Recorded unified patch' }).scrollIntoViewIfNeeded();
-  await page.screenshot({ path: resolve(output, 'unified-hunks.png') });
   await first.getByRole('button', { name: 'Copy patch', exact: true }).click();
   expect(await page.evaluate(() => window.demo.transcript!.copied.at(-1))).toBe(patch);
   const malformed = row.locator('[data-transcript-part="m0.b1"]');
@@ -1031,8 +1021,6 @@ test('historical patches retain real coordinates, malformed/numbered/large fallb
   await expect(large).toContainText('Source 15,999');
   await large.getByRole('button', { name: 'Copy patch', exact: true }).click();
   expect(await page.evaluate(() => window.demo.transcript!.copied.at(-1))).toBe(huge);
-  await mkdir(output, { recursive: true });
-  await page.screenshot({ path: resolve(output, 'historical-patches.png') });
 });
 test('a running response shows no status notes; redaction is honest; stopped partial activity survives without provider signatures', async ({
   page,

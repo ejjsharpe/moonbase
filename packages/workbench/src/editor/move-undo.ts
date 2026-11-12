@@ -1,3 +1,4 @@
+import { getParentPath } from '@moonbase/contracts/paths';
 import { useEffect, useRef, useState } from 'react';
 import type { CheckoutTarget, DirectoryEntry } from '@moonbase/contracts/workspace';
 import { checkoutKey, readOwn, type EditorController } from '@moonbase/application/editor';
@@ -11,8 +12,6 @@ import {
 } from './files-tree-drop.ts';
 import type { RunMutation } from './mutation-runner.tsx';
 
-const parentOf = (path: string) => path.split('/').slice(0, -1).join('/');
-
 /**
  * Expands the folders that show `paths` in a checkout's tree, lists the newly expanded ones, and
  * selects `paths`, focusing the first.
@@ -24,9 +23,9 @@ export function selectEntries(
 ) {
   const tree = readOwn(controller.getSnapshot().recovery.views, checkout.checkoutId)?.tree;
   if (!tree || !paths.length) return;
-  const opening = [...new Set(paths.flatMap((path) => listFoldersToExpand(parentOf(path))))].filter(
-    (folder) => !tree.expanded.includes(folder),
-  );
+  const opening = [
+    ...new Set(paths.flatMap((path) => listFoldersToExpand(getParentPath(path)))),
+  ].filter((folder) => !tree.expanded.includes(folder));
   controller.tree(checkout, {
     expanded: [...tree.expanded, ...opening],
     focus: paths[0],
@@ -58,7 +57,7 @@ export async function listFolders(
         // The editor reports the failure; whether the folder is gone is decided below.
       }
       if (!folder) return 'unlisted';
-      const parent = await read(parentOf(folder));
+      const parent = await read(getParentPath(folder));
       if (parent === 'unlisted') return parent;
       if (parent === 'gone' || !parent.some((entry) => entry.path === folder && entry.directory))
         return 'gone';
@@ -150,7 +149,9 @@ export function useMoveUndo(
     undoing.current = true;
     try {
       const folders = [
-        ...new Set(current.moves.flatMap((move) => [parentOf(move.to), parentOf(move.from)])),
+        ...new Set(
+          current.moves.flatMap((move) => [getParentPath(move.to), getParentPath(move.from)]),
+        ),
       ];
       const { listings, unlisted } = await listFolders(controller, checkout, folders);
       if (unlisted !== undefined) {

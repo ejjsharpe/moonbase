@@ -27,7 +27,8 @@ import {
 } from '@moonbase/contracts/socket-schema';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import * as P from './protocol.ts';
-import * as V from './validation.ts';
+import { isCancellableChatRead, isSameChatHost } from '@moonbase/contracts/chat-validation';
+import { fail } from '@moonbase/contracts/errors';
 import {
   chunkPayload,
   payloadChunks,
@@ -256,7 +257,7 @@ type Registry = {
 const isCancellable = (operation: string) =>
   isHostCommand(operation)
     ? !isHostMutation(operation)
-    : isChatCommand(operation) && V.isCancellableRead(operation);
+    : isChatCommand(operation) && isCancellableChatRead(operation);
 /** A running request: what cancels it, and the chunked input it holds of `chunkedBytes`. */
 type Running = { controller: AbortController; cancellable: boolean; charged: number };
 /** An encoded workspace reply waiting to be written, and its next chunk. */
@@ -362,7 +363,7 @@ class Session {
     if (
       message.type !== 'hello' ||
       message.seq !== 0 ||
-      !V.sameHost(message.host, this.context.host)
+      !isSameChatHost(message.host, this.context.host)
     )
       return this.fail();
     const keys = deriveSocketKeys(this.context.token, {
@@ -386,7 +387,7 @@ class Session {
   /** An authenticated message is the next in sequence, or the connection closes. */
   private open(bytes: Buffer): SocketClientMessage {
     const message = decodeSocketClientMessage(openSocketMessage(this.keys!.client, bytes));
-    if (message.seq !== this.received) V.fail('Unauthorized', 'Socket message is out of sequence.');
+    if (message.seq !== this.received) fail('Unauthorized', 'Socket message is out of sequence.');
     this.received++;
     return message;
   }
@@ -558,7 +559,7 @@ class Session {
       kind === 'workspace'
         ? (target as SocketSubscriptionTarget<'workspace'>).checkout.hostId ===
           this.context.host.hostId
-        : V.sameHost((target as { host: ChatHostTarget }).host, this.context.host);
+        : isSameChatHost((target as { host: ChatHostTarget }).host, this.context.host);
     if (!own) return refuse('Unauthorized');
     // Workspace subscriptions have a limit of their own, so open projects don't crowd out chats.
     const workspace = kind === 'workspace',
@@ -649,7 +650,7 @@ class Session {
           !workspace ||
           !this.context.health.capabilities.includes(chatHostCapabilities.workspace)
         )
-          return V.fail('Incompatible', 'This host does not serve the workspace.');
+          return fail('Incompatible', 'This host does not serve the workspace.');
         feed.close = workspace.watch(
           feed.target as SocketSubscriptionTarget<'workspace'>,
           receive,
@@ -665,7 +666,7 @@ class Session {
         !subscribe ||
         !this.context.health.capabilities.includes(daemonCommandCapabilities.getProviders)
       )
-        return V.fail('Incompatible', 'This host does not serve provider setup.');
+        return fail('Incompatible', 'This host does not serve provider setup.');
       // A provider read follows each change, one at a time; changes during a read start one more.
       const target = feed.target as SocketSubscriptionTarget<'providerSetup'>;
       const stop = followChanges(

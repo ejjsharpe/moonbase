@@ -32,7 +32,6 @@ bun run typecheck
 bun run lint
 bun run test
 bun run format:check
-bun run --cwd packages/contracts check:socket-schema
 bun run test:editor-integration
 bun run test:chat-integration
 ```

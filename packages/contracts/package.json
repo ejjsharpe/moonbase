@@ -19,6 +19,7 @@
     "./errors": "./src/errors.ts",
     "./common": "./src/common.ts",
     "./lookup": "./src/lookup.ts",
+    "./paths": "./src/paths.ts",
     "./services": "./src/services.ts",
     "./providers": "./src/providers.ts",
     "./providers-schema": "./src/providers-schema.ts",
@@ -30,9 +31,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint .",
-    "test": "node --experimental-strip-types --test test/*.test.ts",
-    "socket-schema": "node --experimental-strip-types scripts/socket-schema.ts",
-    "check:socket-schema": "node --experimental-strip-types scripts/socket-schema.ts --check"
+    "test": "node --experimental-strip-types --test test/*.test.ts"
   },
   "dependencies": {
     "effect": "4.1.0"

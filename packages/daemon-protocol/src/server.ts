@@ -1,3 +1,9 @@
+import { hostTokenPattern } from '@moonbase/contracts/host';
+import {
+  ChatHostTargetSchema,
+  decodeChatInput,
+  isChatCommand,
+} from '@moonbase/contracts/chat-schema';
 import type { AddressInfo } from 'node:net';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { Cause, Effect, Exit, type ManagedRuntime } from 'effect';
@@ -39,9 +45,13 @@ import {
 } from '@moonbase/contracts/host';
 import { releaseResource } from '@moonbase/effect';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import { ChatHostTargetSchema } from '@moonbase/contracts/chat-schema';
 import * as P from './protocol.ts';
-import * as V from './validation.ts';
+import {
+  checkChatOutput,
+  isCancellableChatRead,
+  isSameChatHost,
+} from '@moonbase/contracts/chat-validation';
+import { fail } from '@moonbase/contracts/errors';
 import { createSocketServer, type SocketSources } from './socket-server.ts';
 import { systemSocketClock, type SocketClock } from './socket-protocol.ts';
 
@@ -53,7 +63,7 @@ export type ChatServerConfiguration = { host: ChatHostTarget; token: string; por
 const decodeServerConfiguration = Schema.decodeUnknownSync(
   Schema.Struct({
     host: ChatHostTargetSchema,
-    token: Schema.String.check(Schema.makeFilter((value) => /^[\x21-\x7e]{16,4096}$/.test(value))),
+    token: Schema.String.check(Schema.makeFilter((value) => hostTokenPattern.test(value))),
     port: Schema.Number.check(
       Schema.makeFilter((value) => Number.isSafeInteger(value) && value >= 0 && value <= 65535),
     ),
@@ -64,7 +74,7 @@ function readServerConfiguration(value: unknown) {
   try {
     return decodeServerConfiguration(value);
   } catch {
-    return V.fail('InvalidInput', 'Invalid private chat configuration or cursor.');
+    return fail('InvalidInput', 'Invalid private chat configuration or cursor.');
   }
 }
 /**
@@ -134,13 +144,13 @@ export const serveChat = (
           },
           expected,
         );
-        const configuration = V.output(
+        const configuration = checkChatOutput(
           'getChatHost',
           await client.command('getChatHost', { host: expected }),
           { host: expected },
         );
         if (JSON.stringify(configuration).includes(token))
-          V.fail(
+          fail(
             'InvalidInput',
             'Keep the private host key separate from public chat identities and settings.',
           );
@@ -155,11 +165,11 @@ export const serveChat = (
           input: DaemonInput<K>,
         ): Promise<DaemonOutput<K>> => {
           const shape = input as { host?: ChatHostTarget; target?: { host: ChatHostTarget } };
-          if (!V.sameHost(shape.host ?? shape.target!.host, expected))
-            V.fail('Unauthorized', 'Daemon request target differs from this host.');
+          if (!isSameChatHost(shape.host ?? shape.target!.host, expected))
+            fail('Unauthorized', 'Daemon request target differs from this host.');
           // Only what health advertises is served, however the daemon's services were composed.
           if (!health.capabilities.includes(daemonCommandCapabilities[operation]))
-            V.fail('Incompatible', 'This host does not serve that operation.');
+            fail('Incompatible', 'This host does not serve that operation.');
           // Whether the daemon refused the request outright, so nothing of it applied.
           let refused = false;
           const run = async () => {
@@ -173,7 +183,7 @@ export const serveChat = (
               requestId !== undefined &&
               (value as { requestId?: string }).requestId !== requestId
             )
-              V.fail('Unavailable', 'Daemon request identity changed.');
+              fail('Unavailable', 'Daemon request identity changed.');
             return value;
           };
           if (!isDaemonMutation(operation)) return run();
@@ -183,7 +193,7 @@ export const serveChat = (
             prior = daemonRequests.get(key);
           if (prior) {
             if (prior.operation !== operation || !areJsonValuesEqual(prior.input, input))
-              V.fail('InvalidInput', 'Request ID is bound to another operation or input.');
+              fail('InvalidInput', 'Request ID is bound to another operation or input.');
             return prior.outcome as Promise<DaemonOutput<K>>;
           }
           const outcome = run();
@@ -211,10 +221,10 @@ export const serveChat = (
         ) => {
           const workspace = socket?.workspace;
           if (!workspace || !health.capabilities.includes(chatHostCapabilities.workspace))
-            return V.fail('Incompatible', 'This host does not serve that operation.');
+            return fail('Incompatible', 'This host does not serve that operation.');
           const checkout = hostInputCheckout(input);
           if (checkout && checkout.hostId !== expected.hostId)
-            V.fail('Unauthorized', 'Workspace request target differs from this host.');
+            fail('Unauthorized', 'Workspace request target differs from this host.');
           return workspace.command(
             operation,
             input,
@@ -227,12 +237,13 @@ export const serveChat = (
             return dispatchWorkspace(operation, decodeHostInput(operation, input), signal);
           if (daemon && isDaemonCommand(operation))
             return dispatchDaemon(operation, decodeDaemonInput(operation, input));
-          const command = V.command(operation),
-            decoded = V.input(command, input);
+          if (!isChatCommand(operation)) return fail('InvalidInput', 'Unknown chat operation.');
+          const command = operation,
+            decoded = decodeChatInput(command, input);
           return client.command(
             command,
             decoded,
-            V.isCancellableRead(command) ? { signal } : undefined,
+            isCancellableChatRead(command) ? { signal } : undefined,
           );
         };
         const describeFailure = (operation: unknown, error: unknown) =>
@@ -331,7 +342,7 @@ export const serveChat = (
         server.on('upgrade', (request, upgraded, head) => sockets.upgrade(request, upgraded, head));
         const address = server.address();
         if (!address || typeof address === 'string')
-          V.fail('Unavailable', 'Chat loopback listener did not open.');
+          fail('Unavailable', 'Chat loopback listener did not open.');
         return {
           origin: `http://127.0.0.1:${(address as AddressInfo).port}`,
           close: async () => {

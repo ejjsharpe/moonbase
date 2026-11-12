@@ -24,7 +24,8 @@ import { controls } from '@moonbase/ui/controls';
 import { checkoutName, projectHue, projectInitials, projectTiles } from '@moonbase/ui/projects';
 import { colors, radius, shadow, space, type } from '@moonbase/ui/tokens.stylex';
 import { workbench } from '@moonbase/ui/workbench';
-import { FileIcon, Icon } from './icon.tsx';
+import { Icon } from '@moonbase/ui/icons';
+import { FileIcon } from '@moonbase/ui/file-icons';
 
 /** Something besides a file that Go to can jump to, supplied by the workbench or its app. */
 export type PickerEntry = {

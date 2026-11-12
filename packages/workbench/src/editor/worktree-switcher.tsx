@@ -8,7 +8,7 @@ import { controls } from '@moonbase/ui/controls';
 import { overlays } from '@moonbase/ui/overlays';
 import { checkoutName, projectHue, projectInitials, projectTiles } from '@moonbase/ui/projects';
 import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
-import { Icon } from './icon.tsx';
+import { Icon } from '@moonbase/ui/icons';
 
 /**
  * The project sidebar's header: the checkout's name and branch. It opens a menu of the

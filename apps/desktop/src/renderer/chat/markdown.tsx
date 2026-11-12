@@ -10,7 +10,7 @@ import {
 } from 'react';
 import { Button } from '@base-ui/react/button';
 import { Collapsible } from '@base-ui/react/collapsible';
-import { Icon } from '../icon.tsx';
+import { Icon } from '@moonbase/ui/icons';
 import * as stylex from '@stylexjs/stylex';
 import * as monaco from 'monaco-editor';
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';

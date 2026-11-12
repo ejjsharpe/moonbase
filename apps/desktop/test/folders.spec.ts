@@ -24,7 +24,6 @@ test('a plain-folder project offers Initialize Git, which makes it a Git project
   await expect(page.getByRole('button', { name: /^Switch worktree/ })).toHaveCount(0);
   await expect(page.getByRole('group', { name: 'Sidebar view', exact: true })).toHaveCount(0);
   const initialize = page.getByRole('button', { name: 'Initialize Git', exact: true });
-  await page.screenshot({ path: test.info().outputPath('plain-folder.png') });
 
   await initialize.click();
   const repository = projects.getByRole('tab', { name: 'notes · main', exact: true });
@@ -57,7 +56,6 @@ test('a plain-folder project offers Initialize Git, which makes it a Git project
       exact: true,
     }),
   ).toBeVisible();
-  await page.screenshot({ path: test.info().outputPath('initialized-folder.png') });
 });
 
 test('Initialize Git is disabled and shows its progress while git init runs', async ({ page }) => {

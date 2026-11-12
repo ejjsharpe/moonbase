@@ -11,7 +11,7 @@ import {
   chatInputSchemas,
   ChatReasoningEffortSchema,
 } from '@moonbase/contracts/chat-schema';
-import { fail } from './validation.ts';
+import { fail } from '@moonbase/contracts/errors';
 
 const text = (bytes: number) =>
   Schema.String.check(

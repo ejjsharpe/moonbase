@@ -53,7 +53,8 @@ import { ExplorerMenu, type ExplorerAction } from './explorer-menu.tsx';
 import { CheatSheet, editorShortcuts, type Shortcut } from './cheat-sheet.tsx';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { styles } from './styles.ts';
-import { FileIcon, Icon } from './icon.tsx';
+import { Icon } from '@moonbase/ui/icons';
+import { FileIcon } from '@moonbase/ui/file-icons';
 
 type FocusOrigin = 'editor' | 'strip' | 'tree';
 const focusOrigin = (element: HTMLElement): FocusOrigin => {

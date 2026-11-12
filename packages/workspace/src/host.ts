@@ -1,3 +1,4 @@
+import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { Cause, Deferred, Effect, Exit, Scope, type Fiber, type FiberSet } from 'effect';
 import { decodeHostInput, decodeHostOutput } from '@moonbase/contracts/workspace-host-schema';
 import { releaseResource } from '@moonbase/effect';
@@ -15,7 +16,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { Store } from './store.ts';
-import { admit, applicationError, type AdmissionOwner } from './admission.ts';
+import { admit, applicationError, releaseAll, type AdmissionOwner } from './admission.ts';
 import { HostJournal, journalSchema, type RequestOperation } from './host-journal.ts';
 import { makeChatWorktree } from './chat-worktrees.ts';
 import {
@@ -30,17 +31,22 @@ import {
 } from './schema.ts';
 import { WorkspaceDiscovery } from './discovery.ts';
 import { WorkspaceObservations } from './observations.ts';
-import { createGitGate, Directory, identity, makeRunner } from './filesystem.ts';
+import {
+  createGitGate,
+  Directory,
+  identity,
+  makeRunner,
+  O_NOFOLLOW_ANY,
+  systemGit,
+} from './filesystem.ts';
 import type { NativeImport } from './native-import.ts';
 import { NativeReferences } from './native-references.ts';
 import { WorkspaceWorktrees } from './worktrees.ts';
 import {
-  affected,
   canonical,
   checkout,
   ensure,
   errorText,
-  fail,
   folded,
   hash,
   identifier,
@@ -49,6 +55,7 @@ import {
   same,
   textDocument,
 } from './validation.ts';
+import { fail } from '@moonbase/contracts/errors';
 
 const dayMs = 24 * 60 * 60 * 1000;
 type OperationSource = {
@@ -65,7 +72,7 @@ const containsSelectedSource = (
   (entry.directory &&
     (source.native
       ? source.native.parents.split(',').includes(entry.identity)
-      : affected(source.path, entry.path)));
+      : isPathAtOrInside(source.path, entry.path)));
 type WorkspaceOwnership = {
   operations: FiberSet.FiberSet<unknown, ApplicationError>;
   operationScope: Scope.Closeable;
@@ -124,8 +131,6 @@ export class FileHost implements AdmissionOwner {
     done: Deferred.Deferred<void>;
   }>();
   readonly cleanupFailures: Cause.Cause<never>[] = [];
-  readonly closeCompletion = Deferred.makeUnsafe<void>();
-  closing = false;
   readonly references: NativeReferences;
   readonly journal: HostJournal;
   readonly run;
@@ -141,6 +146,7 @@ export class FileHost implements AdmissionOwner {
   /** The host's state and its owner's reserved paths, as real paths. */
   private readonly reserved: string[];
   readonly gitReady: () => Promise<void>;
+  private readonly git: string;
   constructor(
     config: WorkspaceConfiguration,
     ownership: WorkspaceOwnership,
@@ -151,20 +157,21 @@ export class FileHost implements AdmissionOwner {
     this.config = config;
     this.allowRoot = allowRoot;
     this.chats = chats;
-    this.gitReady = createGitGate(config.gitExecutable ?? '/usr/bin/git');
+    this.git = config.gitExecutable ?? systemGit;
+    this.gitReady = createGitGate(this.git);
     this.ownership = ownership;
     ensureQualifiedRuntime();
     identifier(config.hostId);
     const helper =
       config.filesystemHelper ?? fileURLToPath(new URL('../dist/filesystem', import.meta.url));
     ensure(
-      isAbsolute(helper) && isAbsolute(config.gitExecutable ?? '/usr/bin/git'),
+      isAbsolute(helper) && isAbsolute(this.git),
       'Filesystem/Git executables must be absolute.',
     );
     this.discovery = new WorkspaceDiscovery(
       (target) => this.directory(target),
       (target) => this.policy(target),
-      config.gitExecutable ?? '/usr/bin/git',
+      this.git,
       config.ripgrepExecutable,
     );
     this.worktrees = new WorkspaceWorktrees(
@@ -445,43 +452,35 @@ export class FileHost implements AdmissionOwner {
       );
     });
   }
+  /**
+   * Called once, by the host layer's finalizer: refuses new work, aborts what is running, then
+   * releases in order and reports every failure, including those recorded while it ran.
+   */
   close(): Effect.Effect<void> {
     return Effect.suspend(() => {
-      if (this.closing) return Deferred.await(this.closeCompletion);
-      this.closing = this.closed = true;
+      this.closed = true;
       for (const signal of this.signals) signal.abort();
-      return Effect.gen({ self: this }, function* () {
-        const releases = [
-          this.observations.close(),
-          Scope.close(this.ownership.referenceScope, Exit.void),
-          Scope.close(this.ownership.operationScope, Exit.void),
-          Scope.close(this.ownership.helperScope, Exit.void),
-          Effect.suspend(() =>
-            Effect.forEach(this.directories.values(), (directory) =>
-              Effect.exit(releaseResource(() => directory.close())),
-            ).pipe(
-              Effect.flatMap((outcomes) => {
-                const failures = outcomes.flatMap((exit) =>
-                  Exit.isFailure(exit) ? [exit.cause] : [],
-                );
-                return failures.length
-                  ? Effect.failCause(failures.reduce((all, cause) => Cause.combine(all, cause)))
-                  : Effect.void;
-              }),
+      return releaseAll([
+        this.observations.close(),
+        Scope.close(this.ownership.referenceScope, Exit.void),
+        Scope.close(this.ownership.operationScope, Exit.void),
+        Scope.close(this.ownership.helperScope, Exit.void),
+        Effect.suspend(() =>
+          releaseAll(
+            [...this.directories.values()].map((directory) =>
+              releaseResource(() => directory.close()),
             ),
           ),
-          releaseResource(() => this.store.close()),
-        ];
-        const outcomes = yield* Effect.forEach(releases, Effect.exit);
-        const failures = [
-          ...this.cleanupFailures,
-          ...outcomes.flatMap((exit) => (Exit.isFailure(exit) ? [exit.cause] : [])),
-        ];
-        if (failures.length)
-          return yield* Effect.failCause(
-            failures.reduce((combined, cause) => Cause.combine(combined, cause)),
-          );
-      }).pipe(Effect.onExit((exit) => Deferred.done(this.closeCompletion, exit)));
+        ),
+        releaseResource(() => this.store.close()),
+        Effect.suspend(() =>
+          this.cleanupFailures.length
+            ? Effect.failCause(
+                this.cleanupFailures.reduce((all, cause) => Cause.combine(all, cause)),
+              )
+            : Effect.void,
+        ),
+      ]);
     }).pipe(Effect.uninterruptible);
   }
   /** Whether the root policy lets the host use `real`; a throwing predicate denies. */
@@ -564,7 +563,7 @@ export class FileHost implements AdmissionOwner {
         target.root,
         approved.identity,
         this.run,
-        this.config.gitExecutable ?? '/usr/bin/git',
+        this.git,
         this.gitReady,
       );
     } else if (!directory) {
@@ -572,13 +571,7 @@ export class FileHost implements AdmissionOwner {
         this.directories.size < 128,
         'Open checkout resource limit reached. Restart after preserving recovery to release retained checkout descriptors.',
       );
-      directory = new Directory(
-        target.root,
-        approved.identity,
-        this.run,
-        this.config.gitExecutable ?? '/usr/bin/git',
-        this.gitReady,
-      );
+      directory = new Directory(target.root, approved.identity, this.run, this.git, this.gitReady);
       this.directories.set(target.checkoutId, directory);
     }
     try {
@@ -591,7 +584,7 @@ export class FileHost implements AdmissionOwner {
       );
       const fd = openSync(
         approved.common.path,
-        constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000,
+        constants.O_RDONLY | constants.O_DIRECTORY | O_NOFOLLOW_ANY,
       );
       try {
         ensure(
@@ -611,7 +604,7 @@ export class FileHost implements AdmissionOwner {
   gitEntry(root: string) {
     let fd: number;
     try {
-      fd = openSync(join(root, '.git'), constants.O_RDONLY | constants.O_NONBLOCK | 0x20000000);
+      fd = openSync(join(root, '.git'), constants.O_RDONLY | constants.O_NONBLOCK | O_NOFOLLOW_ANY);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw error;
@@ -633,7 +626,10 @@ export class FileHost implements AdmissionOwner {
     for (const p of ['info', 'info/exclude']) {
       let fd: number;
       try {
-        fd = openSync(join(common.path, p), constants.O_RDONLY | constants.O_NONBLOCK | 0x20000000);
+        fd = openSync(
+          join(common.path, p),
+          constants.O_RDONLY | constants.O_NONBLOCK | O_NOFOLLOW_ANY,
+        );
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
         throw error;
@@ -668,17 +664,11 @@ export class FileHost implements AdmissionOwner {
     if (created) ensure(root === created.root, 'The new worktree location changed. Inspect it.');
     this.protected(root);
     await this.permit(root, requested);
-    const fd = openSync(root, constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000);
+    const fd = openSync(root, constants.O_RDONLY | constants.O_DIRECTORY | O_NOFOLLOW_ANY);
     const id = identity(fstatSync(fd));
     closeSync(fd);
     const gitEntry = this.gitEntry(root);
-    const directory = new Directory(
-      root,
-      id,
-      this.run,
-      this.config.gitExecutable ?? '/usr/bin/git',
-      this.gitReady,
-    );
+    const directory = new Directory(root, id, this.run, this.git, this.gitReady);
     try {
       const repository =
         gitEntry || created ? await this.inspectRepository(directory, signal) : null;
@@ -764,7 +754,7 @@ export class FileHost implements AdmissionOwner {
       .trim()
       .split('\n')
       .map((p) => realpathSync(resolve(root, p)));
-    const commonFd = openSync(common, constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000);
+    const commonFd = openSync(common, constants.O_RDONLY | constants.O_DIRECTORY | O_NOFOLLOW_ANY);
     try {
       return {
         common: { path: common, identity: identity(fstatSync(commonFd)) },
@@ -1203,7 +1193,9 @@ export class FileHost implements AdmissionOwner {
         fail('Conflict', 'Source changed. Capture a fresh selection before continuing.');
       ensure(
         !sources.some(
-          (s) => affected(entry.target.path, s.path) || affected(s.path, entry.target.path),
+          (s) =>
+            isPathAtOrInside(entry.target.path, s.path) ||
+            isPathAtOrInside(s.path, entry.target.path),
         ),
         'Overlapping sources are not one selection.',
       );
@@ -1301,7 +1293,7 @@ export class FileHost implements AdmissionOwner {
       }
       if (!source.native && !create)
         ensure(
-          !affected(folded(destination), folded(source.path)) ||
+          !isPathAtOrInside(folded(destination), folded(source.path)) ||
             (input.kind === 'move' &&
               destination !== source.path &&
               folded(destination) === folded(source.path)),
@@ -1309,7 +1301,7 @@ export class FileHost implements AdmissionOwner {
         );
       ensure(
         !sources.some(
-          (s) => s.path !== source.path && affected(folded(destination), folded(s.path)),
+          (s) => s.path !== source.path && isPathAtOrInside(folded(destination), folded(s.path)),
         ),
         'Destination overlaps another selected source.',
       );

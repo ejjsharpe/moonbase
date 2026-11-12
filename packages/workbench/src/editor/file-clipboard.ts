@@ -1,3 +1,4 @@
+import { getParentPath, getPathName, joinPath } from '@moonbase/contracts/paths';
 import { useRef, useState } from 'react';
 import type { CheckoutTarget, DirectoryEntry } from '@moonbase/contracts/workspace';
 import {
@@ -30,9 +31,6 @@ export type PastePlan =
   | { kind: 'none' }
   | { kind: 'refused'; message: string };
 
-const parentOf = (path: string) => path.split('/').slice(0, -1).join('/');
-const nameOf = (path: string) => path.split('/').at(-1)!;
-const join = (folder: string, name: string) => (folder ? `${folder}/${name}` : name);
 const unavailable =
   'File action unavailable. Check the selection and finish the current editor dialog or preservation.';
 
@@ -61,7 +59,7 @@ export const findPasteFolder = (
   mode: FileClipboard['mode'],
   paths: readonly string[],
   folder: string,
-) => (mode === 'copy' && paths.includes(folder) ? parentOf(folder) : folder);
+) => (mode === 'copy' && paths.includes(folder) ? getParentPath(folder) : folder);
 
 /** Whether `folder` is strictly inside one of `paths`. */
 const isInside = (paths: readonly string[], folder: string) =>
@@ -94,11 +92,11 @@ export function planPaste(
   }
   if (isInside(paths, folder))
     return { kind: 'refused', message: 'Can’t copy a folder into itself.' };
-  const taken = new Set(entries.map((entry) => fold(nameOf(entry.path))));
+  const taken = new Set(entries.map((entry) => fold(getPathName(entry.path))));
   const kept: string[] = [],
     colliding: Pick<DirectoryEntry, 'path' | 'directory'>[] = [];
   for (const source of sources) {
-    const name = fold(nameOf(source.path));
+    const name = fold(getPathName(source.path));
     if (taken.has(name)) colliding.push(source);
     else {
       kept.push(source.path);
@@ -106,7 +104,7 @@ export function planPaste(
     }
   }
   const renamed = colliding.map((source) => {
-    const name = findFreeName(nameOf(source.path), source.directory, taken);
+    const name = findFreeName(getPathName(source.path), source.directory, taken);
     taken.add(fold(name));
     return { path: source.path, name };
   });
@@ -202,7 +200,7 @@ export function useFileClipboard({
     try {
       const into = findPasteFolder(current.mode, current.paths, folder);
       const { listings, unlisted } = await listFolders(controller, checkout, [
-        ...new Set([into, ...current.paths.map(parentOf)]),
+        ...new Set([into, ...current.paths.map(getParentPath)]),
       ]);
       // Entries that may still be there stay on the clipboard to paste once they list again.
       if (unlisted !== undefined) {
@@ -214,7 +212,7 @@ export function useFileClipboard({
       const sources: DirectoryEntry[] = [],
         missing: string[] = [];
       for (const path of current.paths) {
-        const entry = listings.get(parentOf(path))?.find((entry) => entry.path === path);
+        const entry = listings.get(getParentPath(path))?.find((entry) => entry.path === path);
         if (entry) sources.push(entry);
         else missing.push(path);
       }
@@ -270,7 +268,7 @@ export function useFileClipboard({
         }
         // A batch copies into a folder under the entries' own names, so each renamed copy is its own.
         for (const { path, name } of completed ? plan.renamed : []) {
-          const destination = join(into, name);
+          const destination = joinPath(into, name);
           const result = await runMutation(
             { checkout, kind: 'copy', paths: [path] },
             destination,

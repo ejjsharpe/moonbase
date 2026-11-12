@@ -5,7 +5,7 @@ import { controls } from '@moonbase/ui/controls';
 import { overlays } from '@moonbase/ui/overlays';
 import { projectHue, projectInitials, projectTiles } from '@moonbase/ui/projects';
 import { colors, radius } from '@moonbase/ui/tokens.stylex';
-import { Icon } from '../icon.tsx';
+import { Icon } from '@moonbase/ui/icons';
 import { FolderMenu, folderMenuStyles, folderName, parentPath } from '../folder-menu.tsx';
 
 /** A checkout the editor has opened, which local chat may use as its working folder. */

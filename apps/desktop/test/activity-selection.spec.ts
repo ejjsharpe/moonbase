@@ -116,7 +116,7 @@ async function installCopy(page: Page) {
 for (const manifest of [false, true])
   test(`independent selected live output retains pointer range manifest=${manifest}`, async ({
     page,
-  }, info) => {
+  }) => {
     await open(page);
     const update = async (suffix: string) =>
       page.evaluate(async (suffix) => {
@@ -172,7 +172,6 @@ for (const manifest of [false, true])
     await update('first and appended');
     await expect(pre).toBeFocused();
     await expect(row).toContainText('running');
-    await page.screenshot({ path: info.outputPath('selected-output.png') });
     const after = await page.evaluate(() => ({
       text: window.getSelection()?.toString(),
       focus: document.activeElement?.tagName,
@@ -516,7 +515,7 @@ test('released output retention yields to the existing 128-selection content bou
 for (const manifest of [false, true])
   test(`independent actual pointer selection in loaded live body survives append with reread held manifest=${manifest}`, async ({
     page,
-  }, info) => {
+  }) => {
     await open(page);
     const initial =
       'SELECT THIS stable prefix\n' +
@@ -564,7 +563,6 @@ for (const manifest of [false, true])
     await page.mouse.down();
     await page.mouse.move(box.x + box.width, box.y + box.height / 2, { steps: 8 });
     await page.mouse.up();
-    await page.screenshot({ path: info.outputPath('before-append-selection.png') });
     const before = await page.evaluate(() => window.getSelection()!.toString());
     expect(before).toBe('SELECT THIS');
     await expect(pre).toBeFocused();
@@ -598,7 +596,6 @@ for (const manifest of [false, true])
         text: document.querySelector('[data-independent-before]')?.textContent,
       }));
       console.log(JSON.stringify({ manifest, before, during, initialLength: initial.length }));
-      await page.screenshot({ path: info.outputPath('held-reread-selection.png') });
       expect.soft(during.selected).toBe(before);
       expect.soft(during.text).toContain('retained output line 59');
     } finally {

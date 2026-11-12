@@ -28,7 +28,6 @@ jobs:
       - run: bun run typecheck
       - run: bun run lint
       - run: bun run format:check
-      - run: bun run --cwd packages/contracts check:socket-schema
       - run: bun run --cwd packages/workbench check:renderer
 
   # The workspace's native filesystem binary, which the desktop build and tests use, and the pinned ripgrep need macOS.

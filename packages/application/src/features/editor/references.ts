@@ -1,3 +1,4 @@
+import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import type {
   CheckoutTarget,
   CheckoutView,
@@ -26,7 +27,7 @@ export function moveRecoveryReferences(
   source: string,
   destination: string,
 ) {
-  const affected = (path: string) => path === source || path.startsWith(source + '/');
+  const affected = (path: string) => isPathAtOrInside(path, source);
   const move = (path: string) => (affected(path) ? destination + path.slice(source.length) : path);
   const selected = readOwn(state.views, checkout.checkoutId);
   if (selected) {

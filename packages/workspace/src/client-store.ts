@@ -9,7 +9,8 @@ import {
 } from '@moonbase/contracts/workspace';
 import { normalizeApplicationError } from '@moonbase/effect';
 import { Store } from './store.ts';
-import { canonical, errorText, fail, hash, key, text, textDocument } from './validation.ts';
+import { canonical, errorText, hash, key, text, textDocument } from './validation.ts';
+import { fail } from '@moonbase/contracts/errors';
 import {
   type SaveRecord,
   type StoredSave,

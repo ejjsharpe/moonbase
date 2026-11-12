@@ -6,7 +6,7 @@ import { colors, radius, space, syntax, type } from '@moonbase/ui/tokens.stylex'
 import { controls } from '@moonbase/ui/controls';
 import type { ProviderSetupController } from '@moonbase/application/chat';
 import { Choice } from './choice.tsx';
-import { Icon } from '../icon.tsx';
+import { Icon } from '@moonbase/ui/icons';
 import { vendorOf, type Provider } from './vendors.ts';
 import { projectTiles } from '@moonbase/ui/projects';
 

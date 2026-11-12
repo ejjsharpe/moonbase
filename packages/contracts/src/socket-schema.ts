@@ -17,12 +17,7 @@ import {
 import { ChatHostHealthSchema } from './host-schema.ts';
 import { ProviderStateSchema } from './providers-schema.ts';
 import { socketLimits } from './socket.ts';
-import {
-  WorkspaceWatchTargetSchema,
-  WorkspaceWatchValueSchema,
-  hostInputSchemas,
-  hostOutputSchemas,
-} from './workspace-host-schema.ts';
+import { WorkspaceWatchTargetSchema, WorkspaceWatchValueSchema } from './workspace-host-schema.ts';
 import type {
   SocketDelta,
   SocketSubscriptionKind,
@@ -257,25 +252,6 @@ export const SocketReplySchema = Schema.Union([
   }),
 ]);
 export type SocketReply = typeof SocketReplySchema.Type;
-
-/** Every root schema of the protocol, for the JSON Schema export. */
-export const socketJsonSchemaRoots = {
-  SocketChallenge: SocketChallengeSchema,
-  SocketClientMessage: SocketClientMessageSchema,
-  SocketServerMessage: SocketServerMessageSchema,
-  SocketReply: SocketReplySchema,
-  ChatDelta: ChatDeltaSchema,
-  ChatListDelta: ChatListDeltaSchema,
-  ProviderSetupDelta: ProviderSetupDeltaSchema,
-  ChatSnapshot: ChatSnapshotSchema,
-  ChatListState: ChatListStateSchema,
-  ProviderState: ProviderStateSchema,
-  WorkspaceWatchValue: WorkspaceWatchValueSchema,
-  SocketChunkedRequest: SocketChunkedRequestSchema,
-  /** Each workspace operation's input and reply, keyed by operation name. */
-  WorkspaceHostInputs: struct(hostInputSchemas),
-  WorkspaceHostOutputs: struct(hostOutputSchemas),
-};
 
 const strict = { onExcessProperty: 'error', reportInput: false } as const;
 const clientMessage = Schema.decodeUnknownSync(SocketClientMessageSchema, strict);

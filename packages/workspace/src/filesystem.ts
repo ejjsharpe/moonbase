@@ -3,8 +3,11 @@ import { execFile, spawn } from 'node:child_process';
 import fs, { constants, fstatSync, openSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import type { FileDocument } from '@moonbase/contracts/workspace';
-import { document, ensure, fail, path } from './validation.ts';
-const flags = constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000;
+import { document, ensure, path } from './validation.ts';
+import { fail } from '@moonbase/contracts/errors';
+/** macOS `O_NOFOLLOW_ANY`: refuse a symlink anywhere in the path, not only the last component. */
+export const O_NOFOLLOW_ANY = 0x20000000;
+const flags = constants.O_RDONLY | constants.O_DIRECTORY | O_NOFOLLOW_ANY;
 export const identity = (stat: { dev: number; ino: number }) => `${stat.dev}:${stat.ino}`;
 /**
  * Reads one stdout line (without its newline) as it arrives; `'stop'` ends the process early and
@@ -245,7 +248,7 @@ export function makeRunner(
       ),
     );
 }
-const systemGit = '/usr/bin/git';
+export const systemGit = '/usr/bin/git';
 /** Whether the Xcode command-line tools (or Xcode) are selected; asking never opens an installer. */
 const developerToolsInstalled = () =>
   new Promise<boolean>((resolve) => {
@@ -386,7 +389,7 @@ export class Directory {
     }
     const fd = openSync(
       resolve(this.root, p),
-      constants.O_RDONLY | constants.O_NONBLOCK | 0x20000000,
+      constants.O_RDONLY | constants.O_NONBLOCK | O_NOFOLLOW_ANY,
     );
     try {
       const info = fstatSync(fd);

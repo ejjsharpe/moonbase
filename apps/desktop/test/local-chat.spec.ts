@@ -613,10 +613,6 @@ for (const mode of ['local', 'remote'] as const)
           ),
         ),
       ).toBe(next);
-      await mkdir(resolve('../../test-results/transcript-112'), { recursive: true });
-      await page.screenshot({
-        path: resolve(`../../test-results/transcript-112/native-${mode}-held-tool.png`),
-      });
       await page.getByRole('button', { name: 'Stop', exact: true }).click();
       // One locator: Stop may leave the DOM between separate visibility and disabled checks.
       await expect(
@@ -688,9 +684,6 @@ test('transcript remote first/next chunks render through authenticated stream an
     expect(after.commands.filter((operation) => operation === 'getChat').length).toBe(
       before.commands.filter((operation) => operation === 'getChat').length,
     );
-    await page.screenshot({
-      path: resolve('../../test-results/transcript-111/native-remote-held.png'),
-    });
     host.release();
     await page.getByLabel('Message', { exact: true }).focus();
     await expect(page.getByText('REMOTE COMPLETED', { exact: true })).toBeVisible();

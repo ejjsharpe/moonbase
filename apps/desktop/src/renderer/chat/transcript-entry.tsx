@@ -65,7 +65,7 @@ import {
 import type { TranscriptActions } from './transcript-actions.ts';
 import { compareProps } from './stable-props.ts';
 import { transcriptStyles as styles } from './transcript-styles.ts';
-import { Icon } from '../icon.tsx';
+import { Icon } from '@moonbase/ui/icons';
 
 /**
  * A row's slice of transcript state. The transcript passes each row only what concerns it, in

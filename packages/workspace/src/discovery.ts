@@ -4,7 +4,8 @@ import { basename, dirname, isAbsolute, join } from 'node:path';
 import type { CheckoutTarget, CommandInput, CommandOutput } from '@moonbase/contracts/workspace';
 import type { Directory } from './filesystem.ts';
 import { matchPath, compareMatches } from '@moonbase/contracts/lookup';
-import { document, ensure, fail, path, requireGit } from './validation.ts';
+import { document, ensure, path, requireGit } from './validation.ts';
+import { fail } from '@moonbase/contracts/errors';
 import { parseGitStatus } from './git-status.ts';
 
 /** Names discovery and text search never descend into, matching the native lookup preflight. */

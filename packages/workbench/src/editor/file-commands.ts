@@ -4,7 +4,7 @@ import {
   type EditorController,
   type MutationAction,
 } from '@moonbase/application/editor';
-import type { Icon } from './icon.tsx';
+import type { Icon } from '@moonbase/ui/icons';
 
 /** What a name typed in the tree does. */
 export type TreeEditKind = 'rename' | 'duplicate' | 'create-file' | 'create-directory';

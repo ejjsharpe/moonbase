@@ -1,9 +1,10 @@
+import { O_NOFOLLOW_ANY } from './filesystem.ts';
 import fs, { openSync, fstatSync, constants } from 'node:fs';
 import { basename, dirname, isAbsolute } from 'node:path';
 
-const flags = constants.O_RDONLY | constants.O_NONBLOCK | 0x20000000; // macOS O_NOFOLLOW_ANY
+const flags = constants.O_RDONLY | constants.O_NONBLOCK | O_NOFOLLOW_ANY;
 const identity = (s: { dev: number; ino: number }) => `${s.dev}:${s.ino}`;
-// Only constructed from privileged preload webUtils or the main-process native clipboard.
+// Paths come from the daemon's host import capture (dropped or pasted Finder files).
 // Retain the source descriptor, never a parent-directory descriptor or Project approval.
 export class NativeImport {
   readonly source: string;

@@ -24,7 +24,7 @@ import {
   type ChatCommand,
   type ChatCommandOption,
 } from './commands.ts';
-import { Icon } from '../icon.tsx';
+import { Icon } from '@moonbase/ui/icons';
 
 /**
  * The message textarea. Typing `@` searches the chat's working folder on its host; a picked file is
