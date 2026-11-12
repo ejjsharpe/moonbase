@@ -193,7 +193,7 @@ test('a save sent as the daemon is stopped keeps its text, and resolves once the
   assert(onDisk || loaded.state.drafts.some((d) => d.text === 'edited'), String(sent));
   // The next request started a new daemon in a new connection, and files are served again.
   const again = await client.command('readFile', { checkout, path: 'a.txt' });
-  assert(again.text === 'edited' || again.text === 'one');
+  assert.equal(again.text, onDisk ? 'edited' : 'one');
   assert.equal(daemon.isRunning(), true);
   assert.notEqual(await readDaemonPid(directory), before);
   // The save is settled now: its text is on disk or in the draft, and nothing is left unresolved.

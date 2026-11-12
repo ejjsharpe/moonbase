@@ -5,8 +5,8 @@
 ## Integration
 
 - `WorkspaceHostLive(config)` provides `WorkspaceHostService` (everything except recovery, plus `saveStatus`, `acknowledgeSave` and `listOperations`), the privileged `WorkspaceNative` service for approved native imports, and `WorkspaceFolders` (see Chat folders). It keeps approvals and journals in `workspace-host.sqlite` in `dataDirectory`.
-- `WorkspaceRecoveryLive({dataDirectory, installationId, hostWaitMs?}, host)` provides today's full `WorkspaceService` over a host service, local or remote. It keeps drafts and editor state in `moonbase-workspace-v1.sqlite`. Loading recovery gives its host phases (feed, evidence, verification) `hostWaitMs` (5 s) together; once it runs out they stop their host calls and are retried on the next load. Local work (drafting unsettled saves) still runs, and a failing phase or another client's unreadable recovery is reported in `errors` without hiding drafts.
-- `WorkspaceLocalLive(config)` composes both in one process (Electron main no longer does: it runs only the recovery store over the daemon's host); see [`examples/local.ts`](examples/local.ts).
+- `WorkspaceRecoveryLive({dataDirectory, installationId, hostWaitMs?}, host)` provides the full client-facing `WorkspaceService` over a host service, local or remote. It keeps drafts and editor state in `moonbase-workspace-v1.sqlite`. Loading recovery gives its host phases (feed, evidence, verification) `hostWaitMs` (5 s) together; once it runs out they stop their host calls and are retried on the next load. Local work (drafting unsettled saves) still runs, and a failing phase or another client's unreadable recovery is reported in `errors` without hiding drafts.
+- `WorkspaceLocalLive(config)` composes both in one process (Electron main composes only the recovery store, over the daemon's host); see [`examples/local.ts`](examples/local.ts).
 
 Compose each once in a process root's runtime. The workspace opens only on macOS with Node 26.13 or newer, the pinned Electron (45.1.0) or exactly Bun 1.4.4, and is refused as `Incompatible` otherwise. Configure a stable `hostId` and a `dataDirectory` outside approved checkouts. A packaged process (the daemon) must supply absolute `filesystemHelper` and `ripgrepExecutable` paths. System Git defaults to `/usr/bin/git`; when the Xcode command-line tools are missing, Git runs fail as `Unavailable` and the macOS installer prompt is never triggered. Without them even a plain folder can't be opened (`Unavailable`).
 
@@ -61,7 +61,7 @@ A `CheckoutTarget` says whether its root is the repository's `main` working tree
 - Saves check content versions. Replacing an existing file requires explicit consent and moves the old one to Trash.
 - Helper processes run in their own process group. Stopping one (cancellation, a limit) sends the group SIGTERM, then SIGKILL after 2 seconds, and waits for it to exit, so Git and its children can clean up first.
 - Files must be UTF-8 text up to 2 MiB. Filesystem changes and SQLite commits are not one atomic transaction.
-- A client's settled save and operation records and publication receipts are not yet compacted; only the host journal is.
+- A client's settled save and operation records and publication receipts are never compacted; only the host journal is.
 
 ## Checks
 

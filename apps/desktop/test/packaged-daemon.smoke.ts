@@ -305,6 +305,8 @@ test('the packaged daemon opens, saves, searches and trashes in a temporary repo
     );
     // The packaged helper moves the file to the Trash of the user the daemon runs as.
     const sources = await run(host.inspectEntries({ checkout, paths: [trashed] }));
+    // Set before the call: a lost reply may still have moved the file, and cleanup is by its unique name.
+    trashRequested = true;
     const result = await run(
       host.mutate({
         installationId: 'smoke',
@@ -315,7 +317,6 @@ test('the packaged daemon opens, saves, searches and trashes in a temporary repo
         sources,
       }),
     );
-    trashRequested = true;
     assert.equal(result.outcome, 'completed', JSON.stringify(result));
     await assert.rejects(access(join(project, trashed)), { code: 'ENOENT' });
     // The file is now in the Trash of the user running the daemon, under its unique name.

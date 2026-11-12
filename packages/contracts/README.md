@@ -26,7 +26,7 @@ The WebSocket protocol (`socket`, `socket-schema`; capability `socket-v1`) is on
 
 `settleChat` settles or unsettles a chat (`{ target, settled }`) and returns its summary, whose `settledAt` says when it was settled.
 
-The file host (`WorkspaceHostService`) reports a save as `saved` or `conflict` and an operation with its items, and carries no editor recovery. `saveStatus` answers `saved`, `conflict`, `not-started` (the request never reached the host) or `uncertain`. `listOperations {checkout, after}` returns one page of completed moves, copies and Trash after a feed sequence, with `through` (what the page covers), `floor` (entries up to it may have been discarded) and `more`; `after: null` only reports the present position. The client-facing `WorkspaceService` keeps today's commands and results, including `recoveryChanges`.
+The file host (`WorkspaceHostService`) reports a save as `saved` or `conflict` and an operation with its items, and carries no editor recovery. `saveStatus` answers `saved`, `conflict`, `not-started` (the request never reached the host) or `uncertain`. `listOperations {checkout, after}` returns one page of completed moves, copies and Trash after a feed sequence, with `through` (what the page covers), `floor` (entries up to it may have been discarded) and `more`; `after: null` only reports the present position. The client-facing `WorkspaceService` carries the host's commands and results plus the client's recovery, including `recoveryChanges`.
 
 A `CheckoutTarget` is a Git checkout (`vcs: 'git'`, with `branch` and `worktree`: `main` or `linked`) or a plain folder (`vcs: 'none'`); worktrees of one repository share `projectId`. Saved targets without `vcs` decode as Git.
 
