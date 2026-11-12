@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { Layer, ManagedRuntime } from 'effect';
+import { type Effect, Layer, ManagedRuntime } from 'effect';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
-import { LocalHostService } from '@moonbase/contracts/services';
+import { LocalHostService, WorkspaceHostService } from '@moonbase/contracts/services';
 import {
   makeChatClient,
   makeConnectionClient,
@@ -15,6 +18,7 @@ import {
   RemoteChatLive,
   RemoteLocalHostLive,
   RemoteProviderSetupLive,
+  RemoteWorkspaceHostLive,
 } from '@moonbase/daemon-protocol/remote';
 import { findDaemonCommand } from '../src/main/daemon-command.ts';
 import {
@@ -225,6 +229,119 @@ test('the packaged daemon serves a chat from temporary data, and its Claude Code
     await runtime?.dispose();
     await started.stop('SIGKILL');
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('the packaged daemon opens, saves, searches and trashes in a temporary repository', async () => {
+  const { root, directory } = await prepareDaemonRoot();
+  const project = join(root, 'project');
+  await mkdir(project);
+  const git = (...args: string[]) =>
+    execFileSync('/usr/bin/git', [
+      '-C',
+      project,
+      '-c',
+      'user.name=Moonbase smoke',
+      '-c',
+      'user.email=smoke@example.invalid',
+      ...args,
+    ]);
+  git('init', '-q', '-b', 'main');
+  // Only files this test made are trashed; the name is unique in the user's Trash.
+  const trashed = `moonbase-smoke-${randomUUID()}.txt`;
+  await writeFile(join(project, 'notes.txt'), 'one\n');
+  await writeFile(join(project, trashed), 'discard me\n');
+  git('add', '.');
+  git('commit', '-qm', 'Initial files');
+  const daemon = findDaemonCommand(packaged, directory, {
+    // Only the system PATH, as an app launched from Finder has: no `rg` on it.
+    PATH: '/usr/bin:/bin',
+    HOME: root,
+    TMPDIR: root,
+  });
+  const started = startDaemonCommand(daemon);
+  let runtime: ManagedRuntime.ManagedRuntime<unknown, unknown> | undefined;
+  let trashRequested = false;
+  const trashDirectories = () => [join(homedir(), '.Trash'), join(root, '.Trash')];
+  try {
+    const ready = await bounded(started.ready);
+    const clients = ManagedRuntime.make(
+      RemoteWorkspaceHostLive({ host: ready.host }).pipe(
+        Layer.provideMerge(LoopbackConnectionLive({ directory })),
+      ),
+    );
+    runtime = clients as ManagedRuntime.ManagedRuntime<unknown, unknown>;
+    await makeConnectionClient(clients).command('connect', { profileId: 'loopback' });
+    const host = await clients.runPromise(WorkspaceHostService);
+    const run = <A>(effect: Effect.Effect<A, unknown>) => clients.runPromise(effect);
+    const checkout = await run(host.openCheckout({ root: project }));
+    const document = await run(host.readFile({ checkout, path: 'notes.txt' }));
+    const saved = await run(
+      host.saveFile({
+        installationId: 'smoke',
+        clientId: 'smoke',
+        requestId: randomUUID(),
+        target: { checkout, path: 'notes.txt' },
+        text: 'two needle\n',
+        expectedVersion: document.version,
+      }),
+    );
+    assert.equal(saved.kind, 'saved', JSON.stringify(saved));
+    assert.equal(await readFile(join(project, 'notes.txt'), 'utf8'), 'two needle\n');
+    // The packaged ripgrep beside the bundle finds it; the PATH has none.
+    const found = await run(
+      host.searchText({
+        checkout,
+        query: 'needle',
+        matchCase: true,
+        wholeWord: false,
+        regex: false,
+      }),
+    );
+    assert.deepEqual(
+      found.files.map((file) => file.path),
+      ['notes.txt'],
+      JSON.stringify(found),
+    );
+    // The packaged helper moves the file to the Trash of the user the daemon runs as.
+    const sources = await run(host.inspectEntries({ checkout, paths: [trashed] }));
+    // Set before the call: a lost reply may still have moved the file, and cleanup is by its unique name.
+    trashRequested = true;
+    const result = await run(
+      host.mutate({
+        installationId: 'smoke',
+        id: randomUUID(),
+        clientId: 'smoke',
+        checkout,
+        kind: 'trash',
+        sources,
+      }),
+    );
+    assert.equal(result.outcome, 'completed', JSON.stringify(result));
+    await assert.rejects(access(join(project, trashed)), { code: 'ENOENT' });
+    // The file is now in the Trash of the user running the daemon, under its unique name.
+    const inTrash = await Promise.all(
+      trashDirectories().map((dir) =>
+        access(join(dir, trashed)).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    );
+    assert(inTrash.includes(true), 'the trashed file is in a Trash directory');
+    await clients.dispose();
+    runtime = undefined;
+    assert.deepEqual(await started.stop(), [0, null]);
+  } finally {
+    await runtime?.dispose();
+    await started.stop('SIGKILL');
+    await rm(root, { recursive: true, force: true });
+    // Leave nothing of the smoke test in the real Trash; only the uniquely named file is touched.
+    if (trashRequested) {
+      for (const dir of trashDirectories()) {
+        await rm(join(dir, trashed), { force: true }).catch(() => undefined);
+      }
+    }
   }
 });
 

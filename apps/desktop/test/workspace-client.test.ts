@@ -47,9 +47,16 @@ async function composeWorkspace(
   t.after(() => runtime.dispose());
   return { runtime, client: makeEditorClient(runtime) };
 }
-async function temporaryProfile(t: TestContext) {
+/** A temporary profile; `stops` run in order, even after a failure, before the profile is removed. */
+async function temporaryProfile(t: TestContext, stops: (() => Promise<unknown>)[] = []) {
   const userData = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-workspace-client-')));
-  t.after(() => rm(userData, { recursive: true, force: true }));
+  t.after(async () => {
+    try {
+      for (const stop of stops) await stop().catch(() => undefined);
+    } finally {
+      await rm(userData, { recursive: true, force: true });
+    }
+  });
   return userData;
 }
 const draftState = (
@@ -129,15 +136,18 @@ test('without a reachable daemon the store keeps drafts, files are unavailable, 
 });
 
 test('a save sent as the daemon is stopped keeps its text, and resolves once the daemon is back', async (t) => {
-  const userData = await temporaryProfile(t);
+  const stops: (() => Promise<unknown>)[] = [];
+  const userData = await temporaryProfile(t, stops);
   await prepareDaemonData(userData);
   const directory = findDaemonDirectory(userData);
   const command = makeFauxDaemonCommand(directory);
-  t.after(() => stopDaemon(directory));
+  // Stop the handle's daemon and any replacement it started, while the endpoint file still exists.
+  stops.push(() => stopDaemon(directory));
   const project = join(userData, 'project');
   await mkdir(project);
   await writeFile(join(project, 'a.txt'), 'one');
   const daemon = createLocalDaemon({ directory, command });
+  stops.unshift(() => daemon.stop());
   await daemon.ensure();
   const session = await readDaemonSession(directory);
   // The daemon connection is the one main builds: it starts a stopped daemon on the next request.
@@ -146,7 +156,7 @@ test('a save sent as the daemon is stopped keeps its text, and resolves once the
       Layer.provideMerge(LocalDaemonConnectionLive(daemon)),
     ),
   );
-  t.after(() => connection.dispose());
+  stops.unshift(() => connection.dispose());
   const { client } = await composeWorkspace(t, userData, () =>
     connection.runPromise(
       Effect.gen(function* () {
@@ -183,7 +193,7 @@ test('a save sent as the daemon is stopped keeps its text, and resolves once the
   assert(onDisk || loaded.state.drafts.some((d) => d.text === 'edited'), String(sent));
   // The next request started a new daemon in a new connection, and files are served again.
   const again = await client.command('readFile', { checkout, path: 'a.txt' });
-  assert(again.text === 'edited' || again.text === 'one');
+  assert.equal(again.text, onDisk ? 'edited' : 'one');
   assert.equal(daemon.isRunning(), true);
   assert.notEqual(await readDaemonPid(directory), before);
   // The save is settled now: its text is on disk or in the draft, and nothing is left unresolved.

@@ -214,7 +214,7 @@ async function main() {
     clipboard,
     shell,
     // Picker and clipboard paths are native; a drop's paths come from the renderer (webUtils), so
-    // the daemon's reserved-path and root-policy check on every import is the authority.
+    // the daemon's reserved-path check on every import is the authority.
     capture: async (input) =>
       (await runApplicationEffect(runtime, host.captureImports(input))).references,
     // Releasing never starts a daemon: references of one that is not running expire on their own.
