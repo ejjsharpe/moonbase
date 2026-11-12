@@ -115,7 +115,7 @@ export function createFolderApprovals(file: string): FolderApprovals {
 
 /**
  * A local-mode daemon's folders plus its workspace's: chats may also use a folder that `checkouts`
- * says is an approved checkout root or a worktree Git lists for one. Only `has` widens. Picker
+ * says is the root of an approved checkout. Only `has` widens. Picker
  * approvals, the recent list and `approve` are the picker's alone, so a project the editor opened
  * is never offered again as a recent folder. A `checkouts` that throws approves nothing.
  */
@@ -132,8 +132,10 @@ export function withCheckoutFolders(
   };
 }
 
+/** Exact, for real paths in their on-disk spelling; fold first to compare as macOS volumes do. */
 const isInside = (root: string, path: string) =>
   path === root || path.startsWith(root === '/' ? '/' : `${root}/`);
+const folded = (path: string) => path.normalize('NFC').toLowerCase();
 
 /**
  * A host-mode daemon's folders: its approved roots and any folder under one, named by its real
@@ -158,9 +160,12 @@ export async function createRootFolders(
     }),
   );
   // A root holding the daemon's data or credential key would let chats and `@` search read them.
-  const held = await Promise.all(reserved.map(findRealPath));
+  // Folded, as a path not made yet keeps the case it was named in.
+  const held = (await Promise.all(reserved.map(findRealPath))).map(folded);
   if (
-    identities.some(({ root }) => held.some((path) => isInside(root, path) || isInside(path, root)))
+    identities.some(({ root }) =>
+      held.some((path) => isInside(folded(root), path) || isInside(path, folded(root))),
+    )
   )
     throw new ApplicationError({
       code: 'InvalidInput',
