@@ -17,7 +17,8 @@ import { Effect, Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { emptyRecovery } from '@moonbase/contracts/workspace';
-import { WorkspaceLive, WorkspaceNative } from '../src/index.ts';
+import { WorkspaceNative } from '../src/index.ts';
+import { WorkspaceLive } from './workspace-live.ts';
 import { quote, fixture, isError, waitFor } from './recovery-fixture.ts';
 
 for (const kind of ['move', 'copy'] as const)

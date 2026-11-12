@@ -1,41 +1,41 @@
-import { normalizeApplicationError } from '@moonbase/effect';
-import {
-  type SaveRecordSchema,
-  type OperationRecordSchema,
-  parseRecovery,
-  savedRevision,
-} from './schema.ts';
-import { type Store, pendingSaves } from './store.ts';
+import { basename, join } from 'node:path';
 import {
   emptyRecovery,
-  type SaveResult,
-  type CommandInput,
-  type OperationResult,
-  type WorkspaceOperation,
-  type EditorRecovery,
   type CheckoutTarget,
+  type CommandInput,
+  type EditorRecovery,
+  type OperationResult,
+  type SaveResult,
+  type WorkspaceOperation,
 } from '@moonbase/contracts/workspace';
+import type {
+  HostOperationResult,
+  OperationFeed,
+  OperationFeedEntry,
+  SaveStatus,
+} from '@moonbase/contracts/workspace-host';
 import {
-  identifier,
+  parseRecovery,
+  savedRevision,
+  type OperationRecord,
+  type SaveRecord,
+} from './client-schema.ts';
+import { type ClientStore, pendingSaves } from './client-store.ts';
+import {
+  affected,
   canonical,
-  same,
-  recovery,
   ensure,
+  errorText,
   fail,
-  textDocument,
+  identifier,
+  isOriginalResult,
+  key,
+  overlaps,
+  recovery,
+  same,
   hash,
 } from './validation.ts';
-import { type Directory } from './filesystem.ts';
-import { basename, join } from 'node:path';
-export const key = (clientId: string, id: string) => hash(canonical([clientId, id]));
-export const affected = (p: string, source: string) => p === source || p.startsWith(source + '/');
-export const isOriginalResult = (
-  kind: WorkspaceOperation['kind'],
-  item: OperationResult['items'][number],
-) => kind === 'trash' || item.destination !== undefined;
-export const errorText = (error: unknown) => normalizeApplicationError(error).message;
-export type SaveRecord = typeof SaveRecordSchema.Type;
-export type OperationRecord = typeof OperationRecordSchema.Type;
+
 export function reconcile(state: EditorRecovery, records: OperationRecord[]) {
   for (const record of records) {
     if (!state.checkouts.some((c) => same(c, record.input.checkout))) continue;
@@ -92,24 +92,66 @@ export function reconcile(state: EditorRecovery, records: OperationRecord[]) {
     }
   }
 }
+
+/** The file host as the client's recovery sees it, with the installation already bound. */
+export type HostPorts = {
+  readFile(
+    target: CheckoutTargetFile,
+    signal: AbortSignal,
+  ): Promise<{ text: string; version: string }>;
+  verifyCheckout(target: CheckoutTarget, signal: AbortSignal): Promise<void>;
+  saveStatus(
+    input: { clientId: string; requestId: string },
+    signal: AbortSignal,
+  ): Promise<SaveStatus>;
+  acknowledgeSave(
+    input: { clientId: string; requestId: string },
+    signal: AbortSignal,
+  ): Promise<void>;
+  operationStatus(
+    input: { clientId: string; id: string },
+    signal: AbortSignal,
+  ): Promise<HostOperationResult | null>;
+  acknowledgeOperation(input: { clientId: string; id: string }, signal: AbortSignal): Promise<void>;
+  listOperations(
+    input: { checkout: CheckoutTarget; after: number | null },
+    signal: AbortSignal,
+  ): Promise<OperationFeed>;
+};
+type CheckoutTargetFile = { checkout: CheckoutTarget; path: string };
+
+const attentionPredicate = `json_extract(body, '$.result.outcome') IS NOT 'completed'
+      OR json_extract(body, '$.publicationError') IS NOT NULL
+      OR json_extract(body, '$.publishedItems') IS NULL
+      OR EXISTS (
+        SELECT 1 FROM json_each(body, '$.result.items') i
+        WHERE json_extract(i.value, '$.outcome') = 'completed'
+          AND NOT EXISTS (
+            SELECT 1 FROM json_each(body, '$.publishedItems') p
+            WHERE json_extract(p.value, '$.source') IS json_extract(i.value, '$.source')
+              AND json_extract(p.value, '$.destination') IS json_extract(i.value, '$.destination')
+              AND json_extract(p.value, '$.outcome') IS json_extract(i.value, '$.outcome')
+              AND json_extract(p.value, '$.message') IS json_extract(i.value, '$.message')
+          )
+      )`;
+
+/**
+ * One client's recovery: the drafts and editor state it publishes, and the intents for the saves
+ * and operations it has sent to the file host. An outcome from the host, the host's status
+ * queries or its operation feed is applied to the recovery in one local transaction.
+ */
 export class WorkspaceRecovery {
   private readonly volatileSaves = new Map<string, SaveRecord>();
-  private readonly activeSaves = new Set<string>();
+  private readonly activeSaves = new Map<string, string>();
   private readonly volatileOperations = new Map<string, OperationRecord>();
-  private readonly store: Store;
-  private readonly directory: (target: CheckoutTarget) => Promise<Directory>;
-  private readonly isCheckoutActive: (checkoutId: string) => boolean;
-  private readonly approveCheckout: (target: CheckoutTarget) => void;
-  constructor(
-    store: Store,
-    directory: (target: CheckoutTarget) => Promise<Directory>,
-    isCheckoutActive: (checkoutId: string) => boolean,
-    approveCheckout: (target: CheckoutTarget) => void,
-  ) {
+  private readonly activeOperations = new Map<string, string>();
+  private readonly store: ClientStore;
+  private readonly host: HostPorts;
+  private readonly installationId: string;
+  constructor(store: ClientStore, host: HostPorts, installationId: string) {
     this.store = store;
-    this.directory = directory;
-    this.isCheckoutActive = isCheckoutActive;
-    this.approveCheckout = approveCheckout;
+    this.host = host;
+    this.installationId = installationId;
   }
 
   getPublication(clientId: string) {
@@ -120,83 +162,28 @@ export class WorkspaceRecovery {
     identifier(input.requestId);
     return this.store.recoveryPublication(input.clientId, input.requestId)?.receipt ?? null;
   }
-  async getOperationStatus(input: CommandInput<'operationStatus'>) {
-    identifier(input.clientId);
-    identifier(input.id);
-    await this.recoverEvidence();
-    return this.getOperation(key(input.clientId, input.id))?.result ?? null;
+  isCheckoutActive(checkoutId: string) {
+    return (
+      [...this.activeSaves.values()].includes(checkoutId) ||
+      [...this.activeOperations.values()].includes(checkoutId)
+    );
   }
-  reserveSave(id: string, record: SaveRecord) {
-    return this.store.reserve('saves', id, record);
-  }
-  startSave(id: string) {
-    this.activeSaves.add(id);
+
+  // Saves
+  startSave(id: string, checkoutId: string) {
+    this.activeSaves.set(id, checkoutId);
   }
   finishSave(id: string) {
     this.activeSaves.delete(id);
   }
+  reserveSave(id: string, record: SaveRecord) {
+    return this.store.reserve('saves', id, record);
+  }
   retainSave(id: string, record: SaveRecord) {
     this.volatileSaves.set(id, record);
   }
-  reserveOperation(id: string, record: OperationRecord) {
-    return this.store.reserve('operations', id, record);
-  }
-  writeOperation(id: string, record: OperationRecord) {
-    this.store.put('operations', id, record);
-  }
-  retainOperation(id: string, record: OperationRecord) {
-    this.volatileOperations.set(id, record);
-  }
-  getPublicationRevisions(input: WorkspaceOperation) {
-    const revisions: Record<string, number> = {
-      [input.clientId]: this.store.readRecovery(input.clientId)?.revision ?? 0,
-    };
-    for (const row of this.store.db.prepare('SELECT client, revision, body FROM recovery').all())
-      if (
-        parseRecovery(row.body, row.client as string).checkouts.some((c) => same(c, input.checkout))
-      )
-        revisions[row.client as string] = savedRevision(row.revision);
-    return revisions;
-  }
-  getUnsettledOperations(target: CheckoutTarget, clientId: string) {
-    return this.getOperations(
-      "json_extract(body, '$.input.checkout.checkoutId') = ? AND (json_extract(body, '$.result.outcome') = 'uncertain' OR NOT EXISTS (SELECT 1 FROM json_each(body, '$.acknowledgedBy') WHERE value = ?))",
-      [target.checkoutId, clientId],
-    );
-  }
-  /**
-   * A checkout's operation records that are not settled for every purpose: uncertain, with a
-   * recovery publication still failing, or not yet acknowledged by the client that made them.
-   */
-  getUnsettledCheckoutOperations(target: CheckoutTarget) {
-    return this.getOperations("json_extract(body, '$.input.checkout.checkoutId') = ?", [
-      target.checkoutId,
-    ]).filter(
-      (r) =>
-        r.input.checkout.checkoutId === target.checkoutId &&
-        (r.result.outcome === 'uncertain' ||
-          r.publicationError !== undefined ||
-          !r.acknowledgedBy.includes(r.input.clientId)),
-    );
-  }
-  getPendingSaves(target: CheckoutTarget) {
-    return this.store.all<SaveRecord>(
-      'saves',
-      pendingSaves +
-        " AND json_extract(body, '$.result') IS NULL AND json_extract(body, '$.input.target.checkout.checkoutId') = ?",
-      [target.checkoutId],
-    );
-  }
-  assertDestinationAvailable(target: CheckoutTarget, conflicts: (draftPath: string) => boolean) {
-    for (const row of this.store.db.prepare('SELECT client, body FROM recovery').all()) {
-      const state = parseRecovery(row.body, row.client as string);
-      ensure(
-        !state.drafts.some(
-          (d) => d.target.checkout.checkoutId === target.checkoutId && conflicts(d.target.path),
-        ),
-        'Destination has recovery drafts. Preserve them before replacement.',
-      );
-    }
+  discardSave(id: string) {
+    this.store.delete('saves', id);
   }
   getSaveRecord(id: string) {
     return this.volatileSaves.get(id) ?? this.store.get<SaveRecord>('saves', id);
@@ -214,17 +201,24 @@ export class WorkspaceRecovery {
     for (const [id, record] of this.volatileSaves) records.set(id, record);
     return [...records.values()];
   }
-  getOperation(id: string) {
-    return this.volatileOperations.get(id) ?? this.store.get<OperationRecord>('operations', id);
+  /** Saves that have no outcome and are not running now, in one checkout. */
+  getPendingSaves(target: CheckoutTarget) {
+    return this.store
+      .all<SaveRecord>(
+        'saves',
+        pendingSaves +
+          " AND json_extract(body, '$.result') IS NULL AND json_extract(body, '$.notStarted') IS NOT 1 AND json_extract(body, '$.input.target.checkout.checkoutId') = ?",
+        [target.checkoutId],
+      )
+      .filter((r) => !this.activeSaves.has(key(r.input.clientId, r.input.requestId)));
   }
-  private getOperations(predicate = '1', parameters: string[] = []) {
-    const records = new Map(
-      this.store
-        .all<OperationRecord>('operations', predicate, parameters)
-        .map((r) => [key(r.input.clientId, r.input.id), r]),
-    );
-    for (const [id, record] of this.volatileOperations) records.set(id, record);
-    return [...records.values()];
+  /** The text a draft held when the save began: its recorded baseline, else the file on the host. */
+  async getBaseline(input: CommandInput<'saveFile'>, signal: AbortSignal) {
+    const draft = (
+      this.store.readRecovery(input.clientId)?.state as EditorRecovery | undefined
+    )?.drafts.find((d) => same(d.target, input.target));
+    if (draft && draft.disk.version === input.expectedVersion) return draft.disk;
+    return this.host.readFile(input.target, signal);
   }
   replaySave(id: string, input: CommandInput<'saveFile'>, record: SaveRecord): SaveResult {
     if (!same(record.input, input))
@@ -254,9 +248,147 @@ export class WorkspaceRecovery {
       'Interrupted save retained its intent. Inspect disk and recovered draft before a new deliberate save.',
     );
   }
-  replayOperation(id: string, input: WorkspaceOperation, record: OperationRecord) {
+  /** Tells the host a settled save needs no more replay; a failure is retried at the next load. */
+  async acknowledgeSaves(records: SaveRecord[], signal: AbortSignal) {
+    for (const record of records) {
+      if (!record.result || !record.published || record.hostAcknowledged) continue;
+      const { clientId, requestId } = record.input;
+      try {
+        await this.host.acknowledgeSave({ clientId, requestId }, signal);
+        const id = key(clientId, requestId);
+        const stored = this.store.get<SaveRecord>('saves', id);
+        if (stored && stored.published) {
+          this.store.put('saves', id, { ...stored, hostAcknowledged: true });
+          record.hostAcknowledged = true;
+        }
+      } catch {
+        /* The host keeps the entry until the next acknowledgement. */
+      }
+    }
+  }
+
+  // Operations
+  startOperation(id: string, checkoutId: string) {
+    this.activeOperations.set(id, checkoutId);
+  }
+  finishOperation(id: string) {
+    this.activeOperations.delete(id);
+  }
+  isOperationActive(id: string) {
+    return this.activeOperations.has(id);
+  }
+  reserveOperation(id: string, record: OperationRecord) {
+    return this.store.reserve('operations', id, record);
+  }
+  discardOperation(id: string) {
+    this.store.delete('operations', id);
+  }
+  getOperation(id: string) {
+    return this.volatileOperations.get(id) ?? this.store.get<OperationRecord>('operations', id);
+  }
+  private getOperations(predicate = '1', parameters: string[] = []) {
+    const records = new Map(
+      this.store
+        .all<OperationRecord>('operations', predicate, parameters)
+        .map((r) => [key(r.input.clientId, r.input.id), r]),
+    );
+    for (const [id, record] of this.volatileOperations) records.set(id, record);
+    return [...records.values()];
+  }
+  /** Revisions of every local recovery that names the checkout, as the operation begins. */
+  getPublicationRevisions(checkout: CheckoutTarget, clientId?: string) {
+    const revisions: Record<string, number> = clientId
+      ? { [clientId]: this.store.readRecovery(clientId)?.revision ?? 0 }
+      : {};
+    for (const row of this.store.db.prepare('SELECT client, revision, body FROM recovery').all())
+      if (parseRecovery(row.body, row.client as string).checkouts.some((c) => same(c, checkout)))
+        revisions[row.client as string] = savedRevision(row.revision);
+    return revisions;
+  }
+  /** Where a local record touches: its sources and destinations, or its items when reported by the feed. */
+  footprint(record: OperationRecord) {
+    const input = record.input;
+    if (record.remote)
+      return record.result.items.flatMap((item) =>
+        item.destination === undefined ? [item.source] : [item.source, item.destination],
+      );
+    const sources = input.sources.map((s) => s.target.path);
+    if (input.destination === undefined) return sources;
+    return [
+      ...sources,
+      ...(sources.length > 1
+        ? sources.map((p) => join(input.destination!, basename(p)))
+        : [input.destination]),
+    ];
+  }
+  /** Operations in the checkout that are uncertain or that this client has not yet acknowledged. */
+  getUnsettledOperations(target: CheckoutTarget, clientId: string) {
+    return this.getOperations(
+      "json_extract(body, '$.input.checkout.checkoutId') = ? AND (json_extract(body, '$.result.outcome') = 'uncertain' OR NOT EXISTS (SELECT 1 FROM json_each(body, '$.acknowledgedBy') WHERE value = ?))",
+      [target.checkoutId, clientId],
+    ).filter(
+      (r) =>
+        !this.activeOperations.has(key(r.input.clientId, r.input.id)) &&
+        r.input.checkout.checkoutId === target.checkoutId &&
+        (!r.acknowledgedBy.includes(clientId) || r.result.outcome === 'uncertain'),
+    );
+  }
+  /**
+   * A checkout's operation records that are not settled for every purpose: uncertain, with a
+   * recovery publication still failing, or not yet acknowledged by the client that made them.
+   */
+  getUnsettledCheckoutOperations(target: CheckoutTarget) {
+    return this.getOperations("json_extract(body, '$.input.checkout.checkoutId') = ?", [
+      target.checkoutId,
+    ]).filter(
+      (r) =>
+        !this.activeOperations.has(key(r.input.clientId, r.input.id)) &&
+        r.input.checkout.checkoutId === target.checkoutId &&
+        !r.remote &&
+        (r.result.outcome === 'uncertain' ||
+          r.publicationError !== undefined ||
+          !r.acknowledgedBy.includes(r.input.clientId)),
+    );
+  }
+  /** Refuses to start over work whose outcome this client has not settled. */
+  assertSettled(target: CheckoutTarget, paths: string[], clientId: string) {
+    if (
+      this.getUnsettledOperations(target, clientId).some((r) =>
+        overlaps(paths, this.footprint(r)),
+      ) ||
+      this.getPendingSaves(target).some((r) => overlaps(paths, [r.input.target.path]))
+    )
+      fail(
+        'Uncertain',
+        'An operation awaits recovery publication or inspection. Query its status; do not repeat the mutation.',
+      );
+  }
+  assertDestinationAvailable(target: CheckoutTarget, conflicts: (draftPath: string) => boolean) {
+    for (const row of this.store.db.prepare('SELECT client, body FROM recovery').all()) {
+      const state = parseRecovery(row.body, row.client as string);
+      ensure(
+        !state.drafts.some(
+          (d) => d.target.checkout.checkoutId === target.checkoutId && conflicts(d.target.path),
+        ),
+        'Destination has recovery drafts. Preserve them before replacement.',
+      );
+    }
+  }
+  /** Takes the host's items and outcome into the client's record, ahead of publishing it. */
+  adoptHostResult(record: OperationRecord, host: HostOperationResult) {
+    record.result = { ...record.result, items: host.items, outcome: host.outcome };
+    if (host.message === undefined) delete record.result.message;
+    else record.result.message = host.message;
+  }
+  async replayOperation(
+    id: string,
+    input: WorkspaceOperation,
+    record: OperationRecord,
+    signal: AbortSignal,
+  ) {
     if (!same(record.input, input))
       fail('Conflict', 'Operation ID already belongs to another payload/client/checkout.');
+    if (this.activeOperations.has(id)) return { result: record.result, missing: false };
     if (this.volatileOperations.has(id)) {
       try {
         this.publishOperation(id, record);
@@ -264,16 +396,46 @@ export class WorkspaceRecovery {
         this.retainPublication(id, record, error);
       }
     }
-    return record.result;
+    // `missing`: the host has no record of a request that was left unanswered, so it may be sent.
+    const missing =
+      !record.remote &&
+      record.result.outcome === 'uncertain' &&
+      (await this.resolveOperation(id, record, signal)) === 'missing' &&
+      record.result.items.length === 0;
+    return { result: record.result, missing };
   }
-
+  /** Asks the host what became of an operation this client sent, and applies what it reports. */
+  async resolveOperation(
+    id: string,
+    record: OperationRecord,
+    signal: AbortSignal,
+  ): Promise<'found' | 'missing' | 'unavailable'> {
+    let host: HostOperationResult | null;
+    try {
+      host = await this.host.operationStatus(
+        { clientId: record.input.clientId, id: record.input.id },
+        signal,
+      );
+    } catch {
+      return 'unavailable';
+    }
+    if (!host) return 'missing';
+    this.adoptHostResult(record, host);
+    try {
+      this.publishOperation(id, record);
+    } catch (error) {
+      this.retainPublication(id, record, error);
+    }
+    return 'found';
+  }
+  /** Returns whether the host should now be told this client's own operation is settled. */
   acknowledgeOperation(input: CommandInput<'acknowledgeOperation'>) {
     identifier(input.clientId);
     identifier(input.operationClientId);
     identifier(input.id);
     const id = key(input.operationClientId, input.id),
       record = this.getOperation(id);
-    if (!record || record.acknowledgedBy.includes(input.clientId)) return;
+    if (!record || record.acknowledgedBy.includes(input.clientId)) return false;
     const observation = this.store.readRecovery(input.clientId);
     if (
       input.clientId !== input.operationClientId &&
@@ -308,8 +470,26 @@ export class WorkspaceRecovery {
       acknowledgedBy: [...record.acknowledgedBy, input.clientId],
     });
     this.volatileOperations.delete(id);
+    return !record.remote && input.clientId === input.operationClientId;
   }
-  persistRecovery(input: CommandInput<'persistRecovery'>, signal: AbortSignal) {
+  markOperationAcknowledged(id: string) {
+    const record = this.store.get<OperationRecord>('operations', id);
+    if (record) this.store.put('operations', id, { ...record, hostAcknowledged: true });
+  }
+  /** Operations this client issued, acknowledged here, that the host may still be keeping. */
+  getUnacknowledgedAtHost() {
+    return this.getOperations(
+      "json_extract(body, '$.hostAcknowledged') IS NOT 1 AND json_extract(body, '$.remote') IS NOT 1",
+    ).filter(
+      (r) =>
+        !r.remote &&
+        !r.hostAcknowledged &&
+        r.result.outcome !== 'uncertain' &&
+        r.acknowledgedBy.includes(r.input.clientId),
+    );
+  }
+
+  persistRecovery = async (input: CommandInput<'persistRecovery'>, signal: AbortSignal) => {
     identifier(input.clientId);
     identifier(input.requestId);
     ensure(
@@ -321,7 +501,12 @@ export class WorkspaceRecovery {
     const digest = hash(canonical(input)),
       previous = this.store.replayPublication(input, digest);
     if (previous) return previous;
-    for (const target of input.state.checkouts) this.approveCheckout(target);
+    // A checkout the client already recovered was approved when it was added.
+    const known = (this.store.readRecovery(input.clientId)?.state as EditorRecovery | undefined)
+      ?.checkouts;
+    for (const target of input.state.checkouts)
+      if (!known?.some((c) => same(c, target))) await this.host.verifyCheckout(target, signal);
+    if (signal.aborted) fail('Cancelled', 'Recovery publication cancelled before commit.');
     const state = structuredClone(input.state);
     const retained = this.store.readRecovery(input.clientId)?.state as EditorRecovery | undefined;
     for (const record of this.getOperations(
@@ -339,7 +524,7 @@ export class WorkspaceRecovery {
             );
     }
     return this.store.persist(input, digest);
-  }
+  };
   retainPublication(id: string, record: OperationRecord, error: unknown) {
     const committed = this.store.get<OperationRecord>('operations', id);
     record.result.recoveryChanges = [
@@ -354,9 +539,12 @@ export class WorkspaceRecovery {
     record.result.message = record.publicationError;
     this.volatileOperations.set(id, record);
   }
+  /**
+   * Applies an operation's completed items to every local recovery that names its checkout, and
+   * records the operation, in one transaction.
+   */
   publishOperation(id: string, record: OperationRecord) {
-    this.store.db.exec('BEGIN IMMEDIATE');
-    try {
+    this.store.transaction(() => {
       const committed = this.store.get<OperationRecord>('operations', id);
       if (committed && !same(committed.input, record.input))
         fail('Conflict', 'Operation identity changed before recovery publication.');
@@ -375,7 +563,11 @@ export class WorkspaceRecovery {
         originals = mergedItems.filter((item) => isOriginalResult(record.input.kind, item));
       const expected = record.input.sources.length || record.input.nativeReferences?.length || 1;
       let outcome: OperationResult['outcome'];
-      if (originals.length !== expected || originals.some((item) => item.outcome === 'uncertain'))
+      if (record.remote) outcome = 'completed';
+      else if (
+        originals.length !== expected ||
+        originals.some((item) => item.outcome === 'uncertain')
+      )
         outcome = 'uncertain';
       else if (originals.every((item) => item.outcome === 'completed')) outcome = 'completed';
       else outcome = 'failed';
@@ -392,7 +584,6 @@ export class WorkspaceRecovery {
         committed.result.outcome !== outcome ||
         fresh.length > 0;
       if (!changed) {
-        this.store.db.exec('COMMIT');
         delete record.publicationError;
         Object.assign(record, committed);
         this.volatileOperations.delete(id);
@@ -449,15 +640,12 @@ export class WorkspaceRecovery {
       )
         delete updated.result.message;
       this.store.put('operations', id, updated);
-      this.store.db.exec('COMMIT');
       delete record.publicationError;
       Object.assign(record, updated);
       this.volatileOperations.delete(id);
-    } catch (error) {
-      this.store.db.exec('ROLLBACK');
-      throw error;
-    }
+    });
   }
+  /** Applies a save's outcome (or, when restoring, its text) to the client's recovery. */
   publishSaves(records: SaveRecord[], restore = false) {
     if (!records.length) return;
     const clientId = records[0].input.clientId;
@@ -465,8 +653,7 @@ export class WorkspaceRecovery {
       records.every((record) => record.input.clientId === clientId),
       'A Save publication group belongs to one client.',
     );
-    this.store.db.exec('BEGIN IMMEDIATE');
-    try {
+    this.store.transaction(() => {
       if (
         restore ||
         records.some(
@@ -477,10 +664,7 @@ export class WorkspaceRecovery {
       ) {
         const group = new Map(
           this.getSaveRecords(clientId)
-            .filter(
-              (r) =>
-                r.input.clientId === clientId && r.started && (!r.published || r.restorePending),
-            )
+            .filter((r) => r.input.clientId === clientId && (!r.published || r.restorePending))
             .map((r) => [key(clientId, r.input.requestId), r]),
         );
         for (const record of records) group.set(key(clientId, record.input.requestId), record);
@@ -542,7 +726,7 @@ export class WorkspaceRecovery {
         const updated: SaveRecord = {
           ...record,
           result,
-          published: !!result,
+          published: !!result || !!record.notStarted,
           recoveryRestored: !!committed?.recoveryRestored || restored,
           restorePending: !!wantsRestore && !committed?.recoveryRestored && !restored,
         };
@@ -562,20 +746,22 @@ export class WorkspaceRecovery {
           };
         if (!same(entry.committed, entry.updated)) this.store.put('saves', entry.id, entry.updated);
       }
-      this.store.db.exec('COMMIT');
       for (const { id, record, updated } of updates) {
         Object.assign(record, updated);
         this.volatileSaves.delete(id);
       }
-    } catch (error) {
-      this.store.db.exec('ROLLBACK');
-      throw error;
-    }
+    });
   }
-  async recoverEvidence(openIds?: Set<string>) {
+
+  /**
+   * Resolves what the host knows of every save and operation this client left open: a settled
+   * outcome is applied, a request the host never admitted is restored as a draft, and anything
+   * still unclear is kept with its text.
+   */
+  async recoverEvidence(signal: AbortSignal, openIds?: Set<string>) {
     const groups = new Map<string, SaveRecord[]>();
     for (const record of this.getSaveRecords()) {
-      if (!record.started || (record.published && !record.restorePending)) continue;
+      if (record.published && !record.restorePending) continue;
       const records = groups.get(record.input.clientId) ?? [];
       records.push(record);
       groups.set(record.input.clientId, records);
@@ -584,17 +770,24 @@ export class WorkspaceRecovery {
       if (records.some((record) => this.isCheckoutActive(record.input.target.checkout.checkoutId)))
         continue;
       for (const record of records)
-        if (!record.result && (!openIds || openIds.has(record.input.target.checkout.checkoutId))) {
+        if (
+          !record.result &&
+          !record.notStarted &&
+          (!openIds || openIds.has(record.input.target.checkout.checkoutId))
+        ) {
           try {
-            const disk = await (
-              await this.directory(record.input.target.checkout)
-            ).read(record.input.target.path);
-            if (disk.version === textDocument(record.input.text).version)
-              record.result = { kind: 'saved', disk, recoveryChanges: [] };
-            else if (disk.version === record.input.expectedVersion)
-              record.result = { kind: 'conflict', disk };
+            const status = await this.host.saveStatus(
+              { clientId: record.input.clientId, requestId: record.input.requestId },
+              signal,
+            );
+            if (status.kind === 'saved')
+              record.result = { kind: 'saved', disk: status.disk, recoveryChanges: [] };
+            else if (status.kind === 'conflict')
+              record.result = { kind: 'conflict', disk: status.disk };
+            else if (status.kind === 'not-started') record.notStarted = true;
+            else if (status.message !== undefined) record.message = status.message;
           } catch {
-            /* Restore admitted text without guessing an unavailable disk outcome. */
+            /* Restore admitted text without guessing an unavailable host's outcome. */
           }
         }
       try {
@@ -608,140 +801,150 @@ export class WorkspaceRecovery {
           this.volatileSaves.set(key(record.input.clientId, record.input.requestId), record);
         }
       }
+      await this.acknowledgeSaves(records, signal);
     }
-    for (const record of this.getOperations(
-      `json_extract(body, '$.result.outcome') IS NOT 'completed'
-      OR json_extract(body, '$.publicationError') IS NOT NULL
-      OR json_extract(body, '$.publishedItems') IS NULL
-      OR EXISTS (
-        SELECT 1 FROM json_each(body, '$.result.items') i
-        WHERE json_extract(i.value, '$.outcome') = 'completed'
-          AND NOT EXISTS (
-            SELECT 1 FROM json_each(body, '$.publishedItems') p
-            WHERE json_extract(p.value, '$.source') IS json_extract(i.value, '$.source')
-              AND json_extract(p.value, '$.destination') IS json_extract(i.value, '$.destination')
-              AND json_extract(p.value, '$.outcome') IS json_extract(i.value, '$.outcome')
-              AND json_extract(p.value, '$.message') IS json_extract(i.value, '$.message')
-          )
-      )`,
-    )) {
-      if (this.isCheckoutActive(record.input.checkout.checkoutId)) continue;
-      const items = record.result.items.filter((item) => isOriginalResult(record.input.kind, item));
-      if (
-        items.length ===
-          (record.input.sources.length || record.input.nativeReferences?.length || 1) &&
-        items.every((item) => item.outcome !== 'uncertain')
-      ) {
-        const outcome = items.every((item) => item.outcome === 'completed')
-          ? 'completed'
-          : 'failed';
-        const id = key(record.input.clientId, record.input.id);
-        if (
-          record.result.outcome !== outcome ||
-          record.result.items.some(
-            (item) =>
-              item.outcome === 'completed' &&
-              !(record.publishedItems ?? []).includes(canonical(item)),
-          ) ||
-          this.volatileOperations.has(id)
-        ) {
-          record.result.outcome = outcome;
-          try {
-            this.publishOperation(id, record);
-          } catch (error) {
-            this.retainPublication(id, record, error);
-          }
+    for (const record of this.getOperations(attentionPredicate)) {
+      const id = key(record.input.clientId, record.input.id);
+      if (this.isCheckoutActive(record.input.checkout.checkoutId) || this.activeOperations.has(id))
+        continue;
+      if (!record.remote && record.result.outcome === 'uncertain') {
+        if ((await this.resolveOperation(id, record, signal)) !== 'found') continue;
+      } else if (record.publicationError || this.volatileOperations.has(id)) {
+        try {
+          this.publishOperation(id, record);
+        } catch (error) {
+          this.retainPublication(id, record, error);
         }
       }
-      if (
-        record.result.outcome !== 'uncertain' ||
-        this.isCheckoutActive(record.input.checkout.checkoutId)
-      )
-        continue;
-      const kind = record.input.kind;
-      if (kind !== 'move' || (openIds && !openIds.has(record.input.checkout.checkoutId))) continue;
-      let directory: Directory;
-      try {
-        directory = await this.directory(record.input.checkout);
-      } catch {
-        continue;
-      }
-      for (const source of record.input.sources) {
-        if (
-          record.result.items.some(
-            (i) => i.source === source.target.path && i.destination && i.outcome === 'completed',
-          )
-        )
-          continue;
-        const destination =
-          record.input.sources.length === 1
-            ? record.input.destination!
-            : join(record.input.destination!, basename(source.target.path));
-        const inspect = async (p: string) => {
-          try {
-            return (await directory.entry(p)).identity;
-          } catch {
-            return null;
-          }
-        };
-        const from = await inspect(source.target.path),
-          to = await inspect(destination);
-        if (to === source.identity && from !== source.identity) {
-          record.result.items = record.result.items.filter(
-            (i) => i.source !== source.target.path || !i.destination,
-          );
-          record.result.items.push({
-            source: source.target.path,
-            destination,
-            outcome: 'completed',
-            message: 'Recovered exact moved object identity; no mutation repeated.',
-          });
-        } else if (
-          from === source.identity &&
-          to !== source.identity &&
-          !record.input.replacements?.length
-        ) {
-          record.result.items = record.result.items.filter((i) => i.source !== source.target.path);
-          record.result.items.push({
-            source: source.target.path,
-            destination,
-            outcome: 'failed',
-            message: 'Original object remains at source; no mutation repeated.',
-          });
-        }
-      }
-      if (
-        record.result.items.length >= record.input.sources.length &&
-        !record.result.items.some((i) => i.outcome === 'uncertain')
-      )
-        record.result.outcome = record.result.items.every((i) => i.outcome === 'completed')
-          ? 'completed'
-          : 'failed';
+    }
+    for (const record of this.getUnacknowledgedAtHost()) {
       const id = key(record.input.clientId, record.input.id);
       try {
-        this.publishOperation(id, record);
-      } catch (error) {
-        this.retainPublication(id, record, error);
+        await this.host.acknowledgeOperation(
+          { clientId: record.input.clientId, id: record.input.id },
+          signal,
+        );
+        this.markOperationAcknowledged(id);
+      } catch {
+        /* The host keeps the entry until the next acknowledgement. */
       }
     }
   }
 
-  async loadRecovery(clientId: string) {
+  /**
+   * Applies completed moves, copies and Trash that other installations' clients made in this
+   * client's checkouts since the last time. A gap past the host's retention leaves drafts at their
+   * old paths and marks them. Returns messages for what could not be read.
+   */
+  async syncFeed(signal: AbortSignal) {
+    const errors: string[] = [];
+    const checkouts = new Map<string, CheckoutTarget>();
+    for (const row of this.store.db.prepare('SELECT client, body FROM recovery').all())
+      for (const target of parseRecovery(row.body, row.client as string).checkouts)
+        checkouts.set(target.checkoutId, target);
+    const byHost = new Map<string, CheckoutTarget[]>();
+    for (const target of checkouts.values())
+      byHost.set(target.hostId, [...(byHost.get(target.hostId) ?? []), target]);
+    for (const [hostId, targets] of byHost) {
+      try {
+        await this.syncHostFeed(hostId, targets, signal);
+      } catch (error) {
+        errors.push('Operation history unavailable: ' + errorText(error));
+      }
+    }
+    return errors;
+  }
+  private async syncHostFeed(hostId: string, targets: CheckoutTarget[], signal: AbortSignal) {
+    const cursor = this.store.get<{ sequence: number }>('cursors', hostId);
+    if (!cursor) {
+      // Nothing earlier concerns this client: begin at the host's present position.
+      const feed = await this.host.listOperations({ checkout: targets[0], after: null }, signal);
+      this.store.put('cursors', hostId, { sequence: feed.through });
+      return;
+    }
+    const entries: OperationFeedEntry[] = [];
+    let through = Number.POSITIVE_INFINITY;
+    for (const checkout of targets) {
+      let after = cursor.sequence;
+      for (;;) {
+        const feed = await this.host.listOperations({ checkout, after }, signal);
+        if (feed.floor > cursor.sequence)
+          this.store.put('gaps', key(hostId, checkout.checkoutId), {
+            since: cursor.sequence,
+            checkoutId: checkout.checkoutId,
+          });
+        entries.push(...feed.operations);
+        if (!feed.more) {
+          through = Math.min(through, feed.through);
+          break;
+        }
+        after = feed.through;
+      }
+    }
+    if (!Number.isFinite(through) || through <= cursor.sequence) return;
+    entries.sort((a, b) => a.sequence - b.sequence);
+    for (const entry of entries) {
+      if (entry.sequence > through) break;
+      // This installation applies its own results as they return.
+      if (entry.installationId !== this.installationId) this.applyFeedEntry(entry);
+    }
+    this.store.put('cursors', hostId, { sequence: through });
+  }
+  private applyFeedEntry(entry: OperationFeedEntry) {
+    const id = key(entry.clientId, entry.id);
+    const existing = this.getOperation(id);
+    if (existing && !existing.remote) return;
+    const record: OperationRecord = existing ?? {
+      input: {
+        id: entry.id,
+        clientId: entry.clientId,
+        checkout: entry.checkout,
+        kind: entry.kind,
+        sources: [],
+      },
+      remote: true,
+      result: {
+        id: entry.id,
+        clientId: entry.clientId,
+        recoveryChanges: [],
+        checkout: entry.checkout,
+        kind: entry.kind,
+        outcome: 'completed',
+        items: [],
+      },
+      publishedItems: [],
+      publicationRevisions: this.getPublicationRevisions(entry.checkout),
+      acknowledgedBy: [],
+    };
+    const known = new Set(record.result.items.map((item) => canonical(item)));
+    record.result.items = [
+      ...record.result.items,
+      ...entry.items.filter((item) => !known.has(canonical(item))),
+    ];
+    try {
+      this.publishOperation(id, record);
+    } catch (error) {
+      this.retainPublication(id, record, error);
+    }
+  }
+
+  async loadRecovery(clientId: string, signal: AbortSignal) {
     identifier(clientId);
     const before = this.store.readRecovery(clientId);
     if (before) recovery(before.state as EditorRecovery, clientId);
+    const errors: string[] = await this.syncFeed(signal);
     await this.recoverEvidence(
+      signal,
       new Set((before?.state as EditorRecovery | undefined)?.openCheckoutIds ?? []),
     );
     const stored = this.store.readRecovery(clientId),
       state = (stored?.state ?? emptyRecovery(clientId)) as EditorRecovery;
     recovery(state, clientId);
-    const errors: string[] = [];
     for (const target of state.checkouts.filter((c) =>
       state.openCheckoutIds.includes(c.checkoutId),
     )) {
       try {
-        await this.directory(target);
+        await this.host.verifyCheckout(target, signal);
       } catch (error) {
         errors.push(target.root + ': ' + errorText(error));
       }
@@ -774,22 +977,45 @@ export class WorkspaceRecovery {
     for (const record of this.getSaveRecords(clientId))
       if (
         record.input.clientId === clientId &&
-        (!record.result || (record.restorePending && !record.recoveryRestored))
+        ((!record.result && !record.notStarted) ||
+          (record.restorePending && !record.recoveryRestored))
       ) {
         errors.push(
           (record.result ? 'Save restoration pending ' : 'Uncertain save ') +
             record.input.requestId +
             ' for ' +
             record.input.target.path +
-            ': inspect disk and staging ' +
-            record.temporary +
-            '; journal text retained.' +
+            ': inspect disk; journal text retained.' +
             (record.message ? ' ' + record.message : '') +
             (record.recoveryPublication === undefined
               ? ' Earlier Save ordering is unknown: no command-start publication fence. Keep the published draft and inspect retained journal text before deliberate reconciliation.'
               : ''),
         );
       }
+    errors.push(...this.getFeedGapErrors(state));
     return { revision: stored?.revision ?? 0, state, errors, operations };
+  }
+  /** A gap's mark stays while any local recovery still holds a draft in its checkout. */
+  private getFeedGapErrors(state: EditorRecovery) {
+    const errors: string[] = [];
+    for (const row of this.store.db
+      .prepare("SELECT key, body FROM records WHERE bucket='gaps'")
+      .all()) {
+      const gap = this.store.parse<{ since: number; checkoutId: string }>('gaps', row.body);
+      const holders = [...this.store.db.prepare('SELECT client, body FROM recovery').all()].filter(
+        (r) =>
+          parseRecovery(r.body, r.client as string).drafts.some(
+            (d) => d.target.checkout.checkoutId === gap.checkoutId,
+          ),
+      );
+      if (!holders.length) this.store.delete('gaps', row.key as string);
+      else if (state.drafts.some((d) => d.target.checkout.checkoutId === gap.checkoutId))
+        errors.push(
+          'Operation history for ' +
+            gap.checkoutId +
+            ' is incomplete: drafts stay at their last known paths and need attention.',
+        );
+    }
+    return errors;
   }
 }

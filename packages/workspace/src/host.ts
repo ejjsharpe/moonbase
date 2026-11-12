@@ -1,24 +1,33 @@
-import { normalizeApplicationError } from '@moonbase/effect';
-import { type ApprovalSchema } from './schema.ts';
-import { Cause, Deferred, Effect, Exit, Fiber, FiberSet, Scope } from 'effect';
-import { decodeWorkspaceInput, decodeWorkspaceOutput } from '@moonbase/contracts/workspace-schema';
+import { Cause, Deferred, Effect, Exit, Scope, type Fiber, type FiberSet } from 'effect';
+import { decodeHostInput, decodeHostOutput } from '@moonbase/contracts/workspace-host-schema';
 import { releaseResource } from '@moonbase/effect';
-import { type WorkspaceServiceShape } from '@moonbase/contracts/services';
+import { type WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import {
   ApplicationError,
   type CheckoutTarget,
-  type CommandInput,
-  type CommandOutput,
-  type OperationResult,
-  type SaveResult,
-  type WorkspaceCommand,
-  type WorkspaceOperation,
+  type GitCheckoutTarget,
 } from '@moonbase/contracts/workspace';
+import type {
+  HostCommand,
+  HostInput,
+  HostOperationResult,
+  HostOutput,
+  HostSaveResult,
+} from '@moonbase/contracts/workspace-host';
 import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { Store } from './store.ts';
+import { admit, applicationError, type AdmissionOwner } from './admission.ts';
+import { HostJournal } from './host-journal.ts';
+import {
+  hostDecoders,
+  type Approval,
+  type HostOperationRecord,
+  type HostSaveRecord,
+  type WorkspaceConfiguration,
+} from './schema.ts';
 import { WorkspaceDiscovery } from './discovery.ts';
 import { WorkspaceObservations } from './observations.ts';
 import { Directory, identity, makeRunner } from './filesystem.ts';
@@ -26,34 +35,28 @@ import type { NativeImport } from './native-import.ts';
 import { NativeReferences } from './native-references.ts';
 import { WorkspaceWorktrees } from './worktrees.ts';
 import {
+  affected,
   canonical,
   checkout,
   ensure,
+  errorText,
   fail,
+  folded,
   hash,
   identifier,
+  overlaps,
   path,
   same,
   textDocument,
 } from './validation.ts';
 
-import type { WorkspaceConfiguration } from './index.ts';
-import {
-  key,
-  affected,
-  errorText,
-  WorkspaceRecovery,
-  type SaveRecord,
-  type OperationRecord,
-} from './recovery.ts';
-type Approval = typeof ApprovalSchema.Type;
+const dayMs = 24 * 60 * 60 * 1000;
 type OperationSource = {
   path: string;
   identity: string;
   directory: boolean;
   native?: NativeImport;
 };
-const folded = (p: string) => p.normalize('NFC').toLowerCase();
 const containsSelectedSource = (
   entry: { path: string; identity: string; directory: boolean },
   source: { path: string; identity: string; native?: NativeImport },
@@ -63,11 +66,6 @@ const containsSelectedSource = (
     (source.native
       ? source.native.parents.split(',').includes(entry.identity)
       : affected(source.path, entry.path)));
-const applicationError = (error: unknown, code: ApplicationError['code'] = 'Unavailable') =>
-  ApplicationError.is(error)
-    ? error
-    : new ApplicationError({ code, message: normalizeApplicationError(error).message });
-
 type WorkspaceOwnership = {
   operations: FiberSet.FiberSet<unknown, ApplicationError>;
   operationScope: Scope.Closeable;
@@ -95,10 +93,10 @@ export function ensureQualifiedRuntime(platform: string, versions: NodeJS.Proces
     );
 }
 
-export class LocalWorkspace {
+export class FileHost implements AdmissionOwner {
   readonly ownership: WorkspaceOwnership;
   readonly store: Store;
-  readonly service: WorkspaceServiceShape;
+  readonly service: WorkspaceHostServiceShape;
   readonly directories = new Map<string, Directory>();
   readonly observations: WorkspaceObservations;
   readonly signals = new Set<AbortController>();
@@ -111,13 +109,16 @@ export class LocalWorkspace {
   readonly closeCompletion = Deferred.makeUnsafe<void>();
   closing = false;
   readonly references: NativeReferences;
-  readonly recovery: WorkspaceRecovery;
+  readonly journal: HostJournal;
   readonly run;
   readonly discovery: WorkspaceDiscovery;
   readonly worktrees: WorkspaceWorktrees;
   closed = false;
   readonly config: WorkspaceConfiguration;
-  constructor(config: WorkspaceConfiguration, ownership: WorkspaceOwnership) {
+  get operations() {
+    return this.ownership.operations;
+  }
+  constructor(config: WorkspaceConfiguration, ownership: WorkspaceOwnership, now = Date.now) {
     this.config = config;
     this.ownership = ownership;
     ensureQualifiedRuntime(process.platform, process.versions);
@@ -143,15 +144,26 @@ export class LocalWorkspace {
       (message) =>
         this.cleanupFailures.push(Cause.die(new ApplicationError({ code: 'Uncertain', message }))),
     );
-    this.store = new Store(config.dataDirectory, config.hostId);
+    this.store = new Store(config.dataDirectory, {
+      file: 'workspace-host.sqlite',
+      applicationId: 1296193364,
+      schema:
+        "CREATE INDEX IF NOT EXISTS pending_host_saves ON records(bucket) WHERE bucket='saves' AND json_extract(body, '$.result') IS NULL; CREATE INDEX IF NOT EXISTS feed_operation ON records(json_extract(body, '$.operation')) WHERE bucket='feed';",
+      decoders: hostDecoders,
+    });
+    try {
+      this.store.claim('host', config.hostId, 'Workspace store belongs to a different host.');
+    } catch (error) {
+      this.store.close();
+      throw error;
+    }
     this.run = makeRunner(helper, ownership.runHelper, (cause) => this.cleanupFailures.push(cause));
-    this.recovery = new WorkspaceRecovery(
+    this.journal = new HostJournal(
       this.store,
       (target) => this.directory(target),
       (checkoutId) => this.active(checkoutId),
-      (target) => {
-        this.approval(target);
-      },
+      now,
+      config.journalRetentionMs ?? 7 * dayMs,
     );
     this.references = new NativeReferences(
       (target) => this.directory(target),
@@ -172,21 +184,21 @@ export class LocalWorkspace {
       (cause) => this.cleanupFailures.push(cause),
     );
     const call =
-      <K extends WorkspaceCommand>(
+      <K extends HostCommand>(
         operation: K,
-        fn: (input: CommandInput<K>, signal: AbortSignal) => Promise<CommandOutput<K>>,
+        fn: (input: HostInput<K>, signal: AbortSignal) => Promise<HostOutput<K>>,
         persistence = false,
-        lease?: (input: CommandInput<K>) => { checkoutId: string; paths: string[] },
+        lease?: (input: HostInput<K>) => { checkoutId: string; paths: string[] },
       ) =>
-      (input: CommandInput<K>) =>
+      (input: HostInput<K>) =>
         Effect.flatMap(
           Effect.try({
-            try: () => decodeWorkspaceInput(operation, input),
+            try: () => decodeHostInput(operation, input),
             catch: applicationError,
           }),
           (captured) =>
             this.effect(
-              async (signal) => decodeWorkspaceOutput(operation, await fn(captured, signal)),
+              async (signal) => decodeHostOutput(operation, await fn(captured, signal)),
               persistence,
               lease?.(captured),
             ),
@@ -195,26 +207,18 @@ export class LocalWorkspace {
       openCheckout: call<'openCheckout'>('openCheckout', (input, signal) =>
         this.open(input.root, signal),
       ),
+      verifyCheckout: call<'verifyCheckout'>('verifyCheckout', async (input) => {
+        await this.directory(input.checkout);
+      }),
       readFile: call<'readFile'>('readFile', async (target, signal) =>
         (await this.directory(target.checkout)).read(target.path, signal),
       ),
-      saveFile: (input) =>
-        Effect.flatMap(
-          Effect.try({
-            try: () => ({
-              input: decodeWorkspaceInput('saveFile', input),
-              publication: this.recovery.getPublication(input.clientId),
-            }),
-            catch: applicationError,
-          }),
-          ({ input: captured, publication }) =>
-            this.effect(
-              async (signal) =>
-                decodeWorkspaceOutput('saveFile', await this.save(captured, publication, signal)),
-              false,
-              { checkoutId: captured.target.checkout.checkoutId, paths: [captured.target.path] },
-            ),
-        ),
+      saveFile: call<'saveFile'>(
+        'saveFile',
+        (input, signal) => this.save(input, signal),
+        false,
+        (input) => ({ checkoutId: input.target.checkout.checkoutId, paths: [input.target.path] }),
+      ),
       listDirectory: call<'listDirectory'>('listDirectory', (input, signal) =>
         this.discovery.listDirectory(input, signal),
       ),
@@ -228,11 +232,11 @@ export class LocalWorkspace {
         this.worktrees.listWorktrees(input.checkout, signal),
       ),
       createWorktree: call<'createWorktree'>('createWorktree', (input, signal) =>
-        this.worktrees.createWorktree(input, signal),
+        this.createWorktree(input, signal),
       ),
       initializeRepository: call<'initializeRepository'>(
         'initializeRepository',
-        (input, signal) => this.initializeRepository(input.checkout, signal),
+        (input, signal) => this.initializeRepositoryOnce(input, signal),
         false,
         // Waits for, and holds off, every save and file operation in the checkout.
         (input) => ({ checkoutId: input.checkout.checkoutId, paths: [''] }),
@@ -270,27 +274,30 @@ export class LocalWorkspace {
       ),
       operationStatus: call<'operationStatus'>(
         'operationStatus',
-        async (input) => this.recovery.getOperationStatus(input),
+        async (input) => this.journal.operationStatus(input),
         true,
       ),
       acknowledgeOperation: call<'acknowledgeOperation'>(
         'acknowledgeOperation',
-        async (input) => this.recovery.acknowledgeOperation(input),
+        async (input) => this.journal.acknowledgeOperation(input),
         true,
       ),
-      loadRecovery: call<'loadRecovery'>(
-        'loadRecovery',
-        async (input) => this.recovery.loadRecovery(input.clientId),
+      saveStatus: call<'saveStatus'>(
+        'saveStatus',
+        async (input) => this.journal.saveStatus(input),
         true,
       ),
-      getRecoveryPublication: call<'getRecoveryPublication'>(
-        'getRecoveryPublication',
-        async (input) => this.recovery.getRecoveryPublication(input),
+      acknowledgeSave: call<'acknowledgeSave'>(
+        'acknowledgeSave',
+        async (input) => this.journal.acknowledgeSave(input),
         true,
       ),
-      persistRecovery: call<'persistRecovery'>(
-        'persistRecovery',
-        async (input, signal) => this.recovery.persistRecovery(input, signal),
+      listOperations: call<'listOperations'>(
+        'listOperations',
+        async (input) => {
+          this.approval(input.checkout);
+          return this.journal.listOperations(input.checkout, input.after);
+        },
         true,
       ),
       watch: (input) => this.observations.watch(input),
@@ -302,47 +309,15 @@ export class LocalWorkspace {
     lease?: { checkoutId: string; paths: string[] },
     abandoned?: (result: A) => void,
   ): Effect.Effect<A, ApplicationError> {
-    return Effect.uninterruptibleMask((restore) =>
-      Effect.gen({ self: this }, function* () {
-        if (this.closed)
-          return yield* Effect.fail(
-            new ApplicationError({ code: 'Unavailable', message: 'Workspace scope is closed.' }),
-          );
-        const abort = new AbortController();
-        this.signals.add(abort);
-        let result: { value: A } | undefined;
-        const work = Effect.tryPromise({
-          try: async () => {
-            if (abort.signal.aborted)
-              fail('Cancelled', 'Workspace command cancelled before admission.');
-            const value = await fn(abort.signal);
-            result = { value };
-            if (abort.signal.aborted) abandoned?.(value);
-            return value;
-          },
-          catch: (error) => applicationError(error, persistence ? 'Persistence' : 'Unavailable'),
-        });
-        // Raw OS Promises must settle before the lease, descriptors or Store can be released.
-        const owned = (lease ? this.withLease(lease, abort.signal, work) : work).pipe(
-          Effect.uninterruptible,
-          Effect.ensuring(Effect.sync(() => this.signals.delete(abort))),
-        );
-        const fiber = yield* FiberSet.run(this.ownership.operations, owned);
-        return yield* restore(Fiber.join(fiber)).pipe(
-          Effect.onInterrupt(() =>
-            Effect.gen(function* () {
-              abort.abort();
-              if (abandoned) {
-                yield* Fiber.await(fiber);
-                if (result) yield* releaseResource(() => abandoned(result!.value));
-              }
-            }),
-          ),
-        );
-      }),
+    return admit(
+      this,
+      fn,
+      persistence,
+      lease ? (signal, work) => this.withLease(lease, signal, work) : undefined,
+      abandoned,
     );
   }
-  footprint(input: WorkspaceOperation) {
+  footprint(input: HostInput<'mutate'>) {
     const sources = input.sources.map((s) => s.target.path);
     if (input.destination === undefined) return sources;
     const names = sources.length
@@ -355,14 +330,6 @@ export class LocalWorkspace {
         : [input.destination]),
     ];
   }
-  overlaps(a: string[], b: string[]) {
-    return a.some((p) =>
-      b.some(
-        (q) =>
-          p === '' || q === '' || affected(folded(p), folded(q)) || affected(folded(q), folded(p)),
-      ),
-    );
-  }
   active(checkoutId: string) {
     return [...this.leases].some((lock) => lock.checkoutId === checkoutId);
   }
@@ -373,8 +340,7 @@ export class LocalWorkspace {
   ) {
     return Effect.suspend(() => {
       const previous = [...this.leases].filter(
-        (active) =>
-          active.checkoutId === lease.checkoutId && this.overlaps(lease.paths, active.paths),
+        (active) => active.checkoutId === lease.checkoutId && overlaps(lease.paths, active.paths),
       );
       const entry = { ...lease, done: Deferred.makeUnsafe<void>() };
       this.leases.add(entry);
@@ -682,6 +648,55 @@ export class LocalWorkspace {
       closeSync(commonFd);
     }
   }
+  /** Replays the first outcome of a `createWorktree` request ID; a new ID creates the worktree. */
+  async createWorktree(input: HostInput<'createWorktree'>, signal: AbortSignal) {
+    const id = this.journal.requestId('createWorktree', input);
+    const previous = this.journal.replayRequest(id, 'createWorktree', input);
+    if (previous) return previous;
+    this.approval(input.checkout);
+    const occupied = this.journal.reserveRequest(id, { input });
+    if (occupied) return this.journal.replayRequest(id, 'createWorktree', input)!;
+    return this.settleRequest(id, input, () => this.worktrees.createWorktree(input, signal));
+  }
+  /** Replays the first outcome of an `initializeRepository` request ID; a new ID runs `git init`. */
+  async initializeRepositoryOnce(input: HostInput<'initializeRepository'>, signal: AbortSignal) {
+    const id = this.journal.requestId('initializeRepository', input);
+    const previous = this.journal.replayRequest(id, 'initializeRepository', input);
+    if (previous) return previous as GitCheckoutTarget;
+    this.approval(input.checkout);
+    const occupied = this.journal.reserveRequest(id, { input });
+    if (occupied)
+      return this.journal.replayRequest(id, 'initializeRepository', input)! as GitCheckoutTarget;
+    return this.settleRequest(id, input, () => this.initializeRepository(input.checkout, signal));
+  }
+  /** Runs a reserved request and records its outcome, success or failure, for replay. */
+  private async settleRequest<T extends CheckoutTarget>(
+    id: string,
+    input: HostInput<'createWorktree'> | HostInput<'initializeRepository'>,
+    run: () => Promise<T>,
+  ) {
+    try {
+      const result = await run();
+      try {
+        this.journal.settleRequest(id, { input, result });
+      } catch {
+        /* The worktree or repository exists; a replay of this ID reports it interrupted. */
+      }
+      return result;
+    } catch (error) {
+      if (ApplicationError.is(error)) {
+        try {
+          this.journal.settleRequest(id, {
+            input,
+            error: { code: error.code, message: error.message },
+          });
+        } catch {
+          /* A replay of this ID reports the request interrupted. */
+        }
+      }
+      throw error;
+    }
+  }
   /**
    * Runs `git init` in a plain folder with no `.git` entry and no unsettled saves or file
    * operations, then approves and returns it as the main worktree of its own new repository.
@@ -692,11 +707,11 @@ export class LocalWorkspace {
     if (this.gitEntry(target.root))
       fail('Conflict', 'This folder already has a .git entry. Reopen it to use its repository.');
     ensure(
-      !this.recovery.getPendingSaves(target).length,
+      !this.journal.getPendingSaves(target).length,
       'A save awaits recovery. Resolve it before initializing Git.',
     );
     ensure(
-      !this.recovery.getUnsettledCheckoutOperations(target).length,
+      !this.journal.getUnsettledCheckoutOperations(target).length,
       'A file operation awaits recovery publication or inspection. Resolve it before initializing Git.',
     );
     await directory.initializeGit(signal);
@@ -705,35 +720,22 @@ export class LocalWorkspace {
     ensure(initialized.vcs === 'git', 'Git did not initialize this folder. Inspect it.');
     return initialized;
   }
-  assertSettled(target: CheckoutTarget, paths: string[], clientId: string) {
+  assertSettled(target: CheckoutTarget, paths: string[], installationId: string, clientId: string) {
     if (
-      this.recovery
-        .getUnsettledOperations(target, clientId)
-        .some(
-          (r) =>
-            r.input.checkout.checkoutId === target.checkoutId &&
-            this.overlaps(paths, r.paths ?? this.footprint(r.input)) &&
-            (!r.acknowledgedBy.includes(clientId) || r.result.outcome === 'uncertain'),
-        ) ||
-      this.recovery
+      this.journal
+        .getUnsettledOperations(target, installationId, clientId)
+        .some((r) => overlaps(paths, r.paths ?? this.footprint(r.input))) ||
+      this.journal
         .getPendingSaves(target)
-        .some(
-          (r) =>
-            r.input.target.checkout.checkoutId === target.checkoutId &&
-            this.overlaps(paths, [r.input.target.path]) &&
-            !r.result,
-        )
+        .some((r) => overlaps(paths, [r.input.target.path]) && !r.result)
     )
       fail(
         'Uncertain',
         'An operation awaits recovery publication or inspection. Query its status; do not repeat the mutation.',
       );
   }
-  async save(
-    input: CommandInput<'saveFile'>,
-    publication: number,
-    signal: AbortSignal,
-  ): Promise<SaveResult> {
+  async save(input: HostInput<'saveFile'>, signal: AbortSignal): Promise<HostSaveResult> {
+    identifier(input.installationId);
     identifier(input.clientId);
     identifier(input.requestId);
     path(input.target.path);
@@ -743,36 +745,30 @@ export class LocalWorkspace {
       typeof input.expectedVersion === 'string' && /^[a-f0-9]{64}$/.test(input.expectedVersion),
       'Invalid expected content version.',
     );
-    const id = key(input.clientId, input.requestId),
-      previous = this.recovery.getSaveRecord(id);
-    if (previous) return this.recovery.replaySave(id, input, previous);
-    this.assertSettled(input.target.checkout, [input.target.path], input.clientId);
+    const id = this.journal.saveId(input),
+      previous = this.journal.getSave(id);
+    if (previous) return this.journal.replaySave(id, input, previous);
+    this.assertSettled(
+      input.target.checkout,
+      [input.target.path],
+      input.installationId,
+      input.clientId,
+    );
     const directory = await this.directory(input.target.checkout),
       disk = await directory.read(input.target.path, signal);
     if (signal.aborted) fail('Cancelled', 'Save cancelled before admission.');
     if (disk.version !== input.expectedVersion) {
       const result = { kind: 'conflict', disk } as const;
-      const previous = this.recovery.reserveSave(id, {
-        input,
-        result,
-        started: false,
-      });
-      return previous
-        ? this.recovery.replaySave(id, input, this.recovery.getSaveRecord(id) ?? previous)
+      const occupied = this.journal.reserveSave(id, { input, result, started: false });
+      return occupied
+        ? this.journal.replaySave(id, input, this.journal.getSave(id) ?? occupied)
         : result;
     }
     const temporary = join(dirname(input.target.path), '.moonbase-save-' + randomUUID());
-    const record: SaveRecord = {
-      input,
-      started: true,
-      temporary,
-      baseline: disk,
-      recoveryPublication: publication,
-    };
-    const occupied = this.recovery.reserveSave(id, record);
-    if (occupied)
-      return this.recovery.replaySave(id, input, this.recovery.getSaveRecord(id) ?? occupied);
-    this.recovery.startSave(id);
+    const record: HostSaveRecord = { input, started: true, temporary, baseline: disk };
+    const occupied = this.journal.reserveSave(id, record);
+    if (occupied) return this.journal.replaySave(id, input, this.journal.getSave(id) ?? occupied);
+    this.journal.startSave(id);
     try {
       const stagingIdentity = (
         await directory.io(['stage', input.target.path, temporary], input.text)
@@ -782,10 +778,10 @@ export class LocalWorkspace {
         record.result = { kind: 'conflict', disk: current };
       else {
         await directory.io(['replace', input.target.path, temporary, stagingIdentity]);
-        record.result = { kind: 'saved', disk: proposed, recoveryChanges: [] };
+        record.result = { kind: 'saved', disk: proposed };
       }
       try {
-        this.recovery.publishSaves([record]);
+        this.journal.settleSave(id, record);
       } catch (error) {
         if (record.result.kind === 'saved')
           record.result = {
@@ -793,22 +789,23 @@ export class LocalWorkspace {
             persistencePending: true,
             message: 'Saved to disk; durable request publication failed: ' + errorText(error),
           };
-        this.recovery.retainSave(id, record);
+        this.journal.retainSave(id, record);
       }
       return record.result;
     } catch (error) {
       record.message = errorText(error);
-      this.recovery.retainSave(id, record);
+      this.journal.retainSave(id, record);
       return fail(
         'Uncertain',
         'Save may have changed disk. Request retained; inspect disk and recovery. ' +
           errorText(error),
       );
     } finally {
-      this.recovery.finishSave(id);
+      this.journal.finishSave(id);
     }
   }
-  async mutate(input: WorkspaceOperation, signal: AbortSignal): Promise<OperationResult> {
+  async mutate(input: HostInput<'mutate'>, signal: AbortSignal): Promise<HostOperationResult> {
+    identifier(input.installationId);
     identifier(input.clientId);
     identifier(input.id);
     this.approval(input.checkout);
@@ -824,30 +821,26 @@ export class LocalWorkspace {
       'Text belongs only to file creation.',
     );
     if (input.text !== undefined) textDocument(input.text);
-    const id = key(input.clientId, input.id),
-      previous = this.recovery.getOperation(id);
-    if (previous) return this.recovery.replayOperation(id, input, previous);
-    this.assertSettled(input.checkout, this.footprint(input), input.clientId);
+    const id = this.journal.operationId(input),
+      previous = this.journal.getOperation(id);
+    if (previous) return this.journal.replayOperation(id, input, previous);
+    this.assertSettled(input.checkout, this.footprint(input), input.installationId, input.clientId);
     if (signal.aborted) fail('Cancelled', 'Operation cancelled before admission.');
     const directory = await this.directory(input.checkout);
     const { items, tokens, replacements } = await this.prepareMutation(input, directory, signal);
     const create = input.kind.startsWith('create-');
     const importing = input.kind === 'import';
     const staging = items.map((item) => item.staging);
-    const publicationRevisions = this.recovery.getPublicationRevisions(input);
-    const record: OperationRecord = {
+    const record: HostOperationRecord = {
       input,
       paths: [
         ...input.sources.map((source) => source.target.path),
         ...items.flatMap((item) => (item.destination === undefined ? [] : [item.destination])),
       ],
       staging,
-      publicationRevisions,
-      acknowledgedBy: [],
       result: {
         id: input.id,
         clientId: input.clientId,
-        recoveryChanges: [],
         checkout: input.checkout,
         kind: input.kind,
         outcome: 'uncertain',
@@ -859,9 +852,9 @@ export class LocalWorkspace {
     // The complete immutable selection is durable before the first native mutation.
     const claims = this.references.inspectReferences(tokens, input.checkout, input.clientId);
     if (signal.aborted) fail('Cancelled', 'Operation cancelled before admission.');
-    const occupied = this.recovery.reserveOperation(id, record);
+    const occupied = this.journal.reserveOperation(id, record);
     if (occupied)
-      return this.recovery.replayOperation(id, input, this.recovery.getOperation(id) ?? occupied);
+      return this.journal.replayOperation(id, input, this.journal.getOperation(id) ?? occupied);
     this.references.claimReferences(claims);
     try {
       for (const { source, destination, staging: temporary } of items) {
@@ -894,7 +887,7 @@ export class LocalWorkspace {
               outcome: 'completed',
               message: 'Explicit replacement moved to macOS Trash: ' + trashLocation,
             });
-            this.recovery.writeOperation(id, record);
+            this.journal.writeOperation(id, record);
           }
           if (create) {
             await directory.io(
@@ -927,7 +920,7 @@ export class LocalWorkspace {
               outcome: 'completed',
               message: trashPath ? 'macOS Trash: ' + trashPath : 'Moved to macOS Trash.',
             });
-            this.recovery.writeOperation(id, record);
+            this.journal.writeOperation(id, record);
             continue;
           } else {
             await directory.io(
@@ -972,12 +965,12 @@ export class LocalWorkspace {
           });
         }
         try {
-          this.recovery.writeOperation(id, record);
+          this.journal.writeOperation(id, record);
         } catch (error) {
           record.result.message =
             'Filesystem outcome retained in memory; durable publication failed: ' +
             errorText(error);
-          this.recovery.retainOperation(id, record);
+          this.journal.retainOperation(id, record);
           return record.result;
         }
         if (record.result.items.some((item) => item.outcome === 'uncertain')) break;
@@ -997,9 +990,11 @@ export class LocalWorkspace {
           '. Drafts and journal retained; no automatic retry.';
       else delete record.result.message;
       try {
-        this.recovery.publishOperation(id, record);
+        this.journal.finalizeOperation(id, record);
       } catch (error) {
-        this.recovery.retainPublication(id, record, error);
+        record.result.message =
+          'Filesystem outcome retained in memory; durable publication failed: ' + errorText(error);
+        this.journal.retainOperation(id, record);
       }
       return record.result;
     } finally {
@@ -1007,7 +1002,7 @@ export class LocalWorkspace {
     }
   }
   private async prepareMutation(
-    input: WorkspaceOperation,
+    input: HostInput<'mutate'>,
     directory: Directory,
     signal: AbortSignal,
   ) {
@@ -1146,12 +1141,6 @@ export class LocalWorkspace {
           (s) => s.path !== source.path && affected(folded(destination), folded(s.path)),
         ),
         'Destination overlaps another selected source.',
-      );
-      this.recovery.assertDestinationAvailable(
-        input.checkout,
-        (draftPath) =>
-          affected(folded(draftPath), folded(destination)) &&
-          (!!source.native || !affected(draftPath, source.path)),
       );
     }
     return { items, tokens, replacements };

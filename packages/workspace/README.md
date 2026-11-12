@@ -1,10 +1,22 @@
 # Workspace
 
-`@moonbase/workspace` is the local macOS workspace service: file reads, version-checked saves, create/move/copy and Finder Trash; Git status and comparisons, file lookup and watching; and SQLite recovery storage for drafts, editor state and interrupted operations. It implements the workspace contracts and is independent of the editor UI.
+`@moonbase/workspace` is the macOS workspace service in two layers: a **file host** (file reads, version-checked saves, create/move/copy and Finder Trash; Git status and comparisons, file lookup and watching; and journals of the saves and operations it admitted) and a **client recovery store** (drafts, editor state and the client's record of what it sent). It implements the workspace contracts and is independent of the editor UI.
 
 ## Integration
 
-`WorkspaceLive(config)` provides `WorkspaceService` and the privileged `WorkspaceNative` service for approved native imports. Compose it once in a process root's runtime; the workspace opens only on macOS with Node 26.13 or newer, the pinned Electron (45.1.0) or exactly Bun 1.4.4, and is refused as `Incompatible` otherwise; see [`examples/local.ts`](examples/local.ts). Configure a stable `hostId` and a `dataDirectory` outside approved checkouts. Packaged apps must supply absolute `filesystemHelper` and `ripgrepExecutable` paths. System Git defaults to `/usr/bin/git`.
+- `WorkspaceHostLive(config)` provides `WorkspaceHostService` (everything except recovery, plus `saveStatus`, `acknowledgeSave` and `listOperations`) and the privileged `WorkspaceNative` service for approved native imports. It keeps approvals and journals in `workspace-host.sqlite` in `dataDirectory`.
+- `WorkspaceRecoveryLive({dataDirectory, installationId}, host)` provides today's full `WorkspaceService` over a host service. It keeps drafts and editor state in `moonbase-workspace-v1.sqlite`, so existing drafts carry.
+- `WorkspaceLocalLive(config)` composes both in one process, as Electron main does; see [`examples/local.ts`](examples/local.ts).
+
+Compose each once in a process root's runtime. The workspace opens only on macOS with Node 26.13 or newer, the pinned Electron (45.1.0) or exactly Bun 1.4.4, and is refused as `Incompatible` otherwise. Configure a stable `hostId` and a `dataDirectory` outside approved checkouts. Packaged apps must supply absolute `filesystemHelper` and `ripgrepExecutable` paths. System Git defaults to `/usr/bin/git`.
+
+## File host and recovery
+
+The host journals each save and operation under `(installationId, clientId, requestId)` and replays its recorded outcome for the same ID. `createWorktree` and `initializeRepository` carry a request ID and replay their first outcome the same way. An entry stays until its client acknowledges it (`acknowledgeSave`, `acknowledgeOperation`), then for `journalRetentionMs` (7 days by default); unacknowledged entries are never discarded. `assertSettled` and `initializeRepository` consult only these journals. Results carry no `recoveryChanges`.
+
+Completed moves, copies and Trash also enter an operation feed with a store-wide, increasing sequence. `listOperations({checkout, after})` returns one bounded page after a sequence, with `through`, `floor` (entries up to it may have been discarded) and `more`.
+
+The client records a save or operation intent (text, baseline) before sending it, and applies the reply, `saveStatus`, `operationStatus` or feed entry to its recovery in one local transaction. `loadRecovery` resolves open intents through the host: `saved` and `conflict` settle them, `not-started` restores the text as a draft, `uncertain` keeps the draft and reports it. A lost reply is never sent again as new work. `loadRecovery` also reads the feed after its per-host cursor and reconciles drafts and views of its checkouts, so another client's move re-paths a draft and its Trash leaves it. A gap past the host's retention leaves drafts where they are and reports them. This client's own results are applied as they return, so its own feed entries are skipped.
 
 ## Search
 
@@ -32,6 +44,7 @@ A `CheckoutTarget` says whether its root is the repository's `main` working tree
 - Saves check content versions. Replacing an existing file requires explicit consent and moves the old one to Trash.
 - Helper processes run in their own process group. Stopping one (cancellation, a limit) sends the group SIGTERM, then SIGKILL after 2 seconds, and waits for it to exit, so Git and its children can clean up first.
 - Files must be UTF-8 text up to 2 MiB. Filesystem changes and SQLite commits are not one atomic transaction.
+- A client's settled save and operation records and publication receipts are not yet compacted; only the host journal is.
 
 ## Checks
 

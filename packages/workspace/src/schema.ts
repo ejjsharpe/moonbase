@@ -1,50 +1,49 @@
 import { Schema, Struct } from 'effect';
 import { isAbsolute } from 'node:path';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import { hash, recovery } from './validation.ts';
+import { hash } from './validation.ts';
 import {
   CheckoutTargetSchema,
   FileDocumentSchema,
-  OperationResultSchema,
-  RecoveryPublicationSchema,
-  SaveResultSchema,
   WorkspaceIdentifierSchema,
-  WorkspaceOperationSchema,
-  workspaceInputSchemas,
-  decodeEditorRecovery,
 } from '@moonbase/contracts/workspace-schema';
+import {
+  HostOperationResultSchema,
+  HostSaveResultSchema,
+  OperationFeedEntrySchema,
+  hostInputSchemas,
+} from '@moonbase/contracts/workspace-host-schema';
 
-const struct = <const F extends Schema.Struct.Fields>(fields: F) =>
+export const struct = <const F extends Schema.Struct.Fields>(fields: F) =>
   Schema.Struct(fields).mapFields(Struct.map(Schema.mutableKey));
-const array = <S extends Schema.Constraint>(schema: S) => Schema.mutable(Schema.Array(schema));
-const optional = Schema.optional;
-const natural = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
-const absolute = Schema.String.check(Schema.makeFilter((s) => isAbsolute(s) && !s.includes('\0')));
-const digest = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/));
-const storedDocument = FileDocumentSchema.check(
+export const array = <S extends Schema.Constraint>(schema: S) =>
+  Schema.mutable(Schema.Array(schema));
+export const optional = Schema.optional;
+export const natural = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+export const absolute = Schema.String.check(
+  Schema.makeFilter((s) => isAbsolute(s) && !s.includes('\0')),
+);
+export const storedDocument = FileDocumentSchema.check(
   Schema.makeFilter((document) => hash(document.text) === document.version),
 );
-const operationItems = Schema.decodeUnknownSync(OperationResultSchema.fields.items, {
-  onExcessProperty: 'error',
-  reportInput: false,
-});
-const publishedItem = Schema.String.check(
-  Schema.makeFilter((value) => {
-    try {
-      operationItems([JSON.parse(value)]);
-      return true;
-    } catch {
-      return false;
-    }
-  }),
-);
+export const strictDecoders = (schemas: Record<string, Schema.Decoder<unknown>>) =>
+  Object.fromEntries(
+    Object.entries(schemas).map(([bucket, schema]) => [
+      bucket,
+      Schema.decodeUnknownSync(schema, { onExcessProperty: 'error', reportInput: false }),
+    ]),
+  );
+
 export const WorkspaceConfigurationSchema = struct({
   dataDirectory: absolute,
   hostId: WorkspaceIdentifierSchema,
   filesystemHelper: optional(absolute),
   gitExecutable: optional(absolute),
   ripgrepExecutable: optional(absolute),
+  /** How long an acknowledged journal entry stays before it is discarded. */
+  journalRetentionMs: optional(natural),
 });
+export type WorkspaceConfiguration = typeof WorkspaceConfigurationSchema.Type;
 const configuration = Schema.decodeUnknownSync(WorkspaceConfigurationSchema, {
   reportInput: false,
 });
@@ -67,82 +66,56 @@ export const ApprovalSchema = struct({
     struct({ identity: Schema.String, pointer: Schema.NullOr(Schema.String) }),
   ),
 });
-export const SaveRecordSchema = struct({
-  restorePending: optional(Schema.Boolean),
-  recoveryRestored: optional(Schema.Boolean),
-  recoveryPublication: optional(natural),
-  recoveryRevision: optional(natural),
-  baseline: optional(storedDocument),
-  published: optional(Schema.Boolean),
+/** A save the host admitted, until its client acknowledges it and the retention window passes. */
+export const HostSaveRecordSchema = struct({
+  input: hostInputSchemas.saveFile,
+  started: Schema.Boolean,
   temporary: optional(Schema.String),
-  input: workspaceInputSchemas.saveFile,
+  baseline: optional(storedDocument),
   result: optional(
-    SaveResultSchema.check(
+    HostSaveResultSchema.check(
       Schema.makeFilter((result) => hash(result.disk.text) === result.disk.version),
     ),
   ),
-  started: Schema.Boolean,
   message: optional(Schema.String),
+  acknowledgedAt: optional(natural),
 });
-export const OperationRecordSchema = struct({
+export const HostOperationRecordSchema = struct({
+  input: hostInputSchemas.mutate,
   paths: optional(array(Schema.String)),
-  publicationError: optional(Schema.String),
   staging: optional(array(Schema.String)),
-  publishedItems: optional(array(publishedItem)),
-  input: WorkspaceOperationSchema,
-  result: OperationResultSchema,
-  publicationRevisions: Schema.Record(Schema.String, Schema.mutableKey(natural)),
-  acknowledgedBy: array(WorkspaceIdentifierSchema),
+  result: HostOperationResultSchema,
+  /** Canonical forms of the completed items already added to the operation feed. */
+  fed: optional(array(Schema.String)),
+  acknowledgedAt: optional(natural),
 });
-const PublicationRecordSchema = struct({
-  digest,
-  receipt: RecoveryPublicationSchema,
+/** The first outcome of a request that has no client acknowledgement, replayed for its ID. */
+export const HostRequestRecordSchema = struct({
+  input: Schema.Union([hostInputSchemas.createWorktree, hostInputSchemas.initializeRepository]),
+  result: optional(CheckoutTargetSchema),
+  error: optional(struct({ code: Schema.String, message: Schema.String })),
+  settledAt: optional(natural),
 });
-const stored = {
+export const FeedRecordSchema = struct({
+  ...OperationFeedEntrySchema.fields,
+  /** The journal key of the operation these items belong to. */
+  operation: Schema.String,
+});
+export type Approval = typeof ApprovalSchema.Type;
+export type HostSaveRecord = typeof HostSaveRecordSchema.Type;
+export type HostOperationRecord = typeof HostOperationRecordSchema.Type;
+export type HostRequestRecord = typeof HostRequestRecordSchema.Type;
+export type FeedRecord = typeof FeedRecordSchema.Type;
+export const hostDecoders = strictDecoders({
   approvals: ApprovalSchema,
-  saves: SaveRecordSchema,
-  operations: OperationRecordSchema,
-  publications: natural,
-  'recovery-publications': PublicationRecordSchema,
+  saves: HostSaveRecordSchema,
+  operations: HostOperationRecordSchema,
+  requests: HostRequestRecordSchema,
+  feed: FeedRecordSchema,
+  counters: natural,
   meta: WorkspaceIdentifierSchema,
-};
-const decoders = Object.fromEntries(
-  Object.entries(stored).map(([bucket, schema]) => [
-    bucket,
-    Schema.decodeUnknownSync(schema, {
-      onExcessProperty: 'error',
-      reportInput: false,
-    }),
-  ]),
-);
-export const invalidStored = () =>
-  new ApplicationError({
-    code: 'Persistence',
-    message: 'Invalid workspace saved data. Original data retained; publication blocked.',
-  });
-export function savedRevision(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw invalidStored();
-  return value;
-}
-export function parseRecord<T>(bucket: string, body: unknown): T {
-  try {
-    if (typeof body !== 'string') throw Error();
-    if (!Object.hasOwn(decoders, bucket)) throw Error();
-    return decoders[bucket](JSON.parse(body)) as T;
-  } catch {
-    throw invalidStored();
-  }
-}
-export function parseRecovery(body: unknown, clientId: string) {
-  try {
-    if (typeof body !== 'string') throw Error();
-    const state = decodeEditorRecovery(JSON.parse(body));
-    recovery(state, clientId);
-    return state;
-  } catch {
-    throw invalidStored();
-  }
-}
+});
+
 const NativeCaptureSchema = struct({
   checkout: CheckoutTargetSchema,
   clientId: WorkspaceIdentifierSchema,

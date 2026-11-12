@@ -32,7 +32,7 @@ import {
   type EditorBuffer,
   type CloseChoice,
 } from '@moonbase/application/editor';
-import { WorkspaceLive, WorkspaceNative } from '@moonbase/workspace';
+import { WorkspaceLocalLive, WorkspaceNative } from '@moonbase/workspace';
 
 function answering<A>(
   controller: EditorController,
@@ -86,8 +86,9 @@ function fixture() {
     editors: EditorController[] = [];
   function start() {
     const runtime = ManagedRuntime.make(
-      WorkspaceLive({
+      WorkspaceLocalLive({
         hostId: 'fanin-local',
+        installationId: 'fanin',
         dataDirectory,
         filesystemHelper: createRequire(import.meta.url).resolve('@moonbase/workspace/filesystem'),
         ripgrepExecutable: process.env.MOONBASE_TEST_RIPGREP ?? resolve('dist/tools/ripgrep/rg'),

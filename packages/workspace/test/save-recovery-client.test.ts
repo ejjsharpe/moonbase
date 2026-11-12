@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { emptyRecovery } from '@moonbase/contracts/workspace';
-import { WorkspaceLive } from '../src/index.ts';
+import { WorkspaceLive } from './workspace-live.ts';
 
 import { fixture, rejects, draft } from './workspace-fixture.ts';
 test('public client saves, rejects changed retries and preserves original dirty conflict baselines across restart', async () => {

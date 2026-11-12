@@ -1,15 +1,16 @@
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { WorkspaceLive } from '../src/index.ts';
+import { WorkspaceLocalLive } from '../src/index.ts';
 const [root, dataDirectory, file] = process.argv.slice(2);
 if (!root || !dataDirectory || !file)
   throw Error(
     'Usage: node --experimental-strip-types packages/workspace/examples/local.ts ABSOLUTE_CHECKOUT ABSOLUTE_FRESH_MOONBASE_STATE RELATIVE_FILE',
   );
 const runtime = ManagedRuntime.make(
-  WorkspaceLive({
+  WorkspaceLocalLive({
     dataDirectory,
     hostId: 'local-example',
+    installationId: 'local-example',
     ...(process.env.MOONBASE_RIPGREP ? { ripgrepExecutable: process.env.MOONBASE_RIPGREP } : {}),
   }),
 );
