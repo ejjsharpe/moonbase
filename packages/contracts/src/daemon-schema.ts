@@ -18,8 +18,8 @@ import type {
   LocalHostOutput,
 } from './daemon.ts';
 
-/** An absolute folder path: at most 4 KiB of well-formed text without NULs. */
-export const FolderPathSchema = Schema.String.check(
+/** An absolute path: at most 4 KiB of well-formed text without NULs. */
+export const AbsolutePathSchema = Schema.String.check(
   Schema.makeFilter(
     (value) =>
       value.startsWith('/') &&
@@ -28,6 +28,8 @@ export const FolderPathSchema = Schema.String.check(
       new TextEncoder().encode(value).length <= 4096,
   ),
 );
+/** A folder's absolute path. */
+export const FolderPathSchema = AbsolutePathSchema;
 /** How many recent folders a host lists. */
 export const maximumRecentFolders = 8;
 /** How many folders a host-mode daemon lists from its approved roots. */

@@ -18,7 +18,10 @@ import { test } from 'node:test';
 import { Effect, ManagedRuntime } from 'effect';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
 import type { ChatTarget } from '@moonbase/contracts/chat';
-import { ApplicationError } from '@moonbase/contracts/workspace';
+import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
+import { ChatWorktrees } from '../src/chat-worktrees.ts';
+import { CheckoutFolders } from '../src/checkout-folders.ts';
+import type { Approval } from '../src/schema.ts';
 import {
   WorkspaceFolders,
   WorkspaceHostLive,
@@ -33,7 +36,11 @@ const chat: ChatTarget = {
 };
 
 function setup(
-  options: { allowRoot?: RootPredicate; chats?: ChatFolders; nativeImports?: boolean } = {},
+  options: {
+    allowRoot?: RootPredicate;
+    chats?: ChatFolders;
+    nativeImports?: boolean;
+  } = {},
 ) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-chat-folders-')));
   const runtime = ManagedRuntime.make(
@@ -172,7 +179,10 @@ test('turning a chat into a project opens its own folder once, and leaves the ch
     chats: {
       findOwnFolder: async () => {
         if (!folder)
-          throw new ApplicationError({ code: 'Unauthorized', message: 'Not a chat folder.' });
+          throw new ApplicationError({
+            code: 'Unauthorized',
+            message: 'Not a chat folder.',
+          });
         return folder;
       },
       markAsProject: async (requestId) => {
@@ -183,7 +193,11 @@ test('turning a chat into a project opens its own folder once, and leaves the ch
   });
   try {
     const host = await f.host();
-    const input = (requestId: string) => ({ installationId: 'alice', requestId, target: chat });
+    const input = (requestId: string) => ({
+      installationId: 'alice',
+      requestId,
+      target: chat,
+    });
     // A folder the daemon didn't make is refused before anything opens or is marked.
     assert.equal(await code(host.turnChatIntoProject(input('refused'))), 'Unauthorized');
     folder = f.repository('chats/one');
@@ -212,7 +226,11 @@ test('a host without chats cannot turn one into a project', async () => {
     const host = await f.host();
     assert.equal(
       await code(
-        host.turnChatIntoProject({ installationId: 'alice', requestId: 'r', target: chat }),
+        host.turnChatIntoProject({
+          installationId: 'alice',
+          requestId: 'r',
+          target: chat,
+        }),
       ),
       'Incompatible',
     );
@@ -245,6 +263,10 @@ test('a folder is an approved checkout root or a worktree Git lists for one, che
     assert.equal(await has(linked), true);
     assert.equal(readdirSync('/dev/fd').length, open);
     assert.equal(await has(stray), false);
+    // A worktree Git lists inside the host's own state is refused like an opened one.
+    const inState = join(f.base, 'state', 'listed');
+    f.git(root, 'worktree', 'add', '-q', '-b', 'listed', inState);
+    assert.equal(await has(inState), false);
     assert.equal(await has(join(root, '.git')), false);
     symlinkSync(root, join(f.base, 'link'));
     assert.equal(await has(join(f.base, 'link')), false);
@@ -298,5 +320,76 @@ test('a host that takes no native imports refuses to hold or release them', asyn
     );
   } finally {
     await f.close();
+  }
+});
+
+test('a chat worktree cancelled while queued is Cancelled, starts nothing and leaves the project free', async () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-chat-queue-')));
+  try {
+    const target = {
+      vcs: 'git',
+      projectId: 'p',
+      root: join(base, 'repo'),
+    } as CheckoutTarget;
+    let release = () => {};
+    const gate = new Promise<void>((done) => (release = done));
+    let listed = 0;
+    const worktrees = new ChatWorktrees({
+      open: async () => target,
+      list: async () => {
+        if (++listed === 1) await gate;
+        return { worktrees: [] } as never;
+      },
+      create: async () => target,
+      permitParent: async () => {},
+    });
+    const running = worktrees.create(
+      { root: target.root, branch: 'a' },
+      new AbortController().signal,
+    );
+    const abort = new AbortController();
+    const queued = worktrees.create({ root: target.root, branch: 'b' }, abort.signal);
+    abort.abort();
+    await assert.rejects(queued, { code: 'Cancelled' });
+    release();
+    await running;
+    assert.equal(listed, 1);
+    await worktrees.create({ root: target.root, branch: 'c' }, new AbortController().signal);
+    assert.equal(listed, 2);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('a folder check that Git does not answer within its deadline finds no folder', async () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-folder-deadline-')));
+  try {
+    const approval = (name: string) =>
+      ({
+        target: { vcs: 'git', root: join(base, name) },
+        common: { path: join(base, name, '.git') },
+      }) as Approval;
+    mkdirSync(join(base, 'wanted'));
+    let asked = 0;
+    const folders = new CheckoutFolders(
+      {
+        approvals: () => [approval('a'), approval('b')],
+        verify: async () => {},
+        list: (_target, signal) => {
+          asked++;
+          return new Promise((_, refuse) =>
+            signal.addEventListener('abort', () => refuse(signal.reason)),
+          );
+        },
+        permit: async () => {},
+        gitEntry: () => null,
+      },
+      20,
+    );
+    assert.equal(await folders.has(join(base, 'wanted'), new AbortController().signal), false);
+    // The second repository is not asked once the check has run out of time.
+    assert.equal(asked, 1);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
   }
 });

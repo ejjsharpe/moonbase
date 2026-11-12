@@ -9,12 +9,14 @@ export type CheckoutFolderSteps = {
   verify(target: CheckoutTarget): Promise<void>;
   /** Lists the worktrees without keeping the checkout open. */
   list(target: CheckoutTarget, signal: AbortSignal): Promise<Worktree[]>;
+  /** Refuses a root the host's reserved paths or root policy do not allow, as opening it would. */
+  permit(root: string): Promise<void>;
   /** The root's `.git` entry: a folder (`pointer: null`) or a file naming the repository. */
   gitEntry(root: string): { pointer: string | null } | null;
 };
 
-/** How long Git may take to list one repository's worktrees for a folder check. */
-const listDeadlineMs = 10_000;
+/** How long one folder check may spend asking Git, across every approved repository. */
+const defaultDeadlineMs = 10_000;
 
 const realPath = (path: string) => {
   try {
@@ -32,30 +34,31 @@ const realPath = (path: string) => {
  */
 export class CheckoutFolders {
   private readonly steps: CheckoutFolderSteps;
-  constructor(steps: CheckoutFolderSteps) {
+  private readonly deadlineMs: number;
+  constructor(steps: CheckoutFolderSteps, deadlineMs = defaultDeadlineMs) {
     this.steps = steps;
+    this.deadlineMs = deadlineMs;
   }
   async has(path: string, signal: AbortSignal): Promise<boolean> {
-    // A newer approval of the same root supersedes the older ones, which match nothing.
-    const newest = new Map<string, Approval>();
-    for (const approval of this.steps.approvals()) newest.set(approval.target.root, approval);
-    const approvals = [...newest.values()];
+    const approvals = this.steps.approvals();
     const named = approvals.filter((approval) => approval.target.root === path);
     // A root spelled differently from its real path, or no longer a directory, is not a folder.
     if (!isDirectoryNamedByRealPath(path)) return false;
     for (const approval of named) if (await this.holds(approval.target)) return true;
+    // One deadline bounds the whole check, so many approvals cannot stall it; running out of time
+    // is "not a folder".
+    const deadline = AbortSignal.any([signal, AbortSignal.timeout(this.deadlineMs)]);
     // One approved checkout per repository is enough to ask Git for its worktrees.
     const asked = new Set<string>();
     for (const approval of approvals) {
       const common = approval.common;
       if (!common || asked.has(common.path) || approval.target.vcs !== 'git') continue;
+      if (deadline.aborted) return false;
       if (!(await this.holds(approval.target))) continue;
       asked.add(common.path);
-      // A repository that does not answer in time is not a folder source; it must not stall the check.
-      const deadline = AbortSignal.any([signal, AbortSignal.timeout(listDeadlineMs)]);
       const listed = await this.steps.list(approval.target, deadline).catch(() => []);
-      if (listed.some((worktree) => worktree.root === path && this.belongs(path, worktree, common)))
-        return true;
+      for (const worktree of listed)
+        if (worktree.root === path && (await this.belongs(path, worktree, common))) return true;
     }
     return false;
   }
@@ -72,8 +75,10 @@ export class CheckoutFolders {
    * has the repository's own `.git` folder, a linked one a `.git` file pointing into the
    * repository's `worktrees/` folder whose `gitdir` points back at this folder.
    */
-  private belongs(path: string, worktree: Worktree, common: { path: string }) {
+  private async belongs(path: string, worktree: Worktree, common: { path: string }) {
     try {
+      // Git lists what a repository's files say, so the folder meets the same policy as an opened one.
+      await this.steps.permit(path);
       const entry = this.steps.gitEntry(path);
       if (!entry) return false;
       if (worktree.main)

@@ -1,7 +1,7 @@
 import * as Schema from 'effect/Schema';
 import { ApplicationError } from './errors.ts';
 import { ChatTargetSchema, chatReplyErrorCodes } from './chat-schema.ts';
-import { FolderPathSchema } from './daemon-schema.ts';
+import { AbsolutePathSchema, FolderPathSchema } from './daemon-schema.ts';
 import type { HostCommand, HostInput, HostOutput } from './workspace-host.ts';
 import { array, optional, struct, voidResult } from './schema.ts';
 import {
@@ -146,7 +146,7 @@ export const hostInputSchemas = {
   captureImports: struct({
     checkout: CheckoutTargetSchema,
     clientId: WorkspaceIdentifierSchema,
-    paths: array(FolderPathSchema).check(Schema.isMinLength(1), Schema.isMaxLength(128)),
+    paths: array(AbsolutePathSchema).check(Schema.isMinLength(1), Schema.isMaxLength(128)),
   }),
   releaseImports: struct({
     checkout: CheckoutTargetSchema,

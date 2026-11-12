@@ -189,8 +189,10 @@ export class FileHost implements AdmissionOwner {
     });
     this.checkoutFolders = new CheckoutFolders({
       approvals: () => this.store.all<Approval>('approvals'),
-      verify: async (target) => {
-        await this.directory(target, false);
+      verify: (target) => this.verifyFolder(target),
+      permit: async (root) => {
+        this.protected(root);
+        await this.permit(root, root);
       },
       // Through a borrowed descriptor, so checking many approvals never fills the retained cap.
       list: (target, signal) =>
@@ -557,14 +559,15 @@ export class FileHost implements AdmissionOwner {
       );
     return stored!;
   }
-  /**
-   * The checkout's open directory, re-checked. With `retain` false a checkout nobody holds open is
-   * checked through a descriptor that is closed again, so folder checks never use up the cap.
-   */
-  async directory(target: CheckoutTarget, retain = true) {
-    const { directory, transient } = await this.checked(target, retain);
+  /** The checkout's open directory, re-checked. */
+  async directory(target: CheckoutTarget) {
+    const { directory, transient } = await this.checked(target, true);
     transient?.close();
     return directory;
+  }
+  /** Re-checks a checkout through a descriptor closed again, so folder checks never use up the cap. */
+  async verifyFolder(target: CheckoutTarget) {
+    (await this.checked(target, false)).transient?.close();
   }
   /** Runs `operate` on the re-checked checkout through a descriptor that is closed afterwards. */
   async borrow<T>(target: CheckoutTarget, operate: (directory: Directory) => Promise<T>) {
