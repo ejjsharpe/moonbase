@@ -37,6 +37,8 @@ bun run test:editor-integration
 bun run test:chat-integration
 ```
 
+`check:foundation` also checks that the Electron version pinned in the manifests, the packaging config and the workspace runtime gate agree.
+
 `bun run test` runs package suites serially, because concurrent native/process fixtures can delay file-watcher delivery past test deadlines. These are the PR checks; the browser and Electron Playwright suites (`packages/workbench` `test:ui`, `apps/desktop` `test:browser`, `test:native` and `test:package`) run in the `nightly` workflow, which can also be run by hand from Actions. Generated test output goes in ignored `test-results/`; build output goes in `dist/` and `release/`.
 
 PR titles use Conventional Commits, for example `fix(editor): retain drafts`; the `conventional-commits` check enforces this. PRs are squash-merged with the PR title as the commit subject.

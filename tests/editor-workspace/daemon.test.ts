@@ -75,7 +75,7 @@ test("two clients of one daemon share a checkout: a move re-paths the other draf
     const host = await connection.runPromise(WorkspaceHostService);
     const runtime = ManagedRuntime.make(
       WorkspaceRecoveryLive(
-        { dataDirectory: join(base, name), installationId: name, legacyHostIds: [] },
+        { dataDirectory: join(base, name), installationId: name },
         host,
       ),
     );

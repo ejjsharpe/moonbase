@@ -113,8 +113,7 @@ async function main() {
       : await readConfiguration(process.env.MOONBASE_CHAT_CONFIG);
   // Files, Git and search are served by the profile's daemon, which main reaches on demand; this
   // process keeps only this installation's recovery store (drafts and editor state), so the
-  // window opens and drafts are kept without the daemon. Checkouts bound to the former in-process
-  // host are reopened in the daemon as recovery loads.
+  // window opens and drafts are kept without the daemon.
   const installationId = readInstallationId(join(userData, 'workspace-v1'));
   let reachWorkspace = (): Promise<WorkspaceHostServiceShape> =>
     Promise.reject(new ApplicationError({ code: 'Unavailable', message: 'Moonbase is starting.' }));
