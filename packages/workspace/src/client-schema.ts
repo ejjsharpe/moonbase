@@ -149,7 +149,7 @@ export const clientDecoders = {
     meta: WorkspaceIdentifierSchema,
     /** Per call, the request ID its host operation was (or is to be) sent under. */
     requests: struct({ requestId: WorkspaceIdentifierSchema }),
-    'save-records': StoredSaveSchema,
+    saves: StoredSaveSchema,
     operations: OperationRecordSchema,
   }),
 };

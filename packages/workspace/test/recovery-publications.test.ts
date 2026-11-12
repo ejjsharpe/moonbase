@@ -447,9 +447,9 @@ test('growing settled Save history is not parsed by later Save or recovery load'
         .prepare(
           `EXPLAIN QUERY PLAN SELECT body FROM records WHERE bucket=? AND ${pendingSaves} ORDER BY rowid`,
         )
-        .all('save-records');
+        .all('saves');
       assert.ok(
-        plan.some((row) => String(row.detail).includes('pending_save_records')),
+        plan.some((row) => String(row.detail).includes('pending_saves')),
         'pending reads must use the partial index rather than scan settled text in SQLite',
       );
       const operations = database
