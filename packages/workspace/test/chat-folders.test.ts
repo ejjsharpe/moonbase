@@ -18,7 +18,11 @@ import { test } from 'node:test';
 import { Effect, ManagedRuntime } from 'effect';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
 import type { ChatTarget } from '@moonbase/contracts/chat';
-import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
+import {
+  ApplicationError,
+  type CheckoutTarget,
+  type Worktree,
+} from '@moonbase/contracts/workspace';
 import { ChatWorktrees } from '../src/chat-worktrees.ts';
 import { CheckoutFolders } from '../src/checkout-folders.ts';
 import type { Approval } from '../src/schema.ts';
@@ -241,7 +245,7 @@ test('a host without chats cannot turn one into a project', async () => {
 
 test('a folder is an approved checkout root or a worktree Git lists for one, checked again on every use', async () => {
   let allowed = true;
-  const f = setup({ allowRoot: () => allowed });
+  const f = setup({ allowRoot: (real) => allowed && !real.endsWith('denied') });
   try {
     const host = await f.host(),
       folders = await f.folders();
@@ -267,6 +271,10 @@ test('a folder is an approved checkout root or a worktree Git lists for one, che
     const inState = join(f.base, 'state', 'listed');
     f.git(root, 'worktree', 'add', '-q', '-b', 'listed', inState);
     assert.equal(await has(inState), false);
+    // So is one the host's root policy does not allow.
+    const denied = join(f.base, 'denied');
+    f.git(root, 'worktree', 'add', '-q', '-b', 'denied', denied);
+    assert.equal(await has(denied), false);
     assert.equal(await has(join(root, '.git')), false);
     symlinkSync(root, join(f.base, 'link'));
     assert.equal(await has(join(f.base, 'link')), false);
@@ -361,34 +369,45 @@ test('a chat worktree cancelled while queued is Cancelled, starts nothing and le
   }
 });
 
-test('a folder check that Git does not answer within its deadline finds no folder', async () => {
+test('a repository that does not answer in its budget finds no folder and starves no other', async () => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-folder-deadline-')));
   try {
-    const approval = (name: string) =>
-      ({
-        target: { vcs: 'git', root: join(base, name) },
-        common: { path: join(base, name, '.git') },
-      }) as Approval;
-    mkdirSync(join(base, 'wanted'));
-    let asked = 0;
-    const folders = new CheckoutFolders(
-      {
-        approvals: () => [approval('a'), approval('b')],
-        verify: async () => {},
-        list: (_target, signal) => {
-          asked++;
-          return new Promise((_, refuse) =>
-            signal.addEventListener('abort', () => refuse(signal.reason)),
-          );
+    const wanted = join(base, 'wanted');
+    mkdirSync(join(wanted, '.git'), { recursive: true });
+    const hungApproval = {
+      target: { vcs: 'git', root: join(base, 'hung') },
+      common: { path: join(base, 'hung', '.git') },
+    } as Approval;
+    const healthyApproval = {
+      target: { vcs: 'git', root: join(base, 'healthy') },
+      common: { path: join(wanted, '.git') },
+    } as Approval;
+    const folders = (approvals: Approval[], hang: 'list' | 'verify') =>
+      new CheckoutFolders(
+        {
+          approvals: () => approvals,
+          verify: (target) =>
+            hang === 'verify' && target.root.endsWith('hung')
+              ? new Promise(() => {})
+              : Promise.resolve(),
+          list: (target, signal) =>
+            hang === 'list' && target.root.endsWith('hung')
+              ? new Promise((_, refuse) =>
+                  signal.addEventListener('abort', () => refuse(signal.reason)),
+                )
+              : Promise.resolve([{ root: wanted, main: true } as Worktree]),
+          permit: async () => {},
+          gitEntry: () => ({ pointer: null }),
         },
-        permit: async () => {},
-        gitEntry: () => null,
-      },
-      20,
-    );
-    assert.equal(await folders.has(join(base, 'wanted'), new AbortController().signal), false);
-    // The second repository is not asked once the check has run out of time.
-    assert.equal(asked, 1);
+        20,
+      );
+    const signal = new AbortController().signal;
+    // A hung listing or a hung identity check ends within its budget; the next repository is
+    // still asked.
+    for (const hang of ['list', 'verify'] as const)
+      assert.equal(await folders([hungApproval, healthyApproval], hang).has(wanted, signal), true);
+    // Nothing healthy to find: the check ends, closed.
+    assert.equal(await folders([hungApproval], 'list').has(wanted, signal), false);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }

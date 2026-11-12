@@ -18,11 +18,6 @@ export type WorkspaceRecoveryConfiguration = {
   dataDirectory: string;
   installationId: string;
   /**
-   * Host IDs this store's checkouts were bound to before the host it now uses (the cutover from
-   * an in-process host). Recovery reopens their roots on that host as it loads.
-   */
-  legacyHostIds?: string[];
-  /**
    * How long loading recovery waits on the host before it stops asking it for this load, so a
    * host that is slow to start never holds back drafts; what was skipped is retried on the next
    * load. Default 5000.

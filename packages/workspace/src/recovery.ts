@@ -1,4 +1,3 @@
-import { realpathSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
   ApplicationError,
@@ -97,7 +96,6 @@ export function reconcile(state: EditorRecovery, records: OperationRecord[]) {
 
 /** The file host as the client's recovery sees it, with the installation already bound. */
 export type HostPorts = {
-  openCheckout(root: string, signal: AbortSignal): Promise<CheckoutTarget>;
   readFile(
     target: CheckoutTargetFile,
     signal: AbortSignal,
@@ -151,20 +149,12 @@ export class WorkspaceRecovery {
   private readonly store: ClientStore;
   private readonly host: HostPorts;
   private readonly installationId: string;
-  private readonly legacyHostIds: ReadonlySet<string>;
   private readonly hostWaitMs: number;
-  constructor(
-    store: ClientStore,
-    host: HostPorts,
-    installationId: string,
-    legacyHostIds: readonly string[] = [],
-    hostWaitMs = 5000,
-  ) {
+  constructor(store: ClientStore, host: HostPorts, installationId: string, hostWaitMs = 5000) {
     this.hostWaitMs = hostWaitMs;
     this.store = store;
     this.host = host;
     this.installationId = installationId;
-    this.legacyHostIds = new Set(legacyHostIds);
   }
 
   getPublication(clientId: string) {
@@ -317,19 +307,38 @@ export class WorkspaceRecovery {
     for (const [id, record] of this.volatileOperations) records.set(id, record);
     return [...records.values()];
   }
+  /**
+   * Every client's stored recovery, split into those that read and those that don't. Each loop
+   * over the clients uses this, so one unreadable row is skipped (and reported where it matters)
+   * and never stalls the others.
+   */
+  private readableRecoveries() {
+    const readable: { client: string; revision: number; body: string; state: EditorRecovery }[] =
+      [];
+    const unreadable: { client: string; error: string }[] = [];
+    for (const row of this.store.db.prepare('SELECT client, revision, body FROM recovery').all()) {
+      const client = row.client as string;
+      try {
+        readable.push({
+          client,
+          revision: savedRevision(row.revision),
+          body: row.body as string,
+          state: parseRecovery(row.body, client),
+        });
+      } catch (error) {
+        unreadable.push({ client, error: errorText(error) });
+      }
+    }
+    return { readable, unreadable };
+  }
   /** Revisions of every local recovery that names the checkout, as the operation begins. */
   getPublicationRevisions(checkout: CheckoutTarget, clientId?: string) {
     const revisions: Record<string, number> = clientId
       ? { [clientId]: this.store.readRecovery(clientId)?.revision ?? 0 }
       : {};
-    for (const row of this.store.db.prepare('SELECT client, revision, body FROM recovery').all()) {
-      try {
-        if (parseRecovery(row.body, row.client as string).checkouts.some((c) => same(c, checkout)))
-          revisions[row.client as string] = savedRevision(row.revision);
-      } catch {
-        // Another client's unreadable recovery is reported when that client loads.
-      }
-    }
+    // Another client's unreadable recovery is reported when that client loads.
+    for (const { client, revision, state } of this.readableRecoveries().readable)
+      if (state.checkouts.some((c) => same(c, checkout))) revisions[client] = revision;
     return revisions;
   }
   /** Where a local record touches: its sources and destinations, or its items when reported by the feed. */
@@ -391,15 +400,21 @@ export class WorkspaceRecovery {
       );
   }
   assertDestinationAvailable(target: CheckoutTarget, conflicts: (draftPath: string) => boolean) {
-    for (const row of this.store.db.prepare('SELECT client, body FROM recovery').all()) {
-      const state = parseRecovery(row.body, row.client as string);
+    const { readable, unreadable } = this.readableRecoveries();
+    // An unreadable recovery may hold a draft here.
+    ensure(
+      !unreadable.length,
+      'Recovery of ' +
+        unreadable[0]?.client +
+        ' is unreadable and may hold drafts at the destination.',
+    );
+    for (const { state } of readable)
       ensure(
         !state.drafts.some(
           (d) => d.target.checkout.checkoutId === target.checkoutId && conflicts(d.target.path),
         ),
         'Destination has recovery drafts. Preserve them before replacement.',
       );
-    }
   }
   /** Takes the host's items and outcome into the client's record, ahead of publishing it. */
   adoptHostResult(record: OperationRecord, host: HostOperationResult) {
@@ -625,21 +640,19 @@ export class WorkspaceRecovery {
         ...record.publicationRevisions,
         ...committed?.publicationRevisions,
       };
-      for (const row of this.store.db
-        .prepare('SELECT client, revision, body FROM recovery')
-        .all()) {
-        const clientId = row.client as string,
-          state = parseRecovery(row.body, clientId);
+      // An unreadable client recovery is skipped here; every feed sync reports it.
+      for (const { client: clientId, state, body, revision: current } of this.readableRecoveries()
+        .readable) {
         if (
           clientId !== record.input.clientId &&
           !state.checkouts.some((c) => same(c, record.input.checkout))
         )
           continue;
-        let revision = savedRevision(row.revision);
+        let revision = current;
         if (fresh.length)
           reconcile(state, [{ ...record, result: { ...record.result, items: fresh } }]);
         recovery(state, clientId);
-        if (JSON.stringify(state) !== row.body) {
+        if (JSON.stringify(state) !== body) {
           this.store.writeInternalRecovery(clientId, revision, state);
           changes.push({
             clientId,
@@ -893,18 +906,14 @@ export class WorkspaceRecovery {
   async syncFeed(signal: AbortSignal) {
     const errors: string[] = [];
     const checkouts = new Map<string, CheckoutTarget>();
-    for (const row of this.store.db.prepare('SELECT client, body FROM recovery').all()) {
-      try {
-        for (const target of parseRecovery(row.body, row.client as string).checkouts)
-          checkouts.set(target.checkoutId, target);
-      } catch (error) {
-        errors.push('Recovery of ' + String(row.client) + ' is unreadable: ' + errorText(error));
-      }
-    }
+    const { readable, unreadable } = this.readableRecoveries();
+    for (const { state } of readable)
+      for (const target of state.checkouts) checkouts.set(target.checkoutId, target);
+    for (const { client, error } of unreadable)
+      errors.push('Recovery of ' + client + ' is unreadable: ' + error);
     const byHost = new Map<string, CheckoutTarget[]>();
     for (const target of checkouts.values())
-      if (!this.legacyHostIds.has(target.hostId))
-        byHost.set(target.hostId, [...(byHost.get(target.hostId) ?? []), target]);
+      byHost.set(target.hostId, [...(byHost.get(target.hostId) ?? []), target]);
     for (const [hostId, targets] of byHost) {
       try {
         for (const message of await this.syncHostFeed(hostId, targets, signal))
@@ -1039,231 +1048,45 @@ export class WorkspaceRecovery {
     }
   }
 
-  /** The checkouts of any client's recovery that are bound to a former host, by checkout ID. */
-  private legacyCheckouts(errors?: string[]) {
-    const found = new Map<string, CheckoutTarget>();
-    if (!this.legacyHostIds.size) return found;
-    for (const row of this.store.db.prepare('SELECT client, body FROM recovery').all()) {
-      try {
-        for (const target of parseRecovery(row.body, row.client as string).checkouts)
-          if (this.legacyHostIds.has(target.hostId)) found.set(target.checkoutId, target);
-      } catch (error) {
-        // Another client's unreadable recovery is reported, and never hides the drafts.
-        errors?.push('Recovery of ' + String(row.client) + ' is unreadable: ' + errorText(error));
-      }
-    }
-    return found;
-  }
-  /**
-   * The cutover from a former host: reopens the root of each checkout bound to one on the
-   * connected host, then moves the drafts, tabs and recent files of every client's recovery to
-   * the reopened checkout in one local transaction. A root that no longer opens (or whose new
-   * checkout the recovery already holds) stays as it was, with its drafts, and is reported.
-   */
-  private async rebindLegacyCheckouts(signal: AbortSignal) {
-    const errors: string[] = [];
-    const legacy = this.legacyCheckouts(errors);
-    const reopened = new Map<string, CheckoutTarget>();
-    for (const old of legacy.values()) {
-      // Its unsettled saves and operations are asked about by the former ID only; rebinding now
-      // would leave them unresolved for good, so the checkout waits for a load that settles them.
-      if (this.hasUnsettledWork(old.checkoutId)) {
-        errors.push(
-          old.root + ': a save or operation is unresolved; the checkout is rebound later.',
-        );
-        continue;
-      }
-      try {
-        reopened.set(old.checkoutId, await this.reopen(old.root, signal));
-      } catch (error) {
-        errors.push(old.root + ': ' + errorText(error));
-      }
-    }
-    if (!reopened.size) return errors;
-    this.store.transaction(() => {
-      for (const row of this.store.db.prepare('SELECT client FROM recovery').all()) {
-        const client = row.client as string;
-        let stored;
-        try {
-          stored = this.store.readRecovery(client);
-        } catch {
-          continue; // reported by legacyCheckouts
-        }
-        if (!stored) continue;
-        const state = stored.state as EditorRecovery;
-        const present = new Set(state.checkouts.map((c) => c.checkoutId));
-        const moves = new Map(
-          [...reopened].filter(
-            ([from, to]) =>
-              present.has(from) && (from === to.checkoutId || !present.has(to.checkoutId)),
-          ),
-        );
-        // A checkout the recovery already holds under its new ID takes the former one's drafts
-        // that don't collide with its own by path; colliding ones stay where they were.
-        const merges = [...reopened].filter(
-          ([from, to]) => present.has(from) && from !== to.checkoutId && present.has(to.checkoutId),
-        );
-        if (!moves.size && !merges.length) continue;
-        const move = (target: CheckoutTarget) => moves.get(target.checkoutId) ?? target;
-        state.checkouts = state.checkouts.map(move);
-        state.openCheckoutIds = state.openCheckoutIds.map((id) => moves.get(id)?.checkoutId ?? id);
-        if (state.selectedCheckoutId !== null)
-          state.selectedCheckoutId =
-            moves.get(state.selectedCheckoutId)?.checkoutId ?? state.selectedCheckoutId;
-        state.views = Object.fromEntries(
-          Object.entries(state.views).map(([id, view]) => [moves.get(id)?.checkoutId ?? id, view]),
-        );
-        state.drafts = state.drafts.map((d) => ({
-          ...d,
-          target: { ...d.target, checkout: move(d.target.checkout) },
-        }));
-        state.recentFiles = state.recentFiles.map((t) => ({
-          ...t,
-          checkout: move(t.checkout),
-        }));
-        for (const [from, to] of merges) {
-          const held = new Set(
-            state.drafts
-              .filter((d) => d.target.checkout.checkoutId === to.checkoutId)
-              .map((d) => d.target.path),
-          );
-          const colliding = new Set<string>();
-          state.drafts = state.drafts.map((d) => {
-            if (d.target.checkout.checkoutId !== from) return d;
-            if (held.has(d.target.path)) {
-              colliding.add(d.target.path);
-              return d;
-            }
-            return { ...d, target: { ...d.target, checkout: to } };
-          });
-          for (const path of colliding)
-            errors.push(
-              `${path}: a draft already exists in ${to.root}; this one stays on the former checkout.`,
-            );
-          const heldRecent = new Set(
-            state.recentFiles
-              .filter((t) => t.checkout.checkoutId === to.checkoutId)
-              .map((t) => t.path),
-          );
-          state.recentFiles = state.recentFiles.flatMap((t) => {
-            if (t.checkout.checkoutId !== from || colliding.has(t.path)) return [t];
-            return heldRecent.has(t.path) ? [] : [{ ...t, checkout: to }];
-          });
-          const fromView = state.views[from],
-            toView = state.views[to.checkoutId];
-          if (fromView && !toView) state.views[to.checkoutId] = fromView;
-          else if (fromView && toView) {
-            for (const file of fromView.openFiles)
-              if (
-                !colliding.has(file) &&
-                !toView.openFiles.includes(file) &&
-                toView.openFiles.length < 1000
-              )
-                toView.openFiles.push(file);
-            for (const [file, view] of Object.entries(fromView.fileViews))
-              if (!colliding.has(file) && !(file in toView.fileViews))
-                toView.fileViews[file] = view;
-            for (const [file, position] of Object.entries(fromView.positions))
-              if (!colliding.has(file) && !(file in toView.positions))
-                toView.positions[file] = position;
-          }
-          if (colliding.size) continue;
-          state.checkouts = state.checkouts.filter((c) => c.checkoutId !== from);
-          state.openCheckoutIds = [
-            ...new Set(state.openCheckoutIds.map((id) => (id === from ? to.checkoutId : id))),
-          ];
-          if (state.selectedCheckoutId === from) state.selectedCheckoutId = to.checkoutId;
-          delete state.views[from];
-        }
-        try {
-          recovery(state, client);
-          this.store.writeInternalRecovery(client, stored.revision, state);
-        } catch (error) {
-          errors.push('Recovery of ' + client + ' was not rebound: ' + errorText(error));
-        }
-      }
-    });
-    return errors;
-  }
-  private hasUnsettledWork(checkoutId: string) {
-    return (
-      this.getSaveRecords().some(
-        (r) =>
-          r.input.target.checkout.checkoutId === checkoutId &&
-          ((!r.result && !r.notStarted) || (r.restorePending && !r.recoveryRestored)),
-      ) ||
-      this.getOperations(attentionPredicate).some(
-        (r) => r.input.checkout.checkoutId === checkoutId && r.result.outcome === 'uncertain',
-      )
-    );
-  }
-  /** Opens `root` on the connected host, as its canonical spelling if only the case differs. */
-  private async reopen(root: string, signal: AbortSignal) {
-    try {
-      return await this.host.openCheckout(root, signal);
-    } catch (error) {
-      let canonical: string;
-      try {
-        canonical = realpathSync.native(root);
-      } catch {
-        throw error;
-      }
-      if (canonical === root || canonical.toLowerCase() !== root.toLowerCase()) throw error;
-      return this.host.openCheckout(canonical, signal);
-    }
-  }
-
   async loadRecovery(clientId: string, signal: AbortSignal) {
     identifier(clientId);
     const before = this.store.readRecovery(clientId);
     if (before) recovery(before.state as EditorRecovery, clientId);
-    // A host that is slow to answer (such as a daemon still starting) is given `hostWaitMs` in the
-    // first phase it stalls; after that, later phases get only a short probe. A phase that runs out
-    // is retried on the next load, and never stops the next phase, whose local work (drafting
-    // unsettled saves, rebinding checkouts) needs no host.
-    let timedOut = false;
-    const budget = () => (timedOut ? Math.min(this.hostWaitMs, 500) : this.hostWaitMs);
+    // A host that is slow to answer (such as a daemon still starting) is given `hostWaitMs` for all
+    // its phases together. What it did not answer is retried on the next load, and local work
+    // (drafting unsettled saves) needs no host.
+    const hostSignal = AbortSignal.any([signal, AbortSignal.timeout(this.hostWaitMs)]);
     const errors: string[] = [];
-    const withHost = async <T>(phase: (signal: AbortSignal) => Promise<T>, fallback: T) => {
-      const hostSignal = AbortSignal.any([signal, AbortSignal.timeout(budget())]);
+    const withHost = async (phase: () => Promise<string[] | void>) => {
       try {
-        return await phase(hostSignal);
+        errors.push(...((await phase()) ?? []));
       } catch (error) {
         if (signal.aborted) throw error;
-        if (hostSignal.aborted) timedOut = true;
-        else errors.push(errorText(error));
-        return fallback;
+        if (!hostSignal.aborted) errors.push(errorText(error));
       }
     };
-    errors.push(...((await withHost((s) => this.syncFeed(s), [] as string[] | void)) ?? []));
-    // Saves left open on a checkout of a former host are resolved too, so their text becomes a
-    // draft before the checkout is rebound.
-    await withHost(async (s) => {
-      await this.recoverEvidence(
-        s,
-        new Set([
-          ...((before?.state as EditorRecovery | undefined)?.openCheckoutIds ?? []),
-          ...this.legacyCheckouts().keys(),
-        ]),
-      );
-    }, undefined);
-    errors.push(...(await withHost((s) => this.rebindLegacyCheckouts(s), [] as string[])));
+    await withHost(() => this.syncFeed(hostSignal));
+    await withHost(() =>
+      this.recoverEvidence(
+        hostSignal,
+        new Set((before?.state as EditorRecovery | undefined)?.openCheckoutIds ?? []),
+      ),
+    );
     const stored = this.store.readRecovery(clientId),
       state = (stored?.state ?? emptyRecovery(clientId)) as EditorRecovery;
     recovery(state, clientId);
-    const verifySignal = AbortSignal.any([signal, AbortSignal.timeout(budget())]);
     for (const target of state.checkouts.filter((c) =>
       state.openCheckoutIds.includes(c.checkoutId),
     )) {
       try {
-        if (verifySignal.aborted) break;
-        await this.host.verifyCheckout(target, verifySignal);
+        if (hostSignal.aborted) break;
+        await this.host.verifyCheckout(target, hostSignal);
       } catch (error) {
-        if (!verifySignal.aborted) errors.push(target.root + ': ' + errorText(error));
+        if (!hostSignal.aborted) errors.push(target.root + ': ' + errorText(error));
       }
     }
     signal.throwIfAborted();
-    if (timedOut || (verifySignal.aborted && !signal.aborted))
+    if (hostSignal.aborted && !signal.aborted)
       errors.push(
         'The local host did not answer in time; files are checked again on the next load.',
       );
@@ -1316,23 +1139,19 @@ export class WorkspaceRecovery {
   /** A gap's mark stays while any local recovery still holds a draft in its checkout. */
   private getFeedGapErrors(state: EditorRecovery) {
     const errors: string[] = [];
+    const { readable, unreadable } = this.readableRecoveries();
+    // An unreadable recovery may hold a draft in any gapped checkout: its marks stay.
+    for (const { client, error } of unreadable)
+      errors.push('Recovery of ' + client + ' is unreadable: ' + error);
     for (const row of this.store.db
       .prepare("SELECT key, body FROM records WHERE bucket='gaps'")
       .all()) {
       const gap = this.store.parse<{ since: number; checkoutId: string }>('gaps', row.body);
-      const holders = [...this.store.db.prepare('SELECT client, body FROM recovery').all()].filter(
-        (r) => {
-          try {
-            return parseRecovery(r.body, r.client as string).drafts.some(
-              (d) => d.target.checkout.checkoutId === gap.checkoutId,
-            );
-          } catch (error) {
-            // An unreadable recovery may hold a draft here: keep the mark.
-            errors.push('Recovery of ' + String(r.client) + ' is unreadable: ' + errorText(error));
-            return true;
-          }
-        },
-      );
+      const holders = unreadable.length
+        ? [true]
+        : readable.filter((r) =>
+            r.state.drafts.some((d) => d.target.checkout.checkoutId === gap.checkoutId),
+          );
       if (!holders.length) this.store.delete('gaps', row.key as string);
       else if (state.drafts.some((d) => d.target.checkout.checkoutId === gap.checkoutId))
         errors.push(

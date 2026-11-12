@@ -72,7 +72,6 @@ export class ClientWorkspace implements AdmissionOwner {
     config: {
       dataDirectory: string;
       installationId: string;
-      legacyHostIds?: string[];
       hostWaitMs?: number;
     },
     ownership: ClientOwnership,
@@ -83,7 +82,6 @@ export class ClientWorkspace implements AdmissionOwner {
     this.store = new ClientStore(config.dataDirectory, config.installationId);
     const installationId = this.installationId;
     const ports: HostPorts = {
-      openCheckout: (root, signal) => run(host.openCheckout({ root }), signal),
       readFile: (target, signal) => run(host.readFile(target), signal),
       verifyCheckout: (checkout, signal) => run(host.verifyCheckout({ checkout }), signal),
       saveStatus: (input, signal) => run(host.saveStatus({ installationId, ...input }), signal),
@@ -95,13 +93,7 @@ export class ClientWorkspace implements AdmissionOwner {
         run(host.acknowledgeOperation({ installationId, ...input }), signal),
       listOperations: (input, signal) => run(host.listOperations(input), signal),
     };
-    this.recovery = new WorkspaceRecovery(
-      this.store,
-      ports,
-      installationId,
-      config.legacyHostIds,
-      config.hostWaitMs,
-    );
+    this.recovery = new WorkspaceRecovery(this.store, ports, installationId, config.hostWaitMs);
     const call =
       <K extends WorkspaceCommand>(
         operation: K,
@@ -438,6 +430,7 @@ export class ClientWorkspace implements AdmissionOwner {
     const create = input.kind.startsWith('create-');
     const sources = input.sources.map((s) => s.target.path);
     // Imports name no source paths, so the destination itself stands in for each item's target.
+    // A multi-item native import is checked at folder granularity (opaque tokens, no basenames).
     const destinations =
       sources.length > 1
         ? sources.map((p) => join(input.destination!, basename(p)))

@@ -124,7 +124,6 @@ async function main() {
       {
         dataDirectory: join(userData, 'workspace-v1'),
         installationId,
-        legacyHostIds: ['moonbase-local'],
       },
       host,
     ),
