@@ -87,6 +87,12 @@ class DaemonLink extends Context.Service<
       check?: (output: SocketOutput<K>, health: ChatHostHealth) => void,
       /** How long to wait for the reply; `requestDeadlineMs` by default. */
       deadlineMs?: number,
+      /**
+       * Called once when the socket request ends (its reply, a failure or the connection
+       * closing), or at once if none was made. A deadline or an interrupt does not end a
+       * mutation, which the daemon still runs, so this is later than the request's own result.
+       */
+      settled?: () => void,
     ): Effect.Effect<SocketOutput<K>, ApplicationError>;
     /**
      * Follows a subscription. When its connection drops it reconnects within a budget of
@@ -346,12 +352,18 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
       });
 
     return {
-      request: (host, operation, input, mutation, check, deadlineMs) =>
-        Effect.gen(function* () {
+      request: (host, operation, input, mutation, check, deadlineMs, settled) => {
+        let started = false;
+        return Effect.gen(function* () {
           const { endpoint, socket } = yield* acquire(host);
           const attempt = yield* Effect.exit(
             Effect.tryPromise({
-              try: (signal) => socket.request(operation, input, { signal }),
+              try: (signal) => {
+                started = true;
+                const reply = socket.request(operation, input, { signal });
+                if (settled) void reply.then(settled, settled);
+                return reply;
+              },
               catch: (error) => (ApplicationError.is(error) ? error : lostReply(mutation)),
             }).pipe(
               Effect.timeoutOrElse({
@@ -383,7 +395,14 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
             },
           });
           return output;
-        }),
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (!started) settled?.();
+            }),
+          ),
+        );
+      },
       subscribe: <K extends SocketSubscriptionKind>(
         host: ChatHostTarget,
         kind: K,
@@ -700,7 +719,9 @@ export const RemoteProviderSetupLive = (
  * operation, each decoded before it leaves, refused unless the daemon advertises the capability
  * and for a checkout of another host, and answered within its deadline class. Mutations are never
  * sent again: a lost reply is `Uncertain`, and `saveStatus`, `operationStatus` or the request ID
- * of a repeat resolves it. At most `workspaceRequests` are in flight, leaving room for chat.
+ * of a repeat resolves it. At most `workspaceRequests` are in flight, leaving room for chat; a
+ * request keeps its place until the daemon replies or the connection closes, even after its
+ * caller was told `Uncertain`.
  * `watch` ignores `paths`: the daemon follows the whole checkout, and every update, including the
  * snapshot after a reconnect, is an event to refresh from.
  */
@@ -713,6 +734,32 @@ export const RemoteWorkspaceHostLive = (config: {
       const link = yield* DaemonLink;
       const host = decodeChatHostTarget(config.host);
       const permits = Semaphore.makeUnsafe(socketLimits.workspaceRequests);
+      // A permit is held until the daemon has answered (or the connection closed), not until the
+      // caller gave up: a mutation past its deadline still counts against the server's limit.
+      const holdPermit = <A, E>(run: (free: () => void) => Effect.Effect<A, E>) =>
+        Effect.uninterruptibleMask((restore) =>
+          Effect.flatMap(restore(permits.take(1)), () => {
+            let freed = false,
+              entered = false;
+            const free = () => {
+              if (freed) return;
+              freed = true;
+              Effect.runSync(permits.release(1));
+            };
+            return restore(
+              Effect.suspend(() => {
+                entered = true;
+                return run(free);
+              }),
+            ).pipe(
+              Effect.onExit(() =>
+                Effect.sync(() => {
+                  if (!entered) free();
+                }),
+              ),
+            );
+          }),
+        );
       const checkoutMakers = new Set<HostCommand>([
         'openCheckout',
         'createWorktree',
@@ -738,31 +785,30 @@ export const RemoteWorkspaceHostLive = (config: {
               catch: ApplicationError.fromUnknown,
             }),
             (input) =>
-              permits
-                .withPermits(1)(
-                  link.request(
-                    host,
-                    operation,
-                    input as never,
-                    isHostMutation(operation),
-                    undefined,
-                    hostDeadlineMs(operation),
-                  ),
-                )
-                .pipe(
-                  Effect.tap((output) =>
-                    // A checkout the daemon made or opened must belong to the connected host.
-                    checkoutMakers.has(operation) &&
-                    (output as { hostId?: string }).hostId !== host.hostId
-                      ? Effect.fail(
-                          new ApplicationError({
-                            code: 'Incompatible',
-                            message: 'The daemon returned a checkout of another host.',
-                          }),
-                        )
-                      : Effect.void,
-                  ),
-                ) as Effect.Effect<HostOutput<K>, ApplicationError>,
+              holdPermit((free) =>
+                link.request(
+                  host,
+                  operation,
+                  input as never,
+                  isHostMutation(operation),
+                  undefined,
+                  hostDeadlineMs(operation),
+                  free,
+                ),
+              ).pipe(
+                Effect.tap((output) =>
+                  // A checkout the daemon made or opened must belong to the connected host.
+                  checkoutMakers.has(operation) &&
+                  (output as { hostId?: string }).hostId !== host.hostId
+                    ? Effect.fail(
+                        new ApplicationError({
+                          code: 'Incompatible',
+                          message: 'The daemon returned a checkout of another host.',
+                        }),
+                      )
+                    : Effect.void,
+                ),
+              ) as Effect.Effect<HostOutput<K>, ApplicationError>,
           );
       const handlers = Object.fromEntries(
         (Object.keys(hostInputSchemas) as HostCommand[]).map((operation) => [
