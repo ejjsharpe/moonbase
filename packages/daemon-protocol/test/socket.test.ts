@@ -1293,7 +1293,7 @@ test('a 2 MiB file saves and reads back through chunks, a reply over its bound i
     { client, handlers, calls } = controlledWorkspace();
   handlers.saveFile = async (input: ReturnType<typeof saveInput>) => {
     stored.set(input.target.path, input.text);
-    return { kind: 'saved', disk: { text: input.text, version: 'v1' } };
+    return { kind: 'saved', version: 'v1' };
   };
   handlers.readFile = async (input: { path: string }) =>
     input.path === 'huge'

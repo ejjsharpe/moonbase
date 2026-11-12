@@ -927,9 +927,10 @@ export class FileHost implements AdmissionOwner {
     this.approval(input.target.checkout);
     const proposed = textDocument(input.text);
     ensure(/^[a-f0-9]{64}$/.test(input.expectedVersion), 'Invalid expected content version.');
+    const kept = this.journal.saveInput(input, proposed.version);
     const id = this.journal.saveId(input),
       previous = this.journal.getSave(id);
-    if (previous) return this.journal.replaySave(id, input, previous);
+    if (previous) return this.journal.replaySave(id, kept, previous);
     await this.assertSettled(
       input.target.checkout,
       [input.target.path],
@@ -941,12 +942,12 @@ export class FileHost implements AdmissionOwner {
     if (signal.aborted) fail('Cancelled', 'Save cancelled before admission.');
     if (disk.version !== input.expectedVersion) {
       const result = { kind: 'conflict', disk } as const;
-      const occupied = this.journal.reserveSave(id, { input, result });
-      return occupied ? this.journal.replaySave(id, input, occupied) : result;
+      const occupied = this.journal.reserveSave(id, { input: kept, result });
+      return occupied ? this.journal.replaySave(id, kept, occupied) : result;
     }
-    const record: HostSaveRecord = { input };
+    const record: HostSaveRecord = { input: kept };
     const occupied = this.journal.reserveSave(id, record);
-    if (occupied) return this.journal.replaySave(id, input, occupied);
+    if (occupied) return this.journal.replaySave(id, kept, occupied);
     this.journal.startSave(id);
     try {
       const temporary = join(dirname(input.target.path), '.moonbase-save-' + randomUUID());
@@ -960,7 +961,7 @@ export class FileHost implements AdmissionOwner {
         await directory.io(['replace', input.target.path, temporary, stagingIdentity]);
         record.result = { kind: 'saved', version: proposed.version };
       }
-      const result = this.journal.reply({ ...record, result: record.result });
+      const result: HostSaveResult = record.result;
       try {
         this.journal.settleSave(id, record);
       } catch (error) {

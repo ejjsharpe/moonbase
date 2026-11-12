@@ -6372,21 +6372,8 @@
                     "saved"
                   ]
                 },
-                "disk": {
-                  "type": "object",
-                  "properties": {
-                    "text": {
-                      "type": "string"
-                    },
-                    "version": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "text",
-                    "version"
-                  ],
-                  "additionalProperties": false
+                "version": {
+                  "type": "string"
                 },
                 "persistencePending": {
                   "anyOf": [
@@ -6411,7 +6398,7 @@
               },
               "required": [
                 "kind",
-                "disk"
+                "version"
               ],
               "additionalProperties": false
             },
@@ -7556,26 +7543,13 @@
                     "saved"
                   ]
                 },
-                "disk": {
-                  "type": "object",
-                  "properties": {
-                    "text": {
-                      "type": "string"
-                    },
-                    "version": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "text",
-                    "version"
-                  ],
-                  "additionalProperties": false
+                "version": {
+                  "type": "string"
                 }
               },
               "required": [
                 "kind",
-                "disk"
+                "version"
               ],
               "additionalProperties": false
             },

@@ -210,7 +210,7 @@ test('cancelled queued Save releases its lease without admission and successors 
       assert.equal(
         db
           .prepare(
-            "SELECT count(*) AS n FROM records WHERE bucket='saves' AND json_extract(body,'$.input.requestId')='cancelled'",
+            "SELECT count(*) AS n FROM records WHERE bucket='saves' AND json_extract(body,'$.request.requestId')='cancelled'",
           )
           .get()!.n,
         0,
@@ -304,7 +304,7 @@ test('strict private saved request rejection leaves pending journal data untouch
       const row = db.prepare("SELECT key,body FROM records WHERE bucket='saves'").get()!;
       const stored = JSON.parse(row.body as string);
       stored.state = 'sent';
-      stored.input.futureRequest = 'private evidence';
+      stored.request.futureRequest = 'private evidence';
       const original = JSON.stringify(stored);
       db.prepare("UPDATE records SET body=? WHERE bucket='saves' AND key=?").run(
         original,

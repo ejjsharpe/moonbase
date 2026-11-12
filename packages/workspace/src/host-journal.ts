@@ -29,7 +29,6 @@ import {
   key,
   overlaps,
   same,
-  textDocument,
 } from './validation.ts';
 
 /** The operations whose first outcome is remembered by request ID and replayed. */
@@ -173,13 +172,11 @@ export class HostJournal {
     this.update('saves', id, !record.result, record);
     this.volatileSaves.delete(id);
   }
-  /** The reply for a save's outcome: a `saved` one carries the input's own text. */
-  reply(record: HostSaveRecord & { result: object }): HostSaveResult {
-    return record.result.kind === 'saved'
-      ? { kind: 'saved', disk: { text: record.input.text, version: record.result.version } }
-      : record.result;
+  /** A save request as the journal keeps it: its text's version in place of the text. */
+  saveInput({ text: _text, ...input }: HostInput<'saveFile'>, version: string) {
+    return { ...input, version };
   }
-  replaySave(id: string, input: HostInput<'saveFile'>, record: HostSaveRecord | Fenced) {
+  replaySave(id: string, input: HostSaveRecord['input'], record: HostSaveRecord | Fenced) {
     if (record === 'fenced')
       return fail(
         'Conflict',
@@ -192,7 +189,7 @@ export class HostJournal {
         'Uncertain',
         'Interrupted save retained its intent. Ask for its status; do not repeat it.',
       );
-    const result = this.reply({ ...record, result: record.result });
+    const result: HostSaveResult = record.result;
     if (this.volatileSaves.has(id)) {
       try {
         this.settleSave(id, record);
@@ -225,8 +222,7 @@ export class HostJournal {
       await this.resolveSave(id, record);
     if (record.result && this.volatileSaves.has(id)) this.settleOrRetain(id, record);
     if (!record.result) return { kind: 'uncertain', message: record.message };
-    const { kind, disk } = this.reply({ ...record, result: record.result });
-    return { kind, disk };
+    return record.result;
   }
   /**
    * Settles an interrupted save from the disk without repeating it: its own text there is `saved`,
@@ -238,7 +234,7 @@ export class HostJournal {
     try {
       const disk = await (await this.directory(target.checkout)).read(target.path);
       record.result =
-        disk.version === textDocument(record.input.text).version
+        disk.version === record.input.version
           ? { kind: 'saved', version: disk.version }
           : { kind: 'conflict', disk };
     } catch {
