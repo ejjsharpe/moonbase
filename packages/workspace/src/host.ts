@@ -816,6 +816,7 @@ export class FileHost implements AdmissionOwner {
     const id = this.journal.saveId(input),
       previous = this.journal.getSave(id);
     if (previous) return this.journal.replaySave(id, input, previous);
+    this.journal.assertNotCancelled(id);
     this.assertSettled(
       input.target.checkout,
       [input.target.path],

@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, Exit, Fiber, Layer, Queue, Stream } from 'effect';
+import { Cause, Context, Effect, Exit, Fiber, Layer, Queue, Semaphore, Stream } from 'effect';
 import { getJsonKey } from '@moonbase/contracts/common';
 import {
   chatHostCapabilities,
@@ -12,7 +12,9 @@ import {
   ConnectionService,
   LocalHostService,
   ProviderSetupService,
+  WorkspaceHostService,
   type ChatServiceShape,
+  type WorkspaceHostServiceShape,
   type LocalHostHandlers,
   type ProviderSetupHandlers,
   type VerifiedChatEndpoint,
@@ -28,6 +30,15 @@ import type {
 } from '@moonbase/contracts/daemon';
 import { decodeDaemonInput, isDaemonMutation } from '@moonbase/contracts/daemon-schema';
 import { decodeChatHostTarget } from '@moonbase/contracts/host-schema';
+import type { HostCommand, HostInput, HostOutput } from '@moonbase/contracts/workspace-host';
+import {
+  decodeHostInput,
+  hostDeadlineMs,
+  hostInputCheckout,
+  hostInputSchemas,
+  isHostMutation,
+} from '@moonbase/contracts/workspace-host-schema';
+import { socketLimits } from '@moonbase/contracts/socket';
 import type { ProviderCommand, ProviderInput, ProviderState } from '@moonbase/contracts/providers';
 import { decodeProviderInput, readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
 import type {
@@ -74,6 +85,8 @@ class DaemonLink extends Context.Service<
       input: SocketInput<K>,
       mutation: boolean,
       check?: (output: SocketOutput<K>, health: ChatHostHealth) => void,
+      /** How long to wait for the reply; `requestDeadlineMs` by default. */
+      deadlineMs?: number,
     ): Effect.Effect<SocketOutput<K>, ApplicationError>;
     /**
      * Follows a subscription. When its connection drops it reconnects within a budget of
@@ -333,7 +346,7 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
       });
 
     return {
-      request: (host, operation, input, mutation, check) =>
+      request: (host, operation, input, mutation, check, deadlineMs) =>
         Effect.gen(function* () {
           const { endpoint, socket } = yield* acquire(host);
           const attempt = yield* Effect.exit(
@@ -342,7 +355,7 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
               catch: (error) => (ApplicationError.is(error) ? error : lostReply(mutation)),
             }).pipe(
               Effect.timeoutOrElse({
-                duration: P.requestDeadlineMs,
+                duration: deadlineMs ?? P.requestDeadlineMs,
                 orElse: () => Effect.fail(lostReply(mutation)),
               }),
             ),
@@ -679,5 +692,89 @@ export const RemoteProviderSetupLive = (
             (output) => output.url,
           ),
       };
+    }),
+  ).pipe(Layer.provide(DaemonLinkLive));
+
+/**
+ * The file host of a daemon that advertises `workspace-v1`, over the shared WebSocket: every host
+ * operation, each decoded before it leaves, refused unless the daemon advertises the capability
+ * and for a checkout of another host, and answered within its deadline class. Mutations are never
+ * sent again: a lost reply is `Uncertain`, and `saveStatus`, `operationStatus` or the request ID
+ * of a repeat resolves it. At most `workspaceRequests` are in flight, leaving room for chat.
+ * `watch` ignores `paths`: the daemon follows the whole checkout, and every update, including the
+ * snapshot after a reconnect, is an event to refresh from.
+ */
+export const RemoteWorkspaceHostLive = (config: {
+  host: ChatHostTarget;
+}): Layer.Layer<WorkspaceHostService, never, ConnectionService> =>
+  Layer.effect(
+    WorkspaceHostService,
+    Effect.gen(function* () {
+      const link = yield* DaemonLink;
+      const host = decodeChatHostTarget(config.host);
+      const permits = Semaphore.makeUnsafe(socketLimits.workspaceRequests);
+      const ownHost = (value: unknown) => {
+        const checkout = hostInputCheckout(value);
+        if (checkout && checkout.hostId !== host.hostId)
+          V.fail('Unauthorized', 'Workspace request target differs from this host.');
+      };
+      const send =
+        <K extends HostCommand>(operation: K) =>
+        (unknown: HostInput<K>): Effect.Effect<HostOutput<K>, ApplicationError> =>
+          Effect.flatMap(
+            Effect.try({
+              try: () => {
+                const input = decodeHostInput(operation, unknown);
+                ownHost(input);
+                return input;
+              },
+              catch: ApplicationError.fromUnknown,
+            }),
+            (input) =>
+              permits.withPermits(1)(
+                link.request(
+                  host,
+                  operation,
+                  input as never,
+                  isHostMutation(operation),
+                  undefined,
+                  hostDeadlineMs(operation),
+                ),
+              ) as Effect.Effect<HostOutput<K>, ApplicationError>,
+          );
+      const handlers = Object.fromEntries(
+        (Object.keys(hostInputSchemas) as HostCommand[]).map((operation) => [
+          operation,
+          send(operation),
+        ]),
+      ) as { [K in HostCommand]: ReturnType<typeof send<K>> };
+      return {
+        ...handlers,
+        watch: ({ checkout }) =>
+          Stream.unwrap(
+            Effect.map(
+              Effect.try({
+                try: () => {
+                  ownHost({ checkout });
+                  return { checkout };
+                },
+                catch: ApplicationError.fromUnknown,
+              }),
+              (target) =>
+                link.subscribe(host, 'workspace', target).pipe(
+                  Stream.filter((update) => !('reconnecting' in update)),
+                  Stream.map((update) => {
+                    const { value } = update as Exclude<typeof update, { reconnecting: true }>;
+                    return {
+                      checkout,
+                      paths: [''],
+                      ready: value.ready,
+                      ...(value.error ? { error: 'The workspace watch failed.' } : {}),
+                    };
+                  }),
+                ),
+            ),
+          ),
+      } satisfies WorkspaceHostServiceShape;
     }),
   ).pipe(Layer.provide(DaemonLinkLive));

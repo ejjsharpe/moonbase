@@ -3,6 +3,7 @@ import { chatContentChunkBytes, maximumChatReplyBytes } from './chat.ts';
 import type { ChatListState, ChatSnapshot, ChatSummary } from './chat.ts';
 import type { ProviderState } from './providers.ts';
 import type * as Contracts from './socket-schema.ts';
+import type { WorkspaceWatchValue, WorkspaceWatchTarget } from './workspace-host.ts';
 
 /** Where a daemon that advertises `socket-v1` upgrades its one WebSocket per client. */
 export const socketPath = '/v2/socket';
@@ -27,6 +28,17 @@ export const socketLimits = {
   requests: 32,
   /** Replies and refusals waiting to be written; a client that leaves more unread is dropped. */
   queuedReplies: 64,
+  /** Workspace requests and replies: JSON before chunking, as one operation's bound. */
+  workspaceRequestBytes: 16 * 1024 * 1024,
+  workspaceReplyBytes: 16 * 1024 * 1024,
+  /** Chunked request input in flight on one connection; a request past it closes the connection. */
+  workspaceInFlightBytes: 32 * 1024 * 1024,
+  /** Workspace subscriptions on one connection, apart from `subscriptions`. */
+  workspaceSubscriptions: 64,
+  /** Workspace requests a client keeps in flight, leaving room for chat below `requests`. */
+  workspaceRequests: 16,
+  /** Chunks of one workspace reply written before pending updates get a turn. */
+  workspaceBurstChunks: 4,
   /** The server's bound on the hello arriving after its challenge. */
   handshakeMs: 5_000,
   /**
@@ -53,25 +65,29 @@ export const socketLimits = {
   historyTotalBytes: 16 * 1024 * 1024,
 } as const;
 
-export type SocketSubscriptionKind = 'chat' | 'chatList' | 'providerSetup';
+export type SocketSubscriptionKind = 'chat' | 'chatList' | 'providerSetup' | 'workspace';
 /** What each subscription kind targets and the value its updates describe. */
 export type SocketSubscriptionTarget<K extends SocketSubscriptionKind> = {
   chat: typeof Contracts.ChatTargetSchema.Type;
   chatList: typeof Contracts.ChatSessionSchema.Type;
   providerSetup: typeof Contracts.ProviderSetupTargetSchema.Type;
+  workspace: WorkspaceWatchTarget;
 }[K];
 export type SocketSubscriptionValue<K extends SocketSubscriptionKind> = {
   chat: ChatSnapshot;
   chatList: ChatListState;
   providerSetup: ProviderState;
+  workspace: WorkspaceWatchValue;
 }[K];
 export type ChatDelta = typeof Contracts.ChatDeltaSchema.Type;
 export type ChatListDelta = typeof Contracts.ChatListDeltaSchema.Type;
 export type ProviderSetupDelta = typeof Contracts.ProviderSetupDeltaSchema.Type;
+/** A workspace value is small and always resent whole, so it has no deltas. */
 export type SocketDelta<K extends SocketSubscriptionKind> = {
   chat: ChatDelta;
   chatList: ChatListDelta;
   providerSetup: ProviderSetupDelta;
+  workspace: never;
 }[K];
 export type SocketClientMessage = typeof Contracts.SocketClientMessageSchema.Type;
 export type SocketServerMessage = typeof Contracts.SocketServerMessageSchema.Type;
@@ -162,5 +178,6 @@ export function applySocketDelta<K extends SocketSubscriptionKind>(
   if (kind === 'chat') return applyChatDelta(value as ChatSnapshot, delta as ChatDelta) as never;
   if (kind === 'chatList')
     return applyChatListDelta(value as ChatListState, delta as ChatListDelta) as never;
+  if (kind === 'workspace') return inapplicable();
   return applyProviderSetupDelta(value as ProviderState, delta as ProviderSetupDelta) as never;
 }

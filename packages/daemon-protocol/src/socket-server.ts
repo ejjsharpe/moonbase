@@ -5,10 +5,13 @@ import type { ChatClient } from '@moonbase/contracts/chat';
 import type { DaemonClient } from '@moonbase/contracts/daemon';
 import { daemonCommandCapabilities } from '@moonbase/contracts/daemon-schema';
 import {
+  chatHostCapabilities,
   chatProtocolVersion,
   type ChatHostHealth,
   type ChatHostTarget,
 } from '@moonbase/contracts/host';
+import type { WorkspaceHostClient } from '@moonbase/contracts/workspace-host';
+import { isHostCommand } from '@moonbase/contracts/workspace-host-schema';
 import {
   socketLimits,
   socketPath,
@@ -17,14 +20,19 @@ import {
   type SocketSubscriptionTarget,
   type SocketSubscriptionValue,
 } from '@moonbase/contracts/socket';
-import { decodeSocketClientMessage } from '@moonbase/contracts/socket-schema';
+import {
+  decodeSocketChunkedRequest,
+  decodeSocketClientMessage,
+} from '@moonbase/contracts/socket-schema';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import * as P from './protocol.ts';
 import * as V from './validation.ts';
 import {
   chunkPayload,
+  payloadChunks,
   deriveSocketKeys,
   openSocketMessage,
+  PayloadAssembler,
   readSealedBody,
   sealSocketMessage,
   verifySocketMessage,
@@ -56,6 +64,8 @@ export type SocketServerContext = {
   client: ChatClient;
   /** A daemon's operations; without them, provider setup subscriptions are refused. */
   daemon?: DaemonClient;
+  /** The file host; without it, workspace subscriptions are refused. */
+  workspace?: WorkspaceHostClient;
   sources: SocketSources;
   clock: SocketClock;
   /** Runs one request; resolves its reply, never rejects. */
@@ -234,6 +244,28 @@ type Registry = {
   remove(): void;
 };
 
+/** Frames waiting to be written, sealed only as they are taken so sequence numbers follow writes. */
+type Outgoing = {
+  /** Frames written before pending updates get a turn. */
+  readonly burst: number;
+  /** The next frames, at most `count` of them; fewer once it is done. */
+  take(count: number): Buffer[];
+  readonly done: boolean;
+};
+const frameOf = (seal: () => Buffer): Outgoing => {
+  let done = false;
+  return {
+    burst: Infinity,
+    get done() {
+      return done;
+    },
+    take: () => {
+      done = true;
+      return [seal()];
+    },
+  };
+};
+
 class Session {
   private readonly reader = new WebSocketReader(4096, true);
   private phase: 'hello' | 'open' | 'closed' = 'hello';
@@ -246,8 +278,11 @@ class Session {
   private timer: unknown;
   private readonly requests = new Map<string, AbortController>();
   private readonly subscriptions = new Map<string, Feed>();
-  private readonly replies: Buffer[][] = [];
+  private readonly replies: Outgoing[] = [];
   private readonly ready = new Set<Feed>();
+  /** The chunked request being received, if any, and the input bytes chunked requests hold. */
+  private readonly incoming = new PayloadAssembler();
+  private chunkedBytes = 0;
   private pumping = false;
   /** Set while the socket holds more than `outboundBytes`: reading pauses until it drains. */
   private congestion: Promise<void> | undefined;
@@ -352,13 +387,17 @@ class Session {
   }
 
   private handle(message: SocketClientMessage, bytes: number) {
+    // Nothing may come between one request's chunks.
+    if (this.incoming.partial && message.type !== 'requestChunk') return this.fail();
     switch (message.type) {
       case 'hello':
         return this.fail();
       case 'heartbeat':
         return;
       case 'request':
-        return this.request(message.id, message.operation, message.input, bytes);
+        return this.request(message.id, message.operation, message.input, bytes, 0);
+      case 'requestChunk':
+        return this.requestChunk(message);
       case 'cancel':
         this.requests.get(message.id)?.abort();
         return;
@@ -376,10 +415,43 @@ class Session {
     }
   }
 
-  /** `bytes` is the request's whole frame, held to an HTTP request body's bound. */
-  private request(id: string, operation: string, input: unknown, bytes: number) {
+  /**
+   * One chunk of a workspace request. The first declares the whole request's size, which with
+   * the chunked requests still running must stay within `workspaceInFlightBytes`; any gap,
+   * overlap, other message or excess closes the connection.
+   */
+  private requestChunk(message: Extract<SocketClientMessage, { type: 'requestChunk' }>) {
+    if (!this.context.health.capabilities.includes(chatHostCapabilities.workspace))
+      return this.fail();
+    const first = !this.incoming.partial;
+    if (first) {
+      if (this.requests.has(message.id)) return this.fail();
+      if (this.chunkedBytes + message.total > socketLimits.workspaceInFlightBytes)
+        return this.fail();
+      this.chunkedBytes += message.total;
+    }
+    let done: { value: unknown } | undefined;
+    try {
+      done = this.incoming.push(message.id, message, socketLimits.workspaceRequestBytes);
+    } catch (error) {
+      this.chunkedBytes -= first ? message.total : 0;
+      throw error;
+    }
+    if (!done) return;
+    const { operation, input } = decodeSocketChunkedRequest(done.value);
+    this.request(message.id, operation, input, message.total, message.total);
+  }
+
+  /**
+   * `bytes` is the request's whole frame, or all its chunks'; `charged` is what it holds of
+   * `chunkedBytes` until it is answered.
+   */
+  private request(id: string, operation: string, input: unknown, bytes: number, charged: number) {
+    const release = () => void (this.chunkedBytes -= charged);
     if (this.requests.has(id)) return this.fail();
-    if (bytes > P.maximumChatRequestBytes) {
+    const workspace = isHostCommand(operation);
+    if (!workspace && bytes > P.maximumChatRequestBytes) {
+      release();
       this.queueReply(id, {
         ok: false,
         error: { code: 'InvalidInput', message: 'Chat input exceeds its transport limit.' },
@@ -387,6 +459,7 @@ class Session {
       return;
     }
     if (this.requests.size >= socketLimits.requests) {
+      release();
       this.queueReply(id, {
         ok: false,
         error: { code: 'Unavailable', message: 'Too many requests are in flight; retry.' },
@@ -396,45 +469,72 @@ class Session {
     const controller = new AbortController();
     this.requests.set(id, controller);
     void this.context.answer(operation, input, controller.signal).then((reply) => {
+      release();
       this.requests.delete(id);
-      this.queueReply(id, reply);
+      this.queueReply(id, reply, workspace);
     });
   }
 
-  private queueReply(id: string, reply: unknown) {
+  /** A workspace reply may be as large as `workspaceReplyBytes` and is written in bursts. */
+  private queueReply(id: string, reply: unknown, workspace = false) {
     if (this.phase !== 'open') return;
+    const limit = workspace ? socketLimits.workspaceReplyBytes : socketLimits.payloadBytes;
     const chunks =
-      chunkPayload(reply) ??
-      chunkPayload({
-        ok: false,
-        error: P.publicError(
-          new ApplicationError({ code: 'InvalidInput', message: 'Reply exceeds its limit.' }),
-        ),
-      })!;
-    try {
-      this.queue(chunks.map((chunk) => this.seal({ type: 'reply', id, ...chunk })));
-    } catch {
-      this.fail();
-    }
+      payloadChunks(reply, limit) ??
+      payloadChunks(
+        {
+          ok: false,
+          error: P.publicError(
+            new ApplicationError({ code: 'InvalidInput', message: 'Reply exceeds its limit.' }),
+          ),
+        },
+        limit,
+      )!;
+    let index = 0;
+    this.queue({
+      burst: workspace ? socketLimits.workspaceBurstChunks : Infinity,
+      get done() {
+        return index >= chunks.count;
+      },
+      take: (count) => {
+        const frames: Buffer[] = [];
+        while (index < chunks.count && frames.length < count)
+          frames.push(this.seal({ type: 'reply', id, ...chunks.chunk(index++) }));
+        return frames;
+      },
+    });
   }
   /** Queues frames ahead of updates; a client that leaves too many unread is disconnected. */
-  private queue(frames: Buffer[]) {
+  private queue(outgoing: Outgoing) {
     if (this.replies.length >= socketLimits.queuedReplies) return this.fail();
-    this.replies.push(frames);
+    this.replies.push(outgoing);
     void this.pump();
   }
 
   private subscribe(message: Extract<SocketClientMessage, { type: 'subscribe' }>) {
     const { subscriptionId: id, kind, target } = message;
     if (this.subscriptions.has(id)) return this.fail();
-    const host = 'host' in target ? target.host : (target as { host: ChatHostTarget }).host;
     const key = getJsonKey({ kind, target });
     let feed = this.registry.feeds.get(id);
     if (feed && feed.key !== key) return this.fail();
     const refuse = (code: 'Unauthorized' | 'Unavailable') =>
-      this.queue([this.seal({ type: 'update', subscriptionId: id, kind: 'error', code })]);
-    if (!V.sameHost(host, this.context.host)) return refuse('Unauthorized');
-    if (this.subscriptions.size >= socketLimits.subscriptions) return refuse('Unavailable');
+      this.queue(
+        frameOf(() => this.seal({ type: 'update', subscriptionId: id, kind: 'error', code })),
+      );
+    // A workspace target names its checkout's host; the others name a chat host.
+    const own =
+      kind === 'workspace'
+        ? (target as SocketSubscriptionTarget<'workspace'>).checkout.hostId ===
+          this.context.host.hostId
+        : V.sameHost((target as { host: ChatHostTarget }).host, this.context.host);
+    if (!own) return refuse('Unauthorized');
+    // Workspace subscriptions have a limit of their own, so open projects don't crowd out chats.
+    const workspace = kind === 'workspace',
+      held = [...this.subscriptions.values()].filter(
+        (each) => (each.kind === 'workspace') === workspace,
+      ).length;
+    if (held >= (workspace ? socketLimits.workspaceSubscriptions : socketLimits.subscriptions))
+      return refuse('Unavailable');
     if (feed) {
       // A client that reconnected before its old connection closed takes the subscription over.
       feed.session?.release(feed);
@@ -448,11 +548,13 @@ class Session {
       const after = message.afterSequence,
         start = feed.history.findIndex((update) => update.base === after);
       // A chat list's source starts again without the chats that changed past its first page
-      // meanwhile, so it resumes with a fresh snapshot rather than deltas.
+      // meanwhile, and a workspace's without the changes it missed, so both resume with a fresh
+      // snapshot (which a client answers by reading again) rather than deltas.
       if (
         after === undefined ||
         (after !== feed.sequence && start < 0) ||
-        feed.kind === 'chatList'
+        feed.kind === 'chatList' ||
+        feed.kind === 'workspace'
       ) {
         feed.sent = undefined;
         feed.replay = [];
@@ -509,6 +611,20 @@ class Session {
         );
         return;
       }
+      if (feed.kind === 'workspace') {
+        const workspace = this.context.workspace;
+        if (
+          !workspace ||
+          !this.context.health.capabilities.includes(chatHostCapabilities.workspace)
+        )
+          return V.fail('Incompatible', 'This host does not serve the workspace.');
+        feed.close = workspace.watch(
+          feed.target as SocketSubscriptionTarget<'workspace'>,
+          receive,
+          end,
+        );
+        return;
+      }
       const daemon = this.context.daemon,
         subscribe = this.context.sources.subscribeProviderSetup;
       // Only what health advertises is served, as for daemon requests.
@@ -544,9 +660,11 @@ class Session {
     void feed.close?.().catch(() => {});
     feed.close = undefined;
     if (this.phase === 'open')
-      this.queue([
-        this.seal({ type: 'update', subscriptionId: feed.id, kind: 'error', code: 'Conflict' }),
-      ]);
+      this.queue(
+        frameOf(() =>
+          this.seal({ type: 'update', subscriptionId: feed.id, kind: 'error', code: 'Conflict' }),
+        ),
+      );
   }
   /** Closes a connection still waiting for its hello, to make room for a newer one. */
   evict() {
@@ -602,15 +720,30 @@ class Session {
 
   /**
    * Writes replies before updates and updates round robin, so streaming never delays Send or
-   * Stop; while the socket holds `outboundBytes`, it waits and updates coalesce.
+   * Stop. A workspace reply is written a few chunks at a time, each burst followed by one
+   * pending update, so a large read never stalls chat streaming (every write also counts as the
+   * heartbeat's activity). While the socket holds `outboundBytes`, it waits and updates coalesce.
    */
   private async pump() {
     if (this.pumping) return;
     this.pumping = true;
     try {
       while (this.phase === 'open') {
-        let frames = this.replies.shift();
-        if (!frames) {
+        const reply = this.replies.shift();
+        let frames: Buffer[] = [];
+        if (reply) {
+          frames = reply.take(reply.burst);
+          if (!reply.done) {
+            this.replies.push(reply);
+            // The rest of a long reply waits behind one pending update.
+            const feed = this.ready.values().next().value;
+            if (feed) {
+              this.ready.delete(feed);
+              for (const frame of frames) this.write(frame);
+              frames = this.nextUpdate(feed);
+            }
+          }
+        } else {
           const feed = this.ready.values().next().value;
           if (!feed) break;
           this.ready.delete(feed);

@@ -62,18 +62,32 @@ export function openSocketMessage(key: Buffer, bytes: Uint8Array): unknown {
   if (!verifySocketMessage(key, bytes)) fail('Unauthorized', 'Socket message is not authentic.');
   return json(bytes.subarray(32));
 }
-/** A payload's JSON in `socketLimits.chunkBytes` chunks of base64. */
-export function chunkPayload(value: unknown) {
+type PayloadChunk = { offset: number; total: number; data: string };
+/** A payload's JSON in `socketLimits.chunkBytes` chunks of base64, each made when asked for. */
+export type PayloadChunks = { count: number; chunk(index: number): PayloadChunk };
+/** `value`'s JSON as chunks, or undefined when it exceeds `limit` bytes. */
+export function payloadChunks(
+  value: unknown,
+  limit: number = socketLimits.payloadBytes,
+): PayloadChunks | undefined {
   const bytes = Buffer.from(JSON.stringify(value));
-  if (bytes.length > socketLimits.payloadBytes) return undefined;
-  const chunks: { offset: number; total: number; data: string }[] = [];
-  for (let offset = 0; offset < bytes.length; offset += socketLimits.chunkBytes)
-    chunks.push({
-      offset,
-      total: bytes.length,
-      data: bytes.subarray(offset, offset + socketLimits.chunkBytes).toString('base64'),
-    });
-  return chunks;
+  if (bytes.length > limit) return undefined;
+  return {
+    count: Math.ceil(bytes.length / socketLimits.chunkBytes),
+    chunk: (index) => {
+      const offset = index * socketLimits.chunkBytes;
+      return {
+        offset,
+        total: bytes.length,
+        data: bytes.subarray(offset, offset + socketLimits.chunkBytes).toString('base64'),
+      };
+    },
+  };
+}
+/** A payload's JSON in `socketLimits.chunkBytes` chunks of base64. */
+export function chunkPayload(value: unknown, limit?: number) {
+  const chunks = payloadChunks(value, limit);
+  return chunks && Array.from({ length: chunks.count }, (_, index) => chunks.chunk(index));
 }
 /** Reassembles one chunked payload at a time; chunks must arrive in order and back to back. */
 export class PayloadAssembler {
@@ -88,10 +102,12 @@ export class PayloadAssembler {
   /** The payload's JSON once `chunk` completes it; any gap, overlap or interleaving fails. */
   push(
     key: string,
-    chunk: { offset: number; total: number; data: string },
+    chunk: PayloadChunk,
+    limit: number = socketLimits.payloadBytes,
   ): { value: unknown } | undefined {
     if (this.key === undefined) {
-      if (chunk.offset !== 0) fail('Incompatible', 'Socket payload chunk is out of order.');
+      if (chunk.offset !== 0 || chunk.total > limit)
+        fail('Incompatible', 'Socket payload chunk is out of order or over its bound.');
       this.key = key;
       this.total = chunk.total;
     } else if (key !== this.key || chunk.total !== this.total || chunk.offset !== this.received)

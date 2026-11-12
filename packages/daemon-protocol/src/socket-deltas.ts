@@ -20,6 +20,8 @@ export function projectSocketDelta<K extends SocketSubscriptionKind>(
   next: SocketSubscriptionValue<K>,
 ): SocketDelta<K> | null | undefined {
   if (areJsonValuesEqual(previous, next)) return null;
+  // A workspace value is a few numbers, so it is always sent whole.
+  if (kind === 'workspace') return undefined;
   if (kind === 'chat')
     return projectChatDelta(previous as ChatSnapshot, next as ChatSnapshot) as SocketDelta<K>;
   if (kind === 'chatList')

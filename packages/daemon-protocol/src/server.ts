@@ -17,6 +17,17 @@ import {
   isDaemonMutation,
 } from '@moonbase/contracts/daemon-schema';
 import { LocalHostService, ProviderSetupService } from '@moonbase/contracts/services';
+import type {
+  HostCommand,
+  HostInput,
+  WorkspaceHostClient,
+} from '@moonbase/contracts/workspace-host';
+import {
+  decodeHostInput,
+  hostInputCheckout,
+  isHostCommand,
+  isHostMutation,
+} from '@moonbase/contracts/workspace-host-schema';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import { createHostHealthReply, validateHostHealth } from '@moonbase/ssh/host-health';
 import {
@@ -35,6 +46,7 @@ import { createSocketServer, type SocketSources } from './socket-server.ts';
 import { systemSocketClock, type SocketClock } from './socket-protocol.ts';
 
 export type { SocketSources } from './socket-server.ts';
+export { makeWorkspaceClient } from './workspace-server.ts';
 export type { SocketClock } from './socket-protocol.ts';
 
 export type ChatServerConfiguration = { host: ChatHostTarget; token: string; port: number };
@@ -55,8 +67,16 @@ function readServerConfiguration(value: unknown) {
     return V.fail('InvalidInput', 'Invalid private chat configuration or cursor.');
   }
 }
-/** What the WebSocket pushes beyond chats and their list, and its clock (for tests). */
-export type ChatSocketConfiguration = { sources?: SocketSources; clock?: SocketClock };
+/**
+ * What the WebSocket pushes beyond chats and their list, its clock (for tests) and, for a daemon
+ * that composes the workspace file host, that host: the server then advertises `workspace-v1` and
+ * serves its operations and the `workspace` subscription.
+ */
+export type ChatSocketConfiguration = {
+  sources?: SocketSources;
+  clock?: SocketClock;
+  workspace?: WorkspaceHostClient;
+};
 /** A local-mode daemon's features beyond chat: local-mode chat and control, providers, folders. */
 export const localDaemonCapabilities: readonly ChatHostCapability[] = [
   chatHostCapabilities.local,
@@ -103,6 +123,7 @@ export const serveChat = (
               chatHostCapabilities.chat,
               ...(daemon ? daemonCapabilities : []),
               chatHostCapabilities.socket,
+              ...(socket?.workspace ? [chatHostCapabilities.workspace] : []),
             ],
           },
           expected,
@@ -171,8 +192,32 @@ export const serveChat = (
           });
           return outcome;
         };
-        /** Runs one request: a daemon operation, or a chat operation that `signal` may cancel. */
+        /**
+         * Runs one workspace operation for this host's checkouts. The host journals each mutation
+         * by its request ID, so a repeat replays the first outcome; `signal` cancels reads only,
+         * since a mutation runs to completion even when its connection closes.
+         */
+        const dispatchWorkspace = async <K extends HostCommand>(
+          operation: K,
+          input: HostInput<K>,
+          signal: AbortSignal,
+        ) => {
+          const workspace = socket?.workspace;
+          if (!workspace || !health.capabilities.includes(chatHostCapabilities.workspace))
+            return V.fail('Incompatible', 'This host does not serve that operation.');
+          const checkout = hostInputCheckout(input);
+          if (checkout && checkout.hostId !== expected.hostId)
+            V.fail('Unauthorized', 'Workspace request target differs from this host.');
+          return workspace.command(
+            operation,
+            input,
+            isHostMutation(operation) ? undefined : { signal },
+          );
+        };
+        /** Runs one request: a daemon or workspace operation, or a chat operation that `signal` may cancel. */
         const runOperation = async (operation: unknown, input: unknown, signal: AbortSignal) => {
+          if (isHostCommand(operation))
+            return dispatchWorkspace(operation, decodeHostInput(operation, input), signal);
           if (daemon && isDaemonCommand(operation))
             return dispatchDaemon(operation, decodeDaemonInput(operation, input));
           const command = V.command(operation),
@@ -184,7 +229,7 @@ export const serveChat = (
           );
         };
         const describeFailure = (operation: unknown, error: unknown) =>
-          daemon && isDaemonCommand(operation)
+          (daemon && isDaemonCommand(operation)) || isHostCommand(operation)
             ? P.publicDaemonError(error)
             : P.publicError(error, typeof operation === 'string' ? operation : undefined);
         const sockets = createSocketServer({
@@ -193,6 +238,7 @@ export const serveChat = (
           health,
           client,
           ...(daemon ? { daemon } : {}),
+          ...(socket?.workspace ? { workspace: socket.workspace } : {}),
           sources: socket?.sources ?? {},
           clock: socket?.clock ?? systemSocketClock,
           answer: (operation, input, signal) =>

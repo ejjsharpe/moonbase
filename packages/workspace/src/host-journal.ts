@@ -1,5 +1,8 @@
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
-import { maximumOperationFeedPage } from '@moonbase/contracts/workspace-host-schema';
+import {
+  maximumOperationFeedBytes,
+  maximumOperationFeedPage,
+} from '@moonbase/contracts/workspace-host-schema';
 import type {
   HostInput,
   HostOperationResult,
@@ -75,7 +78,13 @@ export class HostJournal {
     return this.volatileSaves.get(id) ?? this.store.get<HostSaveRecord>('saves', id);
   }
   reserveSave(id: string, record: HostSaveRecord) {
+    this.assertNotCancelled(id);
     return this.store.reserve('saves', id, record);
+  }
+  /** A request a client was told never started (`saveStatus` of an unseen ID) is never admitted. */
+  assertNotCancelled(id: string) {
+    if (this.store.get<number>('cancelled', id) !== null)
+      fail('Conflict', 'The save request was reported as not started and can no longer run.');
   }
   startSave(id: string) {
     this.activeSaves.add(id);
@@ -116,7 +125,12 @@ export class HostJournal {
   async saveStatus(input: SaveIdentity): Promise<SaveStatus> {
     const id = this.saveId(input),
       record = this.getSave(id);
-    if (!record) return { kind: 'not-started' };
+    if (!record) {
+      // Answering `not-started` is a promise: a delayed request must not run after the client
+      // discards its intent, so the ID is remembered for as long as an entry is kept.
+      this.store.put('cancelled', id, this.now());
+      return { kind: 'not-started' };
+    }
     const target = record.input.target;
     if (
       !record.result &&
@@ -428,8 +442,17 @@ export class HostJournal {
       [target.checkoutId, after],
       maximumOperationFeedPage + 1,
     );
-    const more = rows.length > maximumOperationFeedPage;
-    const page = rows.slice(0, maximumOperationFeedPage);
+    // A page also stays within `maximumOperationFeedBytes` (at least one entry), so any page
+    // fits a reply however many items its entries carry.
+    let bytes = 0,
+      kept = 0;
+    for (const row of rows.slice(0, maximumOperationFeedPage)) {
+      bytes += Buffer.byteLength(JSON.stringify(row));
+      if (kept && bytes > maximumOperationFeedBytes) break;
+      kept++;
+    }
+    const more = rows.length > kept;
+    const page = rows.slice(0, kept);
     return {
       operations: page.map(({ operation: _operation, ...entry }) => entry),
       through: more ? page[page.length - 1].sequence : Math.max(latest, after),
@@ -470,6 +493,9 @@ export class HostJournal {
           this.store.delete('operations', operation);
         }
         for (const save of expired('saves', 'acknowledgedAt')) this.store.delete('saves', save);
+        db.prepare(
+          "DELETE FROM records WHERE bucket='cancelled' AND CAST(body AS INTEGER) <= ?",
+        ).run(cutoff);
         for (const request of expired('requests', 'settledAt'))
           this.store.delete('requests', request);
         for (const [checkoutId, floor] of floors)
