@@ -33,7 +33,7 @@ async function until<T>(read: () => T | Promise<T>, done: (value: T) => boolean,
  * and its own connection over the daemon's WebSocket, and neither shares a process with the file
  * host.
  */
-test('two clients of one daemon share a checkout: a move re-paths the other draft, and a save by one is seen by the other', async (t) => {
+test("two clients of one daemon share a checkout: a move re-paths the other draft, and a late save by B does not overwrite A's", async (t) => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-editor-daemon-')));
   const project = join(base, 'project');
   mkdirSync(project);

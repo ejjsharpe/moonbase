@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { type Effect, Layer, ManagedRuntime } from 'effect';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
@@ -260,7 +261,8 @@ test('the packaged daemon opens, saves, searches and trashes in a temporary repo
   });
   const started = startDaemonCommand(daemon);
   let runtime: ManagedRuntime.ManagedRuntime<unknown, unknown> | undefined;
-  let inTrash: string | undefined;
+  let trashRequested = false;
+  const trashDirectories = () => [join(homedir(), '.Trash'), join(root, '.Trash')];
   try {
     const ready = await bounded(started.ready);
     const clients = ManagedRuntime.make(
@@ -313,19 +315,32 @@ test('the packaged daemon opens, saves, searches and trashes in a temporary repo
         sources,
       }),
     );
-    inTrash = result.items[0]?.message?.replace('macOS Trash: ', '');
+    trashRequested = true;
     assert.equal(result.outcome, 'completed', JSON.stringify(result));
     await assert.rejects(access(join(project, trashed)), { code: 'ENOENT' });
-    assert(inTrash?.includes('/.Trash/'), String(inTrash));
+    // The file is now in the Trash of the user running the daemon, under its unique name.
+    const inTrash = await Promise.all(
+      trashDirectories().map((dir) =>
+        access(join(dir, trashed)).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    );
+    assert(inTrash.includes(true), 'the trashed file is in a Trash directory');
     await clients.dispose();
     runtime = undefined;
     assert.deepEqual(await started.stop(), [0, null]);
   } finally {
     await runtime?.dispose();
     await started.stop('SIGKILL');
-    // Leave nothing of the smoke test in the real Trash.
-    if (inTrash?.includes('/.Trash/')) await rm(inTrash, { force: true });
     await rm(root, { recursive: true, force: true });
+    // Leave nothing of the smoke test in the real Trash; only the uniquely named file is touched.
+    if (trashRequested) {
+      for (const dir of trashDirectories()) {
+        await rm(join(dir, trashed), { force: true }).catch(() => undefined);
+      }
+    }
   }
 });
 
