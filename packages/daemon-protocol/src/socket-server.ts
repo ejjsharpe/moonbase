@@ -284,6 +284,9 @@ class Session {
   private readonly incoming = new PayloadAssembler();
   private chunkedBytes = 0;
   private pumping = false;
+  /** Sealed workspace reply bytes still being written, and replies waiting for room. */
+  private replyBytes = 0;
+  private readonly parkedReplies: { id: string; reply: unknown }[] = [];
   /** Set while the socket holds more than `outboundBytes`: reading pauses until it drains. */
   private congestion: Promise<void> | undefined;
   private drain: (() => void) | undefined;
@@ -475,7 +478,11 @@ class Session {
     });
   }
 
-  /** A workspace reply may be as large as `workspaceReplyBytes` and is written in bursts. */
+  /**
+   * A workspace reply may be as large as `workspaceReplyBytes` and is written in bursts. The
+   * sealed replies a connection holds are bounded by `workspaceInFlightBytes`: one that would
+   * pass it waits, unsealed, until the replies ahead of it are written.
+   */
   private queueReply(id: string, reply: unknown, workspace = false) {
     if (this.phase !== 'open') return;
     const limit = workspace ? socketLimits.workspaceReplyBytes : socketLimits.payloadBytes;
@@ -490,6 +497,12 @@ class Session {
         },
         limit,
       )!;
+    const held = workspace ? chunks.bytes : 0;
+    if (held && this.replyBytes && this.replyBytes + held > socketLimits.workspaceInFlightBytes) {
+      this.parkedReplies.push({ id, reply });
+      return;
+    }
+    this.replyBytes += held;
     let index = 0;
     this.queue({
       burst: workspace ? socketLimits.workspaceBurstChunks : Infinity,
@@ -500,6 +513,11 @@ class Session {
         const frames: Buffer[] = [];
         while (index < chunks.count && frames.length < count)
           frames.push(this.seal({ type: 'reply', id, ...chunks.chunk(index++) }));
+        if (held && index >= chunks.count) {
+          this.replyBytes -= held;
+          const parked = this.parkedReplies.shift();
+          if (parked) this.queueReply(parked.id, parked.reply, true);
+        }
         return frames;
       },
     });
@@ -857,6 +875,7 @@ class Session {
     this.subscriptions.clear();
     this.ready.clear();
     this.replies.length = 0;
+    this.parkedReplies.length = 0;
     this.untrack?.();
     this.untrack = undefined;
     this.registry.remove();

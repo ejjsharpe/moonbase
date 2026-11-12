@@ -41,7 +41,7 @@ import * as V from './validation.ts';
 import {
   deriveSocketKeys,
   openSocketMessage,
-  PayloadAssembler,
+  PayloadReassembly,
   sealSocketMessage,
   systemSocketClock,
   type SocketClock,
@@ -166,7 +166,7 @@ export function connectDaemonSocket(
     timer: unknown,
     nextId = 0,
     reason: ApplicationError | undefined;
-  const assembler = new PayloadAssembler();
+  const assembler = new PayloadReassembly();
   // Chunked workspace requests hold their input until answered; the daemon closes a connection
   // that holds more than `workspaceInFlightBytes`, so a request that would pass it waits.
   let chunkedInFlight = 0;
@@ -263,11 +263,11 @@ export function connectDaemonSocket(
     if (message.type === 'welcome') return V.fail('Incompatible', 'Unexpected welcome.');
     if (message.type === 'reply') {
       const pending = requests.get(message.id);
-      // Only a workspace reply may exceed a chat reply's bound.
+      // Only a workspace reply, or the late reply to a cancelled one, may exceed a chat reply's bound.
       const done = assembler.push(
         `reply:${message.id}`,
         message,
-        !pending || isHostCommand(pending.operation)
+        (pending && isHostCommand(pending.operation)) || abandoned.has(message.id)
           ? socketLimits.workspaceReplyBytes
           : socketLimits.payloadBytes,
       );
@@ -292,7 +292,8 @@ export function connectDaemonSocket(
         );
       return;
     }
-    if (assembler.partial && message.kind !== 'snapshot')
+    // A delta cannot follow a snapshot of its own subscription that is still arriving.
+    if (message.kind !== 'snapshot' && assembler.partial(`update:${message.subscriptionId}:`))
       V.fail('Incompatible', 'Socket payload was interrupted.');
     const subscription = subscriptions.get(message.subscriptionId);
     if (message.kind === 'error') {
@@ -457,7 +458,7 @@ export function connectDaemonSocket(
           if (!requests.has(id) || mutation) return;
           requests.delete(id);
           // The daemon holds a cancelled request's input until it replies.
-          if (charged) abandoned.set(id, charged);
+          if (isHostCommand(operation)) abandoned.set(id, charged);
           charged = 0;
           try {
             send({ type: 'cancel', id });

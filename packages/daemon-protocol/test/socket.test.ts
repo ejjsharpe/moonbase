@@ -17,7 +17,7 @@ import type {
   HostOutput,
   WorkspaceHostClient,
 } from '@moonbase/contracts/workspace-host';
-import type { WorkspaceEvent } from '@moonbase/contracts/workspace';
+import { maximumFileBytes, type WorkspaceEvent } from '@moonbase/contracts/workspace';
 import { socketLimits, socketPath } from '@moonbase/contracts/socket';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import {
@@ -1413,45 +1413,56 @@ test('a mutation whose reply is lost is Uncertain, runs to completion without a 
   assert.equal(status!.outcome, 'completed');
 });
 
-test('chat streaming continues while a large workspace reply is being written', async (t) => {
-  const { client, handlers } = controlledWorkspace();
-  let called = false;
-  handlers.readFile = async () => {
-    called = true;
-    return { text: 'x'.repeat(12 * 1024 * 1024), version: 'v1' };
-  };
-  const connection = await workspaceConnection(t, client);
-  const { raw, keys, source } = connection;
-  connection.send({
-    type: 'subscribe',
-    subscriptionId: P.nonce(),
-    kind: 'chat',
-    target,
+test('large workspace replies and chat updates interleave on one connection and all arrive', async (t) => {
+  const { client, handlers } = controlledWorkspace(),
+    source = controlledClient();
+  const big = (letter: string) => ({
+    text: letter.repeat(maximumFileBytes),
+    version: `v-${letter}`,
   });
-  const first = await readSealed(raw, keys);
-  assert(first !== 'closed' && first !== 'timeout');
-  assert.equal(first.type, 'update');
-  // A client that reads nothing makes the daemon stop writing once its buffer is full.
-  raw.socket.pause();
-  connection.send({ type: 'request', id: 'big', operation: 'readFile', input: fileTarget });
-  await until(async () => called, Boolean);
-  await new Promise((resolve) => setImmediate(resolve));
-  source.publish(snapshotOf('streaming'));
-  await new Promise((resolve) => setImmediate(resolve));
-  raw.socket.resume();
-  const order: string[] = [];
-  let previous = first.seq;
-  for (;;) {
-    const message = await readSealed(raw, keys);
-    assert(message !== 'closed' && message !== 'timeout');
-    // Frames are numbered as they are written, however replies and updates interleave.
-    assert.equal(message.seq, ++previous);
-    if (message.type === 'update') order.push('update');
-    if (message.type === 'reply') {
-      order.push('reply');
-      if ((message.offset as number) + chunkBytes >= (message.total as number)) break;
-    }
-  }
-  assert(order.includes('update'), 'no update was written during the reply');
-  assert(order.indexOf('update') < order.lastIndexOf('reply'));
+  const gate = Promise.withResolvers<void>();
+  handlers.readFile = async (input: { path: string }) => {
+    await gate.promise;
+    return big(input.path.slice(0, 1));
+  };
+  const { endpoint } = await serve(t, source.client, { clock: manualClock(), workspace: client });
+  const socket = await open(t, endpoint);
+  const failures: ApplicationError[] = [],
+    texts: (string | undefined)[] = [];
+  socket.subscribe('chat', target, {
+    receive: (value) => texts.push(value.run?.text),
+    onError: (error) => failures.push(error),
+  });
+  await until(async () => texts.length, Boolean);
+  // Three replies and the chat updates share the connection while the daemon's buffer is full.
+  const reads = ['a.txt', 'b.txt', 'c.txt'].map((path) =>
+    socket.request('readFile', { ...fileTarget, path }),
+  );
+  gate.resolve();
+  let streaming = true,
+    published = 0;
+  const stream = () => {
+    if (!streaming) return;
+    source.publish(snapshotOf(`update ${++published}`, 30));
+    setImmediate(stream);
+  };
+  stream();
+  const results = await Promise.all(reads);
+  streaming = false;
+  assert.deepEqual(
+    results.map((result) => [result.version, result.text.length]),
+    [
+      ['v-a', maximumFileBytes],
+      ['v-b', maximumFileBytes],
+      ['v-c', maximumFileBytes],
+    ],
+  );
+  assert(texts.length > 1, 'no chat update arrived during the replies');
+  // The stream still delivers after the replies, and nothing failed along the way.
+  source.publish(snapshotOf('last', 30));
+  await until(
+    async () => texts.at(-1),
+    (text) => text === 'last',
+  );
+  assert.deepEqual(failures, []);
 });

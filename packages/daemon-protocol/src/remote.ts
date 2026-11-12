@@ -713,6 +713,11 @@ export const RemoteWorkspaceHostLive = (config: {
       const link = yield* DaemonLink;
       const host = decodeChatHostTarget(config.host);
       const permits = Semaphore.makeUnsafe(socketLimits.workspaceRequests);
+      const checkoutMakers = new Set<HostCommand>([
+        'openCheckout',
+        'createWorktree',
+        'initializeRepository',
+      ]);
       const ownHost = (value: unknown) => {
         const checkout = hostInputCheckout(value);
         if (checkout && checkout.hostId !== host.hostId)
@@ -731,16 +736,31 @@ export const RemoteWorkspaceHostLive = (config: {
               catch: ApplicationError.fromUnknown,
             }),
             (input) =>
-              permits.withPermits(1)(
-                link.request(
-                  host,
-                  operation,
-                  input as never,
-                  isHostMutation(operation),
-                  undefined,
-                  hostDeadlineMs(operation),
-                ),
-              ) as Effect.Effect<HostOutput<K>, ApplicationError>,
+              permits
+                .withPermits(1)(
+                  link.request(
+                    host,
+                    operation,
+                    input as never,
+                    isHostMutation(operation),
+                    undefined,
+                    hostDeadlineMs(operation),
+                  ),
+                )
+                .pipe(
+                  Effect.tap((output) =>
+                    // A checkout the daemon made or opened must belong to the connected host.
+                    checkoutMakers.has(operation) &&
+                    (output as { hostId?: string }).hostId !== host.hostId
+                      ? Effect.fail(
+                          new ApplicationError({
+                            code: 'Incompatible',
+                            message: 'The daemon returned a checkout of another host.',
+                          }),
+                        )
+                      : Effect.void,
+                  ),
+                ) as Effect.Effect<HostOutput<K>, ApplicationError>,
           );
       const handlers = Object.fromEntries(
         (Object.keys(hostInputSchemas) as HostCommand[]).map((operation) => [
