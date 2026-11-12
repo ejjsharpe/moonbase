@@ -14,7 +14,15 @@ export type {
   WorkspaceConfiguration,
   WorkspaceHostConfiguration,
 } from './schema.ts';
-export type WorkspaceRecoveryConfiguration = { dataDirectory: string; installationId: string };
+export type WorkspaceRecoveryConfiguration = {
+  dataDirectory: string;
+  installationId: string;
+  /**
+   * Host IDs this store's checkouts were bound to before the host it now uses (the cutover from
+   * an in-process host). Recovery reopens their roots on that host as it loads.
+   */
+  legacyHostIds?: string[];
+};
 
 /**
  * The file host: approvals, reads, saves, file operations, Git, search and watching, with the

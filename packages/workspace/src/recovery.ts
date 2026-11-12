@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
   ApplicationError,
@@ -96,6 +97,7 @@ export function reconcile(state: EditorRecovery, records: OperationRecord[]) {
 
 /** The file host as the client's recovery sees it, with the installation already bound. */
 export type HostPorts = {
+  openCheckout(root: string, signal: AbortSignal): Promise<CheckoutTarget>;
   readFile(
     target: CheckoutTargetFile,
     signal: AbortSignal,
@@ -149,10 +151,17 @@ export class WorkspaceRecovery {
   private readonly store: ClientStore;
   private readonly host: HostPorts;
   private readonly installationId: string;
-  constructor(store: ClientStore, host: HostPorts, installationId: string) {
+  private readonly legacyHostIds: ReadonlySet<string>;
+  constructor(
+    store: ClientStore,
+    host: HostPorts,
+    installationId: string,
+    legacyHostIds: readonly string[] = [],
+  ) {
     this.store = store;
     this.host = host;
     this.installationId = installationId;
+    this.legacyHostIds = new Set(legacyHostIds);
   }
 
   getPublication(clientId: string) {
@@ -855,7 +864,8 @@ export class WorkspaceRecovery {
         checkouts.set(target.checkoutId, target);
     const byHost = new Map<string, CheckoutTarget[]>();
     for (const target of checkouts.values())
-      byHost.set(target.hostId, [...(byHost.get(target.hostId) ?? []), target]);
+      if (!this.legacyHostIds.has(target.hostId))
+        byHost.set(target.hostId, [...(byHost.get(target.hostId) ?? []), target]);
     for (const [hostId, targets] of byHost) {
       try {
         for (const message of await this.syncHostFeed(hostId, targets, signal))
@@ -984,15 +994,99 @@ export class WorkspaceRecovery {
     }
   }
 
+  /** The checkouts of any client's recovery that are bound to a former host, by checkout ID. */
+  private legacyCheckouts() {
+    const found = new Map<string, CheckoutTarget>();
+    if (!this.legacyHostIds.size) return found;
+    for (const row of this.store.db.prepare('SELECT client, body FROM recovery').all())
+      for (const target of parseRecovery(row.body, row.client as string).checkouts)
+        if (this.legacyHostIds.has(target.hostId)) found.set(target.checkoutId, target);
+    return found;
+  }
+  /**
+   * The cutover from a former host: reopens the root of each checkout bound to one on the
+   * connected host, then moves the drafts, tabs and recent files of every client's recovery to
+   * the reopened checkout in one local transaction. A root that no longer opens (or whose new
+   * checkout the recovery already holds) stays as it was, with its drafts, and is reported.
+   */
+  private async rebindLegacyCheckouts(signal: AbortSignal) {
+    const errors: string[] = [];
+    const legacy = this.legacyCheckouts();
+    const reopened = new Map<string, CheckoutTarget>();
+    for (const old of legacy.values()) {
+      try {
+        reopened.set(old.checkoutId, await this.reopen(old.root, signal));
+      } catch (error) {
+        errors.push(old.root + ': ' + errorText(error));
+      }
+    }
+    if (!reopened.size) return errors;
+    this.store.transaction(() => {
+      for (const row of this.store.db.prepare('SELECT client FROM recovery').all()) {
+        const client = row.client as string;
+        const stored = this.store.readRecovery(client);
+        if (!stored) continue;
+        const state = stored.state as EditorRecovery;
+        const present = new Set(state.checkouts.map((c) => c.checkoutId));
+        // A checkout the recovery already holds under its new ID is not merged into.
+        const moves = new Map(
+          [...reopened].filter(
+            ([from, to]) =>
+              present.has(from) && (from === to.checkoutId || !present.has(to.checkoutId)),
+          ),
+        );
+        if (!moves.size) continue;
+        const move = (target: CheckoutTarget) => moves.get(target.checkoutId) ?? target;
+        state.checkouts = state.checkouts.map(move);
+        state.openCheckoutIds = state.openCheckoutIds.map((id) => moves.get(id)?.checkoutId ?? id);
+        if (state.selectedCheckoutId !== null)
+          state.selectedCheckoutId =
+            moves.get(state.selectedCheckoutId)?.checkoutId ?? state.selectedCheckoutId;
+        state.views = Object.fromEntries(
+          Object.entries(state.views).map(([id, view]) => [moves.get(id)?.checkoutId ?? id, view]),
+        );
+        state.drafts = state.drafts.map((d) => ({
+          ...d,
+          target: { ...d.target, checkout: move(d.target.checkout) },
+        }));
+        state.recentFiles = state.recentFiles.map((t) => ({ ...t, checkout: move(t.checkout) }));
+        recovery(state, client);
+        this.store.writeInternalRecovery(client, stored.revision, state);
+      }
+    });
+    return errors;
+  }
+  /** Opens `root` on the connected host, as its canonical spelling if only the case differs. */
+  private async reopen(root: string, signal: AbortSignal) {
+    try {
+      return await this.host.openCheckout(root, signal);
+    } catch (error) {
+      let canonical: string;
+      try {
+        canonical = realpathSync.native(root);
+      } catch {
+        throw error;
+      }
+      if (canonical === root || canonical.toLowerCase() !== root.toLowerCase()) throw error;
+      return this.host.openCheckout(canonical, signal);
+    }
+  }
+
   async loadRecovery(clientId: string, signal: AbortSignal) {
     identifier(clientId);
     const before = this.store.readRecovery(clientId);
     if (before) recovery(before.state as EditorRecovery, clientId);
     const errors: string[] = await this.syncFeed(signal);
+    // Saves left open on a checkout of a former host are resolved too, so their text becomes a
+    // draft before the checkout is rebound.
     await this.recoverEvidence(
       signal,
-      new Set((before?.state as EditorRecovery | undefined)?.openCheckoutIds ?? []),
+      new Set([
+        ...((before?.state as EditorRecovery | undefined)?.openCheckoutIds ?? []),
+        ...this.legacyCheckouts().keys(),
+      ]),
     );
+    errors.push(...(await this.rebindLegacyCheckouts(signal)));
     const stored = this.store.readRecovery(clientId),
       state = (stored?.state ?? emptyRecovery(clientId)) as EditorRecovery;
     recovery(state, clientId);

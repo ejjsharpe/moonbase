@@ -12,12 +12,17 @@ import {
   type ObservationClose,
 } from '@moonbase/contracts/workspace';
 import { normalizeApplicationError } from '../../runtime/effect-client.ts';
+import { watchRetry } from '../../runtime/watch-retry.ts';
 import { checkoutKey } from './references.ts';
 
+/** How long a watch must stay up for its failure to renew the retry cap. */
+const watchHealthyMs = watchRetry.healthyMs;
 const sameCheckout = (a: CheckoutTarget, b: CheckoutTarget) => checkoutKey(a) === checkoutKey(b);
 type DiscoveryDependencies = {
   execute<A>(effect: Effect.Effect<A, ApplicationError>): Promise<A>;
   watch: EditorClient['watch'];
+  /** Backoff before each re-watch after a retryable watch failure; its length is the cap. */
+  watchRetryMs: readonly number[];
   /** Lists a folder, reporting a failure unless `report` is false. */
   listDirectory(
     input: CommandInput<'listDirectory'>,
@@ -135,23 +140,59 @@ export class EditorDiscovery {
       ),
     );
   }
+  /**
+   * Watches a checkout. A retryable (`Unavailable`) failure, such as a daemon that restarted,
+   * watches again after each backoff and then reads again, since changes were missed meanwhile;
+   * only a failure that cannot be retried, or the last of them, is reported.
+   */
   async observe(
     checkout: CheckoutTarget,
     isOpen: () => boolean,
     onChanged: (isCurrent: () => boolean) => void,
+    failures = 0,
   ) {
     const key = checkoutKey(checkout);
     await this.releaseObservation(checkout);
     if (this.dependencies.isClosing()) return;
     const scope = Scope.forkUnsafe(this.scope);
     const ready = Deferred.makeUnsafe<Exit.Exit<ObservationClose, ApplicationError>>();
-    let completion: Promise<void> | undefined;
+    let completion: Promise<void> | undefined, upSince: number | undefined;
+    const isCurrent = () => this.stops.get(key)?.scope === scope;
     const close: ObservationClose = () =>
       (completion ??= this.dependencies.execute(
         Effect.flatMap(Deferred.await(ready), (acquired) =>
           Effect.flatMap(acquired, (release) => Effect.promise(release)),
         ).pipe(Effect.uninterruptible),
       ));
+    const fail = (error: unknown) => {
+      if (this.dependencies.isClosing() || !isOpen() || !isCurrent()) return;
+      const failure = normalizeApplicationError(error);
+      if (upSince !== undefined && performance.now() - upSince >= watchHealthyMs) failures = 0;
+      const delay = this.dependencies.watchRetryMs[failures];
+      if (failure.code !== 'Unavailable' || delay === undefined) {
+        this.dependencies.report(error);
+        return;
+      }
+      // The failed watch is released when the next one replaces it; the backoff runs on the root
+      // scope, since replacing the observation ends its own scope.
+      const rewatch = Effect.gen({ self: this }, function* () {
+        yield* Effect.sleep(delay);
+        if (this.dependencies.isClosing() || !isOpen() || !isCurrent()) return;
+        yield* Effect.tryPromise({
+          try: () =>
+            this.observe(
+              checkout,
+              isOpen,
+              onChanged,
+              // A watch that fails again at once spends the next backoff.
+              failures + 1,
+            ),
+          catch: normalizeApplicationError,
+        });
+        if (this.stops.has(key) && isOpen()) onChanged(() => this.stops.has(key));
+      }).pipe(Effect.catch((retry) => Effect.sync(() => this.dependencies.report(retry))));
+      void this.dependencies.execute(Effect.forkIn(rewatch, this.scope)).catch(() => {});
+    };
     // A synchronous watch callback can dispose the model before its close handle returns.
     this.observationClosures.add(close);
     this.stops.set(key, { scope, close });
@@ -167,15 +208,18 @@ export class EditorDiscovery {
                     this.dependencies.isClosing() ||
                     !isOpen() ||
                     !sameCheckout(event.checkout, checkout) ||
-                    this.stops.get(key)?.scope !== scope
+                    !isCurrent()
                   )
                     return;
                   if (event.error) this.dependencies.report(event.error);
-                  if (event.ready) return;
+                  if (event.ready) {
+                    upSince ??= performance.now();
+                    return;
+                  }
                   this.revision++;
-                  onChanged(() => this.stops.get(key)?.scope === scope);
+                  onChanged(isCurrent);
                 },
-                this.dependencies.report,
+                fail,
               ),
             catch: normalizeApplicationError,
           }),

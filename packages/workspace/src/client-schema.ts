@@ -24,6 +24,8 @@ import {
 export const ClientConfigurationSchema = struct({
   dataDirectory: absolute,
   installationId: WorkspaceIdentifierSchema,
+  /** Host IDs whose checkouts are reopened on the connected host when recovery loads. */
+  legacyHostIds: optional(array(Schema.String)),
 });
 const configuration = Schema.decodeUnknownSync(ClientConfigurationSchema, { reportInput: false });
 export function decodeClientConfiguration(value: unknown) {
@@ -94,6 +96,8 @@ export const clientDecoders = {
     /** Per host and checkout, a feed gap that left drafts at their old paths. */
     gaps: FeedGapSchema,
     meta: WorkspaceIdentifierSchema,
+    /** Per call, the request ID its host operation was (or is to be) sent under. */
+    requests: struct({ requestId: WorkspaceIdentifierSchema }),
   }),
   saves: ignoringLegacy(SaveRecordSchema),
   operations: ignoringLegacy(OperationRecordSchema),

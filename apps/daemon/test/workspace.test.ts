@@ -189,16 +189,16 @@ test('a daemon advertises the workspace, saves and reads 2 MiB over the wire, an
           Effect.sync(() => void events.push(event)),
         ),
       );
-      await until(
-        async () => events.length,
-        (count) => count > 0,
-      );
+      await until(async () => events.some((event) => event.ready), Boolean);
       const before = events.length;
       await writeFile(join(project, 'b.txt'), 'new file');
       await until(
         async () => events.length,
         (count) => count > before,
       );
+      // Only the event that says the watch is ready is `ready`; later ones are changes to read.
+      assert.equal(events.filter((event) => event.ready).length, 1);
+      assert(events.slice(before).every((event) => !event.ready));
       await Effect.runPromise(Fiber.interrupt(stream));
     } finally {
       await daemon.stop();

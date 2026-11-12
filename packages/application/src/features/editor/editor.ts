@@ -9,6 +9,7 @@ import {
   type MutationAction,
 } from './workflows.ts';
 import { Deferred, Effect, Exit, Fiber, Scope, Semaphore, type ManagedRuntime } from 'effect';
+import { watchRetry } from '../../runtime/watch-retry.ts';
 import { normalizeApplicationError, runApplicationEffect } from '../../runtime/effect-client.ts';
 import { decodeEditorRecovery } from '@moonbase/contracts/workspace-schema';
 import {
@@ -227,6 +228,7 @@ class EditorModelState {
     this.discovery = new EditorDiscovery(scope, {
       execute: (effect) => this.runEffect(effect),
       watch: (...args) => this.client.watch(...args),
+      watchRetryMs: options.watchRetryMs ?? watchRetry.retryMs,
       listDirectory: (input, scope, report) => this.command('listDirectory', input, scope, report),
       readFile: (target, scope) => this.command('readFile', target, scope),
       readComparison: (input, scope) => this.command('readComparison', input, scope),
@@ -2068,7 +2070,12 @@ export type RevealOptions = {
   /** Rejects on failure without reporting it, for a reveal the user didn't ask for. */
   quiet?: boolean;
 };
-export type EditorDependencies = { client: EditorClient; clientId?: string };
+export type EditorDependencies = {
+  client: EditorClient;
+  clientId?: string;
+  /** Backoff before each re-watch of a checkout; defaults to the transcript's. Its length is the cap. */
+  watchRetryMs?: readonly number[];
+};
 export type EditorModel = EditorModelState;
 export interface EditorController {
   readonly clientId: string;

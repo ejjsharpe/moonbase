@@ -38,10 +38,10 @@ function harness() {
     ]).toString();
   const runtimes: { dispose(): Promise<void> }[] = [];
   let clock = 1_000;
-  const startHost = async (retention = 60_000) => {
+  const startHost = async (retention = 60_000, name = 'host', hostId = 'split-host') => {
     const runtime = ManagedRuntime.make(
       WorkspaceHostLive(
-        { dataDirectory: join(base, 'host'), hostId: 'split-host', journalRetentionMs: retention },
+        { dataDirectory: join(base, name), hostId, journalRetentionMs: retention },
         () => clock,
       ),
     );
@@ -53,10 +53,11 @@ function harness() {
     name: string,
     host: WorkspaceHostServiceShape,
     lose?: (host: WorkspaceHostServiceShape) => WorkspaceHostServiceShape,
+    legacyHostIds?: string[],
   ) => {
     const runtime = ManagedRuntime.make(
       WorkspaceRecoveryLive(
-        { dataDirectory: join(base, name), installationId: name },
+        { dataDirectory: join(base, name), installationId: name, legacyHostIds },
         lose ? lose(host) : host,
       ),
     );
@@ -85,7 +86,10 @@ const dropRequest =
   });
 /** The host commits, then the link goes down: the reply and every status query are lost. */
 const dropReply =
-  <K extends 'saveFile' | 'mutate'>(operation: K, failure: ApplicationError = lost) =>
+  <K extends 'saveFile' | 'mutate' | 'createWorktree'>(
+    operation: K,
+    failure: ApplicationError = lost,
+  ) =>
   (host: WorkspaceHostServiceShape): WorkspaceHostServiceShape => ({
     ...host,
     [operation]: (input: never) =>
@@ -420,6 +424,105 @@ test('createWorktree and initializeRepository replay their first outcome for one
     const initialize = { installationId: 'alice', requestId: 'init-1', checkout: folder };
     const initialized = await Effect.runPromise(host.initializeRepository(initialize));
     assert.deepEqual(await Effect.runPromise(host.initializeRepository(initialize)), initialized);
+  } finally {
+    await h.close();
+  }
+});
+
+test('a worktree whose reply was lost is asked for again under its first request ID, not made twice', async () => {
+  const h = harness();
+  try {
+    writeFileSync(join(h.root, 'file.txt'), 'main');
+    h.git('add', '.');
+    h.git('commit', '-qm', 'initial');
+    const { host } = await h.startHost();
+    const main = await openCheckout(host, h.root);
+    const input = {
+      checkout: main,
+      base: 'main',
+      branch: 'feature/one',
+      location: join(h.base, 'feature'),
+    };
+    const uncertain = new ApplicationError({ code: 'Uncertain', message: 'The reply was lost.' });
+    let alice = h.startClient('alice', host, dropReply('createWorktree', uncertain));
+    await assert.rejects(
+      alice.client.command('createWorktree', input),
+      (error: unknown) => ApplicationError.is(error) && error.code === 'Uncertain',
+    );
+    // The client restarts: the same call is the same request, which replays the worktree.
+    await alice.runtime.dispose();
+    alice = h.startClient('alice', host);
+    const created = await alice.client.command('createWorktree', input);
+    assert.equal(created.root, join(h.base, 'feature'));
+    // An answer (here a refusal of the same branch) ends the intent, so a repeat is a new request.
+    await assert.rejects(
+      alice.client.command('createWorktree', input),
+      (error: unknown) => ApplicationError.is(error) && error.code === 'Conflict',
+    );
+  } finally {
+    await h.close();
+  }
+});
+
+test("the cutover reopens a former host's roots, moves drafts to them and turns an unsettled save into a draft", async () => {
+  const h = harness();
+  try {
+    writeFileSync(join(h.root, 'file.txt'), 'original');
+    const gone = join(h.base, 'gone');
+    mkdirSync(gone);
+    writeFileSync(join(gone, 'file.txt'), 'original');
+    const former = await h.startHost(60_000, 'former', 'moonbase-local');
+    const checkout = await openCheckout(former.host, h.root),
+      orphan = await openCheckout(former.host, gone),
+      disk = await Effect.runPromise(former.host.readFile({ checkout, path: 'file.txt' }));
+    let alice = h.startClient('alice', former.host, dropRequest('saveFile'));
+    const state = draft('window', checkout, 'unsaved edit', disk);
+    state.checkouts.push(orphan);
+    state.drafts.push({ target: { checkout: orphan, path: 'file.txt' }, text: 'kept', disk });
+    await alice.client.command('persistRecovery', {
+      requestId: randomUUID(),
+      clientId: 'window',
+      expectedRevision: 0,
+      state,
+    });
+    // The old host never admitted this save: its text has to come back as a draft.
+    await assert.rejects(
+      alice.client.command('saveFile', {
+        target: { checkout, path: 'file.txt' },
+        clientId: 'window',
+        requestId: 'unsettled',
+        text: 'unsettled text',
+        expectedVersion: disk.version,
+      }),
+    );
+    await alice.runtime.dispose();
+    rmSync(gone, { recursive: true });
+    const { host } = await h.startHost(60_000, 'host', 'split-host');
+    alice = h.startClient('alice', host, undefined, ['moonbase-local']);
+    const load = await alice.client.command('loadRecovery', { clientId: 'window' });
+    const rebound = load.state.checkouts.find((c) => c.root === h.root)!;
+    assert.equal(rebound.hostId, 'split-host');
+    assert.deepEqual(
+      load.state.drafts.find((d) => d.target.checkout.root === h.root)?.target.checkout,
+      rebound,
+    );
+    assert.equal(
+      load.state.drafts.find(
+        (d) => d.target.path === 'file.txt' && d.target.checkout.root === h.root,
+      )?.text,
+      'unsettled text',
+    );
+    assert(load.state.openCheckoutIds.includes(rebound.checkoutId));
+    // A root that no longer opens keeps its draft where it was, and is reported.
+    const stranded = load.state.checkouts.find((c) => c.root === gone)!;
+    assert.equal(stranded.hostId, 'moonbase-local');
+    assert.equal(load.state.drafts.find((d) => d.target.checkout.root === gone)?.text, 'kept');
+    assert(load.errors.some((error) => error.includes(gone)));
+    // The rebound checkout works on the new host.
+    assert.equal(
+      (await alice.client.command('readFile', { checkout: rebound, path: 'file.txt' })).text,
+      'original',
+    );
   } finally {
     await h.close();
   }

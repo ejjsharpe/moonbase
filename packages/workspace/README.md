@@ -5,7 +5,7 @@
 ## Integration
 
 - `WorkspaceHostLive(config)` provides `WorkspaceHostService` (everything except recovery, plus `saveStatus`, `acknowledgeSave` and `listOperations`), the privileged `WorkspaceNative` service for approved native imports, and `WorkspaceFolders` (see Chat folders). It keeps approvals and journals in `workspace-host.sqlite` in `dataDirectory`.
-- `WorkspaceRecoveryLive({dataDirectory, installationId}, host)` provides today's full `WorkspaceService` over a host service. It keeps drafts and editor state in `moonbase-workspace-v1.sqlite`, so existing drafts carry.
+- `WorkspaceRecoveryLive({dataDirectory, installationId, legacyHostIds?}, host)` provides today's full `WorkspaceService` over a host service, local or remote. It keeps drafts and editor state in `moonbase-workspace-v1.sqlite`, so existing drafts carry. `legacyHostIds` names hosts whose checkouts the store held before (Electron's former in-process `moonbase-local`): see Cutover.
 - `WorkspaceLocalLive(config)` composes both in one process, as Electron main does; see [`examples/local.ts`](examples/local.ts).
 
 Compose each once in a process root's runtime. The workspace opens only on macOS with Node 26.13 or newer, the pinned Electron (45.1.0) or exactly Bun 1.4.4, and is refused as `Incompatible` otherwise. Configure a stable `hostId` and a `dataDirectory` outside approved checkouts. Packaged apps must supply absolute `filesystemHelper` and `ripgrepExecutable` paths. System Git defaults to `/usr/bin/git`; when the Xcode command-line tools are missing, Git runs fail as `Unavailable` and the macOS installer prompt is never triggered. Without them even a plain folder can't be opened (`Unavailable`).
@@ -19,6 +19,12 @@ The host journals each save and operation under `(installationId, clientId, requ
 Completed moves, copies and Trash also enter an operation feed with a store-wide, increasing sequence. `listOperations({checkout, after})` returns one bounded page after a sequence (at most 64 entries and about 4 MiB of JSON beyond the first entry, so a page always fits a socket reply), with `through`, `floor` (entries up to it may have been discarded) and `more`.
 
 The client records a save or operation intent (text, baseline) before sending it, and applies the reply, `saveStatus`, `operationStatus` or feed entry to its recovery in one local transaction. `loadRecovery` resolves open intents through the host: `saved` and `conflict` settle them, `not-started` restores the text as a draft, `uncertain` keeps the draft and reports it. A lost reply is never sent again as new work. `loadRecovery` also reads the feed after its per-host cursor and reconciles drafts and views of its checkouts, so another client's move re-paths a draft and its Trash leaves it. A gap past the host's retention leaves drafts where they are and reports them. This client's own results are applied as they return, so its own feed entries are skipped. The feed carries the host store's epoch and a floor per checkout: a different epoch (a recreated store) resets the cursor and marks every checkout's drafts as a gap, and a checkout the host refuses is skipped and reported while the others advance. Saved rows from before the split load with their retired fields (`started`, `temporary`, `recoveryRevision`, `paths`, `staging`) ignored; any other unknown field is refused as `Persistence`. A settled save or operation whose acknowledgement did not reach the host is acknowledged again on the next load.
+
+## Cutover and repeated requests
+
+When recovery loads, each checkout bound to a `legacyHostIds` host has its root reopened on the connected host (as its canonical spelling if only the case differs), and every client's drafts, tabs, recent files and open or selected checkout move to the reopened one in a local transaction. Saves left open on a former host are asked about first: the new host has never seen them, so their text returns as drafts. A root that no longer opens, or whose new checkout the recovery already holds, stays as it was with its drafts and is reported; uncertain operations of a former host stay listed. Former hosts have no operation feed, so none is read from them.
+
+`createWorktree` and `initializeRepository` are sent under a request ID stored in the client store before sending, keyed by the call. A repeat of the same call after a lost reply (or a restart) asks the host for the first outcome. The ID is kept only while the outcome is unknown (`Uncertain`, or cancelled); an answer, a refusal included, ends it, because the host replays a refusal for the same ID.
 
 ## Search
 
@@ -57,7 +63,6 @@ A `CheckoutTarget` says whether its root is the repository's `main` working tree
 - Helper processes run in their own process group. Stopping one (cancellation, a limit) sends the group SIGTERM, then SIGKILL after 2 seconds, and waits for it to exit, so Git and its children can clean up first.
 - Files must be UTF-8 text up to 2 MiB. Filesystem changes and SQLite commits are not one atomic transaction.
 - A client's settled save and operation records and publication receipts are not yet compacted; only the host journal is.
-- Not yet: upgrading users get a fresh host store, so earlier approvals and saves are not carried over, and the D6 cutover is not in this change.
 
 ## Checks
 
