@@ -124,6 +124,7 @@ export const hostDecoders = strictDecoders({
   requests: HostRequestRecordSchema,
   feed: FeedRecordSchema,
   counters: natural,
+  cancelled: natural,
   meta: WorkspaceIdentifierSchema,
 });
 

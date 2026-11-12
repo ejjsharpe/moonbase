@@ -1,5 +1,6 @@
 import * as Schema from 'effect/Schema';
 import { ApplicationError } from './errors.ts';
+import { chatReplyErrorCodes } from './chat-schema.ts';
 import type { HostCommand, HostInput, HostOutput } from './workspace-host.ts';
 import { array, optional, struct, voidResult } from './schema.ts';
 import {
@@ -20,6 +21,8 @@ const natural = Schema.Int.check(
 );
 /** The most feed entries one `listOperations` page carries. */
 export const maximumOperationFeedPage = 64;
+/** The most JSON bytes one page carries beyond its first entry, so a page fits a reply. */
+export const maximumOperationFeedBytes = 4 * 1024 * 1024;
 /** Names the installation whose clients' requests the host journals; one per client store. */
 const installationId = WorkspaceIdentifierSchema;
 
@@ -177,3 +180,53 @@ export function decodeHostOutput<K extends HostCommand>(
     throw new ApplicationError({ code: 'Incompatible', message: 'Invalid workspace reply.' });
   }
 }
+
+/** Operations that change the host: a lost reply is `Uncertain` and is never sent again. */
+const hostMutations: ReadonlySet<string> = new Set<HostCommand>([
+  'saveFile',
+  'mutate',
+  'createWorktree',
+  'initializeRepository',
+  'acknowledgeOperation',
+  'acknowledgeSave',
+]);
+export const isHostMutation = (operation: string) => hostMutations.has(operation);
+/**
+ * How long a client waits for a reply before it is lost: reads, lookup and search, mutations
+ * (the helper's 30 s limit and a margin), and the Git steps of a worktree or `git init`. Past
+ * it a mutation is `Uncertain`; `saveStatus` and `operationStatus` resolve it.
+ */
+export const hostDeadlinesMs = {
+  read: 20_000,
+  search: 30_000,
+  mutation: 60_000,
+  git: 120_000,
+} as const;
+export function hostDeadlineMs(operation: HostCommand): number {
+  if (operation === 'lookupFiles' || operation === 'searchText') return hostDeadlinesMs.search;
+  if (operation === 'createWorktree' || operation === 'initializeRepository')
+    return hostDeadlinesMs.git;
+  return isHostMutation(operation) ? hostDeadlinesMs.mutation : hostDeadlinesMs.read;
+}
+/** The checkout an operation's input names, if any; the server checks it is its own host's. */
+export function hostInputCheckout(input: unknown): { hostId: string } | undefined {
+  const shape = input as {
+    checkout?: { hostId: string };
+    target?: { checkout: { hostId: string } };
+  };
+  return shape.checkout ?? shape.target?.checkout;
+}
+
+/** A `workspace` subscription follows one checkout. */
+export const WorkspaceWatchTargetSchema = struct({ checkout: CheckoutTargetSchema });
+/**
+ * The watch of a checkout: `ready` once files are watched, `revision` rising with every change
+ * seen, `operations` the host's operation feed sequence and `error` a watch failure the client
+ * should answer by watching again. A client rereads after any update.
+ */
+export const WorkspaceWatchValueSchema = struct({
+  ready: Schema.Boolean,
+  revision: natural,
+  operations: natural,
+  error: optional(Schema.Literals(chatReplyErrorCodes)),
+});

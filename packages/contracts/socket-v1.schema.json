@@ -122,6 +122,47 @@
             "type": {
               "type": "string",
               "enum": [
+                "requestChunk"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16777215
+            },
+            "total": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16777216
+            },
+            "data": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "seq",
+            "type",
+            "id",
+            "offset",
+            "total",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "seq": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "type": {
+              "type": "string",
+              "enum": [
                 "cancel"
               ]
             },
@@ -373,6 +414,155 @@
             "type": {
               "type": "string",
               "enum": [
+                "subscribe"
+              ]
+            },
+            "subscriptionId": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "workspace"
+              ]
+            },
+            "target": {
+              "type": "object",
+              "properties": {
+                "checkout": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "vcs": {
+                          "type": "string",
+                          "enum": [
+                            "git"
+                          ]
+                        },
+                        "hostId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "checkoutId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "projectId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "root": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "branch": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "worktree": {
+                          "type": "string",
+                          "enum": [
+                            "main",
+                            "linked"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "hostId",
+                        "checkoutId",
+                        "projectId",
+                        "root",
+                        "branch",
+                        "worktree"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "vcs": {
+                          "type": "string",
+                          "enum": [
+                            "none"
+                          ]
+                        },
+                        "hostId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "checkoutId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "projectId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "root": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "vcs",
+                        "hostId",
+                        "checkoutId",
+                        "projectId",
+                        "root"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "checkout"
+              ],
+              "additionalProperties": false
+            },
+            "afterSequence": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "seq",
+            "type",
+            "subscriptionId",
+            "kind",
+            "target"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "seq": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "type": {
+              "type": "string",
+              "enum": [
                 "unsubscribe"
               ]
             },
@@ -493,12 +683,12 @@
             "offset": {
               "type": "integer",
               "minimum": 0,
-              "maximum": 262143
+              "maximum": 16777215
             },
             "total": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 262144
+              "maximum": 16777216
             },
             "data": {
               "type": "string"
@@ -3467,6 +3657,3929 @@
       "required": [
         "providers",
         "flow"
+      ],
+      "additionalProperties": false
+    },
+    "WorkspaceWatchValue": {
+      "type": "object",
+      "properties": {
+        "ready": {
+          "type": "boolean"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "operations": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "InvalidInput",
+                "Unauthorized",
+                "Incompatible",
+                "Conflict",
+                "Persistence",
+                "Unavailable",
+                "Cancelled",
+                "Uncertain"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "ready",
+        "revision",
+        "operations"
+      ],
+      "additionalProperties": false
+    },
+    "SocketChunkedRequest": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string"
+        },
+        "input": {}
+      },
+      "required": [
+        "operation",
+        "input"
+      ],
+      "additionalProperties": false
+    },
+    "WorkspaceHostInputs": {
+      "type": "object",
+      "properties": {
+        "openCheckout": {
+          "type": "object",
+          "properties": {
+            "root": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "required": [
+            "root"
+          ],
+          "additionalProperties": false
+        },
+        "verifyCheckout": {
+          "type": "object",
+          "properties": {
+            "checkout": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "git"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "branch": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "worktree": {
+                      "type": "string",
+                      "enum": [
+                        "main",
+                        "linked"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root",
+                    "branch",
+                    "worktree"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "none"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "vcs",
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "checkout"
+          ],
+          "additionalProperties": false
+        },
+        "readFile": {
+          "type": "object",
+          "properties": {
+            "checkout": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "git"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "branch": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "worktree": {
+                      "type": "string",
+                      "enum": [
+                        "main",
+                        "linked"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root",
+                    "branch",
+                    "worktree"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "none"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "vcs",
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "path": {
+              "type": "string",
+              "maxLength": 4096,
+              "minLength": 1
+            }
+          },
+          "required": [
+            "checkout",
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        "saveFile": {
+          "type": "object",
+          "properties": {
+            "installationId": {
+              "type": "string"
+            },
+            "target": {
+              "type": "object",
+              "properties": {
+                "checkout": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "vcs": {
+                          "type": "string",
+                          "enum": [
+                            "git"
+                          ]
+                        },
+                        "hostId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "checkoutId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "projectId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "root": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "branch": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "worktree": {
+                          "type": "string",
+                          "enum": [
+                            "main",
+                            "linked"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "hostId",
+                        "checkoutId",
+                        "projectId",
+                        "root",
+                        "branch",
+                        "worktree"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "vcs": {
+                          "type": "string",
+                          "enum": [
+                            "none"
+                          ]
+                        },
+                        "hostId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "checkoutId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "projectId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "root": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "vcs",
+                        "hostId",
+                        "checkoutId",
+                        "projectId",
+                        "root"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "path": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "checkout",
+                "path"
+              ],
+              "additionalProperties": false
+            },
+            "clientId": {
+              "type": "string"
+            },
+            "requestId": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "installationId",
+            "target",
+            "clientId",
+            "requestId",
+            "text",
+            "expectedVersion"
+          ],
+          "additionalProperties": false
+        },
+        "listDirectory": {
+          "type": "object",
+          "properties": {
+            "checkout": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "git"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "branch": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "worktree": {
+                      "type": "string",
+                      "enum": [
+                        "main",
+                        "linked"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root",
+                    "branch",
+                    "worktree"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "none"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "vcs",
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "path": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "hideIgnored": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "includeIgnoredStatus": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "checkout",
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        "getIgnoredPaths": {
+          "type": "object",
+          "properties": {
+            "checkout": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "git"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "branch": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "worktree": {
+                      "type": "string",
+                      "enum": [
+                        "main",
+                        "linked"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root",
+                    "branch",
+                    "worktree"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "none"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "vcs",
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "path": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 4096
+              },
+              "maxItems": 20000
+            }
+          },
+          "required": [
+            "checkout",
+            "path",
+            "paths"
+          ],
+          "additionalProperties": false
+        },
+        "gitStatus": {
+          "type": "object",
+          "properties": {
+            "checkout": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "git"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "branch": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "worktree": {
+                      "type": "string",
+                      "enum": [
+                        "main",
+                        "linked"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root",
+                    "branch",
+                    "worktree"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "none"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "vcs",
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "checkout"
+          ],
+          "additionalProperties": false
+        },
+        "listWorktrees": {
+          "type": "object",
+          "properties": {
+            "checkout": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "git"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "branch": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "worktree": {
+                      "type": "string",
+                      "enum": [
+                        "main",
+                        "linked"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root",
+                    "branch",
+                    "worktree"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "none"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "vcs",
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "checkout"
+          ],
+          "additionalProperties": false
+        },
+        "createWorktree": {
+          "type": "object",
+          "properties": {
+            "installationId": {
+              "type": "string"
+            },
+            "requestId": {
+              "type": "string"
+            },
+            "checkout": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "git"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "branch": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "worktree": {
+                      "type": "string",
+                      "enum": [
+                        "main",
+                        "linked"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root",
+                    "branch",
+                    "worktree"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "none"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "vcs",
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "base": {
+              "type": "string",
+              "maxLength": 255,
+              "minLength": 1
+            },
+            "branch": {
+              "type": "string",
+              "maxLength": 255,
+              "minLength": 1
+            },
+            "location": {
+              "type": "string",
+              "maxLength": 4096,
+              "minLength": 1
+            }
+          },
+          "required": [
+            "installationId",
+            "requestId",
+            "checkout",
+            "base",
+            "branch",
+            "location"
+          ],
+          "additionalProperties": false
+        },
+        "initializeRepository": {
+          "type": "object",
+          "properties": {
+            "installationId": {
+              "type": "string"
+            },
+            "requestId": {
+              "type": "string"
+            },
+            "checkout": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "git"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "branch": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "worktree": {
+                      "type": "string",
+                      "enum": [
+                        "main",
+                        "linked"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root",
+                    "branch",
+                    "worktree"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "none"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "vcs",
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "installationId",
+            "requestId",
+            "checkout"
+          ],
+          "additionalProperties": false
+        },
+        "readComparison": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "object",
+              "properties": {
+                "checkout": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "vcs": {
+                          "type": "string",
+                          "enum": [
+                            "git"
+                          ]
+                        },
+                        "hostId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "checkoutId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "projectId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "root": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "branch": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "worktree": {
+                          "type": "string",
+                          "enum": [
+                            "main",
+                            "linked"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "hostId",
+                        "checkoutId",
+                        "projectId",
+                        "root",
+                        "branch",
+                        "worktree"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "vcs": {
+                          "type": "string",
+                          "enum": [
+                            "none"
+                          ]
+                        },
+                        "hostId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "checkoutId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "projectId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "root": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "vcs",
+                        "hostId",
+                        "checkoutId",
+                        "projectId",
+                        "root"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "path": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "checkout",
+                "path"
+              ],
+              "additionalProperties": false
+            },
+            "area": {
+              "type": "string",
+              "enum": [
+                "staged",
+                "unstaged",
+                "untracked"
+              ]
+            }
+          },
+          "required": [
+            "target",
+            "area"
+          ],
+          "additionalProperties": false
+        },
+        "lookupFiles": {
+          "type": "object",
+          "properties": {
+            "checkout": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "git"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "branch": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "worktree": {
+                      "type": "string",
+                      "enum": [
+                        "main",
+                        "linked"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root",
+                    "branch",
+                    "worktree"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "none"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "vcs",
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "query": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "limit": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "history": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "maxItems": 1000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "checkout",
+            "query"
+          ],
+          "additionalProperties": false
+        },
+        "searchText": {
+          "type": "object",
+          "properties": {
+            "checkout": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "git"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "branch": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "worktree": {
+                      "type": "string",
+                      "enum": [
+                        "main",
+                        "linked"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root",
+                    "branch",
+                    "worktree"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "none"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "vcs",
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "query": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "matchCase": {
+              "type": "boolean"
+            },
+            "wholeWord": {
+              "type": "boolean"
+            },
+            "regex": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "checkout",
+            "query",
+            "matchCase",
+            "wholeWord",
+            "regex"
+          ],
+          "additionalProperties": false
+        },
+        "inspectEntries": {
+          "type": "object",
+          "properties": {
+            "checkout": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "git"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "branch": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "worktree": {
+                      "type": "string",
+                      "enum": [
+                        "main",
+                        "linked"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root",
+                    "branch",
+                    "worktree"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "none"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "vcs",
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 4096
+              },
+              "minItems": 1,
+              "maxItems": 256
+            }
+          },
+          "required": [
+            "checkout",
+            "paths"
+          ],
+          "additionalProperties": false
+        },
+        "mutate": {
+          "type": "object",
+          "properties": {
+            "installationId": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "clientId": {
+              "type": "string"
+            },
+            "checkout": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "git"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "branch": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "worktree": {
+                      "type": "string",
+                      "enum": [
+                        "main",
+                        "linked"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root",
+                    "branch",
+                    "worktree"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "none"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "vcs",
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "create-file",
+                "create-directory",
+                "move",
+                "copy",
+                "trash",
+                "import"
+              ]
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "target": {
+                    "type": "object",
+                    "properties": {
+                      "checkout": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "vcs": {
+                                "type": "string",
+                                "enum": [
+                                  "git"
+                                ]
+                              },
+                              "hostId": {
+                                "type": "string",
+                                "maxLength": 4096,
+                                "minLength": 1
+                              },
+                              "checkoutId": {
+                                "type": "string",
+                                "maxLength": 4096,
+                                "minLength": 1
+                              },
+                              "projectId": {
+                                "type": "string",
+                                "maxLength": 4096,
+                                "minLength": 1
+                              },
+                              "root": {
+                                "type": "string",
+                                "maxLength": 4096,
+                                "minLength": 1
+                              },
+                              "branch": {
+                                "type": "string",
+                                "maxLength": 4096,
+                                "minLength": 1
+                              },
+                              "worktree": {
+                                "type": "string",
+                                "enum": [
+                                  "main",
+                                  "linked"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "hostId",
+                              "checkoutId",
+                              "projectId",
+                              "root",
+                              "branch",
+                              "worktree"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "vcs": {
+                                "type": "string",
+                                "enum": [
+                                  "none"
+                                ]
+                              },
+                              "hostId": {
+                                "type": "string",
+                                "maxLength": 4096,
+                                "minLength": 1
+                              },
+                              "checkoutId": {
+                                "type": "string",
+                                "maxLength": 4096,
+                                "minLength": 1
+                              },
+                              "projectId": {
+                                "type": "string",
+                                "maxLength": 4096,
+                                "minLength": 1
+                              },
+                              "root": {
+                                "type": "string",
+                                "maxLength": 4096,
+                                "minLength": 1
+                              }
+                            },
+                            "required": [
+                              "vcs",
+                              "hostId",
+                              "checkoutId",
+                              "projectId",
+                              "root"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
+                      },
+                      "path": {
+                        "type": "string",
+                        "maxLength": 4096,
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "checkout",
+                      "path"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "identity": {
+                    "type": "string"
+                  },
+                  "directory": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "target",
+                  "identity",
+                  "directory"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 128
+            },
+            "destination": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "text": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "replacements": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "target": {
+                        "type": "object",
+                        "properties": {
+                          "checkout": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "vcs": {
+                                    "type": "string",
+                                    "enum": [
+                                      "git"
+                                    ]
+                                  },
+                                  "hostId": {
+                                    "type": "string",
+                                    "maxLength": 4096,
+                                    "minLength": 1
+                                  },
+                                  "checkoutId": {
+                                    "type": "string",
+                                    "maxLength": 4096,
+                                    "minLength": 1
+                                  },
+                                  "projectId": {
+                                    "type": "string",
+                                    "maxLength": 4096,
+                                    "minLength": 1
+                                  },
+                                  "root": {
+                                    "type": "string",
+                                    "maxLength": 4096,
+                                    "minLength": 1
+                                  },
+                                  "branch": {
+                                    "type": "string",
+                                    "maxLength": 4096,
+                                    "minLength": 1
+                                  },
+                                  "worktree": {
+                                    "type": "string",
+                                    "enum": [
+                                      "main",
+                                      "linked"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "hostId",
+                                  "checkoutId",
+                                  "projectId",
+                                  "root",
+                                  "branch",
+                                  "worktree"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "vcs": {
+                                    "type": "string",
+                                    "enum": [
+                                      "none"
+                                    ]
+                                  },
+                                  "hostId": {
+                                    "type": "string",
+                                    "maxLength": 4096,
+                                    "minLength": 1
+                                  },
+                                  "checkoutId": {
+                                    "type": "string",
+                                    "maxLength": 4096,
+                                    "minLength": 1
+                                  },
+                                  "projectId": {
+                                    "type": "string",
+                                    "maxLength": 4096,
+                                    "minLength": 1
+                                  },
+                                  "root": {
+                                    "type": "string",
+                                    "maxLength": 4096,
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "vcs",
+                                  "hostId",
+                                  "checkoutId",
+                                  "projectId",
+                                  "root"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          "path": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "checkout",
+                          "path"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "identity": {
+                        "type": "string"
+                      },
+                      "directory": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "target",
+                      "identity",
+                      "directory"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "nativeReferences": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 128
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "installationId",
+            "id",
+            "clientId",
+            "checkout",
+            "kind",
+            "sources"
+          ],
+          "additionalProperties": false
+        },
+        "operationStatus": {
+          "type": "object",
+          "properties": {
+            "installationId": {
+              "type": "string"
+            },
+            "clientId": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "installationId",
+            "clientId",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "acknowledgeOperation": {
+          "type": "object",
+          "properties": {
+            "installationId": {
+              "type": "string"
+            },
+            "clientId": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "installationId",
+            "clientId",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "saveStatus": {
+          "type": "object",
+          "properties": {
+            "installationId": {
+              "type": "string"
+            },
+            "clientId": {
+              "type": "string"
+            },
+            "requestId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "installationId",
+            "clientId",
+            "requestId"
+          ],
+          "additionalProperties": false
+        },
+        "acknowledgeSave": {
+          "type": "object",
+          "properties": {
+            "installationId": {
+              "type": "string"
+            },
+            "clientId": {
+              "type": "string"
+            },
+            "requestId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "installationId",
+            "clientId",
+            "requestId"
+          ],
+          "additionalProperties": false
+        },
+        "listOperations": {
+          "type": "object",
+          "properties": {
+            "checkout": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "git"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "branch": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "worktree": {
+                      "type": "string",
+                      "enum": [
+                        "main",
+                        "linked"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root",
+                    "branch",
+                    "worktree"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "none"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "vcs",
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "after": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "checkout",
+            "after"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "openCheckout",
+        "verifyCheckout",
+        "readFile",
+        "saveFile",
+        "listDirectory",
+        "getIgnoredPaths",
+        "gitStatus",
+        "listWorktrees",
+        "createWorktree",
+        "initializeRepository",
+        "readComparison",
+        "lookupFiles",
+        "searchText",
+        "inspectEntries",
+        "mutate",
+        "operationStatus",
+        "acknowledgeOperation",
+        "saveStatus",
+        "acknowledgeSave",
+        "listOperations"
+      ],
+      "additionalProperties": false
+    },
+    "WorkspaceHostOutputs": {
+      "type": "object",
+      "properties": {
+        "openCheckout": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "vcs": {
+                  "type": "string",
+                  "enum": [
+                    "git"
+                  ]
+                },
+                "hostId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "checkoutId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "projectId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "root": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "branch": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "worktree": {
+                  "type": "string",
+                  "enum": [
+                    "main",
+                    "linked"
+                  ]
+                }
+              },
+              "required": [
+                "hostId",
+                "checkoutId",
+                "projectId",
+                "root",
+                "branch",
+                "worktree"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "vcs": {
+                  "type": "string",
+                  "enum": [
+                    "none"
+                  ]
+                },
+                "hostId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "checkoutId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "projectId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "root": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "vcs",
+                "hostId",
+                "checkoutId",
+                "projectId",
+                "root"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "verifyCheckout": {},
+        "readFile": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "version"
+          ],
+          "additionalProperties": false
+        },
+        "saveFile": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "saved"
+                  ]
+                },
+                "disk": {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text",
+                    "version"
+                  ],
+                  "additionalProperties": false
+                },
+                "persistencePending": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "message": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "disk"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "conflict"
+                  ]
+                },
+                "disk": {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text",
+                    "version"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "kind",
+                "disk"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "listDirectory": {
+          "type": "object",
+          "properties": {
+            "entries": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "directory": {
+                    "type": "boolean"
+                  },
+                  "ignored": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "path",
+                  "directory"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "partial": {
+              "type": "boolean"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "entries",
+            "partial"
+          ],
+          "additionalProperties": false
+        },
+        "getIgnoredPaths": {
+          "type": "object",
+          "properties": {
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 4096
+              }
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "paths"
+          ],
+          "additionalProperties": false
+        },
+        "gitStatus": {
+          "type": "object",
+          "properties": {
+            "branch": {
+              "type": "string"
+            },
+            "changes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "area": {
+                    "type": "string",
+                    "enum": [
+                      "conflicted",
+                      "staged",
+                      "unstaged",
+                      "untracked"
+                    ]
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "modified",
+                      "added",
+                      "deleted",
+                      "untracked",
+                      "conflicted",
+                      "typechange"
+                    ]
+                  },
+                  "missing": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "path",
+                  "area",
+                  "kind"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "branch",
+            "changes"
+          ],
+          "additionalProperties": false
+        },
+        "listWorktrees": {
+          "type": "object",
+          "properties": {
+            "worktrees": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "root": {
+                    "type": "string",
+                    "maxLength": 4096,
+                    "minLength": 1
+                  },
+                  "branch": {
+                    "type": "string"
+                  },
+                  "main": {
+                    "type": "boolean"
+                  },
+                  "locked": {
+                    "type": "boolean"
+                  },
+                  "prunable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "root",
+                  "branch",
+                  "main",
+                  "locked",
+                  "prunable"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 1000
+            }
+          },
+          "required": [
+            "worktrees"
+          ],
+          "additionalProperties": false
+        },
+        "createWorktree": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "vcs": {
+                  "type": "string",
+                  "enum": [
+                    "git"
+                  ]
+                },
+                "hostId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "checkoutId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "projectId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "root": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "branch": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "worktree": {
+                  "type": "string",
+                  "enum": [
+                    "main",
+                    "linked"
+                  ]
+                }
+              },
+              "required": [
+                "hostId",
+                "checkoutId",
+                "projectId",
+                "root",
+                "branch",
+                "worktree"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "vcs": {
+                  "type": "string",
+                  "enum": [
+                    "none"
+                  ]
+                },
+                "hostId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "checkoutId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "projectId": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "root": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "vcs",
+                "hostId",
+                "checkoutId",
+                "projectId",
+                "root"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "initializeRepository": {
+          "type": "object",
+          "properties": {
+            "vcs": {
+              "type": "string",
+              "enum": [
+                "git"
+              ]
+            },
+            "hostId": {
+              "type": "string",
+              "maxLength": 4096,
+              "minLength": 1
+            },
+            "checkoutId": {
+              "type": "string",
+              "maxLength": 4096,
+              "minLength": 1
+            },
+            "projectId": {
+              "type": "string",
+              "maxLength": 4096,
+              "minLength": 1
+            },
+            "root": {
+              "type": "string",
+              "maxLength": 4096,
+              "minLength": 1
+            },
+            "branch": {
+              "type": "string",
+              "maxLength": 4096,
+              "minLength": 1
+            },
+            "worktree": {
+              "type": "string",
+              "enum": [
+                "main",
+                "linked"
+              ]
+            }
+          },
+          "required": [
+            "hostId",
+            "checkoutId",
+            "projectId",
+            "root",
+            "branch",
+            "worktree"
+          ],
+          "additionalProperties": false
+        },
+        "readComparison": {
+          "type": "object",
+          "properties": {
+            "original": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "working": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text",
+                    "version"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "original",
+            "title",
+            "working"
+          ],
+          "additionalProperties": false
+        },
+        "lookupFiles": {
+          "type": "object",
+          "properties": {
+            "matches": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "score": {
+                    "type": "number"
+                  },
+                  "positions": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  }
+                },
+                "required": [
+                  "path",
+                  "score",
+                  "positions"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 100
+            },
+            "history": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "score": {
+                    "type": "number"
+                  },
+                  "positions": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  }
+                },
+                "required": [
+                  "path",
+                  "score",
+                  "positions"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 100
+            },
+            "partial": {
+              "type": "boolean"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "matches",
+            "history",
+            "partial"
+          ],
+          "additionalProperties": false
+        },
+        "searchText": {
+          "type": "object",
+          "properties": {
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "matches": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "line": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "text": {
+                          "type": "string",
+                          "maxLength": 512
+                        },
+                        "ranges": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "start": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "end": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "start",
+                              "end"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "maxItems": 64
+                        },
+                        "before": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 512
+                          },
+                          "maxItems": 8
+                        },
+                        "after": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 512
+                          },
+                          "maxItems": 8
+                        }
+                      },
+                      "required": [
+                        "line",
+                        "text",
+                        "ranges",
+                        "before",
+                        "after"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "minItems": 1,
+                    "maxItems": 50
+                  }
+                },
+                "required": [
+                  "path",
+                  "matches"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 200
+            },
+            "partial": {
+              "type": "boolean"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "files",
+            "partial"
+          ],
+          "additionalProperties": false
+        },
+        "inspectEntries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "target": {
+                "type": "object",
+                "properties": {
+                  "checkout": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "vcs": {
+                            "type": "string",
+                            "enum": [
+                              "git"
+                            ]
+                          },
+                          "hostId": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "minLength": 1
+                          },
+                          "checkoutId": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "minLength": 1
+                          },
+                          "projectId": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "minLength": 1
+                          },
+                          "root": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "minLength": 1
+                          },
+                          "branch": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "minLength": 1
+                          },
+                          "worktree": {
+                            "type": "string",
+                            "enum": [
+                              "main",
+                              "linked"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "hostId",
+                          "checkoutId",
+                          "projectId",
+                          "root",
+                          "branch",
+                          "worktree"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "vcs": {
+                            "type": "string",
+                            "enum": [
+                              "none"
+                            ]
+                          },
+                          "hostId": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "minLength": 1
+                          },
+                          "checkoutId": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "minLength": 1
+                          },
+                          "projectId": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "minLength": 1
+                          },
+                          "root": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "vcs",
+                          "hostId",
+                          "checkoutId",
+                          "projectId",
+                          "root"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "path": {
+                    "type": "string",
+                    "maxLength": 4096,
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "checkout",
+                  "path"
+                ],
+                "additionalProperties": false
+              },
+              "identity": {
+                "type": "string"
+              },
+              "directory": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "target",
+              "identity",
+              "directory"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "mutate": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "clientId": {
+              "type": "string"
+            },
+            "checkout": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "git"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "branch": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "worktree": {
+                      "type": "string",
+                      "enum": [
+                        "main",
+                        "linked"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root",
+                    "branch",
+                    "worktree"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "vcs": {
+                      "type": "string",
+                      "enum": [
+                        "none"
+                      ]
+                    },
+                    "hostId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "checkoutId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    },
+                    "root": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "vcs",
+                    "hostId",
+                    "checkoutId",
+                    "projectId",
+                    "root"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "create-file",
+                "create-directory",
+                "move",
+                "copy",
+                "trash",
+                "import"
+              ]
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "completed",
+                "failed",
+                "uncertain"
+              ]
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "destination": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "completed",
+                      "failed",
+                      "uncertain"
+                    ]
+                  },
+                  "message": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "source",
+                  "outcome"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "clientId",
+            "checkout",
+            "kind",
+            "outcome",
+            "items"
+          ],
+          "additionalProperties": false
+        },
+        "operationStatus": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "clientId": {
+                  "type": "string"
+                },
+                "checkout": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "vcs": {
+                          "type": "string",
+                          "enum": [
+                            "git"
+                          ]
+                        },
+                        "hostId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "checkoutId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "projectId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "root": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "branch": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "worktree": {
+                          "type": "string",
+                          "enum": [
+                            "main",
+                            "linked"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "hostId",
+                        "checkoutId",
+                        "projectId",
+                        "root",
+                        "branch",
+                        "worktree"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "vcs": {
+                          "type": "string",
+                          "enum": [
+                            "none"
+                          ]
+                        },
+                        "hostId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "checkoutId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "projectId": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        },
+                        "root": {
+                          "type": "string",
+                          "maxLength": 4096,
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "vcs",
+                        "hostId",
+                        "checkoutId",
+                        "projectId",
+                        "root"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "create-file",
+                    "create-directory",
+                    "move",
+                    "copy",
+                    "trash",
+                    "import"
+                  ]
+                },
+                "outcome": {
+                  "type": "string",
+                  "enum": [
+                    "completed",
+                    "failed",
+                    "uncertain"
+                  ]
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "source": {
+                        "type": "string"
+                      },
+                      "destination": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "outcome": {
+                        "type": "string",
+                        "enum": [
+                          "completed",
+                          "failed",
+                          "uncertain"
+                        ]
+                      },
+                      "message": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "source",
+                      "outcome"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "message": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "clientId",
+                "checkout",
+                "kind",
+                "outcome",
+                "items"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "acknowledgeOperation": {},
+        "saveStatus": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "saved"
+                  ]
+                },
+                "disk": {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text",
+                    "version"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "kind",
+                "disk"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "conflict"
+                  ]
+                },
+                "disk": {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text",
+                    "version"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "kind",
+                "disk"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "not-started"
+                  ]
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "uncertain"
+                  ]
+                },
+                "message": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "acknowledgeSave": {},
+        "listOperations": {
+          "type": "object",
+          "properties": {
+            "operations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "sequence": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "installationId": {
+                    "type": "string"
+                  },
+                  "clientId": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "checkout": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "vcs": {
+                            "type": "string",
+                            "enum": [
+                              "git"
+                            ]
+                          },
+                          "hostId": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "minLength": 1
+                          },
+                          "checkoutId": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "minLength": 1
+                          },
+                          "projectId": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "minLength": 1
+                          },
+                          "root": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "minLength": 1
+                          },
+                          "branch": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "minLength": 1
+                          },
+                          "worktree": {
+                            "type": "string",
+                            "enum": [
+                              "main",
+                              "linked"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "hostId",
+                          "checkoutId",
+                          "projectId",
+                          "root",
+                          "branch",
+                          "worktree"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "vcs": {
+                            "type": "string",
+                            "enum": [
+                              "none"
+                            ]
+                          },
+                          "hostId": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "minLength": 1
+                          },
+                          "checkoutId": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "minLength": 1
+                          },
+                          "projectId": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "minLength": 1
+                          },
+                          "root": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "vcs",
+                          "hostId",
+                          "checkoutId",
+                          "projectId",
+                          "root"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "create-file",
+                      "create-directory",
+                      "move",
+                      "copy",
+                      "trash",
+                      "import"
+                    ]
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "source": {
+                          "type": "string"
+                        },
+                        "destination": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "outcome": {
+                          "type": "string",
+                          "enum": [
+                            "completed",
+                            "failed",
+                            "uncertain"
+                          ]
+                        },
+                        "message": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "source",
+                        "outcome"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "sequence",
+                  "installationId",
+                  "clientId",
+                  "id",
+                  "checkout",
+                  "kind",
+                  "items"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 64
+            },
+            "through": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "floor": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "epoch": {
+              "type": "string"
+            },
+            "more": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "operations",
+            "through",
+            "floor",
+            "epoch",
+            "more"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "openCheckout",
+        "verifyCheckout",
+        "readFile",
+        "saveFile",
+        "listDirectory",
+        "getIgnoredPaths",
+        "gitStatus",
+        "listWorktrees",
+        "createWorktree",
+        "initializeRepository",
+        "readComparison",
+        "lookupFiles",
+        "searchText",
+        "inspectEntries",
+        "mutate",
+        "operationStatus",
+        "acknowledgeOperation",
+        "saveStatus",
+        "acknowledgeSave",
+        "listOperations"
       ],
       "additionalProperties": false
     }

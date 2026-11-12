@@ -18,6 +18,12 @@ import {
 import { ChatHostHealthSchema } from './host-schema.ts';
 import { ProviderStateSchema } from './providers-schema.ts';
 import { socketLimits } from './socket.ts';
+import {
+  WorkspaceWatchTargetSchema,
+  WorkspaceWatchValueSchema,
+  hostInputSchemas,
+  hostOutputSchemas,
+} from './workspace-host-schema.ts';
 import type {
   SocketDelta,
   SocketSubscriptionKind,
@@ -100,11 +106,13 @@ const subscriptionValueSchemas = {
   chat: ChatSnapshotSchema,
   chatList: ChatListStateSchema,
   providerSetup: ProviderStateSchema,
+  workspace: WorkspaceWatchValueSchema,
 };
 const deltaSchemas = {
   chat: ChatDeltaSchema,
   chatList: ChatListDeltaSchema,
   providerSetup: ProviderSetupDeltaSchema,
+  workspace: Schema.Never,
 };
 
 const seq = { seq: sequence };
@@ -131,6 +139,20 @@ export const SocketClientMessageSchema = Schema.Union([
     operation: bytes(64),
     input: Schema.Unknown,
   }),
+  /**
+   * One chunk of a workspace request whose JSON (`{operation, input}`) exceeds a frame. A
+   * request's chunks are sent back to back; any other message between them is refused.
+   */
+  struct({
+    ...seq,
+    type: Schema.Literal('requestChunk'),
+    id: SocketRequestIdSchema,
+    offset: count(socketLimits.workspaceRequestBytes - 1),
+    total: Schema.Int.check(
+      Schema.isBetween({ minimum: 1, maximum: socketLimits.workspaceRequestBytes }),
+    ),
+    data: ChatContentChunkDataSchema,
+  }),
   struct({ ...seq, type: Schema.Literal('cancel'), id: SocketRequestIdSchema }),
   struct({
     ...subscription,
@@ -150,26 +172,47 @@ export const SocketClientMessageSchema = Schema.Union([
     target: ProviderSetupTargetSchema,
     ...afterSequence,
   }),
+  struct({
+    ...subscription,
+    kind: Schema.Literal('workspace'),
+    target: WorkspaceWatchTargetSchema,
+    ...afterSequence,
+  }),
   struct({ ...seq, type: Schema.Literal('unsubscribe'), subscriptionId: SocketNonceSchema }),
   struct({ ...seq, type: Schema.Literal('heartbeat') }),
 ]);
+/** A chunked request's reassembled JSON. */
+export const SocketChunkedRequestSchema = struct({
+  operation: bytes(64),
+  input: Schema.Unknown,
+});
 /** The server's first message, before authentication and without a MAC. */
 export const SocketChallengeSchema = struct({
   type: Schema.Literal('challenge'),
   protocol: Schema.Literal(chatProtocolVersion),
   challenge: SocketNonceSchema,
 });
-const chunk = {
-  offset: count(socketLimits.payloadBytes - 1),
-  total: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: socketLimits.payloadBytes })),
+const chunkOf = (limit: number) => ({
+  offset: count(limit - 1),
+  total: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: limit })),
   data: ChatContentChunkDataSchema,
-};
+});
+const chunk = chunkOf(socketLimits.payloadBytes);
 const update = { ...seq, type: Schema.Literal('update'), subscriptionId: SocketNonceSchema };
 /** What a server sends once the hello is accepted; every message carries its next `seq`. */
 export const SocketServerMessageSchema = Schema.Union([
   struct({ ...seq, type: Schema.Literal('welcome'), health: ChatHostHealthSchema }),
-  /** One chunk of a reply's JSON (`SocketReplySchema`); a reply's chunks are sent together. */
-  struct({ ...seq, type: Schema.Literal('reply'), id: SocketRequestIdSchema, ...chunk }),
+  /**
+   * One chunk of a reply's JSON (`SocketReplySchema`). A chat or daemon reply is at most
+   * `payloadBytes`; a workspace reply at most `workspaceReplyBytes`, its chunks interleaved with
+   * updates.
+   */
+  struct({
+    ...seq,
+    type: Schema.Literal('reply'),
+    id: SocketRequestIdSchema,
+    ...chunkOf(socketLimits.workspaceReplyBytes),
+  }),
   /** One chunk of a fresh snapshot, which resets the subscription at `sequence`. */
   struct({ ...update, sequence, kind: Schema.Literal('snapshot'), ...chunk }),
   /** A delta from `base`, the update before, to `sequence`. */
@@ -211,6 +254,11 @@ export const socketJsonSchemaRoots = {
   ChatSnapshot: ChatSnapshotSchema,
   ChatListState: ChatListStateSchema,
   ProviderState: ProviderStateSchema,
+  WorkspaceWatchValue: WorkspaceWatchValueSchema,
+  SocketChunkedRequest: SocketChunkedRequestSchema,
+  /** Each workspace operation's input and reply, keyed by operation name. */
+  WorkspaceHostInputs: struct(hostInputSchemas),
+  WorkspaceHostOutputs: struct(hostOutputSchemas),
 };
 
 const strict = { onExcessProperty: 'error', reportInput: false } as const;
@@ -218,6 +266,7 @@ const clientMessage = Schema.decodeUnknownSync(SocketClientMessageSchema, strict
 const serverMessage = Schema.decodeUnknownSync(SocketServerMessageSchema, strict);
 const challenge = Schema.decodeUnknownSync(SocketChallengeSchema, strict);
 const reply = Schema.decodeUnknownSync(SocketReplySchema, strict);
+const chunkedRequest = Schema.decodeUnknownSync(SocketChunkedRequestSchema, strict);
 const values = Object.fromEntries(
   Object.entries(subscriptionValueSchemas).map(([kind, schema]) => [
     kind,
@@ -254,6 +303,8 @@ export const decodeSocketChallenge = decoding(
   'Incompatible',
 );
 export const decodeSocketReply = decoding(reply, 'Incompatible');
+/** A server decodes the JSON a client's request chunks reassemble to. */
+export const decodeSocketChunkedRequest = decoding(chunkedRequest, 'InvalidInput');
 export function decodeSocketDelta<K extends SocketSubscriptionKind>(
   kind: K,
   value: unknown,

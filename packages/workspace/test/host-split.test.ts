@@ -155,6 +155,17 @@ test('a save whose reply is lost resolves through saveStatus, and one that never
     assert.equal(restored.state.drafts[0].text, 'unsent text');
     assert.equal(restored.state.drafts[0].disk.text, 'committed text');
     assert.equal(readFileSync(join(h.root, 'file.txt'), 'utf8'), 'committed text');
+    // The host told the client `not-started`, so a delayed copy of that request never runs.
+    const late = await Effect.runPromise(
+      Effect.flip(
+        host.saveFile({
+          installationId: 'alice',
+          ...save('never-arrived', 'unsent text', resolved.state.drafts[0].disk.version),
+        }),
+      ),
+    );
+    assert.equal(late.code, 'Conflict');
+    assert.equal(readFileSync(join(h.root, 'file.txt'), 'utf8'), 'committed text');
   } finally {
     await h.close();
   }

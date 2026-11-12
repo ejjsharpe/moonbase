@@ -4,12 +4,20 @@ import { isDeepStrictEqual } from 'node:util';
 import { connect, type AddressInfo } from 'node:net';
 import { createServer } from 'node:http';
 import { test, type TestContext } from 'node:test';
-import { Effect, Exit, Scope } from 'effect';
+import { Effect, Exit, Queue, Scope, Stream, type Cause } from 'effect';
 import { GenerationTask, createRegistry, defineExtension, hook } from '@earendil-works/pi-durable';
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
 import type { ChatClient, ChatListUpdate, ChatSnapshot } from '@moonbase/contracts/chat';
 import type { DaemonClient } from '@moonbase/contracts/daemon';
 import type { ProviderState } from '@moonbase/contracts/providers';
+import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
+import type {
+  HostCommand,
+  HostInput,
+  HostOutput,
+  WorkspaceHostClient,
+} from '@moonbase/contracts/workspace-host';
+import { maximumFileBytes, type WorkspaceEvent } from '@moonbase/contracts/workspace';
 import { socketLimits, socketPath } from '@moonbase/contracts/socket';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import {
@@ -19,7 +27,12 @@ import {
   type ChatHostHealth,
 } from '@moonbase/contracts/host';
 import { checkHostHealth, healthDomain } from '@moonbase/ssh/host-health';
-import { localDaemonCapabilities, serveChat, type SocketSources } from '../src/server.ts';
+import {
+  localDaemonCapabilities,
+  makeWorkspaceClient,
+  serveChat,
+  type SocketSources,
+} from '../src/server.ts';
 import { connectDaemonSocket } from '../src/socket-client.ts';
 import { createSocketServer } from '../src/socket-server.ts';
 import {
@@ -151,7 +164,12 @@ const emitter = () => {
 async function serve(
   t: TestContext,
   client: ChatClient,
-  options: { daemon?: DaemonClient; sources?: Partial<SocketSources>; clock?: SocketClock } = {},
+  options: {
+    daemon?: DaemonClient;
+    sources?: Partial<SocketSources>;
+    clock?: SocketClock;
+    workspace?: WorkspaceHostClient;
+  } = {},
 ) {
   const token = P.nonce(),
     scope = Effect.runSync(Scope.make());
@@ -167,6 +185,7 @@ async function serve(
           ...options.sources,
         },
         ...(options.clock ? { clock: options.clock } : {}),
+        ...(options.workspace ? { workspace: options.workspace } : {}),
       },
     ).pipe(Effect.provideService(Scope.Scope, scope)),
   );
@@ -1103,4 +1122,408 @@ test('daemon requests are bound to this host and their request ID; a substituted
     assert.equal(failures[0]!.code, 'Incompatible');
     assert.equal(values.length, updates.length - 1);
   }
+});
+
+// The workspace file host over the socket: chunked requests, bounded replies and its watch.
+const checkout = {
+  vcs: 'none',
+  hostId: host.hostId,
+  checkoutId: 'checkout-1',
+  projectId: 'project-1',
+  root: '/work',
+} as const;
+const fileTarget = { checkout, path: 'a.txt' };
+const chunkBytes = socketLimits.chunkBytes;
+type Handler = (input: never, signal?: AbortSignal) => Promise<unknown>;
+/** A file host whose operations the test answers; unanswered ones fail. */
+function controlledWorkspace() {
+  const handlers: Partial<Record<HostCommand, Handler>> = {},
+    calls: HostCommand[] = [];
+  const client: WorkspaceHostClient = {
+    command: async <K extends HostCommand>(
+      operation: K,
+      input: HostInput<K>,
+      options?: { signal?: AbortSignal },
+    ) => {
+      calls.push(operation);
+      const handler = handlers[operation];
+      if (!handler)
+        throw new ApplicationError({ code: 'Unavailable', message: 'Unexpected operation.' });
+      return (await handler(input as never, options?.signal)) as HostOutput<K>;
+    },
+    watch: () => () => Promise.resolve(),
+  };
+  return { client, handlers, calls };
+}
+const saveInput = (text: string, requestId = 'save-1') => ({
+  installationId: 'install',
+  clientId: 'client',
+  requestId,
+  target: fileTarget,
+  text,
+  expectedVersion: 'v0',
+});
+/** The frames of a request body sent as chunks. */
+const chunkMessages = (id: string, body: Buffer, total = body.length) =>
+  Array.from({ length: Math.ceil(body.length / chunkBytes) }, (_, index) => ({
+    type: 'requestChunk',
+    id,
+    offset: index * chunkBytes,
+    total,
+    data: body.subarray(index * chunkBytes, (index + 1) * chunkBytes).toString('base64'),
+  }));
+const padded = (size: number) =>
+  Buffer.from(JSON.stringify({ operation: 'readFile', input: { padding: 'x'.repeat(size) } }));
+/** An authenticated raw connection to a server that serves `workspace`, sealing frames in order. */
+async function workspaceConnection(t: TestContext, workspace: WorkspaceHostClient) {
+  const source = controlledClient(),
+    clock = manualClock();
+  const { token, port } = await serve(t, source.client, { clock, workspace });
+  const raw = await rawSocket(port);
+  const { keys } = await rawHello(raw, token);
+  const welcome = await readSealed(raw, keys);
+  assert(welcome !== 'closed' && welcome !== 'timeout' && welcome.type === 'welcome');
+  assert((welcome.health as { capabilities: string[] }).capabilities.includes('workspace-v1'));
+  let seq = 1;
+  const seal = (message: Record<string, unknown>) =>
+    sealSocketMessage(keys.client, { ...message, seq: seq++ });
+  return {
+    raw,
+    keys,
+    source,
+    seal,
+    send: (message: Record<string, unknown>) => raw.send(seal(message)),
+  };
+}
+
+const chunkFaults: Record<
+  string,
+  (c: Awaited<ReturnType<typeof workspaceConnection>>, body: Buffer) => void
+> = {
+  tampered: (c, body) => {
+    const frame = c.seal(chunkMessages('r', body)[0]!);
+    frame[40] ^= 1;
+    c.raw.send(frame);
+  },
+  replayed: (c, body) => {
+    const frame = c.seal(chunkMessages('r', body)[0]!);
+    c.raw.send(frame);
+    c.raw.send(frame);
+  },
+  reordered: (c, body) => c.send(chunkMessages('r', body)[1]!),
+  interleaved: (c, body) => {
+    c.send(chunkMessages('r', body)[0]!);
+    c.send({ type: 'heartbeat' });
+  },
+  oversized: (c, body) =>
+    c.send({
+      ...chunkMessages('r', body)[0]!,
+      data: Buffer.alloc(chunkBytes + 1, 1).toString('base64'),
+    }),
+  'over its total bound': (c, body) =>
+    c.send({
+      ...chunkMessages('r', body)[0]!,
+      total: socketLimits.workspaceRequestBytes + 1,
+    }),
+};
+for (const [name, fault] of Object.entries(chunkFaults))
+  test(`a ${name} request chunk closes the connection`, async (t) => {
+    const connection = await workspaceConnection(t, controlledWorkspace().client);
+    fault(connection, padded(chunkBytes * 2));
+    await assertRefused(connection.raw);
+  });
+
+test('a request past 32 MiB of chunked input in flight closes the connection', async (t) => {
+  const { client, handlers } = controlledWorkspace(),
+    held = Promise.withResolvers<never>();
+  handlers.getIgnoredPaths = () => held.promise;
+  t.after(() => held.reject(Error('done')));
+  const connection = await workspaceConnection(t, client);
+  const body = Buffer.from(
+    JSON.stringify({
+      operation: 'getIgnoredPaths',
+      input: { checkout, path: '', paths: Array.from({ length: 3900 }, () => 'x'.repeat(4000)) },
+    }),
+  );
+  assert(body.length < socketLimits.workspaceRequestBytes);
+  // Two fit; each stays in flight until the host answers.
+  for (const id of ['a', 'b'])
+    for (const message of chunkMessages(id, body)) connection.send(message);
+  for (const message of chunkMessages('c', body)) connection.send(message);
+  await assertRefused(connection.raw);
+});
+
+test('a 2 MiB file saves and reads back through chunks, a reply over its bound is refused unsent and a host without the capability is refused locally', async (t) => {
+  const stored = new Map<string, string>(),
+    { client, handlers, calls } = controlledWorkspace();
+  handlers.saveFile = async (input: ReturnType<typeof saveInput>) => {
+    stored.set(input.target.path, input.text);
+    return { kind: 'saved', disk: { text: input.text, version: 'v1' } };
+  };
+  handlers.readFile = async (input: { path: string }) =>
+    input.path === 'huge'
+      ? { text: 'x'.repeat(socketLimits.workspaceReplyBytes + 1), version: 'v1' }
+      : { text: stored.get(input.path)!, version: 'v1' };
+  const { endpoint } = await serve(t, controlledClient().client, { workspace: client });
+  const socket = await open(t, endpoint);
+  const text = 'line "quoted"\n'.repeat(Math.floor((2 * 1024 * 1024) / 14));
+  assert(Buffer.byteLength(text) <= 2 * 1024 * 1024);
+  const saved = await socket.request('saveFile', saveInput(text));
+  assert.equal(saved.kind, 'saved');
+  assert.equal((await socket.request('readFile', fileTarget)).text, text);
+  // The host's reply is refused before any of it is sent; the connection carries on.
+  await assert.rejects(socket.request('readFile', { checkout, path: 'huge' }), {
+    code: 'InvalidInput',
+  });
+  assert.equal((await socket.request('readFile', fileTarget)).text, text);
+
+  // A daemon that composes no file host advertises none; its clients send nothing to it.
+  const bare = await serve(t, controlledClient().client);
+  const plain = await open(t, bare.endpoint);
+  assert(!plain.health.capabilities.includes('workspace-v1'));
+  const before = calls.length;
+  await assert.rejects(plain.request('readFile', fileTarget), { code: 'Incompatible' });
+  assert.equal(calls.length, before);
+  // A chunk to such a daemon is a protocol violation.
+  const raw = await rawSocket(bare.port);
+  const { keys } = await rawHello(raw, bare.token);
+  await readSealed(raw, keys);
+  raw.send(sealSocketMessage(keys.client, { seq: 1, ...chunkMessages('r', padded(100))[0]! }));
+  await assertRefused(raw);
+});
+
+test('a workspace watch follows changes and operations, resets after a reconnect, and counts apart from chat subscriptions', async (t) => {
+  const watchers = new Set<Queue.Queue<WorkspaceEvent, Cause.Done>>();
+  let through = 0;
+  const service = {
+    listOperations: () =>
+      Effect.succeed({ operations: [], through, floor: 0, epoch: 'epoch', more: false }),
+    watch: () =>
+      Stream.callback<WorkspaceEvent>((queue) =>
+        Effect.acquireRelease(
+          Effect.sync(() => {
+            watchers.add(queue);
+            Queue.offerUnsafe(queue, { checkout, paths: [], ready: true });
+          }),
+          () => Effect.sync(() => void watchers.delete(queue)),
+        ),
+      ),
+  } as unknown as WorkspaceHostServiceShape;
+  const source = controlledClient();
+  const { endpoint } = await serve(t, source.client, { workspace: makeWorkspaceClient(service) });
+  const first = await open(t, endpoint);
+  const values: { ready: boolean; revision: number; operations: number }[] = [];
+  const subscription = first.subscribe(
+    'workspace',
+    { checkout },
+    { receive: (value) => values.push(value), onError: () => {} },
+  );
+  await until(async () => values.at(-1)?.ready, Boolean);
+  through = 3;
+  for (const queue of watchers) Queue.offerUnsafe(queue, { checkout, paths: [''] });
+  const changed = await until(
+    async () => values.at(-1),
+    (value) => value?.operations === 3,
+  );
+  assert(changed!.revision > 1);
+
+  // A resumed workspace subscription always starts again from a snapshot.
+  const state = subscription.state!;
+  await first.close();
+  const second = await open(t, endpoint);
+  const updates: string[] = [];
+  second.subscribe(
+    'workspace',
+    { checkout },
+    { receive: (_value, update) => updates.push(update), onError: () => {} },
+    state,
+  );
+  await until(async () => updates.length, Boolean);
+  assert.equal(updates[0], 'snapshot');
+
+  // 64 workspace subscriptions fit beside the chat ones; the next is refused.
+  const refused: string[] = [];
+  for (let index = 0; index < socketLimits.workspaceSubscriptions; index++)
+    second.subscribe('workspace', { checkout }, { receive: () => {}, onError: () => {} });
+  second.subscribe(
+    'workspace',
+    { checkout },
+    { receive: () => {}, onError: (error) => refused.push(error.code) },
+  );
+  await until(async () => refused.length, Boolean);
+  assert.equal(refused[0], 'Unavailable');
+  const chat: string[] = [];
+  second.subscribe('chat', target, { receive: () => chat.push('ok'), onError: () => {} });
+  await until(async () => chat.length, Boolean);
+});
+
+test('a mutation whose reply is lost is Uncertain, runs to completion without a signal, and its outcome is read back by operationStatus', async (t) => {
+  const { client, handlers } = controlledWorkspace(),
+    gate = Promise.withResolvers<void>(),
+    outcomes = new Map<string, unknown>();
+  let signal: AbortSignal | undefined | 'none' = 'none';
+  const operation = {
+    installationId: 'install',
+    id: 'op-1',
+    clientId: 'client',
+    checkout,
+    kind: 'create-file' as const,
+    sources: [],
+    destination: 'new.txt',
+    text: 'x',
+  };
+  handlers.mutate = async (_input, received) => {
+    signal = received;
+    await gate.promise;
+    const result = {
+      id: 'op-1',
+      clientId: 'client',
+      checkout,
+      kind: 'create-file',
+      outcome: 'completed',
+      items: [],
+    };
+    outcomes.set('op-1', result);
+    return result;
+  };
+  handlers.operationStatus = async () => outcomes.get('op-1') ?? null;
+  const { endpoint } = await serve(t, controlledClient().client, { workspace: client });
+  const first = await open(t, endpoint);
+  const lost = first.request('mutate', operation);
+  const rejected = assert.rejects(lost, { code: 'Uncertain' });
+  await until(
+    async () => signal,
+    (value) => value !== 'none',
+  );
+  await first.close();
+  await rejected;
+  // The connection closing does not cancel the mutation.
+  assert.equal(signal, undefined);
+  gate.resolve();
+  const second = await open(t, endpoint);
+  const status = await until(
+    () =>
+      second.request('operationStatus', {
+        installationId: 'install',
+        clientId: 'client',
+        id: 'op-1',
+      }),
+    Boolean,
+  );
+  assert.equal(status!.outcome, 'completed');
+});
+
+test('large workspace replies and chat updates interleave on one connection and all arrive', async (t) => {
+  const { client, handlers } = controlledWorkspace(),
+    source = controlledClient();
+  const big = (letter: string) => ({
+    text: letter.repeat(maximumFileBytes),
+    version: `v-${letter}`,
+  });
+  const gate = Promise.withResolvers<void>();
+  handlers.readFile = async (input: { path: string }) => {
+    await gate.promise;
+    return big(input.path.slice(0, 1));
+  };
+  const { endpoint } = await serve(t, source.client, { clock: manualClock(), workspace: client });
+  const socket = await open(t, endpoint);
+  const failures: ApplicationError[] = [],
+    texts: (string | undefined)[] = [];
+  socket.subscribe('chat', target, {
+    receive: (value) => texts.push(value.run?.text),
+    onError: (error) => failures.push(error),
+  });
+  await until(async () => texts.length, Boolean);
+  // Three replies and the chat updates share the connection while the daemon's buffer is full.
+  const reads = ['a.txt', 'b.txt', 'c.txt'].map((path) =>
+    socket.request('readFile', { ...fileTarget, path }),
+  );
+  gate.resolve();
+  let streaming = true,
+    published = 0;
+  const stream = () => {
+    if (!streaming) return;
+    source.publish(snapshotOf(`update ${++published}`, 30));
+    setImmediate(stream);
+  };
+  stream();
+  const results = await Promise.all(reads);
+  streaming = false;
+  assert.deepEqual(
+    results.map((result) => [result.version, result.text.length]),
+    [
+      ['v-a', maximumFileBytes],
+      ['v-b', maximumFileBytes],
+      ['v-c', maximumFileBytes],
+    ],
+  );
+  assert(texts.length > 1, 'no chat update arrived during the replies');
+  // The stream still delivers after the replies, and nothing failed along the way.
+  source.publish(snapshotOf('last', 30));
+  await until(
+    async () => texts.at(-1),
+    (text) => text === 'last',
+  );
+  assert.deepEqual(failures, []);
+});
+
+test('the daemon refuses a workspace request or watch for another host, and no handler runs', async (t) => {
+  const { client, calls } = controlledWorkspace();
+  const { endpoint } = await serve(t, controlledClient().client, { workspace: client });
+  const socket = await open(t, endpoint);
+  const foreign = { ...checkout, hostId: 'other-host' };
+  await assert.rejects(socket.request('readFile', { checkout: foreign, path: 'a.txt' }), {
+    code: 'Unauthorized',
+  });
+  const failures: string[] = [];
+  socket.subscribe(
+    'workspace',
+    { checkout: foreign },
+    { receive: () => {}, onError: (error) => failures.push(error.code) },
+  );
+  await until(async () => failures.length, Boolean);
+  assert.deepEqual(failures, ['Unauthorized']);
+  assert.deepEqual(calls, []);
+});
+
+test('a cancelled chunked request frees its input when the daemon answers, and a request waiting for room sends nothing when cancelled', async (t) => {
+  const { client, handlers } = controlledWorkspace();
+  let calls = 0;
+  const answered: AbortSignal[] = [];
+  handlers.getIgnoredPaths = (_input, signal) => {
+    if (++calls > 2) return Promise.resolve({ paths: [] });
+    answered.push(signal!);
+    return new Promise((_resolve, reject) =>
+      signal!.addEventListener('abort', () =>
+        reject(new ApplicationError({ code: 'Cancelled', message: 'Cancelled.' })),
+      ),
+    );
+  };
+  const { endpoint } = await serve(t, controlledClient().client, { workspace: client });
+  const socket = await open(t, endpoint);
+  // About 11.6 MB each: two are in flight, a third waits for room under 32 MiB.
+  const input = () => ({
+    checkout,
+    path: '',
+    paths: Array.from({ length: 2900 }, () => 'x'.repeat(4000)),
+  });
+  const controllers = [new AbortController(), new AbortController(), new AbortController()];
+  const requests = controllers.map((controller) =>
+    socket.request('getIgnoredPaths', input(), { signal: controller.signal }),
+  );
+  const settled = requests.map((request) => request.catch((error: ApplicationError) => error));
+  await until(
+    async () => answered.length,
+    (count) => count === 2,
+  );
+  // Cancelled while waiting: nothing was sent, so the daemon never runs it.
+  controllers[2]!.abort();
+  assert.equal(((await settled[2]) as ApplicationError).code, 'Cancelled');
+  controllers[0]!.abort();
+  controllers[1]!.abort();
+  assert.equal(((await settled[0]) as ApplicationError).code, 'Cancelled');
+  assert.equal(((await settled[1]) as ApplicationError).code, 'Cancelled');
+  // The late replies release the input, so the next request is not left waiting.
+  assert.deepEqual(await socket.request('getIgnoredPaths', input()), { paths: [] });
+  assert.equal(calls, 3);
 });

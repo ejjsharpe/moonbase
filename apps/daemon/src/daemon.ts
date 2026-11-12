@@ -14,6 +14,7 @@ import {
 } from '@moonbase/chat-runtime/credentials';
 import { WorkspaceHostLive } from '@moonbase/workspace';
 import { WorkspaceHostService, type WorkspaceHostServiceShape } from '@moonbase/contracts/services';
+import type { WorkspaceHostClient } from '@moonbase/contracts/workspace-host';
 import { createFolderApprovals, createRootFolders } from '@moonbase/daemon-protocol/folders';
 import type { DaemonSettings } from '@moonbase/chat-runtime/host-configuration';
 import { createLocalModels } from '@moonbase/chat-runtime/local-models';
@@ -22,6 +23,7 @@ import {
   hostDaemonCapabilities,
   localDaemonCapabilities,
   makeDaemonClient,
+  makeWorkspaceClient,
   serveChat,
   type SocketSources,
 } from '@moonbase/daemon-protocol/server';
@@ -87,12 +89,6 @@ export type DaemonOptions = {
    * daemon composes no workspace and chats are served as before.
    */
   filesystemHelper?: string;
-  /**
-   * Receives the running file host, guarded as the wire will serve it: calls count as use, and are
-   * refused once the daemon stops. Called once, before the daemon listens; test entries drive the
-   * host through it until the wire carries it.
-   */
-  receiveWorkspace?(host: WorkspaceHostServiceShape): void;
   /** Identifies this daemon's code in `endpoint.json`, so a client can tell an outdated one. */
   build?: string;
   /** Wraps the chat client the daemon serves; test entries count and hold requests with it. */
@@ -184,14 +180,15 @@ async function serveDaemon(
       if (stopping) closeAdmissions();
       const serveModes = async (host: WorkspaceHostServiceShape | undefined) => {
         const wrap = options.wrapChat ?? ((client: ChatClient) => client);
-        const exposeWorkspace = (monitor?: IdleMonitor) => {
-          if (host)
-            options.receiveWorkspace?.(
-              guardWorkspace(host, { isStopping: () => stopping, idle: monitor }),
-            );
-        };
+        // The wire serves the file host guarded: calls count as use and are refused once the
+        // daemon stops. Without a host the daemon advertises no workspace.
+        const exposeWorkspace = (monitor?: IdleMonitor) =>
+          host
+            ? makeWorkspaceClient(
+                guardWorkspace(host, { isStopping: () => stopping, idle: monitor }),
+              )
+            : undefined;
         if (settings.mode === 'host') {
-          exposeWorkspace();
           // A host serves remote clients on its configured port and never idles out.
           await serve(
             runtime,
@@ -200,6 +197,7 @@ async function serveDaemon(
             makeDaemonClient(runtime),
             hostDaemonCapabilities,
             sources,
+            exposeWorkspace(),
           );
         } else {
           idle = createIdleMonitor({
@@ -213,7 +211,6 @@ async function serveDaemon(
             },
           });
           if (stopping) idle.stop();
-          exposeWorkspace(idle);
           await serve(
             runtime,
             trackClientUse(wrap(makeChatClient(runtime)), idle),
@@ -232,6 +229,7 @@ async function serveDaemon(
                 };
               },
             },
+            exposeWorkspace(idle),
           );
         }
       };
@@ -309,6 +307,7 @@ async function serveDaemon(
     daemon: DaemonClient,
     capabilities: readonly ChatHostCapability[],
     sources: SocketSources,
+    workspace: WorkspaceHostClient | undefined,
   ) {
     // A daemon told to stop while starting never listens or announces itself.
     if (stopping) return;
@@ -323,7 +322,7 @@ async function serveDaemon(
             refuseWhileStopping(client, refusing),
             refuseDaemonWhileStopping(daemon, refusing),
             capabilities,
-            { sources },
+            { sources, ...(workspace ? { workspace } : {}) },
           );
           listening = Number(new URL(server.origin).port);
           if (!stopping)

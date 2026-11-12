@@ -8,6 +8,13 @@ import {
   isDaemonMutation,
 } from '@moonbase/contracts/daemon-schema';
 import { chatHostCapabilities, type ChatHostHealth } from '@moonbase/contracts/host';
+import type { HostCommand, HostInput, HostOutput } from '@moonbase/contracts/workspace-host';
+import {
+  decodeHostInput,
+  decodeHostOutput,
+  isHostCommand,
+  isHostMutation,
+} from '@moonbase/contracts/workspace-host-schema';
 import { chatReplyErrorCodes } from '@moonbase/contracts/chat-schema';
 import type { CommandOptions } from '@moonbase/contracts/common';
 import type { ChatHostEndpoint } from '@moonbase/contracts/services';
@@ -34,24 +41,28 @@ import * as V from './validation.ts';
 import {
   deriveSocketKeys,
   openSocketMessage,
-  PayloadAssembler,
+  PayloadReassembly,
   sealSocketMessage,
   systemSocketClock,
   type SocketClock,
   type SocketKeys,
 } from './socket-protocol.ts';
 
-export type SocketOperation = ChatCommand | DaemonCommand;
+export type SocketOperation = ChatCommand | DaemonCommand | HostCommand;
 export type SocketInput<K extends SocketOperation> = K extends ChatCommand
   ? ChatInput<K>
   : K extends DaemonCommand
     ? DaemonInput<K>
-    : never;
+    : K extends HostCommand
+      ? HostInput<K>
+      : never;
 export type SocketOutput<K extends SocketOperation> = K extends ChatCommand
   ? ChatOutput<K>
   : K extends DaemonCommand
     ? DaemonOutput<K>
-    : never;
+    : K extends HostCommand
+      ? HostOutput<K>
+      : never;
 /** Where a subscription stood: given to a new connection's `subscribe`, it resumes from there. */
 export type SocketSubscriptionState<K extends SocketSubscriptionKind> = {
   subscriptionId: string;
@@ -110,7 +121,8 @@ export function decodeErrorEnvelope(
   try {
     const record = V.object(error);
     const code = chatReplyErrorCodes.find((value) => value === record.code);
-    if (code && isDaemonCommand(operation)) return P.daemonFailure(code, record.reason);
+    if (code && (isDaemonCommand(operation) || isHostCommand(operation)))
+      return P.daemonFailure(code, record.reason);
     return code && publicFailure(code, operation);
   } catch {
     return undefined;
@@ -154,7 +166,28 @@ export function connectDaemonSocket(
     timer: unknown,
     nextId = 0,
     reason: ApplicationError | undefined;
-  const assembler = new PayloadAssembler();
+  const assembler = new PayloadReassembly();
+  // Chunked workspace requests hold their input until answered; the daemon closes a connection
+  // that holds more than `workspaceInFlightBytes`, so a request that would pass it waits.
+  let chunkedInFlight = 0;
+  const waiting: (() => boolean)[] = [];
+  const acquire = (bytes: number) =>
+    new Promise<void>((resolve) => {
+      const take = () => {
+        if (chunkedInFlight + bytes > socketLimits.workspaceInFlightBytes) return false;
+        chunkedInFlight += bytes;
+        resolve();
+        return true;
+      };
+      if (!waiting.length && take()) return;
+      waiting.push(take);
+    });
+  const release = (bytes: number) => {
+    chunkedInFlight -= bytes;
+    while (waiting.length && waiting[0]!()) waiting.shift();
+  };
+  /** Input a cancelled chunked request holds until the daemon's reply to it arrives. */
+  const abandoned = new Map<string, number>();
   type Pending = {
     operation: SocketOperation;
     mutation: boolean;
@@ -229,9 +262,21 @@ export function connectDaemonSocket(
     if (message.type === 'heartbeat') return;
     if (message.type === 'welcome') return V.fail('Incompatible', 'Unexpected welcome.');
     if (message.type === 'reply') {
-      const done = assembler.push(`reply:${message.id}`, message);
-      if (!done) return;
       const pending = requests.get(message.id);
+      // Only a workspace reply, or the late reply to a cancelled one, may exceed a chat reply's bound.
+      const done = assembler.push(
+        `reply:${message.id}`,
+        message,
+        (pending && isHostCommand(pending.operation)) || abandoned.has(message.id)
+          ? socketLimits.workspaceReplyBytes
+          : socketLimits.payloadBytes,
+      );
+      if (!done) return;
+      const held = abandoned.get(message.id);
+      if (held !== undefined) {
+        abandoned.delete(message.id);
+        release(held);
+      }
       if (!pending) return;
       requests.delete(message.id);
       let reply: ReturnType<typeof decodeSocketReply>;
@@ -247,7 +292,8 @@ export function connectDaemonSocket(
         );
       return;
     }
-    if (assembler.partial && message.kind !== 'snapshot')
+    // A delta cannot follow a snapshot of its own subscription that is still arriving.
+    if (message.kind !== 'snapshot' && assembler.partial(`update:${message.subscriptionId}:`))
       V.fail('Incompatible', 'Socket payload was interrupted.');
     const subscription = subscriptions.get(message.subscriptionId);
     if (message.kind === 'error') {
@@ -353,9 +399,17 @@ export function connectDaemonSocket(
     request(operation, input, requestOptions) {
       return new Promise((resolve, reject) => {
         if (reason) return reject(reason);
-        let decoded: unknown, mutation: boolean, capability: string;
+        let decoded: unknown,
+          mutation: boolean,
+          capability: string,
+          chunked = false,
+          total = 0;
         try {
-          if (isDaemonCommand(operation)) {
+          if (isHostCommand(operation)) {
+            decoded = decodeHostInput(operation, input);
+            mutation = isHostMutation(operation);
+            capability = chatHostCapabilities.workspace;
+          } else if (isDaemonCommand(operation)) {
             decoded = decodeDaemonInput(operation, input);
             mutation = isDaemonMutation(operation);
             capability = daemonCommandCapabilities[operation];
@@ -368,17 +422,24 @@ export function connectDaemonSocket(
           }
           if (!health!.capabilities.includes(capability as never))
             V.fail('Incompatible', 'The daemon does not offer this feature.');
+          const bytes = Buffer.byteLength(JSON.stringify({ operation, input: decoded }));
           if (
-            Buffer.byteLength(JSON.stringify({ operation, input: decoded })) >
-            P.maximumChatRequestBytes
+            bytes >
+            (isHostCommand(operation)
+              ? socketLimits.workspaceRequestBytes
+              : P.maximumChatRequestBytes)
           )
-            V.fail('InvalidInput', 'Chat input exceeds its transport limit.');
+            V.fail('InvalidInput', 'Request input exceeds its transport limit.');
+          // A workspace request over a frame is sent as chunks; a chat one never is.
+          chunked = isHostCommand(operation) && bytes + 288 > socketLimits.frameBytes;
+          total = bytes;
           if (requestOptions?.signal?.aborted) V.fail('Cancelled', 'The request was cancelled.');
         } catch (error) {
           return reject(error);
         }
         const id = String(nextId++);
         const check = (value: unknown) => {
+          if (isHostCommand(operation)) return decodeHostOutput(operation, value);
           if (isDaemonCommand(operation)) {
             const output = decodeDaemonOutput(operation, value);
             const requestId = (decoded as { requestId?: string }).requestId;
@@ -391,19 +452,30 @@ export function connectDaemonSocket(
           }
           return V.output(operation as ChatCommand, value, decoded as never);
         };
+        // What a chunked request holds of the connection's in-flight input, until it settles.
+        let charged = 0;
         const abort = () => {
           if (!requests.has(id) || mutation) return;
           requests.delete(id);
+          // The daemon holds a cancelled request's input until it replies.
+          // A chunked request still waiting for room sent nothing, so the daemon knows no id.
+          const unseen = chunked && charged === 0;
+          if (isHostCommand(operation) && !unseen) abandoned.set(id, charged);
+          charged = 0;
           try {
-            send({ type: 'cancel', id });
+            if (!unseen) send({ type: 'cancel', id });
           } catch {}
           reject(
             new ApplicationError({ code: 'Cancelled', message: 'The request was cancelled.' }),
           );
         };
         requestOptions?.signal?.addEventListener('abort', abort, { once: true });
-        const done = () => requestOptions?.signal?.removeEventListener('abort', abort);
-        requests.set(id, {
+        const done = () => {
+          requestOptions?.signal?.removeEventListener('abort', abort);
+          release(charged);
+          charged = 0;
+        };
+        const pending: Pending = {
           operation,
           mutation,
           resolve: (value) => {
@@ -418,14 +490,34 @@ export function connectDaemonSocket(
             done();
             reject(error);
           },
+        };
+        requests.set(id, pending);
+        const transmit = () => {
+          try {
+            if (!chunked) return send({ type: 'request', id, operation, input: decoded });
+            const bytes = Buffer.from(JSON.stringify({ operation, input: decoded }));
+            // Back to back, so nothing else is sent between them.
+            for (let offset = 0; offset < bytes.length; offset += socketLimits.chunkBytes)
+              send({
+                type: 'requestChunk',
+                id,
+                offset,
+                total: bytes.length,
+                data: bytes.subarray(offset, offset + socketLimits.chunkBytes).toString('base64'),
+              });
+          } catch {
+            requests.delete(id);
+            done();
+            reject(unavailable());
+          }
+        };
+        if (!chunked) return transmit();
+        void acquire(total).then(() => {
+          // A request that ended while it waited sends nothing.
+          if (requests.get(id) !== pending) return release(total);
+          charged = total;
+          transmit();
         });
-        try {
-          send({ type: 'request', id, operation, input: decoded });
-        } catch {
-          requests.delete(id);
-          done();
-          reject(unavailable());
-        }
       });
     },
     subscribe(kind, target, handlers, resume) {

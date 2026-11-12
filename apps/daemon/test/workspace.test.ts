@@ -3,9 +3,13 @@ import { execFileSync } from 'node:child_process';
 import { chmod, mkdir, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { Effect } from 'effect';
+import { Effect, Fiber, Layer, ManagedRuntime, Stream } from 'effect';
 import { createKeyFileSource } from '@moonbase/chat-runtime/credentials';
-import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
+import { WorkspaceHostService } from '@moonbase/contracts/services';
+import { makeConnectionClient } from '@moonbase/application/runtime/clients';
+import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
+import { RemoteWorkspaceHostLive } from '@moonbase/daemon-protocol/remote';
+import { connectDaemonSocket } from '@moonbase/daemon-protocol/socket';
 import { runDaemon, type DaemonExit } from '../src/daemon.ts';
 import { findFilesystemHelper } from '../src/workspace.ts';
 import {
@@ -35,8 +39,8 @@ const gone = (pid: number) => {
 
 /**
  * Runs a daemon in this process on `root/data` with faux providers and hands back the file host it
- * serves, as a test-only client. `settings` is written to `daemon.json` the first time. Aborting
- * is what SIGTERM does.
+ * serves, as a client reaches it: `RemoteWorkspaceHostLive` over the daemon's WebSocket.
+ * `settings` is written to `daemon.json` the first time. Aborting is what SIGTERM does.
  */
 async function startDaemon(
   root: string,
@@ -57,7 +61,6 @@ async function startDaemon(
   if (settings)
     await writeFile(join(directory, 'daemon.json'), JSON.stringify(settings), { mode: 0o600 });
   await writeFile(join(directory, 'faux.json'), '{}');
-  const host = Promise.withResolvers<WorkspaceHostServiceShape>();
   const ready = Promise.withResolvers<void>();
   let settled: DaemonExit | Error | undefined;
   const running = runDaemon({
@@ -66,7 +69,6 @@ async function startDaemon(
     ready: () => ready.resolve(),
     closeClaudeCode: async () => {},
     filesystemHelper: helper,
-    receiveWorkspace: host.resolve,
     ...(time ? { clock: time.clock } : {}),
     providers: (loaded) => ({
       ...createFauxProviders(directory),
@@ -81,15 +83,24 @@ async function startDaemon(
   void running.then(() => ready.resolve());
   await bounded(ready.promise);
   if (settled instanceof Error) throw settled;
+  const identity = await readJson(join(directory, 'identity.json'));
+  const clients = ManagedRuntime.make(
+    RemoteWorkspaceHostLive({ host: identity.host }).pipe(
+      Layer.provideMerge(LoopbackConnectionLive({ directory })),
+    ),
+  );
+  await makeConnectionClient(clients).command('connect', { profileId: 'loopback' });
+  const host = await clients.runPromise(WorkspaceHostService);
   return {
     directory,
-    host: await bounded(host.promise),
+    host,
     abort: () => controller.abort(),
     running,
     get settled() {
       return settled;
     },
-    stop: () => {
+    stop: async () => {
+      await clients.dispose().catch(() => {});
       controller.abort();
       return running;
     },
@@ -104,6 +115,8 @@ async function withRoot(body: (root: string) => Promise<void>) {
     await rm(root, { recursive: true, force: true });
   }
 }
+const portOf = async (directory: string) =>
+  (await readJson(join(directory, 'endpoint.json'))).port as number;
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('/usr/bin/git', [
     '-C',
@@ -140,6 +153,53 @@ test('a local daemon opens its own host id and refuses its data directory, what 
         assert.equal(await refusal(open(path)), 'InvalidInput', path);
       assert.equal(await refusal(open(join(daemon.directory, 'logs'))), 'Unauthorized');
       assert.equal((await run(open(join(daemon.directory, 'chats', 'one')))).vcs, 'none');
+    } finally {
+      await daemon.stop();
+    }
+  });
+});
+
+test('a daemon advertises the workspace, saves and reads 2 MiB over the wire, and a file change reaches a watch', async () => {
+  await withRoot(async (root) => {
+    const project = join(root, 'project');
+    await mkdir(project);
+    await writeFile(join(project, 'a.txt'), 'old');
+    const daemon = await startDaemon(root);
+    const events: { ready?: boolean }[] = [];
+    try {
+      const checkout = await run(daemon.host.openCheckout({ root: project }));
+      const disk = await run(daemon.host.readFile({ checkout, path: 'a.txt' }));
+      // Large enough that its request and reply are each many frames.
+      const text = '"quoted"\n'.repeat(Math.floor((2 * 1024 * 1024) / 9));
+      const saved = await run(
+        daemon.host.saveFile({
+          installationId: 'test',
+          clientId: 'window',
+          requestId: 'big-save',
+          target: { checkout, path: 'a.txt' },
+          text,
+          expectedVersion: disk.version,
+        }),
+      );
+      assert.equal(saved.kind, 'saved');
+      assert.equal((await run(daemon.host.readFile({ checkout, path: 'a.txt' }))).text, text);
+
+      const stream = Effect.runFork(
+        Stream.runForEach(daemon.host.watch({ checkout, paths: [''] }), (event) =>
+          Effect.sync(() => void events.push(event)),
+        ),
+      );
+      await until(
+        async () => events.length,
+        (count) => count > 0,
+      );
+      const before = events.length;
+      await writeFile(join(project, 'b.txt'), 'new file');
+      await until(
+        async () => events.length,
+        (count) => count > before,
+      );
+      await Effect.runPromise(Fiber.interrupt(stream));
     } finally {
       await daemon.stop();
     }
@@ -276,18 +336,25 @@ test('a daemon without the filesystem helper composes no workspace and still run
     const directory = join(root, 'data'),
       controller = new AbortController(),
       ready = Promise.withResolvers<void>();
-    let received = 0;
     const running = runDaemon({
       directory,
       signal: controller.signal,
       ready: () => ready.resolve(),
       closeClaudeCode: async () => {},
-      receiveWorkspace: () => received++,
       providers: () => createFauxProviders(directory),
     });
     await bounded(ready.promise);
+    // Without a file host the daemon advertises no workspace and refuses its operations.
+    const identity = await readJson(join(directory, 'identity.json'));
+    const socket = await connectDaemonSocket({
+      origin: `http://127.0.0.1:${await portOf(directory)}`,
+      token: (await readFile(join(directory, 'token'), 'utf8')).trim(),
+      expected: identity.host,
+    });
+    assert.ok(!socket.health.capabilities.includes('workspace-v1'));
+    await assert.rejects(socket.request('openCheckout', { root }), { code: 'Incompatible' });
+    await socket.close();
     controller.abort();
     assert.equal(await running, 'stopped');
-    assert.equal(received, 0);
   });
 });
