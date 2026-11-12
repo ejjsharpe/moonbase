@@ -74,17 +74,6 @@ export const FeedCursorSchema = struct({ sequence: natural, epoch: optional(Sche
 export const FeedGapSchema = struct({ since: natural, checkoutId: Schema.String });
 export type SaveRecord = typeof SaveRecordSchema.Type;
 export type OperationRecord = typeof OperationRecordSchema.Type;
-/** Fields rows carried before the host split; they are ignored, while other unknown fields stay refused. */
-const legacyFields = ['started', 'temporary', 'recoveryRevision', 'paths', 'staging'];
-const ignoringLegacy = (schema: Schema.Decoder<unknown>) => {
-  const decode = strictDecoders({ row: schema }).row;
-  return (value: unknown) =>
-    decode(
-      typeof value === 'object' && value !== null && !Array.isArray(value)
-        ? Object.fromEntries(Object.entries(value).filter(([name]) => !legacyFields.includes(name)))
-        : value,
-    );
-};
 export const clientDecoders = {
   ...strictDecoders({
     publications: natural,
@@ -94,9 +83,9 @@ export const clientDecoders = {
     /** Per host and checkout, a feed gap that left drafts at their old paths. */
     gaps: FeedGapSchema,
     meta: WorkspaceIdentifierSchema,
+    saves: SaveRecordSchema,
+    operations: OperationRecordSchema,
   }),
-  saves: ignoringLegacy(SaveRecordSchema),
-  operations: ignoringLegacy(OperationRecordSchema),
 };
 export function savedRevision(value: unknown): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw invalidStored();

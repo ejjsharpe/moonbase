@@ -305,6 +305,7 @@ test('a checkout the host refuses does not stop the feed for the others', async 
     });
     const loaded = await bob.client.command('loadRecovery', { clientId: 'b' });
     assert.equal(loaded.state.drafts[0].target.path, 'renamed.txt');
+    assert(loaded.errors.length > 0);
   } finally {
     await h.close();
   }
@@ -409,6 +410,29 @@ test('createWorktree and initializeRepository replay their first outcome for one
     const initialize = { installationId: 'alice', requestId: 'init-1', checkout: folder };
     const initialized = await Effect.runPromise(host.initializeRepository(initialize));
     assert.deepEqual(await Effect.runPromise(host.initializeRepository(initialize)), initialized);
+    // A deterministic refusal is replayed even once its cause is gone.
+    const refused = {
+      ...request,
+      requestId: 'refuse-1',
+      base: 'later',
+      branch: 'feature/three',
+      location: join(h.base, 'three'),
+    };
+    const refusal = (error: unknown) => ApplicationError.is(error) && error.code === 'InvalidInput';
+    await assert.rejects(Effect.runPromise(host.createWorktree(refused)), refusal);
+    h.git('branch', 'later', 'main');
+    await assert.rejects(Effect.runPromise(host.createWorktree(refused)), refusal);
+    // A cancellation is transient: the same ID runs again instead of replaying it.
+    const retried = {
+      ...request,
+      requestId: 'retry-1',
+      branch: 'feature/four',
+      location: join(h.base, 'four'),
+    };
+    await assert.rejects(
+      Effect.runPromise(host.createWorktree(retried), { signal: AbortSignal.abort() }),
+    );
+    assert.equal((await Effect.runPromise(host.createWorktree(retried))).vcs, 'git');
   } finally {
     await h.close();
   }
