@@ -166,11 +166,17 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
     const open = (endpoint: VerifiedChatEndpoint): Promise<DaemonSocket> => {
       if (released)
         return Promise.reject(
-          new ApplicationError({ code: 'Unavailable', message: 'The daemon client was released.' }),
+          new ApplicationError({
+            code: 'Unavailable',
+            message: 'The daemon client was released.',
+          }),
         );
       if (current && sameEndpoint(current.endpoint, endpoint)) return current.socket;
       if (current) closeSocket(current.socket);
-      const link = { endpoint, socket: connectDaemonSocket(endpoint, { clock }) };
+      const link = {
+        endpoint,
+        socket: connectDaemonSocket(endpoint, { clock }),
+      };
       current = link;
       const forget = () => {
         if (current === link) current = undefined;
@@ -225,7 +231,11 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
         let state: SocketSubscriptionState<K> | undefined,
           delivered = false,
           failures = 0;
-        type Ended = { error: ApplicationError; closed: boolean; renewed: boolean };
+        type Ended = {
+          error: ApplicationError;
+          closed: boolean;
+          renewed: boolean;
+        };
         const followSocket = (socket: DaemonSocket) =>
           Effect.callback<Ended>((resume) => {
             let firstAt: number | undefined,
@@ -299,7 +309,11 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
      */
     const shared = new Map<
       string,
-      { sinks: Set<Sink<never>>; latest?: unknown; fiber?: Fiber.Fiber<unknown, unknown> }
+      {
+        sinks: Set<Sink<never>>;
+        latest?: unknown;
+        fiber?: Fiber.Fiber<unknown, unknown>;
+      }
     >();
     const join = <K extends SocketSubscriptionKind>(
       host: ChatHostTarget,
@@ -359,8 +373,8 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
           const attempt = yield* Effect.exit(
             Effect.tryPromise({
               try: (signal) => {
-                started = true;
                 const reply = socket.request(operation, input, { signal });
+                started = true;
                 if (settled) void reply.then(settled, settled);
                 return reply;
               },
@@ -506,9 +520,15 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
                 Stream.filter((update) => !('reconnecting' in update) || last !== undefined),
                 Stream.map((update) => {
                   if ('reconnecting' in update)
-                    return { ...last!, observationStatus: 'reconnecting' as const };
+                    return {
+                      ...last!,
+                      observationStatus: 'reconnecting' as const,
+                    };
                   last = update.value;
-                  return { ...update.value, observationStatus: 'connected' as const };
+                  return {
+                    ...update.value,
+                    observationStatus: 'connected' as const,
+                  };
                 }),
               );
             },
@@ -719,7 +739,7 @@ export const RemoteProviderSetupLive = (
  * operation, each decoded before it leaves, refused unless the daemon advertises the capability
  * and for a checkout of another host, and answered within its deadline class. Mutations are never
  * sent again: a lost reply is `Uncertain`, and `saveStatus`, `operationStatus` or the request ID
- * of a repeat resolves it. At most `workspaceRequests` are in flight, leaving room for chat; a
+ * of a repeat resolves it. At most `workspaceRequests` (plus `workspaceStatusRequests` for the status calls) are in flight, leaving room for chat; a wait for a place ends `Unavailable` at the operation's deadline; a
  * request keeps its place until the daemon replies or the connection closes, even after its
  * caller was told `Uncertain`.
  * `watch` ignores `paths`: the daemon follows the whole checkout, and every update, including the
@@ -734,32 +754,57 @@ export const RemoteWorkspaceHostLive = (config: {
       const link = yield* DaemonLink;
       const host = decodeChatHostTarget(config.host);
       const permits = Semaphore.makeUnsafe(socketLimits.workspaceRequests);
+      // The calls that resolve an `Uncertain` result have places of their own.
+      const statusPermits = Semaphore.makeUnsafe(socketLimits.workspaceStatusRequests);
       // A permit is held until the daemon has answered (or the connection closed), not until the
       // caller gave up: a mutation past its deadline still counts against the server's limit.
-      const holdPermit = <A, E>(run: (free: () => void) => Effect.Effect<A, E>) =>
+      // Waiting for one is bounded by the operation's deadline, so a wedged host cannot leave a
+      // caller waiting for ever; a request that never got one was never sent.
+      const holdPermit = <A, E>(
+        semaphore: Semaphore.Semaphore,
+        deadlineMs: number,
+        run: (free: () => void) => Effect.Effect<A, E>,
+      ) =>
         Effect.uninterruptibleMask((restore) =>
-          Effect.flatMap(restore(permits.take(1)), () => {
-            let freed = false,
-              entered = false;
-            const free = () => {
-              if (freed) return;
-              freed = true;
-              Effect.runSync(permits.release(1));
-            };
-            return restore(
-              Effect.suspend(() => {
-                entered = true;
-                return run(free);
-              }),
-            ).pipe(
-              Effect.onExit(() =>
-                Effect.sync(() => {
-                  if (!entered) free();
+          Effect.flatMap(
+            restore(
+              semaphore.take(1).pipe(
+                Effect.timeoutOrElse({
+                  duration: deadlineMs,
+                  orElse: () =>
+                    Effect.fail(
+                      new ApplicationError({
+                        code: 'Unavailable',
+                        message: 'The workspace is busy with earlier requests.',
+                      }),
+                    ),
                 }),
               ),
-            );
-          }),
+            ),
+            () => {
+              let freed = false,
+                entered = false;
+              const free = () => {
+                if (freed) return;
+                freed = true;
+                Effect.runSync(semaphore.release(1));
+              };
+              return restore(
+                Effect.suspend(() => {
+                  entered = true;
+                  return run(free);
+                }),
+              ).pipe(
+                Effect.onExit(() =>
+                  Effect.sync(() => {
+                    if (!entered) free();
+                  }),
+                ),
+              );
+            },
+          ),
         );
+      const statusOperations = new Set<string>(['saveStatus', 'operationStatus']);
       const checkoutMakers = new Set<HostCommand>([
         'openCheckout',
         'createWorktree',
@@ -783,16 +828,19 @@ export const RemoteWorkspaceHostLive = (config: {
               catch: ApplicationError.fromUnknown,
             }),
             (input) =>
-              holdPermit((free) =>
-                link.request(
-                  host,
-                  operation,
-                  input as never,
-                  isHostMutation(operation),
-                  undefined,
-                  hostDeadlineMs(operation),
-                  free,
-                ),
+              holdPermit(
+                statusOperations.has(operation) ? statusPermits : permits,
+                hostDeadlineMs(operation),
+                (free) =>
+                  link.request(
+                    host,
+                    operation,
+                    input as never,
+                    isHostMutation(operation),
+                    undefined,
+                    hostDeadlineMs(operation),
+                    free,
+                  ),
               ).pipe(
                 Effect.tap((output) =>
                   // A checkout the daemon made or opened must belong to the connected host.

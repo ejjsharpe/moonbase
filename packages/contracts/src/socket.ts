@@ -37,6 +37,8 @@ export const socketLimits = {
   workspaceSubscriptions: 64,
   /** Workspace requests a client keeps in flight, leaving room for chat below `requests`. */
   workspaceRequests: 16,
+  /** Further places only `saveStatus` and `operationStatus` use, so a wedged host cannot block them. */
+  workspaceStatusRequests: 2,
   /** Chunks of one workspace reply written before pending updates get a turn. */
   workspaceBurstChunks: 4,
   /** The server's bound on the hello arriving after its challenge. */
@@ -152,7 +154,10 @@ export function applyChatListDelta(state: ChatListState, delta: ChatListDelta): 
   for (const row of delta.upsert) rows.set(row.target.conversationId, row);
   if (rows.size !== delta.order.length) inapplicable();
   return {
-    list: { conversations: pick(rows, delta.order), nextCursor: delta.nextCursor },
+    list: {
+      conversations: pick(rows, delta.order),
+      nextCursor: delta.nextCursor,
+    },
     changed: delta.changed
       ? pick(byId(state.changed, delta.changed.upsert), delta.changed.order)
       : state.changed,
