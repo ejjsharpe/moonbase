@@ -6,9 +6,8 @@ import {
 import { runDaemon } from './daemon.ts';
 import { readDirectoryArgument } from './data-directory.ts';
 import { describeFailure } from './failure.ts';
-import { findBundledRipgrep } from './ripgrep.ts';
 import { onShutdownSignal } from './signals.ts';
-import { findFilesystemHelper } from './workspace.ts';
+import { findFilesystemHelper, findRipgrep } from './workspace.ts';
 
 /** The bundle's digest, which `scripts/build.mjs` defines; undefined when run from source. */
 declare const MOONBASE_DAEMON_BUILD: string | undefined;
@@ -23,8 +22,8 @@ async function main() {
     signal: onShutdownSignal(),
     ready: (line) => console.log(line),
     closeClaudeCode: closeClaudeCodeProcesses,
-    // The app's ripgrep beside the packaged bundle; from source, the one on PATH.
-    ripgrepExecutable: findBundledRipgrep(import.meta.url),
+    // The app's ripgrep beside the packaged bundle, else the one on PATH, for chats and workspace.
+    ripgrepExecutable: findRipgrep(import.meta.url),
     // The app's native helper beside the packaged bundle; from source, the workspace package's.
     filesystemHelper: findFilesystemHelper(import.meta.url, {
       fromSource: typeof MOONBASE_DAEMON_BUILD !== 'string',
@@ -48,3 +47,5 @@ await main().catch((error) => {
   console.error(JSON.stringify({ event: 'failed', error: describeFailure(error) }));
   process.exitCode = 1;
 });
+// Nothing left behind (a helper that never exited, say) keeps the process, and launchd's job, alive.
+setTimeout(() => process.exit(), 2_000).unref();

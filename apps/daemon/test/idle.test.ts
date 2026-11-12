@@ -3,9 +3,7 @@ import { test } from 'node:test';
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { ChatClient } from '@moonbase/contracts/chat';
 import { runDaemon, type DaemonExit } from '../src/daemon.ts';
-import { refuseWhileStopping } from '../src/admission.ts';
 import { createIdleMonitor } from '../src/idle.ts';
 import { createFauxProviders } from './faux.ts';
 import {
@@ -53,51 +51,6 @@ test('the idle monitor waits for every user to end, and treats an unreadable wor
   await time.advance(10 * minute);
   assert.equal(idle, 1, 'idle fires once');
   assert.equal(time.pending, 0);
-});
-
-test('a gated client is refused new requests and watches once stopping, and keeps open ones', async () => {
-  let stopping = false;
-  const forwarded: string[] = [];
-  let closed = 0;
-  const inner = {
-    command: async (operation: string) => {
-      forwarded.push(operation);
-      return {};
-    },
-    watch: () => {
-      forwarded.push('watch');
-      return async () => {
-        closed++;
-      };
-    },
-  } as unknown as ChatClient;
-  const client = refuseWhileStopping(inner, () => stopping);
-  const target = { host: { hostId: 'h', storeId: 's' }, actorId: 'a', conversationId: 'c' };
-  const close = client.watch(
-    { target } as never,
-    () => {},
-    () => {},
-  );
-  await client.command('getChat', { target } as never);
-  stopping = true;
-  // Anything arriving between stopping and the server closing is refused, not half-admitted.
-  await assert.rejects(client.command('sendChat', { target } as never), {
-    code: 'Unavailable',
-  });
-  assert.throws(
-    () =>
-      client.watch(
-        { target } as never,
-        () => {},
-        () => {},
-      ),
-    {
-      code: 'Unavailable',
-    },
-  );
-  await close();
-  assert.deepEqual(forwarded, ['watch', 'getChat']);
-  assert.equal(closed, 1);
 });
 
 test('a local daemon exits idle only after 5 minutes with no client; a request restarts the wait', async () => {

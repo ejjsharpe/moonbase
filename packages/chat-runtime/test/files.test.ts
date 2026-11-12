@@ -82,6 +82,20 @@ test('search fails clearly when neither ripgrep nor a Git checkout is available'
     index.find(root, ''),
     (error) => ApplicationError.is(error) && error.code === 'Unavailable',
   );
+  // Without the command-line tools, macOS's Git stub would offer to install them: it never runs.
+  const runs: string[] = [];
+  const withoutGit = new ChatFileIndex({
+    run: async (executable) => {
+      runs.push(executable);
+      throw Object.assign(Error('missing'), { code: 'ENOENT' });
+    },
+    canRunGit: async () => false,
+  });
+  await assert.rejects(
+    withoutGit.find(await folder(t), ''),
+    (error) => ApplicationError.is(error) && error.code === 'Unavailable',
+  );
+  assert.deepEqual(runs, ['rg']);
 });
 
 test('one listing serves a burst of queries; it is refreshed later and a failure is not kept', async () => {

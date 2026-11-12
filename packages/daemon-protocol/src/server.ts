@@ -76,6 +76,12 @@ export type ChatSocketConfiguration = {
   sources?: SocketSources;
   clock?: SocketClock;
   workspace?: WorkspaceHostClient;
+  /**
+   * Admits one request or authenticated health probe, returning what ends it once its answer
+   * settles (a mutation's outlives its connection), or throws to refuse it. A daemon counts
+   * requests as use with it and refuses them once it is stopping.
+   */
+  admit?(): () => void;
 };
 /** A local-mode daemon's features beyond chat: local-mode chat and control, providers, folders. */
 export const localDaemonCapabilities: readonly ChatHostCapability[] = [
@@ -138,6 +144,7 @@ export const serveChat = (
             'InvalidInput',
             'Keep the private host key separate from public chat identities and settings.',
           );
+        const admit = socket?.admit ?? (() => () => {});
         const daemonRequests = new Map<
           string,
           { operation: DaemonCommand; input: unknown; outcome: Promise<unknown> }
@@ -241,11 +248,18 @@ export const serveChat = (
           ...(socket?.workspace ? { workspace: socket.workspace } : {}),
           sources: socket?.sources ?? {},
           clock: socket?.clock ?? systemSocketClock,
-          answer: (operation, input, signal) =>
-            runOperation(operation, input, signal).then(
-              (value) => ({ ok: true, value }),
-              (error: unknown) => ({ ok: false, error: describeFailure(operation, error) }),
-            ),
+          answer: async (operation, input, signal) => {
+            try {
+              const release = admit();
+              try {
+                return { ok: true, value: await runOperation(operation, input, signal) };
+              } finally {
+                release();
+              }
+            } catch (error) {
+              return { ok: false, error: describeFailure(operation, error) };
+            }
+          },
         });
         let closed = false,
           active = 0;
@@ -287,7 +301,12 @@ export const serveChat = (
                 authorization: request.headers.authorization,
                 health,
               });
-              await client.command('getChatHost', { host: expected });
+              const release = admit();
+              try {
+                await client.command('getChatHost', { host: expected });
+              } finally {
+                release();
+              }
               response.writeHead(200, { 'content-type': 'application/json' });
               response.end(JSON.stringify(value));
             } catch (error) {
