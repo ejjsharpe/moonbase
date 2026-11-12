@@ -149,8 +149,8 @@ export class EditorDiscovery {
   }
   /**
    * Watches a checkout. A retryable (`Unavailable`) failure, such as a daemon that restarted,
-   * watches again after each backoff and then reads again, since changes were missed meanwhile;
-   * only a failure that cannot be retried, or the last of them, is reported and leaves the watch
+   * watches again after each backoff and reads again once the new watch is ready, since changes
+   * were missed meanwhile; only a failure that cannot be retried, or the last of them, is reported and leaves the watch
    * lost, which an explicit refresh or reopen of the checkout arms again.
    */
   async observe(
@@ -159,7 +159,8 @@ export class EditorDiscovery {
     onChanged: (isCurrent: () => boolean) => void,
     failures = 0,
   ) {
-    const key = checkoutKey(checkout);
+    const key = checkoutKey(checkout),
+      rewatched = failures > 0;
     await this.releaseObservation(checkout);
     if (this.dependencies.isClosing()) return;
     const scope = Scope.forkUnsafe(this.scope);
@@ -198,7 +199,6 @@ export class EditorDiscovery {
             ),
           catch: normalizeApplicationError,
         });
-        if (this.stops.has(key) && isOpen()) onChanged(() => this.stops.has(key));
       }).pipe(Effect.catch((retry) => Effect.sync(() => this.dependencies.report(retry))));
       void this.dependencies.execute(Effect.forkIn(rewatch, this.scope)).catch(() => {});
     };
@@ -222,8 +222,11 @@ export class EditorDiscovery {
                     return;
                   if (event.error) this.dependencies.report(event.error);
                   if (event.ready) {
+                    const first = upSince === undefined;
                     upSince ??= performance.now();
-                    return;
+                    // A re-watch's first ready is its change: what was missed while it was down,
+                    // read only now that no later change can slip past the live watch.
+                    if (!first || !rewatched) return;
                   }
                   this.revision++;
                   onChanged(isCurrent);

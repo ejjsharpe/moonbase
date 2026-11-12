@@ -5,7 +5,12 @@ import { createMoonbaseApplication, type MoonbaseApplication } from '@moonbase/a
 import { DesktopShell, type DesktopShellHandle } from './shell/workbench.tsx';
 import { WorkbenchStartupFailure } from './shell/startup-failure.tsx';
 import { configureMonacoWorkers } from '@moonbase/workbench/workers';
-import { browserClients, browserTranscriptActions, type ChatBridge } from '../chat/wire.ts';
+import {
+  browserClients,
+  browserTranscriptActions,
+  unwrap as unwrapChat,
+  type ChatBridge,
+} from '../chat/wire.ts';
 import {
   bridgeClient,
   unwrap,
@@ -84,7 +89,9 @@ function Desktop({ application }: { application: MoonbaseApplication }) {
       transcriptNative={getTranscriptActions}
       chooseChatFolder={() => window.moonbaseChat.chooseFolder!()}
       recentChatFolders={(targetId) => window.moonbaseChat.recentFolders!(targetId)}
-      createChatWorktree={(root, branch) => window.moonbaseChat.createWorktree!(root, branch)}
+      createChatWorktree={async (root, branch, requestId) =>
+        unwrapChat(await window.moonbaseChat.createWorktree!(root, branch, requestId)) as string
+      }
       turnChatIntoProject={(conversationId) => window.moonbaseChat.turnIntoProject!(conversationId)}
       selectCheckout={async () =>
         application.getSnapshot().phase === 'live'

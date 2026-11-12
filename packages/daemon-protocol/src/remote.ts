@@ -88,9 +88,9 @@ class DaemonLink extends Context.Service<
       /** How long to wait for the reply; `requestDeadlineMs` by default. */
       deadlineMs?: number,
       /**
-       * Called once when the socket request ends (its reply, a failure or the connection
-       * closing), or at once if none was made. A deadline or an interrupt does not end a
-       * mutation, which the daemon still runs, so this is later than the request's own result.
+       * Called once the daemon is done with the request (its reply, to a cancel too, or the
+       * connection closing), or at once if none was sent. A deadline or an interrupt cancels a
+       * read and leaves a mutation running, so this can come later than the request's own result.
        */
       settled?: () => void,
     ): Effect.Effect<SocketOutput<K>, ApplicationError>;
@@ -373,10 +373,11 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
           const attempt = yield* Effect.exit(
             Effect.tryPromise({
               try: (signal) => {
-                const reply = socket.request(operation, input, { signal });
                 started = true;
-                if (settled) void reply.then(settled, settled);
-                return reply;
+                return socket.request(operation, input, {
+                  signal,
+                  ...(settled ? { settled } : {}),
+                });
               },
               catch: (error) => (ApplicationError.is(error) ? error : lostReply(mutation)),
             }).pipe(
@@ -742,8 +743,9 @@ export const RemoteProviderSetupLive = (
  * of a repeat resolves it. At most `workspaceRequests` (plus `workspaceStatusRequests` for the
  * status calls) are in flight, leaving room for chat. A request waits up to the operation's
  * deadline for a place (`Unavailable`, never sent, past it), then has up to the deadline to run. A
- * request keeps its place until the daemon replies or the connection closes, even after its
- * caller was told `Uncertain`.
+ * request keeps its place until the daemon has answered it (a read past its deadline is
+ * cancelled, and the daemon answers the cancel) or the connection closes, even after its caller
+ * was told `Cancelled` or `Uncertain`, so the daemon's places and the client's agree.
  * `watch` ignores `paths`: the daemon follows the whole checkout, and every update, including the
  * snapshot after a reconnect, is an event to refresh from.
  */
@@ -759,7 +761,8 @@ export const RemoteWorkspaceHostLive = (config: {
       // The calls that resolve an `Uncertain` result have places of their own.
       const statusPermits = Semaphore.makeUnsafe(socketLimits.workspaceStatusRequests);
       // A permit is held until the daemon has answered (or the connection closed), not until the
-      // caller gave up: a mutation past its deadline still counts against the server's limit.
+      // caller gave up: a mutation past its deadline still counts against the server's limit, and
+      // a cancelled read until the daemon answers its cancel.
       // Waiting for one is bounded by the operation's deadline, so a wedged host cannot leave a
       // caller waiting for ever; a request that never got one was never sent.
       const holdPermit = <A, E>(
@@ -807,7 +810,7 @@ export const RemoteWorkspaceHostLive = (config: {
           ),
         );
       const statusOperations = new Set<string>(['saveStatus', 'operationStatus']);
-      const checkoutMakers = new Set<HostCommand>([
+      const checkoutMakers = new Set<string>([
         'openCheckout',
         'createWorktree',
         'initializeRepository',
@@ -818,6 +821,21 @@ export const RemoteWorkspaceHostLive = (config: {
         const checkout = hostInputCheckout(value);
         if (checkout && checkout.hostId !== host.hostId)
           V.fail('Unauthorized', 'Workspace request target differs from this host.');
+      };
+      /** The checkouts a reply names: the one it made or opened, an operation's, or a feed's. */
+      const outputCheckouts = (operation: HostCommand, output: unknown) => {
+        if (checkoutMakers.has(operation)) return [output as { hostId: string }];
+        if (operation === 'mutate' || operation === 'operationStatus')
+          return output ? [(output as HostOutput<'mutate'>).checkout] : [];
+        if (operation === 'listOperations')
+          return (output as HostOutput<'listOperations'>).operations.map((entry) => entry.checkout);
+        return [];
+      };
+      // A reply naming a checkout of another host is refused (`Uncertain` for a mutation).
+      const checkOutput = (operation: HostCommand) => (output: unknown) => {
+        for (const checkout of outputCheckouts(operation, output))
+          if (checkout.hostId !== host.hostId)
+            V.fail('Incompatible', 'The daemon returned a checkout of another host.');
       };
       const send =
         <K extends HostCommand>(operation: K) =>
@@ -841,23 +859,10 @@ export const RemoteWorkspaceHostLive = (config: {
                     operation,
                     input as never,
                     isHostMutation(operation),
-                    undefined,
+                    checkOutput(operation),
                     hostDeadlineMs(operation),
                     free,
                   ),
-              ).pipe(
-                Effect.tap((output) =>
-                  // A checkout the daemon made or opened must belong to the connected host.
-                  checkoutMakers.has(operation) &&
-                  (output as { hostId?: string }).hostId !== host.hostId
-                    ? Effect.fail(
-                        new ApplicationError({
-                          code: 'Incompatible',
-                          message: 'The daemon returned a checkout of another host.',
-                        }),
-                      )
-                    : Effect.void,
-                ),
               ) as Effect.Effect<HostOutput<K>, ApplicationError>,
           );
       const handlers = Object.fromEntries(

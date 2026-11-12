@@ -1,21 +1,30 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test, type TestContext } from 'node:test';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { createChatBackends } from '../src/main/chat-backends.ts';
-import { createFileRequestIds, createMemoryRequestIds } from '../src/main/request-ids.ts';
+import { createLocalDaemonClient, type DaemonChat } from '../src/chat/daemon.ts';
+import { createFileRequestIds } from '../src/main/request-ids.ts';
 
 type Dependencies = Parameters<typeof createChatBackends>[0];
-type Backend = NonNullable<Dependencies['localResult']['backend']>;
-/** Makes real folders under a new resolved temporary directory, returning that directory. */
-async function makeFolders(...names: string[]) {
+type Backend = DaemonChat;
+/** A new resolved temporary directory, removed after the test. */
+async function makeDirectory(t: TestContext) {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-chat-backends-')));
-  for (const name of names) await mkdir(join(base, name), { recursive: true });
+  t.after(() => rm(base, { recursive: true, force: true }));
   return base;
 }
+/** Request IDs in a temporary profile file, as main keeps them. */
+const makeRequestIds = async (t: TestContext) =>
+  createFileRequestIds(join(await makeDirectory(t), 'chat-requests.json'));
+/** A local daemon client already holding `backend`, or one that is never reached. */
+const reached = (backend: Backend | null) =>
+  backend
+    ? { get: async () => backend, peek: () => backend }
+    : { get: () => new Promise<Backend>(() => {}), peek: () => null };
 /** A daemon backend whose folder operations are the given handlers; others are never called. */
 function makeBackend(
   session: Backend['session'],
@@ -33,7 +42,7 @@ function makeBackend(
   } as unknown as Backend;
 }
 
-test('chat backends join explicit local retry and revoke pending folder selection on document replacement', async () => {
+test('local chat shares one attempt to reach the daemon, answers a failed one for a moment, and revokes pending folder selection on document replacement', async (t) => {
   const runtime = ManagedRuntime.make(Layer.empty);
   const session = { host: { hostId: 'local', storeId: 'store' }, actorId: 'owner' };
   const approved: string[] = [],
@@ -57,21 +66,24 @@ test('chat backends join explicit local retry and revoke pending folder selectio
       },
     },
   );
-  let completeRetry!: (result: Dependencies['localResult']) => void;
+  let acquiring!: PromiseWithResolvers<Backend>;
   let completePicker!: (path: string | null) => void;
+  // The picker opens once the daemon is reached.
+  const pickerOpened = () => new Promise((resolve) => setImmediate(resolve));
+  let clock = 0;
+  const local = createLocalDaemonClient(
+    () => {
+      attempts++;
+      acquiring = Promise.withResolvers<Backend>();
+      return acquiring.promise;
+    },
+    () => clock,
+  );
   const owner = createChatBackends({
     runtime,
     installationId: 'installation',
-    localResult: {
-      backend: null,
-      error: new ApplicationError({ code: 'Unavailable', message: 'Not ready' }),
-    },
-    acquireLocal: () => {
-      attempts++;
-      return new Promise((resolve) => {
-        completeRetry = resolve;
-      });
-    },
+    requestIds: await makeRequestIds(t),
+    local,
     emit: () => {
       assert.fail('No observation should be started');
     },
@@ -83,16 +95,23 @@ test('chat backends join explicit local retry and revoke pending folder selectio
   try {
     assert.equal(attempts, 0);
     assert.equal(owner.getSessions().length, 0);
+    // A failed attempt is every caller's answer for a moment, then tried anew.
+    const failing = owner.getContext('local');
+    acquiring.reject(Error('spawn failed'));
+    await assert.rejects(failing, { code: 'Unavailable' });
+    await assert.rejects(owner.getContext('local'), { code: 'Unavailable' });
+    assert.equal(attempts, 1);
+    clock += 2000;
     const first = owner.getContext('local'),
       second = owner.getContext('local');
-    assert.equal(attempts, 1);
-    completeRetry({ backend, error: null });
+    assert.equal(attempts, 2);
+    acquiring.resolve(backend);
     assert.deepEqual(await first, session);
     assert.deepEqual(await second, session);
-    assert.deepEqual(owner.getTargets()[0].context, session);
     assert.equal(owner.getSessions().length, 1);
     const previous = owner.getSession('local');
     const picking = owner.chooseFolder();
+    await pickerOpened();
     await owner.releaseDocument();
     completePicker('/obsolete');
     assert.equal(await picking, null);
@@ -100,11 +119,12 @@ test('chat backends join explicit local retry and revoke pending folder selectio
     assert.notEqual(owner.getSession('local'), previous);
     assert.equal(released.length, 1);
     const current = owner.chooseFolder();
+    await pickerOpened();
     completePicker('/current');
     assert.equal(await current, '/current');
     assert.deepEqual(approved, ['/current']);
     await owner.getContext('local');
-    assert.equal(attempts, 1);
+    assert.equal(attempts, 2);
     await owner.releaseDocument();
     assert.equal(released.length, 2);
     assert.notEqual(released[0], released[1]);
@@ -115,7 +135,7 @@ test('chat backends join explicit local retry and revoke pending folder selectio
 });
 
 for (const failure of [false, true])
-  test(`document replacement routes a reused ID to the new session and joins ${failure ? 'failing' : 'held'} old release`, async () => {
+  test(`document replacement routes a reused ID to the new session and joins ${failure ? 'failing' : 'held'} old release`, async (t) => {
     const runtime = ManagedRuntime.make(Layer.empty);
     const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' };
     const target = { ...context, conversationId: 'chat' };
@@ -142,11 +162,8 @@ for (const failure of [false, true])
     const backends = createChatBackends({
       runtime,
       installationId: 'installation',
-      localResult: {
-        backend: null,
-        error: new ApplicationError({ code: 'Unavailable', message: 'No local chat' }),
-      },
-      acquireLocal: () => new Promise(() => {}),
+      requestIds: await makeRequestIds(t),
+      local: reached(null),
       // Only the remote context and label, the chat and owner release are used here.
       remote: {
         configuration: { context, ssh: { profile: { label: 'Remote' } } },
@@ -205,14 +222,11 @@ const checkout = (root: string) => ({
   worktree: 'linked' as const,
 });
 
-test('a new worktree starts only from a folder local chat may use, asks the daemon for it, and repeats only an unknown one', async () => {
+test('a new worktree starts only from a folder the daemon approves, under the renderer’s request, and a replaced document’s is not offered', async (t) => {
   const runtime = ManagedRuntime.make(Layer.empty);
-  const base = await makeFolders('editor');
-  const editor = join(base, 'editor');
   const session = { host: { hostId: 'local', storeId: 'store' }, actorId: 'owner' };
   const requests: { requestId: string; root: string; branch: string }[] = [],
     adopted: string[] = [];
-  let failure: ApplicationError | undefined;
   const backend = makeBackend(
     session,
     {
@@ -225,67 +239,36 @@ test('a new worktree starts only from a folder local chat may use, asks the daem
       workspace: {
         createChatWorktree: (input: { requestId: string; root: string; branch: string }) => {
           requests.push(input);
-          return failure
-            ? Effect.fail(failure)
-            : Effect.succeed(
-                checkout(`${input.root}-worktrees/${input.branch.replaceAll('/', '-')}`),
-              );
+          return Effect.succeed(
+            checkout(`${input.root}-worktrees/${input.branch.replaceAll('/', '-')}`),
+          );
         },
       },
     },
   );
-  // The request IDs outlive a backend, as they do across a reload or restart.
-  let clock = 0;
-  const requestIds = createMemoryRequestIds(() => clock);
-  const make = () =>
-    createChatBackends({
-      runtime,
-      installationId: 'installation',
-      requestIds,
-      localResult: { backend, error: null },
-      acquireLocal: async () => ({ backend, error: null }),
-      emit: () => {},
-      pickFolder: async () => null,
-      isEditorFolder: (path) => path === editor,
-      adoptCheckout: (target) => adopted.push(target.root),
-    });
-  const owner = make();
+  const owner = createChatBackends({
+    runtime,
+    installationId: 'installation',
+    requestIds: await makeRequestIds(t),
+    local: reached(backend),
+    emit: () => {},
+    pickFolder: async () => null,
+    adoptCheckout: (target) => adopted.push(target.root),
+  });
   try {
-    await assert.rejects(owner.createWorktree('/elsewhere', 'chat/a'), { code: 'Unauthorized' });
+    // Even a worktree Git lists for an approved checkout is the daemon's to approve.
+    await assert.rejects(owner.createWorktree('/repo-worktrees/listed', 'chat/a', 'first'), {
+      code: 'Unauthorized',
+    });
     assert.equal(requests.length, 0);
-    assert.equal(await owner.createWorktree('/repo', 'chat/a'), '/repo-worktrees/chat-a');
-    assert.equal(requests[0].root, '/repo');
-    // The daemon's worktree is offered to the editor, and an editor project needs no daemon grant.
+    assert.equal(await owner.createWorktree('/repo', 'chat/a', 'second'), '/repo-worktrees/chat-a');
+    assert.deepEqual(
+      requests.map(({ requestId, root }) => [requestId, root]),
+      [['second', '/repo']],
+    );
+    // The daemon's worktree is offered to the editor.
     assert.deepEqual(adopted, ['/repo-worktrees/chat-a']);
-    assert.equal(await owner.createWorktree(editor, 'b'), `${editor}-worktrees/b`);
-    // A worktree whose outcome is unknown is asked for again under its request; a refusal is not.
-    failure = new ApplicationError({ code: 'Uncertain', message: 'Reply lost.' });
-    await assert.rejects(owner.createWorktree('/repo', 'late'), { code: 'Uncertain' });
-    await owner.releaseDocument();
-    const restarted = make();
-    await assert.rejects(restarted.createWorktree('/repo', 'late'), { code: 'Uncertain' });
-    await restarted.releaseDocument();
-    failure = new ApplicationError({ code: 'Conflict', message: 'Taken.' });
-    await assert.rejects(owner.createWorktree('/repo', 'late'), { code: 'Conflict' });
-    await assert.rejects(owner.createWorktree('/repo', 'late'), { code: 'Conflict' });
-    const late = requests.filter((request) => request.branch === 'late').map((r) => r.requestId);
-    assert.equal(late[0], late[1]);
-    assert.equal(late[1], late[2]);
-    assert.notEqual(late[2], late[3]);
-    // Concurrent calls for one worktree share one request; an ID older than its lifetime is not reused.
-    failure = new ApplicationError({ code: 'Uncertain', message: 'Reply lost.' });
-    const before = requests.length;
-    await Promise.allSettled([
-      owner.createWorktree('/repo', 'twin'),
-      owner.createWorktree('/repo', 'twin'),
-    ]);
-    assert.equal(requests.length, before + 1);
-    clock += 11 * 60_000;
-    await assert.rejects(owner.createWorktree('/repo', 'twin'), { code: 'Uncertain' });
-    const twins = requests.filter((request) => request.branch === 'twin');
-    assert.notEqual(twins[0].requestId, twins[1].requestId);
     // Replacing the document while a creation runs cancels it; its worktree is not offered.
-    failure = undefined;
     adopted.length = 0;
     let finish!: () => void;
     backend.workspace.createChatWorktree = ((input: { root: string; branch: string }) =>
@@ -295,7 +278,7 @@ test('a new worktree starts only from a folder local chat may use, asks the daem
             finish = resolve;
           }),
       ).pipe(Effect.as(checkout(`${input.root}-worktrees/${input.branch}`)))) as never;
-    const pending = owner.createWorktree('/repo', 'slow');
+    const pending = owner.createWorktree('/repo', 'slow', 'third');
     await new Promise((resolve) => setImmediate(resolve));
     await owner.releaseDocument();
     finish?.();
@@ -304,13 +287,16 @@ test('a new worktree starts only from a folder local chat may use, asks the daem
   } finally {
     await owner.releaseDocument();
     await runtime.dispose();
-    await rm(base, { recursive: true, force: true });
   }
 });
-test('turning a chat into a project is one daemon operation, and its checkout is offered to the editor', async () => {
+test('turning a chat into a project is one daemon operation, asked again only while its outcome is unknown, and its checkout is offered to the editor', async (t) => {
   const runtime = ManagedRuntime.make(Layer.empty);
   const session = { host: { hostId: 'local', storeId: 'store' }, actorId: 'owner' };
-  const requests: { installationId: string; target: { conversationId: string } }[] = [],
+  const requests: {
+      installationId: string;
+      requestId: string;
+      target: { conversationId: string };
+    }[] = [],
     adopted: string[] = [];
   let refusal: ApplicationError | undefined;
   const backend = makeBackend(
@@ -318,46 +304,55 @@ test('turning a chat into a project is one daemon operation, and its checkout is
     {},
     {
       workspace: {
-        turnChatIntoProject: (input: {
-          installationId: string;
-          target: { conversationId: string };
-        }) => {
+        turnChatIntoProject: (input: (typeof requests)[number]) => {
           requests.push(input);
           return refusal ? Effect.fail(refusal) : Effect.succeed(checkout('/profile/chats/own'));
         },
       },
     },
   );
-  const owner = createChatBackends({
-    runtime,
-    installationId: 'installation',
-    localResult: { backend, error: null },
-    acquireLocal: async () => ({ backend, error: null }),
-    emit: () => {},
-    pickFolder: async () => null,
-    adoptCheckout: (target) => adopted.push(target.root),
-  });
+  // The request IDs outlive a backend, as they do across a reload or restart.
+  const requestIds = await makeRequestIds(t);
+  const make = () =>
+    createChatBackends({
+      runtime,
+      installationId: 'installation',
+      requestIds,
+      local: reached(backend),
+      emit: () => {},
+      pickFolder: async () => null,
+      adoptCheckout: (target) => adopted.push(target.root),
+    });
+  const owner = make();
   try {
     refusal = new ApplicationError({ code: 'Unauthorized', message: 'Not a chat folder.' });
     await assert.rejects(owner.turnIntoProject('planted'), { code: 'Unauthorized' });
     assert.deepEqual(adopted, []);
+    // An unknown outcome is asked for again under its request, after a restart too; an answer,
+    // a refusal included, is final.
+    refusal = new ApplicationError({ code: 'Uncertain', message: 'Reply lost.' });
+    await assert.rejects(owner.turnIntoProject('own'), { code: 'Uncertain' });
+    await assert.rejects(make().turnIntoProject('own'), { code: 'Uncertain' });
     refusal = undefined;
     assert.equal(await owner.turnIntoProject('own'), '/profile/chats/own');
     assert.deepEqual(adopted, ['/profile/chats/own']);
-    assert.deepEqual(
-      requests.map(({ installationId, target }) => [installationId, target.conversationId]),
-      [
-        ['installation', 'planted'],
-        ['installation', 'own'],
-      ],
-    );
+    await owner.turnIntoProject('own');
+    await owner.turnIntoProject('planted');
+    const ids = (conversationId: string) =>
+      requests.filter((r) => r.target.conversationId === conversationId).map((r) => r.requestId);
+    const own = ids('own'),
+      planted = ids('planted');
+    assert.deepEqual(new Set(own.slice(0, 3)).size, 1);
+    assert.notEqual(own[2], own[3]);
+    assert.notEqual(planted[0], planted[1]);
+    assert(requests.every((request) => request.installationId === 'installation'));
   } finally {
     await owner.releaseDocument();
     await runtime.dispose();
   }
 });
 
-test('a remote daemon host offers its approved roots for folders, its own provider setup, and no local folder actions', async () => {
+test('a remote daemon host offers its approved roots for folders, its own provider setup, and no local folder actions', async (t) => {
   const runtime = ManagedRuntime.make(Layer.empty);
   const context = { host: { hostId: 'remote-host', storeId: 'store' }, actorId: 'actor' };
   const listed: unknown[] = [],
@@ -366,11 +361,8 @@ test('a remote daemon host offers its approved roots for folders, its own provid
   const backends = createChatBackends({
     runtime,
     installationId: 'installation',
-    localResult: {
-      backend: null,
-      error: new ApplicationError({ code: 'Unavailable', message: 'No local chat' }),
-    },
-    acquireLocal: () => new Promise(() => {}),
+    requestIds: await makeRequestIds(t),
+    local: reached(null),
     remote: {
       configuration: { context, ssh: { profile: { label: 'Mac mini' } } },
       chat: { command: async () => null as never, watch: () => async () => {} },
@@ -435,28 +427,15 @@ test('a remote daemon host offers its approved roots for folders, its own provid
   }
 });
 
-test('request ids keep their first window, expire, and tolerate a corrupt file', async () => {
-  const base = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-request-ids-')));
-  try {
-    const file = join(base, 'request-ids.json');
-    let clock = 1_000_000;
-    for (const ids of [
-      createMemoryRequestIds(() => clock),
-      createFileRequestIds(file, () => clock),
-    ]) {
-      ids.put('k', 'a');
-      clock += 6 * 60_000;
-      ids.put('k', 'a');
-      clock += 5 * 60_000;
-      assert.equal(ids.get('k'), undefined, 'reuse does not slide the window');
-      ids.put('k', 'b');
-      clock -= 60_000;
-      assert.equal(ids.get('k'), undefined, 'an entry from the future is expired');
-      clock += 60_000;
-    }
-    await writeFile(file, '{not json');
-    assert.equal(createFileRequestIds(file, () => clock).get('k'), undefined);
-  } finally {
-    await rm(base, { recursive: true, force: true });
-  }
+test('request ids last until deleted, across a new handle, and tolerate a corrupt file', async (t) => {
+  const file = join(await makeDirectory(t), 'request-ids.json');
+  const ids = createFileRequestIds(file);
+  ids.put('k', 'a');
+  ids.put('other', 'b');
+  assert.equal(createFileRequestIds(file).get('k'), 'a');
+  ids.delete('k');
+  assert.equal(createFileRequestIds(file).get('k'), undefined);
+  assert.equal(createFileRequestIds(file).get('other'), 'b');
+  await writeFile(file, '{not json');
+  assert.equal(createFileRequestIds(file).get('other'), undefined);
 });

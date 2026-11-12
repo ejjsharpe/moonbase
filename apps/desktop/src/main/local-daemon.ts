@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { mkdir, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { Context, Effect, Layer, Semaphore } from 'effect';
+import { Cause, Context, Deferred, Effect, Exit, Layer, Semaphore } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatSession } from '@moonbase/contracts/chat';
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
@@ -33,6 +33,11 @@ export type LocalDaemonOptions = {
   replaceMs?: number;
 };
 
+/**
+ * How long a failed attempt to find, start or reach the local daemon is answered again, to every
+ * caller, without trying anew; a crash-looping or hung daemon is then started at most this often.
+ */
+export const daemonRetryAfterMs = 2000;
 /** Why local chat is Unavailable while an older app's daemon, of another protocol, still runs. */
 export const olderDaemonMessage =
   'An older Moonbase daemon is still finishing its work. Local chat starts once it stops.';
@@ -126,8 +131,9 @@ export type LocalDaemon = ReturnType<typeof createLocalDaemon>;
  * a time.
  *
  * A daemon of another build that speaks this protocol is used while it runs and marked outdated;
- * `replace` stops it (`SIGTERM`) and starts this app's. One that speaks another protocol is never
- * signalled: local chat is Unavailable until it exits by itself, idle with no client connected.
+ * `replace` stops it (`SIGTERM`) and starts this app's. One that speaks another protocol is left
+ * alone, and local chat is Unavailable until it exits by itself (idle with no client connected),
+ * unless the user stops it with Restart Daemon (`stop`).
  */
 export function createLocalDaemon({
   directory,
@@ -256,8 +262,9 @@ export function createLocalDaemon({
     restart: () => serialize(start),
     /**
      * Stops the daemon of this directory (`SIGTERM`, so its runs resume in the next one), whether
-     * or not it is outdated or busy, and waits for it. The next request starts a new one. False,
-     * signalling nothing, when no process runs a daemon here.
+     * or not it is outdated or busy, and waits for it: the one in use, else the one its endpoint
+     * names, an older protocol's included, once its command line shows it is a daemon of this
+     * directory. False, signalling nothing, when no process runs a daemon here.
      */
     stop: () => {
       let stopped = false;
@@ -283,11 +290,15 @@ export function createLocalDaemon({
  * reconnected, so the next request reaches a running daemon in a new connection generation. Chat
  * watches of the old generation fail as `Unavailable` and their clients reconnect them.
  *
+ * Lookups that need the daemon back share one recovery, which runs to the end even when they stop
+ * waiting; a failed one is their answer, and every lookup's for `daemonRetryAfterMs` after it.
+ *
  * While the daemon in use is outdated, it is asked every `replaceMs` whether it has active work;
  * once it has none, it is replaced by this app's daemon and reconnected the same way.
  */
 export const LocalDaemonConnectionLive = (
   daemon: LocalDaemon,
+  now: () => number = Date.now,
 ): Layer.Layer<ConnectionService, ApplicationError> =>
   Layer.effect(
     ConnectionService,
@@ -313,9 +324,9 @@ export const LocalDaemonConnectionLive = (
           yield* connect;
         }),
       );
-      const recover = lock.withPermits(1)(
+      const recoverOnce = lock.withPermits(1)(
         Effect.gen(function* () {
-          // Another lookup may have recovered while this one waited.
+          // An outdated daemon may have been replaced while this one waited.
           if (yield* connected) return;
           yield* promise(daemon.ensure);
           const first = yield* Effect.result(connect);
@@ -324,6 +335,29 @@ export const LocalDaemonConnectionLive = (
           // Its process runs but nothing answers: start a daemon that will.
           yield* promise(daemon.restart);
           yield* connect;
+        }),
+      );
+      const scope = yield* Effect.scope;
+      let recovery: Deferred.Deferred<void, ApplicationError> | undefined,
+        failed: { error: ApplicationError; at: number } | undefined;
+      const recover = Effect.uninterruptibleMask((restore) =>
+        Effect.suspend(() => {
+          const since = failed && now() - failed.at;
+          if (failed && since !== undefined && since >= 0 && since < daemonRetryAfterMs)
+            return Effect.fail(failed.error);
+          if (recovery) return restore(Deferred.await(recovery));
+          const done = (recovery = Deferred.makeUnsafe<void, ApplicationError>());
+          const settle = (exit: Exit.Exit<void, ApplicationError>) =>
+            Effect.suspend(() => {
+              recovery = undefined;
+              const error = Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined;
+              failed = ApplicationError.is(error) ? { error, at: now() } : undefined;
+              return Deferred.done(done, exit);
+            });
+          return Effect.andThen(
+            Effect.forkIn(Effect.onExit(recoverOnce, settle), scope),
+            restore(Deferred.await(done)),
+          );
         }),
       );
       const connection = {
@@ -358,22 +392,25 @@ export const LocalDaemonConnectionLive = (
   ).pipe(Layer.provide(LoopbackConnectionLive({ directory: daemon.directory })));
 
 /**
- * The Restart daemon action: after the user confirms, stops the local daemon with `SIGTERM`. Its
- * runs resume in the next daemon, which the next request starts. A failure is reported, never
- * thrown.
+ * The Restart daemon action: after the user confirms, stops the local daemon with `SIGTERM` (one
+ * of an older protocol included) and starts this app's at once with `start`, which also connects
+ * to it; its runs resume there. A failure is reported, never thrown.
  */
 export async function restartDaemon({
   daemon,
+  start,
   confirm,
   report,
 }: {
   daemon: Pick<LocalDaemon, 'stop'>;
+  start(): Promise<unknown>;
   confirm(): Promise<boolean>;
   report(message: string): void;
 }) {
   if (!(await confirm())) return;
   try {
-    if (!(await daemon.stop())) report('No Moonbase daemon was running, so nothing was restarted.');
+    await daemon.stop();
+    await start();
   } catch (error) {
     report(error instanceof Error ? error.message : 'The daemon could not be restarted.');
   }
