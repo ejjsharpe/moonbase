@@ -649,7 +649,7 @@ class EditorModelState {
     if (reopening) {
       this.recovery.openCheckoutIds.push(target.checkoutId);
       await this.observe(target);
-    }
+    } else await this.rewatchLost(target);
     await this.selectOpenCheckout(target);
     await this.refreshCheckout(target);
     return target;
@@ -1482,9 +1482,20 @@ class EditorModelState {
         .map((item) => item.path),
     });
   }
-  refresh(checkout: CheckoutTarget): Promise<void> {
+  async refresh(checkout: CheckoutTarget): Promise<void> {
     this.assertAdmission();
+    await this.rewatchLost(checkout);
     return this.refreshCheckout(checkout);
+  }
+  /** Watches an open checkout again once its watch gave up, so live updates return with the daemon. */
+  private async rewatchLost(checkout: CheckoutTarget) {
+    if (
+      this.closing ||
+      !this.discovery.isWatchLost(checkout) ||
+      !this.recovery.openCheckoutIds.includes(checkout.checkoutId)
+    )
+      return;
+    await this.observe(checkout).catch(this.report);
   }
   private refreshCheckout(checkout: CheckoutTarget): Promise<void> {
     this.checkout(checkout);

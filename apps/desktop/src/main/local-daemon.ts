@@ -171,7 +171,7 @@ export function createLocalDaemon({
     const deadline = Date.now() + stopMs;
     while (isAlive(outdatedPid)) {
       if (Date.now() > deadline)
-        throw unavailable('An older Moonbase chat daemon is still stopping. Try again shortly.');
+        throw unavailable('The Moonbase chat daemon is still stopping. Try again shortly.');
       await delay(50);
     }
     return true;
@@ -372,7 +372,7 @@ export async function restartDaemon({
 }) {
   if (!(await confirm())) return;
   try {
-    await daemon.stop();
+    if (!(await daemon.stop())) report('No Moonbase daemon was running, so nothing was restarted.');
   } catch (error) {
     report(error instanceof Error ? error.message : 'The daemon could not be restarted.');
   }

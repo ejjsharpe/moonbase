@@ -11,6 +11,7 @@ import type { DaemonChat } from '../chat/daemon.ts';
 import type { ChatConfiguration } from '../chat/config.ts';
 import { ChatIpcSession } from '../chat/session.ts';
 import type { Reply, DesktopChatTarget } from '../chat/wire.ts';
+import { createMemoryRequestIds, type RequestIds } from './request-ids.ts';
 
 type LocalResult = { backend: DaemonChat | null; error: ApplicationError | null };
 /** A remote host's daemon in host mode, over its SSH connection. */
@@ -33,6 +34,7 @@ export function createChatBackends({
   installationId,
   adoptCheckout = () => {},
   transcript,
+  requestIds = createMemoryRequestIds(),
 }: {
   runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>;
   localResult: LocalResult;
@@ -47,14 +49,14 @@ export function createChatBackends({
   /** Lets the editor open a checkout the daemon made for a chat. */
   adoptCheckout?(checkout: CheckoutTarget): void;
   transcript?: NativeTranscriptActions;
+  /** Request IDs of chat operations left unknown, kept across reloads and restarts. */
+  requestIds?: RequestIds;
 }) {
   let local = localResult.backend;
   let localRetry: Promise<void> | undefined;
   const sessions = new Map<string, ChatIpcSession>();
   /** Worktree creations for the current document; replacing the document cancels them. */
   const worktreeCreations = new Set<AbortController>();
-  /** Request IDs of worktrees whose creation was left unknown, so a repeat asks for the same one. */
-  const pendingWorktrees = new Map<string, string>();
   let documentId = randomUUID();
   const run = <A>(effect: Effect.Effect<A, ApplicationError>) =>
     runApplicationEffect(runtime, effect);
@@ -117,6 +119,27 @@ export function createChatBackends({
         ]
       : []),
   ];
+  /**
+   * Sends under a request ID kept durably before it is sent, so a repeat after a lost reply, a
+   * reload or a restart asks for the first outcome. The ID is kept only while the outcome is
+   * unknown (`Uncertain`, or cancelled); an answer, a refusal included, is final.
+   */
+  const withRequestId = async <A>(
+    key: string,
+    send: (requestId: string) => Promise<A>,
+  ): Promise<A> => {
+    const requestId = requestIds.get(key) ?? randomUUID();
+    requestIds.put(key, requestId);
+    try {
+      const output = await send(requestId);
+      requestIds.delete(key);
+      return output;
+    } catch (error) {
+      if (!ApplicationError.is(error) || !['Uncertain', 'Cancelled'].includes(error.code))
+        requestIds.delete(key);
+      throw error;
+    }
+  };
   const requireBackend = (message: string) => {
     if (!local) throw new ApplicationError({ code: 'Unavailable', message });
     return local;
@@ -125,7 +148,6 @@ export function createChatBackends({
     const owner = documentId;
     for (const creation of worktreeCreations) creation.abort();
     worktreeCreations.clear();
-    pendingWorktrees.clear();
     const closing = [...sessions.values()].map((session) => session.dispose());
     sessions.clear();
     documentId = randomUUID();
@@ -202,29 +224,20 @@ export function createChatBackends({
       const owner = documentId,
         creation = new AbortController();
       worktreeCreations.add(creation);
-      const pending = JSON.stringify([root, branch]);
+      const pending = JSON.stringify(['createChatWorktree', root, branch]);
       try {
         // An editor project is trusted natively; any other folder must be one the daemon approved.
         if (!isEditorFolder(root))
           await run(
             backend.folders.checkApprovedFolder({ host: backend.session.host, path: root }),
           );
-        const requestId = pendingWorktrees.get(pending) ?? randomUUID();
-        pendingWorktrees.set(pending, requestId);
-        let created: CheckoutTarget;
-        try {
-          created = await runApplicationEffect(
+        const created = await withRequestId(pending, (requestId) =>
+          runApplicationEffect(
             runtime,
             backend.workspace.createChatWorktree({ installationId, requestId, root, branch }),
             { signal: creation.signal },
-          );
-          pendingWorktrees.delete(pending);
-        } catch (error) {
-          // Only a creation left unknown is asked for again; an answer, a refusal included, is final.
-          if (!ApplicationError.is(error) || !['Uncertain', 'Cancelled'].includes(error.code))
-            pendingWorktrees.delete(pending);
-          throw error;
-        }
+          ),
+        );
         // A replaced document's worktree is left on disk but not offered to the new document.
         if (owner !== documentId)
           throw new ApplicationError({
@@ -245,12 +258,16 @@ export function createChatBackends({
     async turnIntoProject(conversationId: string) {
       const backend = requireBackend('Turning a chat into a project is unavailable.');
       const owner = documentId;
-      const created = await run(
-        backend.workspace.turnChatIntoProject({
-          installationId,
-          requestId: randomUUID(),
-          target: { ...backend.session, conversationId },
-        }),
+      const created = await withRequestId(
+        JSON.stringify(['turnChatIntoProject', conversationId]),
+        (requestId) =>
+          run(
+            backend.workspace.turnChatIntoProject({
+              installationId,
+              requestId,
+              target: { ...backend.session, conversationId },
+            }),
+          ),
       );
       if (owner !== documentId)
         throw new ApplicationError({
@@ -265,6 +282,8 @@ export function createChatBackends({
       await this.getContext('local');
       return local!;
     },
+    /** The local daemon's workspace if local chat already reached it; never finds or starts one. */
+    peekLocalWorkspace: () => local?.workspace ?? null,
     requireLocal(backendId: string) {
       if (backendId === 'local' && !local) throw localResult.error;
     },

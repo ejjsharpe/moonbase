@@ -152,12 +152,15 @@ export class WorkspaceRecovery {
   private readonly host: HostPorts;
   private readonly installationId: string;
   private readonly legacyHostIds: ReadonlySet<string>;
+  private readonly hostWaitMs: number;
   constructor(
     store: ClientStore,
     host: HostPorts,
     installationId: string,
     legacyHostIds: readonly string[] = [],
+    hostWaitMs = 5000,
   ) {
+    this.hostWaitMs = hostWaitMs;
     this.store = store;
     this.host = host;
     this.installationId = installationId;
@@ -1028,14 +1031,18 @@ export class WorkspaceRecovery {
         if (!stored) continue;
         const state = stored.state as EditorRecovery;
         const present = new Set(state.checkouts.map((c) => c.checkoutId));
-        // A checkout the recovery already holds under its new ID is not merged into.
         const moves = new Map(
           [...reopened].filter(
             ([from, to]) =>
               present.has(from) && (from === to.checkoutId || !present.has(to.checkoutId)),
           ),
         );
-        if (!moves.size) continue;
+        // A checkout the recovery already holds under its new ID takes the former one's drafts
+        // that don't collide with its own by path; colliding ones stay where they were.
+        const merges = [...reopened].filter(
+          ([from, to]) => present.has(from) && from !== to.checkoutId && present.has(to.checkoutId),
+        );
+        if (!moves.size && !merges.length) continue;
         const move = (target: CheckoutTarget) => moves.get(target.checkoutId) ?? target;
         state.checkouts = state.checkouts.map(move);
         state.openCheckoutIds = state.openCheckoutIds.map((id) => moves.get(id)?.checkoutId ?? id);
@@ -1050,6 +1057,60 @@ export class WorkspaceRecovery {
           target: { ...d.target, checkout: move(d.target.checkout) },
         }));
         state.recentFiles = state.recentFiles.map((t) => ({ ...t, checkout: move(t.checkout) }));
+        for (const [from, to] of merges) {
+          const held = new Set(
+            state.drafts
+              .filter((d) => d.target.checkout.checkoutId === to.checkoutId)
+              .map((d) => d.target.path),
+          );
+          const colliding = new Set<string>();
+          state.drafts = state.drafts.map((d) => {
+            if (d.target.checkout.checkoutId !== from) return d;
+            if (held.has(d.target.path)) {
+              colliding.add(d.target.path);
+              return d;
+            }
+            return { ...d, target: { ...d.target, checkout: to } };
+          });
+          for (const path of colliding)
+            errors.push(
+              `${path}: a draft already exists in ${to.root}; this one stays on the former checkout.`,
+            );
+          const heldRecent = new Set(
+            state.recentFiles
+              .filter((t) => t.checkout.checkoutId === to.checkoutId)
+              .map((t) => t.path),
+          );
+          state.recentFiles = state.recentFiles.flatMap((t) => {
+            if (t.checkout.checkoutId !== from || colliding.has(t.path)) return [t];
+            return heldRecent.has(t.path) ? [] : [{ ...t, checkout: to }];
+          });
+          const fromView = state.views[from],
+            toView = state.views[to.checkoutId];
+          if (fromView && !toView) state.views[to.checkoutId] = fromView;
+          else if (fromView && toView) {
+            for (const file of fromView.openFiles)
+              if (
+                !colliding.has(file) &&
+                !toView.openFiles.includes(file) &&
+                toView.openFiles.length < 1000
+              )
+                toView.openFiles.push(file);
+            for (const [file, view] of Object.entries(fromView.fileViews))
+              if (!colliding.has(file) && !(file in toView.fileViews))
+                toView.fileViews[file] = view;
+            for (const [file, position] of Object.entries(fromView.positions))
+              if (!colliding.has(file) && !(file in toView.positions))
+                toView.positions[file] = position;
+          }
+          if (colliding.size) continue;
+          state.checkouts = state.checkouts.filter((c) => c.checkoutId !== from);
+          state.openCheckoutIds = [
+            ...new Set(state.openCheckoutIds.map((id) => (id === from ? to.checkoutId : id))),
+          ];
+          if (state.selectedCheckoutId === from) state.selectedCheckoutId = to.checkoutId;
+          delete state.views[from];
+        }
         recovery(state, client);
         this.store.writeInternalRecovery(client, stored.revision, state);
       }
@@ -1076,17 +1137,32 @@ export class WorkspaceRecovery {
     identifier(clientId);
     const before = this.store.readRecovery(clientId);
     if (before) recovery(before.state as EditorRecovery, clientId);
-    const errors: string[] = await this.syncFeed(signal);
+    // A host that is slow to answer (such as a daemon still starting) is given `hostWaitMs` in all;
+    // then the drafts load without it, and what it would have settled is retried on the next load.
+    const hostSignal = AbortSignal.any([signal, AbortSignal.timeout(this.hostWaitMs)]);
+    const skipped = () => hostSignal.aborted && !signal.aborted;
+    const errors: string[] = [];
+    const withHost = async (phase: () => Promise<string[] | void>) => {
+      if (skipped()) return;
+      try {
+        errors.push(...((await phase()) ?? []));
+      } catch (error) {
+        if (!skipped()) throw error;
+      }
+    };
+    await withHost(() => this.syncFeed(hostSignal));
     // Saves left open on a checkout of a former host are resolved too, so their text becomes a
     // draft before the checkout is rebound.
-    await this.recoverEvidence(
-      signal,
-      new Set([
-        ...((before?.state as EditorRecovery | undefined)?.openCheckoutIds ?? []),
-        ...this.legacyCheckouts().keys(),
-      ]),
+    await withHost(() =>
+      this.recoverEvidence(
+        hostSignal,
+        new Set([
+          ...((before?.state as EditorRecovery | undefined)?.openCheckoutIds ?? []),
+          ...this.legacyCheckouts().keys(),
+        ]),
+      ),
     );
-    errors.push(...(await this.rebindLegacyCheckouts(signal)));
+    await withHost(() => this.rebindLegacyCheckouts(hostSignal));
     const stored = this.store.readRecovery(clientId),
       state = (stored?.state ?? emptyRecovery(clientId)) as EditorRecovery;
     recovery(state, clientId);
@@ -1094,11 +1170,16 @@ export class WorkspaceRecovery {
       state.openCheckoutIds.includes(c.checkoutId),
     )) {
       try {
-        await this.host.verifyCheckout(target, signal);
+        if (skipped()) break;
+        await this.host.verifyCheckout(target, hostSignal);
       } catch (error) {
-        errors.push(target.root + ': ' + errorText(error));
+        if (!skipped()) errors.push(target.root + ': ' + errorText(error));
       }
     }
+    if (skipped())
+      errors.push(
+        'The local host did not answer in time; files are checked again on the next load.',
+      );
     const relevant = this.getOperations(
       "NOT EXISTS (SELECT 1 FROM json_each(body, '$.acknowledgedBy') WHERE value = ?) AND (json_extract(body, '$.input.clientId') = ? OR json_extract(body, '$.input.checkout.checkoutId') IN (SELECT value FROM json_each(?)))",
       [clientId, clientId, JSON.stringify(state.checkouts.map((c) => c.checkoutId))],

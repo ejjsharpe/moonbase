@@ -69,7 +69,12 @@ export class ClientWorkspace implements AdmissionOwner {
     return this.ownership.operations;
   }
   constructor(
-    config: { dataDirectory: string; installationId: string; legacyHostIds?: string[] },
+    config: {
+      dataDirectory: string;
+      installationId: string;
+      legacyHostIds?: string[];
+      hostWaitMs?: number;
+    },
     ownership: ClientOwnership,
     host: WorkspaceHostServiceShape,
   ) {
@@ -90,7 +95,13 @@ export class ClientWorkspace implements AdmissionOwner {
         run(host.acknowledgeOperation({ installationId, ...input }), signal),
       listOperations: (input, signal) => run(host.listOperations(input), signal),
     };
-    this.recovery = new WorkspaceRecovery(this.store, ports, installationId, config.legacyHostIds);
+    this.recovery = new WorkspaceRecovery(
+      this.store,
+      ports,
+      installationId,
+      config.legacyHostIds,
+      config.hostWaitMs,
+    );
     const call =
       <K extends WorkspaceCommand>(
         operation: K,

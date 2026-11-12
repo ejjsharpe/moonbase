@@ -33,6 +33,7 @@ import { channels as chatChannels } from './chat/wire.ts';
 import { respondTranscriptImage, transcriptImagePath } from './chat/transcript-native.ts';
 import { createNativeActions } from './main/native-actions.ts';
 import { createChatBackends } from './main/chat-backends.ts';
+import { createFileRequestIds } from './main/request-ids.ts';
 import { createDaemonWorkspaceHost } from './main/workspace-host.ts';
 import { findDaemonCommand, type DaemonCommand } from './main/daemon-command.ts';
 import {
@@ -207,16 +208,22 @@ async function main() {
   );
   session.defaultSession.setPermissionCheckHandler(() => false);
 
+  let peekWorkspace = (): WorkspaceHostServiceShape | null => null;
   const requireTrusted = createTrustedDocumentGuard(window, appURL);
   const native = createNativeActions({
     window,
     dialog,
     clipboard,
     shell,
-    // Only paths the native picker, clipboard or a drop gave reach the daemon, never a renderer's.
+    // Picker and clipboard paths are native; a drop's paths come from the renderer (webUtils), so
+    // the daemon's reserved-path and root-policy check on every import is the authority.
     capture: async (input) =>
       (await runApplicationEffect(runtime, host.captureImports(input))).references,
-    release: (input) => runApplicationEffect(runtime, host.releaseImports(input)),
+    // Releasing never starts a daemon: references of one that is not running expire on their own.
+    release: async (input) => {
+      const running = daemon.isRunning() ? peekWorkspace() : null;
+      if (running) await runApplicationEffect(runtime, running.releaseImports(input));
+    },
   });
   const editorSession = new EditorSession(
     runtime,
@@ -246,6 +253,7 @@ async function main() {
     // needs no picker; main trusts these for a chat's new worktree.
     isEditorFolder: (path) => editorSession.hasFolder(path),
     installationId,
+    requestIds: createFileRequestIds(join(userData, 'workspace-v1', 'chat-requests.json')),
     adoptCheckout: (target) => editorSession.adoptCheckout(target),
     remote,
     emit: (backendId, id, result) => {
@@ -260,6 +268,7 @@ async function main() {
     },
   });
   reachWorkspace = async () => (await chatBackends.getLocalBackend()).workspace;
+  peekWorkspace = () => chatBackends.peekLocalWorkspace();
   const rendererRoot = join(directory, 'renderer');
   protocol.handle('moonbase', async (request) => {
     const url = new URL(request.url);

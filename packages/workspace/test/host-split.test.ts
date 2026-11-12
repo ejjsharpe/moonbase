@@ -54,10 +54,11 @@ function harness() {
     host: WorkspaceHostServiceShape,
     lose?: (host: WorkspaceHostServiceShape) => WorkspaceHostServiceShape,
     legacyHostIds?: string[],
+    hostWaitMs?: number,
   ) => {
     const runtime = ManagedRuntime.make(
       WorkspaceRecoveryLive(
-        { dataDirectory: join(base, name), installationId: name, legacyHostIds },
+        { dataDirectory: join(base, name), installationId: name, legacyHostIds, hostWaitMs },
         lose ? lose(host) : host,
       ),
     );
@@ -471,20 +472,45 @@ test("the cutover reopens a former host's roots, moves drafts to them and turns 
     const gone = join(h.base, 'gone');
     mkdirSync(gone);
     writeFileSync(join(gone, 'file.txt'), 'original');
+    const merged = join(h.base, 'merged');
+    mkdirSync(merged);
+    writeFileSync(join(merged, 'a.txt'), 'original');
+    writeFileSync(join(merged, 'b.txt'), 'original');
+    const { host } = await h.startHost(60_000, 'host', 'split-host');
     const former = await h.startHost(60_000, 'former', 'moonbase-local');
     const checkout = await openCheckout(former.host, h.root),
       orphan = await openCheckout(former.host, gone),
+      mergedOld = await openCheckout(former.host, merged),
+      mergedNew = await openCheckout(host, merged),
       disk = await Effect.runPromise(former.host.readFile({ checkout, path: 'file.txt' }));
     let alice = h.startClient('alice', former.host, dropRequest('saveFile'));
     const state = draft('window', checkout, 'unsaved edit', disk);
     state.checkouts.push(orphan);
     state.drafts.push({ target: { checkout: orphan, path: 'file.txt' }, text: 'kept', disk });
+    // The reopened checkout is already held: it takes the drafts that don't collide by path.
+    state.checkouts.push(mergedOld);
+    for (const [checkout, path, text] of [
+      [mergedOld, 'a.txt', 'old a'],
+      [mergedOld, 'b.txt', 'old b'],
+    ] as const)
+      state.drafts.push({ target: { checkout, path }, text, disk });
     await alice.client.command('persistRecovery', {
       requestId: randomUUID(),
       clientId: 'window',
       expectedRevision: 0,
       state,
     });
+    // A client of the new host then holds its checkout of the same root, with a draft of its own.
+    const bound = h.startClient('alice', host);
+    state.checkouts.push(mergedNew);
+    state.drafts.push({ target: { checkout: mergedNew, path: 'a.txt' }, text: 'new a', disk });
+    await bound.client.command('persistRecovery', {
+      requestId: randomUUID(),
+      clientId: 'window',
+      expectedRevision: 1,
+      state,
+    });
+    await bound.runtime.dispose();
     // The old host never admitted this save: its text has to come back as a draft.
     await assert.rejects(
       alice.client.command('saveFile', {
@@ -497,7 +523,6 @@ test("the cutover reopens a former host's roots, moves drafts to them and turns 
     );
     await alice.runtime.dispose();
     rmSync(gone, { recursive: true });
-    const { host } = await h.startHost(60_000, 'host', 'split-host');
     alice = h.startClient('alice', host, undefined, ['moonbase-local']);
     const load = await alice.client.command('loadRecovery', { clientId: 'window' });
     const rebound = load.state.checkouts.find((c) => c.root === h.root)!;
@@ -518,11 +543,51 @@ test("the cutover reopens a former host's roots, moves drafts to them and turns 
     assert.equal(stranded.hostId, 'moonbase-local');
     assert.equal(load.state.drafts.find((d) => d.target.checkout.root === gone)?.text, 'kept');
     assert(load.errors.some((error) => error.includes(gone)));
+    const draftText = (root: string, hostId: string, path: string) =>
+      load.state.drafts.find(
+        (d) =>
+          d.target.checkout.root === root &&
+          d.target.checkout.hostId === hostId &&
+          d.target.path === path,
+      )?.text;
+    assert.equal(draftText(merged, 'split-host', 'b.txt'), 'old b');
+    assert.equal(draftText(merged, 'split-host', 'a.txt'), 'new a');
+    assert.equal(draftText(merged, 'moonbase-local', 'a.txt'), 'old a');
+    assert.equal(draftText(merged, 'moonbase-local', 'b.txt'), undefined);
+    assert(load.errors.some((error) => error.includes('a.txt')));
     // The rebound checkout works on the new host.
     assert.equal(
       (await alice.client.command('readFile', { checkout: rebound, path: 'file.txt' })).text,
       'original',
     );
+  } finally {
+    await h.close();
+  }
+});
+
+test('loading recovery stops waiting on a host that does not answer and still returns the drafts', async () => {
+  const h = harness();
+  try {
+    writeFileSync(join(h.root, 'file.txt'), 'original');
+    const { host } = await h.startHost();
+    const checkout = await openCheckout(host, h.root),
+      disk = await Effect.runPromise(host.readFile({ checkout, path: 'file.txt' }));
+    const silent = (host: WorkspaceHostServiceShape): WorkspaceHostServiceShape =>
+      Object.fromEntries(
+        Object.keys(host).map((name) => [name, () => Effect.never]),
+      ) as unknown as WorkspaceHostServiceShape;
+    const saved = h.startClient('alice', host);
+    await saved.client.command('persistRecovery', {
+      requestId: randomUUID(),
+      clientId: 'window',
+      expectedRevision: 0,
+      state: draft('window', checkout, 'unsaved edit', disk),
+    });
+    await saved.runtime.dispose();
+    const alice = h.startClient('alice', host, silent, undefined, 20);
+    const load = await alice.client.command('loadRecovery', { clientId: 'window' });
+    assert.equal(load.state.drafts[0].text, 'unsaved edit');
+    assert(load.errors.length > 0);
   } finally {
     await h.close();
   }

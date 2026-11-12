@@ -54,6 +54,8 @@ export class EditorDiscovery {
   private dependencies: DiscoveryDependencies;
   private stops = new Map<string, { scope: Scope.Closeable; close: ObservationClose }>();
   private observationClosures = new Set<ObservationClose>();
+  /** Checkouts whose watch gave up, so an explicit refresh or reopen watches them again. */
+  private lostWatches = new Set<string>();
   private selection?: Scope.Closeable;
   private selectionCheckout?: string;
   private obsoleteReadErrors = new WeakSet<ApplicationError>();
@@ -131,6 +133,7 @@ export class EditorDiscovery {
   }
   releaseObservation(checkout: CheckoutTarget): Promise<void> {
     const key = checkoutKey(checkout);
+    this.lostWatches.delete(key);
     const observation = this.stops.get(key);
     if (!observation) return Promise.resolve();
     this.stops.delete(key);
@@ -140,10 +143,15 @@ export class EditorDiscovery {
       ),
     );
   }
+  /** Whether the checkout's watch gave up, such as after a daemon stayed away past every backoff. */
+  isWatchLost(checkout: CheckoutTarget) {
+    return this.lostWatches.has(checkoutKey(checkout));
+  }
   /**
    * Watches a checkout. A retryable (`Unavailable`) failure, such as a daemon that restarted,
    * watches again after each backoff and then reads again, since changes were missed meanwhile;
-   * only a failure that cannot be retried, or the last of them, is reported.
+   * only a failure that cannot be retried, or the last of them, is reported and leaves the watch
+   * lost, which an explicit refresh or reopen of the checkout arms again.
    */
   async observe(
     checkout: CheckoutTarget,
@@ -170,6 +178,7 @@ export class EditorDiscovery {
       if (upSince !== undefined && performance.now() - upSince >= watchHealthyMs) failures = 0;
       const delay = this.dependencies.watchRetryMs[failures];
       if (failure.code !== 'Unavailable' || delay === undefined) {
+        this.lostWatches.add(key);
         this.dependencies.report(error);
         return;
       }

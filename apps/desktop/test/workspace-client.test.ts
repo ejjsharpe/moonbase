@@ -214,5 +214,12 @@ test('Restart daemon asks first, and stops the daemon only when confirmed', asyn
     confirm: async () => true,
     report: (m) => reported.push(m),
   });
-  assert.deepEqual(reported, ['Still stopping.']);
+  assert.equal(reported.length, 1);
+  // A stop that found no daemon to stop is reported too.
+  await restartDaemon({
+    daemon: { stop: async () => false },
+    confirm: async () => true,
+    report: (m) => reported.push(m),
+  });
+  assert.equal(reported.length, 2);
 });

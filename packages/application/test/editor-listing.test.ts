@@ -220,7 +220,7 @@ test('filesystem changes refresh past a held folder read and older replies canno
   }
 });
 
-test('a watch that fails as Unavailable is watched again after the backoff and read again, and a refused one is reported', async () => {
+test('a watch that fails as Unavailable is watched again after the backoff and read again, and a refused one is reported until a refresh watches again', async () => {
   const f = await fixture('listing-rewatch-source', false);
   const watches: {
     receive: (event: WorkspaceEvent) => void;
@@ -271,6 +271,9 @@ test('a watch that fails as Unavailable is watched again after the backoff and r
     watches[1].fail(new ApplicationError({ code: 'Unavailable', message: 'Still down.' }));
     await until(() => reports.length > 0);
     assert.equal(watches.length, 2);
+    // An explicit refresh watches again, so a daemon that returns later revives live updates.
+    await editor.refresh(checkout);
+    assert.equal(watches.length, 3);
   } finally {
     off();
     await editor.dispose();

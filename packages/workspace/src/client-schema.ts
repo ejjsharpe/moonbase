@@ -26,6 +26,8 @@ export const ClientConfigurationSchema = struct({
   installationId: WorkspaceIdentifierSchema,
   /** Host IDs whose checkouts are reopened on the connected host when recovery loads. */
   legacyHostIds: optional(array(Schema.String)),
+  /** How long loading recovery waits on the host before it gives up on it for this load. */
+  hostWaitMs: optional(natural),
 });
 const configuration = Schema.decodeUnknownSync(ClientConfigurationSchema, { reportInput: false });
 export function decodeClientConfiguration(value: unknown) {

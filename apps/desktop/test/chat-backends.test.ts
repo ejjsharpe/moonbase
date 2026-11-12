@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { createChatBackends } from '../src/main/chat-backends.ts';
+import { createMemoryRequestIds } from '../src/main/request-ids.ts';
 
 type Dependencies = Parameters<typeof createChatBackends>[0];
 type Backend = NonNullable<Dependencies['localResult']['backend']>;
@@ -233,10 +234,13 @@ test('a new worktree starts only from a folder local chat may use, asks the daem
       },
     },
   );
+  // The request IDs outlive a backend, as they do across a reload or restart.
+  const requestIds = createMemoryRequestIds();
   const make = () =>
     createChatBackends({
       runtime,
       installationId: 'installation',
+      requestIds,
       localResult: { backend, error: null },
       acquireLocal: async () => ({ backend, error: null }),
       emit: () => {},
@@ -256,7 +260,10 @@ test('a new worktree starts only from a folder local chat may use, asks the daem
     // A worktree whose outcome is unknown is asked for again under its request; a refusal is not.
     failure = new ApplicationError({ code: 'Uncertain', message: 'Reply lost.' });
     await assert.rejects(owner.createWorktree('/repo', 'late'), { code: 'Uncertain' });
-    await assert.rejects(owner.createWorktree('/repo', 'late'), { code: 'Uncertain' });
+    await owner.releaseDocument();
+    const restarted = make();
+    await assert.rejects(restarted.createWorktree('/repo', 'late'), { code: 'Uncertain' });
+    await restarted.releaseDocument();
     failure = new ApplicationError({ code: 'Conflict', message: 'Taken.' });
     await assert.rejects(owner.createWorktree('/repo', 'late'), { code: 'Conflict' });
     await assert.rejects(owner.createWorktree('/repo', 'late'), { code: 'Conflict' });

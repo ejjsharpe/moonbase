@@ -873,7 +873,10 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
           {...stylex.props(styles.empty)}>
           <strong>Chat could not initialize</strong>
           <p>{lifecycle.chat.error}</p>
-          <p>Local editing is available. Open Chat panel to retry before closing this workbench.</p>
+          <p>
+            Files show as unavailable with Retry until the daemon returns. Open Chat panel to retry
+            before closing this workbench.
+          </p>
         </section>
       ) : null}
       {lifecycle.cleanup.errors.length ? (
@@ -1102,12 +1105,10 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         ) : (
           <section {...stylex.props(styles.empty)} aria-label="Chat configuration">
             <h1>{chatHeading}</h1>
-            <p role="status">
-              {lifecycle.chat.error ?? 'Chat is unavailable. Local editing is available.'}
-            </p>
+            <p role="status">{lifecycle.chat.error ?? 'Chat is unavailable.'}</p>
             <p>
-              Local editing remains available. Open Chat panel to retry initialization, or choose
-              another host in Settings.
+              Files need the same daemon, so they show as unavailable with Retry until it returns.
+              Open Chat panel to retry initialization, or choose another host in Settings.
             </p>
             {lifecycle.chatTargets.length > 1 && (
               <Button {...stylex.props(controls.button)} onClick={() => setSettings('hosts')}>
