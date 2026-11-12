@@ -220,7 +220,7 @@ test('filesystem changes refresh past a held folder read and older replies canno
   }
 });
 
-test('a watch that fails as Unavailable is watched again after the backoff and read again, and a refused one is reported until a refresh watches again', async () => {
+test('a watch that fails as Unavailable is watched again after the backoff and read again once ready, and a refused one is reported until a refresh watches again', async () => {
   const f = await fixture('listing-rewatch-source', false);
   const watches: {
     receive: (event: WorkspaceEvent) => void;
@@ -257,15 +257,19 @@ test('a watch that fails as Unavailable is watched again after the backoff and r
       text: 'new',
     });
     watches[0].fail(new ApplicationError({ code: 'Unavailable', message: 'Daemon restarted.' }));
-    // The second watch replaces the failed one, and the change it missed is read.
+    // The second watch replaces the failed one, and the change it missed is read once it is
+    // ready, not before (a read then could miss a change made before the watch is live).
     await until(() => watches.length === 2);
-    await until(() =>
+    const missed = () =>
       editor
         .getSnapshot()
         .listings[fileKey(target('folder'))]?.entries.some(
           (entry) => entry.path === 'folder/missed.ts',
-        ),
-    );
+        );
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+    assert(!missed());
+    watches[1].receive({ checkout, paths: [], ready: true });
+    await until(missed);
     assert.equal(reports.length, 0);
     // The backoff has run out: the next failure is reported instead of watched again.
     watches[1].fail(new ApplicationError({ code: 'Unavailable', message: 'Still down.' }));

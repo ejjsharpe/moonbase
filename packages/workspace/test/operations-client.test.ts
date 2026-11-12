@@ -335,17 +335,9 @@ for (const kind of ['move', 'trash'] as const)
           recovered.state.drafts[0].target.path,
           kind === 'move' ? 'moved.txt' : 'file.txt',
         );
-        assert.equal(recovered.operations[0].outcome, kind === 'move' ? 'completed' : 'uncertain');
-        if (kind === 'trash') {
-          assert(recovered.errors.some((e) => e.includes('Uncertain')));
-          await assert.rejects(
-            restarted.client.command('acknowledgeOperation', {
-              clientId: 'alice',
-              operationClientId: 'alice',
-              id: 'lost',
-            }),
-          );
-        }
+        // The host settles it from the disk: the object left its path (and reached a move's
+        // destination), so it completed, and Trash keeps the draft where it was.
+        assert.equal(recovered.operations[0].outcome, 'completed');
         await restarted.client.command('mutate', operation);
         assert.equal(readFileSync(countFile, 'utf8'), 'called\n');
       } finally {
@@ -672,7 +664,7 @@ test('cancelling admitted native copy is typed, preserves source and leaves unre
             id: 'cancel-copy',
           })
         )?.outcome,
-        'uncertain',
+        'failed',
       );
     } finally {
       await restarted.runtime.dispose();
@@ -767,14 +759,25 @@ test('restart counts transfer and Trash results by structure regardless of displ
             result: { ...result, items: [], recoveryChanges: [] },
           }),
         );
-        host.prepare('INSERT INTO records VALUES(?,?,?)').run(
-          'operations',
-          digest('test-installation', 'alice', kind),
-          JSON.stringify({
-            input: { installationId: 'test-installation', ...input },
-            result: { ...result, items },
-          }),
-        );
+        host
+          .prepare(
+            "INSERT INTO journal(kind, id, checkout, installation, client, unsettled, body) VALUES('operations',?,?,'test-installation','alice',1,?)",
+          )
+          .run(
+            digest('test-installation', 'alice', kind),
+            checkout.checkoutId,
+            JSON.stringify({
+              input: { installationId: 'test-installation', ...input },
+              result: { ...result, items },
+              planned: [
+                {
+                  source: 'source',
+                  identity: sources[0].identity,
+                  ...(kind === 'move' ? { destination: 'destination' } : {}),
+                },
+              ],
+            }),
+          );
       }
     } finally {
       client.close();

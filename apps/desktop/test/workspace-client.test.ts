@@ -7,7 +7,12 @@ import { test, type TestContext } from 'node:test';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { WorkspaceHostService, type WorkspaceHostServiceShape } from '@moonbase/contracts/services';
+import {
+  ConnectionService,
+  WorkspaceHostService,
+  type WorkspaceHostServiceShape,
+} from '@moonbase/contracts/services';
+import { chatHostCapabilities } from '@moonbase/contracts/host';
 import { emptyRecovery, type CheckoutTarget } from '@moonbase/contracts/workspace';
 import { RemoteWorkspaceHostLive } from '@moonbase/daemon-protocol/remote';
 import { WorkspaceRecoveryLive } from '@moonbase/workspace';
@@ -19,6 +24,7 @@ import {
   restartDaemon,
 } from '../src/main/local-daemon.ts';
 import { createDaemonWorkspaceHost } from '../src/main/workspace-host.ts';
+import { createLocalDaemonClient, type LocalDaemonClient } from '../src/chat/daemon.ts';
 import {
   makeFauxDaemonCommand,
   prepareDaemonData,
@@ -28,20 +34,27 @@ import {
 
 const unavailable = new ApplicationError({ code: 'Unavailable', message: 'No daemon.' });
 
-/** The editor's workspace as main composes it, over `reach`; its store is in a temporary profile. */
-async function composeWorkspace(
-  t: TestContext,
-  userData: string,
-  reach: () => Promise<WorkspaceHostServiceShape>,
-  now?: () => number,
-) {
+type Local = Pick<LocalDaemonClient, 'connect'>;
+/** A reached daemon serving `workspace`, advertising the workspace unless `files` is false. */
+const reached = (workspace: Partial<WorkspaceHostServiceShape>, files = true): Local => ({
+  connect: () =>
+    Effect.succeed({
+      workspace,
+      endpoint: {
+        health: { capabilities: files ? [chatHostCapabilities.workspace] : [] },
+      },
+    }) as never,
+});
+
+/** The editor's workspace as main composes it, over `local`; its store is in a temporary profile. */
+async function composeWorkspace(t: TestContext, userData: string, local: Local) {
   const runtime = ManagedRuntime.make(
     WorkspaceRecoveryLive(
       {
         dataDirectory: join(userData, 'workspace-v1'),
         installationId: 'test-installation',
       },
-      createDaemonWorkspaceHost(reach, now),
+      createDaemonWorkspaceHost(local),
     ),
   );
   t.after(() => runtime.dispose());
@@ -81,10 +94,14 @@ test('without a reachable daemon the store keeps drafts, files are unavailable, 
   const userData = await temporaryProfile(t);
   let attempts = 0,
     clock = 0;
-  const reach = async (): Promise<WorkspaceHostServiceShape> => {
-    attempts++;
-    throw unavailable;
-  };
+  // The client main builds: a failed attempt is answered again for a moment.
+  const local = createLocalDaemonClient(
+    async () => {
+      attempts++;
+      throw unavailable;
+    },
+    () => clock,
+  );
   const target: CheckoutTarget = {
     hostId: 'host',
     checkoutId: 'checkout',
@@ -96,10 +113,7 @@ test('without a reachable daemon the store keeps drafts, files are unavailable, 
   const seeded = await composeWorkspace(
     t,
     userData,
-    async () =>
-      ({
-        verifyCheckout: () => Effect.void,
-      }) as unknown as WorkspaceHostServiceShape,
+    reached({ verifyCheckout: () => Effect.void }),
   );
   await seeded.client.command('persistRecovery', {
     clientId: 'desktop-primary',
@@ -108,7 +122,7 @@ test('without a reachable daemon the store keeps drafts, files are unavailable, 
     state: draftState(target, 'before'),
   });
   await seeded.runtime.dispose();
-  const first = await composeWorkspace(t, userData, reach, () => clock);
+  const first = await composeWorkspace(t, userData, local);
   const load = await first.client.command('loadRecovery', { clientId: 'desktop-primary' });
   // Edits keep being kept without the daemon.
   await first.client.command('persistRecovery', {
@@ -129,7 +143,7 @@ test('without a reachable daemon the store keeps drafts, files are unavailable, 
   assert.equal(attempts, 2);
   // Quit or a reload with the daemon down: the draft is still there, with the failure reported.
   await first.runtime.dispose();
-  const second = await composeWorkspace(t, userData, reach, () => clock);
+  const second = await composeWorkspace(t, userData, local);
   const reloaded = await second.client.command('loadRecovery', { clientId: 'desktop-primary' });
   assert.equal(reloaded.state.drafts[0].text, 'unsaved work');
   assert(reloaded.errors.length > 0);
@@ -157,13 +171,22 @@ test('a save sent as the daemon is stopped keeps its text, and resolves once the
     ),
   );
   stops.unshift(() => connection.dispose());
-  const { client } = await composeWorkspace(t, userData, () =>
-    connection.runPromise(
-      Effect.gen(function* () {
-        return yield* WorkspaceHostService;
-      }),
-    ),
-  );
+  const { client } = await composeWorkspace(t, userData, {
+    connect: () =>
+      Effect.tryPromise({
+        try: () =>
+          connection.runPromise(
+            Effect.gen(function* () {
+              const connections = yield* ConnectionService;
+              return {
+                workspace: yield* WorkspaceHostService,
+                endpoint: yield* connections.endpoint({ host: session.host }),
+              };
+            }),
+          ),
+        catch: (error) => error as ApplicationError,
+      }) as never,
+  });
 
   const checkout = await client.command('openCheckout', { root: project });
   const disk = await client.command('readFile', { checkout, path: 'a.txt' });
@@ -201,34 +224,54 @@ test('a save sent as the daemon is stopped keeps its text, and resolves once the
   assert.deepEqual(settled.errors, []);
 });
 
-test('Restart daemon asks first, and stops the daemon only when confirmed', async () => {
-  const stopped: string[] = [],
+test('a call that can’t reach the daemon within its deadline is Unavailable, and only a daemon without files is told apart', async () => {
+  const target = {
+    checkout: {
+      hostId: 'host',
+      checkoutId: 'checkout',
+      projectId: 'project',
+      root: '/project',
+      vcs: 'none' as const,
+    },
+    path: 'a.txt',
+  };
+  const read = (local: Local, deadlineMs?: () => number) =>
+    Effect.runPromise(createDaemonWorkspaceHost(local, deadlineMs).readFile(target));
+  await assert.rejects(
+    read({ connect: () => Effect.never }, () => 10),
+    { code: 'Unavailable' },
+  );
+  const invalid = new ApplicationError({ code: 'Incompatible', message: 'Invalid reply.' });
+  const refusing = { readFile: () => Effect.fail(invalid) };
+  await assert.rejects(read(reached(refusing)), invalid);
+  await assert.rejects(read(reached(refusing, false)), { code: 'Unavailable' });
+});
+
+test('Restart daemon asks first, then stops the daemon and starts it again', async () => {
+  const steps: string[] = [],
     reported: string[] = [];
   const daemon = {
     stop: async () => {
-      stopped.push('stop');
+      steps.push('stop');
       return true;
     },
   };
-  await restartDaemon({ daemon, confirm: async () => false, report: (m) => reported.push(m) });
-  assert.deepEqual(stopped, []);
-  await restartDaemon({ daemon, confirm: async () => true, report: (m) => reported.push(m) });
-  assert.deepEqual(stopped, ['stop']);
+  const start = async () => void steps.push('start');
+  const report = (message: string) => void reported.push(message);
+  await restartDaemon({ daemon, start, confirm: async () => false, report });
+  assert.deepEqual(steps, []);
+  await restartDaemon({ daemon, start, confirm: async () => true, report });
+  assert.deepEqual(steps, ['stop', 'start']);
   await restartDaemon({
     daemon: {
       stop: async () => {
         throw new Error('Still stopping.');
       },
     },
+    start,
     confirm: async () => true,
-    report: (m) => reported.push(m),
+    report,
   });
+  assert.deepEqual(steps, ['stop', 'start']);
   assert.equal(reported.length, 1);
-  // A stop that found no daemon to stop is reported too.
-  await restartDaemon({
-    daemon: { stop: async () => false },
-    confirm: async () => true,
-    report: (m) => reported.push(m),
-  });
-  assert.equal(reported.length, 2);
 });

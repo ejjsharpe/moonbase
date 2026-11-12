@@ -62,7 +62,7 @@ export type DesktopShellProps = {
    */
   recentChatFolders?: (targetId: string) => Promise<readonly string[]>;
   /** Creates a new local chat's linked worktree beside the repository, returning its root. */
-  createChatWorktree?: (root: string, branch: string) => Promise<string>;
+  createChatWorktree?: (root: string, branch: string, requestId: string) => Promise<string>;
   /** Opens a local chat without a project's folder as a project where it is, returning its root. */
   turnChatIntoProject?: (conversationId: string) => Promise<string>;
   selectCheckout?: () => Promise<string | null>;
@@ -998,8 +998,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                         folderProjects={folderProjects}
                         createWorktree={
                           createChatWorktree &&
-                          (async (root, branch) => {
-                            const created = await createChatWorktree(root, branch);
+                          (async (root, branch, requestId) => {
+                            const created = await createChatWorktree(root, branch, requestId);
                             await listProjectWorktrees(selected);
                             // Kept even if listing failed, so the new chat stays in this dock.
                             setProjectWorktrees((listed) => {

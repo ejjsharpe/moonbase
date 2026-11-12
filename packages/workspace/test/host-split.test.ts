@@ -238,6 +238,35 @@ test('a move whose reply is lost before publication resolves through operationSt
     });
     assert.equal(loaded.state.drafts[0].target.path, 'moved.txt');
     assert.equal(loaded.state.drafts[0].text, 'dirty');
+    // A move left without any answer, which never reached the host: a repeat finds it never ran
+    // (its ID is now retired there), drops the intent and is refused, never sent again.
+    writeFileSync(join(h.root, 'other.txt'), 'other');
+    await alice.runtime.dispose();
+    alice = h.startClient('alice', host, (inner) => ({
+      ...inner,
+      mutate: () => Effect.fail(lost),
+      operationStatus: () => Effect.fail(lost),
+    }));
+    const unsent = {
+      ...move,
+      id: 'unsent',
+      sources: await alice.client.command('inspectEntries', { checkout, paths: ['other.txt'] }),
+      destination: 'unsent.txt',
+    };
+    await assert.rejects(alice.client.command('mutate', unsent));
+    await alice.runtime.dispose();
+    alice = h.startClient('alice', host);
+    await assert.rejects(
+      alice.client.command('mutate', unsent),
+      (error: unknown) => ApplicationError.is(error) && error.code === 'Conflict',
+    );
+    assert(!existsSync(join(h.root, 'unsent.txt')));
+    assert.equal(
+      await alice.client.command('operationStatus', { clientId: 'window', id: 'unsent' }),
+      null,
+    );
+    const again = await alice.client.command('mutate', { ...unsent, id: 'unsent-again' });
+    assert.equal(again.outcome, 'completed');
   } finally {
     await h.close();
   }
@@ -489,6 +518,14 @@ test('journal entries leave after acknowledgement and the window; a feed gap kee
         text: '',
       }),
     );
+    // `null` for an ID the host never saw is a promise: a mutation with it that arrives later
+    // never runs, as the client has already discarded its intent.
+    assert.equal(await status('overtaken'), null);
+    await assert.rejects(
+      move('overtaken', 'back.txt', 'overtaken.txt'),
+      (error: unknown) => ApplicationError.is(error) && error.code === 'Conflict',
+    );
+    assert(existsSync(join(h.root, 'back.txt')));
     // Within the window an acknowledged entry is still replayable.
     h.advance(4_000);
     assert.equal((await status('first'))?.outcome, 'completed');

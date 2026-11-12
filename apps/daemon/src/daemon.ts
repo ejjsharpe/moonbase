@@ -49,18 +49,10 @@ import {
   writeEndpoint,
 } from './data-directory.ts';
 import { DaemonFailure, describeFailure } from './failure.ts';
-import {
-  createIdleMonitor,
-  systemClock,
-  trackClientUse,
-  trackDaemonUse,
-  type IdleClock,
-  type IdleMonitor,
-} from './idle.ts';
-import { refuseDaemonWhileStopping, refuseWhileStopping } from './admission.ts';
+import { createIdleMonitor, systemClock, type IdleClock, type IdleMonitor } from './idle.ts';
 import { acquireDaemonLock } from './lock.ts';
 import { openDaemonLog, type DaemonLog } from './log.ts';
-import { createRootPolicy, guardWorkspace } from './workspace.ts';
+import { closeWorkspace, createRootPolicy } from './workspace.ts';
 import { createChatFolders } from './chat-folders.ts';
 
 /** What an entry point adds to a daemon in either mode. */
@@ -87,13 +79,18 @@ export type DaemonOptions = {
   idleMs?: number;
   /** How often an otherwise unused local daemon checks for active work; 30 seconds. */
   pollMs?: number;
-  /** Absolute ripgrep for chat file search; otherwise `rg` on PATH, then Git. */
+  /**
+   * Absolute ripgrep for both chat file search and the workspace. Without one, each looks for `rg`
+   * on PATH; chat search then falls back to Git.
+   */
   ripgrepExecutable?: string;
   /**
    * Absolute native filesystem helper of the workspace file host. Without one, or off macOS, the
    * daemon composes no workspace and chats are served as before.
    */
   filesystemHelper?: string;
+  /** How long shutdown waits for the workspace to close before going on without it; 5 seconds. */
+  workspaceCloseMs?: number;
   /** Identifies this daemon's code in `endpoint.json`, so a client can tell an outdated one. */
   build?: string;
   /** Wraps the chat client the daemon serves; test entries count and hold requests with it. */
@@ -152,6 +149,8 @@ async function serveDaemon(
   if (options.signal.aborted) stop();
   else options.signal.addEventListener('abort', stop, { once: true });
   const ripgrep = options.ripgrepExecutable ? { ripgrepExecutable: options.ripgrepExecutable } : {};
+  // Swapped for the open workspace while it is open, so chats never ask a closed one.
+  let workspace: Workspace = noWorkspace;
   try {
     const providers = options.providers(settings, session);
     // A key file is checked before serving; the Keychain is read at the first sign-in.
@@ -170,13 +169,10 @@ async function serveDaemon(
         : createFolderApprovals(join(directory, 'approved-folders.json'));
     // A local daemon's chats may also use the editor's checkouts and their worktrees, once the
     // workspace is open. A host's chats stay in its roots, which already hold every checkout.
-    let checkoutFolders: ((path: string) => Promise<boolean>) | undefined;
     const folders =
       settings.mode === 'host'
         ? approvedFolders
-        : withCheckoutFolders(approvedFolders, {
-            has: async (path) => (await checkoutFolders?.(path)) ?? false,
-          });
+        : withCheckoutFolders(approvedFolders, { has: (path) => workspace.hasFolder(path) });
     const runtime = ManagedRuntime.make(
       composeRuntime(directory, providers, folders, session, databasePath, ripgrep),
     );
@@ -186,34 +182,19 @@ async function serveDaemon(
           return { control: yield* LocalPiControl, providerChanges: yield* ProviderSetupChanges };
         }),
       );
-      // The WebSocket pushes provider setup changes beside chat and chat list watches.
-      const sources: SocketSources = {
-        subscribeProviderSetup: (listener) => providerChanges.subscribe(listener),
-      };
       closeAdmissions = () => control.setAdmissionsOpen(false);
       if (stopping) closeAdmissions();
-      const serveModes = async (host: WorkspaceHostServiceShape | undefined) => {
-        const wrap = options.wrapChat ?? ((client: ChatClient) => client);
-        // The wire serves the file host guarded: calls count as use and are refused once the
-        // daemon stops. Without a host the daemon advertises no workspace.
-        const exposeWorkspace = (monitor?: IdleMonitor) =>
-          host
-            ? makeWorkspaceClient(
-                guardWorkspace(host, { isStopping: () => stopping, idle: monitor }),
-              )
-            : undefined;
-        if (settings.mode === 'host') {
-          // A host serves remote clients on its configured port and never idles out.
-          await serve(
-            runtime,
-            wrap(makeChatClient(runtime)),
-            settings.port,
-            makeDaemonClient(runtime),
-            hostDaemonCapabilities,
-            sources,
-            exposeWorkspace(),
-          );
-        } else {
+      // The file host closes after the server and before the runtime.
+      const opened = await openWorkspace(
+        approvedFolders,
+        settings.mode === 'host'
+          ? undefined
+          : createChatFolders(makeChatClient(runtime), makeDaemonClient(runtime)),
+      );
+      workspace = opened;
+      try {
+        // A host serves remote clients on its configured port and never idles out.
+        if (settings.mode !== 'host') {
           idle = createIdleMonitor({
             idleMs: options.idleMs ?? 5 * 60_000,
             pollMs: options.pollMs ?? 30_000,
@@ -225,46 +206,27 @@ async function serveDaemon(
             },
           });
           if (stopping) idle.stop();
-          await serve(
-            runtime,
-            trackClientUse(wrap(makeChatClient(runtime)), idle),
-            0,
-            trackDaemonUse(makeDaemonClient(runtime), idle),
-            localDaemonCapabilities,
-            {
-              ...sources,
-              // A connected client keeps a local daemon running, as an open watch does.
-              trackConnection: () => {
-                idle!.begin();
-                let open = true;
-                return () => {
-                  if (open) idle!.end();
-                  open = false;
-                };
-              },
-            },
-            exposeWorkspace(idle),
-          );
         }
-      };
-      // The file host closes after the server and before the runtime.
-      const workspace = await openWorkspace(
-        approvedFolders,
-        settings.mode === 'host'
-          ? undefined
-          : createChatFolders(makeChatClient(runtime), makeDaemonClient(runtime)),
-      );
-      checkoutFolders = workspace.hasFolder;
-      try {
-        await serveModes(workspace.host);
+        await serve(runtime, {
+          client: (options.wrapChat ?? ((client: ChatClient) => client))(makeChatClient(runtime)),
+          daemon: makeDaemonClient(runtime),
+          port: settings.mode === 'host' ? settings.port : 0,
+          capabilities: settings.mode === 'host' ? hostDaemonCapabilities : localDaemonCapabilities,
+          // The WebSocket pushes provider setup changes beside chat and chat list watches.
+          sources: {
+            subscribeProviderSetup: (listener) => providerChanges.subscribe(listener),
+            // A connected client keeps a local daemon running, and so do its watches, which
+            // close with it.
+            ...(idle ? { trackConnection: () => countUse(idle!) } : {}),
+          },
+          // Without a host the daemon advertises no workspace.
+          ...(opened.host ? { workspace: makeWorkspaceClient(opened.host) } : {}),
+        });
       } finally {
-        // A failed close (a stale lock, say) must not stop the shutdown below or the exit code.
-        await workspace.dispose().catch((error: unknown) => {
-          log.write({
-            event: 'workspace',
-            reason: 'close-failed',
-            code: describeFailure(error).code,
-          });
+        workspace = noWorkspace;
+        await closeWorkspace(opened.dispose, {
+          deadlineMs: options.workspaceCloseMs ?? 5_000,
+          log,
         });
       }
     } finally {
@@ -287,16 +249,14 @@ async function serveDaemon(
    * runtime, an unusable store) is logged by code and left out: chats are unaffected. Disposing
    * cancels its helper process groups and waits for them.
    */
-  async function openWorkspace(folders: FolderApprovals, chats: ChatFolders | undefined) {
-    const none = {
-      host: undefined,
-      hasFolder: undefined as ((path: string) => Promise<boolean>) | undefined,
-      dispose: async () => {},
-    };
-    if (process.platform !== 'darwin' || stopping) return none;
+  async function openWorkspace(
+    folders: FolderApprovals,
+    chats: ChatFolders | undefined,
+  ): Promise<Workspace> {
+    if (process.platform !== 'darwin' || stopping) return noWorkspace;
     if (!options.filesystemHelper) {
       log.write({ event: 'workspace', reason: 'no-helper' });
-      return none;
+      return noWorkspace;
     }
     let runtime:
       | ManagedRuntime.ManagedRuntime<WorkspaceHostService | WorkspaceFolders, ApplicationError>
@@ -310,7 +270,7 @@ async function serveDaemon(
           hostId: session.host.hostId,
           filesystemHelper: options.filesystemHelper,
           gitExecutable: '/usr/bin/git',
-          ...(options.ripgrepExecutable ? { ripgrepExecutable: options.ripgrepExecutable } : {}),
+          ...ripgrep,
           // A native source is held to no root policy, so only a local daemon takes imports.
           nativeImports: settings.mode !== 'host',
           ...(chats ? { chats } : {}),
@@ -321,49 +281,55 @@ async function serveDaemon(
       const checkouts = await runtime.runPromise(WorkspaceFolders);
       log.write({ event: 'workspace', reason: 'ready' });
       const opened = runtime;
-      let closed = false;
       return {
         host,
-        hasFolder: (path: string) =>
-          closed ? Promise.resolve(false) : opened.runPromise(checkouts.has(path)),
-        dispose: () => {
-          closed = true;
-          return opened.dispose();
-        },
+        hasFolder: (path) => opened.runPromise(checkouts.has(path)),
+        dispose: () => opened.dispose(),
       };
     } catch (error) {
       await runtime?.dispose().catch(() => {});
       log.write({ event: 'workspace', reason: 'unavailable', code: describeFailure(error).code });
-      return none;
+      return noWorkspace;
     }
   }
 
-  /** Serves until stopped, then closes the server; the caller closes the runtime. */
+  /**
+   * Serves until stopped, then closes the server; the caller closes the runtime. Once stopping,
+   * new requests are refused; a local daemon counts each request as use until it is answered.
+   */
   async function serve<R>(
     runtime: ManagedRuntime.ManagedRuntime<R, ApplicationError>,
-    client: ChatClient,
-    port: number,
-    daemon: DaemonClient,
-    capabilities: readonly ChatHostCapability[],
-    sources: SocketSources,
-    workspace: WorkspaceHostClient | undefined,
+    served: {
+      client: ChatClient;
+      daemon: DaemonClient;
+      port: number;
+      capabilities: readonly ChatHostCapability[];
+      sources: SocketSources;
+      workspace?: WorkspaceHostClient;
+    },
   ) {
     // A daemon told to stop while starting never listens or announces itself.
     if (stopping) return;
+    const admit = () => {
+      if (stopping)
+        throw new ApplicationError({ code: 'Unavailable', message: 'The daemon is stopping.' });
+      return idle ? countUse(idle) : () => {};
+    };
     await runtime.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          // The server's own startup read is let through; once it listens, stopping refuses.
-          let listening = 0;
-          const refusing = () => stopping && listening > 0;
           const server = yield* serveChat(
-            { host: session.host, token, port },
-            refuseWhileStopping(client, refusing),
-            refuseDaemonWhileStopping(daemon, refusing),
-            capabilities,
-            { sources, ...(workspace ? { workspace } : {}) },
+            { host: session.host, token, port: served.port },
+            served.client,
+            served.daemon,
+            served.capabilities,
+            {
+              sources: served.sources,
+              admit,
+              ...(served.workspace ? { workspace: served.workspace } : {}),
+            },
           );
-          listening = Number(new URL(server.origin).port);
+          const listening = Number(new URL(server.origin).port);
           if (!stopping)
             yield* Effect.promise(() =>
               writeEndpoint(directory, {
@@ -384,6 +350,28 @@ async function serveDaemon(
       ),
     );
   }
+}
+
+/** The workspace file host while it is open; a daemon without one has none of these. */
+type Workspace = {
+  host?: WorkspaceHostServiceShape;
+  /** Whether `path` is an approved checkout root, which a local daemon's chats may use. */
+  hasFolder(path: string): Promise<boolean>;
+  dispose(): Promise<void>;
+};
+const noWorkspace: Workspace = {
+  hasFolder: async () => false,
+  dispose: async () => {},
+};
+
+/** Counts one use of a local daemon; the function it returns ends it, once. */
+function countUse(idle: IdleMonitor) {
+  idle.begin();
+  let open = true;
+  return () => {
+    if (open) idle.end();
+    open = false;
+  };
 }
 
 /**

@@ -1,4 +1,4 @@
-import { Context, Exit, Layer, Scope, type ManagedRuntime } from 'effect';
+import { Context, Effect, Exit, Layer, Scope, type ManagedRuntime } from 'effect';
 import {
   RemoteChatLive,
   RemoteLocalHostLive,
@@ -14,13 +14,16 @@ import {
 } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
-import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import {
-  createLocalDaemon,
+  normalizeApplicationError,
+  runApplicationEffect,
+} from '@moonbase/application/runtime/effect-client';
+import {
+  daemonRetryAfterMs,
   LocalDaemonConnectionLive,
+  olderDaemonMessage,
   type LocalDaemon,
   readDaemonSession,
-  type LocalDaemonOptions,
 } from '../main/local-daemon.ts';
 
 /**
@@ -30,16 +33,15 @@ import {
  */
 export async function acquireDaemonChat(
   runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>,
-  options: LocalDaemonOptions & {
-    /** The daemon handle to use, when the caller keeps one to act on it; made from the options otherwise. */
-    daemon?: LocalDaemon;
+  options: {
+    daemon: LocalDaemon;
     /** Opens a provider's sign-in page in the user's browser. */
     openUrl(url: string): Promise<void>;
   },
 ) {
-  const daemon = options.daemon ?? createLocalDaemon(options);
+  const { daemon } = options;
   await daemon.ensure();
-  const session = await readDaemonSession(options.directory);
+  const session = await readDaemonSession(daemon.directory);
   const scope = Scope.forkUnsafe(runtime.scope, 'sequential');
   try {
     const services = await runApplicationEffect(
@@ -73,6 +75,7 @@ export async function acquireDaemonChat(
     await runApplicationEffect(runtime, connection.endpoint({ host: session.host }));
     return {
       session,
+      connection,
       chat: Context.get(services, ChatService),
       providers: Context.get(services, ProviderSetupService),
       folders: Context.get(services, LocalHostService),
@@ -84,3 +87,64 @@ export async function acquireDaemonChat(
   }
 }
 export type DaemonChat = Awaited<ReturnType<typeof acquireDaemonChat>>;
+
+export type LocalDaemonClient = ReturnType<typeof createLocalDaemonClient>;
+/**
+ * Local chat's and the editor's files' one way to the local daemon. `get` finds or starts it and
+ * binds its clients once (`acquire`), sharing an attempt under way; a failed attempt is every
+ * caller's answer for `daemonRetryAfterMs` rather than started again by each. `peek` never starts
+ * one. `connect` also makes sure the daemon in use answers, starting it again if it exited.
+ */
+export function createLocalDaemonClient(
+  acquire: () => Promise<DaemonChat>,
+  now: () => number = Date.now,
+) {
+  let backend: DaemonChat | undefined,
+    attempt: Promise<DaemonChat> | undefined,
+    failed: { error: ApplicationError; at: number } | undefined;
+  const get = (): Promise<DaemonChat> => {
+    if (backend) return Promise.resolve(backend);
+    const since = failed && now() - failed.at;
+    if (failed && since !== undefined && since >= 0 && since < daemonRetryAfterMs)
+      return Promise.reject(failed.error);
+    return (attempt ??= acquire()
+      .then(
+        (acquired) => {
+          failed = undefined;
+          return (backend = acquired);
+        },
+        (error: unknown) => {
+          const { code, message } = normalizeApplicationError(error);
+          console.error('The local daemon is unavailable:', message);
+          failed = {
+            error: new ApplicationError({
+              code: 'Unavailable',
+              // The daemon's own reason when it is still busy; otherwise the generic one.
+              message:
+                code === 'Unavailable' && message === olderDaemonMessage
+                  ? message
+                  : 'Moonbase could not start or reach its local daemon. Retry; drafts are kept.',
+            }),
+            at: now(),
+          };
+          throw failed.error;
+        },
+      )
+      .finally(() => {
+        attempt = undefined;
+      }));
+  };
+  return {
+    get,
+    peek: () => backend ?? null,
+    connect: () =>
+      Effect.flatMap(
+        Effect.tryPromise({ try: get, catch: (error) => error as ApplicationError }),
+        (acquired) =>
+          Effect.map(acquired.connection.endpoint({ host: acquired.session.host }), (endpoint) => ({
+            ...acquired,
+            endpoint,
+          })),
+      ),
+  };
+}
