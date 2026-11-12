@@ -42,7 +42,11 @@ function harness() {
   const startHost = async (retention = 60_000, name = 'host', hostId = 'split-host') => {
     const runtime = ManagedRuntime.make(
       WorkspaceHostLive(
-        { dataDirectory: join(base, name), hostId, journalRetentionMs: retention },
+        {
+          dataDirectory: join(base, name),
+          hostId,
+          journalRetentionMs: retention,
+        },
         () => clock,
       ),
     );
@@ -59,7 +63,12 @@ function harness() {
   ) => {
     const runtime = ManagedRuntime.make(
       WorkspaceRecoveryLive(
-        { dataDirectory: join(base, name), installationId: name, legacyHostIds, hostWaitMs },
+        {
+          dataDirectory: join(base, name),
+          installationId: name,
+          legacyHostIds,
+          hostWaitMs,
+        },
         lose ? lose(host) : host,
       ),
     );
@@ -79,7 +88,10 @@ function harness() {
     },
   };
 }
-const lost = new ApplicationError({ code: 'Unavailable', message: 'The host did not answer.' });
+const lost = new ApplicationError({
+  code: 'Unavailable',
+  message: 'The host did not answer.',
+});
 const dropRequest =
   <K extends 'saveFile' | 'mutate'>(operation: K) =>
   (host: WorkspaceHostServiceShape): WorkspaceHostServiceShape => ({
@@ -121,7 +133,10 @@ test('a save whose reply is lost resolves through saveStatus, and one that never
       expectedVersion,
     });
     // The host commits, then the client gets an unusable reply (a malformed one here) and no status.
-    const malformed = new ApplicationError({ code: 'Incompatible', message: 'Malformed.' });
+    const malformed = new ApplicationError({
+      code: 'Incompatible',
+      message: 'Malformed.',
+    });
     let alice = h.startClient('alice', host, dropReply('saveFile', malformed));
     await alice.client.command('persistRecovery', {
       requestId: randomUUID(),
@@ -135,13 +150,19 @@ test('a save whose reply is lost resolves through saveStatus, and one that never
     assert.equal(readFileSync(join(h.root, 'file.txt'), 'utf8'), 'committed text');
     await alice.runtime.dispose();
     alice = h.startClient('alice', host);
-    const resolved = await alice.client.command('loadRecovery', { clientId: 'window' });
+    const resolved = await alice.client.command('loadRecovery', {
+      clientId: 'window',
+    });
     assert.equal(resolved.state.drafts[0].disk.text, 'committed text');
     assert.deepEqual(resolved.errors, []);
     assert.equal(
       (
         await Effect.runPromise(
-          host.saveStatus({ installationId: 'alice', clientId: 'window', requestId: 'lost-reply' }),
+          host.saveStatus({
+            installationId: 'alice',
+            clientId: 'window',
+            requestId: 'lost-reply',
+          }),
         )
       ).kind,
       'saved',
@@ -157,7 +178,9 @@ test('a save whose reply is lost resolves through saveStatus, and one that never
     );
     await alice.runtime.dispose();
     alice = h.startClient('alice', host);
-    const restored = await alice.client.command('loadRecovery', { clientId: 'window' });
+    const restored = await alice.client.command('loadRecovery', {
+      clientId: 'window',
+    });
     assert.equal(restored.state.drafts[0].text, 'unsent text');
     assert.equal(restored.state.drafts[0].disk.text, 'committed text');
     assert.equal(readFileSync(join(h.root, 'file.txt'), 'utf8'), 'committed text');
@@ -191,7 +214,10 @@ test('a move whose reply is lost before publication resolves through operationSt
       expectedRevision: 0,
       state: draft('window', checkout, 'dirty', disk),
     });
-    const sources = await alice.client.command('inspectEntries', { checkout, paths: ['file.txt'] });
+    const sources = await alice.client.command('inspectEntries', {
+      checkout,
+      paths: ['file.txt'],
+    });
     const move = {
       id: 'lost-move',
       clientId: 'window',
@@ -209,7 +235,9 @@ test('a move whose reply is lost before publication resolves through operationSt
       id: 'lost-move',
     });
     assert.equal(status?.outcome, 'completed');
-    const loaded = await alice.client.command('loadRecovery', { clientId: 'window' });
+    const loaded = await alice.client.command('loadRecovery', {
+      clientId: 'window',
+    });
     assert.equal(loaded.state.drafts[0].target.path, 'moved.txt');
     assert.equal(loaded.state.drafts[0].text, 'dirty');
   } finally {
@@ -264,7 +292,10 @@ test("one client's move re-paths another client's draft on its next load, and it
         clientId: 'a',
         checkout,
         kind,
-        sources: await alice.client.command('inspectEntries', { checkout, paths: [path] }),
+        sources: await alice.client.command('inspectEntries', {
+          checkout,
+          paths: [path],
+        }),
         ...(destination ? { destination } : {}),
       });
     await run('move', 'move', 'moves.txt', 'renamed.txt');
@@ -302,14 +333,22 @@ test('a checkout the host refuses does not stop the feed for the others', async 
         ...inner,
         listOperations: (input) =>
           input.checkout.checkoutId === stale.checkoutId
-            ? Effect.fail(new ApplicationError({ code: 'Unauthorized', message: 'Replaced.' }))
+            ? Effect.fail(
+                new ApplicationError({
+                  code: 'Unauthorized',
+                  message: 'Replaced.',
+                }),
+              )
             : inner.listOperations(input),
       }));
     await bob.client.command('persistRecovery', {
       requestId: randomUUID(),
       clientId: 'b',
       expectedRevision: 0,
-      state: { ...draft('b', checkout, 'bob', disk), checkouts: [checkout, stale] },
+      state: {
+        ...draft('b', checkout, 'bob', disk),
+        checkouts: [checkout, stale],
+      },
     });
     await bob.client.command('loadRecovery', { clientId: 'b' });
     await alice.client.command('mutate', {
@@ -317,7 +356,10 @@ test('a checkout the host refuses does not stop the feed for the others', async 
       clientId: 'a',
       checkout,
       kind: 'move',
-      sources: await alice.client.command('inspectEntries', { checkout, paths: ['file.txt'] }),
+      sources: await alice.client.command('inspectEntries', {
+        checkout,
+        paths: ['file.txt'],
+      }),
       destination: 'renamed.txt',
     });
     const loaded = await bob.client.command('loadRecovery', { clientId: 'b' });
@@ -347,7 +389,13 @@ test('journal entries leave after acknowledgement and the window; a feed gap kee
         }),
       );
     const acknowledge = (id: string) =>
-      Effect.runPromise(host.acknowledgeOperation({ installationId: 'alice', clientId: 'a', id }));
+      Effect.runPromise(
+        host.acknowledgeOperation({
+          installationId: 'alice',
+          clientId: 'a',
+          id,
+        }),
+      );
     const status = (id: string) =>
       Effect.runPromise(host.operationStatus({ installationId: 'alice', clientId: 'a', id }));
     let bob = h.startClient('bob', host);
@@ -423,7 +471,11 @@ test('createWorktree and initializeRepository replay their first outcome for one
       'feature/one',
     );
     const folder = (await openCheckout(host, plain)) as CheckoutTarget;
-    const initialize = { installationId: 'alice', requestId: 'init-1', checkout: folder };
+    const initialize = {
+      installationId: 'alice',
+      requestId: 'init-1',
+      checkout: folder,
+    };
     const initialized = await Effect.runPromise(host.initializeRepository(initialize));
     assert.deepEqual(await Effect.runPromise(host.initializeRepository(initialize)), initialized);
   } finally {
@@ -445,7 +497,10 @@ test('a worktree whose reply was lost is asked for again under its first request
       branch: 'feature/one',
       location: join(h.base, 'feature'),
     };
-    const uncertain = new ApplicationError({ code: 'Uncertain', message: 'The reply was lost.' });
+    const uncertain = new ApplicationError({
+      code: 'Uncertain',
+      message: 'The reply was lost.',
+    });
     let alice = h.startClient('alice', host, dropReply('createWorktree', uncertain));
     await assert.rejects(
       alice.client.command('createWorktree', input),
@@ -487,7 +542,11 @@ test("the cutover reopens a former host's roots, moves drafts to them and turns 
     let alice = h.startClient('alice', former.host, dropRequest('saveFile'));
     const state = draft('window', checkout, 'unsaved edit', disk);
     state.checkouts.push(orphan);
-    state.drafts.push({ target: { checkout: orphan, path: 'file.txt' }, text: 'kept', disk });
+    state.drafts.push({
+      target: { checkout: orphan, path: 'file.txt' },
+      text: 'kept',
+      disk,
+    });
     // The reopened checkout is already held: it takes the drafts that don't collide by path.
     state.checkouts.push(mergedOld);
     for (const [checkout, path, text] of [
@@ -504,7 +563,11 @@ test("the cutover reopens a former host's roots, moves drafts to them and turns 
     // A client of the new host then holds its checkout of the same root, with a draft of its own.
     const bound = h.startClient('alice', host);
     state.checkouts.push(mergedNew);
-    state.drafts.push({ target: { checkout: mergedNew, path: 'a.txt' }, text: 'new a', disk });
+    state.drafts.push({
+      target: { checkout: mergedNew, path: 'a.txt' },
+      text: 'new a',
+      disk,
+    });
     await bound.client.command('persistRecovery', {
       requestId: randomUUID(),
       clientId: 'window',
@@ -525,7 +588,9 @@ test("the cutover reopens a former host's roots, moves drafts to them and turns 
     await alice.runtime.dispose();
     rmSync(gone, { recursive: true });
     alice = h.startClient('alice', host, undefined, ['moonbase-local']);
-    const load = await alice.client.command('loadRecovery', { clientId: 'window' });
+    const load = await alice.client.command('loadRecovery', {
+      clientId: 'window',
+    });
     const rebound = load.state.checkouts.find((c) => c.root === h.root)!;
     assert.equal(rebound.hostId, 'split-host');
     assert.deepEqual(
@@ -558,7 +623,12 @@ test("the cutover reopens a former host's roots, moves drafts to them and turns 
     assert(load.errors.some((error) => error.includes('a.txt')));
     // The rebound checkout works on the new host.
     assert.equal(
-      (await alice.client.command('readFile', { checkout: rebound, path: 'file.txt' })).text,
+      (
+        await alice.client.command('readFile', {
+          checkout: rebound,
+          path: 'file.txt',
+        })
+      ).text,
       'original',
     );
   } finally {
@@ -601,11 +671,76 @@ test('loading recovery stops waiting on a host that does not answer and still re
       .run('broken', '{');
     store.close();
     const alice = h.startClient('alice', host, silent, ['split-host'], 20);
-    const load = await alice.client.command('loadRecovery', { clientId: 'window' });
+    const load = await alice.client.command('loadRecovery', {
+      clientId: 'window',
+    });
     // The silent host leaves the local work to do: the unsettled save becomes a draft.
     assert.equal(load.state.drafts[0].text, 'unsettled text');
     assert(load.errors.some((error) => error.includes('broken')));
     assert(load.errors.length > 1);
+  } finally {
+    await h.close();
+  }
+});
+
+test('a cutover whose evidence phase times out keeps the unsettled save findable, and a broken client does not hide the others', async () => {
+  const h = harness();
+  try {
+    writeFileSync(join(h.root, 'file.txt'), 'original');
+    const { host } = await h.startHost(60_000, 'host', 'split-host');
+    const former = await h.startHost(60_000, 'former', 'moonbase-local');
+    const checkout = await openCheckout(former.host, h.root),
+      disk = await Effect.runPromise(former.host.readFile({ checkout, path: 'file.txt' }));
+    let alice = h.startClient('alice', former.host, dropRequest('saveFile'));
+    for (const clientId of ['window', 'second'])
+      await alice.client.command('persistRecovery', {
+        requestId: randomUUID(),
+        clientId,
+        expectedRevision: 0,
+        state: draft(clientId, checkout, clientId + ' edit', disk),
+      });
+    const store = new DatabaseSync(join(h.base, 'alice', 'moonbase-workspace-v1.sqlite'));
+    store
+      .prepare('INSERT INTO recovery (client, revision, body) VALUES (?, 1, ?)')
+      .run('broken', '{');
+    store.close();
+    await assert.rejects(
+      alice.client.command('saveFile', {
+        target: { checkout, path: 'file.txt' },
+        clientId: 'window',
+        requestId: 'unsettled',
+        text: 'unsettled text',
+        expectedVersion: disk.version,
+      }),
+    );
+    await alice.runtime.dispose();
+    // The connected host opens roots but never answers about the save.
+    const mute = (host: WorkspaceHostServiceShape): WorkspaceHostServiceShape => ({
+      ...host,
+      saveStatus: () => Effect.never,
+    });
+    alice = h.startClient('alice', host, mute, ['moonbase-local'], 20);
+    const first = await alice.client.command('loadRecovery', {
+      clientId: 'window',
+    });
+    // Nothing is dropped, the unreadable client is reported, and the checkout is not rebound
+    // while the save can only be found by its former ID.
+    assert.equal(first.state.checkouts[0].hostId, 'moonbase-local');
+    assert(first.state.drafts.some((d) => d.text === 'unsettled text'));
+    assert(first.errors.some((error) => error.includes('broken')));
+    const second = await alice.client.command('loadRecovery', {
+      clientId: 'second',
+    });
+    assert.equal(second.state.drafts[0].text, 'second edit');
+    await alice.runtime.dispose();
+    // The host answers on the next load: the save resolves, then every client rebinds.
+    alice = h.startClient('alice', host, undefined, ['moonbase-local']);
+    for (const clientId of ['window', 'second']) {
+      const load = await alice.client.command('loadRecovery', { clientId });
+      assert.equal(load.state.checkouts[0].hostId, 'split-host');
+      assert(load.state.drafts.every((d) => d.target.checkout.hostId === 'split-host'));
+      assert(!load.errors.some((error) => error.includes('Uncertain save')));
+    }
   } finally {
     await h.close();
   }

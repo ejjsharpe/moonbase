@@ -67,17 +67,17 @@ export class EditorSession {
   private client: EditorClient;
   private native: NativeActions;
   private send: (id: string, result: Reply<WorkspaceEvent>) => void;
-  private localHostId?: () => Promise<string | undefined>;
+  private localHostId: () => Promise<string | undefined>;
   /**
    * `localHostId` names the host of this machine's own files, the only one Reveal in Finder can
-   * show; without it the checkouts' host is not checked.
+   * show; a checkout of any other host is refused.
    */
   constructor(
     runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>,
     client: EditorClient,
     native: NativeActions,
     send: (id: string, result: Reply<WorkspaceEvent>) => void,
-    localHostId?: () => Promise<string | undefined>,
+    localHostId: () => Promise<string | undefined>,
   ) {
     this.localHostId = localHostId;
     this.lifetime = new IpcLifetime(runtime, 128, (error) => ({
@@ -90,7 +90,10 @@ export class EditorSession {
   }
   private own(value: unknown) {
     if (value !== this.clientId)
-      throw new ApplicationError({ code: 'Unauthorized', message: 'Foreign editor identity.' });
+      throw new ApplicationError({
+        code: 'Unauthorized',
+        message: 'Foreign editor identity.',
+      });
   }
   private approved(value: unknown) {
     checkout(value);
@@ -212,7 +215,10 @@ export class EditorSession {
       requestId(id);
       const admission = this.lifetime.getAdmissionError(id, method === 'watch');
       if (admission === 'closed')
-        throw new ApplicationError({ code: 'Unavailable', message: 'Editor session disposed.' });
+        throw new ApplicationError({
+          code: 'Unavailable',
+          message: 'Editor session disposed.',
+        });
       if (admission === 'active') invalid('Request is already active.');
       if (admission === 'capacity') invalid('Too many active requests of this kind.');
       reserved = this.lifetime.reserveRequest(id, method === 'watch');
@@ -220,7 +226,10 @@ export class EditorSession {
       const live = request.isLive;
       const requireLive = () => {
         if (!live())
-          throw new ApplicationError({ code: 'Cancelled', message: 'Editor document released.' });
+          throw new ApplicationError({
+            code: 'Cancelled',
+            message: 'Editor document released.',
+          });
       };
       let value: unknown;
       if (method === 'command') {
@@ -231,7 +240,9 @@ export class EditorSession {
         const validated = this.validate(operation, envelope.input);
         value = decodeWorkspaceOutput(
           operation,
-          await this.client.command(operation, validated as never, { signal: request.signal }),
+          await this.client.command(operation, validated as never, {
+            signal: request.signal,
+          }),
         );
         // After `git init` the folder's Git target replaces its approval under the same ID.
         if ((operation === 'openCheckout' || operation === 'initializeRepository') && live()) {
@@ -309,10 +320,7 @@ export class EditorSession {
         const target = this.checkoutPath(v.checkout, v.path);
         // Another host's files are not on this Mac, and a path that is only spelled like one of
         // its own would show the wrong file.
-        if (
-          this.localHostId &&
-          (v.checkout as CheckoutTarget).hostId !== (await this.localHostId())
-        )
+        if ((v.checkout as CheckoutTarget).hostId !== (await this.localHostId()))
           invalid('Only files on this Mac can be shown in Finder.');
         // Follow links before checking again, so a link inside the checkout can't point out of it.
         const [root, real] = await Promise.all([

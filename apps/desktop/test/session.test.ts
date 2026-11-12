@@ -40,7 +40,13 @@ function fixture() {
       if (name === 'listWorktrees')
         return {
           worktrees: [
-            { root: '/approved', branch: 'main', main: true, locked: false, prunable: false },
+            {
+              root: '/approved',
+              branch: 'main',
+              main: true,
+              locked: false,
+              prunable: false,
+            },
             {
               root: '/approved-topic',
               branch: 'topic',
@@ -91,6 +97,7 @@ function fixture() {
     (_id, event) => {
       if (event.ok) events.push(event.value);
     },
+    async () => 'local',
   );
   const call = (operation: string, input: unknown, id: string = crypto.randomUUID()) =>
     session.call('command', { operation, input }, id);
@@ -126,7 +133,12 @@ test('native approval, exact identity and caller validation reject before comman
   assert((await f.call('openCheckout', { root: '/approved' })).ok);
   assert.equal(f.dispatches, 1);
   assert.equal(
-    (await f.call('readFile', { checkout: { ...target, hostId: 'other' }, path: 'a.ts' })).ok,
+    (
+      await f.call('readFile', {
+        checkout: { ...target, hostId: 'other' },
+        path: 'a.ts',
+      })
+    ).ok,
     false,
   );
   assert.equal(
@@ -149,7 +161,11 @@ test('listed worktrees of an approved checkout may open; renderer worktree locat
   assert((await f.call('openCheckout', { root: '/approved' })).ok);
   assert.equal((await f.call('openCheckout', { root: '/approved-topic' })).ok, false);
   assert.equal(
-    (await f.call('listWorktrees', { checkout: { ...target, checkoutId: 'unknown' } })).ok,
+    (
+      await f.call('listWorktrees', {
+        checkout: { ...target, checkoutId: 'unknown' },
+      })
+    ).ok,
     false,
   );
   assert.equal(f.dispatches, 1);
@@ -203,6 +219,7 @@ test('a plain folder main trusts opens for the renderer, and Initialize Git repl
       release: async () => {},
     },
     () => {},
+    async () => 'local',
   );
   const call = (operation: string, input: unknown) =>
     session.call('command', { operation, input }, crypto.randomUUID());
@@ -263,16 +280,29 @@ test('ignore classification accepts a full folder listing only for an approved e
   try {
     await f.call('loadRecovery', { clientId: 'desktop-primary' });
     const before = f.dispatches;
-    const input = { checkout: target, path: '', paths: Array(20000).fill('a.ts') };
+    const input = {
+      checkout: target,
+      path: '',
+      paths: Array(20000).fill('a.ts'),
+    };
     await f.call('getIgnoredPaths', input);
     assert.equal(f.dispatches, before + 1);
     assert.equal(
-      (await f.call('getIgnoredPaths', { ...input, paths: Array(20001).fill('a.ts') })).ok,
+      (
+        await f.call('getIgnoredPaths', {
+          ...input,
+          paths: Array(20001).fill('a.ts'),
+        })
+      ).ok,
       false,
     );
     assert.equal(
-      (await f.call('getIgnoredPaths', { ...input, checkout: { ...target, hostId: 'foreign' } }))
-        .ok,
+      (
+        await f.call('getIgnoredPaths', {
+          ...input,
+          checkout: { ...target, hostId: 'foreign' },
+        })
+      ).ok,
       false,
     );
     assert.equal(f.dispatches, before + 1);
@@ -299,7 +329,12 @@ test('superseded classifications release desktop capacity for unrelated file com
           signals.push(signal);
           await new Promise<never>((_resolve, reject) => {
             const cancel = () =>
-              reject(new ApplicationError({ code: 'Cancelled', message: 'Classifier cancelled' }));
+              reject(
+                new ApplicationError({
+                  code: 'Cancelled',
+                  message: 'Classifier cancelled',
+                }),
+              );
             signal.addEventListener('abort', cancel, { once: true });
             if (signal.aborted) cancel();
           });
@@ -315,6 +350,7 @@ test('superseded classifications release desktop capacity for unrelated file com
       release: async () => {},
     },
     () => {},
+    async () => 'local',
   );
   const client = bridgeClient({
     call: session.call.bind(session),
@@ -442,6 +478,7 @@ test('document release retains approvals but cancels waits and isolates reused o
       release: async () => {},
     },
     () => sends++,
+    async () => 'local',
   );
   await owner.call(
     'command',
@@ -492,6 +529,7 @@ test('cancel joins the actual watch finalizer, fences delivery and retains its f
       release: async () => {},
     },
     () => sends++,
+    async () => 'local',
   );
   await owner.call(
     'command',
@@ -518,7 +556,12 @@ test('cancel joins the actual watch finalizer, fences delivery and retains its f
       )
     ).ok,
   );
-  held.reject(new ApplicationError({ code: 'Persistence', message: 'watch release failed' }));
+  held.reject(
+    new ApplicationError({
+      code: 'Persistence',
+      message: 'watch release failed',
+    }),
+  );
   const result = await close;
   assert(!result.ok);
   assert.equal(result.error.code, 'Persistence');
@@ -554,6 +597,7 @@ test('document replacement joins late capture and releases it before completion 
       },
     },
     () => {},
+    async () => 'local',
   );
   await owner.call(
     'command',
@@ -615,7 +659,10 @@ test('browser watch close fences immediately and keeps completion handling until
   await Promise.resolve();
   assert.equal(removed, 0);
   assert.equal(delivered, 0);
-  held.resolve({ ok: false, error: { code: 'Persistence', message: 'cleanup failed' } });
+  held.resolve({
+    ok: false,
+    error: { code: 'Persistence', message: 'cleanup failed' },
+  });
   await assert.rejects(pending, { code: 'Persistence' });
   assert.equal(removed, 1);
 });
@@ -653,10 +700,14 @@ test('late native capture release failure remains in document and session cleanu
       chooseCheckout: async () => null,
       imports: () => captured.promise,
       release: async () => {
-        throw new ApplicationError({ code: 'Persistence', message: 'Late capture release failed' });
+        throw new ApplicationError({
+          code: 'Persistence',
+          message: 'Late capture release failed',
+        });
       },
     },
     () => {},
+    async () => 'local',
   );
   await owner.call(
     'command',
@@ -709,6 +760,7 @@ test('cancelling native capture in a live document releases unpublished referenc
       },
     },
     () => {},
+    async () => 'local',
   );
   await owner.call(
     'command',
@@ -775,6 +827,7 @@ for (const failure of ['none', 'release', 'acquisition'] as const) {
         delivered++;
         acknowledgment = owner.cancel('watch');
       },
+      async () => 'local',
     );
     await owner.call(
       'command',
@@ -873,7 +926,12 @@ test('copy-paths and reveal reach native actions only for approved checkouts and
       assert.equal((await copy([path])).ok, path === 'out/secret' || path === 'src/missing.ts');
     }
     assert.equal(
-      (await call('reveal', { checkout: { ...checkout, root: base }, path: 'secret' })).ok,
+      (
+        await call('reveal', {
+          checkout: { ...checkout, root: base },
+          path: 'secret',
+        })
+      ).ok,
       false,
     );
     assert.deepEqual(revealed, [join(root, 'src/a.ts'), root]);
