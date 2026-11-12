@@ -235,7 +235,8 @@ test('a new worktree starts only from a folder local chat may use, asks the daem
     },
   );
   // The request IDs outlive a backend, as they do across a reload or restart.
-  const requestIds = createMemoryRequestIds();
+  let clock = 0;
+  const requestIds = createMemoryRequestIds(() => clock);
   const make = () =>
     createChatBackends({
       runtime,
@@ -271,6 +272,18 @@ test('a new worktree starts only from a folder local chat may use, asks the daem
     assert.equal(late[0], late[1]);
     assert.equal(late[1], late[2]);
     assert.notEqual(late[2], late[3]);
+    // Concurrent calls for one worktree share one request; an ID older than its lifetime is not reused.
+    failure = new ApplicationError({ code: 'Uncertain', message: 'Reply lost.' });
+    const before = requests.length;
+    await Promise.allSettled([
+      owner.createWorktree('/repo', 'twin'),
+      owner.createWorktree('/repo', 'twin'),
+    ]);
+    assert.equal(requests.length, before + 1);
+    clock += 11 * 60_000;
+    await assert.rejects(owner.createWorktree('/repo', 'twin'), { code: 'Uncertain' });
+    const twins = requests.filter((request) => request.branch === 'twin');
+    assert.notEqual(twins[0].requestId, twins[1].requestId);
     // Replacing the document while a creation runs cancels it; its worktree is not offered.
     failure = undefined;
     adopted.length = 0;

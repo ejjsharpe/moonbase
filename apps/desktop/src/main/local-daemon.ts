@@ -142,7 +142,6 @@ export function createLocalDaemon({
   let pid: number | undefined,
     child: ChildProcess | undefined,
     outdated = false,
-    stopped = false,
     busy: Promise<void> | undefined;
   const serialize = (run: () => Promise<void>) => {
     const next = (busy ?? Promise.resolve()).then(run, run);
@@ -260,11 +259,13 @@ export function createLocalDaemon({
      * or not it is outdated or busy, and waits for it. The next request starts a new one. False,
      * signalling nothing, when no process runs a daemon here.
      */
-    stop: () =>
-      serialize(async () => {
+    stop: () => {
+      let stopped = false;
+      return serialize(async () => {
         const running = pid ?? (await readEndpoint(directory))?.pid;
         stopped = running !== undefined && (await stopDaemon(running));
-      }).then(() => stopped),
+      }).then(() => stopped);
+    },
     /** Stops the outdated daemon in use, which reported no work, and starts this app's. */
     replace: () =>
       serialize(async () => {

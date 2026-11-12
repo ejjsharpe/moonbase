@@ -40,7 +40,6 @@ async function composeWorkspace(
       {
         dataDirectory: join(userData, 'workspace-v1'),
         installationId: 'test-installation',
-        legacyHostIds: ['moonbase-local'],
       },
       createDaemonWorkspaceHost(reach, now),
     ),

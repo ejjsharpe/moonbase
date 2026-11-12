@@ -122,23 +122,29 @@ export function createChatBackends({
   /**
    * Sends under a request ID kept durably before it is sent, so a repeat after a lost reply, a
    * reload or a restart asks for the first outcome. The ID is kept only while the outcome is
-   * unknown (`Uncertain`, or cancelled); an answer, a refusal included, is final.
+   * unknown (`Uncertain`, or cancelled) and for a limited time; an answer, a refusal included, is
+   * final. Concurrent calls with the same key share one call, so one cannot end the ID the other
+   * still needs.
    */
-  const withRequestId = async <A>(
-    key: string,
-    send: (requestId: string) => Promise<A>,
-  ): Promise<A> => {
-    const requestId = requestIds.get(key) ?? randomUUID();
-    requestIds.put(key, requestId);
-    try {
-      const output = await send(requestId);
-      requestIds.delete(key);
-      return output;
-    } catch (error) {
-      if (!ApplicationError.is(error) || !['Uncertain', 'Cancelled'].includes(error.code))
+  const inFlight = new Map<string, Promise<unknown>>();
+  const withRequestId = <A>(key: string, send: (requestId: string) => Promise<A>): Promise<A> => {
+    const running = inFlight.get(key);
+    if (running) return running as Promise<A>;
+    const call = (async () => {
+      const requestId = requestIds.get(key) ?? randomUUID();
+      requestIds.put(key, requestId);
+      try {
+        const output = await send(requestId);
         requestIds.delete(key);
-      throw error;
-    }
+        return output;
+      } catch (error) {
+        if (!ApplicationError.is(error) || !['Uncertain', 'Cancelled'].includes(error.code))
+          requestIds.delete(key);
+        throw error;
+      }
+    })().finally(() => inFlight.delete(key));
+    inFlight.set(key, call);
+    return call;
   };
   const requireBackend = (message: string) => {
     if (!local) throw new ApplicationError({ code: 'Unavailable', message });
