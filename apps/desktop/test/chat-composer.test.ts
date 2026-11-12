@@ -7,6 +7,7 @@ import {
   type ChatTarget,
 } from '@moonbase/contracts/chat';
 import { ChatComposer, getChatComposer } from '../src/renderer/chat/composer.ts';
+import { ApplicationError } from '@moonbase/contracts/errors';
 
 const target = (conversationId: string) =>
   ({ conversationId, session: { actorId: 'a', hostId: 'h', storeId: 's' } }) as never as ChatTarget;
@@ -175,6 +176,36 @@ test('a worktree whose send isn’t confirmed keeps the place on it, until a ret
   assert.equal(composer.readPlace('agents', '').cwd, '/repo-worktrees/chat-fix-it');
   chat.listChat('/repo-worktrees/chat-fix-it');
   assert.equal(composer.readPlace('agents', '').cwd, '/repo');
+});
+
+test('a worktree send whose outcome is unknown is retried under its request; any other outcome or draft starts a new one', async () => {
+  const chat = makeChat();
+  const composer = composerOf(chat);
+  chat.setDraft('Fix it');
+  composer.updatePlace('agents', '', { cwd: '/repo', newWorktree: true });
+  const requests: string[] = [];
+  const send = async (code?: ApplicationError['code']) => {
+    composer.sendInWorktree(
+      'agents',
+      '',
+      async (_root, _branch, requestId) => {
+        requests.push(requestId);
+        if (code) throw new ApplicationError({ code, message: code });
+        return '/repo-worktrees/chat-fix-it';
+      },
+      settings,
+    );
+    await settle();
+  };
+  await send('Uncertain');
+  await send('Cancelled');
+  await send('Conflict');
+  await send('Uncertain');
+  chat.setDraft('Fix another');
+  await send();
+  assert.equal(requests.length, 5);
+  assert.equal(new Set(requests.slice(0, 3)).size, 1);
+  assert.equal(new Set(requests.slice(2)).size, 3);
 });
 
 test('a worktree ready while another chat is open keeps the mentions in the worktree', async () => {
