@@ -264,12 +264,11 @@ export function hostInputCheckout(input: unknown): { hostId: string } | undefine
 export const WorkspaceWatchTargetSchema = struct({ checkout: CheckoutTargetSchema });
 /**
  * The watch of a checkout: `ready` once files are watched, `revision` rising with every change
- * seen, `operations` the host's operation feed sequence and `error` a watch failure the client
- * should answer by watching again. A client rereads after any update.
+ * seen and `error` a watch failure the client should answer by watching again. A client rereads
+ * after any update.
  */
 export const WorkspaceWatchValueSchema = struct({
   ready: Schema.Boolean,
   revision: natural,
-  operations: natural,
   error: optional(Schema.Literals(chatReplyErrorCodes)),
 });

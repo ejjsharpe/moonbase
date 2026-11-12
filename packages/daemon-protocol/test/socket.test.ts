@@ -40,6 +40,7 @@ import {
   systemSocketClock,
   openSocketMessage,
   PayloadAssembler,
+  PayloadReassembly,
   sealSocketMessage,
   type SocketClock,
   type SocketKeys,
@@ -169,6 +170,7 @@ async function serve(
     sources?: Partial<SocketSources>;
     clock?: SocketClock;
     workspace?: WorkspaceHostClient;
+    admit?: () => () => void;
   } = {},
 ) {
   const token = P.nonce(),
@@ -186,6 +188,7 @@ async function serve(
         },
         ...(options.clock ? { clock: options.clock } : {}),
         ...(options.workspace ? { workspace: options.workspace } : {}),
+        ...(options.admit ? { admit: options.admit } : {}),
       },
     ).pipe(Effect.provideService(Scope.Scope, scope)),
   );
@@ -1191,6 +1194,7 @@ async function workspaceConnection(t: TestContext, workspace: WorkspaceHostClien
     raw,
     keys,
     source,
+    clock,
     seal,
     send: (message: Record<string, unknown>) => raw.send(seal(message)),
   };
@@ -1225,6 +1229,17 @@ const chunkFaults: Record<
       ...chunkMessages('r', body)[0]!,
       total: socketLimits.workspaceRequestBytes + 1,
     }),
+  // Base64 whose padding hides set bits decodes, but is not the one encoding of its bytes.
+  'non-canonical': (c, body) => c.send({ ...chunkMessages('r', body)[0]!, data: 'AB==' }),
+  'chat operation': (c) => {
+    const body = Buffer.from(
+      JSON.stringify({
+        operation: 'listChats',
+        input: { session, padding: 'x'.repeat(chunkBytes) },
+      }),
+    );
+    for (const message of chunkMessages('r', body)) c.send(message);
+  },
 };
 for (const [name, fault] of Object.entries(chunkFaults))
   test(`a ${name} request chunk closes the connection`, async (t) => {
@@ -1233,23 +1248,43 @@ for (const [name, fault] of Object.entries(chunkFaults))
     await assertRefused(connection.raw);
   });
 
-test('a request past 32 MiB of chunked input in flight closes the connection', async (t) => {
-  const { client, handlers } = controlledWorkspace(),
+test('a request past 32 MiB of chunked input in flight is refused Unavailable before it runs, a mutation too, and its discarded chunks are still checked', async (t) => {
+  const { client, handlers, calls } = controlledWorkspace(),
     held = Promise.withResolvers<never>();
   handlers.getIgnoredPaths = () => held.promise;
   t.after(() => held.reject(Error('done')));
-  const connection = await workspaceConnection(t, client);
-  const body = Buffer.from(
-    JSON.stringify({
-      operation: 'getIgnoredPaths',
-      input: { checkout, path: '', paths: Array.from({ length: 3900 }, () => 'x'.repeat(4000)) },
-    }),
-  );
+  // About 16.4 MB each: two fit, and each holds its input while the host runs it.
+  const holding = {
+    checkout,
+    path: '',
+    paths: Array.from({ length: 4100 }, () => 'x'.repeat(4000)),
+  };
+  const body = Buffer.from(JSON.stringify({ operation: 'getIgnoredPaths', input: holding }));
   assert(body.length < socketLimits.workspaceRequestBytes);
-  // Two fit; each stays in flight until the host answers.
+  assert(body.length * 3 > socketLimits.workspaceInFlightBytes);
+  const { endpoint } = await serve(t, controlledClient().client, { workspace: client });
+  const socket = await open(t, endpoint);
+  for (let index = 0; index < 2; index++)
+    void socket.request('getIgnoredPaths', holding).catch(() => {});
+  await until(
+    async () => calls.length,
+    (count) => count === 2,
+  );
+  // A mutation that would pass the bound never runs, so it is `Unavailable`, not `Uncertain`, and
+  // the connection carries on.
+  const text = 'x'.repeat(1024 * 1024);
+  await assert.rejects(socket.request('saveFile', saveInput(text)), { code: 'Unavailable' });
+  assert.deepEqual(calls, ['getIgnoredPaths', 'getIgnoredPaths']);
+  handlers.readFile = async () => ({ text: 'ok', version: 'v1' });
+  assert.equal((await socket.request('readFile', fileTarget)).text, 'ok');
+
+  // A discarded request's chunks are checked like any other's: a gap closes the connection.
+  const connection = await workspaceConnection(t, client);
   for (const id of ['a', 'b'])
     for (const message of chunkMessages(id, body)) connection.send(message);
-  for (const message of chunkMessages('c', body)) connection.send(message);
+  const [first, , third] = chunkMessages('c', body);
+  connection.send(first!);
+  connection.send(third!);
   await assertRefused(connection.raw);
 });
 
@@ -1292,12 +1327,9 @@ test('a 2 MiB file saves and reads back through chunks, a reply over its bound i
   await assertRefused(raw);
 });
 
-test('a workspace watch follows changes and operations, resets after a reconnect, and counts apart from chat subscriptions', async (t) => {
+test('a workspace watch follows changes, resets after a reconnect without crowding out chats kept to resume, counts apart from chat subscriptions and ends retryably when the host’s watch finishes', async (t) => {
   const watchers = new Set<Queue.Queue<WorkspaceEvent, Cause.Done>>();
-  let through = 0;
   const service = {
-    listOperations: () =>
-      Effect.succeed({ operations: [], through, floor: 0, epoch: 'epoch', more: false }),
     watch: () =>
       Stream.callback<WorkspaceEvent>((queue) =>
         Effect.acquireRelease(
@@ -1312,39 +1344,63 @@ test('a workspace watch follows changes and operations, resets after a reconnect
   const source = controlledClient();
   const { endpoint } = await serve(t, source.client, { workspace: makeWorkspaceClient(service) });
   const first = await open(t, endpoint);
-  const values: { ready: boolean; revision: number; operations: number }[] = [];
+  const chat = first.subscribe('chat', target, { receive: () => {}, onError: () => {} });
+  const values: { ready: boolean; revision: number }[] = [];
   const subscription = first.subscribe(
     'workspace',
     { checkout },
     { receive: (value) => values.push(value), onError: () => {} },
   );
-  await until(async () => values.at(-1)?.ready, Boolean);
-  through = 3;
+  await until(async () => values.at(-1)?.ready && chat.state, Boolean);
+  const revision = values.at(-1)!.revision;
   for (const queue of watchers) Queue.offerUnsafe(queue, { checkout, paths: [''] });
-  const changed = await until(
-    async () => values.at(-1),
-    (value) => value?.operations === 3,
+  await until(
+    async () => values.at(-1)!.revision,
+    (value) => value > revision,
   );
-  assert(changed!.revision > 1);
+  // A full set of workspace subscriptions beside the chat one.
+  for (let index = 1; index < socketLimits.workspaceSubscriptions; index++)
+    first.subscribe('workspace', { checkout }, { receive: () => {}, onError: () => {} });
+  await until(
+    async () => watchers.size,
+    (count) => count === socketLimits.workspaceSubscriptions,
+  );
 
-  // A resumed workspace subscription always starts again from a snapshot.
-  const state = subscription.state!;
+  // A resumed workspace subscription always starts again from a snapshot, and workspace
+  // subscriptions are not kept to resume, so the chat one still resumes with deltas.
+  const state = subscription.state!,
+    chatState = chat.state!;
   await first.close();
   const second = await open(t, endpoint);
-  const updates: string[] = [];
+  const updates: string[] = [],
+    chatUpdates: string[] = [];
   second.subscribe(
     'workspace',
     { checkout },
     { receive: (_value, update) => updates.push(update), onError: () => {} },
     state,
   );
+  second.subscribe(
+    'chat',
+    target,
+    { receive: (_value, update) => chatUpdates.push(update), onError: () => {} },
+    chatState,
+  );
   await until(async () => updates.length, Boolean);
   assert.equal(updates[0], 'snapshot');
+  source.publish(snapshotOf('resumed'));
+  await until(async () => chatUpdates.length, Boolean);
+  assert.equal(chatUpdates[0], 'delta');
 
   // 64 workspace subscriptions fit beside the chat ones; the next is refused.
-  const refused: string[] = [];
-  for (let index = 0; index < socketLimits.workspaceSubscriptions; index++)
-    second.subscribe('workspace', { checkout }, { receive: () => {}, onError: () => {} });
+  const refused: string[] = [],
+    ended: string[] = [];
+  for (let index = 1; index < socketLimits.workspaceSubscriptions; index++)
+    second.subscribe(
+      'workspace',
+      { checkout },
+      { receive: () => {}, onError: (error) => ended.push(error.code) },
+    );
   second.subscribe(
     'workspace',
     { checkout },
@@ -1352,9 +1408,17 @@ test('a workspace watch follows changes and operations, resets after a reconnect
   );
   await until(async () => refused.length, Boolean);
   assert.equal(refused[0], 'Unavailable');
-  const chat: string[] = [];
-  second.subscribe('chat', target, { receive: () => chat.push('ok'), onError: () => {} });
-  await until(async () => chat.length, Boolean);
+  const chats: string[] = [];
+  second.subscribe('chat', target, { receive: () => chats.push('ok'), onError: () => {} });
+  await until(async () => chats.length, Boolean);
+
+  // A host watch that finishes ends its subscriptions as `Unavailable`, which a client retries.
+  for (const queue of watchers) Queue.endUnsafe(queue);
+  await until(
+    async () => ended.length,
+    (count) => count === socketLimits.workspaceSubscriptions - 1,
+  );
+  assert(ended.every((code) => code === 'Unavailable'));
 });
 
 test('a mutation whose reply is lost is Uncertain, runs to completion without a signal, and its outcome is read back by operationStatus', async (t) => {
@@ -1495,44 +1559,120 @@ test('the daemon refuses a workspace request or watch for another host, and no h
   assert.deepEqual(calls, []);
 });
 
-test('a cancelled chunked request frees its input when the daemon answers, and a request waiting for room sends nothing when cancelled', async (t) => {
-  const { client, handlers } = controlledWorkspace();
-  let calls = 0;
-  const answered: AbortSignal[] = [];
-  handlers.getIgnoredPaths = (_input, signal) => {
-    if (++calls > 2) return Promise.resolve({ paths: [] });
-    answered.push(signal!);
-    return new Promise((_resolve, reject) =>
-      signal!.addEventListener('abort', () =>
-        reject(new ApplicationError({ code: 'Cancelled', message: 'Cancelled.' })),
-      ),
-    );
-  };
+test('a cancelled read frees its place on the daemon at once and the client’s once the daemon answers, and a queued reply it cancels is never sent', async (t) => {
+  const { client, handlers, calls } = controlledWorkspace();
+  // The host ignores the cancel: these reads never end.
+  handlers.readFile = () => new Promise(() => {});
   const { endpoint } = await serve(t, controlledClient().client, { workspace: client });
   const socket = await open(t, endpoint);
-  // About 11.6 MB each: two are in flight, a third waits for room under 32 MiB.
-  const input = () => ({
-    checkout,
-    path: '',
-    paths: Array.from({ length: 2900 }, () => 'x'.repeat(4000)),
-  });
-  const controllers = [new AbortController(), new AbortController(), new AbortController()];
-  const requests = controllers.map((controller) =>
-    socket.request('getIgnoredPaths', input(), { signal: controller.signal }),
+  let settled = 0;
+  const controllers = Array.from({ length: socketLimits.requests }, () => new AbortController());
+  const reads = controllers.map((controller) =>
+    socket.request('readFile', fileTarget, {
+      signal: controller.signal,
+      settled: () => void settled++,
+    }),
   );
-  const settled = requests.map((request) => request.catch((error: ApplicationError) => error));
   await until(
-    async () => answered.length,
-    (count) => count === 2,
+    async () => calls.length,
+    (count) => count === socketLimits.requests,
   );
-  // Cancelled while waiting: nothing was sent, so the daemon never runs it.
-  controllers[2]!.abort();
-  assert.equal(((await settled[2]) as ApplicationError).code, 'Cancelled');
-  controllers[0]!.abort();
-  controllers[1]!.abort();
-  assert.equal(((await settled[0]) as ApplicationError).code, 'Cancelled');
-  assert.equal(((await settled[1]) as ApplicationError).code, 'Cancelled');
-  // The late replies release the input, so the next request is not left waiting.
-  assert.deepEqual(await socket.request('getIgnoredPaths', input()), { paths: [] });
-  assert.equal(calls, 3);
+  for (const controller of controllers) controller.abort();
+  for (const read of reads) await assert.rejects(read, { code: 'Cancelled' });
+  // The callers are told at once; each place is free once the daemon has answered the cancel.
+  assert.equal(settled, 0);
+  await until(
+    async () => settled,
+    (count) => count === socketLimits.requests,
+  );
+  // Every place on the daemon is free again although the host finished none of the reads.
+  assert.equal((await socket.request('getChatHost', { host })).actorId, 'owner');
+
+  // A reply waiting behind a large one while the client reads nothing is dropped for its cancel.
+  const large = controlledWorkspace();
+  large.handlers.readFile = async (input: { path: string }) => ({
+    text: input.path === 'large' ? 'x'.repeat(15 * 1024 * 1024) : 'small',
+    version: 'v1',
+  });
+  const c = await workspaceConnection(t, large.client);
+  c.raw.socket.pause();
+  c.send({
+    type: 'request',
+    id: 'large',
+    operation: 'readFile',
+    input: { checkout, path: 'large' },
+  });
+  c.send({ type: 'request', id: 'small', operation: 'readFile', input: fileTarget });
+  await until(async () => c.clock.hasTimer(socketLimits.drainMs), Boolean);
+  c.send({ type: 'cancel', id: 'small' });
+  // Workspace replies go in order, so this one comes after anything left of the others.
+  c.send({ type: 'request', id: 'after', operation: 'readFile', input: fileTarget });
+  c.raw.socket.resume();
+  const reassembly = new PayloadReassembly(),
+    replies = new Map<
+      string,
+      { ok: boolean; value?: { text?: string }; error?: { code: string } }
+    >(),
+    order: string[] = [];
+  while (!replies.has('after')) {
+    const message = await readSealed(c.raw, c.keys);
+    assert(message !== 'closed' && message !== 'timeout');
+    if (message.type !== 'reply') continue;
+    const done = reassembly.push(
+      String(message.id),
+      message as never,
+      socketLimits.workspaceReplyBytes,
+    );
+    if (!done) continue;
+    order.push(String(message.id));
+    replies.set(String(message.id), done.value as never);
+  }
+  assert.equal(replies.get('small')!.error!.code, 'Cancelled');
+  assert.equal(replies.get('large')!.value!.text!.length, 15 * 1024 * 1024);
+  // One reply per request: the dropped one never follows.
+  assert.deepEqual(order.toSorted(), ['after', 'large', 'small']);
+});
+
+test('a daemon admits each request and health probe until it is answered, past its connection, and its refusal is the reply', async (t) => {
+  const source = controlledClient(),
+    held = Promise.withResolvers<void>();
+  source.handlers.sendChat = () => held.promise;
+  let admissions = 0,
+    open = 0,
+    refusing = false;
+  const admit = () => {
+    if (refusing) throw new ApplicationError({ code: 'Unavailable', message: 'Stopping.' });
+    admissions++;
+    open++;
+    return () => void open--;
+  };
+  const { endpoint, token } = await serve(t, source.client, { admit });
+  const socket = await connectDaemonSocket(endpoint);
+  // A mutation runs to completion after its connection closes, and stays admitted until then.
+  const sending = socket
+    .request('sendChat', { target, requestId: 'held', text: 'Hold this' })
+    .catch(() => {});
+  await until(async () => source.calls.includes('sendChat'), Boolean);
+  socket.close();
+  await sending;
+  assert.equal(open, 1);
+  held.resolve();
+  await until(
+    async () => open,
+    (count) => count === 0,
+  );
+  await Effect.runPromise(checkHostHealth({ origin: endpoint.origin, token, expected: host }));
+  assert.equal(admissions, 2);
+  assert.equal(open, 0);
+
+  // A refused request or probe never reaches the service.
+  refusing = true;
+  const before = source.calls.length;
+  const second = await connectDaemonSocket(endpoint);
+  t.after(() => second.close());
+  await assert.rejects(second.request('getChat', { target }), { code: 'Unavailable' });
+  await assert.rejects(
+    Effect.runPromise(checkHostHealth({ origin: endpoint.origin, token, expected: host })),
+  );
+  assert.deepEqual(source.calls.slice(before), []);
 });

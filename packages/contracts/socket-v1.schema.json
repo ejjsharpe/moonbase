@@ -3671,11 +3671,6 @@
           "minimum": -9007199254740991,
           "maximum": 9007199254740991
         },
-        "operations": {
-          "type": "integer",
-          "minimum": -9007199254740991,
-          "maximum": 9007199254740991
-        },
         "error": {
           "anyOf": [
             {
@@ -3699,8 +3694,7 @@
       },
       "required": [
         "ready",
-        "revision",
-        "operations"
+        "revision"
       ],
       "additionalProperties": false
     },

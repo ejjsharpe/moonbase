@@ -1,6 +1,3 @@
-import type { ChatClient } from '@moonbase/contracts/chat';
-import type { DaemonClient } from '@moonbase/contracts/daemon';
-
 export type IdleClock = {
   now(): number;
   setTimeout(callback: () => void, ms: number): unknown;
@@ -88,55 +85,3 @@ export function createIdleMonitor({
   };
 }
 export type IdleMonitor = ReturnType<typeof createIdleMonitor>;
-
-/** Counts each request and open watch as a client using the daemon. */
-export function trackClientUse(client: ChatClient, idle: IdleMonitor): ChatClient {
-  /** Counts an open watch as use until it closes. */
-  const tracked = (
-    open: () => ReturnType<ChatClient['watch']>,
-  ): ReturnType<ChatClient['watch']> => {
-    idle.begin();
-    let counted = true;
-    let close: ReturnType<ChatClient['watch']>;
-    try {
-      close = open();
-    } catch (error) {
-      idle.end();
-      throw error;
-    }
-    return async () => {
-      if (counted) {
-        counted = false;
-        idle.end();
-      }
-      await close();
-    };
-  };
-  return {
-    command: async (operation, input, options) => {
-      idle.begin();
-      try {
-        return await client.command(operation, input, options);
-      } finally {
-        idle.end();
-      }
-    },
-    watch: (input, receive, onError) => tracked(() => client.watch(input, receive, onError)),
-    watchChatList: (input, receive, onError) =>
-      tracked(() => client.watchChatList(input, receive, onError)),
-  };
-}
-
-/** Counts each daemon operation as a client using the daemon. */
-export function trackDaemonUse(client: DaemonClient, idle: IdleMonitor): DaemonClient {
-  return {
-    command: async (operation, input, options) => {
-      idle.begin();
-      try {
-        return await client.command(operation, input, options);
-      } finally {
-        idle.end();
-      }
-    },
-  };
-}

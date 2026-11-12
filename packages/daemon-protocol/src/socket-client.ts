@@ -75,13 +75,24 @@ export type SocketSubscription<K extends SocketSubscriptionKind> = {
   readonly state: SocketSubscriptionState<K> | undefined;
   close(): void;
 };
+export type SocketRequestOptions = CommandOptions & {
+  /**
+   * Called once the daemon is done with the request: its reply (to a cancel too) arrived or the
+   * connection closed, or nothing of it was sent. A cancelled read fails before this.
+   */
+  settled?(): void;
+};
 export type DaemonSocket = {
   /** The daemon's health, authenticated by the welcome. */
   readonly health: ChatHostHealth;
+  /**
+   * Sends one request, at once and in one piece. Aborting `signal` cancels a read (which fails
+   * `Cancelled` at once); a mutation is never cancelled and its reply is awaited.
+   */
   request<K extends SocketOperation>(
     operation: K,
     input: SocketInput<K>,
-    options?: CommandOptions,
+    options?: SocketRequestOptions,
   ): Promise<SocketOutput<K>>;
   subscribe<K extends SocketSubscriptionKind>(
     kind: K,
@@ -167,27 +178,6 @@ export function connectDaemonSocket(
     nextId = 0,
     reason: ApplicationError | undefined;
   const assembler = new PayloadReassembly();
-  // Chunked workspace requests hold their input until answered; the daemon closes a connection
-  // that holds more than `workspaceInFlightBytes`, so a request that would pass it waits.
-  let chunkedInFlight = 0;
-  const waiting: (() => boolean)[] = [];
-  const acquire = (bytes: number) =>
-    new Promise<void>((resolve) => {
-      const take = () => {
-        if (chunkedInFlight + bytes > socketLimits.workspaceInFlightBytes) return false;
-        chunkedInFlight += bytes;
-        resolve();
-        return true;
-      };
-      if (!waiting.length && take()) return;
-      waiting.push(take);
-    });
-  const release = (bytes: number) => {
-    chunkedInFlight -= bytes;
-    while (waiting.length && waiting[0]!()) waiting.shift();
-  };
-  /** Input a cancelled chunked request holds until the daemon's reply to it arrives. */
-  const abandoned = new Map<string, number>();
   type Pending = {
     operation: SocketOperation;
     mutation: boolean;
@@ -263,21 +253,15 @@ export function connectDaemonSocket(
     if (message.type === 'welcome') return V.fail('Incompatible', 'Unexpected welcome.');
     if (message.type === 'reply') {
       const pending = requests.get(message.id);
-      // Only a workspace reply, or the late reply to a cancelled one, may exceed a chat reply's bound.
+      // Only a workspace reply may exceed a chat reply's bound.
       const done = assembler.push(
         `reply:${message.id}`,
         message,
-        (pending && isHostCommand(pending.operation)) || abandoned.has(message.id)
+        pending && isHostCommand(pending.operation)
           ? socketLimits.workspaceReplyBytes
           : socketLimits.payloadBytes,
       );
-      if (!done) return;
-      const held = abandoned.get(message.id);
-      if (held !== undefined) {
-        abandoned.delete(message.id);
-        release(held);
-      }
-      if (!pending) return;
+      if (!done || !pending) return;
       requests.delete(message.id);
       let reply: ReturnType<typeof decodeSocketReply>;
       try {
@@ -398,12 +382,15 @@ export function connectDaemonSocket(
     },
     request(operation, input, requestOptions) {
       return new Promise((resolve, reject) => {
-        if (reason) return reject(reason);
-        let decoded: unknown,
-          mutation: boolean,
-          capability: string,
-          chunked = false,
-          total = 0;
+        const signal = requestOptions?.signal,
+          settled = requestOptions?.settled;
+        /** Refuses a request before anything of it is sent. */
+        const refuse = (error: unknown) => {
+          settled?.();
+          reject(error);
+        };
+        if (reason) return refuse(reason);
+        let decoded: unknown, mutation: boolean, capability: string, body: Buffer;
         try {
           if (isHostCommand(operation)) {
             decoded = decodeHostInput(operation, input);
@@ -422,20 +409,17 @@ export function connectDaemonSocket(
           }
           if (!health!.capabilities.includes(capability as never))
             V.fail('Incompatible', 'The daemon does not offer this feature.');
-          const bytes = Buffer.byteLength(JSON.stringify({ operation, input: decoded }));
+          body = Buffer.from(JSON.stringify({ operation, input: decoded }));
           if (
-            bytes >
+            body.length >
             (isHostCommand(operation)
               ? socketLimits.workspaceRequestBytes
               : P.maximumChatRequestBytes)
           )
             V.fail('InvalidInput', 'Request input exceeds its transport limit.');
-          // A workspace request over a frame is sent as chunks; a chat one never is.
-          chunked = isHostCommand(operation) && bytes + 288 > socketLimits.frameBytes;
-          total = bytes;
-          if (requestOptions?.signal?.aborted) V.fail('Cancelled', 'The request was cancelled.');
+          if (signal?.aborted) V.fail('Cancelled', 'The request was cancelled.');
         } catch (error) {
-          return reject(error);
+          return refuse(error);
         }
         const id = String(nextId++);
         const check = (value: unknown) => {
@@ -452,34 +436,31 @@ export function connectDaemonSocket(
           }
           return V.output(operation as ChatCommand, value, decoded as never);
         };
-        // What a chunked request holds of the connection's in-flight input, until it settles.
-        let charged = 0;
+        // A cancelled read fails at once but stays pending until the daemon answers it, so
+        // `settled` still says when its place on the daemon is free.
+        let cancelled = false;
         const abort = () => {
-          if (!requests.has(id) || mutation) return;
-          requests.delete(id);
-          // The daemon holds a cancelled request's input until it replies.
-          // A chunked request still waiting for room sent nothing, so the daemon knows no id.
-          const unseen = chunked && charged === 0;
-          if (isHostCommand(operation) && !unseen) abandoned.set(id, charged);
-          charged = 0;
+          // A mutation is never cancelled: it runs to completion and its reply is awaited.
+          if (mutation || cancelled || !requests.has(id)) return;
+          cancelled = true;
           try {
-            if (!unseen) send({ type: 'cancel', id });
+            send({ type: 'cancel', id });
           } catch {}
           reject(
             new ApplicationError({ code: 'Cancelled', message: 'The request was cancelled.' }),
           );
         };
-        requestOptions?.signal?.addEventListener('abort', abort, { once: true });
-        const done = () => {
-          requestOptions?.signal?.removeEventListener('abort', abort);
-          release(charged);
-          charged = 0;
+        signal?.addEventListener('abort', abort, { once: true });
+        const finish = () => {
+          signal?.removeEventListener('abort', abort);
+          settled?.();
         };
-        const pending: Pending = {
+        requests.set(id, {
           operation,
           mutation,
           resolve: (value) => {
-            done();
+            finish();
+            if (cancelled) return;
             try {
               resolve(check(value) as never);
             } catch {
@@ -487,37 +468,29 @@ export function connectDaemonSocket(
             }
           },
           reject: (error) => {
-            done();
+            finish();
             reject(error);
           },
-        };
-        requests.set(id, pending);
-        const transmit = () => {
-          try {
-            if (!chunked) return send({ type: 'request', id, operation, input: decoded });
-            const bytes = Buffer.from(JSON.stringify({ operation, input: decoded }));
-            // Back to back, so nothing else is sent between them.
-            for (let offset = 0; offset < bytes.length; offset += socketLimits.chunkBytes)
+        });
+        try {
+          // A workspace request over a frame is sent as chunks, back to back; a chat one never is.
+          if (!isHostCommand(operation) || body.length + 288 <= socketLimits.frameBytes)
+            send({ type: 'request', id, operation, input: decoded });
+          else
+            for (let offset = 0; offset < body.length; offset += socketLimits.chunkBytes)
               send({
                 type: 'requestChunk',
                 id,
                 offset,
-                total: bytes.length,
-                data: bytes.subarray(offset, offset + socketLimits.chunkBytes).toString('base64'),
+                total: body.length,
+                data: body.subarray(offset, offset + socketLimits.chunkBytes).toString('base64'),
               });
-          } catch {
-            requests.delete(id);
-            done();
-            reject(unavailable());
-          }
-        };
-        if (!chunked) return transmit();
-        void acquire(total).then(() => {
-          // A request that ended while it waited sends nothing.
-          if (requests.get(id) !== pending) return release(total);
-          charged = total;
-          transmit();
-        });
+        } catch {
+          // The connection ended before the whole request left, so the daemon runs none of it.
+          requests.delete(id);
+          finish();
+          reject(unavailable());
+        }
       });
     },
     subscribe(kind, target, handlers, resume) {

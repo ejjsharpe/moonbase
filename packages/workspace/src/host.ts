@@ -21,8 +21,7 @@ import { randomUUID } from 'node:crypto';
 import { Store } from './store.ts';
 import { admit, applicationError, type AdmissionOwner } from './admission.ts';
 import { HostJournal, type RequestOperation } from './host-journal.ts';
-import { ChatWorktrees } from './chat-worktrees.ts';
-import { CheckoutFolders } from './checkout-folders.ts';
+import { makeChatWorktree } from './chat-worktrees.ts';
 import {
   hostDecoders,
   type Approval,
@@ -151,8 +150,8 @@ export class FileHost implements AdmissionOwner {
   }
   private readonly allowRoot: RootPredicate | undefined;
   private readonly chats: ChatFolders | undefined;
-  readonly chatWorktrees: ChatWorktrees;
-  readonly checkoutFolders: CheckoutFolders;
+  /** The host's state and its owner's reserved paths, as real paths. */
+  private readonly reserved: string[];
   readonly gitReady: () => Promise<void>;
   constructor(
     config: WorkspaceConfiguration,
@@ -189,33 +188,11 @@ export class FileHost implements AdmissionOwner {
       (message) =>
         this.cleanupFailures.push(Cause.die(new ApplicationError({ code: 'Uncertain', message }))),
     );
-    this.chatWorktrees = new ChatWorktrees({
-      open: (root, signal) => this.open(root, signal),
-      list: (target, signal) => this.worktrees.listWorktrees(target, signal),
-      create: (input, signal) => this.worktrees.createWorktree(input, signal),
-      permitParent: (parent) => this.permitContainer(parent),
-    });
-    this.checkoutFolders = new CheckoutFolders({
-      approvals: () => this.store.all<Approval>('approvals'),
-      verify: (target) => this.verifyFolder(target),
-      permit: async (root) => {
-        this.protected(root);
-        await this.permit(root, root);
-      },
-      // Through a borrowed descriptor, so checking many approvals never fills the retained cap.
-      list: (target, signal) =>
-        this.borrow(
-          target,
-          async (directory) =>
-            (await this.worktrees.listWorktrees(target, signal, directory)).worktrees,
-        ),
-      gitEntry: (root) => this.gitEntry(root),
-    });
     this.store = new Store(config.dataDirectory, {
       file: 'workspace-host.sqlite',
       applicationId: 1296193364,
       schema:
-        "CREATE INDEX IF NOT EXISTS pending_host_saves ON records(bucket) WHERE bucket='saves' AND json_extract(body, '$.result') IS NULL; CREATE INDEX IF NOT EXISTS feed_operation ON records(json_extract(body, '$.operation')) WHERE bucket='feed';",
+        "CREATE INDEX IF NOT EXISTS approval_root ON records(json_extract(body, '$.target.root')) WHERE bucket='approvals'; CREATE INDEX IF NOT EXISTS pending_host_saves ON records(bucket) WHERE bucket='saves' AND json_extract(body, '$.result') IS NULL; CREATE INDEX IF NOT EXISTS feed_operation ON records(json_extract(body, '$.operation')) WHERE bucket='feed';",
       decoders: hostDecoders,
     });
     try {
@@ -224,6 +201,8 @@ export class FileHost implements AdmissionOwner {
       this.store.close();
       throw error;
     }
+    // Resolved once: the host's own reserved paths don't move while it runs.
+    this.reserved = [this.store.directory, ...(config.reserved ?? [])].map(resolveNearest);
     this.run = makeRunner(helper, ownership.runHelper, (cause) => this.cleanupFailures.push(cause));
     this.journal = new HostJournal(
       this.store,
@@ -516,15 +495,6 @@ export class FileHost implements AdmissionOwner {
       }).pipe(Effect.onExit((exit) => Deferred.done(this.closeCompletion, exit)));
     }).pipe(Effect.uninterruptible);
   }
-  /** Refuses a path that holds, or sits inside, a reserved path of the host's owner. */
-  private reserve(path: string) {
-    const real = resolveNearest(path);
-    for (const reserved of this.config.reserved ?? [])
-      ensure(
-        !holdsOrIsInside(real, resolveNearest(reserved)),
-        'This location is reserved by the workspace host.',
-      );
-  }
   /** Whether the root policy lets the host use `real`; a throwing predicate denies. */
   async permit(real: string, requested: string) {
     if (!this.allowRoot) return;
@@ -544,16 +514,11 @@ export class FileHost implements AdmissionOwner {
       await this.permit(parent, parent);
     }
   }
-  protected(root: string) {
-    this.reserve(root);
-    const inside = (a: string, b: string) => {
-      const p = relative(a, b);
-      return !p || (p !== '..' && !p.startsWith('../') && !isAbsolute(p));
-    };
-    ensure(
-      !inside(root, this.store.directory) && !inside(this.store.directory, root),
-      'Workspace state and file operations must remain outside one another.',
-    );
+  /** Refuses a path that holds, or sits inside, the host's state or a reserved path of its owner. */
+  protected(path: string) {
+    const real = resolveNearest(path);
+    for (const reserved of this.reserved)
+      ensure(!holdsOrIsInside(real, reserved), 'This location is reserved by the workspace host.');
   }
   approval(target: CheckoutTarget) {
     checkout(target);
@@ -573,23 +538,35 @@ export class FileHost implements AdmissionOwner {
     transient?.close();
     return directory;
   }
-  /** Re-checks a checkout through a descriptor closed again, so folder checks never use up the cap. */
-  async verifyFolder(target: CheckoutTarget) {
-    (await this.checked(target, false)).transient?.close();
+  /** Approvals of exactly `root`; a replaced checkout may leave a stale one beside the current. */
+  private approvalsAt(root: string) {
+    return this.store.all<Approval>(
+      'approvals',
+      "bucket='approvals' AND json_extract(body, '$.target.root')=?",
+      [root],
+    );
   }
-  /** Runs `operate` on the re-checked checkout through a descriptor that is closed afterwards. */
-  async borrow<T>(target: CheckoutTarget, operate: (directory: Directory) => Promise<T>) {
-    const { directory, transient } = await this.checked(target, false);
-    try {
-      return await operate(directory);
-    } finally {
-      transient?.close();
+  /**
+   * Whether `path` is the root of an approved checkout that still holds: its identity, reserved
+   * paths and root policy are checked again, through a descriptor closed afterwards so folder
+   * checks never use up the retained cap.
+   */
+  async hasFolder(path: string) {
+    for (const approval of this.approvalsAt(path)) {
+      try {
+        (await this.checked(approval.target, false)).transient?.close();
+        return true;
+      } catch {
+        // A stale approval; another of the same root may still hold.
+      }
     }
+    return false;
   }
   private async checked(target: CheckoutTarget, retain: boolean) {
     const approved = this.approval(target);
-    // Every use re-checks the root policy, so a root replaced since it was approved, or one that
-    // a smaller policy no longer allows, grants nothing.
+    // Every use re-checks reserved paths and the root policy, so a root replaced since it was
+    // approved, or one that a smaller policy no longer allows, grants nothing.
+    this.protected(target.root);
     await this.permit(target.root, target.root);
     let directory = this.directories.get(target.checkoutId);
     let transient: Directory | undefined;
@@ -744,7 +721,7 @@ export class FileHost implements AdmissionOwner {
             : [this.config.hostId, id],
         ),
       );
-      const previous = this.store.all<Approval>('approvals').filter((a) => a.target.root === root);
+      const previous = this.approvalsAt(root);
       const current = previous.find((a) => a.identity === id && a.target.projectId === projectId);
       if (current) return current.target;
       // A plain folder that has since become a repository of its own (its main working tree, with
@@ -823,7 +800,7 @@ export class FileHost implements AdmissionOwner {
    * at the location derived from `root`'s repository.
    */
   async createChatWorktree(input: HostInput<'createChatWorktree'>, signal: AbortSignal) {
-    return this.once('createChatWorktree', input, () => this.chatWorktrees.create(input, signal));
+    return this.once('createChatWorktree', input, () => makeChatWorktree(this, input, signal));
   }
   /**
    * Replays the first outcome of a `turnChatIntoProject` request ID. A new ID checks the chat's own

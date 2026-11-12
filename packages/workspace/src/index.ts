@@ -92,7 +92,7 @@ export function WorkspaceHostLive(configuration: WorkspaceHostConfiguration, now
     Layer.effect(
       WorkspaceFolders,
       Effect.map(HostResources, (host) => ({
-        has: (path: string) => host.effect((signal) => host.checkoutFolders.has(path, signal)),
+        has: (path: string) => host.effect(() => host.hasFolder(path)),
       })),
     ),
   ).pipe(Layer.provide(resources));
@@ -151,9 +151,9 @@ export function WorkspaceLocalLive(
 }
 
 /**
- * Whether a folder is one the host approved as a checkout root, or a worktree Git lists for an
- * approved Git checkout, re-checked by identity on every call. A daemon's chats use it to accept
- * the folders of the editor's projects without a separate grant. It approves nothing.
+ * Whether a folder is the root of a checkout the host approved, re-checked by identity and root
+ * policy on every call. A daemon's chats use it to accept the folders of the editor's projects
+ * without a separate grant. It approves nothing.
  */
 export class WorkspaceFolders extends Context.Service<
   WorkspaceFolders,

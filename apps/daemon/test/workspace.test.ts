@@ -11,7 +11,8 @@ import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
 import { RemoteWorkspaceHostLive } from '@moonbase/daemon-protocol/remote';
 import { connectDaemonSocket } from '@moonbase/daemon-protocol/socket';
 import { runDaemon, type DaemonExit } from '../src/daemon.ts';
-import { findFilesystemHelper } from '../src/workspace.ts';
+import { closeWorkspace, findFilesystemHelper } from '../src/workspace.ts';
+import type { LogRecord } from '../src/log.ts';
 import {
   bounded,
   createControlledClock,
@@ -467,4 +468,22 @@ test('a daemon without the filesystem helper composes no workspace and still run
     controller.abort();
     assert.equal(await running, 'stopped');
   });
+});
+
+test('closing a workspace that fails or never finishes is logged by code and shutdown goes on', async () => {
+  const records: LogRecord[] = [];
+  const log = { write: (record: LogRecord) => void records.push(record) };
+  await closeWorkspace(async () => {}, { deadlineMs: 60_000, log });
+  // A helper that never exits would otherwise keep the daemon, and its lock, forever.
+  await bounded(closeWorkspace(() => new Promise(() => {}), { deadlineMs: 1, log }));
+  await closeWorkspace(
+    async () => {
+      throw new Error('stale lock at /private/path');
+    },
+    { deadlineMs: 60_000, log },
+  );
+  assert.deepEqual(records, [
+    { event: 'workspace', reason: 'close-timeout' },
+    { event: 'workspace', reason: 'close-failed', code: 'Unavailable' },
+  ]);
 });
