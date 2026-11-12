@@ -28,8 +28,6 @@ export const AbsolutePathSchema = Schema.String.check(
       new TextEncoder().encode(value).length <= 4096,
   ),
 );
-/** A folder's absolute path. */
-export const FolderPathSchema = AbsolutePathSchema;
 /** How many recent folders a host lists. */
 export const maximumRecentFolders = 8;
 /** How many folders a host-mode daemon lists from its approved roots. */
@@ -41,30 +39,30 @@ export const localHostInputSchemas = {
   approveFolder: struct({
     host: ChatHostTargetSchema,
     requestId: ChatIdentifierSchema,
-    path: FolderPathSchema,
+    path: AbsolutePathSchema,
     recent: optional(Schema.Boolean),
   }),
   listRecentFolders: struct({ host: ChatHostTargetSchema }),
   /** Refuses any folder but one the daemon made for a chat without a project. */
-  checkChatFolder: struct({ host: ChatHostTargetSchema, path: FolderPathSchema }),
+  checkChatFolder: struct({ host: ChatHostTargetSchema, path: AbsolutePathSchema }),
   /** Refuses a folder that is not approved, or no longer the directory approved. */
-  checkApprovedFolder: struct({ host: ChatHostTargetSchema, path: FolderPathSchema }),
+  checkApprovedFolder: struct({ host: ChatHostTargetSchema, path: AbsolutePathSchema }),
   getActiveWork: struct({ host: ChatHostTargetSchema }),
   markFolderAsProject: struct({ requestId: ChatIdentifierSchema, target: ChatTargetSchema }),
   /** A host-mode daemon's approved roots, then their subfolders, for a client with no picker. */
   listHostFolders: struct({ host: ChatHostTargetSchema }),
 };
 export const localHostOutputSchemas = {
-  approveFolder: struct({ requestId: ChatIdentifierSchema, path: FolderPathSchema }),
+  approveFolder: struct({ requestId: ChatIdentifierSchema, path: AbsolutePathSchema }),
   listRecentFolders: struct({
-    folders: array(FolderPathSchema).check(Schema.isMaxLength(maximumRecentFolders)),
+    folders: array(AbsolutePathSchema).check(Schema.isMaxLength(maximumRecentFolders)),
   }),
   checkChatFolder: voidResult,
   checkApprovedFolder: voidResult,
   getActiveWork: struct({ active: Schema.Boolean }),
   markFolderAsProject: struct({ requestId: ChatIdentifierSchema }),
   listHostFolders: struct({
-    folders: array(FolderPathSchema).check(Schema.isMaxLength(maximumHostFolders)),
+    folders: array(AbsolutePathSchema).check(Schema.isMaxLength(maximumHostFolders)),
   }),
 } satisfies Record<keyof typeof localHostInputSchemas, Schema.Constraint>;
 

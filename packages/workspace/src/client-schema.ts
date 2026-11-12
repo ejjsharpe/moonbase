@@ -24,8 +24,6 @@ import {
 export const ClientConfigurationSchema = struct({
   dataDirectory: absolute,
   installationId: WorkspaceIdentifierSchema,
-  /** Host IDs whose checkouts are reopened on the connected host when recovery loads. */
-  legacyHostIds: optional(array(Schema.String)),
   /** How long loading recovery waits on the host before it gives up on it for this load. */
   hostWaitMs: optional(natural),
 });
@@ -78,17 +76,6 @@ export const FeedCursorSchema = struct({ sequence: natural, epoch: optional(Sche
 export const FeedGapSchema = struct({ since: natural, checkoutId: Schema.String });
 export type SaveRecord = typeof SaveRecordSchema.Type;
 export type OperationRecord = typeof OperationRecordSchema.Type;
-/** Fields rows carried before the host split; they are ignored, while other unknown fields stay refused. */
-const legacyFields = ['started', 'temporary', 'recoveryRevision', 'paths', 'staging'];
-const ignoringLegacy = (schema: Schema.Decoder<unknown>) => {
-  const decode = strictDecoders({ row: schema }).row;
-  return (value: unknown) =>
-    decode(
-      typeof value === 'object' && value !== null && !Array.isArray(value)
-        ? Object.fromEntries(Object.entries(value).filter(([name]) => !legacyFields.includes(name)))
-        : value,
-    );
-};
 export const clientDecoders = {
   ...strictDecoders({
     publications: natural,
@@ -100,9 +87,9 @@ export const clientDecoders = {
     meta: WorkspaceIdentifierSchema,
     /** Per call, the request ID its host operation was (or is to be) sent under. */
     requests: struct({ requestId: WorkspaceIdentifierSchema }),
+    saves: SaveRecordSchema,
+    operations: OperationRecordSchema,
   }),
-  saves: ignoringLegacy(SaveRecordSchema),
-  operations: ignoringLegacy(OperationRecordSchema),
 };
 export function savedRevision(value: unknown): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw invalidStored();
