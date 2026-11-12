@@ -998,12 +998,18 @@ export class WorkspaceRecovery {
   }
 
   /** The checkouts of any client's recovery that are bound to a former host, by checkout ID. */
-  private legacyCheckouts() {
+  private legacyCheckouts(errors?: string[]) {
     const found = new Map<string, CheckoutTarget>();
     if (!this.legacyHostIds.size) return found;
-    for (const row of this.store.db.prepare('SELECT client, body FROM recovery').all())
-      for (const target of parseRecovery(row.body, row.client as string).checkouts)
-        if (this.legacyHostIds.has(target.hostId)) found.set(target.checkoutId, target);
+    for (const row of this.store.db.prepare('SELECT client, body FROM recovery').all()) {
+      try {
+        for (const target of parseRecovery(row.body, row.client as string).checkouts)
+          if (this.legacyHostIds.has(target.hostId)) found.set(target.checkoutId, target);
+      } catch (error) {
+        // Another client's unreadable recovery is reported, and never hides the drafts.
+        errors?.push('Recovery of ' + String(row.client) + ' is unreadable: ' + errorText(error));
+      }
+    }
     return found;
   }
   /**
@@ -1014,7 +1020,7 @@ export class WorkspaceRecovery {
    */
   private async rebindLegacyCheckouts(signal: AbortSignal) {
     const errors: string[] = [];
-    const legacy = this.legacyCheckouts();
+    const legacy = this.legacyCheckouts(errors);
     const reopened = new Map<string, CheckoutTarget>();
     for (const old of legacy.values()) {
       try {
@@ -1027,7 +1033,12 @@ export class WorkspaceRecovery {
     this.store.transaction(() => {
       for (const row of this.store.db.prepare('SELECT client FROM recovery').all()) {
         const client = row.client as string;
-        const stored = this.store.readRecovery(client);
+        let stored;
+        try {
+          stored = this.store.readRecovery(client);
+        } catch {
+          continue; // reported by legacyCheckouts
+        }
         if (!stored) continue;
         const state = stored.state as EditorRecovery;
         const present = new Set(state.checkouts.map((c) => c.checkoutId));
@@ -1111,8 +1122,12 @@ export class WorkspaceRecovery {
           if (state.selectedCheckoutId === from) state.selectedCheckoutId = to.checkoutId;
           delete state.views[from];
         }
-        recovery(state, client);
-        this.store.writeInternalRecovery(client, stored.revision, state);
+        try {
+          recovery(state, client);
+          this.store.writeInternalRecovery(client, stored.revision, state);
+        } catch (error) {
+          errors.push('Recovery of ' + client + ' was not rebound: ' + errorText(error));
+        }
       }
     });
     return errors;
@@ -1137,46 +1152,50 @@ export class WorkspaceRecovery {
     identifier(clientId);
     const before = this.store.readRecovery(clientId);
     if (before) recovery(before.state as EditorRecovery, clientId);
-    // A host that is slow to answer (such as a daemon still starting) is given `hostWaitMs` in all;
-    // then the drafts load without it, and what it would have settled is retried on the next load.
-    const hostSignal = AbortSignal.any([signal, AbortSignal.timeout(this.hostWaitMs)]);
-    const skipped = () => hostSignal.aborted && !signal.aborted;
+    // A host that is slow to answer (such as a daemon still starting) is given `hostWaitMs` in each
+    // phase; a phase that runs out is retried on the next load, and never stops the next phase,
+    // whose local work (drafting unsettled saves, rebinding checkouts) needs no host.
+    let timedOut = false;
     const errors: string[] = [];
-    const withHost = async (phase: () => Promise<string[] | void>) => {
-      if (skipped()) return;
+    const withHost = async <T>(phase: (signal: AbortSignal) => Promise<T>, fallback: T) => {
+      const hostSignal = AbortSignal.any([signal, AbortSignal.timeout(this.hostWaitMs)]);
       try {
-        errors.push(...((await phase()) ?? []));
+        return await phase(hostSignal);
       } catch (error) {
-        if (!skipped()) throw error;
+        if (signal.aborted) throw error;
+        if (hostSignal.aborted) timedOut = true;
+        else errors.push(errorText(error));
+        return fallback;
       }
     };
-    await withHost(() => this.syncFeed(hostSignal));
+    errors.push(...((await withHost((s) => this.syncFeed(s), [] as string[] | void)) ?? []));
     // Saves left open on a checkout of a former host are resolved too, so their text becomes a
     // draft before the checkout is rebound.
-    await withHost(() =>
-      this.recoverEvidence(
-        hostSignal,
+    await withHost(async (s) => {
+      await this.recoverEvidence(
+        s,
         new Set([
           ...((before?.state as EditorRecovery | undefined)?.openCheckoutIds ?? []),
           ...this.legacyCheckouts().keys(),
         ]),
-      ),
-    );
-    await withHost(() => this.rebindLegacyCheckouts(hostSignal));
+      );
+    }, undefined);
+    errors.push(...(await withHost((s) => this.rebindLegacyCheckouts(s), [] as string[])));
     const stored = this.store.readRecovery(clientId),
       state = (stored?.state ?? emptyRecovery(clientId)) as EditorRecovery;
     recovery(state, clientId);
+    const verifySignal = AbortSignal.any([signal, AbortSignal.timeout(this.hostWaitMs)]);
     for (const target of state.checkouts.filter((c) =>
       state.openCheckoutIds.includes(c.checkoutId),
     )) {
       try {
-        if (skipped()) break;
-        await this.host.verifyCheckout(target, hostSignal);
+        if (verifySignal.aborted) break;
+        await this.host.verifyCheckout(target, verifySignal);
       } catch (error) {
-        if (!skipped()) errors.push(target.root + ': ' + errorText(error));
+        if (!verifySignal.aborted) errors.push(target.root + ': ' + errorText(error));
       }
     }
-    if (skipped())
+    if (timedOut || (verifySignal.aborted && !signal.aborted))
       errors.push(
         'The local host did not answer in time; files are checked again on the next load.',
       );

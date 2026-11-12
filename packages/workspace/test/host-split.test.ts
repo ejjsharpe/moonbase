@@ -12,6 +12,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { Effect, ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
@@ -576,18 +577,35 @@ test('loading recovery stops waiting on a host that does not answer and still re
       Object.fromEntries(
         Object.keys(host).map((name) => [name, () => Effect.never]),
       ) as unknown as WorkspaceHostServiceShape;
-    const saved = h.startClient('alice', host);
+    const saved = h.startClient('alice', host, dropRequest('saveFile'));
     await saved.client.command('persistRecovery', {
       requestId: randomUUID(),
       clientId: 'window',
       expectedRevision: 0,
       state: draft('window', checkout, 'unsaved edit', disk),
     });
+    await assert.rejects(
+      saved.client.command('saveFile', {
+        target: { checkout, path: 'file.txt' },
+        clientId: 'window',
+        requestId: 'unsettled',
+        text: 'unsettled text',
+        expectedVersion: disk.version,
+      }),
+    );
     await saved.runtime.dispose();
-    const alice = h.startClient('alice', host, silent, undefined, 20);
+    // Another client's unreadable recovery must not hide these drafts either.
+    const store = new DatabaseSync(join(h.base, 'alice', 'moonbase-workspace-v1.sqlite'));
+    store
+      .prepare('INSERT INTO recovery (client, revision, body) VALUES (?, 1, ?)')
+      .run('broken', '{');
+    store.close();
+    const alice = h.startClient('alice', host, silent, ['split-host'], 20);
     const load = await alice.client.command('loadRecovery', { clientId: 'window' });
-    assert.equal(load.state.drafts[0].text, 'unsaved edit');
-    assert(load.errors.length > 0);
+    // The silent host leaves the local work to do: the unsettled save becomes a draft.
+    assert.equal(load.state.drafts[0].text, 'unsettled text');
+    assert(load.errors.some((error) => error.includes('broken')));
+    assert(load.errors.length > 1);
   } finally {
     await h.close();
   }
