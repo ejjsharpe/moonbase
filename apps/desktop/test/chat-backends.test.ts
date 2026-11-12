@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { createChatBackends } from '../src/main/chat-backends.ts';
-import { createMemoryRequestIds } from '../src/main/request-ids.ts';
+import { createFileRequestIds, createMemoryRequestIds } from '../src/main/request-ids.ts';
 
 type Dependencies = Parameters<typeof createChatBackends>[0];
 type Backend = NonNullable<Dependencies['localResult']['backend']>;
@@ -432,5 +432,31 @@ test('a remote daemon host offers its approved roots for folders, its own provid
   } finally {
     for (const session of backends.getSessions()) await session.dispose();
     await runtime.dispose();
+  }
+});
+
+test('request ids keep their first window, expire, and tolerate a corrupt file', async () => {
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-request-ids-')));
+  try {
+    const file = join(base, 'request-ids.json');
+    let clock = 1_000_000;
+    for (const ids of [
+      createMemoryRequestIds(() => clock),
+      createFileRequestIds(file, () => clock),
+    ]) {
+      ids.put('k', 'a');
+      clock += 6 * 60_000;
+      ids.put('k', 'a');
+      clock += 5 * 60_000;
+      assert.equal(ids.get('k'), undefined, 'reuse does not slide the window');
+      ids.put('k', 'b');
+      clock -= 60_000;
+      assert.equal(ids.get('k'), undefined, 'an entry from the future is expired');
+      clock += 60_000;
+    }
+    await writeFile(file, '{not json');
+    assert.equal(createFileRequestIds(file, () => clock).get('k'), undefined);
+  } finally {
+    await rm(base, { recursive: true, force: true });
   }
 });

@@ -640,9 +640,17 @@ export class WorkspaceRecovery {
         ...record.publicationRevisions,
         ...committed?.publicationRevisions,
       };
-      // An unreadable client recovery is skipped here; every feed sync reports it.
-      for (const { client: clientId, state, body, revision: current } of this.readableRecoveries()
-        .readable) {
+      const { readable, unreadable } = this.readableRecoveries();
+      // An unreadable client recovery is skipped here, so its draft may stay at a moved path:
+      // the checkout's history is marked incomplete (every feed sync reports the row).
+      if (unreadable.length) {
+        const { hostId, checkoutId } = record.input.checkout;
+        this.store.put('gaps', key(hostId, checkoutId), {
+          since: this.store.get<{ sequence: number }>('cursors', hostId)?.sequence ?? 0,
+          checkoutId,
+        });
+      }
+      for (const { client: clientId, state, body, revision: current } of readable) {
         if (
           clientId !== record.input.clientId &&
           !state.checkouts.some((c) => same(c, record.input.checkout))
@@ -1140,9 +1148,8 @@ export class WorkspaceRecovery {
   private getFeedGapErrors(state: EditorRecovery) {
     const errors: string[] = [];
     const { readable, unreadable } = this.readableRecoveries();
-    // An unreadable recovery may hold a draft in any gapped checkout: its marks stay.
-    for (const { client, error } of unreadable)
-      errors.push('Recovery of ' + client + ' is unreadable: ' + error);
+    // An unreadable recovery may hold a draft in any gapped checkout: its marks stay (the sync
+    // that precedes this reports the unreadable row).
     for (const row of this.store.db
       .prepare("SELECT key, body FROM records WHERE bucket='gaps'")
       .all()) {

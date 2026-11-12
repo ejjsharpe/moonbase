@@ -626,6 +626,14 @@ test('loading recovery stops waiting on a host that does not answer and still re
       sources,
     });
     assert.equal(trashed.outcome, 'completed');
+    // The skipped row may hold a draft at a moved path, so the checkout is marked incomplete.
+    const marks = new DatabaseSync(join(h.base, 'alice', 'moonbase-workspace-v1.sqlite'));
+    try {
+      const gaps = marks.prepare("SELECT body FROM records WHERE bucket='gaps'").all();
+      assert(gaps.some((row) => String(row.body).includes(checkout.checkoutId)));
+    } finally {
+      marks.close();
+    }
   } finally {
     await h.close();
   }
