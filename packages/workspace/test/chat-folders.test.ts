@@ -198,7 +198,7 @@ test('turning a chat into a project opens its own folder once, and leaves the ch
         return folder;
       },
       markAsProject: async (requestId) => {
-        if (failMark) throw new ApplicationError({ code: 'Unavailable', message: 'Down.' });
+        if (failMark) throw new Error('Down.');
         marked.push(requestId);
       },
     },
@@ -213,11 +213,17 @@ test('turning a chat into a project opens its own folder once, and leaves the ch
     // A folder the daemon didn't make is refused before anything opens or is marked.
     assert.equal(await code(host.turnChatIntoProject(input('refused'))), 'Unauthorized');
     folder = f.repository('chats/one');
+    // A failure that is not an `ApplicationError` is `Unavailable` and frees the ID for a retry.
     failMark = true;
-    assert.equal(await code(host.turnChatIntoProject(input('down'))), 'Unavailable');
+    assert.equal(await code(host.turnChatIntoProject(input('first'))), 'Unavailable');
     assert.deepEqual(marked, []);
     failMark = false;
-    const target = await run(host.turnChatIntoProject(input('first')));
+    // A duplicate sent while the first runs waits for it instead of being reported interrupted.
+    const [target, duplicate] = await Promise.all([
+      run(host.turnChatIntoProject(input('first'))),
+      run(host.turnChatIntoProject(input('first'))),
+    ]);
+    assert.deepEqual(duplicate, target);
     assert.equal(target.root, folder);
     assert.deepEqual(await run(host.turnChatIntoProject(input('first'))), target);
     assert.deepEqual(marked, ['first']);
@@ -226,6 +232,11 @@ test('turning a chat into a project opens its own folder once, and leaves the ch
     symlinkSync(real, join(f.base, 'chats', 'link'));
     folder = join(f.base, 'chats', 'link');
     assert.equal(await code(host.turnChatIntoProject(input('linked'))), 'Unauthorized');
+    // A `.git` file naming another repository would make the folder that repository's checkout.
+    folder = join(f.base, 'chats', 'foreign');
+    mkdirSync(folder);
+    writeFileSync(join(folder, '.git'), `gitdir: ${join(f.repository('other'), '.git')}\n`);
+    assert.equal(await code(host.turnChatIntoProject(input('foreign'))), 'Unauthorized');
     assert.deepEqual(marked, ['first']);
   } finally {
     await f.close();

@@ -510,7 +510,7 @@ test('admitted cancellation retains its overlap lease and root resources until t
       assert.equal(
         (await reopened.client.command('operationStatus', { clientId: 'alice', id: 'held-copy' }))
           ?.outcome,
-        'uncertain',
+        'failed',
       );
     } finally {
       await reopened.runtime.dispose();
@@ -596,7 +596,7 @@ test('root disposal retains claimed native descriptors and journal ownership unt
       assert.equal(
         (await reopened.client.command('operationStatus', { clientId: 'alice', id: 'held-import' }))
           ?.outcome,
-        'uncertain',
+        'failed',
       );
     } finally {
       await reopened.runtime.dispose();
@@ -816,14 +816,12 @@ test('mutation cancellation during preflight reserves no ID and consumes no nati
       queueMicrotask(() => abort.abort());
       await rejected;
       await client.command('readFile', { checkout, path: 'file.txt' });
+      // The host reserved nothing, but a status query fences the ID, so the selection runs again
+      // under a new one.
       assert.equal(
-        await client.command('operationStatus', { clientId: 'alice', id: input.id }),
-        null,
-      );
-      assert.equal(
-        (await client.command('mutate', input)).outcome,
+        (await client.command('mutate', { ...input, id: input.id + '-again' })).outcome,
         'completed',
-        'original ID and native selection must remain usable after preflight cancellation',
+        'the native selection must remain usable after preflight cancellation',
       );
       assert.equal(
         readFileSync(join(f.root, input.destination), 'utf8'),

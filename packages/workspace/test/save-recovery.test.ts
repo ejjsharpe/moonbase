@@ -3,6 +3,8 @@ import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { Effect } from 'effect';
+import { WorkspaceHostService } from '@moonbase/contracts/services';
 import { emptyRecovery, type EditorRecovery } from '@moonbase/contracts/workspace';
 import { binary, quote, fixture, isError, state, waitFor } from './recovery-fixture.ts';
 test('concurrent lost-move reconciliation retains the original revision receipt and acknowledgement bounds', async () => {
@@ -179,7 +181,6 @@ for (const competing of [false, true])
         competing ? 'later competing text' : 'newest admitted text',
       );
       assert.deepEqual(restored.state.drafts[0].disk, competing ? disk : admittedBaseline);
-      assert(restored.errors.some((e) => e.includes('Uncertain save')));
       assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'external bytes');
     } finally {
       await current.runtime.dispose();
@@ -346,10 +347,6 @@ for (const competing of [false, true])
           assert.deepEqual(
             loaded.state.drafts.map((d) => d.disk),
             drafts.map((d) => d.disk),
-          );
-          assert(
-            loaded.errors.some((e) => e.includes('a.txt')) &&
-              loaded.errors.some((e) => e.includes('b.txt')),
           );
         }
       }
@@ -708,7 +705,6 @@ for (const sibling of ['save', 'move'] as const)
             assert.equal(b.text, 'old b.txt');
             assert.equal(b.disk.text, sibling === 'save' ? 'saved b' : 'original');
           }
-          assert.equal(loaded.errors.length, 1);
           await assert.rejects(
             current.client.command('persistRecovery', {
               requestId: randomUUID(),
@@ -841,6 +837,48 @@ test('unresolved same-target text blocks newer Save and Move effects', async () 
   }
 });
 
+test('an interrupted save the disk no longer shows settles as a conflict and blocks no other save', async () => {
+  const f = fixture(),
+    once = join(f.base, 'interrupted');
+  const helper = f.wrapper(
+    `if [ "$1" = stage ] && [ ! -e ${quote(once)} ]; then /usr/bin/touch ${quote(once)}; kill -KILL $$; fi`,
+  );
+  const { runtime } = f.start(helper);
+  try {
+    const host = await runtime.runPromise(WorkspaceHostService);
+    const checkout = await Effect.runPromise(host.openCheckout({ root: f.root })),
+      target = { checkout, path: 'file.txt' },
+      disk = await Effect.runPromise(host.readFile(target));
+    const save = (clientId: string, text: string, expectedVersion: string) =>
+      Effect.runPromise(
+        host.saveFile({
+          installationId: 'test-installation',
+          clientId,
+          requestId: 'save',
+          target,
+          text,
+          expectedVersion,
+        }),
+      );
+    await assert.rejects(save('alice', 'admitted', disk.version), isError('Uncertain'));
+    writeFileSync(join(f.root, 'file.txt'), 'external');
+    const external = await Effect.runPromise(host.readFile(target));
+    // Another client may still save there: the host settles the first save from the disk.
+    assert.equal((await save('bob', 'bob text', external.version)).kind, 'saved');
+    const status = await Effect.runPromise(
+      host.saveStatus({
+        installationId: 'test-installation',
+        clientId: 'alice',
+        requestId: 'save',
+      }),
+    );
+    assert.deepEqual(status, { kind: 'conflict', disk: external });
+  } finally {
+    await runtime.dispose();
+    f.cleanup();
+  }
+});
+
 for (const sibling of ['save', 'move'] as const)
   test(`pending text survives a failed ${sibling} fact publication and its non-replaying retry`, async () => {
     const { DatabaseSync } = await import('node:sqlite');
@@ -931,7 +969,6 @@ for (const sibling of ['save', 'move'] as const)
           loaded.state.drafts.find((d) => d.target.path === 'file.txt')?.text,
           'pending a',
         );
-        assert.equal(loaded.errors.length, 1);
         const replay =
           sibling === 'save'
             ? await current.client.command('saveFile', saveInput)
@@ -1096,14 +1133,10 @@ if [ "$1" = replace ]; then printf 'replace\\n' >> ${quote(count)}; if [ "$2" = 
         const loaded = await current.client.command('loadRecovery', { clientId: 'alice' });
         assert.equal(loaded.revision, lost === 'replace' ? 4 : 3);
         assert.deepEqual(loaded.state, expected);
-        assert.equal(loaded.errors.length, 1);
-        if (lost === 'stage')
-          await assert.rejects(current.client.command('saveFile', input), isError('Uncertain'));
-        else {
-          const replay = await current.client.command('saveFile', input);
-          assert.equal(replay.kind, 'saved');
-          assert.deepEqual(replay.kind === 'saved' && replay.disk, actual);
-        }
+        // The host settled the interrupted save from the disk: its text never landed.
+        const replay = await current.client.command('saveFile', input);
+        assert.equal(replay.kind, lost === 'stage' ? 'conflict' : 'saved');
+        assert.deepEqual(replay.disk, actual);
         await assert.rejects(
           current.client.command('saveFile', { ...input, text: 'changed payload' }),
           isError('Conflict'),

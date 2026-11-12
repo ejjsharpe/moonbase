@@ -2,11 +2,7 @@ import { Cause, Deferred, Effect, Exit, Scope, type Fiber, type FiberSet } from 
 import { decodeHostInput, decodeHostOutput } from '@moonbase/contracts/workspace-host-schema';
 import { releaseResource } from '@moonbase/effect';
 import { type WorkspaceHostServiceShape } from '@moonbase/contracts/services';
-import {
-  ApplicationError,
-  type CheckoutTarget,
-  type GitCheckoutTarget,
-} from '@moonbase/contracts/workspace';
+import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
 import type {
   HostCommand,
   HostInput,
@@ -20,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { Store } from './store.ts';
 import { admit, applicationError, type AdmissionOwner } from './admission.ts';
-import { HostJournal, type RequestOperation } from './host-journal.ts';
+import { HostJournal, journalSchema, type RequestOperation } from './host-journal.ts';
 import { makeChatWorktree } from './chat-worktrees.ts';
 import {
   hostDecoders,
@@ -81,20 +77,12 @@ type WorkspaceOwnership = {
 };
 
 /**
- * macOS on Node 26.13 or newer, the pinned Electron, or exactly Bun 1.4.4. Bun and Electron are
- * qualified exactly, so upgrading either is a deliberate change; Bun reports an older Node version
- * than it implements, so it is never judged by that version.
+ * macOS on exactly Bun 1.4.4, the daemon's runtime and the only one that composes the file host.
+ * Bun is qualified exactly, so upgrading it is a deliberate change.
  */
-export function ensureQualifiedRuntime(platform: string, versions: NodeJS.ProcessVersions) {
-  const [major = 0, minor = 0] = versions.node.split('.').map(Number);
-  let qualified = major > 26 || (major === 26 && minor >= 13);
-  if (versions.electron !== undefined) qualified = versions.electron === '45.1.0';
-  if (versions.bun !== undefined) qualified = versions.bun === '1.4.4';
-  if (platform !== 'darwin' || !qualified)
-    fail(
-      'Incompatible',
-      'The workspace requires macOS on Node 26.13 or newer, Electron 45.1.0 or exactly Bun 1.4.4.',
-    );
+function ensureQualifiedRuntime() {
+  if (process.platform !== 'darwin' || process.versions.bun !== '1.4.4')
+    fail('Incompatible', 'The workspace file host requires macOS on exactly Bun 1.4.4.');
 }
 
 /** A path's real path, through its nearest existing folder when the path itself doesn't exist. */
@@ -165,7 +153,7 @@ export class FileHost implements AdmissionOwner {
     this.chats = chats;
     this.gitReady = createGitGate(config.gitExecutable ?? '/usr/bin/git');
     this.ownership = ownership;
-    ensureQualifiedRuntime(process.platform, process.versions);
+    ensureQualifiedRuntime();
     identifier(config.hostId);
     const helper =
       config.filesystemHelper ?? fileURLToPath(new URL('../dist/filesystem', import.meta.url));
@@ -192,7 +180,8 @@ export class FileHost implements AdmissionOwner {
       file: 'workspace-host.sqlite',
       applicationId: 1296193364,
       schema:
-        "CREATE INDEX IF NOT EXISTS approval_root ON records(json_extract(body, '$.target.root')) WHERE bucket='approvals'; CREATE INDEX IF NOT EXISTS pending_host_saves ON records(bucket) WHERE bucket='saves' AND json_extract(body, '$.result') IS NULL; CREATE INDEX IF NOT EXISTS feed_operation ON records(json_extract(body, '$.operation')) WHERE bucket='feed';",
+        "CREATE INDEX IF NOT EXISTS approval_root ON records(json_extract(body, '$.target.root')) WHERE bucket='approvals';" +
+        journalSchema,
       decoders: hostDecoders,
     });
     try {
@@ -786,28 +775,26 @@ export class FileHost implements AdmissionOwner {
     }
   }
   /** Replays the first outcome of a `createWorktree` request ID; a new ID creates the worktree. */
-  async createWorktree(input: HostInput<'createWorktree'>, signal: AbortSignal) {
-    const id = this.journal.requestId('createWorktree', input);
-    const previous = this.journal.replayRequest(id, 'createWorktree', input);
-    if (previous) return previous;
-    this.approval(input.checkout);
-    const occupied = this.journal.reserveRequest(id, { input });
-    if (occupied) return this.journal.replayRequest(id, 'createWorktree', input)!;
-    return this.settleRequest(id, input, () => this.worktrees.createWorktree(input, signal));
+  createWorktree(input: HostInput<'createWorktree'>, signal: AbortSignal) {
+    return this.once('createWorktree', input, () => {
+      this.approval(input.checkout);
+      return this.worktrees.createWorktree(input, signal);
+    });
   }
   /**
    * Replays the first outcome of a `createChatWorktree` request ID; a new ID makes the worktree
    * at the location derived from `root`'s repository.
    */
-  async createChatWorktree(input: HostInput<'createChatWorktree'>, signal: AbortSignal) {
+  createChatWorktree(input: HostInput<'createChatWorktree'>, signal: AbortSignal) {
     return this.once('createChatWorktree', input, () => makeChatWorktree(this, input, signal));
   }
   /**
    * Replays the first outcome of a `turnChatIntoProject` request ID. A new ID checks the chat's own
    * folder is one the daemon made, opens it as a checkout and only then marks the chat, so a
-   * failure leaves the chat as it was; the checkout it returns is the folder's.
+   * failure leaves the chat as it was; the checkout it returns is the folder's. The folder must be
+   * plain or its own repository: a `.git` file there could name any other repository.
    */
-  async turnChatIntoProject(input: HostInput<'turnChatIntoProject'>, signal: AbortSignal) {
+  turnChatIntoProject(input: HostInput<'turnChatIntoProject'>, signal: AbortSignal) {
     return this.once('turnChatIntoProject', input, async () => {
       const chats = this.chats;
       if (!chats) return fail('Incompatible', 'This host cannot turn a chat into a project.');
@@ -816,22 +803,45 @@ export class FileHost implements AdmissionOwner {
       // `open` resolves links: a folder replaced by one since it was checked opens elsewhere.
       if (target.root !== folder)
         fail('Unauthorized', 'The folder changed before it opened as a project. Inspect it.');
+      // Only its own `.git` folder: a `.git` file (or a link) would make it another repository's.
+      const { common, gitEntry } = this.approval(target);
+      if (common && (gitEntry?.pointer !== null || common.path !== join(folder, '.git')))
+        fail('Unauthorized', 'The chat folder belongs to another repository. Inspect its .git.');
       await chats.markAsProject(input.requestId, input.target);
       return target;
     });
   }
-  /** Runs a request not seen before and records its outcome; a repeat gets that outcome. */
-  private async once(
-    operation: 'createChatWorktree' | 'turnChatIntoProject',
-    input: HostInput<'createChatWorktree'> | HostInput<'turnChatIntoProject'>,
-    run: () => Promise<CheckoutTarget>,
-  ) {
+  /** The requests running in this process, so a concurrent duplicate waits for the first. */
+  private readonly running = new Map<
+    string,
+    { input: unknown; outcome: Promise<CheckoutTarget> }
+  >();
+  /**
+   * Runs a request not seen before and records its outcome; a repeat gets that outcome, and one
+   * that arrives while the first runs waits for it. A reservation nothing in this process runs
+   * was left by an earlier process, so its request is reported interrupted.
+   */
+  private async once<K extends RequestOperation>(
+    operation: K,
+    input: HostInput<K>,
+    run: () => Promise<HostOutput<K>>,
+  ): Promise<HostOutput<K>> {
     const id = this.journal.requestId(operation, input);
-    const replay = () =>
-      this.journal.replayRequest(id, operation as RequestOperation, input as never)!;
-    if (this.journal.getRequest(id)) return replay();
-    if (this.journal.reserveRequest(id, { input })) return replay();
-    return this.settleRequest(id, input, run);
+    const running = this.running.get(id);
+    if (running) {
+      if (!same(running.input, input))
+        fail('Conflict', 'Request ID already belongs to a different payload.');
+      return (await running.outcome) as HostOutput<K>;
+    }
+    const record = this.journal.reserveRequest(id, input);
+    if (record) return this.journal.replayRequest(record, operation, input) as HostOutput<K>;
+    const outcome = this.settleRequest(id, input, run);
+    this.running.set(id, { input, outcome });
+    try {
+      return await outcome;
+    } finally {
+      this.running.delete(id);
+    }
   }
   /** The parent folder a chat's worktrees go in: reserved paths are refused, and so is a folder
    *  whose own parent (where it would be made) is outside what the host may open. */
@@ -843,25 +853,17 @@ export class FileHost implements AdmissionOwner {
     }
   }
   /** Replays the first outcome of an `initializeRepository` request ID; a new ID runs `git init`. */
-  async initializeRepositoryOnce(input: HostInput<'initializeRepository'>, signal: AbortSignal) {
-    const id = this.journal.requestId('initializeRepository', input);
-    const previous = this.journal.replayRequest(id, 'initializeRepository', input);
-    if (previous) return previous as GitCheckoutTarget;
-    this.approval(input.checkout);
-    const occupied = this.journal.reserveRequest(id, { input });
-    if (occupied)
-      return this.journal.replayRequest(id, 'initializeRepository', input)! as GitCheckoutTarget;
-    return this.settleRequest(id, input, () =>
+  initializeRepositoryOnce(input: HostInput<'initializeRepository'>, signal: AbortSignal) {
+    return this.once('initializeRepository', input, () =>
       this.initializeRepository(input.checkout, signal, input.installationId),
     );
   }
   /**
    * Runs a reserved request. A success or a deterministic refusal is recorded and replayed for
-   * the ID. Every other `ApplicationError` except `Uncertain` (for example `Unavailable`,
-   * `Cancelled`, `Persistence`) releases the reservation so a retry runs again. `Uncertain`
-   * (incomplete cleanup) and any non-`ApplicationError` failure keep it, so a replay reports the
-   * request interrupted instead of retrying over leftovers; the reservation also stays while the
-   * request runs, so a concurrent duplicate never runs it twice.
+   * the ID. `Uncertain` (incomplete cleanup) keeps the reservation, so a replay reports the request
+   * interrupted instead of retrying over leftovers. Every other failure, one that is not an
+   * `ApplicationError` included (it is `Unavailable`, as admission reports it), releases the
+   * reservation so a retry runs again.
    */
   private async settleRequest<T extends CheckoutTarget>(
     id: string,
@@ -876,18 +878,17 @@ export class FileHost implements AdmissionOwner {
         /* The worktree or repository exists; a replay of this ID reports it interrupted. */
       }
       return result;
-    } catch (error) {
-      if (ApplicationError.is(error) && error.code !== 'Uncertain') {
-        try {
-          if (deterministicRefusals.has(error.code))
-            this.journal.settleRequest(id, {
-              input,
-              error: { code: error.code, message: error.message },
-            });
-          else this.journal.releaseRequest(id);
-        } catch {
-          /* A replay of this ID reports the request interrupted. */
-        }
+    } catch (cause) {
+      const error = applicationError(cause);
+      try {
+        if (deterministicRefusals.has(error.code))
+          this.journal.settleRequest(id, {
+            input,
+            error: { code: error.code, message: error.message },
+          });
+        else if (error.code !== 'Uncertain') this.journal.releaseRequest(id);
+      } catch {
+        /* A replay of this ID reports the request interrupted. */
       }
       throw error;
     }
@@ -915,35 +916,21 @@ export class FileHost implements AdmissionOwner {
     ensure(initialized.vcs === 'git', 'Git did not initialize this folder. Inspect it.');
     return initialized;
   }
+  /** Refuses work on `paths` while an unresolved save or operation there blocks this client. */
   assertSettled(target: CheckoutTarget, paths: string[], installationId: string, clientId: string) {
-    if (
-      this.journal
-        .getUnsettledOperations(target, installationId, clientId)
-        .some((r) => overlaps(paths, this.footprint(r.input))) ||
-      this.journal
-        .getPendingSaves(target)
-        .some((r) => overlaps(paths, [r.input.target.path]) && !r.result)
-    )
-      fail(
-        'Uncertain',
-        'An operation awaits recovery publication or inspection. Query its status; do not repeat the mutation.',
-      );
+    return this.journal.assertSettled(target, paths, installationId, clientId, (input) =>
+      this.footprint(input),
+    );
   }
   async save(input: HostInput<'saveFile'>, signal: AbortSignal): Promise<HostSaveResult> {
-    identifier(input.installationId);
-    identifier(input.clientId);
-    identifier(input.requestId);
     path(input.target.path);
     this.approval(input.target.checkout);
     const proposed = textDocument(input.text);
-    ensure(
-      typeof input.expectedVersion === 'string' && /^[a-f0-9]{64}$/.test(input.expectedVersion),
-      'Invalid expected content version.',
-    );
+    ensure(/^[a-f0-9]{64}$/.test(input.expectedVersion), 'Invalid expected content version.');
     const id = this.journal.saveId(input),
       previous = this.journal.getSave(id);
     if (previous) return this.journal.replaySave(id, input, previous);
-    this.assertSettled(
+    await this.assertSettled(
       input.target.checkout,
       [input.target.path],
       input.installationId,
@@ -954,17 +941,15 @@ export class FileHost implements AdmissionOwner {
     if (signal.aborted) fail('Cancelled', 'Save cancelled before admission.');
     if (disk.version !== input.expectedVersion) {
       const result = { kind: 'conflict', disk } as const;
-      const occupied = this.journal.reserveSave(id, { input, result, started: false });
-      return occupied
-        ? this.journal.replaySave(id, input, this.journal.getSave(id) ?? occupied)
-        : result;
+      const occupied = this.journal.reserveSave(id, { input, result });
+      return occupied ? this.journal.replaySave(id, input, occupied) : result;
     }
-    const temporary = join(dirname(input.target.path), '.moonbase-save-' + randomUUID());
-    const record: HostSaveRecord = { input, started: true, temporary, baseline: disk };
+    const record: HostSaveRecord = { input };
     const occupied = this.journal.reserveSave(id, record);
-    if (occupied) return this.journal.replaySave(id, input, this.journal.getSave(id) ?? occupied);
+    if (occupied) return this.journal.replaySave(id, input, occupied);
     this.journal.startSave(id);
     try {
+      const temporary = join(dirname(input.target.path), '.moonbase-save-' + randomUUID());
       const stagingIdentity = (
         await directory.io(['stage', input.target.path, temporary], input.text)
       ).toString();
@@ -973,20 +958,21 @@ export class FileHost implements AdmissionOwner {
         record.result = { kind: 'conflict', disk: current };
       else {
         await directory.io(['replace', input.target.path, temporary, stagingIdentity]);
-        record.result = { kind: 'saved', disk: proposed };
+        record.result = { kind: 'saved', version: proposed.version };
       }
+      const result = this.journal.reply({ ...record, result: record.result });
       try {
         this.journal.settleSave(id, record);
       } catch (error) {
-        if (record.result.kind === 'saved')
-          record.result = {
-            ...record.result,
+        this.journal.retainSave(id, record);
+        if (result.kind === 'saved')
+          return {
+            ...result,
             persistencePending: true,
             message: 'Saved to disk; durable request publication failed: ' + errorText(error),
           };
-        this.journal.retainSave(id, record);
       }
-      return record.result;
+      return result;
     } catch (error) {
       record.message = errorText(error);
       this.journal.retainSave(id, record);
@@ -1000,26 +986,20 @@ export class FileHost implements AdmissionOwner {
     }
   }
   async mutate(input: HostInput<'mutate'>, signal: AbortSignal): Promise<HostOperationResult> {
-    identifier(input.installationId);
-    identifier(input.clientId);
-    identifier(input.id);
     this.approval(input.checkout);
-    ensure(
-      ['create-file', 'create-directory', 'move', 'copy', 'trash', 'import'].includes(input.kind) &&
-        Array.isArray(input.sources) &&
-        input.sources.length <= 128 &&
-        (input.replacements === undefined || Array.isArray(input.replacements)),
-      'Invalid file operation.',
-    );
     ensure(
       input.text === undefined || input.kind === 'create-file',
       'Text belongs only to file creation.',
     );
-    if (input.text !== undefined) textDocument(input.text);
     const id = this.journal.operationId(input),
       previous = this.journal.getOperation(id);
     if (previous) return this.journal.replayOperation(id, input, previous);
-    this.assertSettled(input.checkout, this.footprint(input), input.installationId, input.clientId);
+    await this.assertSettled(
+      input.checkout,
+      this.footprint(input),
+      input.installationId,
+      input.clientId,
+    );
     if (signal.aborted) fail('Cancelled', 'Operation cancelled before admission.');
     const directory = await this.directory(input.checkout);
     const { items, tokens, replacements } = await this.prepareMutation(input, directory, signal);
@@ -1038,13 +1018,17 @@ export class FileHost implements AdmissionOwner {
         message:
           'Admitted operation. Interrupted items must be inspected, never repeated automatically.',
       },
+      // The complete immutable selection is durable before the first native mutation.
+      planned: items.map(({ source, destination }) => ({
+        source: source.path,
+        identity: source.identity,
+        destination,
+      })),
     };
-    // The complete immutable selection is durable before the first native mutation.
     const claims = this.references.inspectReferences(tokens, input.checkout, input.clientId);
     if (signal.aborted) fail('Cancelled', 'Operation cancelled before admission.');
     const occupied = this.journal.reserveOperation(id, record);
-    if (occupied)
-      return this.journal.replayOperation(id, input, this.journal.getOperation(id) ?? occupied);
+    if (occupied) return this.journal.replayOperation(id, input, occupied);
     this.references.claimReferences(claims);
     try {
       for (const { source, destination, staging: temporary } of items) {
@@ -1199,10 +1183,7 @@ export class FileHost implements AdmissionOwner {
     const create = input.kind.startsWith('create-');
     const importing = input.kind === 'import';
     const tokens = input.nativeReferences ?? [];
-    ensure(
-      Array.isArray(tokens) && tokens.length <= 128 && new Set(tokens).size === tokens.length,
-      'Invalid native references.',
-    );
+    ensure(new Set(tokens).size === tokens.length, 'Invalid native references.');
     ensure(
       importing
         ? input.sources.length === 0 && tokens.length > 0
@@ -1212,7 +1193,7 @@ export class FileHost implements AdmissionOwner {
     const sources: OperationSource[] = [];
     for (const entry of input.sources) {
       ensure(
-        entry && same(entry.target.checkout, input.checkout),
+        same(entry.target.checkout, input.checkout),
         'Source target belongs to another checkout.',
       );
       path(entry.target.path);
@@ -1262,8 +1243,7 @@ export class FileHost implements AdmissionOwner {
     const replacementDestinations = new Set<string>();
     for (const replacement of replacements) {
       ensure(
-        replacement &&
-          same(replacement.target.checkout, input.checkout) &&
+        same(replacement.target.checkout, input.checkout) &&
           destinations.some(
             (destination) =>
               destination !== undefined &&

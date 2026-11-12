@@ -421,6 +421,14 @@ test('journal entries leave after acknowledgement and the window; a feed gap kee
         text: '',
       }),
     );
+    // `null` for an ID the host never saw is a promise: a mutation with it that arrives later
+    // never runs, as the client has already discarded its intent.
+    assert.equal(await status('overtaken'), null);
+    await assert.rejects(
+      move('overtaken', 'back.txt', 'overtaken.txt'),
+      (error: unknown) => ApplicationError.is(error) && error.code === 'Conflict',
+    );
+    assert(existsSync(join(h.root, 'back.txt')));
     // Within the window an acknowledged entry is still replayable.
     h.advance(4_000);
     assert.equal((await status('first'))?.outcome, 'completed');
