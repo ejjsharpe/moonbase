@@ -728,7 +728,7 @@ export class FileHost implements AdmissionOwner {
     if (
       this.journal
         .getUnsettledOperations(target, installationId, clientId)
-        .some((r) => overlaps(paths, r.paths ?? this.footprint(r.input))) ||
+        .some((r) => overlaps(paths, this.footprint(r.input))) ||
       this.journal
         .getPendingSaves(target)
         .some((r) => overlaps(paths, [r.input.target.path]) && !r.result)
@@ -837,11 +837,6 @@ export class FileHost implements AdmissionOwner {
     const staging = items.map((item) => item.staging);
     const record: HostOperationRecord = {
       input,
-      paths: [
-        ...input.sources.map((source) => source.target.path),
-        ...items.flatMap((item) => (item.destination === undefined ? [] : [item.destination])),
-      ],
-      staging,
       result: {
         id: input.id,
         clientId: input.clientId,

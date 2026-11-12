@@ -305,6 +305,7 @@ test('a checkout the host refuses does not stop the feed for the others', async 
     });
     const loaded = await bob.client.command('loadRecovery', { clientId: 'b' });
     assert.equal(loaded.state.drafts[0].target.path, 'renamed.txt');
+    assert(loaded.errors.length > 0);
   } finally {
     await h.close();
   }
