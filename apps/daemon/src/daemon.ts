@@ -269,24 +269,26 @@ async function serveDaemon(
       log.write({ event: 'workspace', reason: 'no-helper' });
       return none;
     }
-    const workspaceDirectory = await openPrivateDirectory(join(directory, 'workspace'));
-    const policy = await createRootPolicy(directory, settings, folders);
-    const runtime = ManagedRuntime.make(
-      WorkspaceHostLive({
-        dataDirectory: workspaceDirectory,
-        hostId: session.host.hostId,
-        filesystemHelper: options.filesystemHelper,
-        gitExecutable: '/usr/bin/git',
-        ...(options.ripgrepExecutable ? { ripgrepExecutable: options.ripgrepExecutable } : {}),
-        ...policy,
-      }),
-    );
+    let runtime: ManagedRuntime.ManagedRuntime<WorkspaceHostService, ApplicationError> | undefined;
     try {
+      const workspaceDirectory = await openPrivateDirectory(join(directory, 'workspace'));
+      const policy = await createRootPolicy(directory, settings, folders);
+      runtime = ManagedRuntime.make(
+        WorkspaceHostLive({
+          dataDirectory: workspaceDirectory,
+          hostId: session.host.hostId,
+          filesystemHelper: options.filesystemHelper,
+          gitExecutable: '/usr/bin/git',
+          ...(options.ripgrepExecutable ? { ripgrepExecutable: options.ripgrepExecutable } : {}),
+          ...policy,
+        }),
+      );
       const host = await runtime.runPromise(WorkspaceHostService);
       log.write({ event: 'workspace', reason: 'ready' });
-      return { host, dispose: () => runtime.dispose() };
+      const opened = runtime;
+      return { host, dispose: () => opened.dispose() };
     } catch (error) {
-      await runtime.dispose().catch(() => {});
+      await runtime?.dispose().catch(() => {});
       log.write({ event: 'workspace', reason: 'unavailable', code: describeFailure(error).code });
       return none;
     }

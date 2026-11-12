@@ -26,7 +26,9 @@ async function main() {
     // The app's ripgrep beside the packaged bundle; from source, the one on PATH.
     ripgrepExecutable: findBundledRipgrep(import.meta.url),
     // The app's native helper beside the packaged bundle; from source, the workspace package's.
-    filesystemHelper: findFilesystemHelper(import.meta.url),
+    filesystemHelper: findFilesystemHelper(import.meta.url, {
+      fromSource: typeof MOONBASE_DAEMON_BUILD !== 'string',
+    }),
     build: typeof MOONBASE_DAEMON_BUILD === 'string' ? MOONBASE_DAEMON_BUILD : 'development',
     providers: (settings, session) => ({
       // A host always names a key file: without a GUI session the login keychain is locked.

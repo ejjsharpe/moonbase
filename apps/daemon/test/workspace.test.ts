@@ -24,8 +24,6 @@ const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
 /** The error code a refused workspace call carries. */
 const refusal = async <A>(effect: Effect.Effect<A, { code: string }>) =>
   (await run(Effect.flip(effect))).code;
-/** A root the policy refuses is `Unauthorized`; one that holds reserved state is `InvalidInput`. */
-const refused = ['InvalidInput', 'Unauthorized'];
 const gone = (pid: number) => {
   try {
     process.kill(pid, 0);
@@ -58,7 +56,7 @@ async function startDaemon(
     signal: controller.signal,
     ready: () => ready.resolve(),
     closeClaudeCode: async () => {},
-    filesystemHelper: findFilesystemHelper(import.meta.url),
+    filesystemHelper: findFilesystemHelper(import.meta.url, { fromSource: true }),
     receiveWorkspace: host.resolve,
     ...(time ? { clock: time.clock } : {}),
     providers: (loaded) => ({
@@ -123,14 +121,15 @@ test('a local daemon opens its own host id and refuses its data directory, what 
       await mkdir(join(daemon.directory, 'credentials'), { recursive: true });
       await mkdir(join(daemon.directory, 'chats', 'one'), { recursive: true });
       // The data directory, a folder holding it (and so its token) and the secrets inside it.
+      // Holding reserved state is `InvalidInput`; any other root inside the data directory is refused by policy.
       for (const path of [
         daemon.directory,
         root,
         join(daemon.directory, 'credentials'),
         join(daemon.directory, 'workspace'),
-        join(daemon.directory, 'logs'),
       ])
-        assert.ok(refused.includes(await refusal(open(path))), path);
+        assert.equal(await refusal(open(path)), 'InvalidInput', path);
+      assert.equal(await refusal(open(join(daemon.directory, 'logs'))), 'Unauthorized');
       assert.equal((await run(open(join(daemon.directory, 'chats', 'one')))).vcs, 'none');
     } finally {
       await daemon.stop();
@@ -160,15 +159,30 @@ test('a host-mode daemon opens only roots under approvedRoots by real path, and 
       const open = (path: string) => daemon.host.openCheckout({ root: path });
       const a = await run(open(join(work, 'a')));
       assert.equal(a.root, join(work, 'a'));
-      for (const path of [
-        outside,
-        root,
-        join(work, 'out-link'),
-        join(work, 'in-link'),
-        join(root, 'keys'),
-      ])
-        assert.ok(refused.includes(await refusal(open(path))), path);
+      for (const path of [outside, join(work, 'out-link'), join(work, 'in-link')])
+        assert.equal(await refusal(open(path)), 'Unauthorized', path);
+      // Holding or being the credential key's folder is reserved state.
+      for (const path of [root, join(root, 'keys')])
+        assert.equal(await refusal(open(path)), 'InvalidInput', path);
       await run(daemon.host.verifyCheckout({ checkout: a }));
+
+      // A worktree can't be created outside the approved roots.
+      git(join(work, 'a'), 'init', '-q', '-b', 'main');
+      git(join(work, 'a'), 'commit', '-q', '--allow-empty', '-m', 'initial');
+      const repo = await run(open(join(work, 'a')));
+      assert.equal(
+        await refusal(
+          daemon.host.createWorktree({
+            installationId: 'test',
+            requestId: 'outside-1',
+            checkout: repo,
+            base: 'main',
+            branch: 'feature/outside',
+            location: join(outside, 'tree'),
+          }),
+        ),
+        'Unauthorized',
+      );
 
       // The root becomes another folder: it approves nothing new and nothing opened under it.
       await rename(work, join(root, 'work-old'));

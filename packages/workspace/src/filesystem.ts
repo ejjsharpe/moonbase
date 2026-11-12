@@ -1,5 +1,5 @@
 import { type Cause, Deferred, Effect, Exit } from 'effect';
-import { spawn, spawnSync } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import fs, { constants, fstatSync, openSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import type { FileDocument } from '@moonbase/contracts/workspace';
@@ -233,19 +233,32 @@ export function makeRunner(
 const systemGit = '/usr/bin/git';
 /** Whether the Xcode command-line tools (or Xcode) are selected; asking never opens an installer. */
 const developerToolsInstalled = () =>
-  spawnSync('/usr/bin/xcode-select', ['-p'], { stdio: 'ignore', timeout: 5000 }).status === 0;
+  new Promise<boolean>((resolve) => {
+    execFile('/usr/bin/xcode-select', ['-p'], { timeout: 5000 }, (error) => resolve(!error));
+  });
 /**
  * Guards a Git run. macOS's `/usr/bin/git` is a stub that offers to install the command-line tools
  * when they are missing, which a daemon must never trigger, so a missing install is `Unavailable`
- * and the stub is never run. A found install is remembered; a missing one is looked for again.
+ * and the stub is never run. A found install is remembered; a missing one is looked for again, at
+ * most once per `retryMs`, so calls made while it is missing don't each wait on the probe.
  */
-export function createGitGate(gitExecutable: string, probe = developerToolsInstalled) {
-  let found = gitExecutable !== systemGit;
-  return () => {
+export function createGitGate(
+  gitExecutable: string,
+  probe: () => Promise<boolean> = developerToolsInstalled,
+  { retryMs = 3000, now = Date.now }: { retryMs?: number; now?: () => number } = {},
+) {
+  let found = gitExecutable !== systemGit,
+    probing: Promise<boolean> | undefined,
+    missingAt: number | undefined;
+  return async () => {
     if (found) return;
-    if (!probe())
+    if (missingAt === undefined || now() - missingAt >= retryMs) {
+      probing ??= probe().finally(() => (probing = undefined));
+      if (await probing) found = true;
+      else missingAt = now();
+    }
+    if (!found)
       fail('Unavailable', 'Git is unavailable. Install the Xcode command-line tools on this Mac.');
-    found = true;
   };
 }
 export class Directory {
@@ -254,13 +267,13 @@ export class Directory {
   readonly expected: string;
   readonly run: Run;
   readonly gitExecutable: string;
-  readonly gitReady: () => void;
+  readonly gitReady: () => Promise<void>;
   constructor(
     root: string,
     expected: string,
     run: Run,
     gitExecutable: string,
-    gitReady: () => void = () => {},
+    gitReady: () => Promise<void> = async () => {},
   ) {
     this.gitReady = gitReady;
     this.root = root;
@@ -314,9 +327,9 @@ export class Directory {
    * Runs Git in the checkout. `untranslated` runs it in the C locale, for output read back; other
    * commands keep the user's locale, which hooks and filters they run inherit.
    */
-  git(args: string[], input?: string, signal?: AbortSignal, { untranslated = false } = {}) {
+  async git(args: string[], input?: string, signal?: AbortSignal, { untranslated = false } = {}) {
     this.check();
-    this.gitReady();
+    await this.gitReady();
     return this.run(
       [
         'git',
@@ -333,8 +346,8 @@ export class Directory {
     );
   }
   /** Makes the root a new repository; `git` above names a work tree, which needs one already. */
-  initializeGit(signal?: AbortSignal) {
-    this.gitReady();
+  async initializeGit(signal?: AbortSignal) {
+    await this.gitReady();
     return this.io(['git', this.gitExecutable, 'init', '--quiet'], undefined, signal);
   }
   async entry(p: string, signal?: AbortSignal, spellings?: Map<string, Set<string>>) {

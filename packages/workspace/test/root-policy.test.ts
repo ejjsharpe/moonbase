@@ -150,16 +150,22 @@ test('a worktree location is made only inside a folder the predicate allows', as
   }
 });
 
-test('a missing command-line tools install is Unavailable, is looked for again, and is remembered once found', () => {
+test('a missing command-line tools install is Unavailable, is looked for again after a delay, and is remembered once found', async () => {
   let installed = false,
-    probes = 0;
-  const gate = createGitGate('/usr/bin/git', () => (probes++, installed));
-  assert.throws(gate, { code: 'Unavailable' });
-  assert.throws(gate, { code: 'Unavailable' });
+    probes = 0,
+    clock = 0;
+  const gate = createGitGate('/usr/bin/git', async () => (probes++, installed), {
+    retryMs: 1000,
+    now: () => clock,
+  });
+  await assert.rejects(gate(), { code: 'Unavailable' });
+  await assert.rejects(gate(), { code: 'Unavailable' });
+  assert.equal(probes, 1);
   installed = true;
-  gate();
-  gate();
-  assert.equal(probes, 3);
+  clock = 1000;
+  await gate();
+  await gate();
+  assert.equal(probes, 2);
   // Only the system Git stub offers an installer; any other executable is run as given.
-  createGitGate('/opt/homebrew/bin/git', () => assert.fail('probed'))();
+  await createGitGate('/opt/homebrew/bin/git', async () => assert.fail('probed'))();
 });

@@ -22,13 +22,19 @@ const executable = (path: string) => {
 
 /**
  * The workspace's native helper: `workspace/filesystem` beside the `daemon/` folder of the bundle
- * that `entry` names, else `packages/workspace/dist/filesystem` of a source checkout. Absent when
+ * that `entry` names, else, when `fromSource`, `packages/workspace/dist/filesystem` of a source checkout. Absent when
  * neither holds an executable file, in which case the daemon composes no workspace.
  */
-export function findFilesystemHelper(entry: string | URL): string | undefined {
+export function findFilesystemHelper(
+  entry: string | URL,
+  { fromSource = false }: { fromSource?: boolean } = {},
+): string | undefined {
   return [
     fileURLToPath(new URL('../workspace/filesystem', entry)),
-    fileURLToPath(new URL('../../../packages/workspace/dist/filesystem', import.meta.url)),
+    // Relative to this source file, which only a source checkout lays out; a bundle never looks.
+    ...(fromSource
+      ? [fileURLToPath(new URL('../../../packages/workspace/dist/filesystem', import.meta.url))]
+      : []),
   ].find(executable);
 }
 

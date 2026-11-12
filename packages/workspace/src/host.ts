@@ -138,7 +138,7 @@ export class FileHost implements AdmissionOwner {
     return this.ownership.operations;
   }
   private readonly allowRoot: RootPredicate | undefined;
-  readonly gitReady: () => void;
+  readonly gitReady: () => Promise<void>;
   constructor(
     config: WorkspaceConfiguration,
     ownership: WorkspaceOwnership,

@@ -19,7 +19,7 @@ try {
     signal: onShutdownSignal(),
     ready: (line) => console.log(line),
     closeClaudeCode: async () => {},
-    filesystemHelper: findFilesystemHelper(import.meta.url),
+    filesystemHelper: findFilesystemHelper(import.meta.url, { fromSource: true }),
     providers: (settings) => ({
       ...createFauxProviders(directory),
       ...(settings.credentialKey?.source === 'file'
