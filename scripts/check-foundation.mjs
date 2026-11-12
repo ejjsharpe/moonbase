@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { checkBoundaries, readRepository } from './boundaries.mjs';
 import './test-boundaries.mjs';
@@ -8,6 +8,28 @@ import './test-boundaries.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 assert.deepEqual(checkBoundaries(readRepository(root)), []);
 console.log('Verified final source ownership, public exports and cycles; no migration exceptions.');
+
+{
+  const read = (path) => readFileSync(new URL(path, `file://${root}`), 'utf8');
+  const pins = {
+    'package.json': JSON.parse(read('package.json')).devDependencies?.electron,
+    'apps/desktop/package.json': JSON.parse(read('apps/desktop/package.json')).devDependencies
+      ?.electron,
+    'apps/desktop/scripts/package.mjs': read('apps/desktop/scripts/package.mjs').match(
+      /electronVersion:\s*'([^']+)'/,
+    )?.[1],
+    'packages/workspace/src/workspace.ts': read('packages/workspace/src/workspace.ts').match(
+      /versions\.electron === '([^']+)'/,
+    )?.[1],
+  };
+  assert(
+    Object.values(pins).every(
+      (version) => version !== undefined && version === pins['package.json'],
+    ),
+    `Electron pins must all match; update them together: ${JSON.stringify(pins)}`,
+  );
+  console.log('Verified the Electron version pins agree, including the workspace runtime gate.');
+}
 
 for (const entry of [
   'workspace',
