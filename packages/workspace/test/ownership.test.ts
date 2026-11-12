@@ -303,7 +303,7 @@ test('strict private saved request rejection leaves pending journal data untouch
     try {
       const row = db.prepare("SELECT key,body FROM records WHERE bucket='saves'").get()!;
       const stored = JSON.parse(row.body as string);
-      stored.published = false;
+      stored.state = 'sent';
       stored.input.futureRequest = 'private evidence';
       const original = JSON.stringify(stored);
       db.prepare("UPDATE records SET body=? WHERE bucket='saves' AND key=?").run(

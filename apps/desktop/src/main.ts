@@ -16,12 +16,10 @@ import {
 } from 'electron';
 import { Effect, ManagedRuntime } from 'effect';
 import { WorkspaceService } from '@moonbase/contracts/services';
-import { WorkspaceRecoveryLive } from '@moonbase/workspace';
+import { readInstallationId, WorkspaceRecoveryLive } from '@moonbase/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { acquireDaemonChat, createLocalDaemonClient } from './chat/daemon.ts';
-import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
+import { mkdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EditorSession } from './session.ts';
@@ -47,39 +45,6 @@ import { installWindowLifecycle } from './main/window-lifecycle.ts';
 const directory = fileURLToPath(new URL('.', import.meta.url));
 /** The packaged daemon bundle's build identifier, which `scripts/build.mjs` defines. */
 declare const MOONBASE_DAEMON_BUILD: string | undefined;
-
-/**
- * The identity this profile's recovery store has to a file host: kept in a file, and when that is
- * lost, re-adopted from the one the store already claims so the store is never locked out.
- */
-function readInstallationId(dataDirectory: string) {
-  mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
-  const file = join(dataDirectory, 'installation-id');
-  const valid = (value: unknown): value is string =>
-    typeof value === 'string' && /^[A-Za-z0-9-]{8,}$/.test(value);
-  try {
-    const stored = readFileSync(file, 'utf8').trim();
-    if (valid(stored)) return stored;
-  } catch {}
-  let id: string | undefined;
-  const database = join(dataDirectory, 'moonbase-workspace-v1.sqlite');
-  if (existsSync(database)) {
-    const db = new DatabaseSync(database, { readOnly: true });
-    try {
-      const row = db
-        .prepare("SELECT body FROM records WHERE bucket='meta' AND key='installation'")
-        .get();
-      const claimed: unknown = row ? JSON.parse(String(row.body)) : undefined;
-      if (valid(claimed)) id = claimed;
-    } catch {
-    } finally {
-      db.close();
-    }
-  }
-  id ??= randomUUID();
-  writeFileSync(file, id, { mode: 0o600 });
-  return id;
-}
 
 async function main() {
   const requestedData =
@@ -136,6 +101,7 @@ async function main() {
   const local = createLocalDaemonClient(() =>
     acquireDaemonChat(runtime, { daemon, openUrl: (url) => shell.openExternal(url) }),
   );
+  // The recovery store keeps this installation's identity to the daemon's file host.
   const installationId = readInstallationId(join(userData, 'workspace-v1'));
   const host = createDaemonWorkspaceHost(local);
   const runtime = ManagedRuntime.make(

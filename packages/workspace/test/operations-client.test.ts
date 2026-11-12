@@ -752,6 +752,7 @@ test('restart counts transfer and Trash results by structure regardless of displ
           'operations',
           digest('alice', kind),
           JSON.stringify({
+            open: true,
             input,
             publicationRevisions: {},
             acknowledgedBy: [],

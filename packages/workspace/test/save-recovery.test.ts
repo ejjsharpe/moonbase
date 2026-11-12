@@ -474,7 +474,8 @@ test('a client publication during grouped disk inspection stays authoritative', 
     const loaded = await loading;
     assert.equal(loaded.revision, 2);
     assert.deepEqual(loaded.state, later);
-    assert.equal(loaded.errors.length, 2);
+    // The host finds both files unchanged, and the later publication is the client's newer word.
+    assert.deepEqual(loaded.errors, []);
   } finally {
     writeFileSync(release, 'continue');
     await current.runtime.dispose();
@@ -769,7 +770,8 @@ test('a genuine client publication during Save preflight fences later interrupte
     const loaded = await current.client.command('loadRecovery', { clientId: 'alice' });
     assert.equal(loaded.revision, 2);
     assert.deepEqual(loaded.state, later);
-    assert.equal(loaded.errors.length, 1);
+    // The host settles the save as a conflict, and the later publication is the client's word.
+    assert.deepEqual(loaded.errors, []);
   } finally {
     writeFileSync(release, 'continue');
     await current.runtime.dispose();

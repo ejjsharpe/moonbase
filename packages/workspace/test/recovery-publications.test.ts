@@ -10,7 +10,7 @@ import { Effect, Layer, ManagedRuntime } from 'effect';
 import { ApplicationError, emptyRecovery, type CommandInput } from '@moonbase/contracts/workspace';
 import { WorkspaceService } from '@moonbase/contracts/services';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { pendingSaves } from '../src/client-store.ts';
+import { openOperations, pendingSaves } from '../src/client-store.ts';
 import { WorkspaceLive } from './workspace-live.ts';
 const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
 const isError = (code: ApplicationError['code']) => (e: unknown) =>
@@ -452,6 +452,12 @@ test('growing settled Save history is not parsed by later Save or recovery load'
         plan.some((row) => String(row.detail).includes('pending_saves')),
         'pending reads must use the partial index rather than scan settled text in SQLite',
       );
+      const operations = database
+        .prepare(
+          `EXPLAIN QUERY PLAN SELECT body FROM records WHERE bucket=? AND ${openOperations} ORDER BY rowid`,
+        )
+        .all('operations');
+      assert.ok(operations.some((row) => String(row.detail).includes('open_operations')));
     } finally {
       database.close();
     }
