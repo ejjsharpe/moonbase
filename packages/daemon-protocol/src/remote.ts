@@ -739,7 +739,9 @@ export const RemoteProviderSetupLive = (
  * operation, each decoded before it leaves, refused unless the daemon advertises the capability
  * and for a checkout of another host, and answered within its deadline class. Mutations are never
  * sent again: a lost reply is `Uncertain`, and `saveStatus`, `operationStatus` or the request ID
- * of a repeat resolves it. At most `workspaceRequests` (plus `workspaceStatusRequests` for the status calls) are in flight, leaving room for chat; a wait for a place ends `Unavailable` at the operation's deadline; a
+ * of a repeat resolves it. At most `workspaceRequests` (plus `workspaceStatusRequests` for the
+ * status calls) are in flight, leaving room for chat. A request waits up to the operation's
+ * deadline for a place (`Unavailable`, never sent, past it), then has up to the deadline to run. A
  * request keeps its place until the daemon replies or the connection closes, even after its
  * caller was told `Uncertain`.
  * `watch` ignores `paths`: the daemon follows the whole checkout, and every update, including the
