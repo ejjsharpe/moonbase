@@ -101,48 +101,55 @@ export class PayloadAssembler {
   private received = 0;
   private key: string | undefined;
   private total = 0;
+  private keep = true;
   /** Whether a payload is partly received. */
   get partial() {
     return this.key !== undefined;
   }
-  /** The payload's JSON once `chunk` completes it; any gap, overlap or interleaving fails. */
+  /**
+   * The payload's JSON once `chunk` completes it; any gap, overlap or interleaving fails. A
+   * payload whose first chunk says not to `keep` it is checked the same way but not held, and
+   * completes without a value.
+   */
   push(
     key: string,
     chunk: PayloadChunk,
     limit: number = socketLimits.payloadBytes,
-  ): { value: unknown } | undefined {
+    keep = true,
+  ): { value?: unknown } | undefined {
     if (this.key === undefined) {
       if (chunk.offset !== 0 || chunk.total > limit)
         fail('Incompatible', 'Socket payload chunk is out of order or over its bound.');
       this.key = key;
       this.total = chunk.total;
+      this.keep = keep;
     } else if (key !== this.key || chunk.total !== this.total || chunk.offset !== this.received)
       fail('Incompatible', 'Socket payload chunk is out of order.');
-    const bytes = Buffer.from(chunk.data, 'base64');
-    this.received += bytes.length;
+    const bytes = this.keep ? Buffer.from(chunk.data, 'base64') : undefined;
+    this.received += bytes?.length ?? Buffer.byteLength(chunk.data, 'base64');
     if (this.received > this.total) fail('Incompatible', 'Socket payload exceeds its total.');
-    this.parts.push(bytes);
+    if (bytes) this.parts.push(bytes);
     if (this.received < this.total) return undefined;
-    const whole = Buffer.concat(this.parts, this.total);
+    const whole = this.keep ? Buffer.concat(this.parts, this.total) : undefined;
     this.parts = [];
     this.received = 0;
     this.key = undefined;
-    return { value: json(whole) };
+    return whole ? { value: json(whole) } : {};
   }
 }
 
 /**
  * Reassembles the chunked payloads of one connection's incoming replies and snapshots, which the
  * daemon may interleave: each payload's chunks must still arrive in order, but those of other
- * payloads may fall between them. Payloads in flight together are bounded in count and bytes.
+ * payloads may fall between them. Payloads in flight together are bounded in count and bytes:
+ * the daemon writes one workspace reply at a time, beside chat payloads.
  */
 export class PayloadReassembly {
   private readonly payloads = new Map<string, { assembler: PayloadAssembler; total: number }>();
   private held = 0;
   private readonly maxPayloads = socketLimits.requests + socketLimits.subscriptions;
-  // The daemon bounds the workspace replies it holds in flight, not the chat ones beside them.
   private readonly maxBytes =
-    socketLimits.workspaceInFlightBytes + this.maxPayloads * socketLimits.payloadBytes;
+    socketLimits.workspaceReplyBytes + this.maxPayloads * socketLimits.payloadBytes;
   /** Whether a payload whose key starts with `prefix` is partly received. */
   partial(prefix: string) {
     for (const key of this.payloads.keys()) if (key.startsWith(prefix)) return true;
@@ -172,6 +179,6 @@ export class PayloadReassembly {
       this.payloads.delete(key);
       this.held -= payload.total;
     }
-    return done;
+    return done as { value: unknown } | undefined;
   }
 }
