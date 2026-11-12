@@ -742,8 +742,10 @@ export class FileHost implements AdmissionOwner {
   }
   /**
    * Runs a reserved request. A success or a deterministic refusal is recorded and replayed for
-   * the ID. A transient failure releases the reservation so a retry runs again; the reservation
-   * stays while the request runs, so a concurrent duplicate never runs it twice.
+   * the ID. A transient failure (`Unavailable`, `Cancelled`, `Persistence`) releases the
+   * reservation so a retry runs again. `Uncertain` (incomplete cleanup) and any other failure keep
+   * it, so a replay reports the request interrupted instead of retrying over leftovers; the
+   * reservation also stays while the request runs, so a concurrent duplicate never runs it twice.
    */
   private async settleRequest<T extends CheckoutTarget>(
     id: string,
@@ -759,7 +761,7 @@ export class FileHost implements AdmissionOwner {
       }
       return result;
     } catch (error) {
-      if (ApplicationError.is(error)) {
+      if (ApplicationError.is(error) && error.code !== 'Uncertain') {
         try {
           if (deterministicRefusals.has(error.code))
             this.journal.settleRequest(id, {
