@@ -95,8 +95,6 @@ export const HostSaveRecordSchema = struct({
 });
 export const HostOperationRecordSchema = struct({
   input: hostInputSchemas.mutate,
-  paths: optional(array(Schema.String)),
-  staging: optional(array(Schema.String)),
   result: HostOperationResultSchema,
   /** Canonical forms of the completed items already added to the operation feed. */
   fed: optional(array(Schema.String)),

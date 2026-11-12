@@ -394,6 +394,7 @@ export class ClientWorkspace implements AdmissionOwner {
     const create = input.kind.startsWith('create-');
     const sources = input.sources.map((s) => s.target.path);
     // Imports name no source paths, so the destination itself stands in for each item's target.
+    // A multi-item native import is checked at folder granularity (opaque tokens, no basenames).
     const destinations =
       sources.length > 1
         ? sources.map((p) => join(input.destination!, basename(p)))

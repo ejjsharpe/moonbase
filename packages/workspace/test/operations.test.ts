@@ -437,29 +437,6 @@ for (const kind of ['move', 'copy'] as const)
         null,
       );
       assert.equal(readFileSync(join(f.root, 'folder/child.txt'), 'utf8'), 'must survive');
-      if (kind === 'copy') {
-        // An import names no source path, so its destination alone must be free of drafts.
-        const external = join(f.base, 'external.txt');
-        writeFileSync(external, 'native bytes');
-        const nativeReferences = await runtime.runPromise(
-          Effect.flatMap(WorkspaceNative, (native) =>
-            native.capture({ checkout, clientId: 'alice', paths: [external] }),
-          ),
-        );
-        await assert.rejects(
-          client.command('mutate', {
-            clientId: 'alice',
-            id: 'import-onto-draft',
-            checkout,
-            kind: 'import',
-            sources: [],
-            nativeReferences,
-            destination: 'folder/child.txt',
-          }),
-          isError('InvalidInput'),
-        );
-        assert.equal(readFileSync(join(f.root, 'folder/child.txt'), 'utf8'), 'must survive');
-      }
       assert.deepEqual(
         (await client.command('loadRecovery', { clientId: 'alice' })).state,
         snapshot,
@@ -469,6 +446,52 @@ for (const kind of ['move', 'copy'] as const)
       f.cleanup();
     }
   });
+
+test('a native import onto a path holding a draft is refused', async () => {
+  const f = fixture(),
+    { runtime, client } = f.start(f.wrapper('if [ "$1" = trash ]; then exit 1; fi'));
+  try {
+    writeFileSync(join(f.root, 'child.txt'), 'must survive');
+    const checkout = await client.command('openCheckout', { root: f.root }),
+      target = { checkout, path: 'child.txt' },
+      disk = await client.command('readFile', target);
+    await client.command('persistRecovery', {
+      requestId: randomUUID(),
+      clientId: 'alice',
+      expectedRevision: 0,
+      state: {
+        ...emptyRecovery('alice'),
+        checkouts: [checkout],
+        openCheckoutIds: [checkout.checkoutId],
+        drafts: [{ target, disk, text: 'dirty child' }],
+      },
+    });
+    // An import names no source path, so its destination alone must be free of drafts.
+    const external = join(f.base, 'external.txt');
+    writeFileSync(external, 'native bytes');
+    const nativeReferences = await runtime.runPromise(
+      Effect.flatMap(WorkspaceNative, (native) =>
+        native.capture({ checkout, clientId: 'alice', paths: [external] }),
+      ),
+    );
+    await assert.rejects(
+      client.command('mutate', {
+        clientId: 'alice',
+        id: 'import-onto-draft',
+        checkout,
+        kind: 'import',
+        sources: [],
+        nativeReferences,
+        destination: 'child.txt',
+      }),
+      isError('InvalidInput'),
+    );
+    assert.equal(readFileSync(join(f.root, 'child.txt'), 'utf8'), 'must survive');
+  } finally {
+    await runtime.dispose();
+    f.cleanup();
+  }
+});
 
 for (const selection of ['self', 'descendant', 'ancestor'] as const)
   test(`native ${selection} import rejects before replacement Trash`, async () => {
