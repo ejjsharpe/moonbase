@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { Layer, ManagedRuntime } from 'effect';
+import { Effect, Layer, ManagedRuntime } from 'effect';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
-import { LocalHostService } from '@moonbase/contracts/services';
+import { LocalHostService, WorkspaceHostService } from '@moonbase/contracts/services';
 import {
   makeChatClient,
   makeConnectionClient,
@@ -15,6 +17,7 @@ import {
   RemoteChatLive,
   RemoteLocalHostLive,
   RemoteProviderSetupLive,
+  RemoteWorkspaceHostLive,
 } from '@moonbase/daemon-protocol/remote';
 import { findDaemonCommand } from '../src/main/daemon-command.ts';
 import {
@@ -224,6 +227,104 @@ test('the packaged daemon serves a chat from temporary data, and its Claude Code
   } finally {
     await runtime?.dispose();
     await started.stop('SIGKILL');
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('the packaged daemon opens, saves, searches and trashes in a temporary repository', async () => {
+  const { root, directory } = await prepareDaemonRoot();
+  const project = join(root, 'project');
+  await mkdir(project);
+  const git = (...args: string[]) =>
+    execFileSync('/usr/bin/git', [
+      '-C',
+      project,
+      '-c',
+      'user.name=Moonbase smoke',
+      '-c',
+      'user.email=smoke@example.invalid',
+      ...args,
+    ]);
+  git('init', '-q', '-b', 'main');
+  // Only files this test made are trashed; the name is unique in the user's Trash.
+  const trashed = `moonbase-smoke-${randomUUID()}.txt`;
+  await writeFile(join(project, 'notes.txt'), 'one\n');
+  await writeFile(join(project, trashed), 'discard me\n');
+  git('add', '.');
+  git('commit', '-qm', 'Initial files');
+  const daemon = findDaemonCommand(packaged, directory, {
+    // Only the system PATH, as an app launched from Finder has: no `rg` on it.
+    PATH: '/usr/bin:/bin',
+    HOME: root,
+    TMPDIR: root,
+  });
+  const started = startDaemonCommand(daemon);
+  let runtime: ManagedRuntime.ManagedRuntime<unknown, unknown> | undefined;
+  let inTrash: string | undefined;
+  try {
+    const ready = await bounded(started.ready);
+    const clients = ManagedRuntime.make(
+      RemoteWorkspaceHostLive({ host: ready.host }).pipe(
+        Layer.provideMerge(LoopbackConnectionLive({ directory })),
+      ),
+    );
+    runtime = clients as ManagedRuntime.ManagedRuntime<unknown, unknown>;
+    await makeConnectionClient(clients).command('connect', { profileId: 'loopback' });
+    const host = await clients.runPromise(WorkspaceHostService);
+    const run = <A>(effect: Effect.Effect<A, unknown>) => clients.runPromise(effect);
+    const checkout = await run(host.openCheckout({ root: project }));
+    const document = await run(host.readFile({ checkout, path: 'notes.txt' }));
+    const saved = await run(
+      host.saveFile({
+        installationId: 'smoke',
+        clientId: 'smoke',
+        requestId: randomUUID(),
+        target: { checkout, path: 'notes.txt' },
+        text: 'two needle\n',
+        expectedVersion: document.version,
+      }),
+    );
+    assert.equal(saved.kind, 'saved', JSON.stringify(saved));
+    assert.equal(await readFile(join(project, 'notes.txt'), 'utf8'), 'two needle\n');
+    // The packaged ripgrep beside the bundle finds it; the PATH has none.
+    const found = await run(
+      host.searchText({
+        checkout,
+        query: 'needle',
+        matchCase: true,
+        wholeWord: false,
+        regex: false,
+      }),
+    );
+    assert.deepEqual(
+      found.files.map((file) => file.path),
+      ['notes.txt'],
+      JSON.stringify(found),
+    );
+    // The packaged helper moves the file to the Trash of the user the daemon runs as.
+    const sources = await run(host.inspectEntries({ checkout, paths: [trashed] }));
+    const result = await run(
+      host.mutate({
+        installationId: 'smoke',
+        id: randomUUID(),
+        clientId: 'smoke',
+        checkout,
+        kind: 'trash',
+        sources,
+      }),
+    );
+    inTrash = result.items[0]?.message?.replace('macOS Trash: ', '');
+    assert.equal(result.outcome, 'completed', JSON.stringify(result));
+    await assert.rejects(access(join(project, trashed)), { code: 'ENOENT' });
+    assert(inTrash?.includes('/.Trash/'), String(inTrash));
+    await clients.dispose();
+    runtime = undefined;
+    assert.deepEqual(await started.stop(), [0, null]);
+  } finally {
+    await runtime?.dispose();
+    await started.stop('SIGKILL');
+    // Leave nothing of the smoke test in the real Trash.
+    if (inTrash?.includes('/.Trash/')) await rm(inTrash, { force: true });
     await rm(root, { recursive: true, force: true });
   }
 });

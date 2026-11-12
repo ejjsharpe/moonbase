@@ -182,6 +182,8 @@ const packages = await notices(
     : [],
 );
 await writeFile(join(root, 'dist/main-inputs.json'), JSON.stringify(main.metafile.inputs));
+// Beside the packaged daemon bundle (`workspace/filesystem`, `workspace/ripgrep/rg`): the daemon
+// finds them there; Electron main reads neither.
 const resources = join(root, 'dist/workspace');
 await mkdir(resources, { recursive: true });
 await cp(require.resolve('@moonbase/workspace/filesystem'), join(resources, 'filesystem'));
