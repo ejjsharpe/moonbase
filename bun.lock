@@ -49,6 +49,7 @@
         "@moonbase/chat-runtime": "workspace:*",
         "@moonbase/contracts": "workspace:*",
         "@moonbase/daemon-protocol": "workspace:*",
+        "@moonbase/workspace": "workspace:*",
         "effect": "4.1.0",
       },
     },

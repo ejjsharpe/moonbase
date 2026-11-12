@@ -12,6 +12,8 @@ import {
   createKeyEncryption,
   type CredentialKeySource,
 } from '@moonbase/chat-runtime/credentials';
+import { WorkspaceHostLive } from '@moonbase/workspace';
+import { WorkspaceHostService, type WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import { createFolderApprovals, createRootFolders } from '@moonbase/daemon-protocol/folders';
 import type { DaemonSettings } from '@moonbase/chat-runtime/host-configuration';
 import { createLocalModels } from '@moonbase/chat-runtime/local-models';
@@ -52,6 +54,7 @@ import {
 import { refuseDaemonWhileStopping, refuseWhileStopping } from './admission.ts';
 import { acquireDaemonLock } from './lock.ts';
 import { openDaemonLog, type DaemonLog } from './log.ts';
+import { createRootPolicy, guardWorkspace } from './workspace.ts';
 
 /** What an entry point adds to a daemon in either mode. */
 export type DaemonProviders = {
@@ -79,6 +82,17 @@ export type DaemonOptions = {
   pollMs?: number;
   /** Absolute ripgrep for chat file search; otherwise `rg` on PATH, then Git. */
   ripgrepExecutable?: string;
+  /**
+   * Absolute native filesystem helper of the workspace file host. Without one, or off macOS, the
+   * daemon composes no workspace and chats are served as before.
+   */
+  filesystemHelper?: string;
+  /**
+   * Receives the running file host, guarded as the wire will serve it: calls count as use, and are
+   * refused once the daemon stops. Called once, before the daemon listens; test entries drive the
+   * host through it until the wire carries it.
+   */
+  receiveWorkspace?(host: WorkspaceHostServiceShape): void;
   /** Identifies this daemon's code in `endpoint.json`, so a client can tell an outdated one. */
   build?: string;
   /** Wraps the chat client the daemon serves; test entries count and hold requests with it. */
@@ -168,48 +182,72 @@ async function serveDaemon(
       };
       closeAdmissions = () => control.setAdmissionsOpen(false);
       if (stopping) closeAdmissions();
-      const wrap = options.wrapChat ?? ((client: ChatClient) => client);
-      if (settings.mode === 'host')
-        // A host serves remote clients on its configured port and never idles out.
-        await serve(
-          runtime,
-          wrap(makeChatClient(runtime)),
-          settings.port,
-          makeDaemonClient(runtime),
-          hostDaemonCapabilities,
-          sources,
-        );
-      else {
-        idle = createIdleMonitor({
-          idleMs: options.idleMs ?? 5 * 60_000,
-          pollMs: options.pollMs ?? 30_000,
-          clock: options.clock ?? systemClock,
-          hasActiveWork: () => runtime.runPromise(control.hasActiveWork()),
-          onIdle: () => {
-            exit = 'idle';
-            stop();
-          },
-        });
-        if (stopping) idle.stop();
-        await serve(
-          runtime,
-          trackClientUse(wrap(makeChatClient(runtime)), idle),
-          0,
-          trackDaemonUse(makeDaemonClient(runtime), idle),
-          localDaemonCapabilities,
-          {
-            ...sources,
-            // A connected client keeps a local daemon running, as an open watch does.
-            trackConnection: () => {
-              idle!.begin();
-              let open = true;
-              return () => {
-                if (open) idle!.end();
-                open = false;
-              };
+      const serveModes = async (host: WorkspaceHostServiceShape | undefined) => {
+        const wrap = options.wrapChat ?? ((client: ChatClient) => client);
+        const exposeWorkspace = (monitor?: IdleMonitor) => {
+          if (host)
+            options.receiveWorkspace?.(
+              guardWorkspace(host, { isStopping: () => stopping, idle: monitor }),
+            );
+        };
+        if (settings.mode === 'host') {
+          exposeWorkspace();
+          // A host serves remote clients on its configured port and never idles out.
+          await serve(
+            runtime,
+            wrap(makeChatClient(runtime)),
+            settings.port,
+            makeDaemonClient(runtime),
+            hostDaemonCapabilities,
+            sources,
+          );
+        } else {
+          idle = createIdleMonitor({
+            idleMs: options.idleMs ?? 5 * 60_000,
+            pollMs: options.pollMs ?? 30_000,
+            clock: options.clock ?? systemClock,
+            hasActiveWork: () => runtime.runPromise(control.hasActiveWork()),
+            onIdle: () => {
+              exit = 'idle';
+              stop();
             },
-          },
-        );
+          });
+          if (stopping) idle.stop();
+          exposeWorkspace(idle);
+          await serve(
+            runtime,
+            trackClientUse(wrap(makeChatClient(runtime)), idle),
+            0,
+            trackDaemonUse(makeDaemonClient(runtime), idle),
+            localDaemonCapabilities,
+            {
+              ...sources,
+              // A connected client keeps a local daemon running, as an open watch does.
+              trackConnection: () => {
+                idle!.begin();
+                let open = true;
+                return () => {
+                  if (open) idle!.end();
+                  open = false;
+                };
+              },
+            },
+          );
+        }
+      };
+      // The file host closes after the server and before the runtime.
+      const workspace = await openWorkspace(folders);
+      try {
+        await serveModes(workspace.host);
+      } finally {
+        // A failed close (a stale lock, say) must not stop the shutdown below or the exit code.
+        await workspace.dispose().catch((error: unknown) => {
+          log.write({
+            event: 'workspace',
+            reason: 'close-failed',
+            code: describeFailure(error).code,
+          });
+        });
       }
     } finally {
       await runtime.dispose();
@@ -224,6 +262,44 @@ async function serveDaemon(
   }
   log.write({ event: 'stopped', reason: exit });
   return exit;
+
+  /**
+   * Composes the workspace file host on macOS, with the data in `workspace/`, this daemon's host ID
+   * and the root policy of its mode. A host that can't be composed (no helper, an unqualified
+   * runtime, an unusable store) is logged by code and left out: chats are unaffected. Disposing
+   * cancels its helper process groups and waits for them.
+   */
+  async function openWorkspace(folders: FolderApprovals) {
+    const none = { host: undefined, dispose: async () => {} };
+    if (process.platform !== 'darwin' || stopping) return none;
+    if (!options.filesystemHelper) {
+      log.write({ event: 'workspace', reason: 'no-helper' });
+      return none;
+    }
+    let runtime: ManagedRuntime.ManagedRuntime<WorkspaceHostService, ApplicationError> | undefined;
+    try {
+      const workspaceDirectory = await openPrivateDirectory(join(directory, 'workspace'));
+      const policy = await createRootPolicy(directory, settings, folders);
+      runtime = ManagedRuntime.make(
+        WorkspaceHostLive({
+          dataDirectory: workspaceDirectory,
+          hostId: session.host.hostId,
+          filesystemHelper: options.filesystemHelper,
+          gitExecutable: '/usr/bin/git',
+          ...(options.ripgrepExecutable ? { ripgrepExecutable: options.ripgrepExecutable } : {}),
+          ...policy,
+        }),
+      );
+      const host = await runtime.runPromise(WorkspaceHostService);
+      log.write({ event: 'workspace', reason: 'ready' });
+      const opened = runtime;
+      return { host, dispose: () => opened.dispose() };
+    } catch (error) {
+      await runtime?.dispose().catch(() => {});
+      log.write({ event: 'workspace', reason: 'unavailable', code: describeFailure(error).code });
+      return none;
+    }
+  }
 
   /** Serves until stopped, then closes the server; the caller closes the runtime. */
   async function serve<R>(

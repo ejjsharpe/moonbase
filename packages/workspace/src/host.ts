@@ -26,11 +26,12 @@ import {
   type Approval,
   type HostOperationRecord,
   type HostSaveRecord,
+  type RootPredicate,
   type WorkspaceConfiguration,
 } from './schema.ts';
 import { WorkspaceDiscovery } from './discovery.ts';
 import { WorkspaceObservations } from './observations.ts';
-import { Directory, identity, makeRunner } from './filesystem.ts';
+import { createGitGate, Directory, identity, makeRunner } from './filesystem.ts';
 import type { NativeImport } from './native-import.ts';
 import { NativeReferences } from './native-references.ts';
 import { WorkspaceWorktrees } from './worktrees.ts';
@@ -93,6 +94,24 @@ export function ensureQualifiedRuntime(platform: string, versions: NodeJS.Proces
     );
 }
 
+/** A path's real path, through its nearest existing folder when the path itself doesn't exist. */
+function resolveNearest(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    const parent = dirname(path);
+    return parent === path ? path : join(resolveNearest(parent), basename(path));
+  }
+}
+const holdsOrIsInside = (a: string, b: string) => {
+  const [x, y] = [folded(a), folded(b)];
+  const inside = (outer: string, inner: string) => {
+    const p = relative(outer, inner);
+    return !p || (p !== '..' && !p.startsWith('../') && !isAbsolute(p));
+  };
+  return inside(x, y) || inside(y, x);
+};
+
 /** Refusals that repeat for the same input; every other failure may succeed on retry. */
 const deterministicRefusals: ReadonlySet<string> = new Set([
   'InvalidInput',
@@ -126,8 +145,17 @@ export class FileHost implements AdmissionOwner {
   get operations() {
     return this.ownership.operations;
   }
-  constructor(config: WorkspaceConfiguration, ownership: WorkspaceOwnership, now = Date.now) {
+  private readonly allowRoot: RootPredicate | undefined;
+  readonly gitReady: () => Promise<void>;
+  constructor(
+    config: WorkspaceConfiguration,
+    ownership: WorkspaceOwnership,
+    now = Date.now,
+    allowRoot?: RootPredicate,
+  ) {
     this.config = config;
+    this.allowRoot = allowRoot;
+    this.gitReady = createGitGate(config.gitExecutable ?? '/usr/bin/git');
     this.ownership = ownership;
     ensureQualifiedRuntime(process.platform, process.versions);
     identifier(config.hostId);
@@ -148,7 +176,7 @@ export class FileHost implements AdmissionOwner {
       // `createWorktree` refuses a plain folder first, so `source`'s approval names its repository.
       (root, source, signal) =>
         this.open(root, signal, { root, common: this.approval(source).common! }),
-      (root) => this.protected(root),
+      (location) => this.permitLocation(location),
       (message) =>
         this.cleanupFailures.push(Cause.die(new ApplicationError({ code: 'Uncertain', message }))),
     );
@@ -430,7 +458,36 @@ export class FileHost implements AdmissionOwner {
       }).pipe(Effect.onExit((exit) => Deferred.done(this.closeCompletion, exit)));
     }).pipe(Effect.uninterruptible);
   }
+  /** Refuses a path that holds, or sits inside, a reserved path of the host's owner. */
+  private reserve(path: string) {
+    const real = resolveNearest(path);
+    for (const reserved of this.config.reserved ?? [])
+      ensure(
+        !holdsOrIsInside(real, resolveNearest(reserved)),
+        'This location is reserved by the workspace host.',
+      );
+  }
+  /** Whether the root policy lets the host use `real`; a throwing predicate denies. */
+  async permit(real: string, requested: string) {
+    if (!this.allowRoot) return;
+    let allowed = false;
+    try {
+      allowed = await this.allowRoot(real, requested);
+    } catch {
+      // Denied below.
+    }
+    if (!allowed) fail('Unauthorized', 'This folder is outside what this host may open.');
+  }
+  /** A new worktree's location: reserved paths and, as it doesn't exist yet, its parent's policy. */
+  async permitLocation(location: string) {
+    this.protected(location);
+    if (this.allowRoot) {
+      const parent = dirname(location);
+      await this.permit(parent, parent);
+    }
+  }
   protected(root: string) {
+    this.reserve(root);
     const inside = (a: string, b: string) => {
       const p = relative(a, b);
       return !p || (p !== '..' && !p.startsWith('../') && !isAbsolute(p));
@@ -454,6 +511,9 @@ export class FileHost implements AdmissionOwner {
   }
   async directory(target: CheckoutTarget) {
     const approved = this.approval(target);
+    // Every use re-checks the root policy, so a root replaced since it was approved, or one that
+    // a smaller policy no longer allows, grants nothing.
+    await this.permit(target.root, target.root);
     let directory = this.directories.get(target.checkoutId);
     if (!directory) {
       ensure(
@@ -465,6 +525,7 @@ export class FileHost implements AdmissionOwner {
         approved.identity,
         this.run,
         this.config.gitExecutable ?? '/usr/bin/git',
+        this.gitReady,
       );
       this.directories.set(target.checkoutId, directory);
     }
@@ -545,9 +606,11 @@ export class FileHost implements AdmissionOwner {
       typeof root === 'string' && isAbsolute(root) && !root.includes('\0'),
       'Choose an absolute checkout root through the native picker.',
     );
+    const requested = root;
     root = realpathSync(root);
     if (created) ensure(root === created.root, 'The new worktree location changed. Inspect it.');
     this.protected(root);
+    await this.permit(root, requested);
     const fd = openSync(root, constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000);
     const id = identity(fstatSync(fd));
     closeSync(fd);
@@ -557,6 +620,7 @@ export class FileHost implements AdmissionOwner {
       id,
       this.run,
       this.config.gitExecutable ?? '/usr/bin/git',
+      this.gitReady,
     );
     try {
       const repository =

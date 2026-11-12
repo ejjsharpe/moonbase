@@ -40,10 +40,23 @@ export const WorkspaceConfigurationSchema = struct({
   filesystemHelper: optional(absolute),
   gitExecutable: optional(absolute),
   ripgrepExecutable: optional(absolute),
+  /**
+   * Paths no checkout root, worktree location or import source may hold or sit inside, such as a
+   * daemon's token and credentials. Each is compared by real path, whether or not it exists yet.
+   */
+  reserved: optional(array(absolute)),
   /** How long an acknowledged journal entry stays before it is discarded. */
   journalRetentionMs: optional(natural),
 });
 export type WorkspaceConfiguration = typeof WorkspaceConfigurationSchema.Type;
+/**
+ * Whether the host may open `real` as a checkout root. `requested` is the path as the client named
+ * it, so a predicate can refuse one reached through a link. Called on open, before a worktree is
+ * made (with its parent folder, as the location doesn't exist yet) and on every later use of the
+ * checkout; a refusal or a throw denies.
+ */
+export type RootPredicate = (real: string, requested: string) => boolean | Promise<boolean>;
+export type WorkspaceHostConfiguration = WorkspaceConfiguration & { allowRoot?: RootPredicate };
 const configuration = Schema.decodeUnknownSync(WorkspaceConfigurationSchema, {
   reportInput: false,
 });

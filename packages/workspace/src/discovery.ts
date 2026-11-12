@@ -153,6 +153,7 @@ export class WorkspaceDiscovery {
     let error: string | undefined;
     try {
       this.policy(input.checkout);
+      await directory.gitReady();
       const output = await directory
         .io(
           [

@@ -13,9 +13,10 @@
   "dependencies": {
     "@earendil-works/pi-ai": "1.4.0",
     "@moonbase/application": "workspace:*",
+    "@moonbase/chat-runtime": "workspace:*",
     "@moonbase/contracts": "workspace:*",
     "@moonbase/daemon-protocol": "workspace:*",
-    "@moonbase/chat-runtime": "workspace:*",
+    "@moonbase/workspace": "workspace:*",
     "effect": "4.1.0"
   },
   "engines": {

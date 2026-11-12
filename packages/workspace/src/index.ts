@@ -6,9 +6,17 @@ import { applicationError } from './admission.ts';
 import { ClientWorkspace } from './client.ts';
 import { decodeClientConfiguration } from './client-schema.ts';
 import { FileHost } from './host.ts';
-import { decodeConfiguration, decodeNativeCapture, type WorkspaceConfiguration } from './schema.ts';
+import {
+  decodeConfiguration,
+  decodeNativeCapture,
+  type WorkspaceHostConfiguration,
+} from './schema.ts';
 
-export type { WorkspaceConfiguration } from './schema.ts';
+export type {
+  RootPredicate,
+  WorkspaceConfiguration,
+  WorkspaceHostConfiguration,
+} from './schema.ts';
 export type WorkspaceRecoveryConfiguration = { dataDirectory: string; installationId: string };
 
 /**
@@ -16,7 +24,7 @@ export type WorkspaceRecoveryConfiguration = { dataDirectory: string; installati
  * journals of the saves and operations it admitted. It keeps no client recovery. Scoped resources
  * only; the shared application composition root supplies the runtime. `now` is the journal clock.
  */
-export function WorkspaceHostLive(configuration: WorkspaceConfiguration, now?: () => number) {
+export function WorkspaceHostLive(configuration: WorkspaceHostConfiguration, now?: () => number) {
   const resources = Layer.effect(
     HostResources,
     Effect.acquireRelease(
@@ -25,6 +33,7 @@ export function WorkspaceHostLive(configuration: WorkspaceConfiguration, now?: (
           try: () => decodeConfiguration(configuration),
           catch: applicationError,
         });
+        const allowRoot = configuration.allowRoot;
         const parent = yield* Effect.scope;
         const operationScope = yield* Scope.fork(parent, 'parallel');
         const helperScope = yield* Scope.fork(parent, 'parallel');
@@ -51,6 +60,7 @@ export function WorkspaceHostLive(configuration: WorkspaceConfiguration, now?: (
                 startExpiry,
               },
               now,
+              allowRoot,
             ),
           catch: (error) => applicationError(error, 'Persistence'),
         });
@@ -125,7 +135,7 @@ export function WorkspaceRecoveryLive(
  * `WorkspaceService`, `WorkspaceHostService` and `WorkspaceNative`.
  */
 export function WorkspaceLocalLive(
-  configuration: WorkspaceConfiguration & { installationId: string },
+  configuration: WorkspaceHostConfiguration & { installationId: string },
   now?: () => number,
 ) {
   const { installationId, ...hostConfiguration } = configuration;
