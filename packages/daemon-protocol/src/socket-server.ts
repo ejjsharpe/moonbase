@@ -11,7 +11,7 @@ import {
   type ChatHostTarget,
 } from '@moonbase/contracts/host';
 import type { WorkspaceHostClient } from '@moonbase/contracts/workspace-host';
-import { isHostCommand } from '@moonbase/contracts/workspace-host-schema';
+import { isHostCommand, isHostMutation } from '@moonbase/contracts/workspace-host-schema';
 import {
   socketLimits,
   socketPath,
@@ -286,7 +286,12 @@ class Session {
   private pumping = false;
   /** Sealed workspace reply bytes still being written, and replies waiting for room. */
   private replyBytes = 0;
-  private readonly parkedReplies: { id: string; reply: unknown }[] = [];
+  private readonly parkedReplies: {
+    id: string;
+    reply: unknown;
+    operation: string;
+    written: () => void;
+  }[] = [];
   /** Set while the socket holds more than `outboundBytes`: reading pauses until it drains. */
   private congestion: Promise<void> | undefined;
   private drain: (() => void) | undefined;
@@ -471,10 +476,10 @@ class Session {
     }
     const controller = new AbortController();
     this.requests.set(id, controller);
+    // A request stays counted until its reply is written, which bounds the replies parked for room.
     void this.context.answer(operation, input, controller.signal).then((reply) => {
       release();
-      this.requests.delete(id);
-      this.queueReply(id, reply, workspace);
+      this.queueReply(id, reply, operation, () => void this.requests.delete(id));
     });
   }
 
@@ -483,8 +488,9 @@ class Session {
    * sealed replies a connection holds are bounded by `workspaceInFlightBytes`: one that would
    * pass it waits, unsealed, until the replies ahead of it are written.
    */
-  private queueReply(id: string, reply: unknown, workspace = false) {
+  private queueReply(id: string, reply: unknown, operation = '', written?: () => void) {
     if (this.phase !== 'open') return;
+    const workspace = isHostCommand(operation);
     const limit = workspace ? socketLimits.workspaceReplyBytes : socketLimits.payloadBytes;
     const chunks =
       payloadChunks(reply, limit) ??
@@ -492,14 +498,19 @@ class Session {
         {
           ok: false,
           error: P.publicError(
-            new ApplicationError({ code: 'InvalidInput', message: 'Reply exceeds its limit.' }),
+            // A mutation that applied but cannot be reported is not a refusal.
+            new ApplicationError(
+              workspace && isHostMutation(operation)
+                ? { code: 'Uncertain', message: 'The reply exceeds its limit; the change applied.' }
+                : { code: 'InvalidInput', message: 'Reply exceeds its limit.' },
+            ),
           ),
         },
         limit,
       )!;
     const held = workspace ? chunks.bytes : 0;
     if (held && this.replyBytes && this.replyBytes + held > socketLimits.workspaceInFlightBytes) {
-      this.parkedReplies.push({ id, reply });
+      this.parkedReplies.push({ id, reply, operation, written: written ?? (() => {}) });
       return;
     }
     this.replyBytes += held;
@@ -516,8 +527,9 @@ class Session {
         if (held && index >= chunks.count) {
           this.replyBytes -= held;
           const parked = this.parkedReplies.shift();
-          if (parked) this.queueReply(parked.id, parked.reply, true);
+          if (parked) this.queueReply(parked.id, parked.reply, parked.operation, parked.written);
         }
+        if (index >= chunks.count) written?.();
         return frames;
       },
     });

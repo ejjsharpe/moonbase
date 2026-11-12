@@ -1466,3 +1466,64 @@ test('large workspace replies and chat updates interleave on one connection and 
   );
   assert.deepEqual(failures, []);
 });
+
+test('the daemon refuses a workspace request or watch for another host, and no handler runs', async (t) => {
+  const { client, calls } = controlledWorkspace();
+  const { endpoint } = await serve(t, controlledClient().client, { workspace: client });
+  const socket = await open(t, endpoint);
+  const foreign = { ...checkout, hostId: 'other-host' };
+  await assert.rejects(socket.request('readFile', { checkout: foreign, path: 'a.txt' }), {
+    code: 'Unauthorized',
+  });
+  const failures: string[] = [];
+  socket.subscribe(
+    'workspace',
+    { checkout: foreign },
+    { receive: () => {}, onError: (error) => failures.push(error.code) },
+  );
+  await until(async () => failures.length, Boolean);
+  assert.deepEqual(failures, ['Unauthorized']);
+  assert.deepEqual(calls, []);
+});
+
+test('a cancelled chunked request frees its input when the daemon answers, and a request waiting for room sends nothing when cancelled', async (t) => {
+  const { client, handlers } = controlledWorkspace();
+  let calls = 0;
+  const answered: AbortSignal[] = [];
+  handlers.getIgnoredPaths = (_input, signal) => {
+    if (++calls > 2) return Promise.resolve({ paths: [] });
+    answered.push(signal!);
+    return new Promise((_resolve, reject) =>
+      signal!.addEventListener('abort', () =>
+        reject(new ApplicationError({ code: 'Cancelled', message: 'Cancelled.' })),
+      ),
+    );
+  };
+  const { endpoint } = await serve(t, controlledClient().client, { workspace: client });
+  const socket = await open(t, endpoint);
+  // About 11.6 MB each: two are in flight, a third waits for room under 32 MiB.
+  const input = () => ({
+    checkout,
+    path: '',
+    paths: Array.from({ length: 2900 }, () => 'x'.repeat(4000)),
+  });
+  const controllers = [new AbortController(), new AbortController(), new AbortController()];
+  const requests = controllers.map((controller) =>
+    socket.request('getIgnoredPaths', input(), { signal: controller.signal }),
+  );
+  const settled = requests.map((request) => request.catch((error: ApplicationError) => error));
+  await until(
+    async () => answered.length,
+    (count) => count === 2,
+  );
+  // Cancelled while waiting: nothing was sent, so the daemon never runs it.
+  controllers[2]!.abort();
+  assert.equal(((await settled[2]) as ApplicationError).code, 'Cancelled');
+  controllers[0]!.abort();
+  controllers[1]!.abort();
+  assert.equal(((await settled[0]) as ApplicationError).code, 'Cancelled');
+  assert.equal(((await settled[1]) as ApplicationError).code, 'Cancelled');
+  // The late replies release the input, so the next request is not left waiting.
+  assert.deepEqual(await socket.request('getIgnoredPaths', input()), { paths: [] });
+  assert.equal(calls, 3);
+});

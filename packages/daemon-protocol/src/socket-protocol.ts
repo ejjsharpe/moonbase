@@ -139,8 +139,10 @@ export class PayloadAssembler {
 export class PayloadReassembly {
   private readonly payloads = new Map<string, { assembler: PayloadAssembler; total: number }>();
   private held = 0;
-  private readonly maxBytes = socketLimits.workspaceInFlightBytes;
   private readonly maxPayloads = socketLimits.requests + socketLimits.subscriptions;
+  // The daemon bounds the workspace replies it holds in flight, not the chat ones beside them.
+  private readonly maxBytes =
+    socketLimits.workspaceInFlightBytes + this.maxPayloads * socketLimits.payloadBytes;
   /** Whether a payload whose key starts with `prefix` is partly received. */
   partial(prefix: string) {
     for (const key of this.payloads.keys()) if (key.startsWith(prefix)) return true;

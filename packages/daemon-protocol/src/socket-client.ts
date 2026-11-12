@@ -458,10 +458,12 @@ export function connectDaemonSocket(
           if (!requests.has(id) || mutation) return;
           requests.delete(id);
           // The daemon holds a cancelled request's input until it replies.
-          if (isHostCommand(operation)) abandoned.set(id, charged);
+          // A chunked request still waiting for room sent nothing, so the daemon knows no id.
+          const unseen = chunked && charged === 0;
+          if (isHostCommand(operation) && !unseen) abandoned.set(id, charged);
           charged = 0;
           try {
-            send({ type: 'cancel', id });
+            if (!unseen) send({ type: 'cancel', id });
           } catch {}
           reject(
             new ApplicationError({ code: 'Cancelled', message: 'The request was cancelled.' }),

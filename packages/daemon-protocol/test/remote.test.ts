@@ -3,12 +3,22 @@ import { test, type TestContext } from 'node:test';
 import { Effect, Exit, Layer, ManagedRuntime, Queue, Scope, Stream } from 'effect';
 import type { ChatClient, ChatListUpdate, ChatSnapshot } from '@moonbase/contracts/chat';
 import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
-import { ConnectionService, type VerifiedChatEndpoint } from '@moonbase/contracts/services';
+import {
+  ConnectionService,
+  WorkspaceHostService,
+  type VerifiedChatEndpoint,
+} from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { DaemonClient } from '@moonbase/contracts/daemon';
 import { chatHostCapabilities } from '@moonbase/contracts/host';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
-import { DaemonLinkClock, RemoteChatLive, RemoteLocalHostLive } from '../src/remote.ts';
+import type { WorkspaceHostClient } from '@moonbase/contracts/workspace-host';
+import {
+  DaemonLinkClock,
+  RemoteChatLive,
+  RemoteLocalHostLive,
+  RemoteWorkspaceHostLive,
+} from '../src/remote.ts';
 import { serveChat } from '../src/server.ts';
 import * as P from '../src/protocol.ts';
 import { fixture as runtimeFixture, manualClock, session, until } from './runtime-fixture.ts';
@@ -20,7 +30,7 @@ const unserved: DaemonClient = {
   },
 };
 /** A daemon over a local-mode runtime that can stop and start again on its port. */
-async function daemon(t: TestContext) {
+async function daemon(t: TestContext, workspace?: WorkspaceHostClient) {
   const f = await runtimeFixture(t);
   const token = P.nonce(),
     listed: string[] = [];
@@ -49,6 +59,7 @@ async function daemon(t: TestContext) {
         unserved,
         [chatHostCapabilities.local],
         {
+          ...(workspace ? { workspace } : {}),
           sources: {
             trackConnection: () => {
               connections++;
@@ -97,6 +108,7 @@ function remote(
   t: TestContext,
   d: Awaited<ReturnType<typeof daemon>>,
   clock?: ReturnType<typeof manualClock>,
+  withWorkspace = false,
 ) {
   let endpoint = d.endpoint();
   const changes = new Set<() => void>();
@@ -121,7 +133,11 @@ function remote(
     endpoint: () => Effect.sync(() => structuredClone(endpoint)),
   });
   const runtime = ManagedRuntime.make(
-    Layer.mergeAll(RemoteChatLive, RemoteLocalHostLive).pipe(
+    Layer.mergeAll(
+      RemoteChatLive,
+      RemoteLocalHostLive,
+      ...(withWorkspace ? [RemoteWorkspaceHostLive({ host: session.host })] : []),
+    ).pipe(
       Layer.provide(
         clock ? Layer.merge(connection, Layer.succeed(DaemonLinkClock, clock)) : connection,
       ),
@@ -130,6 +146,7 @@ function remote(
   t.after(() => runtime.dispose());
   return {
     chat: makeChatClient(runtime),
+    workspace: () => runtime.runPromise(WorkspaceHostService),
     /** Replaces the connection generation and announces it. */
     replace() {
       endpoint = { ...endpoint, connectionId: P.nonce() };
@@ -273,4 +290,35 @@ test('a dropped daemon shows reconnecting, then resets its watches; healthy traf
   client.replace();
   await until(async () => again.errors.length, Boolean);
   assert.equal(again.errors[0]!.code, 'Unavailable');
+});
+
+test('a workspace call or watch for another host is refused before it is sent, and a checkout of another host is refused when opened', async (t) => {
+  const foreign = {
+    vcs: 'none',
+    hostId: 'other-host',
+    checkoutId: 'checkout-1',
+    projectId: 'project-1',
+    root: '/work',
+  } as const;
+  const calls: string[] = [];
+  const workspace: WorkspaceHostClient = {
+    command: async (operation) => {
+      calls.push(operation);
+      return foreign as never;
+    },
+    watch: () => () => Promise.resolve(),
+  };
+  const d = await daemon(t, workspace);
+  const host = await remote(t, d, undefined, true).workspace();
+  const code = async (effect: Effect.Effect<unknown, { code: string }>) =>
+    (await Effect.runPromise(Effect.flip(effect))).code;
+  assert.equal(await code(host.readFile({ checkout: foreign, path: 'a.txt' })), 'Unauthorized');
+  assert.equal(
+    await code(Stream.runDrain(host.watch({ checkout: foreign, paths: [''] }))),
+    'Unauthorized',
+  );
+  assert.deepEqual(calls, []);
+  // The daemon answers an open with a checkout of another host.
+  assert.equal(await code(host.openCheckout({ root: '/work' })), 'Incompatible');
+  assert.deepEqual(calls, ['openCheckout']);
 });
