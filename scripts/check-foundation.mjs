@@ -20,18 +20,28 @@ console.log('Verified final source ownership, public exports and cycles; no migr
     )?.[1],
     'packages/workspace runtime gate': readdirSync(
       new URL('packages/workspace/src/', `file://${root}`),
+      { withFileTypes: true },
     )
+      .filter((entry) => entry.isFile())
       .map(
-        (file) =>
-          read(`packages/workspace/src/${file}`).match(/versions\.electron === '([^']+)'/)?.[1],
+        (entry) =>
+          read(`packages/workspace/src/${entry.name}`).match(
+            /versions\.electron === '([^']+)'/,
+          )?.[1],
       )
       .find((version) => version !== undefined),
   };
   assert(
+    pins['packages/workspace runtime gate'] !== undefined,
+    'Electron version gate not found in packages/workspace/src',
+  );
+  assert(
     Object.values(pins).every(
       (version) => version !== undefined && version === pins['package.json'],
     ),
-    `Electron pins must all match; update them together: ${JSON.stringify(pins)}`,
+    `Electron pins must all match; update them together: ${Object.entries(pins)
+      .map(([file, version]) => `${file}=${String(version)}`)
+      .join(', ')}`,
   );
   console.log('Verified the Electron version pins agree, including the workspace runtime gate.');
 }
