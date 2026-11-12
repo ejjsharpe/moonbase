@@ -40,6 +40,9 @@ export function makeFauxDaemonCommand(directory, bun = findTestBun(), build = 'd
       PATH: `${ripgrep}:${process.env.PATH ?? '/usr/bin:/bin'}`,
       HOME: process.env.HOME ?? '',
       TMPDIR: process.env.TMPDIR ?? '/tmp',
+      ...(process.env.MOONBASE_TEST_HOLD_READ
+        ? { MOONBASE_TEST_HOLD_READ: process.env.MOONBASE_TEST_HOLD_READ }
+        : {}),
       WS_NO_BUFFER_UTIL: '1',
       WS_NO_UTF_8_VALIDATE: '1',
       ...(build === 'development' ? {} : { MOONBASE_TEST_DAEMON_BUILD: build }),

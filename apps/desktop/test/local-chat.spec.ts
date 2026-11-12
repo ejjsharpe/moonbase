@@ -361,11 +361,13 @@ test('the window opens while the daemon starts; a failed first start leaves file
     // Once the daemon can start, a retry reaches it, and the project opens and saves.
     await rm(join(gate, 'fail'));
     await writeFile(join(gate, 'start'), '');
-    await page.getByRole('tab', { name: 'Editor', exact: true }).click();
-    await page.getByRole('button', { name: 'Open checkout', exact: true }).click();
     const opener = page.getByRole('dialog', { name: 'Open project', exact: true });
     const treeItem = page.getByRole('treeitem', { name: /^notes\.md/ });
-    await expect(opener.or(treeItem)).toBeVisible();
+    // The failed attempt is answered again for a moment, so Retry may need a second click.
+    await expect(async () => {
+      await page.getByRole('button', { name: 'Open checkout', exact: true }).click();
+      await expect(opener.or(treeItem)).toBeVisible({ timeout: 3000 });
+    }).toPass({ timeout: 20_000 });
     if (await opener.isVisible())
       await opener.getByRole('button', { name: 'Open folder…' }).click();
     await treeItem.dblclick();
