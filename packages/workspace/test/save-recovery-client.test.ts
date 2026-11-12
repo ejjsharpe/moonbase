@@ -364,19 +364,13 @@ test('restart recovers the admitted Save text even when no earlier draft publica
       assert.equal(restored.state.drafts[0].text, 'admitted unsaved text');
       assert.deepEqual(restored.state.drafts[0].disk, disk);
       assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'original');
-      await assert.rejects(restarted.client.command('saveFile', save), rejects('Uncertain'));
-      await restarted.client.command('persistRecovery', {
-        requestId: randomUUID(),
-        clientId: 'alice',
-        expectedRevision: restored.revision,
-        state: { ...restored.state, openCheckoutIds: [checkout.checkoutId] },
-      });
-      await restarted.client.command('loadRecovery', { clientId: 'alice' });
+      // A repeat asks the host, which finds the file as it was: the save settles as a conflict
+      // with the restored text kept, in this session rather than after another load.
       assert.equal((await restarted.client.command('saveFile', save)).kind, 'conflict');
-      assert.equal(
-        (await restarted.client.command('loadRecovery', { clientId: 'alice' })).revision,
-        restored.revision + 1,
-      );
+      const settled = await restarted.client.command('loadRecovery', { clientId: 'alice' });
+      assert.equal(settled.revision, restored.revision);
+      assert.equal(settled.state.drafts[0].text, 'admitted unsaved text');
+      assert.deepEqual(settled.errors, []);
     } finally {
       await restarted.runtime.dispose();
     }

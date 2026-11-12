@@ -347,10 +347,14 @@ for (const competing of [false, true])
             loaded.state.drafts.map((d) => d.disk),
             drafts.map((d) => d.disk),
           );
-          assert(
-            loaded.errors.some((e) => e.includes('a.txt')) &&
-              loaded.errors.some((e) => e.includes('b.txt')),
-          );
+          // Restored text with an unknown outcome is reported; text the later publication
+          // superseded settles once the host shows it never reached the disk.
+          if (competing) assert.deepEqual(loaded.errors, []);
+          else
+            assert(
+              loaded.errors.some((e) => e.includes('a.txt')) &&
+                loaded.errors.some((e) => e.includes('b.txt')),
+            );
         }
       }
       assert.equal(readFileSync(count, 'utf8'), 'stage\nstage\n');
@@ -477,7 +481,8 @@ test('a client publication during grouped disk inspection stays authoritative', 
     const loaded = await loading;
     assert.equal(loaded.revision, 2);
     assert.deepEqual(loaded.state, later);
-    assert.equal(loaded.errors.length, 2);
+    // The host finds both files unchanged, and the later publication is the client's newer word.
+    assert.deepEqual(loaded.errors, []);
   } finally {
     writeFileSync(release, 'continue');
     await current.runtime.dispose();
@@ -1096,7 +1101,8 @@ if [ "$1" = replace ]; then printf 'replace\\n' >> ${quote(count)}; if [ "$2" = 
         const loaded = await current.client.command('loadRecovery', { clientId: 'alice' });
         assert.equal(loaded.revision, lost === 'replace' ? 4 : 3);
         assert.deepEqual(loaded.state, expected);
-        assert.equal(loaded.errors.length, 1);
+        // A save that reached the disk settles even though its text was not restored.
+        assert.equal(loaded.errors.length, lost === 'stage' ? 1 : 0);
         if (lost === 'stage')
           await assert.rejects(current.client.command('saveFile', input), isError('Uncertain'));
         else {

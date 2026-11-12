@@ -18,7 +18,7 @@ import {
 import { admit, applicationError, type AdmissionOwner } from './admission.ts';
 import { ClientStore } from './client-store.ts';
 import type { OperationRecord, SaveRecord } from './client-schema.ts';
-import { WorkspaceRecovery, type HostPorts } from './recovery.ts';
+import { WorkspaceRecovery, type HostPorts, type Recoveries } from './recovery.ts';
 import {
   affected,
   canonical,
@@ -65,21 +65,23 @@ export class ClientWorkspace implements AdmissionOwner {
   closing = false;
   closed = false;
   private readonly installationId: string;
+  /** Calls under a stored request ID that are in flight, so a concurrent duplicate shares one. */
+  private readonly requests = new Map<string, Promise<unknown>>();
   get operations() {
     return this.ownership.operations;
   }
   constructor(
     config: {
       dataDirectory: string;
-      installationId: string;
+      installationId?: string;
       hostWaitMs?: number;
     },
     ownership: ClientOwnership,
     host: WorkspaceHostServiceShape,
   ) {
     this.ownership = ownership;
-    this.installationId = config.installationId;
     this.store = new ClientStore(config.dataDirectory, config.installationId);
+    this.installationId = this.store.installationId;
     const installationId = this.installationId;
     const ports: HostPorts = {
       readFile: (target, signal) => run(host.readFile(target), signal),
@@ -153,10 +155,7 @@ export class ClientWorkspace implements AdmissionOwner {
       mutate: call<'mutate'>('mutate', (input, signal) => this.mutate(input, signal, host)),
       operationStatus: call<'operationStatus'>(
         'operationStatus',
-        async (input, signal) => {
-          await this.recovery.recoverEvidence(signal);
-          return this.recovery.getOperation(key(input.clientId, input.id))?.result ?? null;
-        },
+        (input, signal) => this.recovery.getOperationStatus(input, signal),
         true,
       ),
       acknowledgeOperation: call<'acknowledgeOperation'>(
@@ -231,26 +230,36 @@ export class ClientWorkspace implements AdmissionOwner {
    * same call after a lost reply or a crash asks for the first outcome instead of starting a
    * second one. The ID is kept only while the outcome is unknown (`Uncertain`, or cancelled after
    * sending); an answer, including a refusal, ends it, since the host replays a refusal for the
-   * same ID and a retry then has to be a new request.
+   * same ID and a retry then has to be a new request. A repeat that is `Uncertain` again (the
+   * host reports the first request interrupted) ends it too, so the next call is a new request.
+   * A duplicate made while the call is in flight shares it.
    */
-  private async withRequestId<A>(
+  private withRequestId<A>(
     operation: string,
     input: unknown,
     send: (requestId: string) => Promise<A>,
   ) {
     const name = hash(canonical([operation, input]));
-    const requestId =
-      this.store.get<{ requestId: string }>('requests', name)?.requestId ?? randomUUID();
-    this.store.put('requests', name, { requestId });
-    try {
-      const output = await send(requestId);
-      this.store.delete('requests', name);
-      return output;
-    } catch (error) {
-      if (!ApplicationError.is(error) || !['Uncertain', 'Cancelled'].includes(error.code))
+    const running = this.requests.get(name);
+    if (running) return running as Promise<A>;
+    const call = (async () => {
+      const kept = this.store.get<{ requestId: string }>('requests', name)?.requestId;
+      const requestId = kept ?? randomUUID();
+      if (!kept) this.store.put('requests', name, { requestId });
+      try {
+        const output = await send(requestId);
         this.store.delete('requests', name);
-      throw error;
-    }
+        return output;
+      } catch (error) {
+        const unknown =
+          ApplicationError.is(error) &&
+          (error.code === 'Cancelled' || (error.code === 'Uncertain' && !kept));
+        if (!unknown) this.store.delete('requests', name);
+        throw error;
+      }
+    })().finally(() => this.requests.delete(name));
+    this.requests.set(name, call);
+    return call;
   }
 
   private async saveFile(
@@ -269,14 +278,13 @@ export class ClientWorkspace implements AdmissionOwner {
     const publication = this.recovery.getPublication(input.clientId);
     const id = key(input.clientId, input.requestId),
       previous = this.recovery.getSaveRecord(id);
-    if (previous) return this.recovery.replaySave(id, input, previous);
+    if (previous) return this.recovery.replaySave(id, input, previous, signal);
     this.recovery.assertSettled(input.target.checkout, [input.target.path], input.clientId);
     const baseline = await this.recovery.getBaseline(input, signal);
     if (signal.aborted) fail('Cancelled', 'Save cancelled before admission.');
-    const record: SaveRecord = { input, baseline, recoveryPublication: publication };
+    const record: SaveRecord = { state: 'sent', input, baseline, recoveryPublication: publication };
     const occupied = this.recovery.reserveSave(id, record);
-    if (occupied)
-      return this.recovery.replaySave(id, input, this.recovery.getSaveRecord(id) ?? occupied);
+    if (occupied) return this.recovery.replaySave(id, input, occupied, signal);
     this.recovery.startSave(id, input.target.checkout.checkoutId);
     try {
       let reply;
@@ -324,16 +332,16 @@ export class ClientWorkspace implements AdmissionOwner {
       try {
         this.recovery.publishSaves([record]);
       } catch (error) {
-        if (record.result.kind === 'saved')
-          record.result = {
-            ...record.result,
-            persistencePending: true,
-            message: 'Saved to disk; durable request publication failed: ' + errorText(error),
-          };
-        this.recovery.retainSave(id, record);
+        // The intent stays as sent: a repeat or the next load asks the host for this outcome.
+        if (record.result.kind !== 'saved') return record.result;
+        return {
+          ...record.result,
+          persistencePending: true,
+          message: 'Saved to disk; durable request publication failed: ' + errorText(error),
+        };
       }
       await this.recovery.acknowledgeSaves([record], settled());
-      return record.result;
+      return record.result!;
     } finally {
       this.recovery.finishSave(id);
     }
@@ -348,42 +356,34 @@ export class ClientWorkspace implements AdmissionOwner {
     identifier(input.id);
     const id = key(input.clientId, input.id),
       previous = this.recovery.getOperation(id);
-    let record: OperationRecord;
-    if (previous) {
-      const replay = await this.recovery.replayOperation(id, input, previous, signal);
-      if (!replay.missing) return replay.result;
-      record = previous;
-    } else {
-      this.recovery.assertSettled(input.checkout, this.footprint(input), input.clientId);
-      this.assertDestinationAvailable(input);
-      record = {
-        input,
-        publicationRevisions: this.recovery.getPublicationRevisions(input.checkout, input.clientId),
-        acknowledgedBy: [],
-        result: {
-          id: input.id,
-          clientId: input.clientId,
-          recoveryChanges: [],
-          checkout: input.checkout,
-          kind: input.kind,
-          outcome: 'uncertain',
-          items: [],
-          message:
-            'Admitted operation. Interrupted items must be inspected, never repeated automatically.',
-        },
-      };
-      if (signal.aborted) fail('Cancelled', 'Operation cancelled before admission.');
-      const occupied = this.recovery.reserveOperation(id, record);
-      if (occupied)
-        return (
-          await this.recovery.replayOperation(
-            id,
-            input,
-            this.recovery.getOperation(id) ?? occupied,
-            signal,
-          )
-        ).result;
-    }
+    if (previous) return this.replayOperation(id, input, previous, signal);
+    this.recovery.assertSettled(input.checkout, this.footprint(input), input.clientId);
+    const recoveries = this.recovery.readRecoveries();
+    this.assertDestinationAvailable(input, recoveries);
+    const record: OperationRecord = {
+      open: true,
+      input,
+      publicationRevisions: this.recovery.getPublicationRevisions(
+        input.checkout,
+        input.clientId,
+        recoveries,
+      ),
+      acknowledgedBy: [],
+      result: {
+        id: input.id,
+        clientId: input.clientId,
+        recoveryChanges: [],
+        checkout: input.checkout,
+        kind: input.kind,
+        outcome: 'uncertain',
+        items: [],
+        message:
+          'Admitted operation. Interrupted items must be inspected, never repeated automatically.',
+      },
+    };
+    if (signal.aborted) fail('Cancelled', 'Operation cancelled before admission.');
+    const occupied = this.recovery.reserveOperation(id, record);
+    if (occupied) return this.replayOperation(id, input, occupied, signal);
     this.recovery.startOperation(id, input.checkout.checkoutId);
     try {
       let reply;
@@ -404,15 +404,30 @@ export class ClientWorkspace implements AdmissionOwner {
         reply = status;
       }
       this.recovery.adoptHostResult(record, reply);
-      try {
-        this.recovery.publishOperation(id, record);
-      } catch (error) {
-        this.recovery.retainPublication(id, record, error);
-      }
+      this.recovery.publishOperation(id, record);
       return record.result;
     } finally {
       this.recovery.finishOperation(id);
     }
+  }
+  /**
+   * Answers a repeated operation from its intent. One the host never saw did not run, and asking
+   * about it retired its ID there, so the intent is discarded and the caller repeats it as a new
+   * operation; it is never sent again under the same ID.
+   */
+  private async replayOperation(
+    id: string,
+    input: WorkspaceOperation,
+    record: OperationRecord,
+    signal: AbortSignal,
+  ) {
+    const replay = await this.recovery.replayOperation(id, input, record, signal);
+    if (!replay.missing) return replay.result;
+    this.recovery.discardOperation(id);
+    return fail(
+      'Conflict',
+      'The operation never reached the host and did not run. Repeat it as a new operation.',
+    );
   }
   private footprint(input: WorkspaceOperation) {
     const sources = input.sources.map((s) => s.target.path);
@@ -425,7 +440,7 @@ export class ClientWorkspace implements AdmissionOwner {
     ];
   }
   /** A move or copy onto a path that holds recovery drafts is refused, so they are not orphaned. */
-  private assertDestinationAvailable(input: WorkspaceOperation) {
+  private assertDestinationAvailable(input: WorkspaceOperation, recoveries: Recoveries) {
     if (input.kind === 'trash' || input.destination === undefined) return;
     const create = input.kind.startsWith('create-');
     const sources = input.sources.map((s) => s.target.path);
@@ -435,13 +450,15 @@ export class ClientWorkspace implements AdmissionOwner {
       sources.length > 1
         ? sources.map((p) => join(input.destination!, basename(p)))
         : [input.destination];
-    destinations.forEach((destination, i) =>
-      this.recovery.assertDestinationAvailable(
-        input.checkout,
-        (draftPath) =>
-          affected(folded(draftPath), folded(destination)) &&
-          (create || input.kind === 'import' || !affected(draftPath, sources[i] ?? '')),
-      ),
+    this.recovery.assertDestinationAvailable(
+      input.checkout,
+      (draftPath) =>
+        destinations.some(
+          (destination, i) =>
+            affected(folded(draftPath), folded(destination)) &&
+            (create || input.kind === 'import' || !affected(draftPath, sources[i] ?? '')),
+        ),
+      recoveries,
     );
   }
 

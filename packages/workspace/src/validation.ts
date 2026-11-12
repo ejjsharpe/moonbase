@@ -98,8 +98,9 @@ export function canonical(value: unknown): string {
 const optionalBoolean = (v: unknown) => v === undefined || typeof v === 'boolean';
 const record = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === 'object' && !Array.isArray(v);
-export function recovery(state: EditorRecovery, clientId: string) {
-  decodeEditorRecovery(state);
+/** Checks a recovery state and returns it as decoded (with any defaults the schema supplies). */
+export function recovery(input: unknown, clientId: string): EditorRecovery {
+  const state = decodeEditorRecovery(input);
   ensure(
     record(state) &&
       state.version === 1 &&
@@ -212,6 +213,7 @@ export function recovery(state: EditorRecovery, clientId: string) {
     );
     [...view.tree.expanded, ...view.tree.selected, view.tree.focus].forEach((p) => path(p, true));
   }
+  return state;
 }
 /** Journal key of one request: a hash of its owner and identifier parts. */
 export const key = (...parts: string[]) => hash(canonical(parts));

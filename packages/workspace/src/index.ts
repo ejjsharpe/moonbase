@@ -4,6 +4,7 @@ import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import type { ApplicationError, CheckoutTarget } from '@moonbase/contracts/workspace';
 import { applicationError } from './admission.ts';
 import { ClientWorkspace } from './client.ts';
+import { ClientStore } from './client-store.ts';
 import { decodeClientConfiguration } from './client-schema.ts';
 import { FileHost } from './host.ts';
 import { decodeConfiguration, type WorkspaceHostConfiguration } from './schema.ts';
@@ -16,7 +17,8 @@ export type {
 } from './schema.ts';
 export type WorkspaceRecoveryConfiguration = {
   dataDirectory: string;
-  installationId: string;
+  /** The store's identity to a file host; when absent, the one the store holds or a new one. */
+  installationId?: string;
   /**
    * How long loading recovery waits on the host before it stops asking it for this load, so a
    * host that is slow to start never holds back drafts; what was skipped is retried on the next
@@ -99,9 +101,22 @@ export function WorkspaceHostLive(configuration: WorkspaceHostConfiguration, now
 }
 
 /**
+ * The installation ID of the client recovery store in `dataDirectory`: the one it holds, or a new
+ * one it keeps from now on. Open it before composing `WorkspaceRecoveryLive` over the same folder.
+ */
+export function readInstallationId(dataDirectory: string) {
+  const store = new ClientStore(decodeClientConfiguration({ dataDirectory }).dataDirectory);
+  try {
+    return store.installationId;
+  } finally {
+    store.close();
+  }
+}
+
+/**
  * One client's workspace over a file host: the editor's `WorkspaceService`, with this client's
- * recovery, intents and operation-feed cursor in `dataDirectory`. Compose it with the host in the
- * same process, or over a remote one. `installationId` names this client store to the host.
+ * recovery, intents and operation-feed positions in `dataDirectory`. Compose it with the host in
+ * the same process, or over a remote one. `installationId` names this client store to the host.
  */
 export function WorkspaceRecoveryLive(
   configuration: WorkspaceRecoveryConfiguration,
