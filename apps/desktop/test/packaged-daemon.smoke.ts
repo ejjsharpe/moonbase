@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { Effect, Layer, ManagedRuntime } from 'effect';
+import { type Effect, Layer, ManagedRuntime } from 'effect';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
 import { LocalHostService, WorkspaceHostService } from '@moonbase/contracts/services';
 import {
