@@ -12,7 +12,7 @@ Compose each once in a process root's runtime. The workspace opens only on macOS
 
 ## File host and recovery
 
-The host journals each save and operation under `(installationId, clientId, requestId)` and replays its recorded outcome for the same ID. `createWorktree` and `initializeRepository` carry a request ID and replay their first outcome the same way. An entry stays until its client acknowledges it (`acknowledgeSave`, `acknowledgeOperation`), then for `journalRetentionMs` (7 days by default); unacknowledged entries are never discarded. `assertSettled` and `initializeRepository` consult only these journals. Results carry no `recoveryChanges`.
+The host journals each save and operation under `(installationId, clientId, requestId)` and replays its recorded outcome for the same ID. `createWorktree` and `initializeRepository` carry a request ID and replay their first success or deterministic refusal (`InvalidInput`, `Unauthorized`, `Conflict`, `Incompatible`) the same way; a transient failure (`Unavailable`, `Cancelled`, `Persistence`, `Uncertain`) is not recorded, so a retry with the same ID runs again, while a concurrent duplicate of a running request reports it interrupted. An entry stays until its client acknowledges it (`acknowledgeSave`, `acknowledgeOperation`), then for `journalRetentionMs` (7 days by default); unacknowledged entries are never discarded. `assertSettled` and `initializeRepository` consult only these journals. Results carry no `recoveryChanges`.
 
 Completed moves, copies and Trash also enter an operation feed with a store-wide, increasing sequence. `listOperations({checkout, after})` returns one bounded page after a sequence, with `through`, `floor` (entries up to it may have been discarded) and `more`.
 

@@ -392,6 +392,10 @@ export class HostJournal {
   settleRequest(id: string, record: HostRequestRecord) {
     this.store.put('requests', id, { ...record, settledAt: this.now() });
   }
+  /** Drops an unsettled reservation so a retry under the same ID runs again. */
+  releaseRequest(id: string) {
+    this.store.delete('requests', id);
+  }
   requestId = (operation: string, i: { installationId: string; requestId: string }) =>
     key(operation, i.installationId, i.requestId);
   /** Replays a request's recorded outcome; null when the request is new. */

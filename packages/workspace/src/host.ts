@@ -93,6 +93,14 @@ export function ensureQualifiedRuntime(platform: string, versions: NodeJS.Proces
     );
 }
 
+/** Refusals that repeat for the same input; every other failure may succeed on retry. */
+const deterministicRefusals: ReadonlySet<string> = new Set([
+  'InvalidInput',
+  'Unauthorized',
+  'Conflict',
+  'Incompatible',
+]);
+
 export class FileHost implements AdmissionOwner {
   readonly ownership: WorkspaceOwnership;
   readonly store: Store;
@@ -668,7 +676,11 @@ export class FileHost implements AdmissionOwner {
       this.initializeRepository(input.checkout, signal, input.installationId),
     );
   }
-  /** Runs a reserved request and records its outcome, success or failure, for replay. */
+  /**
+   * Runs a reserved request. A success or a deterministic refusal is recorded and replayed for
+   * the ID. A transient failure releases the reservation so a retry runs again; the reservation
+   * stays while the request runs, so a concurrent duplicate never runs it twice.
+   */
   private async settleRequest<T extends CheckoutTarget>(
     id: string,
     input: HostInput<'createWorktree'> | HostInput<'initializeRepository'>,
@@ -683,17 +695,14 @@ export class FileHost implements AdmissionOwner {
       }
       return result;
     } catch (error) {
-      // A cancellation or storage failure is transient: a replay of this ID reports it interrupted.
-      if (
-        ApplicationError.is(error) &&
-        error.code !== 'Cancelled' &&
-        error.code !== 'Persistence'
-      ) {
+      if (ApplicationError.is(error)) {
         try {
-          this.journal.settleRequest(id, {
-            input,
-            error: { code: error.code, message: error.message },
-          });
+          if (deterministicRefusals.has(error.code))
+            this.journal.settleRequest(id, {
+              input,
+              error: { code: error.code, message: error.message },
+            });
+          else this.journal.releaseRequest(id);
         } catch {
           /* A replay of this ID reports the request interrupted. */
         }

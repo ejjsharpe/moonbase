@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { checkBoundaries, readRepository } from './boundaries.mjs';
 import './test-boundaries.mjs';
@@ -18,9 +18,14 @@ console.log('Verified final source ownership, public exports and cycles; no migr
     'apps/desktop/scripts/package.mjs': read('apps/desktop/scripts/package.mjs').match(
       /electronVersion:\s*'([^']+)'/,
     )?.[1],
-    'packages/workspace/src/workspace.ts': read('packages/workspace/src/workspace.ts').match(
-      /versions\.electron === '([^']+)'/,
-    )?.[1],
+    'packages/workspace runtime gate': readdirSync(
+      new URL('packages/workspace/src/', `file://${root}`),
+    )
+      .map(
+        (file) =>
+          read(`packages/workspace/src/${file}`).match(/versions\.electron === '([^']+)'/)?.[1],
+      )
+      .find((version) => version !== undefined),
   };
   assert(
     Object.values(pins).every(
