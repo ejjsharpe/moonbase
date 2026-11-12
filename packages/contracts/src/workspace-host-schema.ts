@@ -227,6 +227,7 @@ const hostMutations: ReadonlySet<string> = new Set<HostCommand>([
   'acknowledgeSave',
   'createChatWorktree',
   'turnChatIntoProject',
+  'captureImports',
 ]);
 export const isHostMutation = (operation: string) => hostMutations.has(operation);
 /**

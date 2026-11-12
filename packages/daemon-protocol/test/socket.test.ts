@@ -1475,6 +1475,15 @@ test('the daemon refuses a workspace request or watch for another host, and no h
   await assert.rejects(socket.request('readFile', { checkout: foreign, path: 'a.txt' }), {
     code: 'Unauthorized',
   });
+  // A chat named by another host is refused the same way.
+  await assert.rejects(
+    socket.request('turnChatIntoProject', {
+      installationId: 'install',
+      requestId: 'turn',
+      target: { ...target, host: { ...host, hostId: 'other-host' } },
+    }),
+    { code: 'Unauthorized' },
+  );
   const failures: string[] = [];
   socket.subscribe(
     'workspace',

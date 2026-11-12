@@ -190,7 +190,7 @@ export class FileHost implements AdmissionOwner {
     this.checkoutFolders = new CheckoutFolders({
       approvals: () => this.store.all<Approval>('approvals'),
       verify: async (target) => {
-        await this.directory(target);
+        await this.directory(target, false);
       },
       list: async (target, signal) =>
         (await this.worktrees.listWorktrees(target, signal)).worktrees,
@@ -552,13 +552,26 @@ export class FileHost implements AdmissionOwner {
       );
     return stored!;
   }
-  async directory(target: CheckoutTarget) {
+  /**
+   * The checkout's open directory, re-checked. With `retain` false a checkout nobody holds open is
+   * checked through a descriptor that is closed again, so folder checks never use up the cap.
+   */
+  async directory(target: CheckoutTarget, retain = true) {
     const approved = this.approval(target);
     // Every use re-checks the root policy, so a root replaced since it was approved, or one that
     // a smaller policy no longer allows, grants nothing.
     await this.permit(target.root, target.root);
     let directory = this.directories.get(target.checkoutId);
-    if (!directory) {
+    let transient: Directory | undefined;
+    if (!directory && !retain) {
+      directory = transient = new Directory(
+        target.root,
+        approved.identity,
+        this.run,
+        this.config.gitExecutable ?? '/usr/bin/git',
+        this.gitReady,
+      );
+    } else if (!directory) {
       ensure(
         this.directories.size < 128,
         'Open checkout resource limit reached. Restart after preserving recovery to release retained checkout descriptors.',
@@ -572,26 +585,30 @@ export class FileHost implements AdmissionOwner {
       );
       this.directories.set(target.checkoutId, directory);
     }
-    directory.check();
-    // A plain folder runs no Git, so only its own identity matters.
-    if (!approved.common) return directory;
-    ensure(
-      same(this.gitEntry(target.root), approved.gitEntry),
-      'Checkout Git metadata identity changed. Restore the original repository.',
-    );
-    const fd = openSync(
-      approved.common.path,
-      constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000,
-    );
     try {
+      directory.check();
+      // A plain folder runs no Git, so only its own identity matters.
+      if (!approved.common) return directory;
       ensure(
-        identity(fstatSync(fd)) === approved.common.identity,
-        'Repository common directory identity changed.',
+        same(this.gitEntry(target.root), approved.gitEntry),
+        'Checkout Git metadata identity changed. Restore the original repository.',
       );
+      const fd = openSync(
+        approved.common.path,
+        constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000,
+      );
+      try {
+        ensure(
+          identity(fstatSync(fd)) === approved.common.identity,
+          'Repository common directory identity changed.',
+        );
+      } finally {
+        closeSync(fd);
+      }
+      return directory;
     } finally {
-      closeSync(fd);
+      transient?.close();
     }
-    return directory;
   }
   /** The root's `.git` entry, or null when it has none. */
   gitEntry(root: string) {

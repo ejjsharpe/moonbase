@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
+  readFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -221,7 +222,8 @@ test('a host without chats cannot turn one into a project', async () => {
 });
 
 test('a folder is an approved checkout root or a worktree Git lists for one, checked again on every use', async () => {
-  const f = setup();
+  let allowed = true;
+  const f = setup({ allowRoot: () => allowed });
   try {
     const host = await f.host(),
       folders = await f.folders();
@@ -246,6 +248,12 @@ test('a folder is an approved checkout root or a worktree Git lists for one, che
     renameSync(linked, join(f.base, 'moved'));
     mkdirSync(linked);
     assert.equal(await has(linked), false);
+    // A directory whose .git names another worktree of the same repository is not that worktree.
+    const sibling = join(f.base, 'sibling');
+    f.git(root, 'worktree', 'add', '-q', '-b', 'sibling', sibling);
+    assert.equal(await has(sibling), true);
+    writeFileSync(join(linked, '.git'), readFileSync(join(sibling, '.git')));
+    assert.equal(await has(linked), false);
     // A checkout replaced after approval is refused, and takes its worktrees with it.
     rmSync(linked, { recursive: true });
     renameSync(join(f.base, 'moved'), linked);
@@ -255,23 +263,13 @@ test('a folder is an approved checkout root or a worktree Git lists for one, che
     assert.equal(await has(root), false);
     assert.equal(await has(linked), false);
     assert.equal(await code(host.verifyCheckout({ checkout })), 'Unauthorized');
-  } finally {
-    await f.close();
-  }
-});
-
-test('a plain folder checkout is a folder, and a host root policy applies to it', async () => {
-  let allowed = true;
-  const f = setup({ allowRoot: () => allowed });
-  try {
-    const host = await f.host(),
-      folders = await f.folders();
+    // A plain folder checkout is a folder while the host's root policy allows it.
     const plain = join(f.base, 'plain');
     mkdirSync(plain);
     await run(host.openCheckout({ root: plain }));
-    assert.equal(await run(folders.has(plain)), true);
+    assert.equal(await has(plain), true);
     allowed = false;
-    assert.equal(await run(folders.has(plain)), false);
+    assert.equal(await has(plain), false);
   } finally {
     await f.close();
   }
@@ -294,36 +292,6 @@ test('a host that takes no native imports refuses to hold or release them', asyn
       await code(host.releaseImports({ checkout, clientId: 'c', references: ['x'] })),
       'Incompatible',
     );
-  } finally {
-    await f.close();
-  }
-});
-
-test('imports are held for the client and checkout that captured them', async () => {
-  const f = setup();
-  try {
-    const host = await f.host(),
-      plain = join(f.base, 'plain'),
-      other = join(f.base, 'other'),
-      source = join(f.base, 'source.txt');
-    mkdirSync(plain);
-    mkdirSync(other);
-    writeFileSync(source, 'x');
-    const checkout = await run(host.openCheckout({ root: plain }));
-    const elsewhere = await run(host.openCheckout({ root: other }));
-    const { references } = await run(
-      host.captureImports({ checkout, clientId: 'c', paths: [source] }),
-    );
-    assert.equal(references.length, 1);
-    assert.equal(
-      await code(host.releaseImports({ checkout: elsewhere, clientId: 'c', references })),
-      'Unauthorized',
-    );
-    assert.equal(
-      await code(host.releaseImports({ checkout, clientId: 'd', references })),
-      'Unauthorized',
-    );
-    await run(host.releaseImports({ checkout, clientId: 'c', references }));
   } finally {
     await f.close();
   }

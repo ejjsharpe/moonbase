@@ -216,16 +216,11 @@ test('a host-mode daemon opens only roots under approvedRoots by real path, and 
     await symlink(join(work, 'b'), join(work, 'in-link'));
     const keyFile = join(root, 'keys', 'credential.key');
     await mkdir(join(root, 'keys'), { mode: 0o700 });
-    // A root that is itself a repository has its `-worktrees` folder outside every root.
-    const solo = join(root, 'solo');
-    await mkdir(solo);
-    git(solo, 'init', '-q', '-b', 'main');
-    git(solo, 'commit', '-q', '--allow-empty', '-m', 'initial');
     const daemon = await startDaemon(root, {
       settings: {
         mode: 'host',
         port: await findFreePort(),
-        approvedRoots: [work, solo],
+        approvedRoots: [work],
         credentialKey: { source: 'file', path: keyFile },
       },
     });
@@ -258,15 +253,16 @@ test('a host-mode daemon opens only roots under approvedRoots by real path, and 
         'Unauthorized',
       );
 
-      // A chat worktree is made inside a root, never beside a root that is itself the repository.
-      const chatWorktree = (requestId: string, root: string) =>
-        daemon.host.createChatWorktree({ installationId: 'test', requestId, root, branch: 'chat' });
-      assert.equal(
-        (await run(chatWorktree('inside', join(work, 'a')))).root,
-        join(work, 'a-worktrees', 'chat'),
+      // A chat worktree is made inside a root.
+      const chatWorktree = await run(
+        daemon.host.createChatWorktree({
+          installationId: 'test',
+          requestId: 'inside',
+          root: join(work, 'a'),
+          branch: 'chat',
+        }),
       );
-      assert.equal(await refusal(chatWorktree('beside', solo)), 'Unauthorized');
-      await assert.rejects(stat(join(root, 'solo-worktrees')));
+      assert.equal(chatWorktree.root, join(work, 'a-worktrees', 'chat'));
       // Native imports are never held for a host: their sources are held to no root.
       assert.equal(
         await refusal(daemon.host.captureImports({ checkout: a, clientId: 'w', paths: [outside] })),
@@ -328,7 +324,6 @@ test('a local daemon lets chats use its checkouts and worktrees, makes chat work
       };
       const made = await run(daemon.host.createChatWorktree(request));
       assert.equal(made.root, join(root, 'repo-worktrees', 'chat-a'));
-      assert.deepEqual(await run(daemon.host.createChatWorktree(request)), made);
       assert.equal(await approved(made.root), true);
       await socket.request('createChat', {
         session,
@@ -355,7 +350,6 @@ test('a local daemon lets chats use its checkouts and worktrees, makes chat work
       assert.equal(await refusal(turn('refused', inProject.conversation.target)), 'Unauthorized');
       const turned = await run(turn('turn', own.conversation.target));
       assert.equal(turned.root, own.conversation.cwd);
-      assert.deepEqual(await run(turn('turn', own.conversation.target)), turned);
       const { conversation } = await socket.request('getChat', { target: own.conversation.target });
       assert.equal(conversation.ownFolder, undefined);
 

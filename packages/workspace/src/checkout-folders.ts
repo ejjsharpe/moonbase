@@ -1,4 +1,4 @@
-import { realpathSync, statSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { CheckoutTarget, Worktree } from '@moonbase/contracts/workspace';
 import type { Approval } from './schema.ts';
@@ -61,7 +61,7 @@ export class CheckoutFolders {
   /**
    * Whether the folder Git lists is still that worktree of the repository: its main working tree
    * has the repository's own `.git` folder, a linked one a `.git` file pointing into the
-   * repository's `worktrees/` folder.
+   * repository's `worktrees/` folder whose `gitdir` points back at this folder.
    */
   private belongs(path: string, worktree: Worktree, common: { path: string }) {
     try {
@@ -71,11 +71,15 @@ export class CheckoutFolders {
         return entry.pointer === null && realPath(join(path, '.git')) === common.path;
       const match = /^gitdir: (.+?)\s*$/.exec(entry.pointer ?? '');
       const linked = match && realPath(resolve(path, match[1]!));
-      return (
-        !!linked &&
-        basename(dirname(linked)) === 'worktrees' &&
-        dirname(dirname(linked)) === common.path
-      );
+      if (
+        !linked ||
+        basename(dirname(linked)) !== 'worktrees' ||
+        dirname(dirname(linked)) !== common.path
+      )
+        return false;
+      // The admin folder must point back at this folder, or another worktree's would pass.
+      const back = readFileSync(join(linked, 'gitdir'), 'utf8').trim();
+      return realPath(resolve(linked, back)) === realPath(join(path, '.git'));
     } catch {
       return false;
     }
