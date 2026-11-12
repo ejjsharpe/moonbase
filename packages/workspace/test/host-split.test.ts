@@ -433,7 +433,7 @@ test('createWorktree and initializeRepository replay their first outcome for one
       Effect.runPromise(host.createWorktree(retried), { signal: AbortSignal.abort() }),
     );
     assert.equal((await Effect.runPromise(host.createWorktree(retried))).vcs, 'git');
-    // A failure after Git already added the worktree is cleaned up and equally retryable.
+    // A failure after Git already added the worktree is cleaned up, so the same ID runs again.
     const hook = join(h.root, '.git', 'hooks', 'post-checkout');
     writeFileSync(hook, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
     const flaky = {
@@ -449,6 +449,29 @@ test('createWorktree and initializeRepository replay their first outcome for one
     });
     rmSync(hook);
     assert.equal((await Effect.runPromise(host.createWorktree(flaky))).vcs, 'git');
+    // A hook that fails and moves the new branch leaves cleanup incomplete: the request ends
+    // Uncertain and keeps its reservation, so the same ID is reported interrupted, not run again.
+    writeFileSync(
+      hook,
+      '#!/bin/sh\nexport GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t\n' +
+        'git update-ref refs/heads/feature/six "$(git commit-tree -m moved HEAD^{tree})"\nexit 1\n',
+      { mode: 0o755 },
+    );
+    const stuck = {
+      ...request,
+      requestId: 'stuck-1',
+      branch: 'feature/six',
+      location: join(h.base, 'six'),
+    };
+    const uncertain = (error: unknown) => ApplicationError.is(error) && error.code === 'Uncertain';
+    await assert.rejects(Effect.runPromise(host.createWorktree(stuck)), uncertain);
+    rmSync(hook);
+    await assert.rejects(Effect.runPromise(host.createWorktree(stuck)), (error: unknown) => {
+      assert.ok(ApplicationError.is(error));
+      assert.equal(error.code, 'Uncertain');
+      assert.match(error.message, /interrupted/);
+      return true;
+    });
   } finally {
     await h.close();
   }
