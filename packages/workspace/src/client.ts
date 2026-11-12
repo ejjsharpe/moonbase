@@ -270,7 +270,7 @@ export class ClientWorkspace implements AdmissionOwner {
     identifier(input.clientId);
     identifier(input.requestId);
     path(input.target.path);
-    textDocument(input.text);
+    const proposed = textDocument(input.text);
     ensure(
       typeof input.expectedVersion === 'string' && /^[a-f0-9]{64}$/.test(input.expectedVersion),
       'Invalid expected content version.',
@@ -290,6 +290,8 @@ export class ClientWorkspace implements AdmissionOwner {
       let reply;
       try {
         reply = await run(host.saveFile({ installationId: this.installationId, ...input }), signal);
+        if (reply.kind === 'saved' && reply.version !== proposed.version)
+          fail('Incompatible', 'The host reports a different text saved.');
       } catch (error) {
         // A request the host refused before admitting (invalid or unauthorized) leaves nothing
         // to resolve. After a cancellation, a malformed reply or a host-side cancellation only the
@@ -323,7 +325,7 @@ export class ClientWorkspace implements AdmissionOwner {
         reply.kind === 'saved'
           ? {
               kind: 'saved',
-              disk: reply.disk,
+              disk: { text: input.text, version: reply.version },
               recoveryChanges: [],
               ...(reply.persistencePending ? { persistencePending: true } : {}),
               ...(reply.message === undefined ? {} : { message: reply.message }),

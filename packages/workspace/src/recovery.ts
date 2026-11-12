@@ -4,6 +4,7 @@ import {
   type CheckoutTarget,
   type CommandInput,
   type EditorRecovery,
+  type FileDocument,
   type OperationResult,
   type SaveResult,
   type WorkspaceOperation,
@@ -14,7 +15,14 @@ import type {
   OperationFeedEntry,
   SaveStatus,
 } from '@moonbase/contracts/workspace-host';
-import type { FeedCursor, OperationRecord, SaveRecord } from './client-schema.ts';
+import {
+  type FeedCursor,
+  type OperationRecord,
+  type SaveRecord,
+  type StoredSave,
+  fromStoredSave,
+  toStoredSave,
+} from './client-schema.ts';
 import {
   type ClientStore,
   type StoredRecovery,
@@ -148,7 +156,8 @@ async function forEachConcurrently<T>(items: T[], run: (item: T) => Promise<void
     }),
   );
 }
-const saveKey = (record: SaveRecord) => key(record.input.clientId, record.input.requestId);
+const saveKey = (request: { clientId: string; requestId: string }) =>
+  key(request.clientId, request.requestId);
 const operationKey = (record: OperationRecord) => key(record.input.clientId, record.input.id);
 const feedKey = (target: CheckoutTarget) => key(target.hostId, target.checkoutId);
 /** Saves whose outcome is not yet in the recovery. */
@@ -156,6 +165,24 @@ const unresolvedSaves = pendingSaves + " AND json_extract(body, '$.state') <> 's
 const dedupeChanges = (changes: OperationResult['recoveryChanges']) => [
   ...new Map(changes.map((change) => [canonical(change), change])).values(),
 ];
+/**
+ * The text a save began from: kept with the save when it was read from the host, else a draft's
+ * baseline in the recovery, which holds it while no publication came after the save began (only
+ * then is a save restored). Internal writes move and copy drafts but keep their baseline, and
+ * versions are content hashes, so any draft's baseline with that version is the same text.
+ */
+function findBaseline(
+  state: EditorRecovery,
+  target: { checkout: CheckoutTarget; path: string },
+  baseline: SaveRecord['baseline'],
+) {
+  if (baseline.text !== undefined) return { text: baseline.text, version: baseline.version };
+  const disk = (
+    state.drafts.find((d) => same(d.target, target) && d.disk.version === baseline.version) ??
+    state.drafts.find((d) => d.disk.version === baseline.version)
+  )?.disk;
+  return disk && { ...disk };
+}
 /** Whether anything is left to do for an operation record (see `OperationRecord.open`). */
 function isOpen(record: OperationRecord) {
   const published = record.publishedItems ?? [];
@@ -219,30 +246,37 @@ export class WorkspaceRecovery {
     this.activeSaves.delete(id);
   }
   reserveSave(id: string, record: SaveRecord) {
-    return this.store.reserve('saves', id, record);
+    return this.store.reserveSave(id, record);
   }
   discardSave(id: string) {
-    this.store.delete('saves', id);
+    this.store.deleteSave(id);
   }
   getSaveRecord(id: string) {
-    return this.store.get<SaveRecord>('saves', id);
+    return this.store.readSave(id);
   }
-  /** Saves that have no outcome and are not running now, in one checkout. */
+  /** Saves that have no outcome and are not running now, in one checkout (without their text). */
   getPendingSaves(target: CheckoutTarget) {
     return this.store
-      .all<SaveRecord>(
+      .all<StoredSave>(
         'saves',
-        unresolvedSaves + " AND json_extract(body, '$.input.target.checkout.checkoutId') = ?",
+        unresolvedSaves + " AND json_extract(body, '$.request.target.checkout.checkoutId') = ?",
         [target.checkoutId],
       )
-      .filter((r) => !this.activeSaves.has(saveKey(r)));
+      .filter((r) => !this.activeSaves.has(saveKey(r.request)));
   }
-  /** The text a draft held when the save began: its recorded baseline, else the file on the host. */
-  async getBaseline(input: CommandInput<'saveFile'>, signal: AbortSignal) {
+  /**
+   * The text a draft held when the save began: the draft's recorded baseline, which the recovery
+   * already holds (so only its version is given), else the file on the host.
+   */
+  async getBaseline(
+    input: CommandInput<'saveFile'>,
+    signal: AbortSignal,
+  ): Promise<SaveRecord['baseline']> {
     const draft = this.store
       .readRecovery(input.clientId)
       ?.state.drafts.find((d) => same(d.target, input.target));
-    if (draft && draft.disk.version === input.expectedVersion) return draft.disk;
+    if (draft && draft.disk.version === input.expectedVersion)
+      return { version: draft.disk.version };
     return this.host.readFile(input.target, signal);
   }
   /**
@@ -298,10 +332,16 @@ export class WorkspaceRecovery {
   }
   /** Takes a host's save status into the record; returns whether it is an outcome. */
   private applySaveStatus(record: SaveRecord, status: SaveStatus, notStarted: Set<string>) {
-    if (status.kind === 'saved')
-      record.result = { kind: 'saved', disk: status.disk, recoveryChanges: [] };
-    else if (status.kind === 'conflict') record.result = { kind: 'conflict', disk: status.disk };
-    else if (status.kind === 'not-started') notStarted.add(saveKey(record));
+    if (status.kind === 'saved') {
+      // The host names the version it saved; the text is the request's.
+      if (status.version !== hash(record.input.text)) {
+        record.message = 'The host reports a different text saved; inspect disk.';
+        return false;
+      }
+      const disk = { text: record.input.text, version: status.version };
+      record.result = { kind: 'saved', disk, recoveryChanges: [] };
+    } else if (status.kind === 'conflict') record.result = { kind: 'conflict', disk: status.disk };
+    else if (status.kind === 'not-started') notStarted.add(saveKey(record.input));
     else {
       if (status.message !== undefined) record.message = status.message;
       return false;
@@ -309,17 +349,17 @@ export class WorkspaceRecovery {
     return true;
   }
   /** Tells the host settled saves need no more replay; a failure is retried at the next load. */
-  async acknowledgeSaves(records: SaveRecord[], signal: AbortSignal) {
+  async acknowledgeSaves(
+    records: { state: SaveRecord['state']; input: { clientId: string; requestId: string } }[],
+    signal: AbortSignal,
+  ) {
     await forEachConcurrently(
       records.filter((record) => record.state === 'settled'),
       async (record) => {
         const { clientId, requestId } = record.input;
         try {
           await this.host.acknowledgeSave({ clientId, requestId }, signal);
-          const id = saveKey(record);
-          const stored = this.store.get<SaveRecord>('saves', id);
-          if (stored?.state === 'settled')
-            this.store.put('saves', id, { ...stored, state: 'done' });
+          this.store.markSaveDone(saveKey(record.input));
           record.state = 'done';
         } catch {
           /* The host keeps the entry until the next acknowledgement. */
@@ -415,7 +455,7 @@ export class WorkspaceRecovery {
       this.getUnsettledOperations(target, clientId).some((r) =>
         overlaps(paths, this.footprint(r)),
       ) ||
-      this.getPendingSaves(target).some((r) => overlaps(paths, [r.input.target.path]))
+      this.getPendingSaves(target).some((r) => overlaps(paths, [r.request.target.path]))
     )
       fail(
         'Uncertain',
@@ -808,14 +848,12 @@ export class WorkspaceRecovery {
       if (restore) {
         const group = new Map(
           this.store
-            .all<SaveRecord>(
-              'saves',
-              unresolvedSaves + " AND json_extract(body, '$.input.clientId') = ?",
-              [clientId],
-            )
-            .map((r) => [saveKey(r), r]),
+            .readSaves(unresolvedSaves + " AND json_extract(body, '$.request.clientId') = ?", [
+              clientId,
+            ])
+            .map((r) => [saveKey(r.input), r]),
         );
-        for (const record of records) group.set(saveKey(record), record);
+        for (const record of records) group.set(saveKey(record.input), record);
         if ([...group.keys()].some((id) => this.activeSaves.has(id)))
           fail(
             'Persistence',
@@ -827,12 +865,16 @@ export class WorkspaceRecovery {
         revision = stored?.revision ?? 0,
         publication = this.store.publication(clientId),
         state = stored?.state ?? emptyRecovery(clientId);
+      let changed = false;
+      // Baselines this publication replaces in drafts, which a save may still have begun from.
+      const replaced: FileDocument[] = [];
       const updates = records.map((record) => {
-        const id = saveKey(record),
-          committed = this.getSaveRecord(id);
-        if (committed && !same(committed.input, record.input))
-          fail('Conflict', 'Save identity changed before recovery publication.');
-        const base = committed ?? record;
+        const id = saveKey(record.input),
+          committed = this.store.get<StoredSave>('saves', id);
+        if (!committed || !same(committed.request, toStoredSave(record).request))
+          return fail('Conflict', 'Save identity changed before recovery publication.');
+        // The stored record says how far the save got; its text is the one it was reserved with.
+        const base = fromStoredSave(committed, record.input.text, record.baseline.text);
         if (base.state === 'settled' || base.state === 'done')
           return { id, record, committed, updated: base, changed: false };
         const result: SaveResult | undefined =
@@ -843,30 +885,48 @@ export class WorkspaceRecovery {
                 recoveryChanges: record.result.recoveryChanges,
               }
             : record.result;
-        const before = JSON.stringify(state);
         const restores =
           restore &&
           base.state === 'sent' &&
           result?.kind !== 'saved' &&
           base.recoveryPublication === publication;
+        let drafted = false;
         if (restores) {
-          if (!state.checkouts.some((c) => same(c, record.input.target.checkout)))
+          const disk = findBaseline(state, record.input.target, base.baseline);
+          if (!disk)
+            return fail(
+              'Persistence',
+              'The text a Save began from is no longer in the recovery; its text is kept. Inspect disk.',
+            );
+          if (!state.checkouts.some((c) => same(c, record.input.target.checkout))) {
             state.checkouts.push(record.input.target.checkout);
+            drafted = true;
+          }
           const existing = state.drafts.find((d) => same(d.target, record.input.target));
-          if (existing) {
+          if (!existing) {
+            state.drafts.push({ target: record.input.target, text: record.input.text, disk });
+            drafted = true;
+          } else if (
+            existing.text !== record.input.text ||
+            existing.disk.version !== disk.version
+          ) {
             existing.text = record.input.text;
-            existing.disk = base.baseline;
-          } else
-            state.drafts.push({
-              target: record.input.target,
-              text: record.input.text,
-              disk: base.baseline,
-            });
+            if (existing.disk.version !== disk.version) replaced.push(existing.disk);
+            existing.disk = disk;
+            drafted = true;
+          }
         }
         if (result?.kind === 'saved')
           for (const draft of state.drafts)
-            if (same(draft.target, record.input.target)) draft.disk = result.disk;
-        const changed = before !== JSON.stringify(state);
+            if (
+              same(draft.target, record.input.target) &&
+              draft.disk.version !== result.disk.version
+            ) {
+              replaced.push(draft.disk);
+              draft.disk = result.disk;
+              drafted = true;
+            }
+        changed ||= drafted;
         let next: SaveRecord['state'] = restores ? 'restored' : base.state;
         if (result) next = 'settled';
         else if (notStarted.has(id)) next = 'done';
@@ -876,13 +936,14 @@ export class WorkspaceRecovery {
           ...(result ? { result } : {}),
           ...(record.message === undefined ? {} : { message: record.message }),
         };
-        return { id, record, committed, updated, changed };
+        return { id, record, committed, updated, changed: drafted };
       });
-      const changed = updates.some((entry) => entry.changed);
       if (changed) {
         recovery(state, clientId);
         this.store.writeInternalRecovery(clientId, revision, state);
       }
+      const settling = updates.filter((u) => u.updated.state !== 'sent').map((u) => u.id);
+      for (const disk of replaced) this.store.keepBaseline(clientId, disk, settling);
       for (const entry of updates) {
         if (changed && entry.changed && entry.updated.result?.kind === 'saved')
           entry.updated.result = {
@@ -892,7 +953,8 @@ export class WorkspaceRecovery {
               { clientId, previousRevision: revision, revision: revision + 1 },
             ],
           };
-        if (!same(entry.committed, entry.updated)) this.store.put('saves', entry.id, entry.updated);
+        if (!same(entry.committed, toStoredSave(entry.updated)))
+          this.store.writeSave(entry.id, entry.updated);
       }
       for (const { record, updated } of updates) Object.assign(record, updated);
     });
@@ -906,7 +968,7 @@ export class WorkspaceRecovery {
   async recoverEvidence(signal: AbortSignal, openIds?: Set<string>) {
     const notes = new Map<string, string>();
     const groups = new Map<string, SaveRecord[]>();
-    for (const record of this.store.all<SaveRecord>('saves', unresolvedSaves))
+    for (const record of this.store.readSaves(unresolvedSaves))
       groups.set(record.input.clientId, [...(groups.get(record.input.clientId) ?? []), record]);
     await forEachConcurrently([...groups.values()], async (records) => {
       if (records.some((record) => this.isCheckoutActive(record.input.target.checkout.checkoutId)))
@@ -930,7 +992,7 @@ export class WorkspaceRecovery {
       } catch (error) {
         for (const record of records)
           notes.set(
-            saveKey(record),
+            saveKey(record.input),
             'Admitted Save recovery publication pending; previous valid snapshot retained. ' +
               errorText(error),
           );
@@ -945,10 +1007,9 @@ export class WorkspaceRecovery {
       else if (record.publicationError) this.publishOperation(id, record);
     });
     await this.acknowledgeSaves(
-      this.store.all<SaveRecord>(
-        'saves',
-        pendingSaves + " AND json_extract(body, '$.state') = 'settled'",
-      ),
+      this.store
+        .all<StoredSave>('saves', pendingSaves + " AND json_extract(body, '$.state') = 'settled'")
+        .map((r) => ({ state: r.state, input: r.request })),
       signal,
     );
     await forEachConcurrently(
@@ -1153,19 +1214,19 @@ export class WorkspaceRecovery {
             (operation.message ??
               'inspect original, destination, staging and Finder Trash; drafts retained.'),
         );
-    for (const record of this.store.all<SaveRecord>(
+    for (const record of this.store.all<StoredSave>(
       'saves',
-      unresolvedSaves + " AND json_extract(body, '$.input.clientId') = ?",
+      unresolvedSaves + " AND json_extract(body, '$.request.clientId') = ?",
       [clientId],
     ))
       errors.push(
         'Uncertain save ' +
-          record.input.requestId +
+          record.request.requestId +
           ' for ' +
-          record.input.target.path +
+          record.request.target.path +
           ': inspect disk; journal text retained.' +
           (record.message ? ' ' + record.message : '') +
-          (notes.has(saveKey(record)) ? ' ' + notes.get(saveKey(record)) : ''),
+          (notes.has(saveKey(record.request)) ? ' ' + notes.get(saveKey(record.request)) : ''),
       );
     errors.push(...this.getFeedGapErrors(state));
     return { revision: stored?.revision ?? 0, state, errors, operations };

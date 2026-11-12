@@ -1,5 +1,5 @@
 import { normalizeApplicationError } from '@moonbase/effect';
-import { decodeEditorRecovery } from '@moonbase/contracts/workspace-schema';
+import { decodeEditorRecovery, isWellFormed } from '@moonbase/contracts/workspace-schema';
 import { isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
 import {
@@ -69,19 +69,26 @@ export function document(bytes: Buffer): FileDocument {
     bytes.length <= maximumFileBytes && !bytes.includes(0),
     'Text unavailable: binary or exceeds 2 MiB.',
   );
-  let text: string;
+  let decoded: string;
   try {
-    text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+    decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch {
     return fail('InvalidInput', 'Text unavailable: invalid UTF-8.');
   }
-  return { text, version: hash(bytes) };
+  return { text: decoded, version: hash(bytes) };
 }
-export function textDocument(text: string) {
-  ensure(typeof text === 'string', 'Invalid text.');
-  const value = document(Buffer.from(text));
-  ensure(value.text === text, 'Invalid Unicode text.');
-  return value;
+/** Checks that `text` is a file's worth of well-formed text, without hashing it. */
+export function text(value: unknown): asserts value is string {
+  ensure(typeof value === 'string', 'Invalid text.');
+  ensure(isWellFormed(value), 'Invalid Unicode text.');
+  ensure(
+    !value.includes('\0') && Buffer.byteLength(value) <= maximumFileBytes,
+    'Text unavailable: binary or exceeds 2 MiB.',
+  );
+}
+export function textDocument(value: string): FileDocument {
+  text(value);
+  return { text: value, version: hash(value) };
 }
 export const same = (a: unknown, b: unknown): boolean => canonical(a) === canonical(b);
 export function canonical(value: unknown): string {
@@ -149,7 +156,7 @@ export function recovery(input: unknown, clientId: string): EditorRecovery {
   const seen = new Set<string>();
   for (const draft of state.drafts) {
     target(draft?.target);
-    textDocument(draft.text);
+    text(draft.text);
     ensure(
       record(draft.disk) && textDocument(draft.disk.text).version === draft.disk.version,
       'Invalid recovery baseline.',

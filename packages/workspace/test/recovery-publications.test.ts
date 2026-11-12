@@ -465,7 +465,7 @@ test('growing settled Save history is not parsed by later Save or recovery load'
     let historyBytes = 0;
     JSON.parse = (body, ...args) => {
       const value = parse(body, ...args);
-      if (value?.input?.requestId?.startsWith('large-')) historyBytes += body.length;
+      if (value?.request?.requestId?.startsWith('large-')) historyBytes += body.length;
       return value;
     };
     try {

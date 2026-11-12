@@ -29,11 +29,14 @@ export const maximumBranchName = 100;
 /** Names the installation whose clients' requests the host journals; one per client store. */
 const installationId = WorkspaceIdentifierSchema;
 
-/** A save outcome as the file host reports it: the host publishes no recovery. */
+/**
+ * A save outcome as the file host reports it: the host publishes no recovery. A `saved` outcome
+ * names only the version, as the text is the request's own.
+ */
 export const HostSaveResultSchema = Schema.Union([
   struct({
     kind: Schema.Literal('saved'),
-    disk: FileDocumentSchema,
+    version: Schema.String,
     persistencePending: optional(Schema.Boolean),
     message: optional(Schema.String),
   }),
@@ -49,11 +52,12 @@ export const HostOperationResultSchema = struct({
   message: optional(Schema.String),
 });
 /**
- * What the journal knows of a save: `not-started` means the host never admitted the request;
- * `uncertain` means it did but disk evidence cannot say what happened.
+ * What the journal knows of a save: `saved` names the version of the request's text,
+ * `not-started` means the host never admitted the request and `uncertain` means it did but disk
+ * evidence cannot say what happened.
  */
 export const SaveStatusSchema = Schema.Union([
-  struct({ kind: Schema.Literal('saved'), disk: FileDocumentSchema }),
+  struct({ kind: Schema.Literal('saved'), version: Schema.String }),
   struct({ kind: Schema.Literal('conflict'), disk: FileDocumentSchema }),
   struct({ kind: Schema.Literal('not-started') }),
   struct({ kind: Schema.Literal('uncertain'), message: optional(Schema.String) }),

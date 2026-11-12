@@ -12,11 +12,14 @@ const natural = Schema.Int.check(
   Schema.makeFilter((value) => Number.isSafeInteger(value) && value >= 0),
 );
 const coordinate = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
+/** Whether a string has no lone surrogates (`String.prototype.isWellFormed`, ES2024). */
+export const isWellFormed = (value: string) =>
+  (value as string & { isWellFormed(): boolean }).isWellFormed();
 const text = Schema.String.check(
   Schema.makeFilter(
     (value) =>
       !value.includes('\0') &&
-      !/[\ud800-\udfff]/u.test(value) &&
+      isWellFormed(value) &&
       new TextEncoder().encode(value).length <= maximumFileBytes,
   ),
 );

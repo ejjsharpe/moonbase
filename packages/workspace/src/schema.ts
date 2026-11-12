@@ -97,12 +97,14 @@ export const ApprovalSchema = struct({
     struct({ identity: Schema.String, pointer: Schema.NullOr(Schema.String) }),
   ),
 });
+const { text: _text, ...hostSaveFields } = hostInputSchemas.saveFile.fields;
 /**
- * A save the host admitted. A `saved` outcome keeps only the version, as the text is the input's.
- * When it was acknowledged is a column of its journal row, not part of the record.
+ * A save the host admitted. Its input keeps the text's version in place of the text, which the
+ * client keeps; a `saved` outcome keeps only the version. When it was acknowledged is a column of
+ * its journal row, not part of the record.
  */
 export const HostSaveRecordSchema = struct({
-  input: hostInputSchemas.saveFile,
+  input: struct({ ...hostSaveFields, version: Schema.String }),
   result: optional(
     Schema.Union([
       struct({ kind: Schema.Literal('saved'), version: Schema.String }),

@@ -115,7 +115,7 @@ const dropReply =
 const openCheckout = (host: WorkspaceHostServiceShape, root: string) =>
   Effect.runPromise(host.openCheckout({ root }));
 
-test('a save whose reply is lost resolves through saveStatus, and one that never arrived returns as a draft', async () => {
+test('a save whose reply is lost resolves through saveStatus, and one that never arrived returns as a draft over its baseline, even once another client moved that draft', async () => {
   const h = harness();
   try {
     writeFileSync(join(h.root, 'file.txt'), 'original');
@@ -175,13 +175,28 @@ test('a save whose reply is lost resolves through saveStatus, and one that never
       ),
     );
     await alice.runtime.dispose();
+    // Meanwhile another installation moves the file, and the feed moves the draft whose baseline
+    // the save began from (the save kept only its version).
+    const bob = h.startClient('bob', host);
+    await bob.client.command('mutate', {
+      id: 'move',
+      clientId: 'b',
+      checkout,
+      kind: 'move',
+      sources: await bob.client.command('inspectEntries', { checkout, paths: ['file.txt'] }),
+      destination: 'moved.txt',
+    });
     alice = h.startClient('alice', host);
     const restored = await alice.client.command('loadRecovery', {
       clientId: 'window',
     });
-    assert.equal(restored.state.drafts[0].text, 'unsent text');
-    assert.equal(restored.state.drafts[0].disk.text, 'committed text');
-    assert.equal(readFileSync(join(h.root, 'file.txt'), 'utf8'), 'committed text');
+    assert.deepEqual(
+      restored.state.drafts.map((d) => [d.target.path, d.text, d.disk.text]).sort(),
+      [
+        ['file.txt', 'unsent text', 'committed text'],
+        ['moved.txt', 'committed text', 'committed text'],
+      ],
+    );
     // The host told the client `not-started`, so a delayed copy of that request never runs.
     const late = await Effect.runPromise(
       Effect.flip(
@@ -192,7 +207,65 @@ test('a save whose reply is lost resolves through saveStatus, and one that never
       ),
     );
     assert.equal(late.code, 'Conflict');
-    assert.equal(readFileSync(join(h.root, 'file.txt'), 'utf8'), 'committed text');
+    assert(!existsSync(join(h.root, 'file.txt')));
+  } finally {
+    await h.close();
+  }
+});
+
+test('a save whose baseline another save of the file replaced in the recovery still returns as a draft over it', async () => {
+  const h = harness();
+  try {
+    writeFileSync(join(h.root, 'file.txt'), 'original');
+    const { host } = await h.startHost();
+    const checkout = await openCheckout(host, h.root),
+      target = { checkout, path: 'file.txt' },
+      disk = await Effect.runPromise(host.readFile(target));
+    const save = (requestId: string, text: string) => ({
+      target,
+      clientId: 'window',
+      requestId,
+      text,
+      expectedVersion: disk.version,
+    });
+    // The second save reaches the host only after the first has settled, and its reply is lost.
+    let arrive!: () => void, release!: () => void;
+    const arrived = new Promise<void>((resolve) => (arrive = resolve)),
+      released = new Promise<void>((resolve) => (release = resolve));
+    let alice = h.startClient('alice', host, (inner) => ({
+      ...inner,
+      saveFile: (input) =>
+        input.requestId === 'second'
+          ? Effect.promise(() => (arrive(), released)).pipe(
+              Effect.andThen(inner.saveFile(input)),
+              Effect.andThen(Effect.fail(lost)),
+            )
+          : inner.saveFile(input),
+      saveStatus: () => Effect.fail(lost),
+    }));
+    await alice.client.command('persistRecovery', {
+      requestId: randomUUID(),
+      clientId: 'window',
+      expectedRevision: 0,
+      state: draft('window', checkout, 'first text', disk),
+    });
+    const second = alice.client.command('saveFile', save('second', 'second text'));
+    await arrived;
+    assert.equal(
+      (await alice.client.command('saveFile', save('first', 'first text'))).kind,
+      'saved',
+    );
+    release();
+    await assert.rejects(second);
+    await alice.runtime.dispose();
+    alice = h.startClient('alice', host);
+    const loaded = await alice.client.command('loadRecovery', { clientId: 'window' });
+    // The host refused the second save as a conflict: its text comes back over its own baseline.
+    assert.deepEqual(
+      loaded.state.drafts.map((d) => [d.text, d.disk.text]),
+      [['second text', 'original']],
+    );
+    assert.equal(readFileSync(join(h.root, 'file.txt'), 'utf8'), 'first text');
   } finally {
     await h.close();
   }
