@@ -113,6 +113,25 @@ export function createFolderApprovals(file: string): FolderApprovals {
   };
 }
 
+/**
+ * A local-mode daemon's folders plus its workspace's: chats may also use a folder that `checkouts`
+ * says is an approved checkout root or a worktree Git lists for one. Only `has` widens. Picker
+ * approvals, the recent list and `approve` are the picker's alone, so a project the editor opened
+ * is never offered again as a recent folder. A `checkouts` that throws approves nothing.
+ */
+export function withCheckoutFolders(
+  folders: FolderApprovals,
+  checkouts: { has(path: string): Promise<boolean> },
+): FolderApprovals {
+  return {
+    ...folders,
+    async has(path) {
+      if (await folders.has(path)) return true;
+      return checkouts.has(path).catch(() => false);
+    },
+  };
+}
+
 const isInside = (root: string, path: string) =>
   path === root || path.startsWith(root === '/' ? '/' : `${root}/`);
 

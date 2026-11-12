@@ -6,13 +6,10 @@ import { applicationError } from './admission.ts';
 import { ClientWorkspace } from './client.ts';
 import { decodeClientConfiguration } from './client-schema.ts';
 import { FileHost } from './host.ts';
-import {
-  decodeConfiguration,
-  decodeNativeCapture,
-  type WorkspaceHostConfiguration,
-} from './schema.ts';
+import { decodeConfiguration, type WorkspaceHostConfiguration } from './schema.ts';
 
 export type {
+  ChatFolders,
   RootPredicate,
   WorkspaceConfiguration,
   WorkspaceHostConfiguration,
@@ -33,7 +30,7 @@ export function WorkspaceHostLive(configuration: WorkspaceHostConfiguration, now
           try: () => decodeConfiguration(configuration),
           catch: applicationError,
         });
-        const allowRoot = configuration.allowRoot;
+        const { allowRoot, chats } = configuration;
         const parent = yield* Effect.scope;
         const operationScope = yield* Scope.fork(parent, 'parallel');
         const helperScope = yield* Scope.fork(parent, 'parallel');
@@ -61,6 +58,7 @@ export function WorkspaceHostLive(configuration: WorkspaceHostConfiguration, now
               },
               now,
               allowRoot,
+              chats,
             ),
           catch: (error) => applicationError(error, 'Persistence'),
         });
@@ -68,7 +66,7 @@ export function WorkspaceHostLive(configuration: WorkspaceHostConfiguration, now
       (host) => host.close(),
     ),
   );
-  return Layer.merge(
+  return Layer.mergeAll(
     Layer.effect(
       WorkspaceHostService,
       Effect.map(HostResources, (host) => host.service),
@@ -77,18 +75,15 @@ export function WorkspaceHostLive(configuration: WorkspaceHostConfiguration, now
       WorkspaceNative,
       Effect.map(HostResources, (host) => ({
         capture: (input: { checkout: CheckoutTarget; clientId: string; paths: string[] }) =>
-          Effect.flatMap(
-            Effect.try({ try: () => decodeNativeCapture(input), catch: applicationError }),
-            (captured) =>
-              host.effect(
-                (signal) => host.references.capture(captured, signal),
-                false,
-                undefined,
-                (references) => host.references.release({ ...captured, references }),
-              ),
-          ),
+          Effect.map(host.service.captureImports(input), (captured) => captured.references),
         release: (input: { checkout: CheckoutTarget; clientId: string; references: string[] }) =>
-          Effect.try({ try: () => host.references.release(input), catch: applicationError }),
+          host.service.releaseImports(input),
+      })),
+    ),
+    Layer.effect(
+      WorkspaceFolders,
+      Effect.map(HostResources, (host) => ({
+        has: (path: string) => host.effect((signal) => host.checkoutFolders.has(path, signal)),
       })),
     ),
   ).pipe(Layer.provide(resources));
@@ -145,6 +140,16 @@ export function WorkspaceLocalLive(
     ),
   ).pipe(Layer.provideMerge(WorkspaceHostLive(hostConfiguration, now)));
 }
+
+/**
+ * Whether a folder is one the host approved as a checkout root, or a worktree Git lists for an
+ * approved Git checkout, re-checked by identity on every call. A daemon's chats use it to accept
+ * the folders of the editor's projects without a separate grant. It approves nothing.
+ */
+export class WorkspaceFolders extends Context.Service<
+  WorkspaceFolders,
+  { has(path: string): Effect.Effect<boolean, ApplicationError> }
+>()('moonbase/WorkspaceFolders') {}
 
 /** Main/native adapter only: approved picker/drop paths become short-lived, single-use tokens. */
 export class WorkspaceNative extends Context.Service<

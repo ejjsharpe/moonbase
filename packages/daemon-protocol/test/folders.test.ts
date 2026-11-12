@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { Effect, Layer } from 'effect';
 import { LocalHostService } from '@moonbase/contracts/services';
-import { createFolderApprovals, createRootFolders } from '../src/folders.ts';
+import { createFolderApprovals, createRootFolders, withCheckoutFolders } from '../src/folders.ts';
 import { LocalHostLive, LocalPiControl } from '@moonbase/chat-runtime';
 
 test('native folder approvals survive a restart and lapse when the folder is replaced', async () => {
@@ -48,6 +48,34 @@ test('native folder approvals survive a restart and lapse when the folder is rep
     await rm(beta, { recursive: true });
     assert.deepEqual(await createFolderApprovals(file).listRecent(), []);
     assert.equal(JSON.parse(await readFile(file, 'utf8')).length, 3);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('checkout folders widen what chats may use without becoming picker grants', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-folders-')));
+  try {
+    const [picked, project, other] = ['picked', 'project', 'other'].map((name) => join(root, name));
+    for (const folder of [picked, project, other]) await mkdir(folder);
+    let broken = false;
+    const base = createFolderApprovals(join(root, 'approved-folders.json'));
+    const folders = withCheckoutFolders(base, {
+      has: async (path) => {
+        if (broken) throw new Error('The workspace is closed.');
+        return path === project;
+      },
+    });
+    await folders.approve(picked);
+    assert.equal(await folders.has(picked), true);
+    assert.equal(await folders.has(project), true);
+    assert.equal(await folders.has(other), false);
+    // The project grants no picker approval: it is not listed again and lapses with its checkout.
+    assert.deepEqual(await folders.listRecent(), [picked]);
+    assert.equal(await base.has(project), false);
+    broken = true;
+    assert.equal(await folders.has(project), false);
+    assert.equal(await folders.has(picked), true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

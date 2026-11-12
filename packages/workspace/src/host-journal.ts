@@ -30,6 +30,12 @@ import {
   textDocument,
 } from './validation.ts';
 
+/** The operations whose first outcome is remembered by request ID and replayed. */
+export type RequestOperation =
+  | 'createWorktree'
+  | 'initializeRepository'
+  | 'createChatWorktree'
+  | 'turnChatIntoProject';
 type SaveIdentity = Pick<HostInput<'saveStatus'>, 'installationId' | 'clientId' | 'requestId'>;
 type OperationIdentity = Pick<HostInput<'operationStatus'>, 'installationId' | 'clientId' | 'id'>;
 const sequenceKey = (sequence: number) => String(sequence).padStart(12, '0');
@@ -413,7 +419,7 @@ export class HostJournal {
   requestId = (operation: string, i: { installationId: string; requestId: string }) =>
     key(operation, i.installationId, i.requestId);
   /** Replays a request's recorded outcome; null when the request is new. */
-  replayRequest<K extends 'createWorktree' | 'initializeRepository'>(
+  replayRequest<K extends RequestOperation>(
     id: string,
     operation: K,
     input: HostInput<K>,

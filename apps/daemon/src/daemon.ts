@@ -12,10 +12,14 @@ import {
   createKeyEncryption,
   type CredentialKeySource,
 } from '@moonbase/chat-runtime/credentials';
-import { WorkspaceHostLive } from '@moonbase/workspace';
+import { WorkspaceFolders, WorkspaceHostLive, type ChatFolders } from '@moonbase/workspace';
 import { WorkspaceHostService, type WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import type { WorkspaceHostClient } from '@moonbase/contracts/workspace-host';
-import { createFolderApprovals, createRootFolders } from '@moonbase/daemon-protocol/folders';
+import {
+  createFolderApprovals,
+  createRootFolders,
+  withCheckoutFolders,
+} from '@moonbase/daemon-protocol/folders';
 import type { DaemonSettings } from '@moonbase/chat-runtime/host-configuration';
 import { createLocalModels } from '@moonbase/chat-runtime/local-models';
 import { ProviderSetupChanges, ProviderSetupLive } from '@moonbase/chat-runtime/providers';
@@ -57,6 +61,7 @@ import { refuseDaemonWhileStopping, refuseWhileStopping } from './admission.ts';
 import { acquireDaemonLock } from './lock.ts';
 import { openDaemonLog, type DaemonLog } from './log.ts';
 import { createRootPolicy, guardWorkspace } from './workspace.ts';
+import { createChatFolders } from './chat-folders.ts';
 
 /** What an entry point adds to a daemon in either mode. */
 export type DaemonProviders = {
@@ -152,7 +157,7 @@ async function serveDaemon(
     // A key file is checked before serving; the Keychain is read at the first sign-in.
     if (settings.credentialKey?.source === 'file') await checkKeyFile(providers.keySource);
     // A host's roots are checked once, so a root replaced later approves nothing.
-    const folders =
+    const approvedFolders =
       settings.mode === 'host'
         ? await createRootFolders(settings.approvedRoots, {
             reserved: [
@@ -163,6 +168,15 @@ async function serveDaemon(
             throw ApplicationError.is(error) ? new DaemonFailure(error.code, error.message) : error;
           })
         : createFolderApprovals(join(directory, 'approved-folders.json'));
+    // A local daemon's chats may also use the editor's checkouts and their worktrees, once the
+    // workspace is open. A host's chats stay in its roots, which already hold every checkout.
+    let checkoutFolders: ((path: string) => Promise<boolean>) | undefined;
+    const folders =
+      settings.mode === 'host'
+        ? approvedFolders
+        : withCheckoutFolders(approvedFolders, {
+            has: async (path) => (await checkoutFolders?.(path)) ?? false,
+          });
     const runtime = ManagedRuntime.make(
       composeRuntime(directory, providers, folders, session, databasePath, ripgrep),
     );
@@ -234,7 +248,13 @@ async function serveDaemon(
         }
       };
       // The file host closes after the server and before the runtime.
-      const workspace = await openWorkspace(folders);
+      const workspace = await openWorkspace(
+        approvedFolders,
+        settings.mode === 'host'
+          ? undefined
+          : createChatFolders(makeChatClient(runtime), makeDaemonClient(runtime)),
+      );
+      checkoutFolders = workspace.hasFolder;
       try {
         await serveModes(workspace.host);
       } finally {
@@ -267,14 +287,20 @@ async function serveDaemon(
    * runtime, an unusable store) is logged by code and left out: chats are unaffected. Disposing
    * cancels its helper process groups and waits for them.
    */
-  async function openWorkspace(folders: FolderApprovals) {
-    const none = { host: undefined, dispose: async () => {} };
+  async function openWorkspace(folders: FolderApprovals, chats: ChatFolders | undefined) {
+    const none = {
+      host: undefined,
+      hasFolder: undefined as ((path: string) => Promise<boolean>) | undefined,
+      dispose: async () => {},
+    };
     if (process.platform !== 'darwin' || stopping) return none;
     if (!options.filesystemHelper) {
       log.write({ event: 'workspace', reason: 'no-helper' });
       return none;
     }
-    let runtime: ManagedRuntime.ManagedRuntime<WorkspaceHostService, ApplicationError> | undefined;
+    let runtime:
+      | ManagedRuntime.ManagedRuntime<WorkspaceHostService | WorkspaceFolders, ApplicationError>
+      | undefined;
     try {
       const workspaceDirectory = await openPrivateDirectory(join(directory, 'workspace'));
       const policy = await createRootPolicy(directory, settings, folders);
@@ -285,13 +311,26 @@ async function serveDaemon(
           filesystemHelper: options.filesystemHelper,
           gitExecutable: '/usr/bin/git',
           ...(options.ripgrepExecutable ? { ripgrepExecutable: options.ripgrepExecutable } : {}),
+          // A native source is held to no root policy, so only a local daemon takes imports.
+          nativeImports: settings.mode !== 'host',
+          ...(chats ? { chats } : {}),
           ...policy,
         }),
       );
       const host = await runtime.runPromise(WorkspaceHostService);
+      const checkouts = await runtime.runPromise(WorkspaceFolders);
       log.write({ event: 'workspace', reason: 'ready' });
       const opened = runtime;
-      return { host, dispose: () => opened.dispose() };
+      let closed = false;
+      return {
+        host,
+        hasFolder: (path: string) =>
+          closed ? Promise.resolve(false) : opened.runPromise(checkouts.has(path)),
+        dispose: () => {
+          closed = true;
+          return opened.dispose();
+        },
+      };
     } catch (error) {
       await runtime?.dispose().catch(() => {});
       log.write({ event: 'workspace', reason: 'unavailable', code: describeFailure(error).code });

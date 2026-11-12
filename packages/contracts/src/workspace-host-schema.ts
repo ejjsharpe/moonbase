@@ -1,6 +1,7 @@
 import * as Schema from 'effect/Schema';
 import { ApplicationError } from './errors.ts';
-import { chatReplyErrorCodes } from './chat-schema.ts';
+import { ChatTargetSchema, chatReplyErrorCodes } from './chat-schema.ts';
+import { AbsolutePathSchema } from './daemon-schema.ts';
 import type { HostCommand, HostInput, HostOutput } from './workspace-host.ts';
 import { array, optional, struct, voidResult } from './schema.ts';
 import {
@@ -23,6 +24,8 @@ const natural = Schema.Int.check(
 export const maximumOperationFeedPage = 64;
 /** The most JSON bytes one page carries beyond its first entry, so a page fits a reply. */
 export const maximumOperationFeedBytes = 4 * 1024 * 1024;
+/** The longest branch name a chat worktree may have. */
+export const maximumBranchName = 100;
 /** Names the installation whose clients' requests the host journals; one per client store. */
 const installationId = WorkspaceIdentifierSchema;
 
@@ -123,6 +126,35 @@ export const hostInputSchemas = {
     requestId: WorkspaceIdentifierSchema,
   }),
   listOperations: struct({ checkout: CheckoutTargetSchema, after: Schema.NullOr(natural) }),
+  /**
+   * Makes a worktree for a chat beside the repository of the checkout at `root`, at
+   * `<main worktree>-worktrees/<branch>`; the host derives the location.
+   */
+  createChatWorktree: struct({
+    installationId,
+    requestId: WorkspaceIdentifierSchema,
+    root: AbsolutePathSchema,
+    branch: Schema.String.check(Schema.isMaxLength(maximumBranchName)),
+  }),
+  /** Opens the folder the daemon made for a chat as a checkout, then marks the chat as in a project. */
+  turnChatIntoProject: struct({
+    installationId,
+    requestId: WorkspaceIdentifierSchema,
+    target: ChatTargetSchema,
+  }),
+  /** Local mode only: holds approved native files as single-use references for an import. */
+  captureImports: struct({
+    checkout: CheckoutTargetSchema,
+    clientId: WorkspaceIdentifierSchema,
+    paths: array(AbsolutePathSchema).check(Schema.isMinLength(1), Schema.isMaxLength(128)),
+  }),
+  releaseImports: struct({
+    checkout: CheckoutTargetSchema,
+    clientId: WorkspaceIdentifierSchema,
+    references: array(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(160))).check(
+      Schema.isMaxLength(128),
+    ),
+  }),
 };
 export const hostOutputSchemas = {
   openCheckout: workspaceOutputSchemas.openCheckout,
@@ -145,6 +177,10 @@ export const hostOutputSchemas = {
   saveStatus: SaveStatusSchema,
   acknowledgeSave: voidResult,
   listOperations: OperationFeedSchema,
+  createChatWorktree: CheckoutTargetSchema,
+  turnChatIntoProject: CheckoutTargetSchema,
+  captureImports: struct({ references: array(Schema.String) }),
+  releaseImports: voidResult,
 } satisfies Record<keyof typeof hostInputSchemas, Schema.Constraint>;
 
 const inputs = Object.fromEntries(
@@ -189,6 +225,9 @@ const hostMutations: ReadonlySet<string> = new Set<HostCommand>([
   'initializeRepository',
   'acknowledgeOperation',
   'acknowledgeSave',
+  'createChatWorktree',
+  'turnChatIntoProject',
+  'captureImports',
 ]);
 export const isHostMutation = (operation: string) => hostMutations.has(operation);
 /**
@@ -204,17 +243,21 @@ export const hostDeadlinesMs = {
 } as const;
 export function hostDeadlineMs(operation: HostCommand): number {
   if (operation === 'lookupFiles' || operation === 'searchText') return hostDeadlinesMs.search;
-  if (operation === 'createWorktree' || operation === 'initializeRepository')
+  if (
+    operation === 'createWorktree' ||
+    operation === 'initializeRepository' ||
+    operation === 'createChatWorktree'
+  )
     return hostDeadlinesMs.git;
   return isHostMutation(operation) ? hostDeadlinesMs.mutation : hostDeadlinesMs.read;
 }
-/** The checkout an operation's input names, if any; the server checks it is its own host's. */
+/** The checkout (or, for a chat, host) an operation's input names, if any; the server checks it is its own host's. */
 export function hostInputCheckout(input: unknown): { hostId: string } | undefined {
   const shape = input as {
     checkout?: { hostId: string };
-    target?: { checkout: { hostId: string } };
+    target?: { checkout?: { hostId: string }; host?: { hostId: string } };
   };
-  return shape.checkout ?? shape.target?.checkout;
+  return shape.checkout ?? shape.target?.checkout ?? shape.target?.host;
 }
 
 /** A `workspace` subscription follows one checkout. */

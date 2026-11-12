@@ -1,5 +1,6 @@
 import { Schema, Struct } from 'effect';
 import { isAbsolute } from 'node:path';
+import type { ChatTarget } from '@moonbase/contracts/chat';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { hash } from './validation.ts';
 import {
@@ -47,6 +48,11 @@ export const WorkspaceConfigurationSchema = struct({
   reserved: optional(array(absolute)),
   /** How long an acknowledged journal entry stays before it is discarded. */
   journalRetentionMs: optional(natural),
+  /**
+   * Whether the host accepts approved native files as imports (default true). A host-mode daemon
+   * turns them off: a native source is not held to the root policy, so only a local one may.
+   */
+  nativeImports: optional(Schema.Boolean),
 });
 export type WorkspaceConfiguration = typeof WorkspaceConfigurationSchema.Type;
 /**
@@ -56,7 +62,20 @@ export type WorkspaceConfiguration = typeof WorkspaceConfigurationSchema.Type;
  * checkout; a refusal or a throw denies.
  */
 export type RootPredicate = (real: string, requested: string) => boolean | Promise<boolean>;
-export type WorkspaceHostConfiguration = WorkspaceConfiguration & { allowRoot?: RootPredicate };
+/**
+ * A chat's own folder, as the daemon's chats know it, for `turnChatIntoProject`. The host cannot
+ * import the chat engine, so the daemon supplies this; without it the operation is `Incompatible`.
+ */
+export type ChatFolders = {
+  /** The chat's working folder; refuses any folder but one the daemon made for a chat. */
+  findOwnFolder(target: ChatTarget): Promise<string>;
+  /** Marks the chat's folder as a project. Repeating it changes nothing. */
+  markAsProject(requestId: string, target: ChatTarget): Promise<void>;
+};
+export type WorkspaceHostConfiguration = WorkspaceConfiguration & {
+  allowRoot?: RootPredicate;
+  chats?: ChatFolders;
+};
 const configuration = Schema.decodeUnknownSync(WorkspaceConfigurationSchema, {
   reportInput: false,
 });
@@ -102,7 +121,12 @@ export const HostOperationRecordSchema = struct({
 });
 /** The first outcome of a request that has no client acknowledgement, replayed for its ID. */
 export const HostRequestRecordSchema = struct({
-  input: Schema.Union([hostInputSchemas.createWorktree, hostInputSchemas.initializeRepository]),
+  input: Schema.Union([
+    hostInputSchemas.createWorktree,
+    hostInputSchemas.initializeRepository,
+    hostInputSchemas.createChatWorktree,
+    hostInputSchemas.turnChatIntoProject,
+  ]),
   result: optional(CheckoutTargetSchema),
   error: optional(struct({ code: Schema.String, message: Schema.String })),
   settledAt: optional(natural),
@@ -127,20 +151,3 @@ export const hostDecoders = strictDecoders({
   cancelled: natural,
   meta: WorkspaceIdentifierSchema,
 });
-
-const NativeCaptureSchema = struct({
-  checkout: CheckoutTargetSchema,
-  clientId: WorkspaceIdentifierSchema,
-  paths: array(absolute).check(Schema.isMinLength(1), Schema.isMaxLength(128)),
-});
-const nativeCapture = Schema.decodeUnknownSync(NativeCaptureSchema, {
-  onExcessProperty: 'error',
-  reportInput: false,
-});
-export function decodeNativeCapture(value: unknown) {
-  try {
-    return nativeCapture(value);
-  } catch {
-    throw new ApplicationError({ code: 'InvalidInput', message: 'Invalid native capture input.' });
-  }
-}
