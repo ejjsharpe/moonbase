@@ -247,15 +247,20 @@ export class ClientWorkspace implements AdmissionOwner {
       try {
         reply = await run(host.saveFile({ installationId: this.installationId, ...input }), signal);
       } catch (error) {
-        // A request the host refused before admitting leaves nothing to resolve. After a
-        // cancellation only the host can say whether it was admitted. Anything else is kept
+        // A request the host refused before admitting (invalid or unauthorized) leaves nothing
+        // to resolve. After a cancellation, a malformed reply or a host-side cancellation only the
+        // host can say whether it was admitted. Anything else is kept
         // with its text until the next load asks for its status.
         const refused =
           !signal.aborted &&
           ApplicationError.is(error) &&
-          ['InvalidInput', 'Unauthorized', 'Incompatible', 'Cancelled'].includes(error.code);
+          ['InvalidInput', 'Unauthorized'].includes(error.code);
         let admitted = !refused;
-        if (!refused && signal.aborted)
+        if (
+          !refused &&
+          (signal.aborted ||
+            (ApplicationError.is(error) && ['Incompatible', 'Cancelled'].includes(error.code)))
+        )
           admitted = await run(
             host.saveStatus({
               installationId: this.installationId,

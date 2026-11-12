@@ -1,5 +1,6 @@
 import { basename, join } from 'node:path';
 import {
+  ApplicationError,
   emptyRecovery,
   type CheckoutTarget,
   type CommandInput,
@@ -916,6 +917,13 @@ export class WorkspaceRecovery {
       } catch (error) {
         failure = error;
         errors.push(errorText(error));
+        // A checkout the host refuses stays skipped; one that failed in passing is a gap, because
+        // the cursor may move past what it would have listed.
+        if (!(ApplicationError.is(error) && error.code === 'Unauthorized'))
+          this.store.put('gaps', key(hostId, checkout.checkoutId), {
+            since: cursor.sequence,
+            checkoutId: checkout.checkoutId,
+          });
         continue;
       }
       entries.push(...found);
@@ -927,15 +935,19 @@ export class WorkspaceRecovery {
     for (const entry of entries) {
       if (entry.sequence > through) break;
       // This installation applies its own results as they return.
-      if (entry.installationId !== this.installationId) this.applyFeedEntry(entry);
+      if (entry.installationId !== this.installationId && !this.applyFeedEntry(entry)) {
+        // Not durably applied: the cursor stays so the next sync lists it again.
+        errors.push('Operation feed entry not saved.');
+        return errors;
+      }
     }
     this.store.put('cursors', hostId, { sequence: through, epoch: cursor.epoch });
     return errors;
   }
-  private applyFeedEntry(entry: OperationFeedEntry) {
+  private applyFeedEntry(entry: OperationFeedEntry): boolean {
     const id = key(entry.clientId, entry.id);
     const existing = this.getOperation(id);
-    if (existing && !existing.remote) return;
+    if (existing && !existing.remote) return true;
     const record: OperationRecord = existing ?? {
       input: {
         id: entry.id,
@@ -965,8 +977,10 @@ export class WorkspaceRecovery {
     ];
     try {
       this.publishOperation(id, record);
+      return true;
     } catch (error) {
       this.retainPublication(id, record, error);
+      return false;
     }
   }
 

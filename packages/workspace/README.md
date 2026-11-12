@@ -45,6 +45,8 @@ A `CheckoutTarget` says whether its root is the repository's `main` working tree
 - Helper processes run in their own process group. Stopping one (cancellation, a limit) sends the group SIGTERM, then SIGKILL after 2 seconds, and waits for it to exit, so Git and its children can clean up first.
 - Files must be UTF-8 text up to 2 MiB. Filesystem changes and SQLite commits are not one atomic transaction.
 - A client's settled save and operation records and publication receipts are not yet compacted; only the host journal is.
+- Not yet: upgrading users get a fresh host store, so earlier approvals and saves are not carried over, and the D6 cutover is not in this change.
+- Not yet: a `not-started` save status is not durable on the host, so a host restart can later admit a request a client already discarded (WS-04).
 
 ## Checks
 
