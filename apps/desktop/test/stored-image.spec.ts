@@ -1,6 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { readFile, mkdir } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { readFindHighlight } from './find-highlight.ts';
 
 type ImageWindow = Window & { imageUrls: number; releaseImageUrl(): void };
@@ -16,7 +15,6 @@ const jpeg = (await readFile(new URL('./fixtures/images/retained.jpg', import.me
 const tall = (await readFile(new URL('./fixtures/images/tall.png', import.meta.url))).toString(
   'base64',
 );
-const output = resolve('../../test-results/transcript-images');
 async function open(
   page: Page,
   data = checker,
@@ -103,8 +101,7 @@ test('PNG and JPEG thumbnails and one keyboard viewer trap/restore focus and fit
     await expect(dialog).toHaveCount(0);
     await expect(trigger).toBeFocused();
   }
-  await mkdir(output, { recursive: true });
-  for (const [name, width, height] of [
+  for (const [, width, height] of [
     ['normal', 1440, 900],
     ['compact', 540, 844],
     ['zoom-200', 720, 450],
@@ -112,11 +109,9 @@ test('PNG and JPEG thumbnails and one keyboard viewer trap/restore focus and fit
     await page.setViewportSize({ width, height });
     await trigger.scrollIntoViewIfNeeded();
     await expect(trigger).toBeEnabled();
-    await page.screenshot({ path: resolve(output, `${name}-thumbnail.png`) });
     await trigger.click();
     const dialog = page.getByRole('dialog', { name: 'Stored image', exact: true });
     await expect(dialog.getByRole('img', { name: 'Recorded image' })).toBeVisible();
-    await page.screenshot({ path: resolve(output, `${name}-viewer.png`) });
     expect(
       await dialog.evaluate((node) => {
         const rect = node.getBoundingClientRect();
@@ -135,7 +130,6 @@ test('PNG and JPEG thumbnails and one keyboard viewer trap/restore focus and fit
   await page.getByRole('button', { name: 'View stored image' }).click();
   await expect(page.getByRole('img', { name: 'Recorded image' })).toBeVisible();
   expect(await naturalSize(page, 'Recorded image')).toEqual([256, 128]);
-  await page.screenshot({ path: resolve(output, 'jpeg-viewer.png') });
   await page.keyboard.press('Escape');
   await open(page, tall);
   await expect(page.getByRole('button', { name: 'View stored image' })).toBeEnabled();
@@ -153,7 +147,6 @@ test('PNG and JPEG thumbnails and one keyboard viewer trap/restore focus and fit
   await page.keyboard.press('End');
   await expect.poll(() => viewport.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
   await expect(viewer.getByRole('button', { name: 'Close image viewer' })).toBeInViewport();
-  await page.screenshot({ path: resolve(output, 'tall-overflow.png') });
   await page.keyboard.press('Escape');
 });
 test('unsupported, missing and oversized images stay explicit without a request; undecodable bytes offer Retry', async ({

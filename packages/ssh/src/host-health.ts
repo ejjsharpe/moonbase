@@ -1,6 +1,7 @@
+import { hostTokenPattern } from '@moonbase/contracts/host';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Effect } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { ApplicationError, fail } from '@moonbase/contracts/errors';
 import type { ChatHostHealth, ChatHostTarget, HostHealthReply } from '@moonbase/contracts/host';
 import type { ChatHostEndpoint } from '@moonbase/contracts/services';
 import { releaseResource } from '@moonbase/effect';
@@ -9,11 +10,8 @@ import { decodeChatHostHealth } from '@moonbase/contracts/host-schema';
 export type { ChatHostEndpoint } from '@moonbase/contracts/services';
 export type { HostHealthReply } from '@moonbase/contracts/host';
 const maximumHealthBytes = 8 * 1024;
-/** The health proofs' HMAC domain for protocol 2; RPC and stream proofs use their own. */
+/** The HMAC domain for signed health proofs. */
 export const healthDomain = 'moonbase-daemon-health-v1';
-const fail = (code: 'InvalidInput' | 'Incompatible' | 'Unauthorized', message: string): never => {
-  throw new ApplicationError({ code, message });
-};
 const identity = (value: unknown): value is string =>
   typeof value === 'string' && /^[A-Za-z0-9._:-]{1,256}$/.test(value);
 const nonceValid = (value: unknown): value is string =>
@@ -21,7 +19,7 @@ const nonceValid = (value: unknown): value is string =>
   /^[A-Za-z0-9_-]{43}$/.test(value) &&
   Buffer.from(value, 'base64url').toString('base64url') === value;
 function configuredToken(value: string) {
-  if (typeof value !== 'string' || !/^[\x21-\x7e]{16,4096}$/.test(value))
+  if (typeof value !== 'string' || !hostTokenPattern.test(value))
     fail('InvalidInput', 'Configure a valid host key outside the renderer.');
 }
 function signature(

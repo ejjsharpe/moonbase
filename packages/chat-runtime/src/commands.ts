@@ -51,7 +51,16 @@ import {
 import type { RuntimeConfiguration, RetainedWork } from './runtime-types.ts';
 import { findTranscript } from './find.ts';
 import { NestedSourceRetired, readTranscriptContent } from './transcript.ts';
-import * as V from './validation.ts';
+import { decodeChatInput } from '@moonbase/contracts/chat-schema';
+import {
+  checkChatOutput,
+  decodeChatTarget,
+  isCancellableChatRead,
+  isChatMutation,
+  isSameChatHost,
+  isSameChatTarget,
+} from '@moonbase/contracts/chat-validation';
+import { fail } from '@moonbase/contracts/errors';
 import { makeChatFolder } from './chat-folders.ts';
 import * as S from './private-schema.ts';
 
@@ -236,10 +245,10 @@ export class Host {
     };
   }
   session(value: ChatSession) {
-    if (!V.sameHost(value.host, this.config.host))
-      V.fail('Incompatible', 'Chat host/store does not match this host.');
+    if (!isSameChatHost(value.host, this.config.host))
+      fail('Incompatible', 'Chat host/store does not match this host.');
     if (value.actorId !== this.config.actorId)
-      V.fail('Unauthorized', 'This personal chat belongs to another actor.');
+      fail('Unauthorized', 'This personal chat belongs to another actor.');
   }
   async metadata(target: ChatTarget) {
     this.session(target);
@@ -296,10 +305,10 @@ export class Host {
       data: ChatInput<K>,
     ) => Promise<ChatOutput<K>> | Effect.Effect<ChatOutput<K>, ApplicationError>,
   ): Effect.Effect<ChatOutput<K>, ApplicationError> {
-    const mutation = V.isMutation(operation);
+    const mutation = isChatMutation(operation);
     return Effect.gen({ self: this }, function* () {
       const data = yield* Effect.try({
-        try: () => V.input(operation, value),
+        try: () => decodeChatInput(operation, value),
         catch: normalizeApplicationError,
       });
       if (this.closed) return yield* Effect.fail(safeError(null));
@@ -327,7 +336,7 @@ export class Host {
       }).pipe(
         Effect.flatMap((result) =>
           Effect.try({
-            try: () => V.output(operation, result, data),
+            try: () => checkChatOutput(operation, result, data),
             catch: (error) => (mutation ? unknownOutcome() : safeError(error)),
           }),
         ),
@@ -336,7 +345,7 @@ export class Host {
       let admission = invoke;
       if (operation === 'sendChat')
         admission = this.admission((data as ChatInput<'sendChat'>).target.conversationId, invoke);
-      else if (!V.isCancellableRead(operation)) admission = Effect.uninterruptible(invoke);
+      else if (!isCancellableChatRead(operation)) admission = Effect.uninterruptible(invoke);
       return yield* this.own(
         preflight.pipe(
           Effect.andThen(admission),
@@ -402,8 +411,8 @@ export class Host {
     });
   }
   async getHost(d: ChatInput<'getChatHost'>): Promise<ChatOutput<'getChatHost'>> {
-    if (!V.sameHost(d.host, this.config.host))
-      V.fail('Incompatible', 'Chat host/store does not match this host.');
+    if (!isSameChatHost(d.host, this.config.host))
+      fail('Incompatible', 'Chat host/store does not match this host.');
     S.savedStore(await this.harness.snapshot(Store, 'identity', context));
     return { host: { ...this.config.host }, actorId: this.config.actorId, mode: 'local' };
   }
@@ -427,7 +436,7 @@ export class Host {
     if (existing) {
       S.savedRequest(existing, d.session.actorId, d.requestId);
       if (existing.binding !== binding)
-        V.fail('InvalidInput', 'Request ID is already bound to different chat input.');
+        fail('InvalidInput', 'Request ID is already bound to different chat input.');
       if (existing.conversationId)
         return {
           requestId: d.requestId,
@@ -441,20 +450,20 @@ export class Host {
     const requested = d.settings;
     if (requested.cwd !== undefined) {
       const cwd = await realpath(requested.cwd).catch(() =>
-        V.fail('InvalidInput', 'Choose an existing local working folder.'),
+        fail('InvalidInput', 'Choose an existing local working folder.'),
       );
       if (cwd !== requested.cwd || !(await stat(cwd)).isDirectory())
-        V.fail('InvalidInput', 'Choose a canonical local working folder.');
+        fail('InvalidInput', 'Choose a canonical local working folder.');
     } else if (!this.config.chatFolders)
-      V.fail('InvalidInput', 'Choose a local working folder for this chat.');
+      fail('InvalidInput', 'Choose a local working folder for this chat.');
     const model =
       this.config.models.getModel(requested.model.provider, requested.model.modelId) ??
-      V.fail('InvalidInput', 'Choose an installed model from the local catalog.');
+      fail('InvalidInput', 'Choose an installed model from the local catalog.');
     if (
       requested.reasoningEffort &&
       !getSupportedThinkingLevels(model).includes(requested.reasoningEffort)
     )
-      V.fail('InvalidInput', 'Choose a reasoning effort supported by this model.');
+      fail('InvalidInput', 'Choose a reasoning effort supported by this model.');
     await this.config.approveCreation?.(requested);
     if (requested.cwd !== undefined) settings = { ...requested, cwd: requested.cwd };
     else {
@@ -528,7 +537,7 @@ export class Host {
       const request = await tx.doc(Request, requestKey, binding);
       S.savedRequest(request, d.target.actorId, d.requestId);
       if (request.binding !== binding)
-        V.fail('InvalidInput', 'Request ID is already bound to different chat input.');
+        fail('InvalidInput', 'Request ID is already bound to different chat input.');
       const meta = await tx.doc(Metadata, cid(d.target.conversationId), 'metadata', {
         identity: this.identity,
         title: '',
@@ -541,7 +550,7 @@ export class Host {
           meta.pending < 0 ||
           meta.pending === Number.MAX_SAFE_INTEGER
         )
-          V.fail('Persistence', 'Stored pending-intent metadata is invalid.');
+          fail('Persistence', 'Stored pending-intent metadata is invalid.');
         meta.pending++;
         request.pending = true;
         // Sending to a settled chat takes it up again; a retry of the same Send does not.
@@ -552,7 +561,7 @@ export class Host {
     const existing = await this.lookup(d.target, d.requestId);
     if (existing?.admission === 'admitted') return existing;
     const conversation = await this.harness.conversation(cid(d.target.conversationId), context);
-    if (!conversation) return V.fail('InvalidInput', 'Unknown conversation.');
+    if (!conversation) return fail('InvalidInput', 'Unknown conversation.');
     await conversation.submit(
       { type: 'input', requestId: requestKey, content: d.text, whenBusy: 'reject' },
       context,
@@ -599,7 +608,7 @@ export class Host {
   /** Lists a chat without a project under the project its folder became; the folder stays put. */
   async markFolderAsProject(target: ChatTarget): Promise<void> {
     if (this.closed || !this.admissionsOpen)
-      V.fail('Unavailable', 'Local chat is preparing to quit.');
+      fail('Unavailable', 'Local chat is preparing to quit.');
     // Counted as active work, so Quit waits for it.
     this.mutations++;
     try {
@@ -617,18 +626,18 @@ export class Host {
     if (!old) return null;
     S.savedRequest(old, target.actorId, requestId);
     const value = S.savedBinding(old.binding);
-    if (value.operation !== 'sendChat' || !V.sameTarget(value.target, target))
-      return V.fail('InvalidInput', 'Request ID is bound to another operation or target.');
+    if (value.operation !== 'sendChat' || !isSameChatTarget(value.target, target))
+      return fail('InvalidInput', 'Request ID is bound to another operation or target.');
     if (old.conversationId !== target.conversationId)
-      V.fail('Persistence', 'Stored request conversation is invalid.');
+      fail('Persistence', 'Stored request conversation is invalid.');
     const submissionId = await this.harness.commit(async (tx) => {
       const found = await tx.submissionByRequest(cid(target.conversationId), requestKey);
       const request = await tx.doc(Request, requestKey, old.binding);
       S.savedRequest(request, target.actorId, requestId);
       if (request.submissionId && (!found || String(found.id) !== request.submissionId))
-        V.fail('Persistence', 'Stored admission identity is invalid.');
+        fail('Persistence', 'Stored admission identity is invalid.');
       if (found && found.type !== 'input')
-        V.fail('Persistence', 'Stored admission has an incompatible type.');
+        fail('Persistence', 'Stored admission has an incompatible type.');
       if (found && !request.submissionId) {
         request.submissionId = String(found.id);
         const meta = await tx.doc(Metadata, cid(target.conversationId), 'metadata', {
@@ -639,7 +648,7 @@ export class Host {
         S.savedMetadata(meta);
         if (request.pending) {
           if (!Number.isSafeInteger(meta.pending) || meta.pending < 1)
-            V.fail('Persistence', 'Stored pending-intent metadata is invalid.');
+            fail('Persistence', 'Stored pending-intent metadata is invalid.');
           meta.pending--;
           request.pending = false;
         }
@@ -659,10 +668,10 @@ export class Host {
     signal?.throwIfAborted();
     const owner = S.savedStore(await this.harness.snapshot(Store, 'identity', context));
     if (owner.identity !== this.identity)
-      V.fail('Unauthorized', 'Chat store authority changed. Preserve this store.');
+      fail('Unauthorized', 'Chat store authority changed. Preserve this store.');
     if (cache && cache.boundary === undefined) {
       if (!(await this.harness.snapshot(LiveDoc, cid(target.conversationId), context)))
-        V.fail('Persistence', 'Pi live state is unavailable. Reopen this conversation.');
+        fail('Persistence', 'Pi live state is unavailable. Reopen this conversation.');
     }
     return projectSnapshot(this.harness, {
       identity: this.identity,
@@ -706,12 +715,12 @@ export class Host {
             const request = await tx.doc(Request, requestKey, binding);
             S.savedRequest(request, d.stop.target.actorId, d.requestId);
             if (request.binding !== binding)
-              V.fail('InvalidInput', 'Request ID is already bound to different chat input.');
+              fail('InvalidInput', 'Request ID is already bound to different chat input.');
           }, context);
           const submission = await this.harness.submission(sid(d.stop.submissionId), context),
             record = await submission?.status(context);
           if (!record || record.conversationId !== cid(d.stop.target.conversationId))
-            V.fail('InvalidInput', 'Stop submission does not belong to this conversation.');
+            fail('InvalidInput', 'Stop submission does not belong to this conversation.');
           if (d.stop.taskId === null) {
             const result = await this.harness.abortSubmission(
               sid(d.stop.submissionId),
@@ -728,7 +737,7 @@ export class Host {
             ),
             task = await this.harness.getTask(tid(d.stop.taskId), context);
           if (!task || task.conversationId !== cid(d.stop.target.conversationId))
-            V.fail('InvalidInput', 'Stop task does not belong to this conversation.');
+            fail('InvalidInput', 'Stop task does not belong to this conversation.');
           if (task!.state.status === 'terminal') return 'terminal';
           if (
             live?.run?.taskId !== tid(d.stop.taskId) ||
@@ -800,10 +809,10 @@ export class Host {
             yield* Effect.acquireRelease(
               Effect.try({
                 try: () => {
-                  V.target(target);
+                  decodeChatTarget(target);
                   this.session(target);
                   if (this.closed || this.observers >= 64)
-                    V.fail('Unavailable', 'Chat observation is unavailable.');
+                    fail('Unavailable', 'Chat observation is unavailable.');
                   this.observers++;
                 },
                 catch: normalizeApplicationError,
@@ -887,7 +896,7 @@ export class Host {
                 Effect.try({
                   try: () =>
                     active && version === revision
-                      ? Option.some(V.output('getChat', snapshot, { target }))
+                      ? Option.some(checkChatOutput('getChat', snapshot, { target }))
                       : Option.none(),
                   catch: safeError,
                 }),

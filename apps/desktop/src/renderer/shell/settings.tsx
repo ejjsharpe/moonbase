@@ -9,7 +9,7 @@ import { controls } from '@moonbase/ui/controls';
 import { colors, radius, shadow, space, type } from '@moonbase/ui/tokens.stylex';
 import { workbench } from '@moonbase/ui/workbench';
 import { ProviderSetup } from '../chat/setup.tsx';
-import { Icon } from '../icon.tsx';
+import { Icon } from '@moonbase/ui/icons';
 import { errorDTO } from '../../wire.ts';
 
 export type SettingsSection = 'hosts' | 'providers';

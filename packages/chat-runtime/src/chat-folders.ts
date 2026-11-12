@@ -1,9 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, realpath, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { ApplicationError, fail } from '@moonbase/contracts/errors';
 import { daemonErrorReasons } from '@moonbase/contracts/daemon';
-import * as V from './validation.ts';
 
 const slugLength = 40;
 
@@ -51,7 +50,7 @@ async function isInsideGitCheckout(folder: string) {
  */
 export async function makeChatFolder(parent: string, title: string) {
   if (await isInsideGitCheckout(parent))
-    V.fail(
+    fail(
       'Unavailable',
       'Chats without a project are unavailable while Moonbase’s data folder is inside a Git checkout. Choose a working folder.',
     );
@@ -62,7 +61,7 @@ export async function makeChatFolder(parent: string, title: string) {
     await mkdir(folder, { mode: 0o700 });
     return await realpath(folder);
   } catch {
-    return V.fail('Unavailable', 'A folder for the new chat could not be made.');
+    return fail('Unavailable', 'A folder for the new chat could not be made.');
   }
 }
 

@@ -744,7 +744,7 @@ test('runnable consumer composition root uses the public package and never print
 
 for (const action of ['disconnect', 'dispose'])
   for (const deduplicated of [false, true])
-    test(`R1 ${action} from the first connecting observation settles ${deduplicated ? 'all coalesced callers' : 'Connect before attempt startup'}`, async () => {
+    test(`${action} from the first connecting observation settles ${deduplicated ? 'all coalesced callers' : 'Connect before attempt startup'}`, async () => {
       const f = await fixture(),
         abort = new AbortController(),
         secondAbort = new AbortController();
@@ -821,7 +821,7 @@ for (const [flag, extra] of [
   ['NoHostAuthenticationForProxyCommand', 'ProxyCommand /usr/bin/false'],
 ] as const)
   for (const enabled of [true, false])
-    test(`R1 actual system policy ${flag} ${enabled ? 'rejects enabled bypass' : 'preserves normal verification'}`, async () => {
+    test(`actual system policy ${flag} ${enabled ? 'rejects enabled bypass' : 'preserves normal verification'}`, async () => {
       const f = await fixture(),
         config = join(f.base, 'test-only-ssh-config');
       writeFileSync(
@@ -855,7 +855,7 @@ for (const [mode, action] of [
   ['held-both', 'disconnect'],
   ['held-none', 'dispose'],
 ])
-  test(`R1 SSH ${action} invalidates the endpoint and reaps ${mode} helper group without touching a different generation`, async () => {
+  test(`SSH ${action} invalidates the endpoint and reaps ${mode} helper group without touching a different generation`, async () => {
     const f = await fixture(mode),
       unrelated = f.start();
     try {
@@ -909,7 +909,7 @@ for (const [mode, action] of [
   });
 
 for (const action of ['exit', 'cancel'])
-  test(`R1 actual SSH with a pipe-only ProxyCommand releases its owned helper after ${action}`, async () => {
+  test(`actual SSH with a pipe-only ProxyCommand releases its owned helper after ${action}`, async () => {
     const f = await fixture(),
       abort = new AbortController(),
       proxy = join(f.base, 'pipe-only-proxy.mjs'),
@@ -975,7 +975,7 @@ for (const action of ['exit', 'cancel'])
     }
   });
 
-test('R1 cancellation during admitted teardown cannot strand the owned helper group', async () => {
+test('cancellation during admitted teardown cannot strand the owned helper group', async () => {
   const f = await fixture('held-both'),
     abort = new AbortController();
   try {
@@ -1011,7 +1011,7 @@ test('R1 cancellation during admitted teardown cannot strand the owned helper gr
 });
 
 for (const persistent of [false, true])
-  test(`R2 ${persistent ? 'persistent' : 'transient'} EPERM during owned-group exit requires confirmed absence`, async () => {
+  test(`${persistent ? 'persistent' : 'transient'} EPERM during owned-group exit requires confirmed absence`, async () => {
     const f = await fixture('held-both'),
       other = f.start(),
       originalKill = process.kill.bind(process);

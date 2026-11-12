@@ -47,7 +47,13 @@ import type {
   SocketSubscriptionValue,
 } from '@moonbase/contracts/socket';
 import * as P from './protocol.ts';
-import * as V from './validation.ts';
+import { decodeChatInput } from '@moonbase/contracts/chat-schema';
+import {
+  decodeChatTarget,
+  isChatMutation,
+  isSameChatHost,
+} from '@moonbase/contracts/chat-validation';
+import { fail } from '@moonbase/contracts/errors';
 import {
   connectDaemonSocket,
   type DaemonSocket,
@@ -119,7 +125,7 @@ const sameEndpoint = (a: VerifiedChatEndpoint, b: VerifiedChatEndpoint) =>
   a.connectionId === b.connectionId &&
   a.origin === b.origin &&
   a.token === b.token &&
-  V.sameHost(a.expected, b.expected);
+  isSameChatHost(a.expected, b.expected);
 const generationChanged = (mutation: boolean) =>
   new ApplicationError({
     code: mutation ? 'Uncertain' : 'Unavailable',
@@ -463,7 +469,7 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
     ): Effect.Effect<ChatOutput<K>, ApplicationError> =>
       Effect.gen(function* () {
         const input = yield* Effect.try({
-          try: () => V.input(operation, unknown),
+          try: () => decodeChatInput(operation, unknown),
           catch: ApplicationError.fromUnknown,
         });
         const shape = input as {
@@ -483,14 +489,14 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
           host,
           operation,
           input as never,
-          V.isMutation(operation),
+          isChatMutation(operation),
           (output, health) => {
             // Every host is a daemon whose chats choose their own folder and model.
             if (
               operation === 'getChatHost' &&
               !health.capabilities.includes(chatHostCapabilities.local)
             )
-              V.fail('Incompatible', 'This host does not run the Moonbase daemon. Update it.');
+              fail('Incompatible', 'This host does not run the Moonbase daemon. Update it.');
           },
         )) as ChatOutput<K>;
       });
@@ -514,7 +520,7 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
       watch: ({ target }) =>
         Stream.unwrap(
           Effect.map(
-            validate(() => V.target(target)),
+            validate(() => decodeChatTarget(target)),
             (checked) => {
               let last: SocketSubscriptionValue<'chat'> | undefined;
               return link.subscribe(checked.host, 'chat', checked).pipe(
@@ -538,7 +544,7 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
       watchChatList: ({ session }) =>
         Stream.unwrap(
           Effect.map(
-            validate(() => V.input('listChats', { session }).session),
+            validate(() => decodeChatInput('listChats', { session }).session),
             (checked) =>
               link.subscribe(checked.host, 'chatList', checked).pipe(
                 Stream.filter((update) => !('reconnecting' in update)),
@@ -656,7 +662,7 @@ export const RemoteProviderSetupLive = (
           readProviderSignInUrl(output.url) !== output.url ||
           output.state.flow?.id !== input.flowId
         )
-          V.fail('Incompatible', 'Provider sign-in link is invalid.');
+          fail('Incompatible', 'Provider sign-in link is invalid.');
       };
       const openUrl = (url: string) =>
         Effect.tryPromise({
@@ -820,7 +826,7 @@ export const RemoteWorkspaceHostLive = (config: {
       const ownHost = (value: unknown) => {
         const checkout = hostInputCheckout(value);
         if (checkout && checkout.hostId !== host.hostId)
-          V.fail('Unauthorized', 'Workspace request target differs from this host.');
+          fail('Unauthorized', 'Workspace request target differs from this host.');
       };
       /** The checkouts a reply names: the one it made or opened, an operation's, or a feed's. */
       const outputCheckouts = (operation: HostCommand, output: unknown) => {
@@ -835,7 +841,7 @@ export const RemoteWorkspaceHostLive = (config: {
       const checkOutput = (operation: HostCommand) => (output: unknown) => {
         for (const checkout of outputCheckouts(operation, output))
           if (checkout.hostId !== host.hostId)
-            V.fail('Incompatible', 'The daemon returned a checkout of another host.');
+            fail('Incompatible', 'The daemon returned a checkout of another host.');
       };
       const send =
         <K extends HostCommand>(operation: K) =>

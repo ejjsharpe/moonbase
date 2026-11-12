@@ -1,3 +1,4 @@
+import { getParentPath, getPathName, joinPath } from '@moonbase/contracts/paths';
 import type { DirectoryEntry } from '@moonbase/contracts/workspace';
 import type { MutationRunResult } from '@moonbase/application/editor';
 
@@ -51,9 +52,6 @@ export type TreeMove = { from: string; to: string; directory: boolean };
 /** One move the tree can undo: the entries it moved and what it was. */
 export type MoveRecord = { kind: 'rename' | 'move'; moves: TreeMove[] };
 
-const parentOf = (path: string) => path.split('/').slice(0, -1).join('/');
-const nameOf = (path: string) => path.split('/').at(-1)!;
-const join = (folder: string, name: string) => (folder ? `${folder}/${name}` : name);
 /** Whether `path` is `folder` or inside it; every path is inside the root, ''. */
 const within = (path: string, folder: string) =>
   !folder || path === folder || path.startsWith(folder + '/');
@@ -72,7 +70,7 @@ export function selectDraggedPaths(path: string, selection: readonly string[]) {
 /** The folder a drop over `row` lands in: a folder row's own, a file row's parent, else the root. */
 export function findDropFolder(row?: Pick<DirectoryEntry, 'path' | 'directory'>) {
   if (!row) return '';
-  return row.directory ? row.path : parentOf(row.path);
+  return row.directory ? row.path : getParentPath(row.path);
 }
 
 /**
@@ -87,11 +85,11 @@ export function planMove(
 ): { paths: string[] } | { refused: 'into-itself' | 'in-place' | 'collision' } {
   if (paths.some((path) => folder === path || folder.startsWith(path + '/')))
     return { refused: 'into-itself' };
-  const moving = paths.filter((path) => parentOf(path) !== folder);
+  const moving = paths.filter((path) => getParentPath(path) !== folder);
   const moved = new Set(paths.map(fold));
   if (
     listDroppedPaths(moving, folder).some((path) => moved.has(fold(path))) ||
-    findCollidingName(moving.map(nameOf))
+    findCollidingName(moving.map(getPathName))
   )
     return { refused: 'collision' };
   return moving.length ? { paths: moving } : { refused: 'in-place' };
@@ -136,7 +134,7 @@ export const isInDropRegion = (path: string, folder: string | null) =>
  * ('' for the root), the entry's new path for one.
  */
 export const getDropDestination = (paths: readonly string[], folder: string) =>
-  paths.length > 1 ? folder : join(folder, nameOf(paths[0]));
+  paths.length > 1 ? folder : joinPath(folder, getPathName(paths[0]));
 
 /** The first of `names` that another lands on, as the workspace folds names, or undefined. */
 export function findCollidingName(names: readonly string[]) {
@@ -150,7 +148,7 @@ export function findCollidingName(names: readonly string[]) {
 
 /** Where each of `paths` lands in `folder`. */
 export const listDroppedPaths = (paths: readonly string[], folder: string) =>
-  paths.map((path) => join(folder, nameOf(path)));
+  paths.map((path) => joinPath(folder, getPathName(path)));
 
 /** The folders to expand to show `path`'s row: each ancestor, and `path` itself. */
 export function listFoldersToExpand(path: string) {
@@ -171,7 +169,7 @@ export function describeUndo(record: MoveRecord) {
 export function listUndoMoves(moves: readonly TreeMove[]) {
   const groups = new Map<string, TreeMove[]>();
   for (const move of moves) {
-    const parent = parentOf(move.from);
+    const parent = getParentPath(move.from);
     groups.set(parent, [...(groups.get(parent) ?? []), move]);
   }
   return [...groups].map(([parent, group]) => ({
@@ -191,13 +189,13 @@ export function findUndoProblem(
   entriesIn: (folder: string) => readonly DirectoryEntry[] | undefined,
 ) {
   for (const move of moves) {
-    const entry = entriesIn(parentOf(move.to))?.find((entry) => entry.path === move.to);
+    const entry = entriesIn(getParentPath(move.to))?.find((entry) => entry.path === move.to);
     if (!entry || entry.directory !== move.directory)
       return `Can’t undo the move: ${move.to} is no longer there.`;
   }
   for (const move of moves) {
-    const entries = entriesIn(parentOf(move.from));
-    if (!entries) return `Can’t undo the move: the folder ${parentOf(move.from)} is gone.`;
+    const entries = entriesIn(getParentPath(move.from));
+    if (!entries) return `Can’t undo the move: the folder ${getParentPath(move.from)} is gone.`;
     // A rename that only changed case leaves its original spelling free.
     if (entries.some((entry) => fold(entry.path) === fold(move.from) && entry.path !== move.to))
       return `Can’t undo the move: ${move.from} is taken.`;

@@ -1,3 +1,4 @@
+import { O_NOFOLLOW_ANY } from './filesystem.ts';
 import { normalizeApplicationError } from '@moonbase/effect';
 import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
 import { chmodSync, constants, closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
@@ -35,10 +36,14 @@ export class Store {
     this.decoders = options.decoders;
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     this.directory = realpathSync(directory);
-    const fd = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000);
+    const fd = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | O_NOFOLLOW_ANY);
     closeSync(fd);
     const file = join(directory, options.file);
-    const databaseFile = openSync(file, constants.O_CREAT | constants.O_RDWR | 0x20000000, 0o600);
+    const databaseFile = openSync(
+      file,
+      constants.O_CREAT | constants.O_RDWR | O_NOFOLLOW_ANY,
+      0o600,
+    );
     closeSync(databaseFile);
     this.db = new DatabaseSync(file);
     try {

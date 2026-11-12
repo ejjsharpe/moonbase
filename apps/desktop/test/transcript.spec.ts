@@ -1,6 +1,6 @@
 import { disconnectChat } from './chat-target.ts';
 import { test, expect, type Page } from '@playwright/test';
-import { mkdir, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { readFindHighlight } from './find-highlight.ts';
 import {
@@ -14,7 +14,6 @@ import {
 import type * as readingPins from '../src/renderer/chat/reading-pin.ts';
 
 type ReadingPins = typeof readingPins;
-const output = resolve('../../test-results/transcript-111');
 const imagePng = (
   await readFile(new URL('./fixtures/images/checker.png', import.meta.url))
 ).toString('base64');
@@ -1005,7 +1004,7 @@ for (const [name, source, count, body] of [
   ['tabbed list continuation', '- item\n\n\t```js\r\n\t🌔 é\t  \r\n\t```\r\n', 1, '🌔 é\t  \r\n'],
   ['tabbed quote', '>\t```js\r\n>\t🌔 é\t  \r\n>\t```\r\n', 1, '🌔 é\t  \r\n'],
 ] as const)
-  test(`R2 code Copy uses the correct parser block: ${name}`, async ({ page }) => {
+  test(`code Copy uses the correct parser block: ${name}`, async ({ page }) => {
     await open(page);
     await page.evaluate((source) => window.demo.transcript!.live(source), source);
     const live = page.locator('[data-transcript-live]');
@@ -1020,8 +1019,6 @@ for (const [name, source, count, body] of [
     await expect
       .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
       .toBe(body.replace(/\r\n$/, ''));
-    await mkdir(output, { recursive: true });
-    await page.screenshot({ path: resolve(output, `r2-${name.replaceAll(' ', '-')}.png`) });
   });
 test('latest snapshot recovery diagnostics survive running metadata and pinned old live DOM', async ({
   page,
@@ -1071,8 +1068,6 @@ test('latest snapshot recovery diagnostics survive running metadata and pinned o
     'Uncertain · Current receipt needs recovery',
   );
   await expect(live.locator('pre')).toContainText('Retain this selected source');
-  await mkdir(output, { recursive: true });
-  await page.screenshot({ path: resolve(output, 'r1-current-status.png') });
 });
 
 test('safe GFM, literal user content, progressive source, exact native callbacks and normal/compact/200% reading', async ({
@@ -1141,10 +1136,8 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
   await expect(
     row.getByText('Published unknown record description', { exact: true }),
   ).toBeVisible();
-  await mkdir(output, { recursive: true });
   await page.setViewportSize({ width: 1440, height: 900 });
   await row.getByRole('heading').scrollIntoViewIfNeeded();
-  await page.screenshot({ path: resolve(output, 'normal.png') });
   await page.setViewportSize({ width: 640, height: 700 });
   await expect
     .poll(() =>
@@ -1156,12 +1149,10 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
     .toBe(587);
   await page.setViewportSize({ width: 540, height: 844 });
   await row.getByRole('heading').scrollIntoViewIfNeeded();
-  await page.screenshot({ path: resolve(output, 'compact.png') });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
   await page.setViewportSize({ width: 720, height: 450 });
-  await page.screenshot({ path: resolve(output, 'zoom-200.png') });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
@@ -1384,8 +1375,6 @@ test('partial Markdown cannot copy a different complete-source code node', async
     page.getByRole('alert').filter({ hasText: 'displayed code block changed' }),
   ).toBeVisible();
   expect(await page.evaluate(() => window.demo.transcript!.copied)).toEqual([]);
-  await mkdir(output, { recursive: true });
-  await page.screenshot({ path: resolve(output, 'r4-reinterpreted-code.png') });
   await expect(page.getByRole('status').filter({ hasText: 'Copied.' })).toHaveCount(0);
   await live.getByRole('button', { name: /^Read more/ }).click();
   await expect(live.locator('pre')).toHaveText('WRONG BLOCK');
@@ -1442,7 +1431,6 @@ test('Find reveals unloaded folded manifest parts and exact Unicode source while
     () => window.demo.application.chat!.getSnapshot().transcript.find.active,
   );
   expect(active?.start).toBe(70003);
-  await page.screenshot({ path: resolve('../../test-results/find-114/unloaded.png') });
   await find.press('Escape');
   await expect(find).toHaveCount(0);
   await expect(transcript(page)).toBeFocused();
@@ -2271,12 +2259,6 @@ for (const late of ['reply', 'error'] as const)
           firstCursors: [null, null],
           settled: false,
         });
-      if (late === 'reply') {
-        await mkdir(resolve('../../test-results/find-114'), { recursive: true });
-        await page.screenshot({
-          path: resolve('../../test-results/find-114/resume-zero-byte.png'),
-        });
-      }
       await page.evaluate(() => {
         const probe = (window as typeof window & { findResume: FindResumeProbe }).findResume;
         probe.manual = window.demo.application.chat!.jumpToEntry('reading-50').then(() => {});
@@ -2349,7 +2331,7 @@ for (const late of ['reply', 'error'] as const)
   });
 
 for (const activation of ['Control+f', 'Meta+f', 'Find button'])
-  test(`R3 ${activation} refocuses an already-open Find bar after reading navigation`, async ({
+  test(`${activation} refocuses an already-open Find bar after reading navigation`, async ({
     page,
   }) => {
     await page.goto('/?local&design&transcript');
@@ -2399,11 +2381,6 @@ for (const activation of ['Control+f', 'Meta+f', 'Find button'])
         .getByRole('button', { name: 'Find', exact: true })
         .click();
     else await page.keyboard.press(activation);
-    await page.screenshot({
-      path: resolve(
-        `../../test-results/find-114-r3/refocus-${activation.replaceAll(/[^a-z]/gi, '')}.png`,
-      ),
-    });
     expect(
       await page.evaluate(() => ({
         open: window.demo.application.chat!.getSnapshot().transcript.find.open,

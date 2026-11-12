@@ -1,8 +1,8 @@
+import { useStoredToggle } from '../hooks/use-stored-toggle.ts';
 import type { TranscriptNative } from '../../chat/wire.ts';
 import {
   Fragment,
   forwardRef,
-  useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -25,7 +25,7 @@ import { ChatView } from '../chat/view.tsx';
 import { checkoutName } from '@moonbase/ui/projects';
 import { homePath } from '../folder-menu.tsx';
 import { readOwn } from '@moonbase/application/editor';
-import { Icon } from '../icon.tsx';
+import { Icon } from '@moonbase/ui/icons';
 import {
   isFileDropTaken,
   Workbench,
@@ -126,25 +126,6 @@ function ownsPageKeys(element: HTMLElement | null) {
 }
 /** The window's shortcut on the editor's cheat sheet. */
 const windowShortcuts = [{ label: 'Project chats', keys: 'Meta+J' }];
-/** A remembered on/off choice, kept in this renderer's local storage. */
-function useStoredToggle(key: string) {
-  const [on, setOn] = useState(() => {
-    try {
-      return localStorage.getItem(key) === 'true';
-    } catch {
-      return false;
-    }
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem(key, String(on));
-    } catch {
-      // The choice lasts this session only.
-    }
-  }, [key, on]);
-  const toggle = useCallback(() => setOn((value) => !value), []);
-  return [on, toggle, setOn] as const;
-}
 const railWidth = (collapsed: boolean) => (collapsed ? 0 : 52);
 const dockDefaultWidth = 400,
   dockMinWidth = 320;

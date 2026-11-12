@@ -29,9 +29,9 @@ import {
   type ChatInput,
   type ChatOutput,
 } from '@moonbase/contracts/chat';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { ApplicationError, fail } from '@moonbase/contracts/errors';
 import { cid, eid } from './documents.ts';
-import * as V from './validation.ts';
+import { checkCursor, previewText } from './text.ts';
 import * as S from './private-schema.ts';
 
 /** Long reads yield to other work after this many parts. */
@@ -54,7 +54,7 @@ function getKey(harness: Harness) {
 export const hashJson = (value: unknown) =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const getLabel = (value: string, fallback = 'Tool') =>
-  V.preview(value, 128).text.replaceAll('\0', '').trim() || fallback;
+  previewText(value, 128).text.replaceAll('\0', '').trim() || fallback;
 export class NestedSourceRetired extends ApplicationError {
   constructor() {
     super({ code: 'Conflict', message: 'Nested tool source ended; reload the consistent view.' });
@@ -63,7 +63,7 @@ export class NestedSourceRetired extends ApplicationError {
 export function sealCursor(harness: Harness, value: S.TranscriptCursor) {
   const body = Buffer.from(JSON.stringify(value)).toString('base64url');
   const mac = createHmac('sha256', getKey(harness)).update(body).digest('base64url');
-  return V.cursor(body + '.' + mac);
+  return checkCursor(body + '.' + mac);
 }
 export function openCursor(
   harness: Harness,
@@ -86,13 +86,13 @@ export function openCursor(
     if (value.kind !== kind || value.binding !== binding) throw Error();
     return value;
   } catch {
-    return V.fail('InvalidInput', 'Transcript cursor does not belong to this read.');
+    return fail('InvalidInput', 'Transcript cursor does not belong to this read.');
   }
 }
 export async function readEntry(harness: Harness, target: ChatTarget, id: string) {
   const entry = await harness.commit((tx) => tx.entry(eid(id)), context);
   if (!entry || entry.conversationId !== cid(target.conversationId))
-    return V.fail('InvalidInput', 'Entry does not belong to this conversation.');
+    return fail('InvalidInput', 'Entry does not belong to this conversation.');
   return entry;
 }
 /**
@@ -141,7 +141,7 @@ export async function captureTranscript(
 ) {
   return harness.commit(async (tx) => {
     if (cache?.retired)
-      V.fail('Persistence', 'Pi live state was replaced. Reopen this conversation.');
+      fail('Persistence', 'Pi live state was replaced. Reopen this conversation.');
     // LiveDoc already exists for every Harness-created conversation; this read changes no fields.
     const live = JSON.parse(
       JSON.stringify(await tx.doc(LiveDoc, cid(target.conversationId))),
@@ -191,7 +191,7 @@ export function getLiveSource(
   )
     return undefined;
   if (task.conversationId !== cid(target.conversationId))
-    V.fail('Persistence', 'Live task authority is invalid.');
+    fail('Persistence', 'Live task authority is invalid.');
   const attempt = live.generation?.attempt ?? 0;
   const incarnation = createHmac('sha256', getKey(harness))
     .update(
@@ -292,7 +292,7 @@ function describePart(part: Part): ChatTranscriptPart {
     bytes,
     revision: getRevision(part),
     ...(part.encoding === 'utf8'
-      ? (part.memo.preview ??= V.preview(
+      ? (part.memo.preview ??= previewText(
           part.value.subarray(0, previewWindowBytes).toString('utf8'),
           256,
         ))
@@ -391,7 +391,10 @@ function* getMessageSteps(
     const common: Partial<ChatTranscriptPart> = {
       ...(state ? { state } : {}),
       ...(message.role === 'toolResult'
-        ? { toolName: getLabel(message.toolName), callId: V.preview(message.toolCallId, 256).text }
+        ? {
+            toolName: getLabel(message.toolName),
+            callId: previewText(message.toolCallId, 256).text,
+          }
         : {}),
     };
     const content =
@@ -443,7 +446,7 @@ function* getMessageSteps(
             value: { json: block.arguments },
             extra: {
               toolName: getLabel(block.name),
-              callId: V.preview(block.id, 256).text,
+              callId: previewText(block.id, 256).text,
               state: 'requested',
             },
           };
@@ -669,7 +672,7 @@ async function readSavedTranscript(
   if (!cached)
     return getEntryTranscript(harness, await readEntry(harness, target, entryId), signal);
   if (cached.conversationId !== cid(target.conversationId))
-    return V.fail('InvalidInput', 'Entry does not belong to this conversation.');
+    return fail('InvalidInput', 'Entry does not belong to this conversation.');
   return cached;
 }
 
@@ -687,7 +690,7 @@ async function readNestedCall(
     task.conversationId !== cid(target.conversationId) ||
     task.owner !== tool.parentTaskId
   )
-    return V.fail('Persistence', 'Nested tool authority is invalid.');
+    return fail('Persistence', 'Nested tool authority is invalid.');
   const input = task.input as ToolTaskInput;
   if (
     input.kind !== 'nested' ||
@@ -697,11 +700,11 @@ async function readNestedCall(
     input.call.name !== tool.name ||
     tool.callId !== `${input.parentCallId}/${input.key}`
   )
-    return V.fail('Persistence', 'Nested tool call identity is invalid.');
+    return fail('Persistence', 'Nested tool call identity is invalid.');
   const parent = await harness.getTask(input.parent, context);
   signal?.throwIfAborted();
   if (!parent || parent.kind !== 'pi.tool' || parent.conversationId !== task.conversationId)
-    return V.fail('Persistence', 'Nested tool parent authority is invalid.');
+    return fail('Persistence', 'Nested tool parent authority is invalid.');
   const record = await harness.snapshot(NestedCallDoc, input.parent, input.key, context);
   signal?.throwIfAborted();
   if (!record) {
@@ -712,15 +715,15 @@ async function readNestedCall(
       currentParent.kind !== 'pi.tool' ||
       currentParent.conversationId !== task.conversationId
     )
-      return V.fail('Persistence', 'Nested tool parent authority is invalid.');
+      return fail('Persistence', 'Nested tool parent authority is invalid.');
     if (currentParent.state.status === 'terminal' || currentParent.state.status === 'completing')
       throw new NestedSourceRetired();
-    return V.fail('Conflict', 'Nested tool source is unavailable; reload the consistent view.');
+    return fail('Conflict', 'Nested tool source is unavailable; reload the consistent view.');
   }
   if (record.taskId !== task.id || (record.result && record.result.taskId !== task.id))
-    return V.fail('Persistence', 'Retained nested result identity is invalid.');
+    return fail('Persistence', 'Retained nested result identity is invalid.');
   if (tool.status === 'done' && tool.summary && !record.result)
-    return V.fail('Conflict', 'Retained nested result is unavailable; reload the source.');
+    return fail('Conflict', 'Retained nested result is unavailable; reload the source.');
   return { task, input, result: record.result };
 }
 function getNestedOutput(
@@ -784,7 +787,7 @@ async function getLiveTranscript(
   signal?.throwIfAborted();
   const actual = getLiveSource(harness, source.target, capture);
   if (!actual || hashJson(actual) !== hashJson(source))
-    return V.fail('Conflict', 'Transcript source changed; reload the consistent view.');
+    return fail('Conflict', 'Transcript source changed; reload the consistent view.');
   const message = capture.live.generation?.message as Message | undefined;
   const generation: Part[] = [];
   for (const part of buildMessageParts(message ? [message] : [], 'generation.')) {
@@ -815,12 +818,12 @@ async function* listLiveParts(
     if (i >= capture.toolTasks.length) throw new Error('Live tool slot was not captured.');
     const task = capture.toolTasks[i];
     if (task && task.conversationId !== conversationId)
-      V.fail('Persistence', 'Live tool authority is invalid.');
+      fail('Persistence', 'Live tool authority is invalid.');
     const prefix = `tool${i}.`;
     const pairing = (task?.kind === 'pi.tool'
       ? await getTaskPairing(harness, task.conversationId, task.input as ToolTaskInput, signal)
       : undefined) ?? { pairing: 'unmatched' as const };
-    const call = { toolName: getLabel(tool.name), callId: V.preview(tool.callId, 256).text };
+    const call = { toolName: getLabel(tool.name), callId: previewText(tool.callId, 256).text };
     if (
       task?.kind === 'pi.tool' &&
       task.state.checkpoint &&
@@ -839,7 +842,7 @@ async function* listLiveParts(
     if (tool.entry) {
       const entry = capture.tools[i];
       if (!entry || entry.conversationId !== conversationId)
-        return V.fail('Persistence', 'Recorded tool result is unavailable.');
+        return fail('Persistence', 'Recorded tool result is unavailable.');
       for (const part of (await getEntryTranscript(harness, entry, signal)).parts)
         yield {
           ...part,
@@ -871,7 +874,7 @@ async function* listLiveParts(
     }
     const common = {
       toolName: getLabel(tool.name),
-      callId: V.preview(tool.callId, 256).text,
+      callId: previewText(tool.callId, 256).text,
       taskId: String(tool.taskId),
       parentTaskId: String(tool.parentTaskId),
       state,
@@ -985,7 +988,7 @@ async function projectManifest(
     revision !== undefined &&
     (seen.length < start || hashJson(seen.slice(0, start)) !== revision)
   )
-    V.fail('Conflict', 'Transcript manifest changed; reload the source.');
+    fail('Conflict', 'Transcript manifest changed; reload the source.');
   return {
     source,
     parts: page,
@@ -1037,14 +1040,14 @@ async function findPart(parts: TranscriptParts['parts'], partId: string) {
 /** Checks that the selection's fixed prefix still matches the part's value. */
 function checkSelection(part: Part | undefined, selection: ChatTranscriptSelection): Part {
   if (!part || !isAvailable(part))
-    return V.fail('InvalidInput', 'Transcript part is unavailable or invalid.');
+    return fail('InvalidInput', 'Transcript part is unavailable or invalid.');
   if (
     selection.bytes > part.value.length ||
     (selection.bytes === part.value.length
       ? getRevision(part)
       : hashPrefix(part, selection.bytes)) !== selection.revision
   )
-    return V.fail('Conflict', 'Transcript prefix changed; reload the selected part.');
+    return fail('Conflict', 'Transcript prefix changed; reload the selected part.');
   return part;
 }
 async function readSelectedPart(
@@ -1068,7 +1071,7 @@ async function readSelectedPart(
     selection.partId,
   );
   if (!current || !isAvailable(current))
-    V.fail('Conflict', 'Transcript part disappeared; reload the source.');
+    fail('Conflict', 'Transcript part disappeared; reload the source.');
   checkSelection(current, selection);
   signal?.throwIfAborted();
   return part;
@@ -1106,7 +1109,7 @@ export async function readTranscriptContent(
   const offset = input.cursor ? openCursor(harness, input.cursor, 'content', binding).position : 0;
   const part = await readSelectedPart(harness, source, selection, signal);
   signal?.throwIfAborted();
-  if (offset > selection.bytes) V.fail('InvalidInput', 'Invalid content position.');
+  if (offset > selection.bytes) fail('InvalidInput', 'Invalid content position.');
   const bytes = part.value;
   let end = Math.min(offset + chatContentChunkBytes, selection.bytes);
   if (part.encoding === 'utf8') {
@@ -1115,7 +1118,7 @@ export async function readTranscriptContent(
       (offset < bytes.length && (bytes[offset] & 0xc0) === 0x80) ||
       (selection.bytes < bytes.length && (bytes[selection.bytes] & 0xc0) === 0x80)
     )
-      V.fail('InvalidInput', 'Content selection splits Unicode.');
+      fail('InvalidInput', 'Content selection splits Unicode.');
   }
   return {
     kind: 'content',

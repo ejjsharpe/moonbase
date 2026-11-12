@@ -1,3 +1,4 @@
+import { createElement } from 'react';
 import {
   IconBook,
   IconBraces,
@@ -278,4 +279,13 @@ export function findFileTypeMark(name: string): FileTypeMark | null {
   if (!mark) return null;
   const { label, hue } = mark.variants?.get(extension) ?? mark;
   return { label, hue };
+}
+
+/** The icon for the kind of file at `path`, such as TypeScript or an image. */
+export function FileIcon({ path }: { path: string }) {
+  return createElement(fileIcons[findFileIcon(path)], {
+    size: 16,
+    stroke: 1.5,
+    'aria-hidden': true,
+  });
 }

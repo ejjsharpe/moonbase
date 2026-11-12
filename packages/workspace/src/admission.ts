@@ -1,12 +1,21 @@
 import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
-import { Effect, Fiber, FiberSet } from 'effect';
+import { Cause, Effect, Exit, Fiber, FiberSet } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import { fail } from './validation.ts';
+import { fail } from '@moonbase/contracts/errors';
 
 export const applicationError = (error: unknown, code: ApplicationError['code'] = 'Unavailable') =>
   ApplicationError.is(error)
     ? error
     : new ApplicationError({ code, message: normalizeApplicationError(error).message });
+
+/** Runs every release in order, even after one fails, then fails with all their failures. */
+export const releaseAll = (releases: readonly Effect.Effect<void>[]): Effect.Effect<void> =>
+  Effect.flatMap(Effect.forEach(releases, Effect.exit), (exits) => {
+    const failures = exits.flatMap((exit) => (Exit.isFailure(exit) ? [exit.cause] : []));
+    return failures.length
+      ? Effect.failCause(failures.reduce((all, cause) => Cause.combine(all, cause)))
+      : Effect.void;
+  });
 
 /** What admission needs of its owner: whether it still accepts work, and where work is tracked. */
 export type AdmissionOwner = {

@@ -1,9 +1,10 @@
+import { hostTokenPattern } from '@moonbase/contracts/host';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { Effect, Layer, Queue, Semaphore, Stream, type Cause } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { ApplicationError, fail } from '@moonbase/contracts/errors';
 import type { ConnectionProfile, ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { decodeConnectionInput } from '@moonbase/contracts/connection-schema';
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
@@ -12,7 +13,8 @@ import { chatProtocolVersion, type ChatHostHealth } from '@moonbase/contracts/ho
 import { ConnectionService, type ConnectionServiceShape } from '@moonbase/contracts/services';
 import { releaseResource } from '@moonbase/effect';
 import { checkHostHealth } from '@moonbase/ssh/host-health';
-import * as V from './validation.ts';
+import { isSameChatHost } from '@moonbase/contracts/chat-validation';
+import { readObject } from '@moonbase/contracts/common';
 
 export type LoopbackConnectionConfiguration = {
   /** The absolute data directory of a daemon on this machine. */
@@ -95,7 +97,7 @@ async function readDaemonFiles(directory: string) {
   ]);
   const host = parseIdentity(identity);
   const { port, pid, protocol } = parse(endpoint, (value) => {
-    const record = V.object(value, ['port', 'pid', 'version', 'protocol', 'build']);
+    const record = readObject(value, ['port', 'pid', 'version', 'protocol', 'build']);
     if (
       !Number.isSafeInteger(record.port) ||
       (record.port as number) < 1 ||
@@ -114,7 +116,7 @@ async function readDaemonFiles(directory: string) {
   if (protocol !== chatProtocolVersion)
     throw failure('Incompatible', 'The daemon speaks another protocol version.');
   const key = token.trim();
-  if (!/^[\x21-\x7e]{16,4096}$/.test(key)) throw malformed();
+  if (!hostTokenPattern.test(key)) throw malformed();
   return { expected: host, origin: `http://127.0.0.1:${port}`, port, pid, token: key };
 }
 
@@ -195,7 +197,7 @@ export function LoopbackConnectionLive(
         yield* isOpen;
         const files = yield* read().pipe(
           Effect.tap((files) =>
-            V.sameHost(files.expected, expected)
+            isSameChatHost(files.expected, expected)
               ? Effect.void
               : Effect.fail(
                   failure('Incompatible', 'The daemon’s host or store identity changed.'),
@@ -251,7 +253,7 @@ export function LoopbackConnectionLive(
             Effect.try({
               try: () => {
                 if (decodeConnectionInput('connect', input).profileId !== loopbackProfileId)
-                  V.fail('InvalidInput', 'Choose the loopback connection profile.');
+                  fail('InvalidInput', 'Choose the loopback connection profile.');
               },
               catch: ApplicationError.fromUnknown,
             }),
@@ -280,16 +282,13 @@ export function LoopbackConnectionLive(
         endpoint: (input) =>
           Effect.try({
             try: () => {
-              V.object(input, ['host']);
+              readObject(input, ['host']);
               const host = decodeChatHostTarget(input.host);
-              if (closed) V.fail('Unavailable', 'Loopback connection scope is closed.');
-              if (!V.sameHost(host, expected))
-                V.fail('Conflict', 'Connection target does not match the daemon’s host and store.');
+              if (closed) fail('Unavailable', 'Loopback connection scope is closed.');
+              if (!isSameChatHost(host, expected))
+                fail('Conflict', 'Connection target does not match the daemon’s host and store.');
               if (!current || state.state !== 'connected' || state.connectionId !== current.id)
-                V.fail(
-                  'Unavailable',
-                  'No verified connection is available for that host and store.',
-                );
+                fail('Unavailable', 'No verified connection is available for that host and store.');
               return structuredClone({
                 origin: current!.origin,
                 token: current!.token,

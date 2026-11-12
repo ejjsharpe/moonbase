@@ -1,6 +1,7 @@
+import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
-import { Cause, Deferred, Effect, Exit, Scope, type FiberSet } from 'effect';
+import { Cause, Effect, Exit, Scope, type FiberSet } from 'effect';
 import { releaseResource } from '@moonbase/effect';
 import { decodeWorkspaceInput, decodeWorkspaceOutput } from '@moonbase/contracts/workspace-schema';
 import type {
@@ -15,16 +16,14 @@ import {
   type WorkspaceCommand,
   type WorkspaceOperation,
 } from '@moonbase/contracts/workspace';
-import { admit, applicationError, type AdmissionOwner } from './admission.ts';
+import { admit, applicationError, releaseAll, type AdmissionOwner } from './admission.ts';
 import { ClientStore } from './client-store.ts';
 import type { OperationRecord, SaveRecord } from './client-schema.ts';
 import { WorkspaceRecovery, type HostPorts, type Recoveries } from './recovery.ts';
 import {
-  affected,
   canonical,
   ensure,
   errorText,
-  fail,
   folded,
   hash,
   identifier,
@@ -32,6 +31,7 @@ import {
   path,
   textDocument,
 } from './validation.ts';
+import { fail } from '@moonbase/contracts/errors';
 
 export type ClientOwnership = {
   operations: FiberSet.FiberSet<unknown, ApplicationError>;
@@ -61,8 +61,6 @@ export class ClientWorkspace implements AdmissionOwner {
   readonly service: WorkspaceServiceShape;
   readonly recovery: WorkspaceRecovery;
   readonly signals = new Set<AbortController>();
-  readonly closeCompletion = Deferred.makeUnsafe<void>();
-  closing = false;
   closed = false;
   private readonly installationId: string;
   /** Calls under a stored request ID that are in flight, so a concurrent duplicate shares one. */
@@ -457,32 +455,22 @@ export class ClientWorkspace implements AdmissionOwner {
       (draftPath) =>
         destinations.some(
           (destination, i) =>
-            affected(folded(draftPath), folded(destination)) &&
-            (create || input.kind === 'import' || !affected(draftPath, sources[i] ?? '')),
+            isPathAtOrInside(folded(draftPath), folded(destination)) &&
+            (create || input.kind === 'import' || !isPathAtOrInside(draftPath, sources[i] ?? '')),
         ),
       recoveries,
     );
   }
 
+  /** Called once, by the client layer's finalizer: refuses new work, aborts it, then releases. */
   close(): Effect.Effect<void> {
     return Effect.suspend(() => {
-      if (this.closing) return Deferred.await(this.closeCompletion);
-      this.closing = this.closed = true;
+      this.closed = true;
       for (const signal of this.signals) signal.abort();
-      return Effect.gen({ self: this }, function* () {
-        const outcomes = yield* Effect.forEach(
-          [
-            Scope.close(this.ownership.operationScope, Exit.void),
-            releaseResource(() => this.store.close()),
-          ],
-          Effect.exit,
-        );
-        const failures = outcomes.flatMap((exit) => (Exit.isFailure(exit) ? [exit.cause] : []));
-        if (failures.length)
-          return yield* Effect.failCause(
-            failures.reduce((combined, cause) => Cause.combine(combined, cause)),
-          );
-      }).pipe(Effect.onExit((exit) => Deferred.done(this.closeCompletion, exit)));
+      return releaseAll([
+        Scope.close(this.ownership.operationScope, Exit.void),
+        releaseResource(() => this.store.close()),
+      ]);
     }).pipe(Effect.uninterruptible);
   }
 }

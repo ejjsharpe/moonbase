@@ -1,9 +1,10 @@
+import { isPathAtOrInside } from '@moonbase/contracts/paths';
+import { fail } from '@moonbase/contracts/errors';
 import { normalizeApplicationError } from '@moonbase/effect';
 import { decodeEditorRecovery, isWellFormed } from '@moonbase/contracts/workspace-schema';
 import { isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
 import {
-  ApplicationError,
   maximumFileBytes,
   type CheckoutTarget,
   type EditorRecovery,
@@ -12,9 +13,6 @@ import {
   type OperationResult,
   type WorkspaceOperation,
 } from '@moonbase/contracts/workspace';
-export const fail = (code: ApplicationError['code'], message: string): never => {
-  throw new ApplicationError({ code, message });
-};
 export const ensure: (condition: unknown, message: string) => asserts condition = (
   condition,
   message,
@@ -224,7 +222,6 @@ export function recovery(input: unknown, clientId: string): EditorRecovery {
 }
 /** Journal key of one request: a hash of its owner and identifier parts. */
 export const key = (...parts: string[]) => hash(canonical(parts));
-export const affected = (p: string, source: string) => p === source || p.startsWith(source + '/');
 /** An item that reports its own source or destination, not a replacement moved to Trash. */
 export const isOriginalResult = (
   kind: WorkspaceOperation['kind'],
@@ -237,6 +234,9 @@ export const overlaps = (a: string[], b: string[]) =>
   a.some((p) =>
     b.some(
       (q) =>
-        p === '' || q === '' || affected(folded(p), folded(q)) || affected(folded(q), folded(p)),
+        p === '' ||
+        q === '' ||
+        isPathAtOrInside(folded(p), folded(q)) ||
+        isPathAtOrInside(folded(q), folded(p)),
     ),
   );

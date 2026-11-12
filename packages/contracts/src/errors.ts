@@ -2,6 +2,10 @@ import type { FileTarget } from './workspace.ts';
 import type { ApplicationErrorCodeSchema } from './error-schema.ts';
 
 export type ApplicationErrorCode = typeof ApplicationErrorCodeSchema.Type;
+/** Throws an `ApplicationError`; typed `never` so it can end an expression. */
+export function fail(code: ApplicationErrorCode, message: string): never {
+  throw new ApplicationError({ code, message });
+}
 export class ApplicationError extends Error {
   // oxlint-disable-next-line no-unused-private-class-members -- Private-brand membership below authenticates errors without trusting public fields.
   #applicationError = true;
@@ -15,11 +19,7 @@ export class ApplicationError extends Error {
     this.target = options.target;
   }
   static is(value: unknown): value is ApplicationError {
-    try {
-      return typeof value === 'object' && value !== null && #applicationError in value;
-    } catch {
-      return false;
-    }
+    return typeof value === 'object' && value !== null && #applicationError in value;
   }
   static fromUnknown(value: unknown): ApplicationError {
     if (ApplicationError.is(value)) return value;

@@ -1,11 +1,10 @@
 import { useRef, type Ref } from 'react';
 import { Menu } from '@base-ui/react/menu';
 import * as stylex from '@stylexjs/stylex';
-import type { icons } from '@moonbase/ui/icons';
+import { Icon, type icons } from '@moonbase/ui/icons';
 import { controls } from '@moonbase/ui/controls';
 import { filesUI } from '@moonbase/ui/files';
 import { overlays } from '@moonbase/ui/overlays';
-import { Icon } from './icon.tsx';
 
 export type ExplorerAction =
   | {

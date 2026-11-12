@@ -1,3 +1,4 @@
+import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { decodeEditorRecovery } from '@moonbase/contracts/workspace-schema';
 import { readOwn } from '../features/editor/record.ts';
 import { Effect, Layer, Queue, Stream } from 'effect';
@@ -47,7 +48,6 @@ const pathCheck = (path: string, directory = false) => {
   )
     fail('Invalid relative path.');
 };
-const affected = (path: string, source: string) => path === source || path.startsWith(source + '/');
 
 // Independent subsequence matching, with quoted contiguous terms and basename/adjacency preference.
 function match(path: string, query: string): LookupMatch | undefined {
@@ -212,7 +212,7 @@ export function memoryWorkspace(seeds: Seed[]) {
           if (
             item.outcome === 'completed' &&
             item.destination &&
-            affected(target.path, item.source)
+            isPathAtOrInside(target.path, item.source)
           )
             target = { ...target, path: item.destination + target.path.slice(item.source.length) };
       return fileKey(target);
@@ -242,7 +242,7 @@ export function memoryWorkspace(seeds: Seed[]) {
       }
       for (const item of result.items.filter((item) => item.outcome === 'completed')) {
         const move = (path: string) =>
-          item.destination && affected(path, item.source)
+          item.destination && isPathAtOrInside(path, item.source)
             ? item.destination + path.slice(item.source.length)
             : path;
         if (result.kind === 'move') {
@@ -259,7 +259,7 @@ export function memoryWorkspace(seeds: Seed[]) {
           for (const draft of [...state.drafts]) {
             if (
               checkoutKey(draft.target.checkout) !== checkoutKey(result.checkout) ||
-              !affected(draft.target.path, item.source)
+              !isPathAtOrInside(draft.target.path, item.source)
             )
               continue;
             const target = { checkout: result.checkout, path: move(draft.target.path) };
@@ -388,7 +388,7 @@ export function memoryWorkspace(seeds: Seed[]) {
             directory: entry.directory,
             ...(includeIgnoredStatus === false
               ? {}
-              : { ignored: seed.ignored?.some((item) => affected(name, item)) ?? false }),
+              : { ignored: seed.ignored?.some((item) => isPathAtOrInside(name, item)) ?? false }),
           }));
         return {
           entries: values
@@ -410,7 +410,7 @@ export function memoryWorkspace(seeds: Seed[]) {
             fail('Ignore paths must be immediate directory children.');
         }
         return {
-          paths: paths.filter((name) => seed.ignored?.some((item) => affected(name, item))),
+          paths: paths.filter((name) => seed.ignored?.some((item) => isPathAtOrInside(name, item))),
         };
       }),
     gitStatus: ({ checkout }) =>
@@ -439,7 +439,7 @@ export function memoryWorkspace(seeds: Seed[]) {
             staged = readOwn(seed.index, path),
             index = staged ?? head;
           if (index === undefined) {
-            if (!seed.ignored?.some((item) => affected(path, item)))
+            if (!seed.ignored?.some((item) => isPathAtOrInside(path, item)))
               changes.push({ path, area: 'untracked', kind: 'untracked' });
           } else if (!entry) changes.push({ path, area: 'unstaged', kind: 'deleted' });
           else if (entry.text !== index) changes.push({ path, area: 'unstaged', kind: 'modified' });
@@ -536,7 +536,7 @@ export function memoryWorkspace(seeds: Seed[]) {
         const eligible = (path: string) =>
           entries(checkout).has(path) &&
           !entries(checkout).get(path)!.directory &&
-          !seed.ignored?.some((item) => affected(path, item));
+          !seed.ignored?.some((item) => isPathAtOrInside(path, item));
         const recent = [...new Set(history)]
           .filter((path) => entries(checkout).has(path) && !entries(checkout).get(path)!.directory)
           .map((path) => match(path, query))
@@ -568,7 +568,7 @@ export function memoryWorkspace(seeds: Seed[]) {
         const files = [...entries(checkout)]
           .filter(
             ([path, entry]) =>
-              !entry.directory && !seed.ignored?.some((item) => affected(path, item)),
+              !entry.directory && !seed.ignored?.some((item) => isPathAtOrInside(path, item)),
           )
           .map(([path]) => {
             // The same limits as the workspace: 512-character lines, 64 ranges, 50 matches a file.
@@ -660,7 +660,8 @@ export function memoryWorkspace(seeds: Seed[]) {
           if (
             operation.sources.some((source) =>
               operation.sources.some(
-                (other) => other !== source && affected(source.target.path, other.target.path),
+                (other) =>
+                  other !== source && isPathAtOrInside(source.target.path, other.target.path),
               ),
             )
           )
@@ -680,7 +681,7 @@ export function memoryWorkspace(seeds: Seed[]) {
           if (collision && !operation.replacements?.some((ref) => ref.target.path === collision))
             fail('Destination exists. Explicit replacement consent required.', 'Conflict');
           if (collision)
-            for (const path of map.keys()) if (affected(path, collision)) map.delete(path);
+            for (const path of map.keys()) if (isPathAtOrInside(path, collision)) map.delete(path);
           const parent = destination.split('/').slice(0, -1).join('/');
           if (parent && !map.get(parent)?.directory)
             fail('Destination parent unavailable.', 'Unavailable');
@@ -697,10 +698,12 @@ export function memoryWorkspace(seeds: Seed[]) {
           for (const source of operation.sources) {
             const destination = destinationOf(source.target.path);
             if (operation.kind !== 'trash' && !destination) fail('Destination required.');
-            if (destination && affected(destination, source.target.path))
+            if (destination && isPathAtOrInside(destination, source.target.path))
               fail('Cannot transfer an entry into itself.');
             if (destination) replace(destination, source.target.path);
-            const selected = [...map].filter(([path]) => affected(path, source.target.path));
+            const selected = [...map].filter(([path]) =>
+              isPathAtOrInside(path, source.target.path),
+            );
             for (const [path, entry] of selected) {
               if (destination)
                 map.set(destination + path.slice(source.target.path.length), {

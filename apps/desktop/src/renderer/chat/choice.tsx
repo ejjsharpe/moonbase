@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { Select } from '@base-ui/react/select';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
-import { Icon } from '../icon.tsx';
+import { Icon } from '@moonbase/ui/icons';
 import { overlays } from '@moonbase/ui/overlays';
 import { colors, radius } from '@moonbase/ui/tokens.stylex';
 

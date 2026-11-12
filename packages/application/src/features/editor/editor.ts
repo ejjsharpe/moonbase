@@ -1,3 +1,4 @@
+import { getParentPath, isPathAtOrInside } from '@moonbase/contracts/paths';
 import { EditorDiscovery } from './discovery.ts';
 import { EditorPreservation, type ConfirmedClose } from './preservation.ts';
 import { RecoveryPublications, type PublicationOptions } from './recovery-publications.ts';
@@ -61,7 +62,6 @@ const operationKey = (clientId: string, id: string) => JSON.stringify([clientId,
 const deferObservation = Symbol('defer recovery observation');
 const definitiveNonAdmission = (error: unknown) =>
   ApplicationError.is(error) && error.code === 'InvalidInput';
-const affected = (path: string, parent: string) => path === parent || path.startsWith(parent + '/');
 /**
  * The paths an operation writes: each entry's path in a batch's destination folder (which may be
  * the root), or one destination path.
@@ -72,7 +72,6 @@ function listOperationDestinations(operation: WorkspaceOperation) {
     return getMutationDestinations(operation.sources, operation.destination).destinations;
   return operation.destination ? [operation.destination] : [];
 }
-const parentOf = (path: string) => path.split('/').slice(0, -1).join('/');
 const validPath = (path: string, directory = false) => {
   if (directory && path === '') return;
   if (
@@ -1403,7 +1402,7 @@ class EditorModelState {
       this.recovery.checkouts.some((item) => sameCheckout(item, checkout)) &&
       (options.current?.() ?? true);
     const findListed = (path: string) =>
-      this.listings[JSON.stringify([key, parentOf(path)])]?.entries.find(
+      this.listings[JSON.stringify([key, getParentPath(path)])]?.entries.find(
         (entry) => entry.path === path,
       );
     const parts = target.path.split('/'),
@@ -1413,7 +1412,7 @@ class EditorModelState {
       for (const path of levels) {
         let entry = findListed(path);
         if (!entry) {
-          const listing = await this.listCheckout(checkout, parentOf(path), report);
+          const listing = await this.listCheckout(checkout, getParentPath(path), report);
           if (!isCurrent()) return false;
           entry = findListed(path) ?? listing.entries.find((item) => item.path === path);
           if (!entry)
@@ -1432,7 +1431,7 @@ class EditorModelState {
             unclassified.map((path) =>
               this.command(
                 'getIgnoredPaths',
-                { checkout, path: parentOf(path), paths: [path] },
+                { checkout, path: getParentPath(path), paths: [path] },
                 scope,
                 report,
               ),
@@ -1672,9 +1671,11 @@ class EditorModelState {
       [...this.buffers.values()].some(
         (buffer) =>
           sameCheckout(buffer.target.checkout, operation.checkout) &&
-          !operation.sources.some((source) => affected(buffer.target.path, source.target.path)) &&
+          !operation.sources.some((source) =>
+            isPathAtOrInside(buffer.target.path, source.target.path),
+          ) &&
           replacementPaths.some((path) =>
-            affected(
+            isPathAtOrInside(
               buffer.target.path.normalize('NFC').toLowerCase(),
               path.normalize('NFC').toLowerCase(),
             ),
@@ -1688,7 +1689,9 @@ class EditorModelState {
       [...this.buffers.values()].some(
         (buffer) =>
           sameCheckout(buffer.target.checkout, operation.checkout) &&
-          operation.sources.some((source) => affected(buffer.target.path, source.target.path)) &&
+          operation.sources.some((source) =>
+            isPathAtOrInside(buffer.target.path, source.target.path),
+          ) &&
           (buffer.saving || buffer.pendingSave),
       )
     )
@@ -1775,7 +1778,9 @@ class EditorModelState {
           ]);
       return (
         !paths.length ||
-        paths.some((path) => affected(target.path, path) || affected(path, target.path))
+        paths.some(
+          (path) => isPathAtOrInside(target.path, path) || isPathAtOrInside(path, target.path),
+        )
       );
     });
   }
@@ -1825,7 +1830,7 @@ class EditorModelState {
         const durableCopies = durable.drafts.filter(
           (draft) =>
             sameCheckout(draft.target.checkout, result.checkout) &&
-            affected(draft.target.path, item.destination!),
+            isPathAtOrInside(draft.target.path, item.destination!),
         );
         for (const draft of durableCopies)
           if (
@@ -1840,7 +1845,7 @@ class EditorModelState {
         for (const buffer of known.copies ?? [])
           if (
             sameCheckout(buffer.target.checkout, result.checkout) &&
-            affected(buffer.target.path, item.source) &&
+            isPathAtOrInside(buffer.target.path, item.source) &&
             buffer.text !== buffer.disk.text
           ) {
             const target = {
@@ -1994,10 +1999,11 @@ class EditorModelState {
   }
   private moveReferences(checkout: CheckoutTarget, source: string, destination: string) {
     const move = (path: string) =>
-      affected(path, source) ? destination + path.slice(source.length) : path;
+      isPathAtOrInside(path, source) ? destination + path.slice(source.length) : path;
     const incoming = [...this.buffers.values()].filter(
       (buffer) =>
-        sameCheckout(buffer.target.checkout, checkout) && affected(buffer.target.path, source),
+        sameCheckout(buffer.target.checkout, checkout) &&
+        isPathAtOrInside(buffer.target.path, source),
     );
     if (
       incoming.some((buffer) =>
@@ -2019,7 +2025,10 @@ class EditorModelState {
     this.checkout(checkout, false);
     // oxlint-disable-next-line no-useless-spread -- Renaming reinserts buffers; visit each original buffer once.
     for (const [key, buffer] of [...this.buffers])
-      if (sameCheckout(buffer.target.checkout, checkout) && affected(buffer.target.path, source)) {
+      if (
+        sameCheckout(buffer.target.checkout, checkout) &&
+        isPathAtOrInside(buffer.target.path, source)
+      ) {
         this.buffers.delete(key);
         this.comparisonAttempts.delete(key);
         buffer.target = { checkout, path: move(buffer.target.path) };

@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { fail } from './validation.ts';
+import { fail } from '@moonbase/contracts/errors';
 
 /** RFC 6455 framing for the daemon's WebSocket: binary messages, pings and close, no extensions. */
 export const webSocketOpcodes = {

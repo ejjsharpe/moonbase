@@ -22,7 +22,9 @@ import type {
   ChatRun,
 } from '@moonbase/contracts/chat';
 import { Metadata, cid, eid, getSettings, type ChatSettings } from './documents.ts';
-import * as V from './validation.ts';
+import { checkCursor, previewText } from './text.ts';
+import { readObject } from '@moonbase/contracts/common';
+import { fail } from '@moonbase/contracts/errors';
 import * as S from './private-schema.ts';
 import {
   NestedSourceRetired,
@@ -68,21 +70,25 @@ const readCursor = (
   try {
     const decoded = S.cursorEnvelope(
       JSON.parse(
-        new TextDecoder('utf8', { fatal: true }).decode(Buffer.from(V.cursor(value), 'base64url')),
+        new TextDecoder('utf8', { fatal: true }).decode(
+          Buffer.from(checkCursor(value), 'base64url'),
+        ),
       ),
     );
     if (decoded.kind !== kind || decoded.conversationId !== conversationId) throw Error();
     return decoded.scan === null || decoded.scan?.start === true
       ? undefined
-      : (V.object(decoded.scan) as Cursor);
+      : (readObject(decoded.scan) as Cursor);
   } catch {
-    return V.fail('InvalidInput', 'This history cursor belongs to another view or is invalid.');
+    return fail('InvalidInput', 'This history cursor belongs to another view or is invalid.');
   }
 };
 const writeCursor = (scan: Cursor | undefined, kind: string, conversationId?: string) =>
   scan === undefined
     ? null
-    : V.cursor(Buffer.from(JSON.stringify({ kind, conversationId, scan })).toString('base64url'));
+    : checkCursor(
+        Buffer.from(JSON.stringify({ kind, conversationId, scan })).toString('base64url'),
+      );
 
 export function summarizeConversation(
   session: ChatSession,
@@ -321,7 +327,7 @@ async function projectSnapshotOnce(
       run = {
         stop: { target, submissionId: String(submissionId), taskId: String(live.run.taskId) },
         state: runState,
-        ...V.preview(
+        ...previewText(
           live.generation?.message?.content
             .filter((part) => part.type === 'text')
             .map((part) => part.text)
@@ -413,7 +419,7 @@ export async function projectEntry(
     return {
       id: String(entry.id),
       role: 'system',
-      ...V.preview(transcript.parts[0]?.text ?? 'Transcript record.'),
+      ...previewText(transcript.parts[0]?.text ?? 'Transcript record.'),
       transcript,
     };
   const role = message.role === 'toolResult' ? 'tool' : message.role;
@@ -441,9 +447,9 @@ export async function projectEntry(
     transcript,
     role,
     ...(Number.isFinite(recorded.getTime()) ? { createdAt: recorded.toISOString() } : {}),
-    ...V.preview(failed ? 'Model response failed.' : text || empty || ''),
+    ...previewText(failed ? 'Model response failed.' : text || empty || ''),
     ...(message.role === 'toolResult'
-      ? { toolName: V.preview(message.toolName, 128).text, isError: message.isError }
+      ? { toolName: previewText(message.toolName, 128).text, isError: message.isError }
       : {}),
   };
 }
@@ -479,7 +485,7 @@ export async function readHistoryAround(
   }
   if (cursor) {
     if (!cursor.direction || !cursor.upper)
-      return V.fail('InvalidInput', 'Invalid history direction.');
+      return fail('InvalidInput', 'Invalid history direction.');
     await collect(cursor.direction, cursor.position, rowsPerPage);
   } else {
     await collect('older', Number(input.entryId), rowsPerPage / 2);

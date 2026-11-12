@@ -103,7 +103,6 @@ test('browser shell keeps dirty comparisons, cursor, scroll, Monaco undo and sco
       window.demo.chat.calls.filter((call) => ['sendChat', 'stopChat'].includes(call)),
     ),
   ).toEqual([]);
-  await page.screenshot({ path: 'test-results/shared-workbench-project.png', fullPage: true });
   expect(errors).toEqual([]);
 });
 
@@ -251,7 +250,6 @@ test('reopened projects append to the tab strip and open projects keep their slo
   await expect(
     projects.getByRole('tab', { name: 'other · main', exact: true }).locator('..'),
   ).toHaveCSS('transform', 'none');
-  await page.screenshot({ path: test.info().outputPath('reopened-project-tabs.png') });
 });
 
 for (const closed of ['moonbase', 'other', 'third']) {
@@ -660,7 +658,6 @@ test('optional Chat initialization failure remains visible and explicit retry op
   await page.evaluate(() => window.demo.retryChat());
   await shell(page).getByRole('button', { name: 'Open Chat panel', exact: true }).click();
   await expect(shell(page).getByRole('button', { name: 'Connect', exact: true })).toBeVisible();
-  await page.screenshot({ path: 'test-results/shared-workbench-chat.png', fullPage: true });
 });
 
 test('Agents opens first and accepts a preserved draft without a project or saved chat', async ({
@@ -751,9 +748,6 @@ test('local model and effort defaults yield to preferences across new chats and 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(effort).toBeInViewport();
   await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeInViewport();
-  await page.screenshot({
-    path: '../../test-results/redesign-review/model-preferences-compact.png',
-  });
   await page.evaluate(() =>
     window.demo.application.chat!.setModelPreference({
       model: { provider: 'openai', modelId: 'retired-model' },
@@ -1017,7 +1011,6 @@ test('the project rail shows coded tiles and peeks at a project on hover without
   await expect(closeProject).toHaveCSS('opacity', '0');
   await expect(peek).toBeHidden();
   const tileBounds = await tile(project).boundingBox();
-  await rail.screenshot({ path: '../../test-results/redesign-review/rail-idle.png' });
   await project.hover();
   await expect(peek).toBeVisible();
   await expect(peek).toContainText('moonbase');
@@ -1027,7 +1020,6 @@ test('the project rail shows coded tiles and peeks at a project on hover without
   await expect(rail).toHaveCSS('width', '52px');
   expect(await tile(project).boundingBox()).toEqual(tileBounds);
   expect((await peek.boundingBox())!.x).toBeGreaterThanOrEqual(52);
-  await page.screenshot({ path: '../../test-results/redesign-review/rail-peek.png' });
   await page.mouse.move(900, 400);
   await expect(peek).toBeHidden();
   await expect(closeProject).toHaveCSS('opacity', '0');
@@ -1088,7 +1080,6 @@ test('the rail keeps one tile per project and the sidebar header switches its wo
   await expect(
     menu.getByRole('menuitem', { name: 'legend-list · feat/legend-list, current', exact: true }),
   ).toBeDisabled();
-  await page.screenshot({ path: '../../test-results/redesign-review/worktree-switcher.png' });
   await menu.getByRole('menuitem', { name: 'moonbase · main', exact: true }).click();
   const project = projects.getByRole('tab', { name: 'moonbase · main', exact: true });
   await expect(project).toHaveAttribute('aria-selected', 'true');
@@ -1140,7 +1131,6 @@ test('the project dock shows only that project’s chats, with a back arrow to t
   const chat = list.getByRole('button', { name: /Tidy the rail peek spacing/ });
   await expect(list.getByRole('button')).toHaveCount(1);
   await expect(chat).toHaveAttribute('aria-pressed', 'true');
-  await page.screenshot({ path: '../../test-results/redesign-review/project-dock-list.png' });
   await chat.click();
   await expect(title).toBeVisible();
   await page.evaluate(() => window.demo.first.openCheckout('/demo/other'));
@@ -1220,7 +1210,6 @@ test('the project dock resizes by dragging or keys, expands and closes', async (
   const widest = Number(await edge.getAttribute('aria-valuemax'));
   await dock.getByRole('button', { name: 'Expand project chats', exact: true }).click();
   await expect.poll(width).toBe(widest);
-  await page.screenshot({ path: '../../test-results/redesign-review/project-dock-expanded.png' });
   await dock.getByRole('button', { name: 'Restore project chats width', exact: true }).click();
   await expect.poll(width).toBe(340);
   await dock.getByRole('button', { name: 'Hide project chats', exact: true }).click();
@@ -1502,7 +1491,6 @@ test('design fixture renders first-message composition, pinned navigation and co
       .locator('svg')
       .getAttribute('class'),
   ).toContain('tabler-icon');
-  await page.screenshot({ path: '../../test-results/redesign-review/desktop.png', fullPage: true });
   await message.fill('Review the desktop shell and editor');
   await message.press('Enter');
   await expect(
@@ -1515,10 +1503,6 @@ test('design fixture renders first-message composition, pinned navigation and co
       window.demo.chat.calls.filter((call) => ['createChat', 'sendChat'].includes(call)),
     ),
   ).toEqual(['createChat', 'sendChat']);
-  await page.screenshot({
-    path: '../../test-results/redesign-review/conversation.png',
-    fullPage: true,
-  });
   await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
   await expect(
     page.getByRole('button', { name: 'Explorer actions', exact: true }).locator('svg'),
@@ -1537,7 +1521,6 @@ test('design fixture renders first-message composition, pinned navigation and co
   await page.getByRole('button', { name: 'Changes', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Explorer actions', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Files', exact: true }).click();
-  await page.screenshot({ path: '../../test-results/redesign-review/editor.png', fullPage: true });
   await page.getByRole('tab', { name: 'Agents', exact: true }).click();
   await page.getByRole('button', { name: 'New chat', exact: true }).click();
   for (const width of [768, 390]) {
@@ -1547,10 +1530,6 @@ test('design fixture renders first-message composition, pinned navigation and co
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
       true,
     );
-    await page.screenshot({
-      path: `../../test-results/redesign-review/${width}.png`,
-      fullPage: true,
-    });
   }
   await page.evaluate(() => window.demo.first.openCheckout('/demo/other'));
   await expect(
@@ -1572,7 +1551,6 @@ test('design fixture renders first-message composition, pinned navigation and co
     .getByRole('button', { name: 'New chat', exact: true })
     .boundingBox();
   expect(close!.y + close!.height).toBeLessThanOrEqual(fresh!.y);
-  await page.screenshot({ path: '../../test-results/redesign-review/drawer.png', fullPage: true });
   await page.keyboard.press('Escape');
   expect(errors).toEqual([]);
 });

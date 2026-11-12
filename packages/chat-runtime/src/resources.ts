@@ -10,7 +10,7 @@ import type { ApplicationError } from '@moonbase/contracts/workspace';
 import { Host, safeError } from './commands.ts';
 import { Store, readOwnedMetadata, getSettings } from './documents.ts';
 import type { RuntimeConfiguration, RetainedWork } from './runtime-types.ts';
-import * as V from './validation.ts';
+import { fail } from '@moonbase/contracts/errors';
 import * as S from './private-schema.ts';
 
 // Abort requests and terminal cleanup failures remain observable after a caller's deadline.
@@ -68,7 +68,7 @@ export function openHost(config: RuntimeConfiguration) {
     const validated = yield* Effect.tryPromise({
       try: async () => {
         if (!isQualifiedRuntime(process.versions))
-          V.fail(
+          fail(
             'Incompatible',
             'The Pi host requires Node 26.13 or newer, or exactly Bun 1.4.4. The remote client has its own runtime boundary.',
           );
@@ -102,7 +102,7 @@ export function openHost(config: RuntimeConfiguration) {
       });
       const cwd = getSettings(meta).cwd;
       if (target.cwd !== cwd || (await realpath(cwd)) !== cwd || !(await stat(cwd)).isDirectory())
-        V.fail(
+        fail(
           'Unavailable',
           'The saved local working folder is unavailable. Restore it before retrying.',
         );
@@ -175,14 +175,14 @@ export function openHost(config: RuntimeConfiguration) {
         if (existing) S.savedStore(existing);
         await harness.commit(async (tx) => {
           if (!existing && (await tx.scanConversations({}, 1)).items.length)
-            V.fail(
+            fail(
               'Incompatible',
               'This store contains data without Moonbase ownership metadata; no import is authorized.',
             );
           const store = await tx.doc(Store, 'identity', identity);
           S.savedStore(store);
           if (store.identity !== identity)
-            V.fail(
+            fail(
               'Incompatible',
               'Store is already bound to another host, actor, working directory or model.',
             );

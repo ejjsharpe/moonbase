@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { chatProtocolVersion, type ChatHostTarget } from '@moonbase/contracts/host';
 import { socketDomain, socketLimits } from '@moonbase/contracts/socket';
-import { fail } from './validation.ts';
+import { fail } from '@moonbase/contracts/errors';
 import { json } from './protocol.ts';
 
 export type SocketDirection = 'client' | 'server';

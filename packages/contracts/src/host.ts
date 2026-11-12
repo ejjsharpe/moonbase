@@ -3,6 +3,8 @@ import type { ChatHostTargetSchema, ChatHostHealthSchema } from './host-schema.t
 /** Browser-safe identities; credentials and forwarded endpoints remain privileged. */
 export const chatProtocolVersion = 2;
 export const chatHostVersion = '0.1.0';
+/** A host token: 16 to 4096 printable ASCII characters. */
+export const hostTokenPattern = /^[\x21-\x7e]{16,4096}$/;
 /**
  * Features a host advertises in its signed health. `chat` is every host's chat protocol; the
  * others are a daemon's: local-mode chat and its control, provider setup and folders, for a

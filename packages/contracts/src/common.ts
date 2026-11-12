@@ -1,5 +1,17 @@
+import { fail } from './errors.ts';
+
 export type ObservationClose = () => Promise<void>;
 export type CommandOptions = { signal?: AbortSignal };
+
+/** Reads a plain object, rejecting arrays and, when `keys` is given, any other field. */
+export function readObject(value: unknown, keys?: string[]): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    return fail('InvalidInput', 'Expected an object.');
+  const record = value as Record<string, unknown>;
+  if (keys && Object.keys(record).some((key) => !keys.includes(key)))
+    fail('InvalidInput', 'Unexpected fields.');
+  return record;
+}
 
 /**
  * Compares plain decoded data (objects, arrays, finite primitives) structurally; key order is

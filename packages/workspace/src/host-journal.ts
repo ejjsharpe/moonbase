@@ -23,13 +23,13 @@ import type {
 import {
   canonical,
   errorText,
-  fail,
   folded,
   isOriginalResult,
   key,
   overlaps,
   same,
 } from './validation.ts';
+import { fail } from '@moonbase/contracts/errors';
 
 /** The operations whose first outcome is remembered by request ID and replayed. */
 export type RequestOperation =

@@ -1,6 +1,6 @@
 import * as Schema from 'effect/Schema';
 import { areJsonValuesEqual } from './common.ts';
-import { ApplicationError } from './errors.ts';
+import { fail } from './errors.ts';
 import { ChatTargetSchema, decodeChatOutput } from './chat-schema.ts';
 import {
   maximumChatReplyBytes,
@@ -17,9 +17,6 @@ import type { ChatHostTarget } from './host.ts';
 
 // Checks shared by the chat engine and the daemon protocol: both project the replies they hand
 // on, so a reply's authority is checked the same way on either side of the wire.
-const fail = (code: ApplicationError['code'], message: string): never => {
-  throw new ApplicationError({ code, message });
-};
 const decodeTarget = Schema.decodeUnknownSync(ChatTargetSchema, { onExcessProperty: 'error' });
 export const decodeChatTarget = (value: unknown): ChatTarget => {
   try {

@@ -10,7 +10,7 @@ import {
 import type { ChatCreationSettings, ChatTarget } from '@moonbase/contracts/chat';
 /** A chat's saved folder and model; `ownFolder` marks a folder made for a chat without a project. */
 export type ChatSettings = ChatCreationSettings & { cwd: string; ownFolder?: true };
-import * as V from './validation.ts';
+import { fail } from '@moonbase/contracts/errors';
 import * as S from './private-schema.ts';
 
 export const Request = defineDocFamily({
@@ -60,7 +60,7 @@ export const Metadata = defineDocFamily({
 export const key = (actorId: string, requestId: string) => JSON.stringify([actorId, requestId]);
 function numeric(value: string): number {
   if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value)))
-    return V.fail('InvalidInput', 'Invalid Pi record identity.');
+    return fail('InvalidInput', 'Invalid Pi record identity.');
   return Number(value);
 }
 export const cid = (value: string) => numeric(value) as ConversationId;
@@ -70,17 +70,16 @@ export const tid = (value: string) => numeric(value) as TaskId;
 export async function readOwnedMetadata(harness: Harness, identity: string, target: ChatTarget) {
   const meta = await harness.snapshot(Metadata, cid(target.conversationId), 'metadata', context);
   if (!meta || meta.identity !== identity)
-    return V.fail('Unauthorized', 'Conversation does not belong to this configured actor/store.');
+    return fail('Unauthorized', 'Conversation does not belong to this configured actor/store.');
   const saved = S.savedMetadata(meta);
   if (!saved.settings)
-    return V.fail(
+    return fail(
       'Persistence',
       'Stored local conversation settings are missing; preserve this store.',
     );
   return saved;
 }
 export function getSettings(meta: { settings?: ChatSettings }): ChatSettings {
-  if (!meta.settings)
-    return V.fail('Persistence', 'Stored local conversation settings are missing.');
+  if (!meta.settings) return fail('Persistence', 'Stored local conversation settings are missing.');
   return meta.settings;
 }

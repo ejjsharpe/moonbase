@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { Effect, Layer, ManagedRuntime } from 'effect';
+import { Cause, Deferred, Effect, Exit, Layer, ManagedRuntime } from 'effect';
 import type { MutableModels } from '@earendil-works/pi-ai/models';
 import {
   LocalHostLive,
@@ -14,7 +14,6 @@ import {
 } from '@moonbase/chat-runtime/credentials';
 import { WorkspaceFolders, WorkspaceHostLive, type ChatFolders } from '@moonbase/workspace';
 import { WorkspaceHostService, type WorkspaceHostServiceShape } from '@moonbase/contracts/services';
-import type { WorkspaceHostClient } from '@moonbase/contracts/workspace-host';
 import {
   createFolderApprovals,
   createRootFolders,
@@ -29,13 +28,11 @@ import {
   makeDaemonClient,
   makeWorkspaceClient,
   serveChat,
-  type SocketSources,
 } from '@moonbase/daemon-protocol/server';
 import type { ClaudeCodeSubscription } from '@moonbase/chat-runtime/claude-code';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import type { ChatClient, ChatCreationSettings, ChatSession } from '@moonbase/contracts/chat';
-import type { DaemonClient, FolderApprovals } from '@moonbase/contracts/daemon';
-import type { ChatHostCapability } from '@moonbase/contracts/host';
+import type { FolderApprovals } from '@moonbase/contracts/daemon';
 import { chatHostVersion, chatProtocolVersion } from '@moonbase/contracts/host';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { daemonErrorReasons } from '@moonbase/contracts/daemon';
@@ -101,71 +98,101 @@ export type DaemonExit = 'stopped' | 'idle';
 /**
  * Runs one daemon until `signal` aborts or, in local mode, it is idle. It takes the directory's
  * lock before opening the store, serves the runtime on 127.0.0.1, writes `endpoint.json` while
- * listening, and on the way out stops admitting, closes the server and runtime, closes Claude
- * Code's workers and removes `endpoint.json`.
+ * listening, and on the way out stops admitting, closes the server, workspace and runtime, closes
+ * Claude Code's workers and removes `endpoint.json`.
  */
 export async function runDaemon(options: DaemonOptions): Promise<DaemonExit> {
-  const directory = await openPrivateDirectory(options.directory);
-  const lock = await acquireDaemonLock(directory);
-  // An endpoint left by a daemon that crashed names a port nothing serves.
-  await removeEndpoint(directory);
-  let log: DaemonLog | undefined;
-  try {
-    log = await openDaemonLog(directory);
-    return await serveDaemon(options, directory, log);
-  } catch (error) {
-    log?.write({ event: 'failed', ...describeFailure(error) });
-    throw error;
-  } finally {
-    log?.close();
-    lock.release();
-  }
+  const exit = await Effect.runPromiseExit(Effect.scoped(runDaemonScoped(options)));
+  if (Exit.isSuccess(exit)) return exit.value;
+  throw Cause.squash(exit.cause);
 }
 
-async function serveDaemon(
-  options: DaemonOptions,
-  directory: string,
-  log: DaemonLog,
-): Promise<DaemonExit> {
-  const settings = await readSettings(directory),
-    session = await readIdentity(directory),
-    token = await readToken(directory);
-  log.write({ event: 'starting', mode: settings.mode, pid: process.pid, version: chatHostVersion });
-  const databasePath = join(directory, 'chat.sqlite');
-  // SQLite gives its WAL files the store's mode, so the store starts private.
-  await preparePrivateFile(databasePath);
-  let exit: DaemonExit = 'stopped',
-    stopping = false;
-  let finish!: () => void, idle: IdleMonitor | undefined, closeAdmissions: (() => void) | undefined;
-  const finished = new Promise<void>((resolve) => (finish = resolve));
-  // Stopping refuses new requests and runs at once; the server and runtime then close in order.
-  const stop = () => {
-    if (stopping) return;
-    stopping = true;
-    idle?.stop();
-    closeAdmissions?.();
-    finish();
-  };
-  if (options.signal.aborted) stop();
-  else options.signal.addEventListener('abort', stop, { once: true });
-  const ripgrep = options.ripgrepExecutable ? { ripgrepExecutable: options.ripgrepExecutable } : {};
-  // Swapped for the open workspace while it is open, so chats never ask a closed one.
-  let workspace: Workspace = noWorkspace;
-  try {
+/** Runs a promise, failing with whatever it rejects with. */
+const attempt = <A>(run: () => Promise<A>) =>
+  Effect.tryPromise({ try: run, catch: (error) => error });
+
+const runDaemonScoped = (options: DaemonOptions) =>
+  Effect.gen(function* () {
+    const directory = yield* attempt(() => openPrivateDirectory(options.directory));
+    yield* Effect.acquireRelease(
+      attempt(() => acquireDaemonLock(directory)),
+      (lock) => Effect.sync(() => lock.release()),
+    );
+    // An endpoint left by a daemon that crashed names a port nothing serves.
+    yield* attempt(() => removeEndpoint(directory));
+    const log = yield* Effect.acquireRelease(
+      attempt(() => openDaemonLog(directory)),
+      (log) => Effect.sync(() => log.close()),
+    );
+    const exit = yield* Effect.scoped(serveDaemon(options, directory, log)).pipe(
+      Effect.tapCause((cause) =>
+        Effect.sync(() => log.write({ event: 'failed', ...describeFailure(Cause.squash(cause)) })),
+      ),
+    );
+    log.write({ event: 'stopped', reason: exit });
+    return exit;
+  });
+
+/**
+ * Serves until stopped. Each stage releases when the scope closes, in reverse: the server, the
+ * idle monitor, the workspace, the runtime, then Claude Code's workers and `endpoint.json`.
+ */
+const serveDaemon = (options: DaemonOptions, directory: string, log: DaemonLog) =>
+  Effect.gen(function* () {
+    const settings = yield* attempt(() => readSettings(directory)),
+      session = yield* attempt(() => readIdentity(directory)),
+      token = yield* attempt(() => readToken(directory));
+    log.write({
+      event: 'starting',
+      mode: settings.mode,
+      pid: process.pid,
+      version: chatHostVersion,
+    });
+    const databasePath = join(directory, 'chat.sqlite');
+    // SQLite gives its WAL files the store's mode, so the store starts private.
+    yield* attempt(() => preparePrivateFile(databasePath));
+
+    yield* Effect.addFinalizer(() => attempt(() => removeEndpoint(directory)).pipe(Effect.orDie));
+    // Claude Code's warm workers close after the runtime, so a turn finishing during shutdown
+    // can't leave one cached behind it.
+    yield* Effect.addFinalizer(() =>
+      Effect.promise(() => options.closeClaudeCode().catch(() => {})),
+    );
+
+    const stop = createStop();
+    const onAbort = () => stop.request('stopped');
+    yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        if (options.signal.aborted) onAbort();
+        else options.signal.addEventListener('abort', onAbort, { once: true });
+      }),
+      () => Effect.sync(() => options.signal.removeEventListener('abort', onAbort)),
+    );
+
+    const ripgrep = options.ripgrepExecutable
+      ? { ripgrepExecutable: options.ripgrepExecutable }
+      : {};
+    // Swapped for the open workspace while it is open, so chats never ask a closed one.
+    let workspace: Workspace = noWorkspace;
     const providers = options.providers(settings, session);
     // A key file is checked before serving; the Keychain is read at the first sign-in.
-    if (settings.credentialKey?.source === 'file') await checkKeyFile(providers.keySource);
+    if (settings.credentialKey?.source === 'file')
+      yield* attempt(() => checkKeyFile(providers.keySource));
     // A host's roots are checked once, so a root replaced later approves nothing.
     const approvedFolders =
       settings.mode === 'host'
-        ? await createRootFolders(settings.approvedRoots, {
-            reserved: [
-              directory,
-              ...(settings.credentialKey?.source === 'file' ? [settings.credentialKey.path] : []),
-            ],
-          }).catch((error: unknown) => {
-            throw ApplicationError.is(error) ? new DaemonFailure(error.code, error.message) : error;
-          })
+        ? yield* attempt(() =>
+            createRootFolders(settings.approvedRoots, {
+              reserved: [
+                directory,
+                ...(settings.credentialKey?.source === 'file' ? [settings.credentialKey.path] : []),
+              ],
+            }).catch((error: unknown) => {
+              throw ApplicationError.is(error)
+                ? new DaemonFailure(error.code, error.message)
+                : error;
+            }),
+          )
         : createFolderApprovals(join(directory, 'approved-folders.json'));
     // A local daemon's chats may also use the editor's checkouts and their worktrees, once the
     // workspace is open. A host's chats stay in its roots, which already hold every checkout.
@@ -173,183 +200,182 @@ async function serveDaemon(
       settings.mode === 'host'
         ? approvedFolders
         : withCheckoutFolders(approvedFolders, { has: (path) => workspace.hasFolder(path) });
-    const runtime = ManagedRuntime.make(
-      composeRuntime(directory, providers, folders, session, databasePath, ripgrep),
+
+    const runtime = yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        ManagedRuntime.make(
+          composeRuntime(directory, providers, folders, session, databasePath, ripgrep),
+        ),
+      ),
+      (runtime) => attempt(() => runtime.dispose()).pipe(Effect.orDie),
     );
-    try {
-      const { control, providerChanges } = await runtime.runPromise(
+    const { control, providerChanges } = yield* attempt(() =>
+      runtime.runPromise(
         Effect.gen(function* () {
           return { control: yield* LocalPiControl, providerChanges: yield* ProviderSetupChanges };
         }),
-      );
-      closeAdmissions = () => control.setAdmissionsOpen(false);
-      if (stopping) closeAdmissions();
-      // The file host closes after the server and before the runtime.
-      const opened = await openWorkspace(
-        approvedFolders,
-        settings.mode === 'host'
-          ? undefined
-          : createChatFolders(makeChatClient(runtime), makeDaemonClient(runtime)),
-      );
-      workspace = opened;
-      try {
-        // A host serves remote clients on its configured port and never idles out.
-        if (settings.mode !== 'host') {
-          idle = createIdleMonitor({
-            idleMs: options.idleMs ?? 5 * 60_000,
-            pollMs: options.pollMs ?? 30_000,
-            clock: options.clock ?? systemClock,
-            hasActiveWork: () => runtime.runPromise(control.hasActiveWork()),
-            onIdle: () => {
-              exit = 'idle';
-              stop();
-            },
-          });
-          if (stopping) idle.stop();
-        }
-        await serve(runtime, {
-          client: (options.wrapChat ?? ((client: ChatClient) => client))(makeChatClient(runtime)),
-          daemon: makeDaemonClient(runtime),
-          port: settings.mode === 'host' ? settings.port : 0,
-          capabilities: settings.mode === 'host' ? hostDaemonCapabilities : localDaemonCapabilities,
-          // The WebSocket pushes provider setup changes beside chat and chat list watches.
-          sources: {
-            subscribeProviderSetup: (listener) => providerChanges.subscribe(listener),
-            // A connected client keeps a local daemon running, and so do its watches, which
-            // close with it.
-            ...(idle ? { trackConnection: () => countUse(idle!) } : {}),
-          },
-          // Without a host the daemon advertises no workspace.
-          ...(opened.host ? { workspace: makeWorkspaceClient(opened.host) } : {}),
-        });
-      } finally {
-        workspace = noWorkspace;
-        await closeWorkspace(opened.dispose, {
-          deadlineMs: options.workspaceCloseMs ?? 5_000,
-          log,
-        });
-      }
-    } finally {
-      await runtime.dispose();
-    }
-  } finally {
-    idle?.stop();
-    options.signal.removeEventListener('abort', stop);
-    // Claude Code's warm workers close after the runtime, so a turn finishing during shutdown
-    // can't leave one cached behind it.
-    await options.closeClaudeCode().catch(() => {});
-    await removeEndpoint(directory);
-  }
-  log.write({ event: 'stopped', reason: exit });
-  return exit;
-
-  /**
-   * Composes the workspace file host on macOS, with the data in `workspace/`, this daemon's host ID
-   * and the root policy of its mode. A host that can't be composed (no helper, an unqualified
-   * runtime, an unusable store) is logged by code and left out: chats are unaffected. Disposing
-   * cancels its helper process groups and waits for them.
-   */
-  async function openWorkspace(
-    folders: FolderApprovals,
-    chats: ChatFolders | undefined,
-  ): Promise<Workspace> {
-    if (process.platform !== 'darwin' || stopping) return noWorkspace;
-    if (!options.filesystemHelper) {
-      log.write({ event: 'workspace', reason: 'no-helper' });
-      return noWorkspace;
-    }
-    let runtime:
-      | ManagedRuntime.ManagedRuntime<WorkspaceHostService | WorkspaceFolders, ApplicationError>
-      | undefined;
-    try {
-      const workspaceDirectory = await openPrivateDirectory(join(directory, 'workspace'));
-      const policy = await createRootPolicy(directory, settings, folders);
-      runtime = ManagedRuntime.make(
-        WorkspaceHostLive({
-          dataDirectory: workspaceDirectory,
-          hostId: session.host.hostId,
-          filesystemHelper: options.filesystemHelper,
-          gitExecutable: '/usr/bin/git',
-          ...ripgrep,
-          // A native source is held to no root policy, so only a local daemon takes imports.
-          nativeImports: settings.mode !== 'host',
-          ...(chats ? { chats } : {}),
-          ...policy,
-        }),
-      );
-      const host = await runtime.runPromise(WorkspaceHostService);
-      const checkouts = await runtime.runPromise(WorkspaceFolders);
-      log.write({ event: 'workspace', reason: 'ready' });
-      const opened = runtime;
-      return {
-        host,
-        hasFolder: (path) => opened.runPromise(checkouts.has(path)),
-        dispose: () => opened.dispose(),
-      };
-    } catch (error) {
-      await runtime?.dispose().catch(() => {});
-      log.write({ event: 'workspace', reason: 'unavailable', code: describeFailure(error).code });
-      return noWorkspace;
-    }
-  }
-
-  /**
-   * Serves until stopped, then closes the server; the caller closes the runtime. Once stopping,
-   * new requests are refused; a local daemon counts each request as use until it is answered.
-   */
-  async function serve<R>(
-    runtime: ManagedRuntime.ManagedRuntime<R, ApplicationError>,
-    served: {
-      client: ChatClient;
-      daemon: DaemonClient;
-      port: number;
-      capabilities: readonly ChatHostCapability[];
-      sources: SocketSources;
-      workspace?: WorkspaceHostClient;
-    },
-  ) {
-    // A daemon told to stop while starting never listens or announces itself.
-    if (stopping) return;
-    const admit = () => {
-      if (stopping)
-        throw new ApplicationError({ code: 'Unavailable', message: 'The daemon is stopping.' });
-      return idle ? countUse(idle) : () => {};
-    };
-    await runtime.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const server = yield* serveChat(
-            { host: session.host, token, port: served.port },
-            served.client,
-            served.daemon,
-            served.capabilities,
-            {
-              sources: served.sources,
-              admit,
-              ...(served.workspace ? { workspace: served.workspace } : {}),
-            },
-          );
-          const listening = Number(new URL(server.origin).port);
-          if (!stopping)
-            yield* Effect.promise(() =>
-              writeEndpoint(directory, {
-                port: listening,
-                pid: process.pid,
-                version: chatHostVersion,
-                protocol: chatProtocolVersion,
-                build: options.build ?? 'development',
-              }),
-            );
-          if (!stopping) {
-            log.write({ event: 'ready', port: listening });
-            options.ready(JSON.stringify({ event: 'ready', host: session.host, port: listening }));
-          }
-          yield* Effect.promise(() => finished);
-          log.write({ event: 'stopping', reason: exit });
-        }),
       ),
     );
-  }
+    // Stopping refuses new work at once; the server, workspace and runtime then close in order.
+    stop.onRequest(() => control.setAdmissionsOpen(false));
+
+    const opened = yield* Effect.acquireRelease(
+      attempt(() =>
+        openWorkspace(
+          approvedFolders,
+          settings.mode === 'host'
+            ? undefined
+            : createChatFolders(makeChatClient(runtime), makeDaemonClient(runtime)),
+        ),
+      ),
+      (opened) =>
+        Effect.promise(() => {
+          workspace = noWorkspace;
+          return closeWorkspace(opened.dispose, {
+            deadlineMs: options.workspaceCloseMs ?? 5_000,
+            log,
+          });
+        }),
+    );
+    workspace = opened;
+
+    // A host serves remote clients on its configured port and never idles out.
+    const idle =
+      settings.mode === 'host'
+        ? undefined
+        : yield* Effect.acquireRelease(
+            Effect.sync(() =>
+              createIdleMonitor({
+                idleMs: options.idleMs ?? 5 * 60_000,
+                pollMs: options.pollMs ?? 30_000,
+                clock: options.clock ?? systemClock,
+                hasActiveWork: () => runtime.runPromise(control.hasActiveWork()),
+                onIdle: () => stop.request('idle'),
+              }),
+            ),
+            (idle) => Effect.sync(() => idle.stop()),
+          );
+    if (idle) stop.onRequest(() => idle.stop());
+
+    // A daemon told to stop while starting never listens or announces itself.
+    if (stop.reason) return stop.reason;
+    const server = yield* serveChat(
+      { host: session.host, token, port: settings.mode === 'host' ? settings.port : 0 },
+      (options.wrapChat ?? ((client: ChatClient) => client))(makeChatClient(runtime)),
+      makeDaemonClient(runtime),
+      settings.mode === 'host' ? hostDaemonCapabilities : localDaemonCapabilities,
+      {
+        // The WebSocket pushes provider setup changes beside chat and chat list watches. A
+        // connected client keeps a local daemon running, and so do its watches, which close
+        // with it.
+        sources: {
+          subscribeProviderSetup: (listener) => providerChanges.subscribe(listener),
+          ...(idle ? { trackConnection: () => countUse(idle) } : {}),
+        },
+        // Once stopping, new requests are refused; a local daemon counts each request as use
+        // until it is answered.
+        admit: () => {
+          if (stop.reason)
+            throw new ApplicationError({ code: 'Unavailable', message: 'The daemon is stopping.' });
+          return idle ? countUse(idle) : () => {};
+        },
+        // Without a host the daemon advertises no workspace.
+        ...(opened.host ? { workspace: makeWorkspaceClient(opened.host) } : {}),
+      },
+    );
+    const port = Number(new URL(server.origin).port);
+    if (!stop.reason)
+      yield* attempt(() =>
+        writeEndpoint(directory, {
+          port,
+          pid: process.pid,
+          version: chatHostVersion,
+          protocol: chatProtocolVersion,
+          build: options.build ?? 'development',
+        }),
+      );
+    if (!stop.reason) {
+      log.write({ event: 'ready', port });
+      options.ready(JSON.stringify({ event: 'ready', host: session.host, port }));
+    }
+    const reason = yield* Deferred.await(stop.requested);
+    log.write({ event: 'stopping', reason });
+    return reason;
+
+    /**
+     * Composes the workspace file host on macOS, with the data in `workspace/`, this daemon's host
+     * ID and the root policy of its mode. A host that can't be composed (no helper, an unqualified
+     * runtime, an unusable store) is logged by code and left out: chats are unaffected. Disposing
+     * cancels its helper process groups and waits for them.
+     */
+    async function openWorkspace(
+      folders: FolderApprovals,
+      chats: ChatFolders | undefined,
+    ): Promise<Workspace> {
+      if (process.platform !== 'darwin' || stop.reason) return noWorkspace;
+      if (!options.filesystemHelper) {
+        log.write({ event: 'workspace', reason: 'no-helper' });
+        return noWorkspace;
+      }
+      let runtime:
+        | ManagedRuntime.ManagedRuntime<WorkspaceHostService | WorkspaceFolders, ApplicationError>
+        | undefined;
+      try {
+        const workspaceDirectory = await openPrivateDirectory(join(directory, 'workspace'));
+        const policy = await createRootPolicy(directory, settings, folders);
+        runtime = ManagedRuntime.make(
+          WorkspaceHostLive({
+            dataDirectory: workspaceDirectory,
+            hostId: session.host.hostId,
+            filesystemHelper: options.filesystemHelper,
+            gitExecutable: '/usr/bin/git',
+            ...ripgrep,
+            // A native source is held to no root policy, so only a local daemon takes imports.
+            nativeImports: settings.mode !== 'host',
+            ...(chats ? { chats } : {}),
+            ...policy,
+          }),
+        );
+        const host = await runtime.runPromise(WorkspaceHostService);
+        const checkouts = await runtime.runPromise(WorkspaceFolders);
+        log.write({ event: 'workspace', reason: 'ready' });
+        const opened = runtime;
+        return {
+          host,
+          hasFolder: (path) => opened.runPromise(checkouts.has(path)),
+          dispose: () => opened.dispose(),
+        };
+      } catch (error) {
+        await runtime?.dispose().catch(() => {});
+        log.write({ event: 'workspace', reason: 'unavailable', code: describeFailure(error).code });
+        return noWorkspace;
+      }
+    }
+  });
+
+/**
+ * A stop request: the first one sets `reason`, runs each `onRequest` callback at once (so
+ * admissions close before anything else happens) and completes `requested`. A callback added after
+ * the request runs immediately.
+ */
+function createStop() {
+  const callbacks: (() => void)[] = [];
+  const requested = Deferred.makeUnsafe<DaemonExit>();
+  const stop = {
+    reason: undefined as DaemonExit | undefined,
+    requested,
+    request(reason: DaemonExit) {
+      if (stop.reason) return;
+      stop.reason = reason;
+      for (const callback of callbacks) callback();
+      Deferred.doneUnsafe(requested, Exit.succeed(reason));
+    },
+    onRequest(callback: () => void) {
+      if (stop.reason) callback();
+      else callbacks.push(callback);
+    },
+  };
+  return stop;
 }
 
 /** The workspace file host while it is open; a daemon without one has none of these. */

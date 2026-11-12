@@ -1,3 +1,4 @@
+import { hostTokenPattern } from '@moonbase/contracts/host';
 import { Effect, Schema, SchemaGetter } from 'effect';
 import { isAbsolute } from 'node:path';
 import { ApplicationError } from '@moonbase/contracts/workspace';
@@ -25,7 +26,7 @@ export const SshConfigurationSchema = Schema.Struct({
       remotePort: Schema.mutableKey(ConnectionPortSchema),
     })),
   ),
-  token: Schema.mutableKey(Schema.String.check(Schema.isPattern(/^[\x21-\x7e]{16,4096}$/))),
+  token: Schema.mutableKey(Schema.String.check(Schema.isPattern(hostTokenPattern))),
   sshExecutable: Schema.mutableKey(executable),
 }).check(
   Schema.makeFilter(

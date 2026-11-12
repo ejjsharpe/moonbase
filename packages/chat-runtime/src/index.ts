@@ -27,7 +27,9 @@ import {
 import { type Host, safeError } from './commands.ts';
 import { readOnChange } from '@moonbase/effect/changes';
 import { checkChatFolder } from './chat-folders.ts';
-import * as V from './validation.ts';
+import { decodeChatInput } from '@moonbase/contracts/chat-schema';
+import { isSameChatHost } from '@moonbase/contracts/chat-validation';
+import { fail } from '@moonbase/contracts/errors';
 import { openHost } from './resources.ts';
 import type { LocalPiRuntimeConfiguration } from './runtime-types.ts';
 
@@ -67,7 +69,7 @@ function makeChatService(host: Host): ChatServiceShape {
         Effect.map(
           Effect.try({
             try: () => {
-              const input = V.input('listChats', d);
+              const input = decodeChatInput('listChats', d);
               host.session(input.session);
               return input;
             },
@@ -195,8 +197,8 @@ export const LocalHostLive = (
               try: () => {
                 const input = decodeLocalHostInput(operation, unknown);
                 const shape = input as { host?: ChatHostTarget; target?: { host: ChatHostTarget } };
-                if (!V.sameHost(shape.host ?? shape.target!.host, config.host))
-                  V.fail('Unauthorized', 'Local host request names another host.');
+                if (!isSameChatHost(shape.host ?? shape.target!.host, config.host))
+                  fail('Unauthorized', 'Local host request names another host.');
                 return input;
               },
               catch: failure,
