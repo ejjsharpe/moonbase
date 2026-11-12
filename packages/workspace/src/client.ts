@@ -390,10 +390,10 @@ export class ClientWorkspace implements AdmissionOwner {
   }
   /** A move or copy onto a path that holds recovery drafts is refused, so they are not orphaned. */
   private assertDestinationAvailable(input: WorkspaceOperation) {
-    if (input.kind === 'trash' || input.kind === 'import' || input.destination === undefined)
-      return;
+    if (input.kind === 'trash' || input.destination === undefined) return;
     const create = input.kind.startsWith('create-');
     const sources = input.sources.map((s) => s.target.path);
+    // Imports name no source paths, so the destination itself stands in for each item's target.
     const destinations =
       sources.length > 1
         ? sources.map((p) => join(input.destination!, basename(p)))
@@ -403,7 +403,7 @@ export class ClientWorkspace implements AdmissionOwner {
         input.checkout,
         (draftPath) =>
           affected(folded(draftPath), folded(destination)) &&
-          (create || !affected(draftPath, sources[i] ?? '')),
+          (create || input.kind === 'import' || !affected(draftPath, sources[i] ?? '')),
       ),
     );
   }

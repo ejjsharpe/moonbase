@@ -437,6 +437,29 @@ for (const kind of ['move', 'copy'] as const)
         null,
       );
       assert.equal(readFileSync(join(f.root, 'folder/child.txt'), 'utf8'), 'must survive');
+      if (kind === 'copy') {
+        // An import names no source path, so its destination alone must be free of drafts.
+        const external = join(f.base, 'external.txt');
+        writeFileSync(external, 'native bytes');
+        const nativeReferences = await runtime.runPromise(
+          Effect.flatMap(WorkspaceNative, (native) =>
+            native.capture({ checkout, clientId: 'alice', paths: [external] }),
+          ),
+        );
+        await assert.rejects(
+          client.command('mutate', {
+            clientId: 'alice',
+            id: 'import-onto-draft',
+            checkout,
+            kind: 'import',
+            sources: [],
+            nativeReferences,
+            destination: 'folder/child.txt',
+          }),
+          isError('InvalidInput'),
+        );
+        assert.equal(readFileSync(join(f.root, 'folder/child.txt'), 'utf8'), 'must survive');
+      }
       assert.deepEqual(
         (await client.command('loadRecovery', { clientId: 'alice' })).state,
         snapshot,
