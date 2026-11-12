@@ -10,7 +10,7 @@ import { ApplicationError, emptyRecovery, type EditorClient } from '@moonbase/co
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { makeEditorModel, makeEditorController } from '@moonbase/application/editor';
-import { WorkspaceLive } from '@moonbase/workspace';
+import { WorkspaceLocalLive } from '@moonbase/workspace';
 
 const persistence = (error: unknown) => ApplicationError.is(error) && error.code === 'Persistence';
 
@@ -21,7 +21,10 @@ test('real prior-producer recovery with an unfamiliar nested draft field rejects
   mkdirSync(root);
   execFileSync('/usr/bin/git', ['init', '-q', '-b', 'main', root]);
   writeFileSync(join(root, 'file.txt'), 'original disk');
-  const start = () => ManagedRuntime.make(WorkspaceLive({ hostId: 'strict-local', dataDirectory }));
+  const start = () =>
+    ManagedRuntime.make(
+      WorkspaceLocalLive({ hostId: 'strict-local', installationId: 'strict', dataDirectory }),
+    );
   let runtime = start();
   const scope = Scope.makeUnsafe();
   let controller: ReturnType<typeof makeEditorController> | undefined;

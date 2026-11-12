@@ -10,6 +10,8 @@
     "./chat-schema": "./src/chat-schema.ts",
     "./chat-validation": "./src/chat-validation.ts",
     "./workspace-schema": "./src/workspace-schema.ts",
+    "./workspace-host": "./src/workspace-host.ts",
+    "./workspace-host-schema": "./src/workspace-host-schema.ts",
     "./connection-schema": "./src/connection-schema.ts",
     "./host-schema": "./src/host-schema.ts",
     "./error-schema": "./src/error-schema.ts",

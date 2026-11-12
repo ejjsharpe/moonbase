@@ -8,8 +8,7 @@ import {
   type Worktree,
 } from '@moonbase/contracts/workspace';
 import type { Directory } from './filesystem.ts';
-import { errorText } from './recovery.ts';
-import { ensure, fail, requireGit } from './validation.ts';
+import { ensure, errorText, fail, requireGit } from './validation.ts';
 
 const gitFailure = (error: unknown) =>
   error as { status?: number; uncertain?: boolean; stderr?: string };

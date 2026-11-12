@@ -8,6 +8,7 @@ import {
   type WorkspaceEvent,
   type CheckoutTarget,
 } from './workspace.ts';
+import type { HostCommand, HostInput, HostOutput } from './workspace-host.ts';
 import type {
   ConnectionCommand,
   ConnectionInput,
@@ -36,6 +37,20 @@ export type WorkspaceServiceShape = WorkspaceHandlers & {
     paths: string[];
   }): Stream.Stream<WorkspaceEvent, ApplicationError>;
 };
+export type WorkspaceHostHandlers = {
+  [K in HostCommand]: (input: HostInput<K>) => Effect.Effect<HostOutput<K>, ApplicationError>;
+};
+export type WorkspaceHostServiceShape = WorkspaceHostHandlers & {
+  watch(input: {
+    checkout: CheckoutTarget;
+    paths: string[];
+  }): Stream.Stream<WorkspaceEvent, ApplicationError>;
+};
+/** A checkout's files and Git, with the save and operation journals; it holds no client recovery. */
+export class WorkspaceHostService extends Context.Service<
+  WorkspaceHostService,
+  WorkspaceHostServiceShape
+>()('moonbase/WorkspaceHost') {}
 export class WorkspaceService extends Context.Service<WorkspaceService, WorkspaceServiceShape>()(
   'moonbase/Workspace',
 ) {}

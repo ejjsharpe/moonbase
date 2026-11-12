@@ -81,6 +81,7 @@ for (const entry of [
   'chat-schema',
   'chat-validation',
   'workspace-schema',
+  'workspace-host-schema',
   'connection-schema',
   'host-schema',
   'daemon-schema',

@@ -6,6 +6,7 @@
 | --- | --- |
 | `workspace`, `chat`, `connection`, `host`, `providers`, `daemon` | Browser-safe DTOs, command/client interfaces and protocol constants |
 | `errors`, `common` | `ApplicationError`, error codes, `CommandOptions`, `ObservationClose`, and `areJsonValuesEqual` / `getJsonKey` (key-order-safe equality and keys for plain decoded data) |
+| `workspace-host`, `workspace-host-schema` | The file host's operations: the workspace commands without recovery, journalled with an installation, client and request ID, plus `saveStatus`, `acknowledgeSave` and `listOperations` (the operation feed) and request IDs on `createWorktree` and `initializeRepository` |
 | `lookup` | `matchPath` / `compareMatches`: the fuzzy path ranking shared by editor lookup and chat file search |
 | `*-schema`, `schema` | Request, saved-data and wire-reply decoders, and shared schema constructors |
 | `chat-validation` | `checkChatOutput`: a decoded chat reply's authority checks (its target, host, sources and request identity match the request) and size bound, applied by the chat engine and both ends of the daemon protocol; `isChatMutation`, `isCancellableChatRead`, `isSameChatHost` / `isSameChatTarget`, `decodeChatTarget` |
@@ -24,6 +25,8 @@ The WebSocket protocol (`socket`, `socket-schema`; capability `socket-v1`) is on
 `ChatClient.watchChatList` and `ChatService.watchChatList` deliver the chat list's first page and the chats past it that changed while watching (`ChatListUpdate`: `{ list, changed, dropped, reset }`; `reset` after missed updates, and a growing `dropped` count when changed chats were let go) and again after each change; `ProviderSetupClient.watch` and `ProviderSetupService.watch(ownerId)` deliver an owner's setup state the same way, so nothing polls.
 
 `settleChat` settles or unsettles a chat (`{ target, settled }`) and returns its summary, whose `settledAt` says when it was settled.
+
+The file host (`WorkspaceHostService`) reports a save as `saved` or `conflict` and an operation with its items, and carries no editor recovery. `saveStatus` answers `saved`, `conflict`, `not-started` (the request never reached the host) or `uncertain`. `listOperations {checkout, after}` returns one page of completed moves, copies and Trash after a feed sequence, with `through` (what the page covers), `floor` (entries up to it may have been discarded) and `more`; `after: null` only reports the present position. The client-facing `WorkspaceService` keeps today's commands and results, including `recoveryChanges`.
 
 A `CheckoutTarget` is a Git checkout (`vcs: 'git'`, with `branch` and `worktree`: `main` or `linked`) or a plain folder (`vcs: 'none'`); worktrees of one repository share `projectId`. Saved targets without `vcs` decode as Git.
 

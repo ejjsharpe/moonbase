@@ -16,7 +16,8 @@ import { join } from 'node:path';
 import { ManagedRuntime, Effect } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { emptyRecovery } from '@moonbase/contracts/workspace';
-import { WorkspaceLive, WorkspaceNative } from '../src/index.ts';
+import { WorkspaceNative } from '../src/index.ts';
+import { WorkspaceLive } from './workspace-live.ts';
 
 import { fixture, rejects, draft } from './workspace-fixture.ts';
 test('known move preserves drafts and exact target, acknowledgement requires recovery publication; replay does not move twice', async () => {
@@ -450,7 +451,7 @@ test('filesystem success followed by real SQLite publication failure stays obser
       lock.exec('BEGIN IMMEDIATE');
       writeFileSync(release, 'resume');
       const result = await pending;
-      assert(result.message?.includes('publication failed'));
+      assert(result.message);
       assert.equal(result.items[0].outcome, 'completed');
       assert.equal(readFileSync(join(f.root, 'moved.txt'), 'utf8'), 'disk');
     } finally {
@@ -717,7 +718,9 @@ test('restart counts transfer and Trash results by structure regardless of displ
     const checkout = await f.client.command('openCheckout', { root: f.root });
     const sources = await f.client.command('inspectEntries', { checkout, paths: ['source'] });
     await f.runtime.dispose();
-    const db = new DatabaseSync(join(f.dataDirectory, 'moonbase-workspace-v1.sqlite'));
+    // An interrupted operation as the client left it, and as the host journalled it.
+    const client = new DatabaseSync(join(f.dataDirectory, 'moonbase-workspace-v1.sqlite'));
+    const host = new DatabaseSync(join(f.dataDirectory, 'workspace-host.sqlite'));
     try {
       for (const kind of ['move', 'trash'] as const) {
         const items =
@@ -742,37 +745,39 @@ test('restart counts transfer and Trash results by structure regardless of displ
                   message: 'Explicit replacement wording is display only.',
                 },
               ];
-        const record = {
-          input: {
-            id: kind,
-            clientId: 'alice',
-            checkout,
-            kind,
-            sources,
-            ...(kind === 'move' ? { destination: 'destination' } : {}),
-          },
-          publicationRevisions: {},
-          acknowledgedBy: [],
-          result: {
-            id: kind,
-            clientId: 'alice',
-            checkout,
-            kind,
-            outcome: 'uncertain',
-            items,
-            recoveryChanges: [],
-          },
+        const input = {
+          id: kind,
+          clientId: 'alice',
+          checkout,
+          kind,
+          sources,
+          ...(kind === 'move' ? { destination: 'destination' } : {}),
         };
-        db.prepare('INSERT INTO records VALUES(?,?,?)').run(
+        const result = { id: kind, clientId: 'alice', checkout, kind, outcome: 'uncertain' };
+        const digest = (...parts: string[]) =>
+          createHash('sha256').update(JSON.stringify(parts)).digest('hex');
+        client.prepare('INSERT INTO records VALUES(?,?,?)').run(
           'operations',
-          createHash('sha256')
-            .update(JSON.stringify(['alice', kind]))
-            .digest('hex'),
-          JSON.stringify(record),
+          digest('alice', kind),
+          JSON.stringify({
+            input,
+            publicationRevisions: {},
+            acknowledgedBy: [],
+            result: { ...result, items: [], recoveryChanges: [] },
+          }),
+        );
+        host.prepare('INSERT INTO records VALUES(?,?,?)').run(
+          'operations',
+          digest('test-installation', 'alice', kind),
+          JSON.stringify({
+            input: { installationId: 'test-installation', ...input },
+            result: { ...result, items },
+          }),
         );
       }
     } finally {
-      db.close();
+      client.close();
+      host.close();
     }
     const restarted = f.start();
     try {

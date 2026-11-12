@@ -1,3 +1,4 @@
+import { normalizeApplicationError } from '@moonbase/effect';
 import { decodeEditorRecovery } from '@moonbase/contracts/workspace-schema';
 import { isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -8,6 +9,8 @@ import {
   type EditorRecovery,
   type FileDocument,
   type GitCheckoutTarget,
+  type OperationResult,
+  type WorkspaceOperation,
 } from '@moonbase/contracts/workspace';
 export const fail = (code: ApplicationError['code'], message: string): never => {
   throw new ApplicationError({ code, message });
@@ -210,3 +213,21 @@ export function recovery(state: EditorRecovery, clientId: string) {
     [...view.tree.expanded, ...view.tree.selected, view.tree.focus].forEach((p) => path(p, true));
   }
 }
+/** Journal key of one request: a hash of its owner and identifier parts. */
+export const key = (...parts: string[]) => hash(canonical(parts));
+export const affected = (p: string, source: string) => p === source || p.startsWith(source + '/');
+/** An item that reports its own source or destination, not a replacement moved to Trash. */
+export const isOriginalResult = (
+  kind: WorkspaceOperation['kind'],
+  item: OperationResult['items'][number],
+) => kind === 'trash' || item.destination !== undefined;
+export const errorText = (error: unknown) => normalizeApplicationError(error).message;
+export const folded = (p: string) => p.normalize('NFC').toLowerCase();
+/** Whether any path of `a` is, contains or is contained by a path of `b`; '' is the whole checkout. */
+export const overlaps = (a: string[], b: string[]) =>
+  a.some((p) =>
+    b.some(
+      (q) =>
+        p === '' || q === '' || affected(folded(p), folded(q)) || affected(folded(q), folded(p)),
+    ),
+  );

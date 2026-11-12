@@ -2,31 +2,41 @@ import { normalizeApplicationError } from '@moonbase/effect';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { chmodSync, constants, closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
-import { canonical, ensure, fail, hash } from './validation.ts';
-import { invalidStored, parseRecord, parseRecovery, savedRevision } from './schema.ts';
-import {
-  ApplicationError,
-  type CommandInput,
-  type RecoveryPublication,
-} from '@moonbase/contracts/workspace';
+import { ApplicationError } from '@moonbase/contracts/workspace';
+import { ensure } from './validation.ts';
 
-// shortcut: immutable receipts still grow on disk; compact only with proven replay and recovery compatibility.
-export const pendingSaves =
-  "(json_extract(body, '$.result') IS NULL OR json_extract(body, '$.published') IS NOT 1 OR json_extract(body, '$.restorePending') = 1) AND NOT (json_extract(body, '$.started') IS 0 AND json_extract(body, '$.result') IS NOT NULL AND json_extract(body, '$.restorePending') IS NOT 1)";
+export type Decoders = Record<string, (value: unknown) => unknown>;
+export const invalidStored = () =>
+  new ApplicationError({
+    code: 'Persistence',
+    message: 'Invalid workspace saved data. Original data retained; publication blocked.',
+  });
 
-type PublicationRecord = { digest: string; receipt: RecoveryPublication };
-
-/** Independent editor-only namespace. No legacy schemas, stores or migrations. */
+/**
+ * A private SQLite file of keyed records, each decoded strictly by its bucket. The file host and
+ * the client recovery store are separate files built on this.
+ */
 export class Store {
   readonly directory: string;
   readonly db: DatabaseSync;
-  constructor(directory: string, hostId: string) {
+  private readonly decoders: Decoders;
+  constructor(
+    directory: string,
+    options: {
+      file: string;
+      applicationId: number;
+      /** Extra schema statements, run after the records table exists. */
+      schema: string;
+      decoders: Decoders;
+    },
+  ) {
     ensure(isAbsolute(directory), 'Choose an explicit absolute Moonbase workspace data directory.');
+    this.decoders = options.decoders;
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     this.directory = realpathSync(directory);
     const fd = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000);
     closeSync(fd);
-    const file = join(directory, 'moonbase-workspace-v1.sqlite');
+    const file = join(directory, options.file);
     const databaseFile = openSync(file, constants.O_CREAT | constants.O_RDWR | 0x20000000, 0o600);
     closeSync(databaseFile);
     this.db = new DatabaseSync(file);
@@ -35,35 +45,45 @@ export class Store {
       const application = this.db.prepare('PRAGMA application_id').get()!.application_id;
       const tables = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
       ensure(
-        application === 1296193363 || (application === 0 && tables.length === 0),
+        application === options.applicationId || (application === 0 && tables.length === 0),
         'This is not a Moonbase workspace store. Existing data retained.',
       );
       this.db.exec(
-        'PRAGMA application_id=1296193363; CREATE TABLE IF NOT EXISTS records (bucket TEXT NOT NULL, key TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(bucket,key)); CREATE TABLE IF NOT EXISTS recovery (client TEXT PRIMARY KEY, revision INTEGER NOT NULL, body TEXT NOT NULL);',
-      );
-      this.db.exec(
-        `CREATE INDEX IF NOT EXISTS pending_saves_v2 ON records(bucket) WHERE bucket='saves' AND ${pendingSaves};`,
+        `PRAGMA application_id=${options.applicationId}; CREATE TABLE IF NOT EXISTS records (bucket TEXT NOT NULL, key TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(bucket,key));` +
+          options.schema,
       );
       chmodSync(file, 0o600);
-      const identity = this.get<string>('meta', 'host');
-      ensure(!identity || identity === hostId, 'Workspace store belongs to a different host.');
-      if (!identity) this.put('meta', 'host', hostId);
     } catch (error) {
       this.db.close();
       throw error;
+    }
+  }
+  /** Binds the store to one identity the first time and refuses any other afterwards. */
+  claim(key: string, value: string, message: string) {
+    const identity = this.get<string>('meta', key);
+    ensure(!identity || identity === value, message);
+    if (!identity) this.put('meta', key, value);
+  }
+  parse<T>(bucket: string, body: unknown): T {
+    try {
+      if (typeof body !== 'string') throw Error();
+      if (!Object.hasOwn(this.decoders, bucket)) throw Error();
+      return this.decoders[bucket](JSON.parse(body)) as T;
+    } catch {
+      throw invalidStored();
     }
   }
   get<T>(bucket: string, key: string): T | null {
     const row = this.db
       .prepare('SELECT body FROM records WHERE bucket=? AND key=?')
       .get(bucket, key);
-    return row ? parseRecord<T>(bucket, row.body) : null;
+    return row ? this.parse<T>(bucket, row.body) : null;
   }
-  all<T>(bucket: string, predicate = '1', parameters: SQLInputValue[] = []): T[] {
+  all<T>(bucket: string, predicate = '1', parameters: SQLInputValue[] = [], limit = -1): T[] {
     return this.db
-      .prepare(`SELECT body FROM records WHERE bucket=? AND (${predicate}) ORDER BY rowid`)
-      .all(bucket, ...parameters)
-      .map((r) => parseRecord<T>(bucket, r.body));
+      .prepare(`SELECT body FROM records WHERE bucket=? AND (${predicate}) ORDER BY rowid LIMIT ?`)
+      .all(bucket, ...parameters, limit)
+      .map((r) => this.parse<T>(bucket, r.body));
   }
   put(bucket: string, key: string, value: unknown) {
     try {
@@ -97,87 +117,16 @@ export class Store {
       });
     }
   }
-  readRecovery(client: string): { revision: number; state: unknown } | null {
-    const row = this.db.prepare('SELECT revision, body FROM recovery WHERE client=?').get(client);
-    if (!row) return null;
-    const revision = savedRevision(row.revision);
-    return { revision, state: parseRecovery(row.body, client) };
+  delete(bucket: string, key: string) {
+    this.db.prepare('DELETE FROM records WHERE bucket=? AND key=?').run(bucket, key);
   }
-  publication(client: string): number {
-    return this.get<number>('publications', client) ?? 0;
-  }
-  recoveryPublication(clientId: string, requestId: string) {
-    const record = this.get<PublicationRecord>(
-      'recovery-publications',
-      hash(canonical([clientId, requestId])),
-    );
-    if (record) {
-      const receipt = record.receipt;
-      const row = this.db.prepare('SELECT revision FROM recovery WHERE client=?').get(clientId);
-      const currentRevision = row ? savedRevision(row.revision) : -1;
-      if (
-        receipt.clientId !== clientId ||
-        receipt.requestId !== requestId ||
-        !Number.isSafeInteger(receipt.previousRevision) ||
-        !Number.isSafeInteger(receipt.revision) ||
-        receipt.revision !== receipt.previousRevision + 1 ||
-        !Number.isSafeInteger(currentRevision) ||
-        receipt.revision > currentRevision
-      )
-        throw invalidStored();
-    }
-    return record;
-  }
-  replayPublication(
-    input: CommandInput<'persistRecovery'>,
-    digest: string,
-  ): RecoveryPublication | null {
-    const previous = this.recoveryPublication(input.clientId, input.requestId);
-    if (previous && previous.digest !== digest)
-      fail(
-        'InvalidInput',
-        'Recovery request ID already belongs to a different immutable publication.',
-      );
-    if (previous && previous.receipt.previousRevision !== input.expectedRevision)
-      throw invalidStored();
-    return previous?.receipt ?? null;
-  }
-  /** Caller owns the transaction; module facts advance CAS without impersonating a client publication. */
-  writeInternalRecovery(client: string, revision: number, state: unknown) {
-    this.readRecovery(client);
-    this.db
-      .prepare(
-        'INSERT INTO recovery VALUES(?,?,?) ON CONFLICT(client) DO UPDATE SET revision=excluded.revision, body=excluded.body',
-      )
-      .run(client, revision + 1, JSON.stringify(state));
-  }
-  persist(input: CommandInput<'persistRecovery'>, digest: string): RecoveryPublication {
+  /** Runs `fn` in one write transaction; a throw rolls everything back. */
+  transaction<T>(fn: () => T): T {
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      const previous = this.replayPublication(input, digest);
-      if (previous) {
-        this.db.exec('COMMIT');
-        return previous;
-      }
-      const { clientId: client, requestId, expectedRevision: expected, state } = input;
-      const revision = this.readRecovery(client)?.revision ?? 0;
-      if (revision !== expected)
-        fail('Conflict', 'Recovery changed in another window. Reload before publishing.');
-      const receipt = {
-        clientId: client,
-        requestId,
-        previousRevision: revision,
-        revision: revision + 1,
-      };
-      this.db
-        .prepare(
-          'INSERT INTO recovery VALUES(?,?,?) ON CONFLICT(client) DO UPDATE SET revision=excluded.revision, body=excluded.body',
-        )
-        .run(client, revision + 1, JSON.stringify(state));
-      this.put('publications', client, revision + 1);
-      this.put('recovery-publications', hash(canonical([client, requestId])), { digest, receipt });
+      const value = fn();
       this.db.exec('COMMIT');
-      return receipt;
+      return value;
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;

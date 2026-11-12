@@ -13,7 +13,7 @@ import {
 import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { WorkspaceLive } from '../src/index.ts';
+import { WorkspaceLive } from './workspace-live.ts';
 import { fixture, rejects } from './workspace-fixture.ts';
 
 function repository() {

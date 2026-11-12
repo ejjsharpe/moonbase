@@ -15,11 +15,13 @@ import {
   shell,
 } from 'electron';
 import { ManagedRuntime, Effect } from 'effect';
-import { WorkspaceLive, WorkspaceNative } from '@moonbase/workspace';
+import { WorkspaceLocalLive, WorkspaceNative } from '@moonbase/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { acquireDaemonChat } from './chat/daemon.ts';
-import { realpathSync, mkdirSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EditorSession } from './session.ts';
@@ -38,6 +40,39 @@ import { installWindowLifecycle } from './main/window-lifecycle.ts';
 const directory = fileURLToPath(new URL('.', import.meta.url));
 /** The packaged daemon bundle's build identifier, which `scripts/build.mjs` defines. */
 declare const MOONBASE_DAEMON_BUILD: string | undefined;
+
+/**
+ * The identity this profile's recovery store has to a file host: kept in a file, and when that is
+ * lost, re-adopted from the one the store already claims so the store is never locked out.
+ */
+function readInstallationId(dataDirectory: string) {
+  mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
+  const file = join(dataDirectory, 'installation-id');
+  const valid = (value: unknown): value is string =>
+    typeof value === 'string' && /^[A-Za-z0-9-]{8,}$/.test(value);
+  try {
+    const stored = readFileSync(file, 'utf8').trim();
+    if (valid(stored)) return stored;
+  } catch {}
+  let id: string | undefined;
+  const database = join(dataDirectory, 'moonbase-workspace-v1.sqlite');
+  if (existsSync(database)) {
+    const db = new DatabaseSync(database, { readOnly: true });
+    try {
+      const row = db
+        .prepare("SELECT body FROM records WHERE bucket='meta' AND key='installation'")
+        .get();
+      const claimed: unknown = row ? JSON.parse(String(row.body)) : undefined;
+      if (valid(claimed)) id = claimed;
+    } catch {
+    } finally {
+      db.close();
+    }
+  }
+  id ??= randomUUID();
+  writeFileSync(file, id, { mode: 0o600 });
+  return id;
+}
 
 async function main() {
   const requestedData =
@@ -70,9 +105,12 @@ async function main() {
     process.env.MOONBASE_CHAT_CONFIG === undefined
       ? null
       : await readConfiguration(process.env.MOONBASE_CHAT_CONFIG);
-  const workspace = WorkspaceLive({
+  // The file host and this installation's recovery store run in this process; the renderer and
+  // application see one workspace.
+  const workspace = WorkspaceLocalLive({
     hostId: 'moonbase-local',
     dataDirectory: join(userData, 'workspace-v1'),
+    installationId: readInstallationId(join(userData, 'workspace-v1')),
     filesystemHelper: join(assets, 'filesystem'),
     ripgrepExecutable: join(assets, 'ripgrep/rg'),
     gitExecutable: '/usr/bin/git',

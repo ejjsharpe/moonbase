@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { WorkspaceLive } from '../src/index.ts';
+import { WorkspaceLive } from './workspace-live.ts';
 const [root, dataDirectory, filesystemHelper, ripgrepExecutable] = process.argv.slice(2);
 const runtime = ManagedRuntime.make(
   WorkspaceLive({ hostId: 'asset-test', dataDirectory, filesystemHelper, ripgrepExecutable }),

@@ -128,7 +128,7 @@ export const EntryReferenceSchema = struct({
   identity: Schema.String,
   directory: Schema.Boolean,
 });
-const kind = Schema.Literals([
+export const OperationKindSchema = Schema.Literals([
   'create-file',
   'create-directory',
   'move',
@@ -136,7 +136,9 @@ const kind = Schema.Literals([
   'trash',
   'import',
 ]);
-const outcome = Schema.Literals(['completed', 'failed', 'uncertain']);
+export const OperationOutcomeSchema = Schema.Literals(['completed', 'failed', 'uncertain']);
+const kind = OperationKindSchema;
+const outcome = OperationOutcomeSchema;
 export const WorkspaceOperationSchema = struct({
   id: WorkspaceIdentifierSchema,
   clientId: WorkspaceIdentifierSchema,
@@ -148,6 +150,12 @@ export const WorkspaceOperationSchema = struct({
   replacements: optional(array(EntryReferenceSchema)),
   nativeReferences: optional(array(Schema.String).check(Schema.isMaxLength(128))),
 });
+export const OperationItemSchema = struct({
+  source: Schema.String,
+  destination: optional(Schema.String),
+  outcome,
+  message: optional(Schema.String),
+});
 export const OperationResultSchema = struct({
   id: WorkspaceIdentifierSchema,
   clientId: WorkspaceIdentifierSchema,
@@ -155,14 +163,7 @@ export const OperationResultSchema = struct({
   kind,
   recoveryChanges: array(RecoveryChangeSchema),
   outcome,
-  items: array(
-    struct({
-      source: Schema.String,
-      destination: optional(Schema.String),
-      outcome,
-      message: optional(Schema.String),
-    }),
-  ),
+  items: array(OperationItemSchema),
   message: optional(Schema.String),
 });
 export const RecoveryLoadSchema = struct({

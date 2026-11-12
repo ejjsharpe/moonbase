@@ -1,22 +1,24 @@
-import { normalizeApplicationError } from '@moonbase/effect';
 import { Context, Effect, FiberSet, Layer, Scope } from 'effect';
-import { WorkspaceService } from '@moonbase/contracts/services';
-import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
-import { LocalWorkspace } from './workspace.ts';
-import {
-  decodeConfiguration,
-  decodeNativeCapture,
-  type WorkspaceConfigurationSchema,
-} from './schema.ts';
-const applicationError = (error: unknown, code: ApplicationError['code'] = 'Unavailable') =>
-  ApplicationError.is(error)
-    ? error
-    : new ApplicationError({ code, message: normalizeApplicationError(error).message });
-export type WorkspaceConfiguration = typeof WorkspaceConfigurationSchema.Type;
-/** Scoped resources only; the shared application composition root supplies the runtime. */
-export function WorkspaceLive(configuration: WorkspaceConfiguration) {
+import { WorkspaceHostService, WorkspaceService } from '@moonbase/contracts/services';
+import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
+import type { ApplicationError, CheckoutTarget } from '@moonbase/contracts/workspace';
+import { applicationError } from './admission.ts';
+import { ClientWorkspace } from './client.ts';
+import { decodeClientConfiguration } from './client-schema.ts';
+import { FileHost } from './host.ts';
+import { decodeConfiguration, decodeNativeCapture, type WorkspaceConfiguration } from './schema.ts';
+
+export type { WorkspaceConfiguration } from './schema.ts';
+export type WorkspaceRecoveryConfiguration = { dataDirectory: string; installationId: string };
+
+/**
+ * The file host: approvals, reads, saves, file operations, Git, search and watching, with the
+ * journals of the saves and operations it admitted. It keeps no client recovery. Scoped resources
+ * only; the shared application composition root supplies the runtime. `now` is the journal clock.
+ */
+export function WorkspaceHostLive(configuration: WorkspaceConfiguration, now?: () => number) {
   const resources = Layer.effect(
-    LocalResources,
+    HostResources,
     Effect.acquireRelease(
       Effect.gen(function* () {
         const config = yield* Effect.try({
@@ -37,45 +39,101 @@ export function WorkspaceLive(configuration: WorkspaceConfiguration) {
         const startExpiry = yield* FiberSet.runtime(references)();
         return yield* Effect.try({
           try: () =>
-            new LocalWorkspace(config, {
-              operations,
-              operationScope,
-              helperScope,
-              referenceScope,
-              observationScope,
-              runHelper,
-              startExpiry,
-            }),
+            new FileHost(
+              config,
+              {
+                operations,
+                operationScope,
+                helperScope,
+                referenceScope,
+                observationScope,
+                runHelper,
+                startExpiry,
+              },
+              now,
+            ),
           catch: (error) => applicationError(error, 'Persistence'),
         });
       }),
-      (workspace) => workspace.close(),
+      (host) => host.close(),
     ),
   );
   return Layer.merge(
     Layer.effect(
-      WorkspaceService,
-      Effect.map(LocalResources, (workspace) => workspace.service),
+      WorkspaceHostService,
+      Effect.map(HostResources, (host) => host.service),
     ),
     Layer.effect(
       WorkspaceNative,
-      Effect.map(LocalResources, (workspace) => ({
+      Effect.map(HostResources, (host) => ({
         capture: (input: { checkout: CheckoutTarget; clientId: string; paths: string[] }) =>
           Effect.flatMap(
             Effect.try({ try: () => decodeNativeCapture(input), catch: applicationError }),
             (captured) =>
-              workspace.effect(
-                (signal) => workspace.references.capture(captured, signal),
+              host.effect(
+                (signal) => host.references.capture(captured, signal),
                 false,
                 undefined,
-                (references) => workspace.references.release({ ...captured, references }),
+                (references) => host.references.release({ ...captured, references }),
               ),
           ),
         release: (input: { checkout: CheckoutTarget; clientId: string; references: string[] }) =>
-          Effect.try({ try: () => workspace.references.release(input), catch: applicationError }),
+          Effect.try({ try: () => host.references.release(input), catch: applicationError }),
       })),
     ),
   ).pipe(Layer.provide(resources));
+}
+
+/**
+ * One client's workspace over a file host: the editor's `WorkspaceService`, with this client's
+ * recovery, intents and operation-feed cursor in `dataDirectory`. Compose it with the host in the
+ * same process, or over a remote one. `installationId` names this client store to the host.
+ */
+export function WorkspaceRecoveryLive(
+  configuration: WorkspaceRecoveryConfiguration,
+  host: WorkspaceHostServiceShape,
+) {
+  return Layer.effect(
+    WorkspaceService,
+    Effect.map(
+      Effect.acquireRelease(
+        Effect.gen(function* () {
+          const config = yield* Effect.try({
+            try: () => decodeClientConfiguration(configuration),
+            catch: applicationError,
+          });
+          const parent = yield* Effect.scope;
+          const operationScope = yield* Scope.fork(parent, 'parallel');
+          const operations = yield* FiberSet.make<unknown, ApplicationError>().pipe(
+            Scope.provide(operationScope),
+          );
+          return yield* Effect.try({
+            try: () => new ClientWorkspace(config, { operations, operationScope }, host),
+            catch: (error) => applicationError(error, 'Persistence'),
+          });
+        }),
+        (client) => client.close(),
+      ),
+      (client) => client.service,
+    ),
+  );
+}
+
+/**
+ * The file host and one client recovery store in one process, as Electron main composes them: the
+ * host journals and the client recovery share `dataDirectory`, in separate files. Provides
+ * `WorkspaceService`, `WorkspaceHostService` and `WorkspaceNative`.
+ */
+export function WorkspaceLocalLive(
+  configuration: WorkspaceConfiguration & { installationId: string },
+  now?: () => number,
+) {
+  const { installationId, ...hostConfiguration } = configuration;
+  return Layer.unwrap(
+    Effect.map(WorkspaceHostService, (host) =>
+      WorkspaceRecoveryLive({ dataDirectory: configuration.dataDirectory, installationId }, host),
+    ),
+  ).pipe(Layer.provideMerge(WorkspaceHostLive(hostConfiguration, now)));
 }
 
 /** Main/native adapter only: approved picker/drop paths become short-lived, single-use tokens. */
@@ -94,6 +152,6 @@ export class WorkspaceNative extends Context.Service<
     }): Effect.Effect<void, ApplicationError>;
   }
 >()('moonbase/WorkspaceNative') {}
-class LocalResources extends Context.Service<LocalResources, LocalWorkspace>()(
-  'moonbase/LocalWorkspaceResources',
+class HostResources extends Context.Service<HostResources, FileHost>()(
+  'moonbase/WorkspaceHostResources',
 ) {}

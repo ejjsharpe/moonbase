@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { WorkspaceLive } from '../src/index.ts';
+import { WorkspaceLive } from './workspace-live.ts';
 import { fixture, rejects } from './workspace-fixture.ts';
 
 /** A plain folder beside the fixture's repository, in no repository itself. */
