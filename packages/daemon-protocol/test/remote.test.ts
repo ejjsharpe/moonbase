@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
 import { Effect, Exit, Layer, ManagedRuntime, Queue, Scope, Stream } from 'effect';
+import { TestClock } from 'effect/testing';
 import type { ChatClient, ChatListUpdate, ChatSnapshot } from '@moonbase/contracts/chat';
 import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import {
@@ -21,6 +22,7 @@ import {
 } from '../src/remote.ts';
 import { serveChat } from '../src/server.ts';
 import * as P from '../src/protocol.ts';
+import { socketLimits } from '@moonbase/contracts/socket';
 import { fixture as runtimeFixture, manualClock, session, until } from './runtime-fixture.ts';
 
 // The daemon serves chat; these cases need none of its other operations.
@@ -109,6 +111,7 @@ function remote(
   d: Awaited<ReturnType<typeof daemon>>,
   clock?: ReturnType<typeof manualClock>,
   withWorkspace = false,
+  testClock = false,
 ) {
   let endpoint = d.endpoint();
   const changes = new Set<() => void>();
@@ -137,6 +140,7 @@ function remote(
       RemoteChatLive,
       RemoteLocalHostLive,
       ...(withWorkspace ? [RemoteWorkspaceHostLive({ host: session.host })] : []),
+      ...(testClock ? [TestClock.layer()] : []),
     ).pipe(
       Layer.provide(
         clock ? Layer.merge(connection, Layer.succeed(DaemonLinkClock, clock)) : connection,
@@ -146,6 +150,9 @@ function remote(
   t.after(() => runtime.dispose());
   return {
     chat: makeChatClient(runtime),
+    /** Moves the deadlines of requests made through this client. */
+    run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
+    advance: (ms: number) => runtime.runPromise(TestClock.adjust(ms)),
     workspace: () => runtime.runPromise(WorkspaceHostService),
     /** Replaces the connection generation and announces it. */
     replace() {
@@ -321,4 +328,52 @@ test('a workspace call or watch for another host is refused before it is sent, a
   // The daemon answers an open with a checkout of another host.
   assert.equal(await code(host.openCheckout({ root: '/work' })), 'Incompatible');
   assert.deepEqual(calls, ['openCheckout']);
+});
+
+test('a mutation past its deadline keeps its place until the daemon replies, so chat keeps its room', async (t) => {
+  const answers: (() => void)[] = [];
+  const workspace: WorkspaceHostClient = {
+    command: () => new Promise<never>((resolve) => answers.push(() => resolve(undefined as never))),
+    watch: () => () => Promise.resolve(),
+  };
+  const d = await daemon(t, workspace);
+  const client = remote(t, d, undefined, true, true);
+  const host = await client.workspace();
+  const limit = socketLimits.workspaceRequests;
+  const acknowledge = (requestId: string) =>
+    client.run(
+      Effect.flip(
+        host.acknowledgeSave({ installationId: 'install', clientId: 'client', requestId }),
+      ),
+    );
+  const hung = Array.from({ length: limit }, (_, i) => acknowledge(`hung-${i}`));
+  await until(
+    async () => answers.length,
+    (count) => count === limit,
+  );
+  const waiting = client.run(
+    host.acknowledgeSave({ installationId: 'install', clientId: 'client', requestId: 'waiting' }),
+  );
+  await client.advance(120_000);
+  assert.deepEqual(
+    (await Promise.all(hung)).map((error) => error.code),
+    Array(limit).fill('Uncertain'),
+  );
+  // The caller gave up, yet the daemon still counts them: the next one is not sent.
+  assert.equal(answers.length, limit);
+  const created = await client.chat.command('createChat', {
+    session,
+    requestId: 'create',
+    title: 'Beside hung mutations',
+    settings: d.f.settings,
+  });
+  assert.ok(created.conversation.target);
+  // Late replies free their places.
+  for (const answer of answers.splice(0)) answer();
+  await until(
+    async () => answers.length,
+    (count) => count === 1,
+  );
+  answers.splice(0).forEach((answer) => answer());
+  await waiting;
 });
