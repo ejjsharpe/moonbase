@@ -270,6 +270,46 @@ test("one client's move re-paths another client's draft on its next load, and it
   }
 });
 
+test('a checkout the host refuses does not stop the feed for the others', async () => {
+  const h = harness();
+  try {
+    writeFileSync(join(h.root, 'file.txt'), 'disk');
+    const { host } = await h.startHost();
+    mkdirSync(join(h.base, 'other'));
+    const checkout = await openCheckout(host, h.root),
+      stale = await openCheckout(host, join(h.base, 'other'));
+    const disk = await Effect.runPromise(host.readFile({ checkout, path: 'file.txt' }));
+    const alice = h.startClient('alice', host),
+      bob = h.startClient('bob', host, (inner) => ({
+        ...inner,
+        listOperations: (input) =>
+          input.checkout.checkoutId === stale.checkoutId
+            ? Effect.fail(new ApplicationError({ code: 'Unauthorized', message: 'Replaced.' }))
+            : inner.listOperations(input),
+      }));
+    await bob.client.command('persistRecovery', {
+      requestId: randomUUID(),
+      clientId: 'b',
+      expectedRevision: 0,
+      state: { ...draft('b', checkout, 'bob', disk), checkouts: [checkout, stale] },
+    });
+    await bob.client.command('loadRecovery', { clientId: 'b' });
+    await alice.client.command('mutate', {
+      id: 'move',
+      clientId: 'a',
+      checkout,
+      kind: 'move',
+      sources: await alice.client.command('inspectEntries', { checkout, paths: ['file.txt'] }),
+      destination: 'renamed.txt',
+    });
+    const loaded = await bob.client.command('loadRecovery', { clientId: 'b' });
+    assert.equal(loaded.state.drafts[0].target.path, 'renamed.txt');
+    assert(loaded.errors.length > 0);
+  } finally {
+    await h.close();
+  }
+});
+
 test('journal entries leave after acknowledgement and the window; a feed gap keeps drafts and marks them', async () => {
   const h = harness();
   try {

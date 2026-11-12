@@ -6,6 +6,7 @@ import type {
   OperationFeed,
   SaveStatus,
 } from '@moonbase/contracts/workspace-host';
+import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
 import type { Directory } from './filesystem.ts';
 import type { Store } from './store.ts';
@@ -29,13 +30,14 @@ import {
 type SaveIdentity = Pick<HostInput<'saveStatus'>, 'installationId' | 'clientId' | 'requestId'>;
 type OperationIdentity = Pick<HostInput<'operationStatus'>, 'installationId' | 'clientId' | 'id'>;
 const sequenceKey = (sequence: number) => String(sequence).padStart(12, '0');
+const floorKey = (checkoutId: string) => 'feed-floor/' + checkoutId;
 const feeds = (kind: HostOperationRecord['input']['kind']) =>
   kind === 'move' || kind === 'copy' || kind === 'trash';
 
 /**
  * The file host's save and operation journals, keyed by installation, client and request. An
  * entry stays until its client acknowledges it and the retention window passes. Completed moves,
- * copies and Trash also enter a feed with a store-wide, increasing sequence, so other clients can
+ * copies and Trash also enter a feed with a store-wide, increasing sequence (and a floor per checkout), so other clients can
  * reconcile their own recovery.
  */
 export class HostJournal {
@@ -47,6 +49,8 @@ export class HostJournal {
   private readonly isCheckoutActive: (checkoutId: string) => boolean;
   private readonly now: () => number;
   private readonly retentionMs: number;
+  /** Names this store's feed; a recreated store starts a new one. */
+  private readonly epoch: string;
   constructor(
     store: Store,
     directory: (target: CheckoutTarget) => Promise<Directory>,
@@ -59,6 +63,8 @@ export class HostJournal {
     this.isCheckoutActive = isCheckoutActive;
     this.now = now;
     this.retentionMs = retentionMs;
+    this.epoch = store.get<string>('meta', 'feed-epoch') ?? randomUUID();
+    store.put('meta', 'feed-epoch', this.epoch);
     this.compact();
   }
 
@@ -204,14 +210,15 @@ export class HostJournal {
             r.input.clientId === clientId)),
     );
   }
-  /** A checkout's operations that are uncertain or that their client has not acknowledged. */
-  getUnsettledCheckoutOperations(target: CheckoutTarget) {
+  /** A checkout's operations that are uncertain, or unacknowledged by the requesting installation. */
+  getUnsettledCheckoutOperations(target: CheckoutTarget, installationId: string) {
     return this.getOperations("json_extract(body, '$.input.checkout.checkoutId') = ?", [
       target.checkoutId,
     ]).filter(
       (r) =>
         r.input.checkout.checkoutId === target.checkoutId &&
-        (r.result.outcome === 'uncertain' || r.acknowledgedAt === undefined),
+        (r.result.outcome === 'uncertain' ||
+          (r.acknowledgedAt === undefined && r.input.installationId === installationId)),
     );
   }
   replayOperation(id: string, input: HostInput<'mutate'>, record: HostOperationRecord) {
@@ -412,8 +419,9 @@ export class HostJournal {
   /** Entries for one checkout after `after`, in sequence order, one page at a time. */
   listOperations(target: CheckoutTarget, after: number | null): OperationFeed {
     const latest = this.store.get<number>('counters', 'feed') ?? 0;
-    const floor = this.store.get<number>('counters', 'feed-floor') ?? 0;
-    if (after === null) return { operations: [], through: latest, floor, more: false };
+    const floor = this.store.get<number>('counters', floorKey(target.checkoutId)) ?? 0;
+    const epoch = this.epoch;
+    if (after === null) return { operations: [], through: latest, floor, epoch, more: false };
     const rows = this.store.all<FeedRecord>(
       'feed',
       "json_extract(body, '$.checkout.checkoutId') = ? AND json_extract(body, '$.sequence') > ?",
@@ -426,6 +434,7 @@ export class HostJournal {
       operations: page.map(({ operation: _operation, ...entry }) => entry),
       through: more ? page[page.length - 1].sequence : Math.max(latest, after),
       floor,
+      epoch,
       more,
     };
   }
@@ -436,7 +445,8 @@ export class HostJournal {
     try {
       this.store.transaction(() => {
         const db = this.store.db;
-        let floor = this.store.get<number>('counters', 'feed-floor') ?? 0;
+        // Discarding one checkout's entries only raises that checkout's floor.
+        const floors = new Map<string, number>();
         const expired = (bucket: string, field: string) =>
           db
             .prepare(
@@ -447,10 +457,13 @@ export class HostJournal {
         for (const operation of expired('operations', 'acknowledgedAt')) {
           for (const row of db
             .prepare(
-              "SELECT json_extract(body, '$.sequence') AS sequence FROM records WHERE bucket='feed' AND json_extract(body, '$.operation') = ?",
+              "SELECT json_extract(body, '$.sequence') AS sequence, json_extract(body, '$.checkout.checkoutId') AS checkout FROM records WHERE bucket='feed' AND json_extract(body, '$.operation') = ?",
             )
             .all(operation))
-            floor = Math.max(floor, Number(row.sequence));
+            floors.set(
+              row.checkout as string,
+              Math.max(floors.get(row.checkout as string) ?? 0, Number(row.sequence)),
+            );
           db.prepare(
             "DELETE FROM records WHERE bucket='feed' AND json_extract(body, '$.operation') = ?",
           ).run(operation);
@@ -459,7 +472,12 @@ export class HostJournal {
         for (const save of expired('saves', 'acknowledgedAt')) this.store.delete('saves', save);
         for (const request of expired('requests', 'settledAt'))
           this.store.delete('requests', request);
-        this.store.put('counters', 'feed-floor', floor);
+        for (const [checkoutId, floor] of floors)
+          this.store.put(
+            'counters',
+            floorKey(checkoutId),
+            Math.max(floor, this.store.get<number>('counters', floorKey(checkoutId)) ?? 0),
+          );
       });
     } catch {
       /* Retention is best effort; entries stay until the next attempt. */

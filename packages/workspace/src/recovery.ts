@@ -212,6 +212,15 @@ export class WorkspaceRecovery {
       )
       .filter((r) => !this.activeSaves.has(key(r.input.clientId, r.input.requestId)));
   }
+  /** Settled, published saves whose acknowledgement the host has not yet received. */
+  private getUnacknowledgedSavesAtHost() {
+    return this.store
+      .all<SaveRecord>(
+        'saves',
+        "json_extract(body, '$.published') = 1 AND json_extract(body, '$.result') IS NOT NULL AND json_extract(body, '$.hostAcknowledged') IS NOT 1 AND json_extract(body, '$.restorePending') IS NOT 1",
+      )
+      .filter((r) => r.result && r.published && !r.hostAcknowledged && !r.restorePending);
+  }
   /** The text a draft held when the save began: its recorded baseline, else the file on the host. */
   async getBaseline(input: CommandInput<'saveFile'>, signal: AbortSignal) {
     const draft = (
@@ -817,6 +826,7 @@ export class WorkspaceRecovery {
         }
       }
     }
+    await this.acknowledgeSaves(this.getUnacknowledgedSavesAtHost(), signal);
     for (const record of this.getUnacknowledgedAtHost()) {
       const id = key(record.input.clientId, record.input.id);
       try {
@@ -847,7 +857,8 @@ export class WorkspaceRecovery {
       byHost.set(target.hostId, [...(byHost.get(target.hostId) ?? []), target]);
     for (const [hostId, targets] of byHost) {
       try {
-        await this.syncHostFeed(hostId, targets, signal);
+        for (const message of await this.syncHostFeed(hostId, targets, signal))
+          errors.push('Operation history unavailable for a checkout: ' + message);
       } catch (error) {
         errors.push('Operation history unavailable: ' + errorText(error));
       }
@@ -855,40 +866,71 @@ export class WorkspaceRecovery {
     return errors;
   }
   private async syncHostFeed(hostId: string, targets: CheckoutTarget[], signal: AbortSignal) {
-    const cursor = this.store.get<{ sequence: number }>('cursors', hostId);
-    if (!cursor) {
-      // Nothing earlier concerns this client: begin at the host's present position.
-      const feed = await this.host.listOperations({ checkout: targets[0], after: null }, signal);
-      this.store.put('cursors', hostId, { sequence: feed.through });
-      return;
-    }
-    const entries: OperationFeedEntry[] = [];
-    let through = Number.POSITIVE_INFINITY;
-    for (const checkout of targets) {
-      let after = cursor.sequence;
-      for (;;) {
-        const feed = await this.host.listOperations({ checkout, after }, signal);
-        if (feed.floor > cursor.sequence)
-          this.store.put('gaps', key(hostId, checkout.checkoutId), {
-            since: cursor.sequence,
-            checkoutId: checkout.checkoutId,
-          });
-        entries.push(...feed.operations);
-        if (!feed.more) {
-          through = Math.min(through, feed.through);
-          break;
+    const cursor = this.store.get<{ sequence: number; epoch?: string }>('cursors', hostId);
+    const errors: string[] = [];
+    // Begins at the host's present position; nothing earlier concerns this client.
+    const begin = async () => {
+      let failure: unknown;
+      for (const checkout of targets) {
+        try {
+          const feed = await this.host.listOperations({ checkout, after: null }, signal);
+          this.store.put('cursors', hostId, { sequence: feed.through, epoch: feed.epoch });
+          return;
+        } catch (error) {
+          failure = error;
         }
-        after = feed.through;
       }
+      throw failure;
+    };
+    if (!cursor) return begin().then(() => errors);
+    const entries: OperationFeedEntry[] = [];
+    let through = Number.POSITIVE_INFINITY,
+      failure: unknown;
+    for (const checkout of targets) {
+      // One checkout the host refuses (for example, its approval was replaced) must not stop the rest.
+      const found: OperationFeedEntry[] = [];
+      let last = 0,
+        after = cursor.sequence;
+      try {
+        for (;;) {
+          const feed = await this.host.listOperations({ checkout, after }, signal);
+          if (feed.epoch !== cursor.epoch) {
+            // A recreated host store restarts its sequence: moves in between are unknowable.
+            for (const target of targets)
+              this.store.put('gaps', key(hostId, target.checkoutId), {
+                since: cursor.sequence,
+                checkoutId: target.checkoutId,
+              });
+            return begin().then(() => errors);
+          }
+          if (feed.floor > cursor.sequence)
+            this.store.put('gaps', key(hostId, checkout.checkoutId), {
+              since: cursor.sequence,
+              checkoutId: checkout.checkoutId,
+            });
+          found.push(...feed.operations);
+          last = feed.through;
+          if (!feed.more) break;
+          after = feed.through;
+        }
+      } catch (error) {
+        failure = error;
+        errors.push(errorText(error));
+        continue;
+      }
+      entries.push(...found);
+      through = Math.min(through, last);
     }
-    if (!Number.isFinite(through) || through <= cursor.sequence) return;
+    if (!Number.isFinite(through)) throw failure;
+    if (through <= cursor.sequence) return errors;
     entries.sort((a, b) => a.sequence - b.sequence);
     for (const entry of entries) {
       if (entry.sequence > through) break;
       // This installation applies its own results as they return.
       if (entry.installationId !== this.installationId) this.applyFeedEntry(entry);
     }
-    this.store.put('cursors', hostId, { sequence: through });
+    this.store.put('cursors', hostId, { sequence: through, epoch: cursor.epoch });
+    return errors;
   }
   private applyFeedEntry(entry: OperationFeedEntry) {
     const id = key(entry.clientId, entry.id);

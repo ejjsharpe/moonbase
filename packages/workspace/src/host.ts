@@ -192,10 +192,7 @@ export class FileHost implements AdmissionOwner {
       ) =>
       (input: HostInput<K>) =>
         Effect.flatMap(
-          Effect.try({
-            try: () => decodeHostInput(operation, input),
-            catch: applicationError,
-          }),
+          Effect.try({ try: () => decodeHostInput(operation, input), catch: applicationError }),
           (captured) =>
             this.effect(
               async (signal) => decodeHostOutput(operation, await fn(captured, signal)),
@@ -667,7 +664,9 @@ export class FileHost implements AdmissionOwner {
     const occupied = this.journal.reserveRequest(id, { input });
     if (occupied)
       return this.journal.replayRequest(id, 'initializeRepository', input)! as GitCheckoutTarget;
-    return this.settleRequest(id, input, () => this.initializeRepository(input.checkout, signal));
+    return this.settleRequest(id, input, () =>
+      this.initializeRepository(input.checkout, signal, input.installationId),
+    );
   }
   /** Runs a reserved request and records its outcome, success or failure, for replay. */
   private async settleRequest<T extends CheckoutTarget>(
@@ -684,7 +683,12 @@ export class FileHost implements AdmissionOwner {
       }
       return result;
     } catch (error) {
-      if (ApplicationError.is(error)) {
+      // A cancellation or storage failure is transient: a replay of this ID reports it interrupted.
+      if (
+        ApplicationError.is(error) &&
+        error.code !== 'Cancelled' &&
+        error.code !== 'Persistence'
+      ) {
         try {
           this.journal.settleRequest(id, {
             input,
@@ -701,7 +705,7 @@ export class FileHost implements AdmissionOwner {
    * Runs `git init` in a plain folder with no `.git` entry and no unsettled saves or file
    * operations, then approves and returns it as the main worktree of its own new repository.
    */
-  async initializeRepository(target: CheckoutTarget, signal: AbortSignal) {
+  async initializeRepository(target: CheckoutTarget, signal: AbortSignal, installationId: string) {
     ensure(target.vcs === 'none', 'This project is already a Git repository.');
     const directory = await this.directory(target);
     if (this.gitEntry(target.root))
@@ -711,7 +715,7 @@ export class FileHost implements AdmissionOwner {
       'A save awaits recovery. Resolve it before initializing Git.',
     );
     ensure(
-      !this.journal.getUnsettledCheckoutOperations(target).length,
+      !this.journal.getUnsettledCheckoutOperations(target, installationId).length,
       'A file operation awaits recovery publication or inspection. Resolve it before initializing Git.',
     );
     await directory.initializeGit(signal);

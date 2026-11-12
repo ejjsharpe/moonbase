@@ -64,12 +64,14 @@ export const OperationFeedEntrySchema = struct({
 });
 /**
  * Every entry for the checkout after the requested sequence up to `through` is in `operations`;
- * `more` says the page ended early. Entries up to `floor` may have been discarded.
+ * `more` says the page ended early. Entries of this checkout up to `floor` may have been
+ * discarded. `epoch` names the host store: a different one means the sequences start over.
  */
 export const OperationFeedSchema = struct({
   operations: array(OperationFeedEntrySchema).check(Schema.isMaxLength(maximumOperationFeedPage)),
   through: natural,
   floor: natural,
+  epoch: WorkspaceIdentifierSchema,
   more: Schema.Boolean,
 });
 
