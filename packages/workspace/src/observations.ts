@@ -5,7 +5,7 @@ import {
   decodeWorkspaceWatchInput,
 } from '@moonbase/contracts/workspace-schema';
 import { Cause, Deferred, Effect, Exit, Fiber, Queue, Scope, Stream } from 'effect';
-import { readdirSync, readFileSync, realpathSync, watch as fsWatch } from 'node:fs';
+import fs, { readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { Directory } from './filesystem.ts';
 import { ensure, path, same } from './validation.ts';
@@ -173,15 +173,15 @@ export class WorkspaceObservations {
             Effect.try({
               try: () => {
                 const closed = Deferred.makeUnsafe<void>();
-                const watcher = fsWatch(
-                  path,
-                  { persistent: false, recursive: true },
-                  (_kind, name) => changed(undefined, name ? resolve(path, name) : undefined),
-                ).on('error', (error) => {
-                  changed(normalizeApplicationError(error).message);
-                  // Node stops a failed watcher without guaranteeing a later close event.
-                  Deferred.doneUnsafe(closed, Effect.void);
-                });
+                const watcher = fs
+                  .watch(path, { persistent: false, recursive: true }, (_kind, name) =>
+                    changed(undefined, name ? resolve(path, name) : undefined),
+                  )
+                  .on('error', (error) => {
+                    changed(normalizeApplicationError(error).message);
+                    // Node stops a failed watcher without guaranteeing a later close event.
+                    Deferred.doneUnsafe(closed, Effect.void);
+                  });
                 watcher.once('close', () => Deferred.doneUnsafe(closed, Effect.void));
                 const release = Effect.gen(function* () {
                   yield* releaseResource(() => watcher.close());

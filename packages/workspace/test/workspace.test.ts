@@ -684,3 +684,30 @@ test('native assets in packaged resource paths run with restricted PATH and no p
     await f.close();
   }
 });
+
+test('only macOS on Node 26.13 or newer, the pinned Electron or exactly Bun 1.4.4 opens a workspace', async () => {
+  const original = Object.getOwnPropertyDescriptor(process, 'versions')!;
+  const opens = async (versions: Record<string, string | undefined>) => {
+    const f = fixture();
+    Object.defineProperty(process, 'versions', {
+      ...original,
+      value: { ...process.versions, bun: undefined, electron: undefined, ...versions },
+    });
+    try {
+      const status = await f.client
+        .command('openCheckout', { root: f.root })
+        .then(() => 'opened')
+        .catch((error) => (error as { code?: unknown }).code);
+      return status;
+    } finally {
+      Object.defineProperty(process, 'versions', original);
+      await f.close();
+    }
+  };
+  assert.equal(await opens({ bun: '1.4.4', node: '26.3.0' }), 'opened');
+  assert.equal(await opens({ bun: '1.4.5', node: '26.13.0' }), 'Incompatible');
+  assert.equal(await opens({ electron: '45.1.0', node: '24.22.1' }), 'opened');
+  assert.equal(await opens({ electron: '45.2.0', node: '24.22.1' }), 'Incompatible');
+  assert.equal(await opens({ node: '26.13.0' }), 'opened');
+  assert.equal(await opens({ node: '26.12.9' }), 'Incompatible');
+});

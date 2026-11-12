@@ -1,6 +1,6 @@
 import { type Cause, Deferred, Effect, Exit } from 'effect';
 import { spawn } from 'node:child_process';
-import { closeSync, constants, fstatSync, openSync, readdirSync, realpathSync } from 'node:fs';
+import fs, { constants, fstatSync, openSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import type { FileDocument } from '@moonbase/contracts/workspace';
 import { document, ensure, fail, path } from './validation.ts';
@@ -256,7 +256,7 @@ export class Directory {
         parent = resolve(parent, component);
       }
     } catch (error) {
-      closeSync(this.fd);
+      fs.closeSync(this.fd);
       throw error;
     }
   }
@@ -264,7 +264,7 @@ export class Directory {
   close() {
     if (this.closed) return;
     this.closed = true;
-    closeSync(this.fd);
+    fs.closeSync(this.fd);
   }
   check() {
     const fd = openSync(this.root, flags);
@@ -272,7 +272,7 @@ export class Directory {
       if (identity(fstatSync(fd)) !== this.expected)
         fail('Unauthorized', 'Checkout directory replaced. Reopen its original directory.');
     } finally {
-      closeSync(fd);
+      fs.closeSync(fd);
     }
   }
   io(args: string[], input?: string, signal?: AbortSignal, extra?: number[]) {
@@ -337,7 +337,7 @@ export class Directory {
       ensure(info.isFile() || info.isDirectory(), 'Unsupported filesystem object.');
       return { identity: identity(info), directory: info.isDirectory() };
     } finally {
-      closeSync(fd);
+      fs.closeSync(fd);
     }
   }
 

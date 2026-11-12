@@ -78,6 +78,23 @@ type WorkspaceOwnership = {
   startExpiry: (effect: Effect.Effect<void>) => Fiber.Fiber<void>;
 };
 
+/**
+ * macOS on Node 26.13 or newer, the pinned Electron, or exactly Bun 1.4.4. Bun and Electron are
+ * qualified exactly, so upgrading either is a deliberate change; Bun reports an older Node version
+ * than it implements, so it is never judged by that version.
+ */
+export function ensureQualifiedRuntime(platform: string, versions: NodeJS.ProcessVersions) {
+  const [major = 0, minor = 0] = versions.node.split('.').map(Number);
+  let qualified = major > 26 || (major === 26 && minor >= 13);
+  if (versions.electron !== undefined) qualified = versions.electron === '45.1.0';
+  if (versions.bun !== undefined) qualified = versions.bun === '1.4.4';
+  if (platform !== 'darwin' || !qualified)
+    fail(
+      'Incompatible',
+      'The workspace requires macOS on Node 26.13 or newer, Electron 45.1.0 or exactly Bun 1.4.4.',
+    );
+}
+
 export class LocalWorkspace {
   readonly ownership: WorkspaceOwnership;
   readonly store: Store;
@@ -103,7 +120,7 @@ export class LocalWorkspace {
   constructor(config: WorkspaceConfiguration, ownership: WorkspaceOwnership) {
     this.config = config;
     this.ownership = ownership;
-    ensure(process.platform === 'darwin', 'Workspace native implementation requires macOS.');
+    ensureQualifiedRuntime(process.platform, process.versions);
     identifier(config.hostId);
     const helper =
       config.filesystemHelper ?? fileURLToPath(new URL('../dist/filesystem', import.meta.url));
