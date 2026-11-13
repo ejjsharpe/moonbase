@@ -102,8 +102,7 @@ const moduleOwner = (path) => path.match(/^(?:packages|apps)\/[^/]+/)?.[0];
 // Unit tests sit beside their source but are never production code.
 const isTest = (path) => /\.test\.[cm]?[jt]sx?$/.test(path);
 const production = (path) =>
-  !isTest(path) &&
-  (/^packages\/[^/]+\/src\//.test(path) || /^packages\/ui\/[^/]+\.ts$/.test(path));
+  !isTest(path) && (/^packages\/[^/]+\/src\//.test(path) || /^packages\/ui\/[^/]+\.ts$/.test(path));
 
 /** Check source ownership separately from emitted bundles, which erase type-only imports. */
 export function checkBoundaries({ files, packages }) {
@@ -315,7 +314,5 @@ export function checkBoundaries({ files, packages }) {
   return [...new Set(errors)];
 }
 
-export const isPrivilegedDesktopInput = (path) =>
-  /(?:^|\/)apps\/desktop\/src\/(?:main(?:\/|\.ts$)|(?:session|ipc-lifetime)\.ts$|chat\/(?:config|local|session|transcript-native)\.ts$)/.test(
-    path,
-  );
+// Electron main: everything under `src/main`.
+export const isPrivilegedDesktopInput = (path) => /(?:^|\/)apps\/desktop\/src\/main\//.test(path);

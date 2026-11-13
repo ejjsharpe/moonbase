@@ -7,7 +7,7 @@ assert.deepEqual(
   inputs.filter(
     (p) =>
       isPrivilegedDesktopInput(p) ||
-      /(?:^|\/)node_modules\/(?:electron|@moonbase\/(?:workspace|chat-runtime|daemon-protocol|ssh|connection))\/|packages\/(?:workspace|chat-runtime|daemon-protocol|ssh|connection)\/|packages\/workbench\/(?:demo|test)\/|packages\/contracts\/src\/services\.ts|packages\/application\/src\/testing\/|packages\/application\/src\/app\/(?:handlers|clients)\.ts|apps\/desktop\/src\/(?:main|session|preload|chat-preload|chat\/(?:config|session))\.ts|@earendil-works|pi-ai|pi-durable|node:sqlite|source-snapshot|node:/.test(
+      /(?:^|\/)node_modules\/(?:electron|@moonbase\/(?:workspace|chat-runtime|daemon-protocol|ssh|connection))\/|packages\/(?:workspace|chat-runtime|daemon-protocol|ssh|connection)\/|packages\/workbench\/(?:demo|test)\/|packages\/contracts\/src\/services\.ts|packages\/application\/src\/testing\/|packages\/application\/src\/app\/(?:handlers|clients)\.ts|apps\/desktop\/src\/(?:main|preload)\/|@earendil-works|pi-ai|pi-durable|node:sqlite|source-snapshot|node:/.test(
         p,
       ),
   ),
@@ -30,10 +30,10 @@ assert(
 );
 for (const entry of [
   'packages/workbench/src/workbench.tsx',
-  'apps/desktop/src/renderer/shell/workbench.tsx',
-  'apps/desktop/src/renderer/chat/view.tsx',
-  'apps/desktop/src/renderer/chat/transcript.tsx',
-  'apps/desktop/src/renderer/chat/markdown.tsx',
+  'apps/desktop/src/renderer/app/workbench.tsx',
+  'apps/desktop/src/renderer/features/chat/view.tsx',
+  'apps/desktop/src/renderer/features/chat/transcript/transcript.tsx',
+  'apps/desktop/src/renderer/features/chat/transcript/markdown.tsx',
 ])
   assert(inputs.some((p) => p.endsWith(entry)));
 assert(!inputs.some((p) => /packages\/editor\//.test(p)));

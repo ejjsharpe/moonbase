@@ -1,11 +1,11 @@
 import { defineConfig } from '@playwright/test';
 export default defineConfig({
-  testDir: './test',
+  testDir: './test/e2e',
   outputDir: process.env.MOONBASE_NATIVE_OUTPUT ?? 'test-results',
   workers: 1,
   fullyParallel: false,
   timeout: 45000,
-  globalTeardown: './test/global-teardown.ts',
+  globalTeardown: './test/fixtures/global-teardown.ts',
   use: { trace: 'retain-on-failure' },
   projects: [
     { name: 'editor', testMatch: 'desktop.spec.ts' },

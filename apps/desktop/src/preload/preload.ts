@@ -1,0 +1,73 @@
+import './chat-preload.ts';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import {
+  channels,
+  type DesktopBridge,
+  type DesktopAction,
+  type ErrorDTO,
+  type Reply,
+} from '../shared/ipc/wire.ts';
+const active = new Set<string>();
+const call = async <T = unknown>(method: string, input: unknown, id: string) => {
+  active.add(id);
+  try {
+    const reply: Reply<T> = await ipcRenderer.invoke(channels.call, { method, input, id });
+    if (method !== 'watch' || !reply.ok) active.delete(id);
+    return reply;
+  } catch (error) {
+    active.delete(id);
+    throw error;
+  }
+};
+window.addEventListener('unload', () => {
+  for (const id of active) void bridge.cancel(id).catch(() => {});
+  active.clear();
+});
+const bridge: DesktopBridge = {
+  clientId: 'desktop-primary',
+  call(method, input, id) {
+    if (
+      ![
+        'command',
+        'choose-checkout',
+        'choose-imports',
+        'clipboard-imports',
+        'watch',
+        'copy-paths',
+        'reveal',
+      ].includes(method)
+    )
+      return Promise.reject(Error('Unsupported bridge method.'));
+    return call(method, input, id);
+  },
+  cancel: async (id) => {
+    try {
+      return await ipcRenderer.invoke(channels.cancel, id);
+    } finally {
+      active.delete(id);
+    }
+  },
+  events(receive) {
+    const listener = (_: unknown, id: string, result: Reply) => receive(id, result);
+    ipcRenderer.on(channels.event, listener);
+    return () => ipcRenderer.removeListener(channels.event, listener);
+  },
+  actions(receive) {
+    const listener = (_: unknown, action: DesktopAction, id: string, error?: ErrorDTO) =>
+      receive(action, id, error);
+    ipcRenderer.on(channels.action, listener);
+    return () => ipcRenderer.removeListener(channels.action, listener);
+  },
+  chatConfigured: () => ipcRenderer.invoke(channels.configured, null),
+  ready: () => ipcRenderer.send(channels.ready),
+  quitResult: (id, consent, cleanupError) =>
+    ipcRenderer.send(channels.quit, { id, consent, ...(cleanupError ? { cleanupError } : {}) }),
+  drop: (checkout, files) =>
+    call<string[]>(
+      'dropped-imports',
+      { checkout, paths: files.map((file) => webUtils.getPathForFile(file)).filter(Boolean) },
+      crypto.randomUUID(),
+    ),
+};
+// No ipcRenderer/event objects, filesystem functions or generic channel access cross this boundary.
+contextBridge.exposeInMainWorld('moonbase', bridge);

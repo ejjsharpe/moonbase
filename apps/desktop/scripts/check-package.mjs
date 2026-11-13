@@ -51,14 +51,22 @@ assert.deepEqual(
   [],
   'Privileged desktop owner reached packaged renderer',
 );
-assert(main.includes('src/chat/transcript-native.ts'), 'Missing native transcript authority owner');
-for (const entry of ['native-actions', 'ipc', 'window-lifecycle', 'chat-backends'])
+assert(
+  main.includes('src/main/native/transcript-native.ts'),
+  'Missing native transcript authority owner',
+);
+for (const entry of [
+  'native/native-actions',
+  'ipc/ipc',
+  'app/window-lifecycle',
+  'daemon/chat-backends',
+])
   assert(main.includes(`src/main/${entry}.ts`), `Missing packaged main owner: ${entry}`);
 
 for (const entry of [
   'packages/workbench/src/workbench.tsx',
-  'apps/desktop/src/renderer/shell/workbench.tsx',
-  'apps/desktop/src/renderer/chat/view.tsx',
+  'apps/desktop/src/renderer/app/workbench.tsx',
+  'apps/desktop/src/renderer/features/chat/view.tsx',
 ])
   assert(
     renderer.some((p) => p.endsWith(entry)),

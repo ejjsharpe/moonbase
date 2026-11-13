@@ -68,7 +68,7 @@ assert(
 );
 for (const specifier of ['@moonbase/chat', '@moonbase/editor', '@moonbase/application/client'])
   assert(
-    check({ 'apps/desktop/src/main.ts': `import '${specifier}';` }).some((error) =>
+    check({ 'apps/desktop/src/main/app/main.ts': `import '${specifier}';` }).some((error) =>
       error.includes('public package export'),
     ),
   );
@@ -118,7 +118,9 @@ assert(
   }).some((error) => error.includes('cross-package source')),
 );
 assert.deepEqual(
-  check({ 'packages/application/src/index.test.ts': "import 'node:assert'; import '../test/x.ts';" }),
+  check({
+    'packages/application/src/index.test.ts': "import 'node:assert'; import '../test/x.ts';",
+  }),
   [],
 );
 assert(
@@ -194,15 +196,13 @@ console.log(
 );
 
 for (const entry of [
-  'main.ts',
-  'main/native-actions.ts',
-  'main/ipc.ts',
-  'main/window-lifecycle.ts',
-  'main/chat-backends.ts',
+  'main/app/main.ts',
+  'main/native/native-actions.ts',
+  'main/ipc/ipc.ts',
+  'main/ipc/ipc-lifetime.ts',
+  'main/daemon/chat-backends.ts',
   'main/future-owner.ts',
-  'ipc-lifetime.ts',
-  'chat/local.ts',
 ])
   assert(isPrivilegedDesktopInput(`/checkout/apps/desktop/src/${entry}`), entry);
-assert(!isPrivilegedDesktopInput('/checkout/apps/desktop/src/renderer/main.tsx'));
-assert(!isPrivilegedDesktopInput('/checkout/apps/desktop/src/chat/wire.ts'));
+assert(!isPrivilegedDesktopInput('/checkout/apps/desktop/src/renderer/app/main.tsx'));
+assert(!isPrivilegedDesktopInput('/checkout/apps/desktop/src/shared/ipc/chat-wire.ts'));

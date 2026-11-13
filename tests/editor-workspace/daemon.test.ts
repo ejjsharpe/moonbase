@@ -11,12 +11,12 @@ import { WorkspaceHostService } from '@moonbase/contracts/services';
 import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
 import { RemoteWorkspaceHostLive } from '@moonbase/daemon-protocol/remote';
 import { WorkspaceRecoveryLive } from '@moonbase/workspace';
-import { startDaemonCommand } from '../../apps/desktop/test/daemon-process.ts';
+import { startDaemonCommand } from '../../apps/desktop/test/fixtures/daemon-process.ts';
 import {
   makeFauxDaemonCommand,
   prepareDaemonData,
   stopDaemon,
-} from '../../apps/desktop/test/faux-daemon.mjs';
+} from '../../apps/desktop/test/fixtures/faux-daemon.mjs';
 
 async function until<T>(read: () => T | Promise<T>, done: (value: T) => boolean, ms = 20000) {
   const deadline = Date.now() + ms;
