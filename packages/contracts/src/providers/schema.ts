@@ -1,12 +1,12 @@
 import * as Schema from 'effect/Schema';
-import { struct } from './schema.ts';
+import { struct } from '../shared/schema.ts';
 import {
   ChatIdentifierSchema,
   ChatModelPreferenceSchema,
   ChatReasoningEffortSchema,
-} from './chat-schema.ts';
-import { optional } from './schema.ts';
-import { ApplicationError } from './errors.ts';
+} from '../chat/schema.ts';
+import { optional } from '../shared/schema.ts';
+import { ApplicationError } from '../errors/errors.ts';
 import type { ProviderCommand, ProviderInput, ProviderOutput } from './providers.ts';
 
 const text = (limit: number) =>

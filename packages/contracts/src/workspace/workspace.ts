@@ -1,10 +1,10 @@
 /** Browser-safe application boundary. Privileged implementations use ./services. */
 export const maximumFileBytes = 2 * 1024 * 1024;
-import type * as Contracts from './workspace-schema.ts';
-import type { ApplicationError } from './errors.ts';
-import type { CommandOptions, ObservationClose } from './common.ts';
-export { ApplicationError, type ApplicationErrorCode } from './errors.ts';
-export type { CommandOptions, ObservationClose } from './common.ts';
+import type * as Contracts from './schema.ts';
+import type { ApplicationError } from '../errors/errors.ts';
+import type { CommandOptions, ObservationClose } from '../shared/common.ts';
+export { ApplicationError, type ApplicationErrorCode } from '../errors/errors.ts';
+export type { CommandOptions, ObservationClose } from '../shared/common.ts';
 export type CheckoutTarget = typeof Contracts.CheckoutTargetSchema.Type;
 export type GitCheckoutTarget = typeof Contracts.GitCheckoutTargetSchema.Type;
 export type FileTarget = typeof Contracts.FileTargetSchema.Type;

@@ -1,14 +1,14 @@
 import * as Schema from 'effect/Schema';
-import { ApplicationError } from './errors.ts';
-import { array, optional, struct, voidResult } from './schema.ts';
-import { ChatHostTargetSchema, ChatIdentifierSchema } from './host-schema.ts';
-import { ChatTargetSchema } from './chat-schema.ts';
+import { ApplicationError } from '../errors/errors.ts';
+import { array, optional, struct, voidResult } from '../shared/schema.ts';
+import { ChatHostTargetSchema, ChatIdentifierSchema } from '../host/schema.ts';
+import { ChatTargetSchema } from '../chat/schema.ts';
 import {
   ProviderSignInUrlSchema,
   ProviderStateSchema,
   providerInputSchemas,
-} from './providers-schema.ts';
-import { chatHostCapabilities, type ChatHostCapability } from './host.ts';
+} from '../providers/schema.ts';
+import { chatHostCapabilities, type ChatHostCapability } from '../host/host.ts';
 import type {
   DaemonCommand,
   DaemonInput,

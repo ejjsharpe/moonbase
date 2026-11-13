@@ -1,8 +1,12 @@
 import * as Schema from 'effect/Schema';
-import { ApplicationError } from './errors.ts';
+import { ApplicationError } from '../errors/errors.ts';
 import type { ConnectionCommand, ConnectionInput, ConnectionOutput } from './connection.ts';
-import { ChatHostHealthSchema, ChatHostTargetSchema, ChatIdentifierSchema } from './host-schema.ts';
-import { optional, struct, voidResult } from './schema.ts';
+import {
+  ChatHostHealthSchema,
+  ChatHostTargetSchema,
+  ChatIdentifierSchema,
+} from '../host/schema.ts';
+import { optional, struct, voidResult } from '../shared/schema.ts';
 
 export const ConnectionPortSchema = Schema.Int.check(
   Schema.isBetween({ minimum: 1, maximum: 65535 }),

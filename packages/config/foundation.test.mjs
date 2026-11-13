@@ -37,7 +37,7 @@ test('Foundation verifies browser-only command contracts and headless models wit
     const independent = check();
     assert.equal(independent.status, 0, independent.stderr);
     writeFileSync(
-      path.join(directory, 'packages/contracts/src/workspace.ts'),
+      path.join(directory, 'packages/contracts/src/workspace/workspace.ts'),
       "export { readFile } from 'node:fs/promises';\n",
     );
     const corrupt = check();

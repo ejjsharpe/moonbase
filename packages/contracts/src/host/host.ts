@@ -1,4 +1,4 @@
-import type { ChatHostTargetSchema, ChatHostHealthSchema } from './host-schema.ts';
+import type { ChatHostTargetSchema, ChatHostHealthSchema } from './schema.ts';
 
 /** Browser-safe identities; credentials and forwarded endpoints remain privileged. */
 export const chatProtocolVersion = 2;

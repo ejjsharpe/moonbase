@@ -1,7 +1,7 @@
 import * as Schema from 'effect/Schema';
-import { ApplicationError } from './errors.ts';
+import { ApplicationError } from '../errors/errors.ts';
 import { chatHostVersion, chatProtocolVersion } from './host.ts';
-import { array, struct } from './schema.ts';
+import { array, struct } from '../shared/schema.ts';
 
 export const ChatIdentifierSchema = Schema.String.check(
   Schema.isPattern(/^[A-Za-z0-9._:-]{1,256}$/),

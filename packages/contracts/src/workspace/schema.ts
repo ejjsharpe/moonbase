@@ -1,21 +1,21 @@
 import * as Schema from 'effect/Schema';
 import { ApplicationError, maximumFileBytes } from './workspace.ts';
 import type { CommandInput, CommandOutput, WorkspaceCommand } from './workspace.ts';
-import { array, optional, struct, voidResult } from './schema.ts';
+import { array, optional, struct, voidResult } from '../shared/schema.ts';
 import {
   CheckoutTargetSchema,
   FileTargetSchema,
   GitCheckoutTargetSchema,
   NonemptyStringSchema as nonempty,
   PathSchema as path,
-} from './target-schema.ts';
+} from '../shared/target-schema.ts';
 
 export {
   CheckoutTargetSchema,
   FileTargetSchema,
   FolderCheckoutTargetSchema,
   GitCheckoutTargetSchema,
-} from './target-schema.ts';
+} from '../shared/target-schema.ts';
 
 export const WorkspaceIdentifierSchema = Schema.String.check(Schema.isPattern(/^[\w.-]{1,160}$/));
 const natural = Schema.Int.check(

@@ -1,5 +1,5 @@
 import * as Schema from 'effect/Schema';
-import { FileTargetSchema } from './target-schema.ts';
+import { FileTargetSchema } from '../shared/target-schema.ts';
 
 export const ApplicationErrorCodeSchema = Schema.Literals([
   'InvalidInput',

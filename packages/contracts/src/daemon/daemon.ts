@@ -1,6 +1,6 @@
-import type { CommandOptions } from './common.ts';
-import type { ApplicationErrorCode } from './errors.ts';
-import type * as Contracts from './daemon-schema.ts';
+import type { CommandOptions } from '../shared/common.ts';
+import type { ApplicationErrorCode } from '../errors/errors.ts';
+import type * as Contracts from './schema.ts';
 
 /** A daemon's folder and control operations. */
 export type LocalHostCommand = keyof typeof Contracts.localHostInputSchemas;

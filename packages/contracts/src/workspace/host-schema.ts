@@ -1,9 +1,9 @@
 import * as Schema from 'effect/Schema';
-import { ApplicationError } from './errors.ts';
-import { ChatTargetSchema, chatReplyErrorCodes } from './chat-schema.ts';
-import { AbsolutePathSchema } from './daemon-schema.ts';
-import type { HostCommand, HostInput, HostOutput } from './workspace-host.ts';
-import { array, optional, struct, voidResult } from './schema.ts';
+import { ApplicationError } from '../errors/errors.ts';
+import { ChatTargetSchema, chatReplyErrorCodes } from '../chat/schema.ts';
+import { AbsolutePathSchema } from '../daemon/schema.ts';
+import type { HostCommand, HostInput, HostOutput } from './host.ts';
+import { array, optional, struct, voidResult } from '../shared/schema.ts';
 import {
   CheckoutTargetSchema,
   FileDocumentSchema,
@@ -15,7 +15,7 @@ import {
   WorkspaceOperationSchema,
   workspaceInputSchemas,
   workspaceOutputSchemas,
-} from './workspace-schema.ts';
+} from './schema.ts';
 
 const natural = Schema.Int.check(
   Schema.makeFilter((value) => Number.isSafeInteger(value) && value >= 0),

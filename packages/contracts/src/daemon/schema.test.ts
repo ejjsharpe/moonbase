@@ -9,12 +9,12 @@ import {
   isDaemonMutation,
   maximumHostFolders,
   maximumRecentFolders,
-} from '../src/daemon-schema.ts';
-import { readProviderSignInUrl } from '../src/providers-schema.ts';
-import { daemonErrorReasons, findDaemonErrorReason, readDaemonErrorReason } from '../src/daemon.ts';
-import { decodeConnectionProfile } from '../src/connection-schema.ts';
-import { chatHostCapabilities } from '../src/host.ts';
-import { decodeChatHostHealth } from '../src/host-schema.ts';
+} from './schema.ts';
+import { readProviderSignInUrl } from '../providers/schema.ts';
+import { daemonErrorReasons, findDaemonErrorReason, readDaemonErrorReason } from './daemon.ts';
+import { decodeConnectionProfile } from '../connection/schema.ts';
+import { chatHostCapabilities } from '../host/host.ts';
+import { decodeChatHostHealth } from '../host/schema.ts';
 
 const host = { hostId: 'host', storeId: 'store' };
 const state = { providers: [], flow: null };

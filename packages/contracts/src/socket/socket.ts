@@ -1,9 +1,9 @@
-import { ApplicationError } from './errors.ts';
-import { chatContentChunkBytes, maximumChatReplyBytes } from './chat.ts';
-import type { ChatListState, ChatSnapshot, ChatSummary } from './chat.ts';
-import type { ProviderState } from './providers.ts';
-import type * as Contracts from './socket-schema.ts';
-import type { WorkspaceWatchValue, WorkspaceWatchTarget } from './workspace-host.ts';
+import { ApplicationError } from '../errors/errors.ts';
+import { chatContentChunkBytes, maximumChatReplyBytes } from '../chat/chat.ts';
+import type { ChatListState, ChatSnapshot, ChatSummary } from '../chat/chat.ts';
+import type { ProviderState } from '../providers/providers.ts';
+import type * as Contracts from './schema.ts';
+import type { WorkspaceWatchValue, WorkspaceWatchTarget } from '../workspace/host.ts';
 
 /** Where a daemon that advertises `socket-v1` upgrades its one WebSocket per client. */
 export const socketPath = '/v2/socket';

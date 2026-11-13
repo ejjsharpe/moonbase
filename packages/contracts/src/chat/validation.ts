@@ -1,7 +1,7 @@
 import * as Schema from 'effect/Schema';
-import { areJsonValuesEqual } from './common.ts';
-import { fail } from './errors.ts';
-import { ChatTargetSchema, decodeChatOutput } from './chat-schema.ts';
+import { areJsonValuesEqual } from '../shared/common.ts';
+import { fail } from '../errors/errors.ts';
+import { ChatTargetSchema, decodeChatOutput } from './schema.ts';
 import {
   maximumChatReplyBytes,
   type ChatTranscript,
@@ -13,7 +13,7 @@ import {
   type ChatSummary,
   type ChatSnapshot,
 } from './chat.ts';
-import type { ChatHostTarget } from './host.ts';
+import type { ChatHostTarget } from '../host/host.ts';
 
 // Checks shared by the chat engine and the daemon protocol: both project the replies they hand
 // on, so a reply's authority is checked the same way on either side of the wire.

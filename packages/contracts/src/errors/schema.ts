@@ -1,7 +1,7 @@
 import * as Schema from 'effect/Schema';
 import { ApplicationError, ApplicationErrorCodeSchema } from './errors.ts';
-import { FileTargetSchema } from './target-schema.ts';
-import { optional, struct } from './schema.ts';
+import { FileTargetSchema } from '../shared/target-schema.ts';
+import { optional, struct } from '../shared/schema.ts';
 
 export const ApplicationErrorDTOSchema = struct({
   code: ApplicationErrorCodeSchema,

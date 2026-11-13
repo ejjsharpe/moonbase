@@ -1,8 +1,8 @@
 import * as Schema from 'effect/Schema';
-import { struct, optional } from './schema.ts';
-import { ChatIdentifierSchema, ChatHostTargetSchema } from './host-schema.ts';
-export { ChatIdentifierSchema, ChatHostTargetSchema } from './host-schema.ts';
-import { ApplicationError } from './errors.ts';
+import { struct, optional } from '../shared/schema.ts';
+import { ChatIdentifierSchema, ChatHostTargetSchema } from '../host/schema.ts';
+export { ChatIdentifierSchema, ChatHostTargetSchema } from '../host/schema.ts';
+import { ApplicationError } from '../errors/errors.ts';
 import {
   chatPageSize,
   maximumChatFindQueryBytes,

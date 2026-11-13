@@ -1,6 +1,6 @@
-import type { ApplicationError, CommandOptions, ObservationClose } from './workspace.ts';
+import type { ApplicationError, CommandOptions, ObservationClose } from '../workspace/workspace.ts';
 
-import type * as Contracts from './connection-schema.ts';
+import type * as Contracts from './schema.ts';
 export type ConnectionProfile = typeof Contracts.ConnectionProfileSchema.Type;
 export type ConnectionSnapshot = typeof Contracts.ConnectionSnapshotSchema.Type;
 export type ConnectionCommands = {

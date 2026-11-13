@@ -1,6 +1,6 @@
 /** The file host's operations: workspace commands without recovery, plus the journal queries. */
-import type { CommandOptions } from './common.ts';
-import type * as Contracts from './workspace-host-schema.ts';
+import type { CommandOptions } from '../shared/common.ts';
+import type * as Contracts from './host-schema.ts';
 import type { CheckoutTarget } from './workspace.ts';
 
 export type HostCommands = {

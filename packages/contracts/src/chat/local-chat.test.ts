@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { decodeChatInput, decodeChatOutput } from '../src/chat-schema.ts';
-import { decodeProviderInput, decodeProviderOutput } from '../src/providers-schema.ts';
+import { decodeChatInput, decodeChatOutput } from './schema.ts';
+import { decodeProviderInput, decodeProviderOutput } from '../providers/schema.ts';
 
 const session = { host: { hostId: 'local', storeId: 'local-store' }, actorId: 'owner' };
 test('local settings/host variants stay portable while setup inputs reject extra authority and status drops private fields', () => {

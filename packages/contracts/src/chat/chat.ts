@@ -1,5 +1,5 @@
-import type { ApplicationError, CommandOptions, ObservationClose } from './workspace.ts';
-import type * as Contracts from './chat-schema.ts';
+import type { ApplicationError, CommandOptions, ObservationClose } from '../workspace/workspace.ts';
+import type * as Contracts from './schema.ts';
 
 export const maximumChatInputBytes = 32 * 1024;
 // JSON can escape each input byte as \uXXXX; identifiers and envelope fields fit in 4 KiB.

@@ -1,6 +1,6 @@
-import type { CommandOptions, ObservationClose } from './common.ts';
-import type { ApplicationError } from './errors.ts';
-import type * as Contracts from './providers-schema.ts';
+import type { CommandOptions, ObservationClose } from '../shared/common.ts';
+import type { ApplicationError } from '../errors/errors.ts';
+import type * as Contracts from './schema.ts';
 
 export type ProviderState = typeof Contracts.ProviderStateSchema.Type;
 export type ProviderCommand = keyof typeof Contracts.providerInputSchemas;

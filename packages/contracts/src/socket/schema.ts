@@ -1,8 +1,8 @@
 import * as Schema from 'effect/Schema';
-import { array, optional, struct } from './schema.ts';
-import { ApplicationError } from './errors.ts';
-import { chatManifestPageSize, chatPageSize, chatPreviewBytes } from './chat.ts';
-import { chatProtocolVersion } from './host.ts';
+import { array, optional, struct } from '../shared/schema.ts';
+import { ApplicationError } from '../errors/errors.ts';
+import { chatManifestPageSize, chatPageSize, chatPreviewBytes } from '../chat/chat.ts';
+import { chatProtocolVersion } from '../host/host.ts';
 import {
   ChatIdentifierSchema,
   ChatHostTargetSchema,
@@ -13,11 +13,11 @@ import {
   ChatTargetSchema,
   chatOutputSchemas,
   chatReplyErrorCodes,
-} from './chat-schema.ts';
-import { ChatHostHealthSchema } from './host-schema.ts';
-import { ProviderStateSchema } from './providers-schema.ts';
+} from '../chat/schema.ts';
+import { ChatHostHealthSchema } from '../host/schema.ts';
+import { ProviderStateSchema } from '../providers/schema.ts';
 import { socketLimits } from './socket.ts';
-import { WorkspaceWatchTargetSchema, WorkspaceWatchValueSchema } from './workspace-host-schema.ts';
+import { WorkspaceWatchTargetSchema, WorkspaceWatchValueSchema } from '../workspace/host-schema.ts';
 import type {
   SocketDelta,
   SocketSubscriptionKind,
@@ -26,7 +26,7 @@ import type {
   SocketServerMessage,
   SocketChallenge,
 } from './socket.ts';
-export { ChatSessionSchema, ChatTargetSchema } from './chat-schema.ts';
+export { ChatSessionSchema, ChatTargetSchema } from '../chat/schema.ts';
 
 const unicode = Schema.String.check(Schema.makeFilter((value) => !/[\ud800-\udfff]/u.test(value)));
 const bytes = (limit: number) =>

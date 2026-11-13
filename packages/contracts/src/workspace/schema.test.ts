@@ -376,7 +376,7 @@ test('a shared outcome error round-trips and builds its message from its fields'
 for (const entry of ['workspace-schema', 'connection-schema', 'host-schema', 'error-schema'])
   test(`${entry} bundles without privileged implementations or application services`, async () => {
     const bundle = await build({
-      absWorkingDir: fileURLToPath(new URL('../../../', import.meta.url)),
+      absWorkingDir: fileURLToPath(new URL('../../../../', import.meta.url)),
       entryPoints: [`@moonbase/contracts/${entry}`],
       bundle: true,
       platform: 'browser',
