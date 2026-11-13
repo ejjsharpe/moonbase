@@ -15,7 +15,7 @@ import {
   createHostHealthReply,
   type ChatHostEndpoint,
   type HostHealthReply,
-} from '../src/host-health.ts';
+} from './host-health.ts';
 
 const expected = { hostId: 'host-a', storeId: 'store-a' };
 const health: ChatHostHealth = {
