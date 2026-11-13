@@ -24,6 +24,14 @@ Write code as if Moonbase had been Effect-native from the start (epic #273, D14 
 - Errors are per-module `Schema.TaggedError` classes with fields and a `message` built from them. RPC procedures declare an `error` union. Shared outcomes are `UncertainError` (never resend), `CancelledError` and `UnauthorizedError`. Don't add new `ApplicationError` or `fail()` calls.
 - Wrap a Promise or callback API once, where it enters (`Effect.tryPromise({ try: (signal) => … })`, `Effect.callback`, `Stream.callback`).
 
+Client state is per-concept, in three layers, never a controller object with its own listener store and lifecycle:
+
+- pure functions for derived decisions;
+- an Effect service holding a `SubscriptionRef` for state we own (drafts, saves, the send outbox);
+- Atoms (`effect/reactivity`, `AtomRpc` over an RPC group, `AsyncResult` for load state) for subscription, caching and query dedupe.
+
+Atoms hold no domain logic, so a headless test or a non-React client can use the services alone. React reads atoms through `@effect/atom-react`, which belongs to `workbench` and the desktop renderer only.
+
 ## Testing
 
 - Test each behavior once, through public interfaces, at the lowest level that proves it. Add a browser or Electron test only for what needs the real boundary.
