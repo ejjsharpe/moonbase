@@ -1,7 +1,8 @@
+import { normalizeApplicationError, toApplicationError } from '@moonbase/effect';
 import { Cause, Deferred, Effect, Exit, Fiber, Schema, Scope, type ManagedRuntime } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ObservationClose } from '@moonbase/contracts/common';
-import { normalizeApplicationError, runApplicationEffect } from '../../runtime/effect-client.ts';
+import { runApplicationEffect } from '../../runtime/effect-client.ts';
 import { decodeChatInput, ChatModelPreferenceSchema } from '@moonbase/contracts/chat-schema';
 import type {
   ChatCreationSettings,
@@ -836,7 +837,8 @@ class ChatModelState {
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.sync(() => {
-            if (!Cause.hasInterruptsOnly(cause)) recover(Cause.squash(cause), { open: false });
+            if (!Cause.hasInterruptsOnly(cause))
+              recover(toApplicationError(cause), { open: false });
           }),
         ),
       );
@@ -1178,7 +1180,7 @@ class ChatModelState {
                 if (Cause.hasInterruptsOnly(cause)) return;
                 if (!attempt.open || !owner.alive || this.selection !== owner) return;
                 attempt.open = false;
-                recover(Cause.squash(cause), attempt);
+                recover(toApplicationError(cause), attempt);
               }),
             ),
           );

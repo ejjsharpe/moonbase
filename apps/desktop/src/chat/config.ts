@@ -11,6 +11,7 @@ import type { ChatSession } from '@moonbase/contracts/chat';
 import * as Schema from 'effect/Schema';
 import { ChatIdentifierSchema } from '@moonbase/contracts/chat-schema';
 import { invalid } from './wire.ts';
+import { isPrivateTo } from '@moonbase/contracts/files';
 
 const configurationSchema = Schema.Struct({
   profile: SshConfigurationSchema.fields.profile,
@@ -32,12 +33,7 @@ export async function readConfiguration(path: string | undefined): Promise<ChatC
   const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const stat = await file.stat();
-    if (
-      !stat.isFile() ||
-      stat.size > 16384 ||
-      (stat.mode & 0o077) !== 0 ||
-      stat.uid !== process.getuid?.()
-    )
+    if (!stat.isFile() || stat.size > 16384 || !isPrivateTo(stat, process.getuid?.()))
       throw new ApplicationError({
         code: 'InvalidInput',
         message: 'Chat configuration must be an owner-only regular file, at most 16 KiB.',

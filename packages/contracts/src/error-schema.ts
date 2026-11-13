@@ -1,18 +1,8 @@
 import * as Schema from 'effect/Schema';
-import { ApplicationError } from './errors.ts';
-import { FileTargetSchema } from './workspace-schema.ts';
+import { ApplicationError, ApplicationErrorCodeSchema } from './errors.ts';
+import { FileTargetSchema } from './target-schema.ts';
 import { optional, struct } from './schema.ts';
 
-export const ApplicationErrorCodeSchema = Schema.Literals([
-  'InvalidInput',
-  'Unavailable',
-  'Conflict',
-  'Persistence',
-  'Uncertain',
-  'Cancelled',
-  'Unauthorized',
-  'Incompatible',
-]);
 export const ApplicationErrorDTOSchema = struct({
   code: ApplicationErrorCodeSchema,
   message: Schema.String,

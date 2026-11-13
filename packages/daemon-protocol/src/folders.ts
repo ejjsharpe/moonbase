@@ -4,6 +4,7 @@ import { basename, dirname, join } from 'node:path';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { daemonErrorReasons, type FolderApprovals } from '@moonbase/contracts/daemon';
 import { maximumHostFolders } from '@moonbase/contracts/daemon-schema';
+import { isPrivateTo } from '@moonbase/contracts/files';
 
 type Approval = { path: string; dev: number; ino: number; at: string; recent: boolean };
 // Picker folders and chat worktrees are kept to separate limits, so worktree chats never push
@@ -239,12 +240,7 @@ async function readApprovals(file: string) {
   }
   try {
     const info = await handle.stat();
-    if (
-      !info.isFile() ||
-      info.size > 512 * 1024 ||
-      info.uid !== process.getuid?.() ||
-      info.mode & 0o077
-    )
+    if (!info.isFile() || info.size > 512 * 1024 || !isPrivateTo(info, process.getuid?.()))
       return map;
     const parsed: unknown = JSON.parse(await handle.readFile('utf8'));
     if (!Array.isArray(parsed)) return map;

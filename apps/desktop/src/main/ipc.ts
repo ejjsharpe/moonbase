@@ -8,7 +8,7 @@ import {
   channels as chatChannels,
   record as chatRecord,
   fields,
-  errorDTO as chatError,
+  errorReply,
   requestId,
 } from '../chat/wire.ts';
 
@@ -159,7 +159,7 @@ export function installCommandIpc({
         });
       return await owner.call(v.kind, v.operation, v.input, v.id);
     } catch (error) {
-      return chatError(error);
+      return errorReply(error);
     }
   });
   ipcMain.handle(chatChannels.cancel, async (event, value: unknown) => {
@@ -175,7 +175,7 @@ export function installCommandIpc({
       if (!reply.ok) reportCleanup(Promise.reject(new ApplicationError(reply.error)));
       return reply;
     } catch (error) {
-      return chatError(error);
+      return errorReply(error);
     }
   });
 

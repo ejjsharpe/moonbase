@@ -1,27 +1,7 @@
 import { Cause, Effect, Exit, Stream, type ManagedRuntime } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { CommandOptions, ObservationClose } from '@moonbase/contracts/common';
-import { normalizeApplicationError } from '@moonbase/effect';
-export { normalizeApplicationError } from '@moonbase/effect';
-
-function applicationFailure(cause: Cause.Cause<ApplicationError>): ApplicationError {
-  if (Cause.hasInterruptsOnly(cause))
-    return new ApplicationError({ code: 'Cancelled', message: 'Command cancelled' });
-  const failures = cause.reasons.flatMap((reason) => {
-    if (Cause.isFailReason(reason)) return [reason.error];
-    if (Cause.isDieReason(reason)) return [reason.defect];
-    return [];
-  });
-  if (failures.length === 1 && ApplicationError.is(failures[0])) return failures[0];
-  const typed = failures.find(ApplicationError.is);
-  return new ApplicationError({
-    code: typed?.code ?? 'Unavailable',
-    target: typed?.target,
-    message:
-      failures.map((value) => normalizeApplicationError(value).message).join('; ') ||
-      'Application effect failed',
-  });
-}
+import { normalizeApplicationError, toApplicationError } from '@moonbase/effect';
 
 export async function runApplicationEffect<A, R, E extends ApplicationError>(
   runtime: ManagedRuntime.ManagedRuntime<R, E>,
@@ -36,7 +16,7 @@ export async function runApplicationEffect<A, R, E extends ApplicationError>(
   } catch (error) {
     throw normalizeApplicationError(error);
   }
-  if (Exit.isFailure(exit)) throw applicationFailure(exit.cause);
+  if (Exit.isFailure(exit)) throw toApplicationError(exit.cause);
   return exit.value;
 }
 
@@ -65,7 +45,7 @@ export function observeApplicationStream<A, R, E extends ApplicationError>(
     .then(
       (exit) =>
         Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
-          ? applicationFailure(exit.cause)
+          ? toApplicationError(exit.cause)
           : undefined,
       normalizeApplicationError,
     )

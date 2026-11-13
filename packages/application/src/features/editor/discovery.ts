@@ -1,3 +1,4 @@
+import { normalizeApplicationError } from '@moonbase/effect';
 import { Cause, Deferred, Effect, Exit, Fiber, Scope } from 'effect';
 import {
   ApplicationError,
@@ -11,7 +12,6 @@ import {
   type GitStatus,
   type ObservationClose,
 } from '@moonbase/contracts/workspace';
-import { normalizeApplicationError } from '../../runtime/effect-client.ts';
 import { watchRetry } from '../../runtime/watch-retry.ts';
 import { checkoutKey } from './references.ts';
 
@@ -292,7 +292,7 @@ export class EditorDiscovery {
               capabilities.isCurrent()
             );
           },
-          catch: ApplicationError.fromUnknown,
+          catch: normalizeApplicationError,
         }).pipe(Effect.ensuring(Effect.sync(() => this.refreshing.delete(key))));
         return Effect.flatMap(Effect.forkIn(work, scope), (fiber) => {
           this.refreshing.set(key, fiber);

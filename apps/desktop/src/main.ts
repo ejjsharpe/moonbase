@@ -1,7 +1,5 @@
-import {
-  normalizeApplicationError,
-  runApplicationEffect,
-} from '@moonbase/application/runtime/effect-client';
+import { normalizeApplicationError } from '@moonbase/effect';
+import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import {
   app,
   BrowserWindow,

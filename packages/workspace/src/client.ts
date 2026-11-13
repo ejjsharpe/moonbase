@@ -2,7 +2,7 @@ import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
 import { Cause, Effect, Exit, Scope, type FiberSet } from 'effect';
-import { releaseResource } from '@moonbase/effect';
+import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
 import { decodeWorkspaceInput, decodeWorkspaceOutput } from '@moonbase/contracts/workspace-schema';
 import type {
   WorkspaceHostServiceShape,
@@ -16,7 +16,7 @@ import {
   type WorkspaceCommand,
   type WorkspaceOperation,
 } from '@moonbase/contracts/workspace';
-import { admit, applicationError, releaseAll, type AdmissionOwner } from './admission.ts';
+import { admit, releaseAll, type AdmissionOwner } from './admission.ts';
 import { ClientStore } from './client-store.ts';
 import type { OperationRecord, SaveRecord } from './client-schema.ts';
 import { WorkspaceRecovery, type HostPorts, type Recoveries } from './recovery.ts';
@@ -104,7 +104,7 @@ export class ClientWorkspace implements AdmissionOwner {
         Effect.flatMap(
           Effect.try({
             try: () => decodeWorkspaceInput(operation, input),
-            catch: applicationError,
+            catch: normalizeApplicationError,
           }),
           (captured) =>
             this.effect(

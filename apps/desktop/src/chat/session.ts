@@ -18,7 +18,7 @@ import {
   fields,
   record,
   requestId,
-  errorDTO,
+  errorReply,
   invalid,
   isChatWatchKind,
   type Reply,
@@ -75,7 +75,7 @@ export class ChatIpcSession {
     emit: (id: string, result: Reply) => void,
     capabilities: ChatIpcCapabilities = {},
   ) {
-    this.lifetime = new IpcLifetime(runtime, 64, errorDTO);
+    this.lifetime = new IpcLifetime(runtime, 64, errorReply);
     this.chat = chat;
     this.connection = backend.mode === 'remote' ? backend.connection : null;
     this.context = context;
@@ -170,7 +170,7 @@ export class ChatIpcSession {
           },
           delivered = (e: ApplicationError) => {
             failed = true;
-            if (live()) this.emit(id, errorDTO(e));
+            if (live()) this.emit(id, errorReply(e));
           };
         let failed = false;
         await request.acquireWatch(() => {
@@ -239,7 +239,7 @@ export class ChatIpcSession {
       return { ok: true, value };
     } catch (e) {
       request.fail();
-      return errorDTO(e);
+      return errorReply(e);
     } finally {
       await request.finish();
     }

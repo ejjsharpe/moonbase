@@ -1,7 +1,7 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { Cause, Deferred, Effect, Exit, Scope, type Fiber, type FiberSet } from 'effect';
 import { decodeHostInput, decodeHostOutput } from '@moonbase/contracts/workspace-host-schema';
-import { releaseResource } from '@moonbase/effect';
+import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
 import { type WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
 import type {
@@ -16,7 +16,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { Store } from './store.ts';
-import { admit, applicationError, releaseAll, type AdmissionOwner } from './admission.ts';
+import { admit, releaseAll, type AdmissionOwner } from './admission.ts';
 import { HostJournal, journalSchema, type RequestOperation } from './host-journal.ts';
 import { makeChatWorktree } from './chat-worktrees.ts';
 import {
@@ -236,7 +236,10 @@ export class FileHost implements AdmissionOwner {
       ) =>
       (input: HostInput<K>) =>
         Effect.flatMap(
-          Effect.try({ try: () => decodeHostInput(operation, input), catch: applicationError }),
+          Effect.try({
+            try: () => decodeHostInput(operation, input),
+            catch: normalizeApplicationError,
+          }),
           (captured) =>
             this.effect(
               async (signal) => decodeHostOutput(operation, await fn(captured, signal)),
@@ -869,7 +872,7 @@ export class FileHost implements AdmissionOwner {
       }
       return result;
     } catch (cause) {
-      const error = applicationError(cause);
+      const error = normalizeApplicationError(cause);
       try {
         if (deterministicRefusals.has(error.code))
           this.journal.settleRequest(id, {

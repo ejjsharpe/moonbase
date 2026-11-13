@@ -1,3 +1,4 @@
+import { normalizeApplicationError, toApplicationError } from '@moonbase/effect';
 import { Cause, Deferred, Effect, Exit, Fiber, FiberHandle, FiberMap, Option, Scope } from 'effect';
 import type { ApplicationError } from '@moonbase/contracts/errors';
 import type {
@@ -15,7 +16,6 @@ import type {
 } from '@moonbase/contracts/chat';
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { areJsonValuesEqual, getJsonKey } from '@moonbase/contracts/common';
-import { normalizeApplicationError } from '../../runtime/effect-client.ts';
 import { sameTarget } from './saved.ts';
 import type { TranscriptViewMemory, TranscriptView } from './view-memory.ts';
 import {
@@ -72,11 +72,7 @@ const historyJob = 'history',
 const catchFailure =
   (handle: (error: ApplicationError) => void) =>
   <A>(effect: Effect.Effect<A, ApplicationError>) =>
-    effect.pipe(
-      Effect.catchCause((cause) =>
-        Effect.sync(() => handle(normalizeApplicationError(Cause.squash(cause)))),
-      ),
-    );
+    effect.pipe(Effect.catchCause((cause) => Effect.sync(() => handle(toApplicationError(cause)))));
 const interruptFiber = (fiber: Option.Option<Fiber.Fiber<unknown, unknown>>) => {
   if (Option.isSome(fiber)) fiber.value.interruptUnsafe();
 };
@@ -87,7 +83,7 @@ const interruptFiber = (fiber: Option.Option<Fiber.Fiber<unknown, unknown>>) => 
 const joinFiber = (fiber: Fiber.Fiber<void, unknown>) =>
   Effect.runPromise(Fiber.await(fiber)).then((exit) => {
     if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause))
-      throw normalizeApplicationError(Cause.squash(exit.cause));
+      throw toApplicationError(exit.cause);
   });
 
 /**

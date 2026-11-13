@@ -1,4 +1,4 @@
-import { normalizeApplicationError } from '@moonbase/application/runtime/effect-client';
+import { normalizeApplicationError } from '@moonbase/effect';
 import {
   decodeApplicationErrorDTO,
   type ApplicationErrorDTOSchema,
@@ -9,7 +9,7 @@ import {
   decodeConnectionSnapshot,
   isConnectionCommand,
 } from '@moonbase/contracts/connection-schema';
-import { cancellation, unwrap as unwrapReply } from '../wire.ts';
+import { cancellation, errorDTO, unwrap as unwrapReply } from '../wire.ts';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import type {
   ChatClient,
@@ -109,9 +109,10 @@ export function fields(value: Record<string, unknown>, allowed: string[], requir
 export function requestId(value: unknown): asserts value is string {
   if (typeof value !== 'string' || !/^[A-Za-z0-9._:-]{1,256}$/.test(value)) invalid();
 }
-export function errorDTO(value: unknown): Extract<Reply, { ok: false }> {
-  const e = normalizeApplicationError(value);
-  return { ok: false, error: { code: e.code, message: e.message.slice(0, 512) } };
+/** A failed chat reply: the shared error DTO without a target, its message at most 512 characters. */
+export function errorReply(value: unknown): Extract<Reply, { ok: false }> {
+  const { code, message } = errorDTO(value);
+  return { ok: false, error: { code, message: message.slice(0, 512) } };
 }
 export function unwrap(reply: Reply): unknown {
   if (!reply.ok) {

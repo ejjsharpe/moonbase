@@ -6,6 +6,9 @@ import { checkBoundaries, readRepository } from './boundaries.mjs';
 import './test-boundaries.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+// Effect may resolve outside the checkout, as it does from the foundation test's copy.
+const portableInput =
+  /^packages\/contracts\/|(?:^|\/)node_modules\/(?:\.bun\/[^/]+\/node_modules\/)?effect\//;
 assert.deepEqual(checkBoundaries(readRepository(root)), []);
 console.log('Verified final source ownership, public exports and cycles; no migration exceptions.');
 
@@ -28,17 +31,20 @@ for (const entry of [
     write: false,
     metafile: true,
   });
-  assert(
-    Object.keys(result.metafile.inputs).every((input) => input.startsWith('packages/contracts/')),
-    'DTO/client entries must emit no Effect/platform dependency',
-  );
-  assert(
-    !/node:|electron|@moonbase\/(workspace|chat-runtime|daemon-protocol|ssh)/.test(
-      result.outputFiles[0].text,
-    ),
+  // `ApplicationError` is an Effect Schema class, so DTO entries carry portable Effect too.
+  for (const input of Object.keys(result.metafile.inputs))
+    assert(
+      portableInput.test(input),
+      `${entry} must bundle only contracts and portable Effect: ${input}`,
+    );
+  // Every input is bundled, so no Node, Electron or implementation import is left external.
+  assert.deepEqual(
+    Object.values(result.metafile.outputs).flatMap((output) => output.imports),
+    [],
+    `${entry} must import nothing outside its bundle`,
   );
 }
-console.log('Verified browser-only command contracts.');
+console.log('Verified browser-only command contracts (contracts and portable Effect only).');
 
 for (const entry of [
   'chat-schema',
@@ -61,11 +67,8 @@ for (const entry of [
     metafile: true,
   });
   for (const input of Object.keys(result.metafile.inputs))
-    // Effect may resolve outside the checkout, as it does from the foundation test's copy.
     assert(
-      /^packages\/contracts\/|(?:^|\/)node_modules\/(?:\.bun\/[^/]+\/node_modules\/)?effect\//.test(
-        input,
-      ),
+      portableInput.test(input),
       `${entry} must bundle only contracts and portable Effect: ${input}`,
     );
 }

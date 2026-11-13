@@ -1,13 +1,23 @@
-import * as Effect from 'effect/Effect';
 import * as Schema from 'effect/Schema';
 import { ApplicationError, maximumFileBytes } from './workspace.ts';
 import type { CommandInput, CommandOutput, WorkspaceCommand } from './workspace.ts';
 import { array, optional, struct, voidResult } from './schema.ts';
+import {
+  CheckoutTargetSchema,
+  FileTargetSchema,
+  GitCheckoutTargetSchema,
+  NonemptyStringSchema as nonempty,
+  PathSchema as path,
+} from './target-schema.ts';
+
+export {
+  CheckoutTargetSchema,
+  FileTargetSchema,
+  FolderCheckoutTargetSchema,
+  GitCheckoutTargetSchema,
+} from './target-schema.ts';
 
 export const WorkspaceIdentifierSchema = Schema.String.check(Schema.isPattern(/^[\w.-]{1,160}$/));
-const string = Schema.String.check(Schema.isMaxLength(4096));
-const path = string.check(Schema.makeFilter((value) => !value.includes('\0')));
-const nonempty = string.check(Schema.isMinLength(1));
 const natural = Schema.Int.check(
   Schema.makeFilter((value) => Number.isSafeInteger(value) && value >= 0),
 );
@@ -23,33 +33,6 @@ const text = Schema.String.check(
       new TextEncoder().encode(value).length <= maximumFileBytes,
   ),
 );
-const checkoutFields = {
-  hostId: nonempty,
-  checkoutId: nonempty,
-  projectId: nonempty,
-  root: path.check(Schema.isMinLength(1)),
-};
-/** A checkout at the top of a Git working tree. Saved targets without `vcs` decode as Git. */
-export const GitCheckoutTargetSchema = struct({
-  vcs: Schema.Literal('git').pipe(Schema.withDecodingDefaultKey(Effect.succeed('git' as const))),
-  ...checkoutFields,
-  branch: nonempty,
-  /** Whether `root` is the repository's main working tree or a linked `git worktree`. */
-  worktree: Schema.Literals(['main', 'linked']),
-});
-/** A plain folder in no Git repository: it has no branch, worktrees or Git status. */
-export const FolderCheckoutTargetSchema = struct({
-  vcs: Schema.Literal('none'),
-  ...checkoutFields,
-});
-export const CheckoutTargetSchema = Schema.Union([
-  GitCheckoutTargetSchema,
-  FolderCheckoutTargetSchema,
-]);
-export const FileTargetSchema = struct({
-  checkout: CheckoutTargetSchema,
-  path: path.check(Schema.isMinLength(1)),
-});
 export const FileDocumentSchema = struct({ text, version: Schema.String });
 export const FileViewSchema = Schema.Literals([
   'file',
