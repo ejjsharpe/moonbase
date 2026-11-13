@@ -4,7 +4,7 @@ import { Harness, type ConversationId } from '@earendil-works/pi-durable';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import type { ChatClient, ChatTarget, ChatOutput } from '@moonbase/contracts/chat';
-import { fixture } from './runtime-fixture.ts';
+import { fixture } from '../test/fixtures/runtime-fixture.ts';
 
 async function collect(client: ChatClient, target: ChatTarget, query: string, cursor?: string) {
   const matches: ChatOutput<'findChatTranscript'>['matches'] = [];
@@ -193,7 +193,7 @@ test('Find cancellation leaves exact Stop and unrelated reads responsive while s
     },
   ]);
   await f.client.command('sendChat', { target, requestId: 'run', text: 'Running' });
-  const { until } = await import('./runtime-fixture.ts');
+  const { until } = await import('../test/fixtures/runtime-fixture.ts');
   const view = await until(
     () => f.client.command('getChat', { target }),
     (view) => !!view.run,
@@ -305,7 +305,7 @@ test('Find JSON token continuations preserve string escaping, long keys, nesting
 
 test('Find adapts dense escaped matches to actual JSON envelopes with maximum-size authorities', async (t) => {
   const { ManagedRuntime } = await import('effect');
-  const { LocalPiRuntimeLive } = await import('../src/index.ts');
+  const { LocalPiRuntimeLive } = await import('./index.ts');
   const { makeChatClient } = await import('@moonbase/application/runtime/clients');
   let harness!: Harness;
   const open = Harness.open;

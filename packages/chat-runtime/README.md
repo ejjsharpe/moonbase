@@ -37,4 +37,4 @@ bun run --cwd packages/chat-runtime test
 bun run test:chat-integration
 ```
 
-`test` runs the suite under `bun test`, the runtime the daemon ships on. Tests use controlled providers and temporary SQLite stores, never real provider quota or SSH hosts.
+`test` runs the suite under `bun test`, the runtime the daemon ships on. Unit tests sit beside their source (`src/*.test.ts`); shared fixtures are in `test/fixtures`. Tests use controlled providers and temporary SQLite stores, never real provider quota or SSH hosts.

@@ -27,7 +27,7 @@ import type {
 } from '@moonbase/contracts/chat';
 import type { ApplicationError } from '@moonbase/contracts/errors';
 import { Type } from 'typebox';
-import { fixture, until, delay } from './runtime-fixture.ts';
+import { fixture, until, delay } from '../test/fixtures/runtime-fixture.ts';
 
 function gate() {
   let release!: () => void;

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { createCredentialStore } from '../src/credentials.ts';
+import { createCredentialStore } from './credentials.ts';
 
 test('credential persistence encrypts privately, serializes refresh and retains originals on encryption/storage failure', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'moonbase-credentials-')),
@@ -108,7 +108,7 @@ test('credential persistence encrypts privately, serializes refresh and retains 
 });
 
 test('pinned SDK refresh serializes encrypted credentials and persists rotated ChatGPT metadata after caller cancellation', async (t) => {
-  const { createLocalModels } = await import('../src/local-models.ts');
+  const { createLocalModels } = await import('./local-models.ts');
   const directory = await mkdtemp(join(tmpdir(), 'moonbase-sdk-refresh-')),
     key = randomBytes(32);
   t.after(() => rm(directory, { recursive: true, force: true }));

@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type * as Esbuild from 'esbuild';
-import { writeBrokenClaude, writeFakeClaude } from './fake-claude.ts';
+import { writeBrokenClaude, writeFakeClaude } from '../test/fixtures/fake-claude.ts';
 
 const require = createRequire(new URL('../../../package.json', import.meta.url));
 

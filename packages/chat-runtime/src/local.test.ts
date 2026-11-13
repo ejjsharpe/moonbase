@@ -13,7 +13,7 @@ import {
 } from '@earendil-works/pi-ai/providers/faux';
 import type { ChatInput } from '@moonbase/contracts/chat';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
-import { LocalPiRuntimeLive, LocalPiControl } from '../src/index.ts';
+import { LocalPiRuntimeLive, LocalPiControl } from './index.ts';
 
 const session = { host: { hostId: 'local-test', storeId: 'local-store' }, actorId: 'local-owner' };
 async function until<A>(read: () => Promise<A>, ready: (value: A) => boolean) {

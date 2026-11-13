@@ -6,7 +6,7 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { type Registry } from '@earendil-works/pi-durable';
-import { LocalPiRuntimeLive } from '../src/index.ts';
+import { LocalPiRuntimeLive } from '../../src/index.ts';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 
 export const session = {

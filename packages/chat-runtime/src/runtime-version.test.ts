@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { ManagedRuntime } from 'effect';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
-import { LocalPiRuntimeLive } from '../src/index.ts';
+import { LocalPiRuntimeLive } from './index.ts';
 
 const session = { host: { hostId: 'version-host', storeId: 'version-store' }, actorId: 'owner' };
 type Versions = Partial<Record<'node' | 'bun' | 'electron', string>>;

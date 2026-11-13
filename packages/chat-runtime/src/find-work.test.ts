@@ -4,7 +4,7 @@ import { Harness, type ConversationId, type EntryRecord } from '@earendil-works/
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import type { ChatOutput } from '@moonbase/contracts/chat';
-import { fixture } from './runtime-fixture.ts';
+import { fixture } from '../test/fixtures/runtime-fixture.ts';
 
 test('a continuation does not enumerate more than the declared 32-part work bound', async (t) => {
   let harness!: Harness;

@@ -4,7 +4,7 @@ import { ManagedRuntime } from 'effect';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { makeProviderSetupClient } from '@moonbase/application/runtime/clients';
-import { ProviderSetupLive, inactiveProviderOwnerMs, localProviderIds } from '../src/providers.ts';
+import { ProviderSetupLive, inactiveProviderOwnerMs, localProviderIds } from './providers.ts';
 import { ProviderSetupService } from '@moonbase/contracts/services';
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';

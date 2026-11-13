@@ -23,11 +23,11 @@ import { NodeSqliteDatabase, openNodeSqliteDatabase } from '@earendil-works/chor
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { readFile } from 'node:fs/promises';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import { LocalPiRuntimeLive } from '../src/index.ts';
-import { classifyPublication } from '../src/commands.ts';
-import { Metadata, Store } from '../src/documents.ts';
+import { LocalPiRuntimeLive } from './index.ts';
+import { classifyPublication } from './commands.ts';
+import { Metadata, Store } from './documents.ts';
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
-import { session, until, fixture } from './runtime-fixture.ts';
+import { session, until, fixture } from '../test/fixtures/runtime-fixture.ts';
 
 test('atomic creation retries and actor/request immutable binding survive restart', async (t) => {
   const f = await fixture(t);

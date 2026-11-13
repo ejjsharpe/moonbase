@@ -16,7 +16,7 @@ import {
   instrumentTranscriptReads,
   seedTranscriptHistory,
   seedTranscriptLongText,
-} from '../../packages/chat-runtime/test/transcript-history-fixture.ts';
+} from '../../packages/chat-runtime/test/fixtures/transcript-history-fixture.ts';
 
 for (const mode of ['local', 'remote'] as const)
   test(`integrated ${mode} controller reveals evicted Find and around targets across 1,121 real mixed records`, async (t) => {

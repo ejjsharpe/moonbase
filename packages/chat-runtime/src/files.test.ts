@@ -9,9 +9,9 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import { ChatFileIndex, type ChatFileListingRun } from '../src/files.ts';
-import { LocalPiRuntimeLive } from '../src/index.ts';
-import { fixture, isRunning, session } from './runtime-fixture.ts';
+import { ChatFileIndex, type ChatFileListingRun } from './files.ts';
+import { LocalPiRuntimeLive } from './index.ts';
+import { fixture, isRunning, session } from '../test/fixtures/runtime-fixture.ts';
 
 const which = (name: string) => {
   try {

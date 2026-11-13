@@ -4,7 +4,7 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 import { createRegistry, defineExtension, defineTool } from '@earendil-works/pi-durable';
 import { Type } from 'typebox';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
-import { session, until, fixture } from './runtime-fixture.ts';
+import { session, until, fixture } from '../test/fixtures/runtime-fixture.ts';
 
 test('counted tools publish bounded progress; old task Stop cannot follow generation handover', async (t) => {
   let tools = 0,

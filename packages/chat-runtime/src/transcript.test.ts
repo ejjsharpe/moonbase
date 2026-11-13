@@ -25,7 +25,7 @@ import type {
   ChatTranscriptSource,
   ChatTranscriptPart,
 } from '@moonbase/contracts/chat';
-import { fixture, until } from './runtime-fixture.ts';
+import { fixture, until } from '../test/fixtures/runtime-fixture.ts';
 
 async function manifest(client: ChatClient, source: ChatTranscriptSource) {
   const parts: ChatTranscriptPart[] = [];

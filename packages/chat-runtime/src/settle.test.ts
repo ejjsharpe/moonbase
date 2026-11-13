@@ -3,8 +3,8 @@ import { test } from 'node:test';
 import type { ManagedRuntime } from 'effect';
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
 import type { ChatClient, ChatTarget } from '@moonbase/contracts/chat';
-import { LocalPiControl } from '../src/index.ts';
-import { fixture, session, until } from './runtime-fixture.ts';
+import { LocalPiControl } from './index.ts';
+import { fixture, session, until } from '../test/fixtures/runtime-fixture.ts';
 
 const listed = async (client: ChatClient, target: ChatTarget) =>
   (await client.command('listChats', { session })).conversations.find(
