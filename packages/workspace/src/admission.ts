@@ -3,11 +3,6 @@ import { Cause, Effect, Exit, Fiber, FiberSet } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { fail } from '@moonbase/contracts/errors';
 
-export const applicationError = (error: unknown, code: ApplicationError['code'] = 'Unavailable') =>
-  ApplicationError.is(error)
-    ? error
-    : new ApplicationError({ code, message: normalizeApplicationError(error).message });
-
 /** Runs every release in order, even after one fails, then fails with all their failures. */
 export const releaseAll = (releases: readonly Effect.Effect<void>[]): Effect.Effect<void> =>
   Effect.flatMap(Effect.forEach(releases, Effect.exit), (exits) => {
@@ -56,7 +51,14 @@ export function admit<A>(
           result = { value };
           return value;
         },
-        catch: (error) => applicationError(error, persistence ? 'Persistence' : 'Unavailable'),
+        catch: (error) =>
+          normalizeApplicationError(
+            error,
+            new ApplicationError({
+              code: persistence ? 'Persistence' : 'Unavailable',
+              message: 'Application effect failed',
+            }),
+          ),
       });
       // Raw OS Promises must settle before the lease, descriptors or Store can be released.
       const owned = (surround ? surround(abort.signal, work) : work).pipe(

@@ -6,7 +6,7 @@ import {
 } from '@moonbase/contracts/chat-schema';
 import type { AddressInfo } from 'node:net';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { Cause, Effect, Exit, type ManagedRuntime } from 'effect';
+import { Effect, Exit, type ManagedRuntime } from 'effect';
 import * as Schema from 'effect/Schema';
 import type { ChatClient } from '@moonbase/contracts/chat';
 import type {
@@ -43,7 +43,7 @@ import {
   type ChatHostCapability,
   type ChatHostTarget,
 } from '@moonbase/contracts/host';
-import { releaseResource } from '@moonbase/effect';
+import { releaseResource, toApplicationError } from '@moonbase/effect';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import * as P from './protocol.ts';
 import {
@@ -378,10 +378,10 @@ export function makeDaemonClient(
   ) => {
     const exit = await runtime.runPromiseExit(effect);
     if (Exit.isSuccess(exit)) return exit.value;
-    const error = exit.cause.reasons.find(Cause.isFailReason)?.error;
-    throw ApplicationError.is(error)
-      ? error
-      : new ApplicationError({ code: 'Unavailable', message: 'Daemon operation failed.' });
+    throw toApplicationError(
+      exit.cause,
+      new ApplicationError({ code: 'Unavailable', message: 'Daemon operation failed.' }),
+    );
   };
   const handlers: { [K in DaemonCommand]: (input: DaemonInput<K>) => Promise<DaemonOutput<K>> } = {
     approveFolder: (input) => run(Effect.flatMap(LocalHostService, (s) => s.approveFolder(input))),

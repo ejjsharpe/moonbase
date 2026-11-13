@@ -56,7 +56,7 @@ type ChatInstance = { model: ChatModel; controller: ChatController; scope: Scope
 const closing = () =>
   new ApplicationError({ code: 'Unavailable', message: 'Application is closing.' });
 function failures(errors: unknown[]): ApplicationError {
-  const normalized = errors.map(normalizeApplicationError);
+  const normalized = errors.map((error) => normalizeApplicationError(error));
   return new ApplicationError({
     code: normalized[0]?.code ?? 'Unavailable',
     message: normalized

@@ -1,3 +1,4 @@
+import { normalizeApplicationError } from '@moonbase/effect';
 import { createRegistry, defineExtension, section } from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { Context, Effect, Layer, Stream } from 'effect';
@@ -73,7 +74,7 @@ function makeChatService(host: Host): ChatServiceShape {
               host.session(input.session);
               return input;
             },
-            catch: ApplicationError.fromUnknown,
+            catch: normalizeApplicationError,
           }),
           (input) => watchChatListState(host, input.session),
         ),

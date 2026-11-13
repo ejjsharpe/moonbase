@@ -1,3 +1,4 @@
+import { normalizeApplicationError } from '@moonbase/effect';
 import { Cause, Context, Effect, Exit, Fiber, Layer, Queue, Semaphore, Stream } from 'effect';
 import { getJsonKey } from '@moonbase/contracts/common';
 import {
@@ -470,7 +471,7 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
       Effect.gen(function* () {
         const input = yield* Effect.try({
           try: () => decodeChatInput(operation, unknown),
-          catch: ApplicationError.fromUnknown,
+          catch: normalizeApplicationError,
         });
         const shape = input as {
           host?: ChatHostTarget;
@@ -501,7 +502,7 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
         )) as ChatOutput<K>;
       });
     const validate = <A>(read: () => A) =>
-      Effect.try({ try: read, catch: ApplicationError.fromUnknown });
+      Effect.try({ try: read, catch: normalizeApplicationError });
     return {
       getChatHost: (d) => call('getChatHost', d),
       listChats: (d) => call('listChats', d),
@@ -573,7 +574,7 @@ function sendDaemonCommand<K extends DaemonCommand>(
   return Effect.flatMap(
     Effect.try({
       try: () => decodeDaemonInput(operation, unknown),
-      catch: ApplicationError.fromUnknown,
+      catch: normalizeApplicationError,
     }),
     (input) => {
       const shape = input as { host?: ChatHostTarget; target?: ChatTarget };
@@ -681,7 +682,7 @@ export const RemoteProviderSetupLive = (
           Effect.flatMap(
             Effect.try({
               try: () => decodeProviderInput(operation, unknown),
-              catch: ApplicationError.fromUnknown,
+              catch: normalizeApplicationError,
             }),
             (input) =>
               sendDaemonCommand(
@@ -723,7 +724,7 @@ export const RemoteProviderSetupLive = (
             Effect.map(
               Effect.try({
                 try: () => decodeDaemonInput('getProviders', { host, ownerId }),
-                catch: ApplicationError.fromUnknown,
+                catch: normalizeApplicationError,
               }),
               (target) =>
                 link.subscribe(host, 'providerSetup', target).pipe(
@@ -853,7 +854,7 @@ export const RemoteWorkspaceHostLive = (config: {
                 ownHost(input);
                 return input;
               },
-              catch: ApplicationError.fromUnknown,
+              catch: normalizeApplicationError,
             }),
             (input) =>
               holdPermit(
@@ -887,7 +888,7 @@ export const RemoteWorkspaceHostLive = (config: {
                   ownHost({ checkout });
                   return { checkout };
                 },
-                catch: ApplicationError.fromUnknown,
+                catch: normalizeApplicationError,
               }),
               (target) =>
                 link.subscribe(host, 'workspace', target).pipe(

@@ -70,6 +70,7 @@ const unknownOutcome = () =>
     message:
       'Chat operation may have committed. Preserve its exact request and query before retrying.',
   });
+/** A chat failure safe to show: Pi's busy refusal as `Conflict`, any other unknown failure hidden. */
 export const safeError = (error: unknown, uncertain = false): ApplicationError => {
   if (ApplicationError.is(error)) return error;
   try {
@@ -81,12 +82,16 @@ export const safeError = (error: unknown, uncertain = false): ApplicationError =
   } catch {
     /* Unknown SDK diagnostics remain private. */
   }
-  if (uncertain) return unknownOutcome();
-  return new ApplicationError({
-    code: 'Persistence',
-    message:
-      'Pi storage or execution is unavailable. Reopen this explicit store after resolving its failure.',
-  });
+  return normalizeApplicationError(
+    error,
+    uncertain
+      ? unknownOutcome()
+      : new ApplicationError({
+          code: 'Persistence',
+          message:
+            'Pi storage or execution is unavailable. Reopen this explicit store after resolving its failure.',
+        }),
+  );
 };
 /** What one commit means for a watched conversation's projection and its caches. */
 export type PublicationEffect = {

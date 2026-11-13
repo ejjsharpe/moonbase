@@ -1,3 +1,4 @@
+import { normalizeApplicationError } from '@moonbase/effect';
 import { getParentPath, isPathAtOrInside } from '@moonbase/contracts/paths';
 import { EditorDiscovery } from './discovery.ts';
 import { EditorPreservation, type ConfirmedClose } from './preservation.ts';
@@ -11,7 +12,7 @@ import {
 } from './workflows.ts';
 import { Deferred, Effect, Exit, Fiber, Scope, Semaphore, type ManagedRuntime } from 'effect';
 import { watchRetry } from '../../runtime/watch-retry.ts';
-import { normalizeApplicationError, runApplicationEffect } from '../../runtime/effect-client.ts';
+import { runApplicationEffect } from '../../runtime/effect-client.ts';
 import { decodeEditorRecovery } from '@moonbase/contracts/workspace-schema';
 import {
   ApplicationError,
@@ -342,7 +343,7 @@ class EditorModelState {
   }
   report = (error: unknown) => {
     if (this.closing || this.discovery.isObsoleteReadError(error)) return;
-    this.errors = [...this.errors.slice(-19), ApplicationError.fromUnknown(error).message];
+    this.errors = [...this.errors.slice(-19), normalizeApplicationError(error).message];
     this.emit();
   };
   clearErrors() {
@@ -528,7 +529,7 @@ class EditorModelState {
         await this.settleInitialization(checkout, initialized);
         failure = editorError(
           'Git was initialized, but the project did not finish moving to it: ' +
-            ApplicationError.fromUnknown(error).message +
+            normalizeApplicationError(error).message +
             ' Your tabs and drafts are kept on the repository.',
         );
       }
@@ -849,7 +850,9 @@ class EditorModelState {
           disk = await this.discovery.readFile(target, selection);
         } catch (error) {
           if (!current() || !this.buffers.has(key)) throw error;
-          this.report('File unavailable on disk. Retained buffer and edits remain accessible.');
+          this.report(
+            editorError('File unavailable on disk. Retained buffer and edits remain accessible.'),
+          );
           disk = null;
         }
       } else {
@@ -858,7 +861,9 @@ class EditorModelState {
           disk = comparison.working;
         } catch (error) {
           if (!current() || !this.buffers.has(key)) throw error;
-          this.report('Comparison unavailable. Retained buffer and edits remain accessible.');
+          this.report(
+            editorError('Comparison unavailable. Retained buffer and edits remain accessible.'),
+          );
           disk = null;
           comparison = this.comparisons[key];
         }
@@ -929,12 +934,12 @@ class EditorModelState {
   ): Promise<boolean> {
     this.checkout(target.checkout);
     if (this.initialization?.checkoutId === target.checkout.checkoutId) {
-      this.report('Git is initializing in this project. Save again when it finishes.');
+      this.report(editorError('Git is initializing in this project. Save again when it finishes.'));
       return false;
     }
     if (this.publicationBlocked()) return false;
     if (this.uncertainAffects(target)) {
-      this.report('Resolve the pending file operation before saving this file.');
+      this.report(editorError('Resolve the pending file operation before saving this file.'));
       return false;
     }
     const buffer = this.buffers.get(fileKey(target));
@@ -1129,7 +1134,7 @@ class EditorModelState {
   ) {
     this.assertReady();
     if (this.initialization) {
-      this.report('Git is initializing. Close again when it finishes.');
+      this.report(editorError('Git is initializing. Close again when it finishes.'));
       return false;
     }
     if (
@@ -1142,7 +1147,7 @@ class EditorModelState {
       ...new Map(targets.map((target) => [fileKey(target), structuredClone(target)])).values(),
     ];
     if (captured.some((target) => this.uncertainAffects(target))) {
-      this.report('Resolve pending file operations before closing their files.');
+      this.report(editorError('Resolve pending file operations before closing their files.'));
       return false;
     }
     const referenceRevision = this.referenceRevision;
@@ -1738,7 +1743,11 @@ class EditorModelState {
       return result;
     } catch (error) {
       if (this.operations.has(operationKey(this.clientId, operation.id)))
-        this.report('Operation outcome unconfirmed. Resolve status before taking further action.');
+        this.report(
+          editorError(
+            'Operation outcome unconfirmed. Resolve status before taking further action.',
+          ),
+        );
       throw error;
     }
   }
@@ -1748,7 +1757,9 @@ class EditorModelState {
     if (!known) throw editorError('Unknown operation.');
     const result = await this.command('operationStatus', { clientId: operationClientId, id });
     if (!result) {
-      this.report('Operation status unavailable; drafts and original references retained.');
+      this.report(
+        editorError('Operation status unavailable; drafts and original references retained.'),
+      );
       return null;
     }
     if (result.clientId !== operationClientId || result.id !== id)
@@ -1992,7 +2003,7 @@ class EditorModelState {
               this.resumeFacts();
             }
           },
-          catch: ApplicationError.fromUnknown,
+          catch: normalizeApplicationError,
         }),
       ),
     );
@@ -2163,7 +2174,7 @@ export const makeEditorModel = (
     const scope = yield* Scope.make();
     const model = yield* Effect.try({
       try: () => new EditorModelState(scope, dependencies),
-      catch: ApplicationError.fromUnknown,
+      catch: normalizeApplicationError,
     });
     yield* Effect.addFinalizer(() => model.release());
     return model;

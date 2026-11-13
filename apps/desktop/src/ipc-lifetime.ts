@@ -1,8 +1,6 @@
+import { normalizeApplicationError } from '@moonbase/effect';
 import { Effect, Exit, Scope, type ManagedRuntime } from 'effect';
-import {
-  normalizeApplicationError,
-  runApplicationEffect,
-} from '@moonbase/application/runtime/effect-client';
+import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import { ApplicationError, type ObservationClose } from '@moonbase/contracts/workspace';
 import type { ErrorDTO, Reply } from './wire.ts';
 

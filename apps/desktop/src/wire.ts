@@ -1,4 +1,4 @@
-import { normalizeApplicationError } from '@moonbase/application/runtime/effect-client';
+import { normalizeApplicationError } from '@moonbase/effect';
 import {
   decodeApplicationErrorDTO,
   type ApplicationErrorDTOSchema,

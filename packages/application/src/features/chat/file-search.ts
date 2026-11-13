@@ -1,5 +1,5 @@
+import { normalizeApplicationError } from '@moonbase/effect';
 import type { ChatFileMatch, ChatOutput } from '@moonbase/contracts/chat';
-import { normalizeApplicationError } from '../../runtime/effect-client.ts';
 
 export type ChatFileSearchSnapshot = {
   /** The query the matches answer, or null before any answer. */

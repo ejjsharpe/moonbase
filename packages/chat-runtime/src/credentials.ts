@@ -6,6 +6,7 @@ import * as Schema from 'effect/Schema';
 import type { CreateModelsOptions } from '@earendil-works/pi-ai/models';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { CredentialKeySource } from './credential-keys.ts';
+import { isPrivateTo } from '@moonbase/contracts/files';
 
 export {
   createKeyFileSource,
@@ -170,12 +171,7 @@ export function createCredentialStore(
   const prepare = async () => {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const stat = await lstat(directory);
-    if (
-      !stat.isDirectory() ||
-      stat.isSymbolicLink() ||
-      stat.uid !== process.getuid?.() ||
-      stat.mode & 0o077
-    )
+    if (!stat.isDirectory() || stat.isSymbolicLink() || !isPrivateTo(stat, process.getuid?.()))
       throw failure();
   };
   // A file is unreadable when the key encryption authenticates it as not sealed under the loaded
@@ -193,12 +189,7 @@ export function createCredentialStore(
       }
       try {
         const stat = await file.stat();
-        if (
-          !stat.isFile() ||
-          stat.uid !== process.getuid?.() ||
-          stat.mode & 0o077 ||
-          stat.size > 128 * 1024
-        )
+        if (!stat.isFile() || !isPrivateTo(stat, process.getuid?.()) || stat.size > 128 * 1024)
           throw failure();
         if (!(await encryption.available())) throw failure();
         const sealed = await file.readFile();

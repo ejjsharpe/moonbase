@@ -20,6 +20,7 @@
     "./common": "./src/common.ts",
     "./lookup": "./src/lookup.ts",
     "./paths": "./src/paths.ts",
+    "./files": "./src/files.ts",
     "./services": "./src/services.ts",
     "./providers": "./src/providers.ts",
     "./providers-schema": "./src/providers-schema.ts",

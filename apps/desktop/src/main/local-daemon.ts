@@ -16,6 +16,7 @@ import {
 import { LoopbackConnectionLive, loopbackProfileId } from '@moonbase/daemon-protocol/loopback';
 import { RemoteLocalHostLive } from '@moonbase/daemon-protocol/remote';
 import type { DaemonCommand } from './daemon-command.ts';
+import { isPrivateTo } from '@moonbase/contracts/files';
 
 /** A local daemon's data directory inside a Moonbase user-data directory (one per profile). */
 export const findDaemonDirectory = (userData: string) => join(userData, 'daemon-v1');
@@ -67,7 +68,7 @@ async function readDaemonFile(path: string) {
   }
   try {
     const info = await file.stat();
-    if (!info.isFile() || info.uid !== process.getuid?.() || info.mode & 0o077 || info.size > 4096)
+    if (!info.isFile() || !isPrivateTo(info, process.getuid?.()) || info.size > 4096)
       return undefined;
     return JSON.parse(await file.readFile('utf8')) as unknown;
   } catch {

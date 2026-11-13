@@ -4,7 +4,7 @@ import { Effect } from 'effect';
 import { ApplicationError, fail } from '@moonbase/contracts/errors';
 import type { ChatHostHealth, ChatHostTarget, HostHealthReply } from '@moonbase/contracts/host';
 import type { ChatHostEndpoint } from '@moonbase/contracts/services';
-import { releaseResource } from '@moonbase/effect';
+import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
 import { decodeChatHostHealth } from '@moonbase/contracts/host-schema';
 
 export type { ChatHostEndpoint } from '@moonbase/contracts/services';
@@ -123,7 +123,7 @@ export const checkHostHealth = (
           authorization: `Moonbase-HMAC-SHA256 ${signature(endpoint.token, 'request', nonce)}`,
         };
       },
-      catch: ApplicationError.fromUnknown,
+      catch: normalizeApplicationError,
     }),
     ({ origin, nonce, authorization }) =>
       Effect.flatMap(

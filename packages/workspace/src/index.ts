@@ -1,8 +1,8 @@
 import { Context, Effect, FiberSet, Layer, Scope } from 'effect';
 import { WorkspaceHostService, WorkspaceService } from '@moonbase/contracts/services';
 import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
-import type { ApplicationError, CheckoutTarget } from '@moonbase/contracts/workspace';
-import { applicationError } from './admission.ts';
+import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
+import { normalizeApplicationError } from '@moonbase/effect';
 import { ClientWorkspace } from './client.ts';
 import { ClientStore } from './client-store.ts';
 import { decodeClientConfiguration } from './client-schema.ts';
@@ -39,7 +39,7 @@ export function WorkspaceHostLive(configuration: WorkspaceHostConfiguration, now
       Effect.gen(function* () {
         const config = yield* Effect.try({
           try: () => decodeConfiguration(configuration),
-          catch: applicationError,
+          catch: normalizeApplicationError,
         });
         const { allowRoot, chats } = configuration;
         const parent = yield* Effect.scope;
@@ -71,7 +71,11 @@ export function WorkspaceHostLive(configuration: WorkspaceHostConfiguration, now
               allowRoot,
               chats,
             ),
-          catch: (error) => applicationError(error, 'Persistence'),
+          catch: (error) =>
+            normalizeApplicationError(
+              error,
+              new ApplicationError({ code: 'Persistence', message: 'Application effect failed' }),
+            ),
         });
       }),
       (host) => host.close(),
@@ -129,7 +133,7 @@ export function WorkspaceRecoveryLive(
         Effect.gen(function* () {
           const config = yield* Effect.try({
             try: () => decodeClientConfiguration(configuration),
-            catch: applicationError,
+            catch: normalizeApplicationError,
           });
           const parent = yield* Effect.scope;
           const operationScope = yield* Scope.fork(parent, 'parallel');
@@ -138,7 +142,11 @@ export function WorkspaceRecoveryLive(
           );
           return yield* Effect.try({
             try: () => new ClientWorkspace(config, { operations, operationScope }, host),
-            catch: (error) => applicationError(error, 'Persistence'),
+            catch: (error) =>
+              normalizeApplicationError(
+                error,
+                new ApplicationError({ code: 'Persistence', message: 'Application effect failed' }),
+              ),
           });
         }),
         (client) => client.close(),

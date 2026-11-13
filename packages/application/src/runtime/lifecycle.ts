@@ -1,6 +1,7 @@
+import { normalizeApplicationError } from '@moonbase/effect';
 import { Effect, Exit, Fiber, Scope, type ManagedRuntime } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { normalizeApplicationError, runApplicationEffect } from './effect-client.ts';
+import { runApplicationEffect } from './effect-client.ts';
 
 function disposalOutcome(dispose: () => Promise<void>): Promise<ApplicationError | undefined> {
   try {

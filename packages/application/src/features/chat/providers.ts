@@ -1,3 +1,4 @@
+import { normalizeApplicationError } from '@moonbase/effect';
 import type {
   ProviderCommand,
   ProviderInput,
@@ -5,7 +6,6 @@ import type {
   ProviderState,
 } from '@moonbase/contracts/providers';
 import type { ObservationClose } from '@moonbase/contracts/common';
-import { normalizeApplicationError } from '../../runtime/effect-client.ts';
 
 export type ProviderSetupSnapshot = {
   status: ProviderState | null;

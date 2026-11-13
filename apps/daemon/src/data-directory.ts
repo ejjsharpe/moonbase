@@ -9,6 +9,7 @@ import {
   type DaemonSettings,
 } from '@moonbase/chat-runtime/host-configuration';
 import { DaemonFailure } from './failure.ts';
+import { isPrivateTo } from '@moonbase/contracts/files';
 
 export const unsafe = () =>
   new DaemonFailure(
@@ -21,8 +22,7 @@ const malformed = () =>
     'A daemon data file is malformed. Preserve the directory and check its files.',
   );
 
-const isPrivate = (info: Stats, mask = 0o077) =>
-  info.uid === process.getuid?.() && !(info.mode & mask);
+const isPrivate = (info: Stats) => isPrivateTo(info, process.getuid?.());
 
 /** The data directory from the daemon's arguments, which must be exactly that one path. */
 export function readDirectoryArgument(args: readonly string[]) {

@@ -7,7 +7,7 @@ import { decodeConnectionInput } from '@moonbase/contracts/connection-schema';
 import { decodeChatHostTarget } from '@moonbase/contracts/host-schema';
 import type { ChatHostHealth } from '@moonbase/contracts/host';
 import { checkHostHealth } from '@moonbase/ssh/host-health';
-import { releaseResource } from '@moonbase/effect';
+import { releaseResource, toApplicationError } from '@moonbase/effect';
 import { ConnectionService, type ConnectionServiceShape } from '@moonbase/contracts/services';
 import { SshProcess } from './process.ts';
 import {
@@ -483,19 +483,19 @@ class Connection {
       Effect.onExit((exit) =>
         Effect.gen(function* () {
           const cause = Exit.isFailure(exit) ? exit.cause : undefined;
-          const typed = cause?.reasons.find(Cause.isFailReason)?.error;
-          let failure = ApplicationError.is(typed)
-            ? typed
-            : error(
-                g.reason ? 'Cancelled' : 'Unavailable',
-                g.reason
-                  ? 'SSH connection attempt was cancelled.'
-                  : 'SSH connection ended before verification.',
-              );
+          const ended = error(
+            g.reason ? 'Cancelled' : 'Unavailable',
+            g.reason
+              ? 'SSH connection attempt was cancelled.'
+              : 'SSH connection ended before verification.',
+          );
+          let failure =
+            cause && !Cause.hasInterruptsOnly(cause) ? toApplicationError(cause, ended) : ended;
+          // A cleanup defect is reported beside the attempt's own end, not in place of it.
           if (cause?.reasons.some(Cause.isDieReason))
             failure = error(
-              failure.code,
-              failure.message + ' A verification resource cleanup also failed.',
+              ended.code,
+              ended.message + ' A verification resource cleanup also failed.',
             );
           if (self.current === g)
             self.publish(

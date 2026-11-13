@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { build } from 'esbuild';
+import * as Schema from 'effect/Schema';
 import { fileURLToPath } from 'node:url';
 import {
   ApplicationError,
@@ -344,6 +345,23 @@ test('error DTOs decode strictly without authenticating a plain value as Applica
       () => decodeApplicationErrorDTO(bad),
       (e) => ApplicationError.is(e) && e.code === 'Incompatible' && !e.message.includes('secret'),
     );
+});
+test('ApplicationError round-trips through its schema and rejects an unknown code', () => {
+  const error = new ApplicationError({ code: 'Conflict', message: 'Changed on disk', target });
+  const encoded = Schema.encodeSync(ApplicationError)(error);
+  assert.deepEqual(encoded, {
+    _tag: 'ApplicationError',
+    code: 'Conflict',
+    message: 'Changed on disk',
+    target,
+  });
+  const decoded = Schema.decodeUnknownSync(ApplicationError)(encoded);
+  assert(ApplicationError.is(decoded));
+  assert.deepEqual(
+    [decoded.code, decoded.message, decoded.target],
+    [error.code, error.message, target],
+  );
+  assert.throws(() => Schema.decodeUnknownSync(ApplicationError)({ ...encoded, code: 'unknown' }));
 });
 for (const entry of ['workspace-schema', 'connection-schema', 'host-schema', 'error-schema'])
   test(`${entry} bundles without privileged implementations or application services`, async () => {

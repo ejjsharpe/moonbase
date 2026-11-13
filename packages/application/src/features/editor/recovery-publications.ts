@@ -1,3 +1,4 @@
+import { normalizeApplicationError } from '@moonbase/effect';
 import { Effect, Fiber, Semaphore, type Scope } from 'effect';
 import {
   ApplicationError,
@@ -114,7 +115,7 @@ export class RecoveryPublications {
           Effect.flatMap(() => {
             if (generation !== this.scheduleGeneration || isClosing()) return Effect.void;
             this.scheduled = undefined;
-            return Effect.tryPromise({ try: flush, catch: ApplicationError.fromUnknown });
+            return Effect.tryPromise({ try: flush, catch: normalizeApplicationError });
           }),
           Effect.catch((error) => Effect.sync(() => report(error))),
         ),
@@ -219,7 +220,7 @@ export class RecoveryPublications {
             this.pendingPublication = pending;
             await this.confirm(pending, receipt);
           },
-          catch: ApplicationError.fromUnknown,
+          catch: normalizeApplicationError,
         }),
       ),
     )
@@ -278,7 +279,7 @@ export class RecoveryPublications {
               return false;
             }
           },
-          catch: ApplicationError.fromUnknown,
+          catch: normalizeApplicationError,
         }),
       ),
     );

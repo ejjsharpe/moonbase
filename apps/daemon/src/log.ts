@@ -1,6 +1,7 @@
 import { closeSync, constants, fstatSync, openSync, renameSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { openPrivateDirectory, unsafe } from './data-directory.ts';
+import { isPrivateTo } from '@moonbase/contracts/files';
 
 /** Only these fields reach the log, so no token, credential, request body or chat text can. */
 export type LogRecord = {
@@ -43,7 +44,7 @@ export async function openDaemonLog(
       throw unsafe();
     }
     const info = fstatSync(opened);
-    if (!info.isFile() || info.uid !== process.getuid?.() || info.mode & 0o077) {
+    if (!info.isFile() || !isPrivateTo(info, process.getuid?.())) {
       closeSync(opened);
       throw unsafe();
     }

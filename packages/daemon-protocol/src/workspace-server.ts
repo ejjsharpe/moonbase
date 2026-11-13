@@ -2,15 +2,13 @@ import { Cause, Effect, Exit, Fiber, Stream } from 'effect';
 import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import type { HostCommand, WorkspaceHostClient } from '@moonbase/contracts/workspace-host';
 import { ApplicationError } from '@moonbase/contracts/workspace';
+import { toApplicationError } from '@moonbase/effect';
 
-const cancelled = () =>
-  new ApplicationError({ code: 'Cancelled', message: 'The request was cancelled.' });
-const failure = (cause: Cause.Cause<unknown>) => {
-  const error = cause.reasons.find(Cause.isFailReason)?.error;
-  return ApplicationError.is(error)
-    ? error
-    : new ApplicationError({ code: 'Unavailable', message: 'Workspace operation failed.' });
-};
+const failure = (cause: Cause.Cause<unknown>) =>
+  toApplicationError(
+    cause,
+    new ApplicationError({ code: 'Unavailable', message: 'Workspace operation failed.' }),
+  );
 
 /**
  * Binds a file host's operations and watch to what the socket server calls. A checkout's watch
@@ -24,9 +22,7 @@ export function makeWorkspaceClient(host: WorkspaceHostServiceShape): WorkspaceH
       const handler = host[operation] as (input: unknown) => Effect.Effect<unknown, unknown>;
       const exit = await Effect.runPromiseExit(handler(input), { signal: options?.signal });
       if (Exit.isSuccess(exit)) return exit.value as never;
-      throw options?.signal?.aborted && Cause.hasInterruptsOnly(exit.cause)
-        ? cancelled()
-        : failure(exit.cause);
+      throw failure(exit.cause);
     },
     watch({ checkout }, receive, onError) {
       let ready = false,

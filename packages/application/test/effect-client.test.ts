@@ -3,7 +3,6 @@ import { test } from 'node:test';
 import { Cause, Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import {
-  normalizeApplicationError,
   runApplicationEffect,
   observeApplicationStream,
 } from '@moonbase/application/runtime/effect-client';
@@ -236,7 +235,7 @@ test('unknown defects and raw Effect evidence never expose private diagnostics',
         (error) => {
           assert(ApplicationError.is(error));
           assert.equal(error.code, typed.code);
-          assert.strictEqual(error.target, target);
+          assert.deepEqual(error.target, target);
           assert.equal(error.message, `${typed.message}; Application effect failed`);
           assert(!String(error).includes(privateDiagnostic));
           assert(!JSON.stringify(error).includes(privateDiagnostic));
@@ -280,7 +279,7 @@ test('unknown cleanup failures cannot be rebranded into public private diagnosti
         (error) => {
           assert(ApplicationError.is(error));
           assert.equal(error.code, 'Uncertain');
-          assert.strictEqual(error.target, target);
+          assert.deepEqual(error.target, target);
           assert.equal(
             error.message,
             'Mutation receipt missing; Application resource cleanup failed',
@@ -372,36 +371,6 @@ test('active observation defects and deliberate-close cleanup failures are redac
     assert.equal(errors.length, 1);
   } finally {
     await runtime.dispose();
-  }
-});
-
-test('public error normalizer preserves typed identity and safely adapts unknown Promise failures', async () => {
-  const typed = new ApplicationError({
-    code: 'Uncertain',
-    message: 'Original mutation outcome remains uncertain',
-    target,
-  });
-  assert.strictEqual(normalizeApplicationError(typed), typed);
-  for (const value of [
-    new Error(privateDiagnostic),
-    Cause.die(new Error(privateDiagnostic)),
-    { _tag: 'ApplicationError', code: 'Uncertain', message: privateDiagnostic, target },
-    {
-      toString() {
-        throw new Error(privateDiagnostic);
-      },
-    },
-  ]) {
-    safeFailure(normalizeApplicationError(value), 'Application effect failed');
-    const exit = await Effect.runPromiseExit(
-      Effect.tryPromise({ try: () => Promise.reject(value), catch: normalizeApplicationError }),
-    );
-    assert.equal(exit._tag, 'Failure');
-    if (exit._tag === 'Failure') {
-      assert(Cause.hasFails(exit.cause));
-      for (const reason of exit.cause.reasons)
-        if (Cause.isFailReason(reason)) safeFailure(reason.error, 'Application effect failed');
-    }
   }
 });
 

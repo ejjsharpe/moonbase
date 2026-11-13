@@ -1,5 +1,5 @@
+import { normalizeApplicationError } from '@moonbase/effect';
 import type { EntryReference, OperationResult } from '@moonbase/contracts/workspace';
-import { normalizeApplicationError } from '../../runtime/effect-client.ts';
 import type { EditorMutation, MutationAction } from './workflows.ts';
 
 /**

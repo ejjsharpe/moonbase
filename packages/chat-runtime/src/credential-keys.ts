@@ -4,6 +4,7 @@ import { constants } from 'node:fs';
 import { link, open, stat, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 import { ApplicationError } from '@moonbase/contracts/errors';
+import { isPrivateTo } from '@moonbase/contracts/files';
 
 /** Holds the 256-bit key that encrypts provider credentials. */
 export type CredentialKeySource = {
@@ -77,8 +78,7 @@ export function createKeyFileSource(path: string): CredentialKeySource {
     }
     try {
       const info = await file.stat();
-      if (!info.isFile() || info.uid !== process.getuid?.() || info.mode & 0o077)
-        throw notPrivate();
+      if (!info.isFile() || !isPrivateTo(info, process.getuid?.())) throw notPrivate();
       if (info.size > 128) throw notKey();
       const key = decodeKey((await file.readFile('utf8')).replace(/\n$/, ''));
       if (!key) throw notKey();

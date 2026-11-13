@@ -11,10 +11,11 @@ import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { decodeChatHostTarget } from '@moonbase/contracts/host-schema';
 import { chatProtocolVersion, type ChatHostHealth } from '@moonbase/contracts/host';
 import { ConnectionService, type ConnectionServiceShape } from '@moonbase/contracts/services';
-import { releaseResource } from '@moonbase/effect';
+import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
 import { checkHostHealth } from '@moonbase/ssh/host-health';
 import { isSameChatHost } from '@moonbase/contracts/chat-validation';
 import { readObject } from '@moonbase/contracts/common';
+import { isPrivateTo } from '@moonbase/contracts/files';
 
 export type LoopbackConnectionConfiguration = {
   /** The absolute data directory of a daemon on this machine. */
@@ -48,7 +49,7 @@ async function readPrivateFile(path: string, maxBytes: number) {
   }
   try {
     const info = await file.stat();
-    if (!info.isFile() || info.uid !== process.getuid?.() || info.mode & 0o077) throw unsafe();
+    if (!info.isFile() || !isPrivateTo(info, process.getuid?.())) throw unsafe();
     if (info.size > maxBytes) throw malformed();
     return new TextDecoder('utf8', { fatal: true }).decode(await file.readFile());
   } catch (error) {
@@ -70,12 +71,7 @@ async function checkDirectory(directory: string) {
   const info = await lstat(directory).catch(() => {
     throw failure('Unavailable', 'The daemon is not running.');
   });
-  if (
-    !info.isDirectory() ||
-    info.isSymbolicLink() ||
-    info.uid !== process.getuid?.() ||
-    info.mode & 0o077
-  )
+  if (!info.isDirectory() || info.isSymbolicLink() || !isPrivateTo(info, process.getuid?.()))
     throw unsafe();
 }
 const parseIdentity = (identity: string) =>
@@ -244,7 +240,7 @@ export function LoopbackConnectionLive(
           Effect.flatMap(
             Effect.try({
               try: () => decodeConnectionInput('getConnection', input),
-              catch: ApplicationError.fromUnknown,
+              catch: normalizeApplicationError,
             }),
             () => Effect.as(isOpen, structuredClone(state)),
           ),
@@ -255,7 +251,7 @@ export function LoopbackConnectionLive(
                 if (decodeConnectionInput('connect', input).profileId !== loopbackProfileId)
                   fail('InvalidInput', 'Choose the loopback connection profile.');
               },
-              catch: ApplicationError.fromUnknown,
+              catch: normalizeApplicationError,
             }),
             () => lock.withPermits(1)(connect),
           ),
@@ -263,7 +259,7 @@ export function LoopbackConnectionLive(
           Effect.flatMap(
             Effect.try({
               try: () => decodeConnectionInput('disconnect', input).connectionId,
-              catch: ApplicationError.fromUnknown,
+              catch: normalizeApplicationError,
             }),
             (connectionId) =>
               lock.withPermits(1)(
@@ -297,7 +293,7 @@ export function LoopbackConnectionLive(
                 health: current!.health,
               });
             },
-            catch: ApplicationError.fromUnknown,
+            catch: normalizeApplicationError,
           }),
         watch: () =>
           Stream.unwrap(

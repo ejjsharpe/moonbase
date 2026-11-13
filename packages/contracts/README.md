@@ -5,7 +5,8 @@
 | Subpath | Contents |
 | --- | --- |
 | `workspace`, `chat`, `connection`, `host`, `providers`, `daemon` | Browser-safe DTOs, command/client interfaces and protocol constants |
-| `errors`, `common` | `ApplicationError`, error codes, `CommandOptions`, `ObservationClose`, and `areJsonValuesEqual` / `getJsonKey` (key-order-safe equality and keys for plain decoded data) |
+| `errors`, `common` | `ApplicationError` (a `Schema.TaggedError` with `code`, `message` and optional `target`, so it encodes and decodes with its schema; `ApplicationError.is` checks a private brand, which runs no Proxy trap), error codes, `CommandOptions`, `ObservationClose`, and `areJsonValuesEqual` / `getJsonKey` (key-order-safe equality and keys for plain decoded data) |
+| `files` | `isPrivateTo(stats, uid)`: a file is owned by `uid` with no group or other permission bits, the check every private file passes |
 | `workspace-host`, `workspace-host-schema` | The file host's operations: the workspace commands without recovery, journalled with an installation, client and request ID, plus `saveStatus`, `acknowledgeSave` and `listOperations` (the operation feed, a page also bounded in bytes), with request IDs on `createWorktree` and `initializeRepository`, and `createChatWorktree`, `turnChatIntoProject` (journalled mutations) and local-mode `captureImports` and `releaseImports`; which are mutations, their deadline classes, `WorkspaceWatchValue` and the promise-shaped `WorkspaceHostClient` a server dispatches to |
 | `lookup` | `matchPath` / `compareMatches`: the fuzzy path ranking shared by editor lookup and chat file search |
 | `*-schema`, `schema` | Request, saved-data and wire-reply decoders, and shared schema constructors |
@@ -30,7 +31,7 @@ The file host (`WorkspaceHostService`) reports a save as `saved` (with the versi
 
 A `CheckoutTarget` is a Git checkout (`vcs: 'git'`, with `branch` and `worktree`: `main` or `linked`) or a plain folder (`vcs: 'none'`); worktrees of one repository share `projectId`. Saved targets without `vcs` decode as Git.
 
-Client entries use type-only schema imports, so they emit no Effect runtime code. `services` is privileged: `ConnectionService.endpoint` carries origin and key data that must never reach renderers, settings or logs.
+Client entries bundle only contracts and portable Effect (`ApplicationError` is a schema class); type-only client imports emit no runtime code. `services` is privileged: `ConnectionService.endpoint` carries origin and key data that must never reach renderers, settings or logs.
 
 ```sh
 bun run --cwd packages/contracts typecheck
