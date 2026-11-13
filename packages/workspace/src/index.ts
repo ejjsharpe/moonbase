@@ -3,18 +3,18 @@ import { WorkspaceHostService, WorkspaceService } from '@moonbase/contracts/serv
 import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
 import { normalizeApplicationError } from '@moonbase/effect';
-import { ClientWorkspace } from './client.ts';
-import { ClientStore } from './client-store.ts';
-import { decodeClientConfiguration } from './client-schema.ts';
-import { FileHost } from './host.ts';
-import { decodeConfiguration, type WorkspaceHostConfiguration } from './schema.ts';
+import { ClientWorkspace } from './client/client.ts';
+import { ClientStore } from './client/client-store.ts';
+import { decodeClientConfiguration } from './client/client-schema.ts';
+import { FileHost } from './host/file-host.ts';
+import { decodeConfiguration, type WorkspaceHostConfiguration } from './host/schema.ts';
 
 export type {
   ChatFolders,
   RootPredicate,
   WorkspaceConfiguration,
   WorkspaceHostConfiguration,
-} from './schema.ts';
+} from './host/schema.ts';
 export type WorkspaceRecoveryConfiguration = {
   dataDirectory: string;
   /** The store's identity to a file host; when absent, the one the store holds or a new one. */

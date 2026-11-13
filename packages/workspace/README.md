@@ -2,6 +2,8 @@
 
 `@moonbase/workspace` is the macOS workspace service in two layers: a **file host** (file reads, version-checked saves, create/move/copy and Finder Trash; Git status and comparisons, file lookup and watching; and journals of the saves and operations it admitted) and a **client recovery store** (drafts, editor state and the client's record of what it sent). It implements the workspace contracts and is independent of the editor UI. The [daemon](../../apps/daemon/README.md) composes the file host and serves it over its WebSocket in both modes; Electron composes only the recovery store, over the daemon's host (`RemoteWorkspaceHostLive`).
 
+Source is in `src/host` (the file host: `files`, `git`, `watch`, `journal`), `src/client` (the recovery store) and `src/shared` (the SQLite store, validation, admission and native file access both use). Unit tests sit beside their source; shared fixtures are in `test/fixtures`.
+
 ## Integration
 
 - `WorkspaceHostLive(config)` provides `WorkspaceHostService` (everything except recovery, plus `saveStatus`, `acknowledgeSave` and `listOperations`), the privileged `WorkspaceNative` service for approved native imports, and `WorkspaceFolders` (see Chat folders). It keeps approvals and journals in `workspace-host.sqlite` in `dataDirectory`.
