@@ -117,6 +117,10 @@ assert(
     'packages/contracts/src/index.ts': '',
   }).some((error) => error.includes('cross-package source')),
 );
+assert.deepEqual(
+  check({ 'packages/application/src/index.test.ts': "import 'node:assert'; import '../test/x.ts';" }),
+  [],
+);
 assert(
   check({
     'packages/application/src/index.ts': "import './other.ts';",
