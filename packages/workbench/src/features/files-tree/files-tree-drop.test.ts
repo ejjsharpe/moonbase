@@ -15,7 +15,7 @@ import {
   planDrop,
   selectDraggedPaths,
   type TreeDrag,
-} from '../src/editor/files-tree-drop.ts';
+} from './files-tree-drop.ts';
 
 const drag = (...paths: string[]): TreeDrag => ({ source: 'editor', checkout: 'checkout', paths });
 const into = (folder: string) => ({ source: 'editor', checkout: 'checkout', folder });

@@ -10,3 +10,5 @@
 - `@moonbase/ui/fonts.css`: bundled BlexMono Nerd Font Mono 3.5.1 (regular, italic, medium, semibold, bold), used for both `type.ui` and `type.mono`. Import it beside `reset.css` in every browser root. Its OFL licence is `fonts/LICENSE.txt`; `fonts/nerd-fonts/` holds Nerd Fonts' licence, its list of patched glyph sets and their licences, copied from Nerd Fonts v3.5.1, with `upstream/` holding the Apache-2.0 text and the licences of sets Nerd Fonts ships none for, from each project. The desktop build adds both to the dependency notices.
 
 Consuming React components use Base UI for interaction and accessibility; state and behavior stay with the consumer. Keep text readable (at least 4.5:1 contrast) and respect reduced motion.
+
+`bun run --cwd packages/ui test` runs the logic tests beside their source; `typecheck` checks the package on its own.

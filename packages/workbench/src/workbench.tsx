@@ -6,17 +6,21 @@ import {
   type PickerMode,
   type PickerOpenFile,
   type PickerRequest,
-} from './picker.tsx';
-import { FilesTree, type FollowedFiles, type TreeCreateRequest } from './files-tree.tsx';
-import { findCreateFolder } from './files-tree-rows.ts';
-import { gitStatusMarks } from './files-tree-status.ts';
-import { Mutation, type Action } from './mutation.tsx';
-import { useMutationRunner } from './mutation-runner.tsx';
-import { useMoveUndo } from './move-undo.ts';
-import { useFileClipboard } from './file-clipboard.ts';
-import { maxDraggedEntries } from './files-tree-drop.ts';
-import { formatKeys, isCommandKey } from './file-commands.ts';
-import { Popup } from './popup.tsx';
+} from './features/picker/picker.tsx';
+import {
+  FilesTree,
+  type FollowedFiles,
+  type TreeCreateRequest,
+} from './features/files-tree/files-tree.tsx';
+import { findCreateFolder } from './features/files-tree/files-tree-rows.ts';
+import { gitStatusMarks } from './features/files-tree/files-tree-status.ts';
+import { Mutation, type Action } from './components/mutation.tsx';
+import { useMutationRunner } from './components/mutation-runner.tsx';
+import { useMoveUndo } from './features/files-tree/move-undo.ts';
+import { useFileClipboard } from './features/files-tree/file-clipboard.ts';
+import { maxDraggedEntries } from './features/files-tree/files-tree-drop.ts';
+import { formatKeys, isCommandKey } from './lib/file-commands.ts';
+import { Popup } from './components/popup.tsx';
 import {
   forwardRef,
   useEffect,
@@ -47,12 +51,12 @@ import {
   type EditorController,
   type EditorSnapshot,
 } from '@moonbase/application/editor';
-import { MonacoView, readSelection, type EditorReveal } from './monaco-view.tsx';
-import { WorktreeSwitcher } from './worktree-switcher.tsx';
-import { ExplorerMenu, type ExplorerAction } from './explorer-menu.tsx';
-import { CheatSheet, editorShortcuts, type Shortcut } from './cheat-sheet.tsx';
+import { MonacoView, readSelection, type EditorReveal } from './features/editor/monaco-view.tsx';
+import { WorktreeSwitcher } from './features/editor/worktree-switcher.tsx';
+import { ExplorerMenu, type ExplorerAction } from './features/files-tree/explorer-menu.tsx';
+import { CheatSheet, editorShortcuts, type Shortcut } from './features/editor/cheat-sheet.tsx';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { styles } from './styles.ts';
+import { styles } from './components/styles.ts';
 import { Icon } from '@moonbase/ui/icons';
 import { FileIcon } from '@moonbase/ui/file-icons';
 

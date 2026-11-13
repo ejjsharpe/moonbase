@@ -56,7 +56,7 @@ for (const entry of ['native-actions', 'ipc', 'window-lifecycle', 'chat-backends
   assert(main.includes(`src/main/${entry}.ts`), `Missing packaged main owner: ${entry}`);
 
 for (const entry of [
-  'packages/workbench/src/editor/workbench.tsx',
+  'packages/workbench/src/workbench.tsx',
   'apps/desktop/src/renderer/shell/workbench.tsx',
   'apps/desktop/src/renderer/chat/view.tsx',
 ])

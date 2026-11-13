@@ -29,7 +29,7 @@ assert(
   'Missing direct maintained Markdown parser',
 );
 for (const entry of [
-  'packages/workbench/src/editor/workbench.tsx',
+  'packages/workbench/src/workbench.tsx',
   'apps/desktop/src/renderer/shell/workbench.tsx',
   'apps/desktop/src/renderer/chat/view.tsx',
   'apps/desktop/src/renderer/chat/transcript.tsx',

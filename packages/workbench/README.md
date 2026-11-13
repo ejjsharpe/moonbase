@@ -19,6 +19,8 @@ Pass the exact open checkout, or `undefined` for the empty view. `renderLayout({
 | `.` | `Workbench`, `WorkbenchProps` and `WorkbenchHandle` |
 | `./workers` | Monaco workers for browser roots |
 
+Source is `src/workbench.tsx`, which composes `src/features/{editor,files-tree,picker}`; features don't import each other and share `src/components` and `src/lib`.
+
 ## Checks
 
 ```sh
@@ -31,6 +33,6 @@ bun run --cwd packages/workbench test:ui
 bun run --cwd packages/workbench demo
 ```
 
-`test` runs the logic-only `*.test.ts` files under Node; `test:ui` runs the `*.spec.ts` browser tests against the demo.
+`test` runs the logic-only `*.test.ts` files beside their source under Node; `test:ui` runs the `test/e2e/*.spec.ts` browser tests against the demo.
 
 The demo renders two project workbenches with independent buffers; `?remote` gives the second a remote identity and `?clipboard` installs a paste fixture.

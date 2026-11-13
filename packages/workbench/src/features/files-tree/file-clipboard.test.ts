@@ -1,11 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import {
-  copyName,
-  findFreeName,
-  findPasteFolder,
-  planPaste,
-} from '../src/editor/file-clipboard.ts';
+import { copyName, findFreeName, findPasteFolder, planPaste } from './file-clipboard.ts';
 
 const file = (path: string) => ({ path, directory: false });
 const folder = (path: string) => ({ path, directory: true });

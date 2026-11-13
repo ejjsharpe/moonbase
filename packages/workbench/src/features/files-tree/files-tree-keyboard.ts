@@ -1,7 +1,7 @@
 import type { KeyboardEvent, RefObject } from 'react';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import type { EditorController } from '@moonbase/application/editor';
-import { isCommandKey, shortcutCommand, type FileCommand } from './file-commands.ts';
+import { isCommandKey, shortcutCommand, type FileCommand } from '../../lib/file-commands.ts';
 import type { VisibleRow } from './files-tree-rows.ts';
 
 /** What the tree's keyboard and pointer selection read and act on. */
