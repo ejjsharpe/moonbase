@@ -3,9 +3,9 @@ import { test } from 'node:test';
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { runDaemon, type DaemonExit } from '../src/daemon.ts';
-import { createIdleMonitor } from '../src/idle.ts';
-import { createFauxProviders } from './faux.ts';
+import { runDaemon, type DaemonExit } from './daemon.ts';
+import { createIdleMonitor } from './idle.ts';
+import { createFauxProviders } from '../test/fixtures/faux.ts';
 import {
   bounded,
   createControlledClock,
@@ -15,8 +15,8 @@ import {
   startInProcess,
   temporaryRoot,
   until,
-} from './fixture.ts';
-import { fauxModelId, fauxProviderId } from './faux.ts';
+} from '../test/fixtures/fixture.ts';
+import { fauxModelId, fauxProviderId } from '../test/fixtures/faux.ts';
 
 const minute = 60_000;
 

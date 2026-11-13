@@ -63,7 +63,8 @@ export type CleanupReport = {
   reboundPorts: number[];
 };
 const daemonEntry = new URL('./daemon-host.ts', import.meta.url).pathname;
-const noNetwork = new URL('../../apps/daemon/test/no-network.ts', import.meta.url).pathname;
+const noNetwork = new URL('../../apps/daemon/test/fixtures/no-network.ts', import.meta.url)
+  .pathname;
 /**
  * A controlled remote host: the daemon in host mode in temporary data, on Bun, with the faux
  * providers and tools of `behaviour` (a `faux-*.mjs` module), reached through `forward.mjs` in

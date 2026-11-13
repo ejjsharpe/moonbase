@@ -8,7 +8,7 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint .",
-    "test": "bun test --timeout 60000 ./test"
+    "test": "bun test --timeout 60000 ./src"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.4.0",

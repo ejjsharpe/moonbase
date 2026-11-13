@@ -21,8 +21,8 @@ import {
 import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
 import { connectDaemonSocket } from '@moonbase/daemon-protocol/socket';
 import type { ChatHostTarget } from '@moonbase/contracts/host';
-import { runDaemon, type DaemonExit } from '../src/daemon.ts';
-import type { IdleClock } from '../src/idle.ts';
+import { runDaemon, type DaemonExit } from '../../src/daemon.ts';
+import type { IdleClock } from '../../src/idle.ts';
 import { createFauxProviders } from './faux.ts';
 
 export const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -56,7 +56,7 @@ export async function temporaryRoot() {
 
 const entries = {
   faux: new URL('./faux-daemon.ts', import.meta.url).pathname,
-  main: new URL('../src/main.ts', import.meta.url).pathname,
+  main: new URL('../../src/main.ts', import.meta.url).pathname,
 };
 const noNetwork = new URL('./no-network.ts', import.meta.url).pathname;
 

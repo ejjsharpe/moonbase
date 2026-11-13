@@ -9,7 +9,7 @@ import {
 } from '@earendil-works/pi-ai/providers/faux';
 import { createMemoryKeySource } from '@moonbase/chat-runtime/credentials';
 import { localProviderIds } from '@moonbase/chat-runtime/providers';
-import type { DaemonProviders } from '../src/daemon.ts';
+import type { DaemonProviders } from '../../src/daemon.ts';
 
 export const fauxProviderId = 'moonbase-faux';
 export const fauxModelId = 'faux-model';

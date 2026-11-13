@@ -1,11 +1,11 @@
 import { chmodSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createKeyFileSource } from '@moonbase/chat-runtime/credentials';
-import { runDaemon } from '../src/daemon.ts';
-import { readDirectoryArgument } from '../src/data-directory.ts';
-import { describeFailure } from '../src/failure.ts';
-import { onShutdownSignal } from '../src/signals.ts';
-import { findFilesystemHelper } from '../src/workspace.ts';
+import { runDaemon } from '../../src/daemon.ts';
+import { readDirectoryArgument } from '../../src/data-directory.ts';
+import { describeFailure } from '../../src/failure.ts';
+import { onShutdownSignal } from '../../src/signals.ts';
+import { findFilesystemHelper } from '../../src/workspace.ts';
 import { createFauxProviders, readFauxScript } from './faux.ts';
 
 /**
@@ -30,7 +30,7 @@ function holdingHelper(folder: string, helper: string) {
 }
 
 /**
- * The daemon's test entry: `bun test/faux-daemon.ts <absolute data directory>`. It composes the
+ * The daemon's test entry: `bun test/fixtures/faux-daemon.ts <absolute data directory>`. It composes the
  * real daemon with faux providers, scripted by `faux.json`, and an in-memory credential key, or the
  * temporary key file `daemon.json` names, so sign-ins survive a restart.
  */

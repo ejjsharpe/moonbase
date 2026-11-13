@@ -22,8 +22,8 @@ import {
   temporaryRoot,
   until,
   type DaemonProcess,
-} from './fixture.ts';
-import { fauxModelId, fauxProviderId, fauxSignInCode } from './faux.ts';
+} from '../test/fixtures/fixture.ts';
+import { fauxModelId, fauxProviderId, fauxSignInCode } from '../test/fixtures/faux.ts';
 
 const model = { provider: fauxProviderId, modelId: fauxModelId };
 // The test entry composes the file host, so it advertises the workspace.

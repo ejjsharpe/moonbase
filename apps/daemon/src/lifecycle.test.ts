@@ -4,9 +4,9 @@ import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createKeyFileSource } from '@moonbase/chat-runtime/credentials';
-import { runDaemon } from '../src/daemon.ts';
-import { createControlledClock, startInProcess, temporaryRoot } from './fixture.ts';
-import { createFauxProviders } from './faux.ts';
+import { runDaemon } from './daemon.ts';
+import { createControlledClock, startInProcess, temporaryRoot } from '../test/fixtures/fixture.ts';
+import { createFauxProviders } from '../test/fixtures/faux.ts';
 
 const minute = 60_000;
 const exists = (path: string) =>

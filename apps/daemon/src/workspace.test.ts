@@ -10,9 +10,9 @@ import { makeConnectionClient } from '@moonbase/application/runtime/clients';
 import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
 import { RemoteWorkspaceHostLive } from '@moonbase/daemon-protocol/remote';
 import { connectDaemonSocket } from '@moonbase/daemon-protocol/socket';
-import { runDaemon, type DaemonExit } from '../src/daemon.ts';
-import { closeWorkspace, findFilesystemHelper } from '../src/workspace.ts';
-import type { LogRecord } from '../src/log.ts';
+import { runDaemon, type DaemonExit } from './daemon.ts';
+import { closeWorkspace, findFilesystemHelper } from './workspace.ts';
+import type { LogRecord } from './log.ts';
 import {
   bounded,
   createControlledClock,
@@ -21,8 +21,8 @@ import {
   temporaryRoot,
   until,
   type ControlledClock,
-} from './fixture.ts';
-import { createFauxProviders, fauxModelId, fauxProviderId } from './faux.ts';
+} from '../test/fixtures/fixture.ts';
+import { createFauxProviders, fauxModelId, fauxProviderId } from '../test/fixtures/faux.ts';
 
 const minute = 60_000;
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);

@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { findRipgrep } from '../src/workspace.ts';
+import { findRipgrep } from './workspace.ts';
 
 test('a daemon finds only an executable ripgrep, in the app layout beside its bundle, else on PATH', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-daemon-ripgrep-')));

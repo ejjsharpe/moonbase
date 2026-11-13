@@ -14,8 +14,8 @@ import {
   type SocketOperation,
   type SocketOutput,
 } from '@moonbase/daemon-protocol/socket';
-import { bounded, readJson, startDaemon, temporaryRoot, until } from './fixture.ts';
-import { fauxModelId, fauxProviderId, fauxSignInCode } from './faux.ts';
+import { bounded, readJson, startDaemon, temporaryRoot, until } from '../test/fixtures/fixture.ts';
+import { fauxModelId, fauxProviderId, fauxSignInCode } from '../test/fixtures/faux.ts';
 
 const model = { provider: fauxProviderId, modelId: fauxModelId };
 
