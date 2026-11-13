@@ -6,7 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-const root = fileURLToPath(new URL('../../../', import.meta.url));
+const root = fileURLToPath(new URL('../../', import.meta.url));
 const tools = (name) => path.join(root, 'node_modules', name, 'bin', name);
 
 // Exercise the actual root overrides in an isolated monorepo, without linting invalid fixtures in CI.

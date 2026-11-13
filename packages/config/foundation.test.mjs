@@ -6,7 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-const root = fileURLToPath(new URL('../../../', import.meta.url));
+const root = fileURLToPath(new URL('../../', import.meta.url));
 
 test('Foundation verifies browser-only command contracts and headless models without a source archive', () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'moonbase-foundation-'));

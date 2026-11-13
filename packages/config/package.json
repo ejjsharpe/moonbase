@@ -8,7 +8,7 @@
     "./typescript/base.json": "./typescript/base.json"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test '*.test.mjs'"
   },
   "nx": {
     "targets": {
