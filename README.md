@@ -19,6 +19,8 @@ The daemon owns projects: it serves files, saves, Git, worktrees, search and wat
 | [Desktop](apps/desktop/README.md) | Electron app: navigation, Chat view, native capabilities and packaging |
 | [Daemon](apps/daemon/README.md) | Bun process root that serves chats and the workspace (files, Git, worktrees, search, watching) from its own data directory |
 
+Modules are laid out feature-first: imports flow from a module's `app` (or root) through `features/<name>` to shared `components`, `lib` and `shared` folders, and one feature never imports another (`check:foundation` enforces it). Unit tests sit beside their source (`foo.ts`, `foo.test.ts`); Playwright specs are in `test/e2e` and shared harnesses, fixtures and faux processes in `test/fixtures`. Packages expose entry points through `package.json` `exports`, with no barrel files inside features.
+
 See [AGENTS.md](AGENTS.md) for contribution rules.
 
 ## Development

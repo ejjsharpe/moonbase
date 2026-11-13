@@ -125,6 +125,20 @@ assert.deepEqual(
 );
 assert(
   check({
+    'packages/workbench/src/features/picker/picker.tsx': "import '../files-tree/rows.ts';",
+    'packages/workbench/src/features/files-tree/rows.ts': '',
+  }).some((error) => error.includes('feature picker imports feature files-tree')),
+);
+assert.deepEqual(
+  check({
+    'packages/workbench/src/workbench.tsx': "import './features/files-tree/rows.ts';",
+    'packages/workbench/src/features/files-tree/rows.ts': "import '../../components/popup.tsx';",
+    'packages/workbench/src/components/popup.tsx': '',
+  }),
+  [],
+);
+assert(
+  check({
     'packages/application/src/index.ts': "import './other.ts';",
     'packages/application/src/other.ts': "import './index.ts';",
   }).some((error) => error.includes('runtime source cycle')),

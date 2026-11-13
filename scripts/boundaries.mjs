@@ -101,6 +101,11 @@ const owner = (path) => path.match(/^packages\/([^/]+)\//)?.[1];
 const moduleOwner = (path) => path.match(/^(?:packages|apps)\/[^/]+/)?.[0];
 // Unit tests sit beside their source but are never production code.
 const isTest = (path) => /\.test\.[cm]?[jt]sx?$/.test(path);
+// A feature folder's code and tests: `<root>/features/<name>/`. Features don't import each other.
+const feature = (path) => {
+  const match = path.match(/^(.*\/)features\/([^/]+)\//);
+  return match && { root: match[1], name: match[2] };
+};
 const production = (path) =>
   !isTest(path) && (/^packages\/[^/]+\/src\//.test(path) || /^packages\/ui\/[^/]+\.ts$/.test(path));
 
@@ -154,6 +159,10 @@ export function checkBoundaries({ files, packages }) {
       )
         reject(path, edge, 'cross-package source import; use public exports');
       if (resolved && files.has(resolved)) graph.get(path).push({ ...edge, target: resolved });
+      const from = feature(path),
+        to = feature(resolved ?? '');
+      if (from && to && from.root === to.root && from.name !== to.name)
+        reject(path, edge, `feature ${from.name} imports feature ${to.name}`);
       if (processRoots.has(path)) {
         if (
           edge.specifier.startsWith('@moonbase/application') &&
