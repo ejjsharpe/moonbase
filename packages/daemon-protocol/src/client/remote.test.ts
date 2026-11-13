@@ -19,11 +19,16 @@ import {
   RemoteChatLive,
   RemoteLocalHostLive,
   RemoteWorkspaceHostLive,
-} from '../src/remote.ts';
-import { serveChat } from '../src/server.ts';
-import * as P from '../src/protocol.ts';
+} from './remote.ts';
+import { serveChat } from '../server/server.ts';
+import * as P from '../shared/protocol.ts';
 import { socketLimits } from '@moonbase/contracts/socket';
-import { fixture as runtimeFixture, manualClock, session, until } from './runtime-fixture.ts';
+import {
+  fixture as runtimeFixture,
+  manualClock,
+  session,
+  until,
+} from '../../test/fixtures/runtime-fixture.ts';
 
 // The daemon serves chat; these cases need none of its other operations.
 const unserved: DaemonClient = {

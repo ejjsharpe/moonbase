@@ -15,7 +15,7 @@ import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import { ConnectionService } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
-import { RemoteChatLive } from '../src/remote.ts';
+import { RemoteChatLive } from './remote.ts';
 import { createRequire } from 'node:module';
 
 async function bounded<T>(promise: Promise<T>, ms = 5000): Promise<T> {
@@ -50,9 +50,9 @@ function start(path: string) {
     process.execPath,
     [
       '--import',
-      new URL('./no-provider.mjs', import.meta.url).pathname,
+      new URL('../../test/fixtures/no-provider.mjs', import.meta.url).pathname,
       '--experimental-strip-types',
-      new URL('./faux-host.mjs', import.meta.url).pathname,
+      new URL('../../test/fixtures/faux-host.mjs', import.meta.url).pathname,
       path,
     ],
     { stdio: ['ignore', 'pipe', 'pipe'], env: process.env },
@@ -204,7 +204,7 @@ test('actual child host crash resumes Pi-owned work without resubmitting reserve
 });
 
 test('compiled remote entry runs on Electron Node24 against the separate production host with no engine graph', async () => {
-  const rootRequire = createRequire(new URL('../../../package.json', import.meta.url)),
+  const rootRequire = createRequire(new URL('../../../../package.json', import.meta.url)),
     esbuild = rootRequire('esbuild') as typeof Esbuild,
     electron = rootRequire('electron') as string;
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-electron-remote-'))),
@@ -228,7 +228,7 @@ test('compiled remote entry runs on Electron Node24 against the separate product
     import {Effect,Layer,ManagedRuntime,Stream} from 'effect';
     import { ConnectionService, LocalHostService } from '@moonbase/contracts/services';
     import {makeChatClient} from '@moonbase/application/runtime/clients';
-    import {RemoteChatLive} from './src/remote.ts';
+    import {RemoteChatLive} from './src/client/remote.ts';
     async function main(){
       const config=JSON.parse(readFileSync(process.argv[2],'utf8'));
       const unavailable=()=>Effect.die('No implicit connection command');
@@ -244,7 +244,11 @@ test('compiled remote entry runs on Electron Node24 against the separate product
       }finally{await runtime.dispose();}}
     main().catch(()=>{console.error('remote compatibility failed');process.exitCode=1;});`;
   const result = await esbuild.build({
-    stdin: { contents: source, resolveDir: new URL('..', import.meta.url).pathname, loader: 'ts' },
+    stdin: {
+      contents: source,
+      resolveDir: new URL('../..', import.meta.url).pathname,
+      loader: 'ts',
+    },
     bundle: true,
     platform: 'node',
     format: 'cjs',
@@ -257,10 +261,15 @@ test('compiled remote entry runs on Electron Node24 against the separate product
       /pi-durable|pi-ai|chord|packages\/(chat-runtime|workspace|workbench|editor)\//.test(path),
     ),
   );
-  const sourceDirectory = fileURLToPath(new URL('../src/', import.meta.url));
+  const sourceDirectory = fileURLToPath(new URL('../', import.meta.url));
   assert.deepEqual(
     inputs.filter((path) => path.startsWith(sourceDirectory)).sort(),
-    ['remote.ts', 'protocol.ts', 'socket-client.ts', 'socket-protocol.ts']
+    [
+      'client/remote.ts',
+      'shared/protocol.ts',
+      'client/socket-client.ts',
+      'shared/socket-protocol.ts',
+    ]
       .map((name) => join(sourceDirectory, name))
       .sort(),
     'The remote bundle must contain only its transport and protocol leaves.',

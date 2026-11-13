@@ -117,9 +117,7 @@ for (const inputs of [preloadInputs, rendererInputs]) {
 // runtime, provider setup, credentials, Claude Code or the protocol's server side.
 assert.deepEqual(
   mainInputs.filter((path) =>
-    /@earendil-works|chat-runtime\/src\/|daemon-protocol\/src\/(?!remote|loopback|protocol|validation|socket-client|socket-protocol)[^/]+\.ts$/.test(
-      path,
-    ),
+    /@earendil-works|chat-runtime\/src\/|daemon-protocol\/src\/server\//.test(path),
   ),
   [],
   'The local chat runtime reached Electron main',
@@ -129,8 +127,8 @@ assert(
   'Electron main uses safeStorage',
 );
 for (const entry of [
-  'daemon-protocol/src/remote.ts',
-  'daemon-protocol/src/loopback.ts',
+  'daemon-protocol/src/client/remote.ts',
+  'daemon-protocol/src/client/loopback.ts',
   'src/main/local-daemon.ts',
   'src/main/daemon-command.ts',
   'src/chat/daemon.ts',
@@ -149,7 +147,7 @@ for (const entry of [
   'apps/daemon/src/main.ts',
   'chat-runtime/src/index.ts',
   'chat-runtime/src/claude-code.ts',
-  'daemon-protocol/src/server.ts',
+  'daemon-protocol/src/server/server.ts',
 ])
   assert(
     daemonInputs.some((path) => path.endsWith(entry)),

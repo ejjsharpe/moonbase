@@ -26,7 +26,7 @@ import {
   decodeSocketClientMessage,
 } from '@moonbase/contracts/socket-schema';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import * as P from './protocol.ts';
+import * as P from '../shared/protocol.ts';
 import { isCancellableChatRead, isSameChatHost } from '@moonbase/contracts/chat-validation';
 import { fail } from '@moonbase/contracts/errors';
 import {
@@ -41,7 +41,7 @@ import {
   type PayloadChunks,
   type SocketClock,
   type SocketKeys,
-} from './socket-protocol.ts';
+} from '../shared/socket-protocol.ts';
 import { projectSocketDelta } from './socket-deltas.ts';
 import { followChanges } from '@moonbase/effect/changes';
 import {

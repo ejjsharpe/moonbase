@@ -45,7 +45,7 @@ import {
 } from '@moonbase/contracts/host';
 import { releaseResource, toApplicationError } from '@moonbase/effect';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import * as P from './protocol.ts';
+import * as P from '../shared/protocol.ts';
 import {
   checkChatOutput,
   isCancellableChatRead,
@@ -53,11 +53,11 @@ import {
 } from '@moonbase/contracts/chat-validation';
 import { fail } from '@moonbase/contracts/errors';
 import { createSocketServer, type SocketSources } from './socket-server.ts';
-import { systemSocketClock, type SocketClock } from './socket-protocol.ts';
+import { systemSocketClock, type SocketClock } from '../shared/socket-protocol.ts';
 
 export type { SocketSources } from './socket-server.ts';
 export { makeWorkspaceClient } from './workspace-server.ts';
-export type { SocketClock } from './socket-protocol.ts';
+export type { SocketClock } from '../shared/socket-protocol.ts';
 
 export type ChatServerConfiguration = { host: ChatHostTarget; token: string; port: number };
 const decodeServerConfiguration = Schema.decodeUnknownSync(

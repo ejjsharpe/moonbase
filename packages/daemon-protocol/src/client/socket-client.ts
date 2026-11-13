@@ -40,7 +40,7 @@ import {
 } from '@moonbase/contracts/socket-schema';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { validateHostHealth } from '@moonbase/ssh/host-health';
-import * as P from './protocol.ts';
+import * as P from '../shared/protocol.ts';
 import { checkChatOutput, isChatMutation } from '@moonbase/contracts/chat-validation';
 import { readObject } from '@moonbase/contracts/common';
 import { fail } from '@moonbase/contracts/errors';
@@ -52,7 +52,7 @@ import {
   systemSocketClock,
   type SocketClock,
   type SocketKeys,
-} from './socket-protocol.ts';
+} from '../shared/socket-protocol.ts';
 
 export type SocketOperation = ChatCommand | DaemonCommand | HostCommand;
 export type SocketInput<K extends SocketOperation> = K extends ChatCommand

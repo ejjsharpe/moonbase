@@ -7,7 +7,7 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { type Registry } from '@earendil-works/pi-durable';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
-import type { SocketClock } from '../src/socket-protocol.ts';
+import type { SocketClock } from '../../src/shared/socket-protocol.ts';
 
 export const session = {
   host: { hostId: 'test-host', storeId: 'test-store' },

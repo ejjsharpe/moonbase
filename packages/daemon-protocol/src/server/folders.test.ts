@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { Effect, Layer } from 'effect';
 import { LocalHostService } from '@moonbase/contracts/services';
-import { createFolderApprovals, createRootFolders, withCheckoutFolders } from '../src/folders.ts';
+import { createFolderApprovals, createRootFolders, withCheckoutFolders } from './folders.ts';
 import { LocalHostLive, LocalPiControl } from '@moonbase/chat-runtime';
 
 test('native folder approvals survive a restart and lapse when the folder is replaced', async () => {

@@ -22,11 +22,11 @@ import { ApplicationError } from '@moonbase/contracts/workspace';
 import type { ChatClient } from '@moonbase/contracts/chat';
 import { chatHostCapabilities } from '@moonbase/contracts/host';
 import { LocalHostLive, LocalPiRuntimeLive } from '@moonbase/chat-runtime';
-import { createFolderApprovals } from '../src/folders.ts';
+import { createFolderApprovals } from '../server/folders.ts';
 import { ProviderSetupLive, localProviderIds } from '@moonbase/chat-runtime/providers';
-import { RemoteChatLive, RemoteLocalHostLive, RemoteProviderSetupLive } from '../src/remote.ts';
-import { makeDaemonClient, serveChat } from '../src/server.ts';
-import { connectDaemonSocket } from '../src/socket-client.ts';
+import { RemoteChatLive, RemoteLocalHostLive, RemoteProviderSetupLive } from './remote.ts';
+import { makeDaemonClient, serveChat } from '../server/server.ts';
+import { connectDaemonSocket } from './socket-client.ts';
 
 const host = { hostId: 'transport-host', storeId: 'transport-store' },
   session = { host, actorId: 'personal' },

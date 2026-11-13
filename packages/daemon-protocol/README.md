@@ -10,6 +10,8 @@
 | `./folders` | Host-side folder authority, for the daemon only: `createFolderApprovals(file)`: approved working folders, re-checked by identity on use; `createRootFolders(roots, { reserved })`: a host-mode daemon's approved roots and the folders under them, refusing a root that holds or sits in a `reserved` path. Both return the contracts `FolderApprovals`; `withCheckoutFolders(folders, checkouts)` widens a local daemon's `has` to the roots of the workspace's approved checkouts (picker approvals, `approve` and the recent list are unchanged) |
 | `./loopback` | `LoopbackConnectionLive({directory})`: privileged `ConnectionService` for a daemon on this machine |
 
+Source is split into `src/server` (the daemon's side), `src/client` (clients' side) and `src/shared` (the wire both speak). Unit tests sit beside their source; shared fixtures and child processes are in `test/fixtures`.
+
 Remote hosts run the [daemon](../../apps/daemon/README.md#remote-host) in host mode, reached through the [SSH package](../ssh/README.md); its listener binds only `127.0.0.1`.
 
 ## Behavior worth knowing
@@ -33,4 +35,4 @@ bun run --cwd packages/daemon-protocol lint
 bun run --cwd packages/daemon-protocol test
 ```
 
-`test` runs under `bun test` against the real chat engine (`@moonbase/chat-runtime`, a dev dependency) with controlled providers and temporary stores. One case runs the compiled remote client in the pinned Electron, as desktop main runs it, which covers the client's Node path and that it bundles no engine. Host-process tests run a controlled local-mode host (`test/faux-host.mjs`) as a child process: crash recovery and parked work.
+`test` runs under `bun test` against the real chat engine (`@moonbase/chat-runtime`, a dev dependency) with controlled providers and temporary stores. One case runs the compiled remote client in the pinned Electron, as desktop main runs it, which covers the client's Node path and that it bundles no engine. Host-process tests run a controlled local-mode host (`test/fixtures/faux-host.mjs`) as a child process: crash recovery and parked work.

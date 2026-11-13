@@ -3,17 +3,17 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./remote": "./src/remote.ts",
-    "./server": "./src/server.ts",
-    "./loopback": "./src/loopback.ts",
-    "./socket": "./src/socket-client.ts",
-    "./folders": "./src/folders.ts"
+    "./remote": "./src/client/remote.ts",
+    "./server": "./src/server/server.ts",
+    "./loopback": "./src/client/loopback.ts",
+    "./socket": "./src/client/socket-client.ts",
+    "./folders": "./src/server/folders.ts"
   },
   "scripts": {
     "build": "tsc --noEmit -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint .",
-    "test": "bun test --timeout 60000 ./test"
+    "test": "bun test --timeout 60000 ./src"
   },
   "dependencies": {
     "effect": "4.1.0",

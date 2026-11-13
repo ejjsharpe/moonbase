@@ -32,9 +32,9 @@ import {
   makeWorkspaceClient,
   serveChat,
   type SocketSources,
-} from '../src/server.ts';
-import { connectDaemonSocket } from '../src/socket-client.ts';
-import { createSocketServer } from '../src/socket-server.ts';
+} from './server.ts';
+import { connectDaemonSocket } from '../client/socket-client.ts';
+import { createSocketServer } from './socket-server.ts';
 import {
   deriveSocketKeys,
   systemSocketClock,
@@ -44,10 +44,14 @@ import {
   sealSocketMessage,
   type SocketClock,
   type SocketKeys,
-} from '../src/socket-protocol.ts';
-import { encodeWebSocketFrame, WebSocketReader } from '../src/websocket.ts';
-import * as P from '../src/protocol.ts';
-import { fixture as runtimeFixture, manualClock, until } from './runtime-fixture.ts';
+} from '../shared/socket-protocol.ts';
+import { encodeWebSocketFrame, WebSocketReader } from './websocket.ts';
+import * as P from '../shared/protocol.ts';
+import {
+  fixture as runtimeFixture,
+  manualClock,
+  until,
+} from '../../test/fixtures/runtime-fixture.ts';
 
 const host = { hostId: 'socket-host', storeId: 'socket-store' };
 const session = { host, actorId: 'owner' };

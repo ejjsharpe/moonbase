@@ -47,7 +47,7 @@ import type {
   SocketSubscriptionTarget,
   SocketSubscriptionValue,
 } from '@moonbase/contracts/socket';
-import * as P from './protocol.ts';
+import * as P from '../shared/protocol.ts';
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import {
   decodeChatTarget,
@@ -63,7 +63,7 @@ import {
   type SocketOutput,
   type SocketSubscriptionState,
 } from './socket-client.ts';
-import { systemSocketClock, type SocketClock } from './socket-protocol.ts';
+import { systemSocketClock, type SocketClock } from '../shared/socket-protocol.ts';
 
 /** What a subscription delivers: a value (`reset` after one that replaced missed updates) or a gap. */
 type LinkUpdate<K extends SocketSubscriptionKind> =
