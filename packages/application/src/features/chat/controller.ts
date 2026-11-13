@@ -2,7 +2,7 @@ import { normalizeApplicationError, toApplicationError } from '@moonbase/effect'
 import { Cause, Deferred, Effect, Exit, Fiber, Schema, Scope, type ManagedRuntime } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ObservationClose } from '@moonbase/contracts/common';
-import { runApplicationEffect } from '../../runtime/effect-client.ts';
+import { runApplicationEffect } from '../../lib/effect/effect-client.ts';
 import { decodeChatInput, ChatModelPreferenceSchema } from '@moonbase/contracts/chat-schema';
 import type {
   ChatCreationSettings,

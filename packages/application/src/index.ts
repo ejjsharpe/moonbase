@@ -6,4 +6,4 @@ export {
   type MoonbaseApplicationSnapshot,
   type ApplicationPhase,
   type ApplicationChatStatus,
-} from './runtime/composition.ts';
+} from './app/composition.ts';

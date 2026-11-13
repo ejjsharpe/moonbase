@@ -25,9 +25,7 @@ assert.deepEqual(prohibited, [], 'Privileged or reference application code reach
 assert(inputs.some((path) => path.endsWith('application/src/features/editor/editor.ts')));
 assert(inputs.some((path) => path.endsWith('contracts/src/errors.ts')));
 assert.deepEqual(
-  inputs.filter((path) =>
-    /application[/\\]src[/\\]runtime[/\\](?:handlers|clients)\.ts$/.test(path),
-  ),
+  inputs.filter((path) => /application[/\\]src[/\\]app[/\\](?:handlers|clients)\.ts$/.test(path)),
   [],
 );
 assert(inputs.some((path) => path.includes('monaco-editor')));

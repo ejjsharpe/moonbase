@@ -3,18 +3,18 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./runtime/handlers": "./src/runtime/handlers.ts",
-    "./runtime/clients": "./src/runtime/clients.ts",
-    "./runtime/effect-client": "./src/runtime/effect-client.ts",
-    "./chat": "./src/features/chat/index.ts",
-    "./editor": "./src/features/editor/index.ts",
+    "./runtime/handlers": "./src/app/handlers.ts",
+    "./runtime/clients": "./src/app/clients.ts",
+    "./runtime/effect-client": "./src/lib/effect/effect-client.ts",
+    "./chat": "./src/chat.ts",
+    "./editor": "./src/editor.ts",
     "./testing/memory-workspace": "./src/testing/memory-workspace.ts",
     ".": "./src/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint .",
-    "test": "node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts"
+    "test": "node --experimental-strip-types --test --test-concurrency=1 'src/**/*.test.ts' 'examples/*.test.ts'"
   },
   "dependencies": {
     "effect": "4.1.0",

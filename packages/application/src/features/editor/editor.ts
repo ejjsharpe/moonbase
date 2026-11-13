@@ -11,8 +11,8 @@ import {
   type MutationAction,
 } from './workflows.ts';
 import { Deferred, Effect, Exit, Fiber, Scope, Semaphore, type ManagedRuntime } from 'effect';
-import { watchRetry } from '../../runtime/watch-retry.ts';
-import { runApplicationEffect } from '../../runtime/effect-client.ts';
+import { watchRetry } from '../../lib/effect/watch-retry.ts';
+import { runApplicationEffect } from '../../lib/effect/effect-client.ts';
 import { decodeEditorRecovery } from '@moonbase/contracts/workspace-schema';
 import {
   ApplicationError,
