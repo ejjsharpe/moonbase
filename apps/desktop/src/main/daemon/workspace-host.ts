@@ -2,12 +2,12 @@ import { Effect, Stream } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { chatHostCapabilities } from '@moonbase/contracts/host';
 import type { VerifiedChatEndpoint, WorkspaceHostServiceShape } from '@moonbase/contracts/services';
-import type { HostCommand } from '@moonbase/contracts/workspace-host';
 import {
+  type HostCommand,
   hostDeadlineMs,
   hostDeadlinesMs,
   hostInputSchemas,
-} from '@moonbase/contracts/workspace-host-schema';
+} from '@moonbase/contracts/workspace-host';
 import type { LocalDaemonClient } from './chat-daemon.ts';
 
 const unreachable = () =>

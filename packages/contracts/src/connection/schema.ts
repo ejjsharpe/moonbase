@@ -1,12 +1,35 @@
+import type { CommandOptions, ObservationClose } from '../workspace/schema.ts';
 import * as Schema from 'effect/Schema';
-import { ApplicationError } from '../errors/errors.ts';
-import type { ConnectionCommand, ConnectionInput, ConnectionOutput } from './connection.ts';
+import { ApplicationError } from '../errors/schema.ts';
 import {
   ChatHostHealthSchema,
   ChatHostTargetSchema,
   ChatIdentifierSchema,
 } from '../host/schema.ts';
 import { optional, struct, voidResult } from '../shared/schema.ts';
+
+export type ConnectionProfile = typeof ConnectionProfileSchema.Type;
+export type ConnectionSnapshot = typeof ConnectionSnapshotSchema.Type;
+export type ConnectionCommands = {
+  [K in keyof typeof connectionInputSchemas]: {
+    input: (typeof connectionInputSchemas)[K]['Type'];
+    output: (typeof connectionOutputSchemas)[K]['Type'];
+  };
+};
+export type ConnectionCommand = keyof ConnectionCommands;
+export type ConnectionInput<K extends ConnectionCommand> = ConnectionCommands[K]['input'];
+export type ConnectionOutput<K extends ConnectionCommand> = ConnectionCommands[K]['output'];
+export interface ConnectionClient {
+  command<K extends ConnectionCommand>(
+    operation: K,
+    input: ConnectionInput<K>,
+    options?: CommandOptions,
+  ): Promise<ConnectionOutput<K>>;
+  watch(
+    receive: (snapshot: ConnectionSnapshot) => void,
+    onError: (error: ApplicationError) => void,
+  ): ObservationClose;
+}
 
 export const ConnectionPortSchema = Schema.Int.check(
   Schema.isBetween({ minimum: 1, maximum: 65535 }),

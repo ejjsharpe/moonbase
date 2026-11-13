@@ -9,25 +9,22 @@ import {
   type WorkspaceCommand,
   type CommandInput,
   type CommandOutput,
-} from '@moonbase/contracts/workspace';
-import {
   decodeWorkspaceInput,
   decodeWorkspaceOutput,
   decodeEditorRecovery,
   decodeWorkspaceEvent,
   decodeWorkspaceWatchInput,
   isWorkspaceCommand,
-} from '@moonbase/contracts/workspace-schema';
+} from '@moonbase/contracts/workspace';
 import {
   decodeConnectionInput,
   decodeConnectionOutput,
   decodeConnectionProfile,
   decodeConnectionSnapshot,
   isConnectionCommand,
-} from '@moonbase/contracts/connection-schema';
-import { decodeApplicationErrorDTO } from '@moonbase/contracts/error-schema';
-import { UncertainError } from '@moonbase/contracts/errors';
-import { decodeChatHostHealth } from '@moonbase/contracts/host-schema';
+} from '@moonbase/contracts/connection';
+import { decodeApplicationErrorDTO, UncertainError } from '@moonbase/contracts/errors';
+import { decodeChatHostHealth } from '@moonbase/contracts/host';
 
 const checkout = {
   hostId: 'host',
@@ -373,7 +370,7 @@ test('a shared outcome error round-trips and builds its message from its fields'
   assert.deepEqual(decoded.target, target);
   assert.match(decoded.message, /^Save /);
 });
-for (const entry of ['workspace-schema', 'connection-schema', 'host-schema', 'error-schema'])
+for (const entry of ['workspace', 'connection', 'host', 'errors'])
   test(`${entry} bundles without privileged implementations or application services`, async () => {
     const bundle = await build({
       absWorkingDir: fileURLToPath(new URL('../../../../', import.meta.url)),

@@ -98,7 +98,7 @@ for (const specifier of [
   '@moonbase/application/chat',
   '@moonbase/contracts/chat',
   '@moonbase/contracts/connection',
-  '@moonbase/contracts/host-schema',
+  '@moonbase/contracts/host',
 ])
   assert(
     check({ 'packages/workbench/src/index.ts': `import type {} from '${specifier}';` }).some(

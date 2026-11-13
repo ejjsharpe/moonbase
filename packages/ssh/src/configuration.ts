@@ -2,10 +2,7 @@ import { hostTokenPattern } from '@moonbase/contracts/host';
 import { Effect, Schema, SchemaGetter } from 'effect';
 import { isAbsolute } from 'node:path';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import {
-  ConnectionPortSchema,
-  ConnectionProfileSchema,
-} from '@moonbase/contracts/connection-schema';
+import { ConnectionPortSchema, ConnectionProfileSchema } from '@moonbase/contracts/connection';
 
 const executable = Schema.NullOr(Schema.String).pipe(
   Schema.decodeTo(

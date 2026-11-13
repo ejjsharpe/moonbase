@@ -2,8 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
 import { link, lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
-import type { ChatSession } from '@moonbase/contracts/chat';
-import { decodeChatInput } from '@moonbase/contracts/chat-schema';
+import { type ChatSession, decodeChatInput } from '@moonbase/contracts/chat';
 import {
   decodeDaemonSettings,
   type DaemonSettings,

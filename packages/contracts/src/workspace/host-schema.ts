@@ -1,10 +1,6 @@
-import * as Schema from 'effect/Schema';
-import { ApplicationError } from '../errors/errors.ts';
-import { ChatTargetSchema, chatReplyErrorCodes } from '../chat/schema.ts';
-import { AbsolutePathSchema } from '../daemon/schema.ts';
-import type { HostCommand, HostInput, HostOutput } from './host.ts';
-import { array, optional, struct, voidResult } from '../shared/schema.ts';
+import type { CommandOptions } from '../shared/common.ts';
 import {
+  type CheckoutTarget,
   CheckoutTargetSchema,
   FileDocumentSchema,
   GitCheckoutTargetSchema,
@@ -16,6 +12,53 @@ import {
   workspaceInputSchemas,
   workspaceOutputSchemas,
 } from './schema.ts';
+import * as Schema from 'effect/Schema';
+import { ApplicationError } from '../errors/schema.ts';
+import { ChatTargetSchema, chatReplyErrorCodes } from '../chat/schema.ts';
+import { AbsolutePathSchema } from '../daemon/schema.ts';
+import { array, optional, struct, voidResult } from '../shared/schema.ts';
+
+/** The file host's operations: workspace commands without recovery, plus the journal queries. */
+
+export type HostCommands = {
+  [K in keyof typeof hostInputSchemas]: {
+    input: (typeof hostInputSchemas)[K]['Type'];
+    output: (typeof hostOutputSchemas)[K]['Type'];
+  };
+};
+export type HostCommand = keyof HostCommands;
+export type HostInput<K extends HostCommand> = HostCommands[K]['input'];
+export type HostOutput<K extends HostCommand> = HostCommands[K]['output'];
+export type HostOperationResult = typeof HostOperationResultSchema.Type;
+export type HostSaveResult = typeof HostSaveResultSchema.Type;
+export type SaveStatus = typeof SaveStatusSchema.Type;
+export type OperationFeedEntry = typeof OperationFeedEntrySchema.Type;
+export type OperationFeed = typeof OperationFeedSchema.Type;
+/** What a `workspace` subscription's target names. */
+export type WorkspaceWatchTarget = typeof WorkspaceWatchTargetSchema.Type;
+/** What a `workspace` subscription describes: see `WorkspaceWatchValueSchema`. */
+export type WorkspaceWatchValue = typeof WorkspaceWatchValueSchema.Type;
+/**
+ * The file host as the socket server calls it: promise-shaped. A daemon builds it from its file
+ * host and injects it into the server, which then advertises `workspace-v1`.
+ */
+export type WorkspaceHostClient = {
+  /** Runs one host operation; `signal` cancels a read, and is not passed to a mutation. */
+  command<K extends HostCommand>(
+    operation: K,
+    input: HostInput<K>,
+    options?: CommandOptions,
+  ): Promise<HostOutput<K>>;
+  /**
+   * Follows a checkout; `receive` gets a fresh value after each change, and `onError` ends it,
+   * also when the host's watch finishes. Returns its stop.
+   */
+  watch(
+    input: { checkout: CheckoutTarget },
+    receive: (value: WorkspaceWatchValue) => void,
+    onError: (error: unknown) => void,
+  ): () => Promise<void>;
+};
 
 const natural = Schema.Int.check(
   Schema.makeFilter((value) => Number.isSafeInteger(value) && value >= 0),

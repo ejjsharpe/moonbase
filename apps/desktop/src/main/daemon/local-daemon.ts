@@ -5,8 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { Cause, Context, Deferred, Effect, Exit, Layer, Semaphore } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import type { ChatSession } from '@moonbase/contracts/chat';
-import { decodeChatInput } from '@moonbase/contracts/chat-schema';
+import { type ChatSession, decodeChatInput } from '@moonbase/contracts/chat';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
 import {
   ConnectionService,

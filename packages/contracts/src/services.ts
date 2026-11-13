@@ -3,7 +3,7 @@ import type {
   ProviderInput,
   ProviderOutput,
   ProviderState,
-} from './providers/providers.ts';
+} from './providers/schema.ts';
 import { Context, type Effect, type Stream } from 'effect';
 import {
   type ApplicationError,
@@ -12,15 +12,15 @@ import {
   type WorkspaceCommand,
   type WorkspaceEvent,
   type CheckoutTarget,
-} from './workspace/workspace.ts';
-import type { HostCommand, HostInput, HostOutput } from './workspace/host.ts';
+} from './workspace/schema.ts';
+import type { HostCommand, HostInput, HostOutput } from './workspace/host-schema.ts';
 import type {
   ConnectionCommand,
   ConnectionInput,
   ConnectionOutput,
   ConnectionSnapshot,
-} from './connection/connection.ts';
-import type { ChatHostTarget, ChatHostHealth } from './host/host.ts';
+} from './connection/schema.ts';
+import type { ChatHostTarget, ChatHostHealth } from './host/schema.ts';
 import type {
   ChatCommand,
   ChatInput,
@@ -29,8 +29,8 @@ import type {
   ChatSession,
   ChatSnapshot,
   ChatTarget,
-} from './chat/chat.ts';
-import type { LocalHostCommand, LocalHostInput, LocalHostOutput } from './daemon/daemon.ts';
+} from './chat/schema.ts';
+import type { LocalHostCommand, LocalHostInput, LocalHostOutput } from './daemon/schema.ts';
 
 export type WorkspaceHandler<K extends WorkspaceCommand> = (
   input: CommandInput<K>,

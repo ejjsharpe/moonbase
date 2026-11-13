@@ -2,25 +2,31 @@ import {
   chatReplyErrorCodes,
   decodeChatInput,
   isChatCommand,
-} from '@moonbase/contracts/chat-schema';
-import type { ChatCommand, ChatInput, ChatOutput } from '@moonbase/contracts/chat';
-import type { DaemonCommand, DaemonInput, DaemonOutput } from '@moonbase/contracts/daemon';
+  type ChatCommand,
+  type ChatInput,
+  type ChatOutput,
+} from '@moonbase/contracts/chat';
 import {
+  type DaemonCommand,
+  type DaemonInput,
+  type DaemonOutput,
   daemonCommandCapabilities,
   decodeDaemonInput,
   decodeDaemonOutput,
   isDaemonCommand,
   isDaemonMutation,
-} from '@moonbase/contracts/daemon-schema';
+} from '@moonbase/contracts/daemon';
 import { chatHostCapabilities, type ChatHostHealth } from '@moonbase/contracts/host';
-import type { HostCommand, HostInput, HostOutput } from '@moonbase/contracts/workspace-host';
 import {
+  type HostCommand,
+  type HostInput,
+  type HostOutput,
   decodeHostInput,
   decodeHostOutput,
   isHostCommand,
   isHostMutation,
-} from '@moonbase/contracts/workspace-host-schema';
-import type { CommandOptions } from '@moonbase/contracts/common';
+} from '@moonbase/contracts/workspace-host';
+import { type CommandOptions, readObject } from '@moonbase/contracts/common';
 import type { ChatHostEndpoint } from '@moonbase/contracts/services';
 import {
   applySocketDelta,
@@ -30,19 +36,16 @@ import {
   type SocketSubscriptionKind,
   type SocketSubscriptionTarget,
   type SocketSubscriptionValue,
-} from '@moonbase/contracts/socket';
-import {
   decodeSocketChallenge,
   decodeSocketDelta,
   decodeSocketReply,
   decodeSocketServerMessage,
   decodeSocketSubscriptionValue,
-} from '@moonbase/contracts/socket-schema';
+} from '@moonbase/contracts/socket';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { validateHostHealth } from '@moonbase/ssh/host-health';
 import * as P from '../shared/protocol.ts';
 import { checkChatOutput, isChatMutation } from '@moonbase/contracts/chat-validation';
-import { readObject } from '@moonbase/contracts/common';
 import { fail } from '@moonbase/contracts/errors';
 import {
   deriveSocketKeys,

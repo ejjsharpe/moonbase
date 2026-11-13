@@ -1,10 +1,9 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { fail } from '@moonbase/contracts/errors';
 import { normalizeApplicationError } from '@moonbase/effect';
-import { decodeEditorRecovery, isWellFormed } from '@moonbase/contracts/workspace-schema';
-import { isAbsolute } from 'node:path';
-import { createHash } from 'node:crypto';
 import {
+  decodeEditorRecovery,
+  isWellFormed,
   maximumFileBytes,
   type CheckoutTarget,
   type EditorRecovery,
@@ -13,6 +12,8 @@ import {
   type OperationResult,
   type WorkspaceOperation,
 } from '@moonbase/contracts/workspace';
+import { isAbsolute } from 'node:path';
+import { createHash } from 'node:crypto';
 export const ensure: (condition: unknown, message: string) => asserts condition = (
   condition,
   message,

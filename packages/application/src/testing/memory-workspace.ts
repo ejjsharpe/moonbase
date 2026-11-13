@@ -1,9 +1,6 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
-import { decodeEditorRecovery } from '@moonbase/contracts/workspace-schema';
-import { readOwn } from '../features/editor/record.ts';
-import { Effect, Layer, Queue, Stream } from 'effect';
-import { WorkspaceService, type WorkspaceServiceShape } from '@moonbase/contracts/services';
 import {
+  decodeEditorRecovery,
   ApplicationError,
   emptyRecovery,
   maximumFileBytes,
@@ -21,6 +18,9 @@ import {
   type RecoveryChange,
   type RecoveryPublication,
 } from '@moonbase/contracts/workspace';
+import { readOwn } from '../features/editor/record.ts';
+import { Effect, Layer, Queue, Stream } from 'effect';
+import { WorkspaceService, type WorkspaceServiceShape } from '@moonbase/contracts/services';
 import { checkoutKey, fileKey, moveRecoveryReferences } from '../features/editor/references.ts';
 
 type Seed = {

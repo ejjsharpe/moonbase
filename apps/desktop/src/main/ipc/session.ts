@@ -6,8 +6,6 @@ import {
   decodeWorkspaceOutput,
   decodeWorkspaceWatchInput,
   isWorkspaceCommand,
-} from '@moonbase/contracts/workspace-schema';
-import {
   ApplicationError,
   type CheckoutTarget,
   type EditorClient,

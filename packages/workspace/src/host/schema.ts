@@ -1,18 +1,18 @@
 import { Schema, Struct } from 'effect';
 import { isAbsolute } from 'node:path';
 import type { ChatTarget } from '@moonbase/contracts/chat';
-import { ApplicationError } from '@moonbase/contracts/workspace';
-import { hash } from '../shared/validation.ts';
 import {
+  ApplicationError,
   CheckoutTargetSchema,
   FileDocumentSchema,
   WorkspaceIdentifierSchema,
-} from '@moonbase/contracts/workspace-schema';
+} from '@moonbase/contracts/workspace';
+import { hash } from '../shared/validation.ts';
 import {
   HostOperationResultSchema,
   OperationFeedEntrySchema,
   hostInputSchemas,
-} from '@moonbase/contracts/workspace-host-schema';
+} from '@moonbase/contracts/workspace-host';
 
 export const struct = <const F extends Schema.Struct.Fields>(fields: F) =>
   Schema.Struct(fields).mapFields(Struct.map(Schema.mutableKey));

@@ -2,8 +2,11 @@ import { constants } from 'node:fs';
 import { lstat, open, readdir, realpath, rename, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { daemonErrorReasons, type FolderApprovals } from '@moonbase/contracts/daemon';
-import { maximumHostFolders } from '@moonbase/contracts/daemon-schema';
+import {
+  daemonErrorReasons,
+  type FolderApprovals,
+  maximumHostFolders,
+} from '@moonbase/contracts/daemon';
 import { isPrivateTo } from '@moonbase/contracts/files';
 
 type Approval = { path: string; dev: number; ino: number; at: string; recent: boolean };

@@ -1,16 +1,17 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { Cause, Deferred, Effect, Exit, Scope, type Fiber, type FiberSet } from 'effect';
-import { decodeHostInput, decodeHostOutput } from '@moonbase/contracts/workspace-host-schema';
-import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
-import { type WorkspaceHostServiceShape } from '@moonbase/contracts/services';
-import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
-import type {
-  HostCommand,
-  HostInput,
-  HostOperationResult,
-  HostOutput,
-  HostSaveResult,
+import {
+  decodeHostInput,
+  decodeHostOutput,
+  type HostCommand,
+  type HostInput,
+  type HostOperationResult,
+  type HostOutput,
+  type HostSaveResult,
 } from '@moonbase/contracts/workspace-host';
+import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
+import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
+import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
 import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';

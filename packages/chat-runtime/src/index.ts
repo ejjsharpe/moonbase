@@ -10,6 +10,7 @@ import {
   type ChatSession,
   type ChatSummary,
   type ChatTarget,
+  decodeChatInput,
 } from '@moonbase/contracts/chat';
 import type { ChatHostTarget } from '@moonbase/contracts/host';
 import {
@@ -17,8 +18,8 @@ import {
   type FolderApprovals,
   type LocalHostCommand,
   type LocalHostInput,
+  decodeLocalHostInput,
 } from '@moonbase/contracts/daemon';
-import { decodeLocalHostInput } from '@moonbase/contracts/daemon-schema';
 import {
   ChatService,
   LocalHostService,
@@ -28,7 +29,6 @@ import {
 import { type Host, safeError } from './commands.ts';
 import { readOnChange } from '@moonbase/effect/changes';
 import { checkChatFolder } from './chat-folders.ts';
-import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { isSameChatHost } from '@moonbase/contracts/chat-validation';
 import { fail } from '@moonbase/contracts/errors';
 import { openHost } from './resources.ts';

@@ -1,16 +1,16 @@
 import { isAbsolute } from 'node:path';
 import * as Schema from 'effect/Schema';
-import type { ChatCreationSettings } from '@moonbase/contracts/chat';
-import type { Models } from '@earendil-works/pi-ai/models';
-import type { Registry } from '@earendil-works/pi-durable';
 import {
+  type ChatCreationSettings,
   ChatIdentifierSchema,
   ChatSessionSchema,
   ChatTargetSchema,
   ChatStopTargetSchema,
   chatInputSchemas,
   ChatReasoningEffortSchema,
-} from '@moonbase/contracts/chat-schema';
+} from '@moonbase/contracts/chat';
+import type { Models } from '@earendil-works/pi-ai/models';
+import type { Registry } from '@earendil-works/pi-durable';
 import { fail } from '@moonbase/contracts/errors';
 
 const text = (bytes: number) =>

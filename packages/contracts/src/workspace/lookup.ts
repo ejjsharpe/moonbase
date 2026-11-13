@@ -1,4 +1,4 @@
-import type { LookupMatch } from './workspace.ts';
+import type { LookupMatch } from './schema.ts';
 
 /** Fuzzy path matcher shared by editor file lookup and chat file search. Positions are UTF-16 offsets, as consumed by React/Monaco. */
 export function matchPath(path: string, query: string): LookupMatch | null {

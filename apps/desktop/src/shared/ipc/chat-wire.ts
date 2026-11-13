@@ -2,24 +2,27 @@ import { normalizeApplicationError } from '@moonbase/effect';
 import {
   decodeApplicationErrorDTO,
   type ApplicationErrorDTOSchema,
-} from '@moonbase/contracts/error-schema';
-import { isChatCommand } from '@moonbase/contracts/chat-schema';
+} from '@moonbase/contracts/errors';
+import {
+  isChatCommand,
+  type ChatClient,
+  type ChatSession,
+  type ChatTranscriptSource,
+  type ChatTranscriptSelection,
+} from '@moonbase/contracts/chat';
 import {
   decodeConnectionOutput,
   decodeConnectionSnapshot,
   isConnectionCommand,
-} from '@moonbase/contracts/connection-schema';
+  type ConnectionClient,
+} from '@moonbase/contracts/connection';
 import { cancellation, errorDTO, unwrap as unwrapReply } from './wire.ts';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import type {
-  ChatClient,
-  ChatSession,
-  ChatTranscriptSource,
-  ChatTranscriptSelection,
-} from '@moonbase/contracts/chat';
-import type { ProviderSetupClient } from '@moonbase/contracts/providers';
-import { decodeProviderOutput, isProviderCommand } from '@moonbase/contracts/providers-schema';
-import type { ConnectionClient } from '@moonbase/contracts/connection';
+import {
+  type ProviderSetupClient,
+  decodeProviderOutput,
+  isProviderCommand,
+} from '@moonbase/contracts/providers';
 
 export const channels = {
   call: 'moonbase-chat:call',

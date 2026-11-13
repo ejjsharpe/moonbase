@@ -1,7 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
-import { maximumBranchName } from '@moonbase/contracts/workspace-host-schema';
+import { maximumBranchName } from '@moonbase/contracts/workspace-host';
 import type { Directory } from '../../shared/filesystem.ts';
 import type { FileHost } from '../file-host.ts';
 import { ensure, requireGit } from '../../shared/validation.ts';

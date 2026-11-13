@@ -15,16 +15,17 @@ import { Effect, Exit, Fiber, FiberSet, Option, Queue, Scope, Semaphore, Stream 
 import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/models';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import type {
-  ChatCommand,
-  ChatInput,
-  ChatOutput,
-  ChatSnapshot,
-  ChatSummary,
-  ChatTarget,
-  ChatSession,
-  ChatHistoryPage,
-  ChatSendReceipt,
+import {
+  type ChatCommand,
+  type ChatInput,
+  type ChatOutput,
+  type ChatSnapshot,
+  type ChatSummary,
+  type ChatTarget,
+  type ChatSession,
+  type ChatHistoryPage,
+  type ChatSendReceipt,
+  decodeChatInput,
 } from '@moonbase/contracts/chat';
 import { ChatFileIndex } from './files.ts';
 import {
@@ -51,7 +52,6 @@ import {
 import type { RuntimeConfiguration, RetainedWork } from './runtime-types.ts';
 import { findTranscript } from './find.ts';
 import { NestedSourceRetired, readTranscriptContent } from './transcript.ts';
-import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import {
   checkChatOutput,
   decodeChatTarget,

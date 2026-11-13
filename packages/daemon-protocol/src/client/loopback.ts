@@ -1,15 +1,21 @@
-import { hostTokenPattern } from '@moonbase/contracts/host';
+import {
+  hostTokenPattern,
+  decodeChatHostTarget,
+  chatProtocolVersion,
+  type ChatHostHealth,
+} from '@moonbase/contracts/host';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { Effect, Layer, Queue, Semaphore, Stream, type Cause } from 'effect';
 import { ApplicationError, fail } from '@moonbase/contracts/errors';
-import type { ConnectionProfile, ConnectionSnapshot } from '@moonbase/contracts/connection';
-import { decodeConnectionInput } from '@moonbase/contracts/connection-schema';
-import { decodeChatInput } from '@moonbase/contracts/chat-schema';
-import { decodeChatHostTarget } from '@moonbase/contracts/host-schema';
-import { chatProtocolVersion, type ChatHostHealth } from '@moonbase/contracts/host';
+import {
+  type ConnectionProfile,
+  type ConnectionSnapshot,
+  decodeConnectionInput,
+} from '@moonbase/contracts/connection';
+import { decodeChatInput } from '@moonbase/contracts/chat';
 import { ConnectionService, type ConnectionServiceShape } from '@moonbase/contracts/services';
 import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
 import { checkHostHealth } from '@moonbase/ssh/host-health';

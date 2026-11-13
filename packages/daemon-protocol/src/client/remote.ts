@@ -5,9 +5,16 @@ import {
   chatHostCapabilities,
   type ChatHostHealth,
   type ChatHostTarget,
+  decodeChatHostTarget,
 } from '@moonbase/contracts/host';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import type { ChatCommand, ChatInput, ChatOutput, ChatTarget } from '@moonbase/contracts/chat';
+import {
+  type ChatCommand,
+  type ChatInput,
+  type ChatOutput,
+  type ChatTarget,
+  decodeChatInput,
+} from '@moonbase/contracts/chat';
 import {
   ChatService,
   ConnectionService,
@@ -21,34 +28,40 @@ import {
   type VerifiedChatEndpoint,
 } from '@moonbase/contracts/services';
 import { randomUUID } from 'node:crypto';
-import type {
-  DaemonCommand,
-  DaemonInput,
-  DaemonOutput,
-  HostProviderCommand,
-  LocalHostCommand,
-  LocalHostInput,
-} from '@moonbase/contracts/daemon';
-import { decodeDaemonInput, isDaemonMutation } from '@moonbase/contracts/daemon-schema';
-import { decodeChatHostTarget } from '@moonbase/contracts/host-schema';
-import type { HostCommand, HostInput, HostOutput } from '@moonbase/contracts/workspace-host';
 import {
+  type DaemonCommand,
+  type DaemonInput,
+  type DaemonOutput,
+  type HostProviderCommand,
+  type LocalHostCommand,
+  type LocalHostInput,
+  decodeDaemonInput,
+  isDaemonMutation,
+} from '@moonbase/contracts/daemon';
+import {
+  type HostCommand,
+  type HostInput,
+  type HostOutput,
   decodeHostInput,
   hostDeadlineMs,
   hostInputCheckout,
   hostInputSchemas,
   isHostMutation,
-} from '@moonbase/contracts/workspace-host-schema';
-import { socketLimits } from '@moonbase/contracts/socket';
-import type { ProviderCommand, ProviderInput, ProviderState } from '@moonbase/contracts/providers';
-import { decodeProviderInput, readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
-import type {
-  SocketSubscriptionKind,
-  SocketSubscriptionTarget,
-  SocketSubscriptionValue,
+} from '@moonbase/contracts/workspace-host';
+import {
+  socketLimits,
+  type SocketSubscriptionKind,
+  type SocketSubscriptionTarget,
+  type SocketSubscriptionValue,
 } from '@moonbase/contracts/socket';
+import {
+  type ProviderCommand,
+  type ProviderInput,
+  type ProviderState,
+  decodeProviderInput,
+  readProviderSignInUrl,
+} from '@moonbase/contracts/providers';
 import * as P from '../shared/protocol.ts';
-import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import {
   decodeChatTarget,
   isChatMutation,

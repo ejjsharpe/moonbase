@@ -17,7 +17,7 @@ assert.deepEqual(
 assert(inputs.some((p) => p.endsWith('application/src/app/composition.ts')));
 assert(inputs.some((p) => p.endsWith('application/src/features/editor/editor.ts')));
 assert(!inputs.some((p) => p.endsWith('desktop/src/renderer/cleanup.ts')));
-assert(inputs.some((p) => p.endsWith('contracts/src/errors/errors.ts')));
+assert(inputs.some((p) => p.endsWith('contracts/src/errors/schema.ts')));
 assert(inputs.some((p) => p.includes('monaco-editor')));
 assert(
   inputs.some((p) => p.endsWith('node_modules/diff/libesm/patch/parse.js')),

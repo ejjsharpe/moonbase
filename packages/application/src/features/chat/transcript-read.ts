@@ -1,12 +1,12 @@
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
-import { decodeChatInput } from '@moonbase/contracts/chat-schema';
-import type {
-  ChatClient,
-  ChatInput,
-  ChatOutput,
-  ChatTranscriptSource,
-  ChatTranscriptSelection,
+import {
+  decodeChatInput,
+  type ChatClient,
+  type ChatInput,
+  type ChatOutput,
+  type ChatTranscriptSource,
+  type ChatTranscriptSelection,
 } from '@moonbase/contracts/chat';
 
 /** A ChatClient read; its boundary has already decoded and bounded the reply. */

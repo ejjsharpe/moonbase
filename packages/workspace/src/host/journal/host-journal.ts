@@ -2,14 +2,12 @@ import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/works
 import {
   maximumOperationFeedBytes,
   maximumOperationFeedPage,
-} from '@moonbase/contracts/workspace-host-schema';
-import type {
-  HostInput,
-  HostOperationResult,
-  HostSaveResult,
-  OperationFeed,
-  OperationFeedEntry,
-  SaveStatus,
+  type HostInput,
+  type HostOperationResult,
+  type HostSaveResult,
+  type OperationFeed,
+  type OperationFeedEntry,
+  type SaveStatus,
 } from '@moonbase/contracts/workspace-host';
 import { randomUUID } from 'node:crypto';
 import type { Directory } from '../../shared/filesystem.ts';

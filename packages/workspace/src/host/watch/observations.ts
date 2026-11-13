@@ -1,9 +1,10 @@
 import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
-import type { ApplicationError, CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
+  type ApplicationError,
+  type CheckoutTarget,
   decodeWorkspaceEvent,
   decodeWorkspaceWatchInput,
-} from '@moonbase/contracts/workspace-schema';
+} from '@moonbase/contracts/workspace';
 import { Cause, Deferred, Effect, Exit, Fiber, Queue, Scope, Stream } from 'effect';
 import fs, { readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';

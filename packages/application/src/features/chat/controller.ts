@@ -3,26 +3,25 @@ import { Cause, Deferred, Effect, Exit, Fiber, Schema, Scope, type ManagedRuntim
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ObservationClose } from '@moonbase/contracts/common';
 import { runApplicationEffect } from '../../lib/effect/effect-client.ts';
-import { decodeChatInput, ChatModelPreferenceSchema } from '@moonbase/contracts/chat-schema';
-import type {
-  ChatCreationSettings,
-  ChatMention,
-  ChatModelPreference,
-  ChatClient,
-  ChatCommand,
-  ChatInput,
-  ChatListState,
-  ChatOutput,
-  ChatHostConfiguration,
-  ChatSession,
-  ChatSnapshot,
-  ChatSummary,
-  ChatTarget,
-  ChatStopTarget,
-  ChatTranscriptSource,
-  ChatTranscriptSelection,
-} from '@moonbase/contracts/chat';
 import {
+  decodeChatInput,
+  ChatModelPreferenceSchema,
+  type ChatCreationSettings,
+  type ChatMention,
+  type ChatModelPreference,
+  type ChatClient,
+  type ChatCommand,
+  type ChatInput,
+  type ChatListState,
+  type ChatOutput,
+  type ChatHostConfiguration,
+  type ChatSession,
+  type ChatSnapshot,
+  type ChatSummary,
+  type ChatTarget,
+  type ChatStopTarget,
+  type ChatTranscriptSource,
+  type ChatTranscriptSelection,
   findChatMentionStarts,
   isChatMentionPath,
   maximumChatMentions,
@@ -38,7 +37,6 @@ import {
   type Saved,
   type Pending,
 } from './saved.ts';
-export type { Pending } from './saved.ts';
 import { TranscriptOwner } from './transcript.ts';
 import {
   makeEmptyTranscriptState,
@@ -47,6 +45,7 @@ import {
 } from './transcript-state.ts';
 import { TranscriptViewMemory, type TranscriptView } from './view-memory.ts';
 import { ChatFileSearch } from './file-search.ts';
+export type { Pending } from './saved.ts';
 
 export interface DraftStorage {
   read(): string | null;

@@ -1,20 +1,20 @@
 import { normalizeApplicationError, toApplicationError } from '@moonbase/effect';
 import { Cause, Deferred, Effect, Exit, Fiber, FiberHandle, FiberMap, Option, Scope } from 'effect';
 import type { ApplicationError } from '@moonbase/contracts/errors';
-import type {
-  ChatClient,
-  ChatTranscriptMatch,
-  ChatCommand,
-  ChatInput,
-  ChatOutput,
-  ChatEntry,
-  ChatSnapshot,
-  ChatSummary,
-  ChatTarget,
-  ChatTranscriptSource,
-  ChatTranscriptSelection,
+import {
+  type ChatClient,
+  type ChatTranscriptMatch,
+  type ChatCommand,
+  type ChatInput,
+  type ChatOutput,
+  type ChatEntry,
+  type ChatSnapshot,
+  type ChatSummary,
+  type ChatTarget,
+  type ChatTranscriptSource,
+  type ChatTranscriptSelection,
+  decodeChatInput,
 } from '@moonbase/contracts/chat';
-import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { areJsonValuesEqual, getJsonKey } from '@moonbase/contracts/common';
 import { sameTarget } from './saved.ts';
 import type { TranscriptViewMemory, TranscriptView } from './view-memory.ts';

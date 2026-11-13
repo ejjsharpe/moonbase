@@ -3,12 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
 import { Cause, Effect, Exit, Scope, type FiberSet } from 'effect';
 import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
-import { decodeWorkspaceInput, decodeWorkspaceOutput } from '@moonbase/contracts/workspace-schema';
-import type {
-  WorkspaceHostServiceShape,
-  WorkspaceServiceShape,
-} from '@moonbase/contracts/services';
 import {
+  decodeWorkspaceInput,
+  decodeWorkspaceOutput,
   ApplicationError,
   type CheckoutTarget,
   type CommandInput,
@@ -16,6 +13,10 @@ import {
   type WorkspaceCommand,
   type WorkspaceOperation,
 } from '@moonbase/contracts/workspace';
+import type {
+  WorkspaceHostServiceShape,
+  WorkspaceServiceShape,
+} from '@moonbase/contracts/services';
 import { admit, releaseAll, type AdmissionOwner } from '../shared/admission.ts';
 import { ClientStore } from './client-store.ts';
 import type { OperationRecord, SaveRecord } from './client-schema.ts';

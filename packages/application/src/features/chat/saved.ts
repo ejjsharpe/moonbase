@@ -8,8 +8,10 @@ import {
   ChatMentionSchema,
   areChatMentionsInText,
   chatInputSchemas,
-} from '@moonbase/contracts/chat-schema';
-import { maximumChatMentions, type ChatSession, type ChatTarget } from '@moonbase/contracts/chat';
+  maximumChatMentions,
+  type ChatSession,
+  type ChatTarget,
+} from '@moonbase/contracts/chat';
 
 const struct = <const F extends Schema.Struct.Fields>(fields: F) =>
   Schema.Struct(fields).mapFields(Struct.map(Schema.mutableKey));

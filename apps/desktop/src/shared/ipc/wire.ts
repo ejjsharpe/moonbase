@@ -2,9 +2,10 @@ import { normalizeApplicationError } from '@moonbase/effect';
 import {
   decodeApplicationErrorDTO,
   type ApplicationErrorDTOSchema,
-} from '@moonbase/contracts/error-schema';
-import { decodeWorkspaceOutput, decodeWorkspaceEvent } from '@moonbase/contracts/workspace-schema';
+} from '@moonbase/contracts/errors';
 import {
+  decodeWorkspaceOutput,
+  decodeWorkspaceEvent,
   ApplicationError,
   type CheckoutTarget,
   type EditorClient,

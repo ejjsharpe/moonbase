@@ -1,48 +1,44 @@
-import { hostTokenPattern } from '@moonbase/contracts/host';
 import {
-  ChatHostTargetSchema,
-  decodeChatInput,
-  isChatCommand,
-} from '@moonbase/contracts/chat-schema';
-import type { AddressInfo } from 'node:net';
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { Effect, Exit, type ManagedRuntime } from 'effect';
-import * as Schema from 'effect/Schema';
-import type { ChatClient } from '@moonbase/contracts/chat';
-import type {
-  DaemonClient,
-  DaemonCommand,
-  DaemonInput,
-  DaemonOutput,
-} from '@moonbase/contracts/daemon';
-import {
-  daemonCommandCapabilities,
-  decodeDaemonInput,
-  decodeDaemonOutput,
-  isDaemonCommand,
-  isDaemonMutation,
-} from '@moonbase/contracts/daemon-schema';
-import { LocalHostService, ProviderSetupService } from '@moonbase/contracts/services';
-import type {
-  HostCommand,
-  HostInput,
-  WorkspaceHostClient,
-} from '@moonbase/contracts/workspace-host';
-import {
-  decodeHostInput,
-  hostInputCheckout,
-  isHostCommand,
-  isHostMutation,
-} from '@moonbase/contracts/workspace-host-schema';
-import { areJsonValuesEqual } from '@moonbase/contracts/common';
-import { createHostHealthReply, validateHostHealth } from '@moonbase/ssh/host-health';
-import {
+  hostTokenPattern,
   chatHostCapabilities,
   chatHostVersion,
   chatProtocolVersion,
   type ChatHostCapability,
   type ChatHostTarget,
 } from '@moonbase/contracts/host';
+import {
+  ChatHostTargetSchema,
+  decodeChatInput,
+  isChatCommand,
+  type ChatClient,
+} from '@moonbase/contracts/chat';
+import type { AddressInfo } from 'node:net';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { Effect, Exit, type ManagedRuntime } from 'effect';
+import * as Schema from 'effect/Schema';
+import {
+  type DaemonClient,
+  type DaemonCommand,
+  type DaemonInput,
+  type DaemonOutput,
+  daemonCommandCapabilities,
+  decodeDaemonInput,
+  decodeDaemonOutput,
+  isDaemonCommand,
+  isDaemonMutation,
+} from '@moonbase/contracts/daemon';
+import { LocalHostService, ProviderSetupService } from '@moonbase/contracts/services';
+import {
+  type HostCommand,
+  type HostInput,
+  type WorkspaceHostClient,
+  decodeHostInput,
+  hostInputCheckout,
+  isHostCommand,
+  isHostMutation,
+} from '@moonbase/contracts/workspace-host';
+import { areJsonValuesEqual } from '@moonbase/contracts/common';
+import { createHostHealthReply, validateHostHealth } from '@moonbase/ssh/host-health';
 import { releaseResource, toApplicationError } from '@moonbase/effect';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import * as P from '../shared/protocol.ts';

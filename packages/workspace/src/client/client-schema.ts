@@ -4,16 +4,14 @@ import {
   type CommandInput,
   type EditorRecovery,
   type SaveResult,
-} from '@moonbase/contracts/workspace';
-import { recovery } from '../shared/validation.ts';
-import {
   OperationResultSchema,
   RecoveryChangeSchema,
   RecoveryPublicationSchema,
   WorkspaceIdentifierSchema,
   WorkspaceOperationSchema,
   workspaceInputSchemas,
-} from '@moonbase/contracts/workspace-schema';
+} from '@moonbase/contracts/workspace';
+import { recovery } from '../shared/validation.ts';
 import { invalidStored } from '../shared/store.ts';
 import {
   array,

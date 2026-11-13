@@ -2,18 +2,26 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import type { ManagedRuntime } from 'effect';
 import type { ObservationClose } from '@moonbase/contracts/common';
 import { LRUCache } from 'lru-cache';
-import { decodeConnectionInput, isConnectionCommand } from '@moonbase/contracts/connection-schema';
-import type { ProviderSetupClient } from '@moonbase/contracts/providers';
-import { decodeProviderInput, isProviderCommand } from '@moonbase/contracts/providers-schema';
-import { decodeChatInput, isChatCommand } from '@moonbase/contracts/chat-schema';
-import { ApplicationError } from '@moonbase/contracts/workspace';
 import {
+  decodeConnectionInput,
+  isConnectionCommand,
+  type ConnectionClient,
+  type ConnectionCommand,
+} from '@moonbase/contracts/connection';
+import {
+  type ProviderSetupClient,
+  decodeProviderInput,
+  isProviderCommand,
+} from '@moonbase/contracts/providers';
+import {
+  decodeChatInput,
+  isChatCommand,
   maximumChatRequestBytes,
   type ChatClient,
   type ChatCommand,
   type ChatSession,
 } from '@moonbase/contracts/chat';
-import type { ConnectionClient, ConnectionCommand } from '@moonbase/contracts/connection';
+import { ApplicationError } from '@moonbase/contracts/workspace';
 import {
   fields,
   record,

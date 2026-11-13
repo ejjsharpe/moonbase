@@ -13,8 +13,8 @@ import {
 import { Deferred, Effect, Exit, Fiber, Scope, Semaphore, type ManagedRuntime } from 'effect';
 import { watchRetry } from '../../lib/effect/watch-retry.ts';
 import { runApplicationEffect } from '../../lib/effect/effect-client.ts';
-import { decodeEditorRecovery } from '@moonbase/contracts/workspace-schema';
 import {
+  decodeEditorRecovery,
   ApplicationError,
   emptyRecovery,
   maximumFileBytes,
@@ -39,15 +39,14 @@ import {
   type CommandOutput,
   type WorkspaceOperation,
 } from '@moonbase/contracts/workspace';
-
 import { readOwn, writeOwn } from './record.ts';
-
 import {
   checkoutKey,
   fileKey,
   moveRecoveryReferences,
   closeRecoveryReferences,
 } from './references.ts';
+
 export { checkoutKey, fileKey } from './references.ts';
 // These diagnostics are authored by this module; injected failures use shared normalization.
 const editorError = (message: string) => new ApplicationError({ code: 'Unavailable', message });

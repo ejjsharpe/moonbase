@@ -2,10 +2,8 @@ import { Cause, Deferred, Effect, Exit, Fiber, Layer, Queue, Stream, type Scope 
 import { createServer, type Server, type AddressInfo } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
-import { decodeConnectionInput } from '@moonbase/contracts/connection-schema';
-import { decodeChatHostTarget } from '@moonbase/contracts/host-schema';
-import type { ChatHostHealth } from '@moonbase/contracts/host';
+import { type ConnectionSnapshot, decodeConnectionInput } from '@moonbase/contracts/connection';
+import { decodeChatHostTarget, type ChatHostHealth } from '@moonbase/contracts/host';
 import { checkHostHealth } from '@moonbase/ssh/host-health';
 import { releaseResource, toApplicationError } from '@moonbase/effect';
 import { ConnectionService, type ConnectionServiceShape } from '@moonbase/contracts/services';

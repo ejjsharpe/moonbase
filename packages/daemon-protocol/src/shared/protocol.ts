@@ -2,7 +2,7 @@ import { hostTokenPattern } from '@moonbase/contracts/host';
 import { randomBytes } from 'node:crypto';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 export { maximumChatRequestBytes, maximumChatReplyBytes } from '@moonbase/contracts/chat';
-import { chatReplyErrorCodes } from '@moonbase/contracts/chat-schema';
+import { chatReplyErrorCodes } from '@moonbase/contracts/chat';
 import type { ChatHostEndpoint } from '@moonbase/contracts/services';
 import {
   daemonErrorReasons,

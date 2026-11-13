@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { decodeChatInput, decodeChatOutput, isChatCommand } from '@moonbase/contracts/chat-schema';
 import {
+  decodeChatInput,
+  decodeChatOutput,
+  isChatCommand,
   formatChatMention,
   type ChatCommand,
   type ChatInput,

@@ -46,19 +46,7 @@ for (const entry of [
 }
 console.log('Verified browser-only command contracts (contracts and portable Effect only).');
 
-for (const entry of [
-  'chat-schema',
-  'chat-validation',
-  'workspace-schema',
-  'workspace-host-schema',
-  'connection-schema',
-  'host-schema',
-  'daemon-schema',
-  'providers-schema',
-  'error-schema',
-  'schema',
-  'services',
-]) {
+for (const entry of ['chat-validation', 'workspace-host', 'schema', 'services']) {
   const result = await build({
     entryPoints: [`@moonbase/contracts/${entry}`],
     bundle: true,

@@ -1,11 +1,15 @@
-import { hostTokenPattern } from '@moonbase/contracts/host';
+import {
+  hostTokenPattern,
+  type ChatHostHealth,
+  type ChatHostTarget,
+  type HostHealthReply,
+  decodeChatHostHealth,
+} from '@moonbase/contracts/host';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Effect } from 'effect';
 import { ApplicationError, fail } from '@moonbase/contracts/errors';
-import type { ChatHostHealth, ChatHostTarget, HostHealthReply } from '@moonbase/contracts/host';
 import type { ChatHostEndpoint } from '@moonbase/contracts/services';
 import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
-import { decodeChatHostHealth } from '@moonbase/contracts/host-schema';
 
 export type { ChatHostEndpoint } from '@moonbase/contracts/services';
 export type { HostHealthReply } from '@moonbase/contracts/host';

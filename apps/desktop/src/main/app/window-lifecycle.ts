@@ -1,8 +1,7 @@
 import { normalizeApplicationError } from '@moonbase/effect';
 import { randomUUID } from 'node:crypto';
 import type { App, BrowserWindow, Dialog, IpcMain, IpcMainEvent } from 'electron';
-import { ApplicationError } from '@moonbase/contracts/errors';
-import { decodeApplicationErrorDTO } from '@moonbase/contracts/error-schema';
+import { ApplicationError, decodeApplicationErrorDTO } from '@moonbase/contracts/errors';
 import type { EditorSession } from '../ipc/session.ts';
 import type { DesktopChatBackends } from '../daemon/chat-backends.ts';
 import { channels, errorDTO, keys, record, requestId } from '../../shared/ipc/wire.ts';

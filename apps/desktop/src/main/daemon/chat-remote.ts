@@ -12,7 +12,7 @@ import {
   ProviderSetupService,
 } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
+import { readProviderSignInUrl } from '@moonbase/contracts/providers';
 import { bindChatClient, bindConnectionClient } from '@moonbase/application/runtime/clients';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import type { ChatConfiguration } from './chat-config.ts';

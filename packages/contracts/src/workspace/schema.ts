@@ -1,6 +1,6 @@
+import { ApplicationError } from '../errors/schema.ts';
+import type { CommandOptions, ObservationClose } from '../shared/common.ts';
 import * as Schema from 'effect/Schema';
-import { ApplicationError, maximumFileBytes } from './workspace.ts';
-import type { CommandInput, CommandOutput, WorkspaceCommand } from './workspace.ts';
 import { array, optional, struct, voidResult } from '../shared/schema.ts';
 import {
   CheckoutTargetSchema,
@@ -9,6 +9,71 @@ import {
   NonemptyStringSchema as nonempty,
   PathSchema as path,
 } from '../shared/target-schema.ts';
+
+/** Browser-safe application boundary. Privileged implementations use ./services. */
+export const maximumFileBytes = 2 * 1024 * 1024;
+export { ApplicationError, type ApplicationErrorCode } from '../errors/schema.ts';
+export type { CommandOptions, ObservationClose } from '../shared/common.ts';
+export type CheckoutTarget = typeof CheckoutTargetSchema.Type;
+export type GitCheckoutTarget = typeof GitCheckoutTargetSchema.Type;
+export type FileTarget = typeof FileTargetSchema.Type;
+export type FileDocument = typeof FileDocumentSchema.Type;
+export type FileView = typeof FileViewSchema.Type;
+export type EditorPosition = typeof EditorPositionSchema.Type;
+export type CheckoutView = typeof CheckoutViewSchema.Type;
+export type RecoveryDraft = typeof RecoveryDraftSchema.Type;
+export type EditorRecovery = typeof EditorRecoverySchema.Type;
+export type RecoveryLoad = typeof RecoveryLoadSchema.Type;
+export type DirectoryEntry = typeof DirectoryEntrySchema.Type;
+export type DirectoryListing = typeof DirectoryListingSchema.Type;
+export type GitChange = typeof GitChangeSchema.Type;
+export type GitChangeKind = typeof GitChangeKindSchema.Type;
+export type GitStatus = typeof GitStatusSchema.Type;
+export type Worktree = typeof WorktreeSchema.Type;
+export type Comparison = typeof ComparisonSchema.Type;
+export type LookupMatch = typeof LookupMatchSchema.Type;
+export type TextMatch = typeof TextMatchSchema.Type;
+export type TextSearchFile = typeof TextSearchFileSchema.Type;
+export type RecoveryChange = typeof RecoveryChangeSchema.Type;
+export type RecoveryPublication = typeof RecoveryPublicationSchema.Type;
+export type EntryReference = typeof EntryReferenceSchema.Type;
+export type WorkspaceOperation = typeof WorkspaceOperationSchema.Type;
+export type OperationResult = typeof OperationResultSchema.Type;
+export type SaveResult = typeof SaveResultSchema.Type;
+export type WorkspaceEvent = typeof WorkspaceEventSchema.Type;
+export const emptyRecovery = (clientId: string): EditorRecovery => ({
+  version: 1,
+  clientId,
+  checkouts: [],
+  openCheckoutIds: [],
+  selectedCheckoutId: null,
+  views: {},
+  drafts: [],
+  recentFiles: [],
+  sidebarWidth: 270,
+  followActiveFile: true,
+});
+export type WorkspaceCommands = {
+  [K in keyof typeof workspaceInputSchemas]: {
+    input: (typeof workspaceInputSchemas)[K]['Type'];
+    output: (typeof workspaceOutputSchemas)[K]['Type'];
+  };
+};
+export type WorkspaceCommand = keyof WorkspaceCommands;
+export type CommandInput<K extends WorkspaceCommand> = WorkspaceCommands[K]['input'];
+export type CommandOutput<K extends WorkspaceCommand> = WorkspaceCommands[K]['output'];
+export interface EditorClient {
+  command<K extends WorkspaceCommand>(
+    operation: K,
+    input: CommandInput<K>,
+    options?: CommandOptions,
+  ): Promise<CommandOutput<K>>;
+  watch(
+    input: { checkout: CheckoutTarget; paths: string[] },
+    receive: (event: WorkspaceEvent) => void,
+    onError: (error: ApplicationError) => void,
+  ): ObservationClose;
+}
 
 export {
   CheckoutTargetSchema,

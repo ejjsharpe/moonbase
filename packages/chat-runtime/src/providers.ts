@@ -2,19 +2,21 @@ import { randomUUID } from 'node:crypto';
 import { Context, Effect, Layer } from 'effect';
 import { readOnChange } from '@moonbase/effect/changes';
 import { getSupportedThinkingLevels, type Models } from '@earendil-works/pi-ai/models';
-type Interaction = Parameters<Models['login']>[2];
-type AuthPrompt = Parameters<Interaction['prompt']>[0];
-type AuthEvent = Parameters<Interaction['notify']>[0];
 import { ProviderSetupService, type ProviderSetupHandlers } from '@moonbase/contracts/services';
-import type { ProviderCommand, ProviderInput, ProviderState } from '@moonbase/contracts/providers';
 import {
+  type ProviderCommand,
+  type ProviderInput,
+  type ProviderState,
   decodeProviderInput,
   decodeProviderOutput,
   readProviderSignInUrl,
-} from '@moonbase/contracts/providers-schema';
+} from '@moonbase/contracts/providers';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { daemonErrorReasons, type DaemonErrorReason } from '@moonbase/contracts/daemon';
 import type { ChatReasoningEffort } from '@moonbase/contracts/chat';
+type Interaction = Parameters<Models['login']>[2];
+type AuthPrompt = Parameters<Interaction['prompt']>[0];
+type AuthEvent = Parameters<Interaction['notify']>[0];
 
 // Moonbase defaults for the pinned catalog; explicit user preferences take precedence.
 const defaultModels: Record<string, { modelId: string; reasoningEffort: ChatReasoningEffort }> = {

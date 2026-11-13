@@ -1,18 +1,19 @@
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { getJsonKey } from '@moonbase/contracts/common';
-import type { ChatClient } from '@moonbase/contracts/chat';
-import { isChatCommand } from '@moonbase/contracts/chat-schema';
-import type { DaemonClient } from '@moonbase/contracts/daemon';
-import { daemonCommandCapabilities } from '@moonbase/contracts/daemon-schema';
+import { type ChatClient, isChatCommand } from '@moonbase/contracts/chat';
+import { type DaemonClient, daemonCommandCapabilities } from '@moonbase/contracts/daemon';
 import {
   chatHostCapabilities,
   chatProtocolVersion,
   type ChatHostHealth,
   type ChatHostTarget,
 } from '@moonbase/contracts/host';
-import type { WorkspaceHostClient } from '@moonbase/contracts/workspace-host';
-import { isHostCommand, isHostMutation } from '@moonbase/contracts/workspace-host-schema';
+import {
+  type WorkspaceHostClient,
+  isHostCommand,
+  isHostMutation,
+} from '@moonbase/contracts/workspace-host';
 import {
   socketLimits,
   socketPath,
@@ -20,11 +21,9 @@ import {
   type SocketSubscriptionKind,
   type SocketSubscriptionTarget,
   type SocketSubscriptionValue,
-} from '@moonbase/contracts/socket';
-import {
   decodeSocketChunkedRequest,
   decodeSocketClientMessage,
-} from '@moonbase/contracts/socket-schema';
+} from '@moonbase/contracts/socket';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import * as P from '../shared/protocol.ts';
 import { isCancellableChatRead, isSameChatHost } from '@moonbase/contracts/chat-validation';

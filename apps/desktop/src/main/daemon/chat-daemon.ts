@@ -14,7 +14,7 @@ import {
   WorkspaceHostService,
 } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
+import { readProviderSignInUrl } from '@moonbase/contracts/providers';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import {
   daemonRetryAfterMs,

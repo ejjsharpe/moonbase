@@ -13,5 +13,5 @@ export {
 } from '@moonbase/application/runtime/effect-client';
 export { ApplicationError } from '@moonbase/contracts/errors';
 export { WorkspaceService, ConnectionService, ChatService } from '@moonbase/contracts/services';
-export { decodeChatInput } from '@moonbase/contracts/chat-schema';
+export { decodeChatInput } from '@moonbase/contracts/chat';
 export { checkHeadlessApplication } from '../../packages/application/examples/headless.ts';

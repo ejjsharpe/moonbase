@@ -1,7 +1,11 @@
-import { decodeChatInput } from '@moonbase/contracts/chat-schema';
+import {
+  decodeChatInput,
+  type ChatClient,
+  type ChatSnapshot,
+  type ChatTranscriptSelection,
+} from '@moonbase/contracts/chat';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
-import type { ChatClient, ChatSnapshot, ChatTranscriptSelection } from '@moonbase/contracts/chat';
 import {
   iterateTranscriptSource,
   makeTranscriptReader,

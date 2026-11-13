@@ -3,9 +3,8 @@ import { execFileSync } from 'node:child_process';
 import { test } from 'node:test';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { ChatOutput, ChatSnapshot } from '@moonbase/contracts/chat';
-import { chatInputSchemas } from '@moonbase/contracts/chat-schema';
-import { daemonInputSchemas } from '@moonbase/contracts/daemon-schema';
+import { type ChatOutput, type ChatSnapshot, chatInputSchemas } from '@moonbase/contracts/chat';
+import { daemonInputSchemas } from '@moonbase/contracts/daemon';
 import type { ProviderState } from '@moonbase/contracts/providers';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import {

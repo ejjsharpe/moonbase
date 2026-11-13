@@ -1,4 +1,4 @@
-import { fail } from '../errors/errors.ts';
+import { fail } from '../errors/schema.ts';
 
 export type ObservationClose = () => Promise<void>;
 export type CommandOptions = { signal?: AbortSignal };

@@ -1,13 +1,29 @@
+import type { CommandOptions, ObservationClose } from '../shared/common.ts';
+import { ApplicationError } from '../errors/schema.ts';
 import * as Schema from 'effect/Schema';
-import { struct } from '../shared/schema.ts';
+import { struct, optional } from '../shared/schema.ts';
 import {
   ChatIdentifierSchema,
   ChatModelPreferenceSchema,
   ChatReasoningEffortSchema,
 } from '../chat/schema.ts';
-import { optional } from '../shared/schema.ts';
-import { ApplicationError } from '../errors/errors.ts';
-import type { ProviderCommand, ProviderInput, ProviderOutput } from './providers.ts';
+
+export type ProviderState = typeof ProviderStateSchema.Type;
+export type ProviderCommand = keyof typeof providerInputSchemas;
+export type ProviderInput<K extends ProviderCommand> = (typeof providerInputSchemas)[K]['Type'];
+export type ProviderOutput<_K extends ProviderCommand> = ProviderState;
+export interface ProviderSetupClient {
+  command<K extends ProviderCommand>(
+    operation: K,
+    input: ProviderInput<K>,
+    options?: CommandOptions,
+  ): Promise<ProviderOutput<K>>;
+  /** The setup state, then again after each change to it, so a sign-in's progress needs no polling. */
+  watch(
+    receive: (state: ProviderState) => void,
+    onError: (error: ApplicationError) => void,
+  ): ObservationClose;
+}
 
 const text = (limit: number) =>
   Schema.String.check(
