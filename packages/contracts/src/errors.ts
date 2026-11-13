@@ -14,9 +14,10 @@ export const ApplicationErrorCodeSchema = Schema.Literals([
 export type ApplicationErrorCode = typeof ApplicationErrorCodeSchema.Type;
 
 /**
- * The one error Moonbase shows or sends. Its message is written by Moonbase, never copied from
- * an unknown failure, so it is safe to show; `normalizeApplicationError` in `@moonbase/effect`
- * turns anything else into one.
+ * Legacy (epic #273, D14): modules move to their own tagged errors and the shared outcome errors
+ * below, each in the ticket that rewrites it. Its message is written by Moonbase, never copied
+ * from an unknown failure, so it is safe to show; `normalizeApplicationError` in
+ * `@moonbase/effect` turns anything else into one.
  */
 export class ApplicationError extends Schema.TaggedError<ApplicationError>()('ApplicationError', {
   code: ApplicationErrorCodeSchema,
@@ -27,6 +28,37 @@ export class ApplicationError extends Schema.TaggedError<ApplicationError>()('Ap
   #applicationError = true;
   static is(value: unknown): value is ApplicationError {
     return typeof value === 'object' && value !== null && #applicationError in value;
+  }
+}
+
+// Outcomes every caller treats the same, whatever module failed (D14).
+
+/** A mutation that may have committed: its caller checks the outcome and never resends it. */
+export class UncertainError extends Schema.TaggedError<UncertainError>()('UncertainError', {
+  operation: Schema.String,
+  target: Schema.optional(FileTargetSchema),
+}) {
+  override get message(): string {
+    return `${this.operation} may have completed. Check its outcome before retrying.`;
+  }
+}
+
+/** Work stopped because its caller cancelled it. */
+export class CancelledError extends Schema.TaggedError<CancelledError>()('CancelledError', {
+  operation: Schema.String,
+}) {
+  override get message(): string {
+    return `${this.operation} was cancelled.`;
+  }
+}
+
+/** The caller isn't allowed to do this, or its credentials were refused. */
+export class UnauthorizedError extends Schema.TaggedError<UnauthorizedError>()(
+  'UnauthorizedError',
+  { operation: Schema.String },
+) {
+  override get message(): string {
+    return `${this.operation} is not authorized.`;
   }
 }
 

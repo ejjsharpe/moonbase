@@ -26,6 +26,7 @@ import {
   isConnectionCommand,
 } from '@moonbase/contracts/connection-schema';
 import { decodeApplicationErrorDTO } from '@moonbase/contracts/error-schema';
+import { UncertainError } from '@moonbase/contracts/errors';
 import { decodeChatHostHealth } from '@moonbase/contracts/host-schema';
 
 const checkout = {
@@ -362,6 +363,15 @@ test('ApplicationError round-trips through its schema and rejects an unknown cod
     [error.code, error.message, target],
   );
   assert.throws(() => Schema.decodeUnknownSync(ApplicationError)({ ...encoded, code: 'unknown' }));
+});
+test('a shared outcome error round-trips and builds its message from its fields', () => {
+  const error = new UncertainError({ operation: 'Save', target });
+  const decoded = Schema.decodeUnknownSync(UncertainError)(
+    Schema.encodeSync(UncertainError)(error),
+  );
+  assert.equal(decoded._tag, 'UncertainError');
+  assert.deepEqual(decoded.target, target);
+  assert.match(decoded.message, /^Save /);
 });
 for (const entry of ['workspace-schema', 'connection-schema', 'host-schema', 'error-schema'])
   test(`${entry} bundles without privileged implementations or application services`, async () => {
