@@ -1,5 +1,3 @@
-import type { IncomingMessage } from 'node:http';
-import type { Duplex } from 'node:stream';
 import { getJsonKey } from '@moonbase/contracts/common';
 import type { ChatClient } from '@moonbase/contracts/chat';
 import { isChatCommand } from '@moonbase/contracts/chat-schema';
@@ -44,14 +42,19 @@ import {
 } from './socket-protocol.ts';
 import { projectSocketDelta } from './socket-deltas.ts';
 import { followChanges } from '@moonbase/effect/changes';
-import {
-  acceptWebSocketKey,
-  encodeWebSocketClose,
-  encodeWebSocketFrame,
-  webSocketCloseCodes,
-  webSocketOpcodes,
-  WebSocketReader,
-} from './websocket.ts';
+import type { BunServer, BunServeOptions, BunWebSocket } from './bun-server.ts';
+
+/** What Bun keeps with each upgraded connection. */
+export type SocketData = { session?: Session };
+/** Close codes the daemon sends: going away on shutdown, policy violation for any refusal. */
+const closeCodes = { goingAway: 1001, policy: 1008 };
+/** Before its hello, a connection may send only a message this small. */
+const maximumHelloBytes = 4096;
+/** Bun's own bound on a socket's buffered output; the session stops writing far below it. */
+const backpressureLimit = 1024 * 1024 * 1024;
+/** A `Sec-WebSocket-Key` is the base64 of 16 bytes. */
+const isWebSocketKey = (key: string | null) =>
+  key !== null && /^[A-Za-z0-9+/]{22}==$/.test(key) && Buffer.from(key, 'base64').length === 16;
 
 /** What a daemon pushes to provider subscriptions, and how it counts connections. */
 export type SocketSources = {
@@ -83,7 +86,7 @@ const maximumConnections = 32;
  * fast enough flood of new ones can still evict a client's before its hello arrives.
  */
 const maximumHandshakes = 8;
-/** A refused or closed connection's socket is destroyed this long after its close frame. */
+/** A closing connection is cut this long after its close frame if the client never answers. */
 const lingerMs = 1000;
 
 type Update = { base: number; sequence: number; delta: unknown; bytes: number };
@@ -110,8 +113,9 @@ type Feed = {
 };
 
 /**
- * Serves `GET /v2/socket` upgrades on the HTTP listener: one authenticated connection per client
- * with requests, subscriptions and numbered deltas.
+ * Serves `GET /v2/socket` upgrades on the daemon's `Bun.serve` listener: one authenticated
+ * connection per client with requests, subscriptions and numbered deltas. Bun does the framing;
+ * this decides which upgrades it accepts and runs each connection's session.
  */
 export function createSocketServer(context: SocketServerContext) {
   const sessions = new Set<Session>(),
@@ -177,59 +181,87 @@ export function createSocketServer(context: SocketServerContext) {
     }
   };
 
-  function upgrade(request: IncomingMessage, socket: Duplex, head: Buffer) {
-    const refuse = (status: number) => {
-      socket.end(`HTTP/1.1 ${status} Refused\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
-      setTimeout(() => socket.destroy(), lingerMs).unref();
-    };
-    const accept = acceptWebSocketKey(request.headers['sec-websocket-key']);
+  const registry = (session: () => Session): Registry => ({
+    feeds,
+    forget,
+    claim,
+    detach,
+    keep,
+    dropHistory,
+    authenticate: () => {
+      if (!handshakes.delete(session()) || sessions.size >= maximumConnections) return false;
+      sessions.add(session());
+      return true;
+    },
+    remove: () => void (handshakes.delete(session()) || sessions.delete(session())),
+  });
+
+  /**
+   * Upgrades a request for the socket, or answers the status it is refused with. Every check is
+   * made before Bun upgrades it.
+   */
+  function upgrade(request: Request, server: BunServer<SocketData>): Response | undefined {
+    const refuse = (status: number) =>
+      new Response(null, { status, headers: { Connection: 'close' } });
+    const headers = request.headers,
+      url = new URL(request.url);
     // A browser page always sends Origin; only privileged local processes may connect.
-    if (request.headers.origin !== undefined) return refuse(403);
+    if (headers.get('origin') !== null) return refuse(403);
     if (
       closed ||
       request.method !== 'GET' ||
-      request.url !== socketPath ||
+      url.pathname !== socketPath ||
+      url.search !== '' ||
       // Any port: through an SSH forward, Host names the client's local end of the tunnel.
-      !/^127\.0\.0\.1:\d+$/.test(request.headers.host ?? '') ||
-      request.headers.upgrade?.toLowerCase() !== 'websocket' ||
-      request.headers['sec-websocket-version'] !== '13' ||
-      !accept
+      !/^127\.0\.0\.1:\d+$/.test(headers.get('host') ?? '') ||
+      headers.get('upgrade')?.toLowerCase() !== 'websocket' ||
+      headers.get('sec-websocket-version') !== '13' ||
+      !isWebSocketKey(headers.get('sec-websocket-key'))
     )
       return refuse(400);
     if (sessions.size >= maximumConnections) return refuse(503);
-    for (const oldest of handshakes) {
-      if (handshakes.size < maximumHandshakes) break;
-      oldest.evict();
-    }
-    socket.write(
-      `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\nCache-Control: no-store\r\n\r\n`,
-    );
-    const session = new Session(socket, context, {
-      feeds,
-      forget,
-      claim,
-      detach,
-      keep,
-      dropHistory,
-      authenticate: () => {
-        if (!handshakes.delete(session) || sessions.size >= maximumConnections) return false;
-        sessions.add(session);
-        return true;
-      },
-      remove: () => void (handshakes.delete(session) || sessions.delete(session)),
-    });
-    handshakes.add(session);
-    if (head.length) session.receive(head);
+    if (!server.upgrade(request, { data: {}, headers: { 'Cache-Control': 'no-store' } }))
+      return refuse(400);
+    return undefined;
   }
+
+  /** Bun's WebSocket options: its limits, and handlers that pass each event to its session. */
+  const websocket: BunServeOptions<SocketData>['websocket'] = {
+    // Bun refuses a larger message; before its hello a session takes far less.
+    maxPayloadLength: socketLimits.frameBytes,
+    // The session's heartbeat and idle limit decide when a socket is quiet.
+    idleTimeout: 0,
+    sendPings: false,
+    backpressureLimit,
+    closeOnBackpressureLimit: false,
+    perMessageDeflate: false,
+    open(socket) {
+      if (closed) return socket.terminate();
+      for (const oldest of handshakes) {
+        if (handshakes.size < maximumHandshakes) break;
+        oldest.evict();
+      }
+      const session: Session = new Session(
+        socket,
+        context,
+        registry(() => session),
+      );
+      socket.data.session = session;
+      handshakes.add(session);
+    },
+    message: (socket, message) => socket.data.session?.receive(message),
+    ping: (socket) => socket.data.session?.ping(),
+    drain: (socket) => socket.data.session?.drained(),
+    close: (socket) => socket.data.session?.closed(),
+  };
 
   return {
     upgrade,
+    websocket,
     async close() {
       closed = true;
       await Promise.allSettled(
-        [...handshakes, ...sessions].map((session) =>
-          session.shutdown(webSocketCloseCodes.goingAway, true),
-        ),
+        [...handshakes, ...sessions].map((session) => session.shutdown(closeCodes.goingAway)),
       );
       for (const feed of feeds.values()) forget(feed);
     },
@@ -268,7 +300,6 @@ const refusal = (code: 'Unavailable' | 'InvalidInput' | 'Cancelled', message: st
 });
 
 class Session {
-  private readonly reader = new WebSocketReader(4096, true);
   private phase: 'hello' | 'open' | 'closed' = 'hello';
   private readonly challenge = P.nonce();
   private keys: SocketKeys | undefined;
@@ -294,65 +325,68 @@ class Session {
   private congestion: Promise<void> | undefined;
   private drain: (() => void) | undefined;
   private untrack: (() => void) | undefined;
-  private readonly socket: Duplex;
+  /** Set once Bun reports the connection closed. */
+  private socketClosed = false;
+  private linger: ReturnType<typeof setTimeout> | undefined;
+  private readonly socket: BunWebSocket<SocketData>;
   private readonly context: SocketServerContext;
   private readonly registry: Registry;
   private readonly finished: Promise<void>;
   private resolveFinished!: () => void;
 
-  constructor(socket: Duplex, context: SocketServerContext, registry: Registry) {
+  constructor(socket: BunWebSocket<SocketData>, context: SocketServerContext, registry: Registry) {
     this.socket = socket;
     this.context = context;
     this.registry = registry;
     this.finished = new Promise((resolve) => (this.resolveFinished = resolve));
     this.lastReceived = this.lastSent = context.clock.now();
-    socket.on('data', (bytes: Buffer) => this.receive(bytes));
-    socket.on('drain', () => this.drain?.());
-    socket.on('error', () => this.end());
-    socket.on('close', () => this.end());
     // The challenge is the only unauthenticated message; the hello must answer it in time.
-    socket.write(
-      encodeWebSocketFrame(
-        webSocketOpcodes.binary,
-        Buffer.from(
-          JSON.stringify({
-            type: 'challenge',
-            protocol: chatProtocolVersion,
-            challenge: this.challenge,
-          }),
-        ),
+    socket.sendBinary(
+      Buffer.from(
+        JSON.stringify({
+          type: 'challenge',
+          protocol: chatProtocolVersion,
+          challenge: this.challenge,
+        }),
       ),
     );
     this.timer = context.clock.setTimeout(() => this.fail(), socketLimits.handshakeMs);
   }
 
   /**
-   * Handles received frames until the socket is congested; frames already read wait in the
-   * reader until it drains. Only the hello is accepted before authentication, and only
-   * authenticated messages count as activity, so pings never keep a connection alive.
+   * Handles one received message. Only a small binary hello is accepted before authentication,
+   * and only authenticated messages count as activity, so pings never keep a connection alive.
    */
-  receive(bytes: Buffer) {
+  receive(message: string | Uint8Array) {
     if (this.phase === 'closed') return;
     try {
-      for (const { opcode, payload } of this.reader.push(bytes)) {
-        if ((this.phase as string) === 'closed') return;
-        if (opcode === webSocketOpcodes.close) return this.shutdown(webSocketCloseCodes.normal);
-        if (opcode !== webSocketOpcodes.binary && this.phase === 'hello') return this.fail();
-        if (opcode === webSocketOpcodes.ping)
-          this.socket.write(encodeWebSocketFrame(webSocketOpcodes.pong, payload));
-        else if (opcode === webSocketOpcodes.pong) continue;
-        else if (opcode !== webSocketOpcodes.binary) return this.fail();
-        else if (this.phase === 'hello') this.hello(payload);
-        else {
-          const message = this.open(payload);
-          this.lastReceived = this.context.clock.now();
-          this.handle(message, payload.length);
-        }
-        if (this.congested()) return;
-      }
+      if (typeof message === 'string') return this.fail();
+      const payload = Buffer.from(message.buffer, message.byteOffset, message.byteLength);
+      if (this.phase === 'hello')
+        return payload.length > maximumHelloBytes ? this.fail() : this.hello(payload);
+      const opened = this.open(payload);
+      this.lastReceived = this.context.clock.now();
+      this.handle(opened, payload.length);
+      void this.congested();
     } catch {
       this.fail();
     }
+  }
+  /** Bun answered a ping; one before the hello is refused, and its answers count as output. */
+  ping() {
+    if (this.phase === 'hello') return this.fail();
+    void this.congested();
+  }
+  /** Bun wrote out what the socket held. */
+  drained() {
+    this.drain?.();
+  }
+  /** Bun closed the connection, after a close frame or a failure. */
+  closed() {
+    this.socketClosed = true;
+    clearTimeout(this.linger);
+    this.end();
+    this.resolveFinished();
   }
 
   /** The hello's MAC is under keys derived from its own nonce and this connection's challenge. */
@@ -377,7 +411,6 @@ class Session {
     this.lastReceived = this.context.clock.now();
     this.received = 1;
     this.phase = 'open';
-    this.reader.maximum = socketLimits.frameBytes;
     this.context.clock.clearTimeout(this.timer);
     this.untrack = this.context.sources.trackConnection?.();
     this.send({ type: 'welcome', health: this.context.health });
@@ -798,7 +831,7 @@ class Session {
     if (
       this.phase === 'closed' ||
       this.congestion ||
-      this.socket.writableLength <= socketLimits.outboundBytes
+      this.socket.getBufferedAmount() <= socketLimits.outboundBytes
     )
       return this.congestion;
     this.socket.pause();
@@ -806,11 +839,16 @@ class Session {
       const timer = this.context.clock.setTimeout(() => this.fail(), socketLimits.drainMs);
       this.drain = () => {
         this.context.clock.clearTimeout(timer);
-        this.drain = this.congestion = undefined;
-        resolve();
-        if (this.phase === 'closed') return;
+        this.drain = undefined;
+        const proceed = () => {
+          this.congestion = undefined;
+          resolve();
+        };
+        if (this.phase === 'closed') return proceed();
+        // Writing resumes a turn after reading does, so what the client sent while the daemon
+        // was not reading (a cancel, say) is handled first.
         this.socket.resume();
-        this.receive(Buffer.alloc(0));
+        setTimeout(proceed, 0);
       };
     });
     return this.congestion;
@@ -827,7 +865,7 @@ class Session {
   }
   private write(frame: Buffer) {
     this.lastSent = this.context.clock.now();
-    this.socket.write(encodeWebSocketFrame(webSocketOpcodes.binary, frame));
+    this.socket.sendBinary(frame);
   }
 
   /** Heartbeats fill quiet intervals; a client silent past `idleMs` is disconnected. */
@@ -852,21 +890,21 @@ class Session {
 
   /** Any refusal closes with one code and no reason, so nothing says what was wrong. */
   private fail() {
-    void this.shutdown(webSocketCloseCodes.policy);
+    void this.shutdown(closeCodes.policy);
   }
   /**
-   * Sends a close frame and stops reading. The socket is destroyed once the frame is written
-   * when `immediate`, as when the daemon shuts down, or else after a moment for the client to
-   * read it.
+   * Sends a close frame with `code` and no reason, and stops reading. A client that never answers
+   * it is cut off after `lingerMs`.
    */
-  shutdown(code: number, immediate = false) {
+  shutdown(code: number) {
     if (this.phase !== 'closed') {
       // Nothing more is read from a connection that is closing.
       this.socket.pause();
-      this.socket.end(encodeWebSocketClose(code), () => {
-        if (immediate) this.socket.destroy();
-      });
-      setTimeout(() => this.socket.destroy(), lingerMs).unref();
+      this.socket.close(code);
+      if (!this.socketClosed) {
+        this.linger = setTimeout(() => this.socket.terminate(), lingerMs);
+        this.linger.unref?.();
+      }
       this.end();
     }
     return this.finished;
@@ -890,7 +928,6 @@ class Session {
     this.untrack?.();
     this.untrack = undefined;
     this.registry.remove();
-    if (this.socket.destroyed) this.resolveFinished();
-    else this.socket.once('close', () => this.resolveFinished());
+    if (this.socketClosed) this.resolveFinished();
   }
 }
