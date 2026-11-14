@@ -3,9 +3,12 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { Schema } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/workspace';
 import type { SshConfiguration } from '@moonbase/ssh';
-import { decodeSshConfiguration, SshConfigurationSchema } from '@moonbase/ssh/configuration';
+import {
+  decodeSshConfiguration,
+  SshConfigurationError,
+  SshConfigurationSchema,
+} from '@moonbase/ssh/configuration';
 
 const configuration: SshConfiguration = {
   profile: {
@@ -22,9 +25,7 @@ function rejected(value: unknown) {
   assert.throws(
     () => decodeSshConfiguration(value),
     (error) => {
-      assert(ApplicationError.is(error));
-      assert.equal(error.code, 'InvalidInput');
-      assert.equal(error.message, 'Invalid SSH configuration.');
+      assert(error instanceof SshConfigurationError);
       assert(!JSON.stringify(error).includes(configuration.token));
       assert(!JSON.stringify(error).includes('private-credential-path'));
       assert(!String(error).includes('SchemaError'));

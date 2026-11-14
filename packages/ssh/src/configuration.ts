@@ -1,7 +1,6 @@
 import { hostTokenPattern } from '@moonbase/contracts/host';
 import { Effect, Schema, SchemaGetter } from 'effect';
 import { isAbsolute } from 'node:path';
-import { ApplicationError } from '@moonbase/contracts/workspace';
 import {
   ConnectionPortSchema,
   ConnectionProfileSchema,
@@ -49,11 +48,20 @@ export type SshConfiguration = Omit<DecodedSshConfiguration, 'sshExecutable'> & 
   sshExecutable?: string;
 };
 
+/** An SSH configuration that does not decode; it names no input, so no private value escapes. */
+export class SshConfigurationError extends Schema.TaggedError<SshConfigurationError>()(
+  'SshConfigurationError',
+  {},
+) {
+  override get message(): string {
+    return 'Invalid SSH configuration.';
+  }
+}
 const decode = Schema.decodeUnknownSync(SshConfigurationSchema, { reportInput: false });
 export function decodeSshConfiguration(value: unknown): DecodedSshConfiguration {
   try {
     return decode(value);
   } catch {
-    throw new ApplicationError({ code: 'InvalidInput', message: 'Invalid SSH configuration.' });
+    throw new SshConfigurationError();
   }
 }

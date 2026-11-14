@@ -26,7 +26,7 @@ import {
   chatProtocolVersion,
   type ChatHostHealth,
 } from '@moonbase/contracts/host';
-import { checkHostHealth, healthDomain } from '@moonbase/ssh/host-health';
+import { checkHostHealth, healthDomain } from '../src/health.ts';
 import {
   localDaemonCapabilities,
   makeWorkspaceClient,

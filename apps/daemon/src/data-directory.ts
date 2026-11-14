@@ -4,7 +4,7 @@ import { link, lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 import type { ChatSession } from '@moonbase/contracts/chat';
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
-import { decodeDaemonSettings, type DaemonSettings } from '@moonbase/chat-runtime/daemon-settings';
+import { decodeDaemonSettings, type DaemonSettings } from './daemon-settings.ts';
 import { DaemonFailure } from './failure.ts';
 import { isPrivateTo } from '@moonbase/contracts/files';
 

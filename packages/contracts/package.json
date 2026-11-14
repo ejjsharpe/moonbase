@@ -6,6 +6,7 @@
     "./workspace": "./src/workspace.ts",
     "./chat": "./src/chat.ts",
     "./connection": "./src/connection.ts",
+    "./connection-errors": "./src/connection-errors.ts",
     "./host": "./src/host.ts",
     "./chat-schema": "./src/chat-schema.ts",
     "./chat-validation": "./src/chat-validation.ts",

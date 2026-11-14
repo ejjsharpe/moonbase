@@ -136,7 +136,6 @@
       "dependencies": {
         "@moonbase/contracts": "workspace:*",
         "@moonbase/effect": "workspace:*",
-        "@moonbase/ssh": "workspace:*",
         "effect": "4.1.0",
       },
       "devDependencies": {

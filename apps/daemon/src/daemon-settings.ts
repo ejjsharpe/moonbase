@@ -1,8 +1,10 @@
 import * as Schema from 'effect/Schema';
 import { fail } from '@moonbase/contracts/errors';
-import { absolutePath, safeInteger } from './field-schemas.ts';
+import { AbsolutePathSchema as absolutePath } from '@moonbase/contracts/daemon-schema';
 
-const port = safeInteger.check(Schema.makeFilter((value) => value > 0 && value <= 65535));
+const port = Schema.Number.check(
+  Schema.makeFilter((value) => Number.isSafeInteger(value) && value > 0 && value <= 65535),
+);
 const keyFile = Schema.Struct({ source: Schema.Literal('file'), path: absolutePath });
 // A root is named by its real path; one under another would only repeat its folders.
 const approvedRoots = Schema.Array(absolutePath).check(

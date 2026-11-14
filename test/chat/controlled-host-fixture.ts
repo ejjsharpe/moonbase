@@ -17,6 +17,7 @@ import {
 } from '@moonbase/daemon-protocol/remote';
 import { LocalHostService } from '@moonbase/contracts/services';
 import { SshLive } from '@moonbase/ssh';
+import { checkHostHealth } from '@moonbase/daemon-protocol/health';
 import type { ChatTarget } from '@moonbase/contracts/chat';
 import { fauxModel } from './faux-model.ts';
 
@@ -218,7 +219,10 @@ export async function controlledHostFixture(behaviour: URL, hold = false) {
         }),
       ).pipe(
         Layer.provideMerge(
-          SshLive({ profile: configuredProfile, token, sshExecutable: executable }),
+          SshLive(
+            { profile: configuredProfile, token, sshExecutable: executable },
+            { verify: checkHostHealth },
+          ),
         ),
       ),
     );
