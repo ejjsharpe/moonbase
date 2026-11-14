@@ -308,6 +308,31 @@ test('watch limits, pending unsubscribe/root disposal and arbitrary failing rele
   mock.restoreAll();
 });
 
+test('a watch Pi cannot subscribe is unavailable, so its client watches again, and names nothing of Pi', async (t) => {
+  const original = Harness.open,
+    canary = 'private-subscribe-canary';
+  mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
+    const harness = await original(...args);
+    harness.subscribeCommits = () => {
+      throw Error(canary);
+    };
+    return harness;
+  });
+  t.after(() => mock.restoreAll());
+  const f = await fixture(t),
+    target = await f.create();
+  const failures: ApplicationError[] = [];
+  const off = f.client.watch(
+    { target },
+    () => {},
+    (error) => failures.push(error),
+  );
+  await until(async () => failures.length, Boolean);
+  assert.equal(failures[0]!.code, 'Unavailable');
+  assert(!failures[0]!.message.includes(canary));
+  await off().catch(() => {});
+});
+
 test('null-task Stop withdraws an actual Pi-queued submission while preserving the unrelated active input', async (t) => {
   const original = Harness.open;
   let harness: Harness | undefined;

@@ -91,6 +91,12 @@ export const safeError = (error: unknown, uncertain = false): ChatError => {
     ? new UncertainError({ operation: 'The chat request' })
     : new ChatStoreError({ problem: 'failed' });
 };
+/**
+ * A watch's failure safe to show: a chat error as itself, and anything else (Pi's subscriptions,
+ * a failed re-read) unavailable, so its client watches again.
+ */
+export const watchError = (error: unknown): ChatError =>
+  isChatError(error) ? error : new ChatUnavailableError({ reason: 'watch-failed' });
 /** What one commit means for a watched conversation's projection and its caches. */
 export type PublicationEffect = {
   /** The watched view must be read again. */
@@ -791,7 +797,7 @@ export class Host {
                     throw new ChatUnavailableError({ reason: 'observers' });
                   this.observers++;
                 },
-                catch: (error) => safeError(error),
+                catch: watchError,
               }),
               () =>
                 Effect.sync(() => {
@@ -819,7 +825,7 @@ export class Host {
             yield* Effect.acquireRelease(
               Effect.try({
                 try: () => this.harness.subscribeCommits(invalidate),
-                catch: (error) => safeError(error),
+                catch: watchError,
               }),
               (off) => releaseResource(off),
             );
@@ -830,7 +836,7 @@ export class Host {
                     ended = true;
                     refresh();
                   }),
-                catch: (error) => safeError(error),
+                catch: watchError,
               }),
               (off) => releaseResource(off),
             );
@@ -841,7 +847,7 @@ export class Host {
                     invalidateStatus();
                     refresh();
                   }),
-                catch: (error) => safeError(error),
+                catch: watchError,
               }),
               (off) => releaseResource(off),
             );

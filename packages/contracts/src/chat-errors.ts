@@ -132,6 +132,7 @@ export class ChatStoreMismatchError extends Schema.TaggedError<ChatStoreMismatch
 
 const unavailable = {
   quitting: 'Local chat is preparing to quit.',
+  'watch-failed': 'Chat updates stopped; they are read again shortly.',
   observers: 'Chat observation is unavailable.',
   'own-folder-in-checkout':
     'Chats without a project are unavailable while Moonbase’s data folder is inside a Git checkout. Choose a working folder.',
