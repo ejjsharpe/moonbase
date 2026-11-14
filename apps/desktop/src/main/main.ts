@@ -1,4 +1,5 @@
 import { normalizeApplicationError } from '@moonbase/effect';
+import { toWireError } from '@moonbase/contracts/workspace-host-errors';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import {
   app,
@@ -155,11 +156,20 @@ async function main() {
     // Picker and clipboard paths are native; a drop's paths come from the renderer (webUtils), so
     // the daemon's reserved-path check on every import is the authority.
     capture: async (input) =>
-      (await runApplicationEffect(runtime, host.captureImports(input))).references,
+      (
+        await runApplicationEffect(
+          runtime,
+          host.captureImports(input).pipe(Effect.mapError(toWireError)),
+        )
+      ).references,
     // Releasing never starts a daemon: references of one that is not running expire on their own.
     release: async (input) => {
       const running = daemon.isRunning() ? local.peek()?.workspace : null;
-      if (running) await runApplicationEffect(runtime, running.releaseImports(input));
+      if (running)
+        await runApplicationEffect(
+          runtime,
+          running.releaseImports(input).pipe(Effect.mapError(toWireError)),
+        );
     },
   });
   const editorSession = new EditorSession(

@@ -1,6 +1,7 @@
 import type { NativeTranscriptActions } from './transcript-native.ts';
+import { toWireError } from '@moonbase/contracts/workspace-host-errors';
 import { randomUUID } from 'node:crypto';
-import type { Effect, ManagedRuntime } from 'effect';
+import { Effect, type ManagedRuntime } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatClient } from '@moonbase/contracts/chat';
@@ -200,7 +201,9 @@ export function createChatBackends({
         await run(backend.folders.checkApprovedFolder({ host: backend.session.host, path: root }));
         const created = await runApplicationEffect(
           runtime,
-          backend.workspace.createChatWorktree({ installationId, requestId, root, branch }),
+          backend.workspace
+            .createChatWorktree({ installationId, requestId, root, branch })
+            .pipe(Effect.mapError(toWireError)),
           { signal: creation.signal },
         );
         // A replaced document's worktree is left on disk but not offered to the new document.
@@ -227,11 +230,13 @@ export function createChatBackends({
         JSON.stringify(['turnChatIntoProject', conversationId]),
         (requestId) =>
           run(
-            backend.workspace.turnChatIntoProject({
-              installationId,
-              requestId,
-              target: { ...backend.session, conversationId },
-            }),
+            backend.workspace
+              .turnChatIntoProject({
+                installationId,
+                requestId,
+                target: { ...backend.session, conversationId },
+              })
+              .pipe(Effect.mapError(toWireError)),
           ),
       );
       if (owner !== documentId)
