@@ -16,9 +16,10 @@ Data may be lost between versions while Moonbase is prerelease: a change can sta
 
 ## Files and folders
 
-- Start flat. When a few files belong to one thing and are used together, group them in a folder named for it (`renderer/chat/transcript/`, `workbench/src/editor/files-tree/`). Don't add generic folders like `utils/` or `logic/`.
+- Start flat. When a few files belong to one thing and are used together, group them in a folder named for it (`renderer/chat/transcript/`, `workbench/src/files-tree/`). Don't add generic folders like `utils/` or `logic/`.
 - Code that runs in different processes gets a folder per process: desktop `main/`, `preload/` and `renderer/`, with the IPC contract they share in `ipc/`; workspace `host/` and `client/`, with what they share at `src/`.
 - Desktop tests: unit tests in `test/`, Playwright specs in `test/e2e/`, harnesses and faux processes in `test/fixtures/`.
+- Test helpers: `x-fixture.ts` for shared setup, `faux-x` for a fake process or provider, `x-process.ts` for a script a test spawns.
 
 ## Effect
 
