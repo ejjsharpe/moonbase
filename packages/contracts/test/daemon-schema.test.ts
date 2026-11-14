@@ -12,7 +12,7 @@ import {
 } from '../src/daemon-schema.ts';
 import { readProviderSignInUrl } from '../src/providers-schema.ts';
 import * as Schema from 'effect/Schema';
-import { LocalHostRpcErrorSchema } from '../src/daemon-rpc.ts';
+import { folderReadErrors } from '../src/daemon-rpc.ts';
 import { FolderRefusedError } from '../src/folder-errors.ts';
 import { decodeConnectionProfile } from '../src/connection-schema.ts';
 import { chatHostCapabilities, chatProtocolVersion } from '../src/host.ts';
@@ -116,8 +116,9 @@ test('health accepts the current protocol with daemon capabilities and refuses a
 });
 
 test('a daemon error crosses the wire as its tag and fields only, and decodes to its own text', () => {
-  const encode = Schema.encodeSync(LocalHostRpcErrorSchema),
-    decode = Schema.decodeUnknownSync(LocalHostRpcErrorSchema, { onExcessProperty: 'error' });
+  const schema = Schema.Union(folderReadErrors);
+  const encode = Schema.encodeSync(schema),
+    decode = Schema.decodeUnknownSync(schema, { onExcessProperty: 'error' });
   const error = Object.assign(new FolderRefusedError({ refusal: 'not-approved', use: 'search' }), {
     cause: '/private/path',
   });

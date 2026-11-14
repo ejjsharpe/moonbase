@@ -1,8 +1,11 @@
 import type { ConversationId, Harness as HarnessType } from '@earendil-works/pi-durable';
 import type { ChatInput, ChatStopTarget } from '@moonbase/contracts/chat';
 import type { FolderApprovals } from '@moonbase/contracts/daemon';
-import { FolderMissingError, FolderRefusedError } from '@moonbase/contracts/folder-errors';
-import { ChatStoreError } from '@moonbase/contracts/chat-errors';
+import {
+  FolderMissingError,
+  FolderRefusedError,
+  FoldersUnavailableError,
+} from '@moonbase/contracts/folder-errors';
 import { ProviderSetupRefusedError } from '@moonbase/contracts/provider-errors';
 import { HostKeyExposedError } from '@moonbase/contracts/host-errors';
 import { UncertainError } from '@moonbase/contracts/errors';
@@ -226,7 +229,8 @@ test('a handler failure reaches the client as a fixed failure that carries none 
   f.afterDispatch = async () => {
     throw new UncertainError({ operation: secret });
   };
-  await assert.rejects(f.remote.command('listChats', { session }), (error: unknown) => {
+  const create = { session, requestId: 'outcome', title: 'Outcome', settings: f.settings };
+  await assert.rejects(f.remote.command('createChat', create), (error: unknown) => {
     assert(ApplicationError.is(error));
     assert.equal(error.code, 'Uncertain');
     assert(!JSON.stringify(error).includes(secret) && !error.message.includes(secret));
@@ -991,11 +995,11 @@ test('a refused daemon mutation may be sent again; one that may have applied is 
   assert.deepEqual(f.dispatched.slice(before), ['approveFolder', 'approveFolder']);
   // A failure after the daemon applied the request answers its repeat without running it.
   f.afterDispatch = async () => {
-    throw new ChatStoreError({ problem: 'failed' });
+    throw new FoldersUnavailableError();
   };
-  assert.deepEqual(await approve('applied'), { tag: 'ChatStoreError' });
+  assert.deepEqual(await approve('applied'), { tag: 'FoldersUnavailableError' });
   f.afterDispatch = undefined;
-  assert.deepEqual(await approve('applied'), { tag: 'ChatStoreError' });
+  assert.deepEqual(await approve('applied'), { tag: 'FoldersUnavailableError' });
   assert.deepEqual(f.dispatched.slice(before), ['approveFolder', 'approveFolder', 'approveFolder']);
 });
 

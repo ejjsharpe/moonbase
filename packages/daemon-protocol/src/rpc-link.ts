@@ -14,15 +14,16 @@ import {
 } from 'effect';
 import { RpcClient, RpcSerialization } from 'effect/rpc';
 import * as Socket from 'effect/socket/Socket';
-import { ChatRpcs, chatRpcErrors } from '@moonbase/contracts/chat-rpc';
+import { ChatRpcs, chatErrorSchemaOf } from '@moonbase/contracts/chat-rpc';
 import {
   LocalHostRpcs,
   ProviderSetupRpcs,
-  localHostRpcErrors,
-  providerSetupRpcErrors,
+  daemonErrorSchemas,
 } from '@moonbase/contracts/daemon-rpc';
 import { ConnectionError, HostVerificationError } from '@moonbase/contracts/connection-errors';
-import { InvalidChatRequestError } from '@moonbase/contracts/chat-errors';
+import { InvalidChatRequestError, type ChatError } from '@moonbase/contracts/chat-errors';
+import type { FolderError } from '@moonbase/contracts/folder-errors';
+import type { ProviderSetupError } from '@moonbase/contracts/provider-errors';
 import {
   ApplicationError,
   CancelledError,
@@ -33,6 +34,7 @@ import {
   HostUnavailableError,
   IncompatibleHostError,
   type DaemonLinkError,
+  type hostErrors,
 } from '@moonbase/contracts/host-errors';
 import {
   chatHostCapabilities,
@@ -67,13 +69,26 @@ type Generation = {
   alive: boolean;
 };
 
+type ErrorClass = abstract new (...args: never) => unknown;
 /** The errors a daemon's procedures declare: the only failures a client takes from it. */
 const remoteErrors = [
-  ...new Set([...chatRpcErrors, ...localHostRpcErrors, ...providerSetupRpcErrors]),
+  ...new Set(
+    [
+      chatErrorSchemaOf('getChat'),
+      chatErrorSchemaOf('findChatFiles'),
+      chatErrorSchemaOf('sendChat'),
+      chatErrorSchemaOf('getChatSend'),
+      ...Object.values(daemonErrorSchemas),
+    ].flatMap((union) => union.members as readonly ErrorClass[]),
+  ),
 ];
-/** What a service over the link fails with: a daemon's errors as presented, or the link's own. */
-export type RemoteError = InstanceType<(typeof remoteErrors)[number]>;
-const isOneOf = (errors: readonly (abstract new (...args: never) => unknown)[], error: unknown) => {
+/** An error a daemon's procedures declare, as the client presents it. */
+export type RemoteError =
+  | ChatError
+  | FolderError
+  | ProviderSetupError
+  | InstanceType<(typeof hostErrors)[number]>;
+const isOneOf = (errors: readonly ErrorClass[], error: unknown) => {
   try {
     return errors.some((member) => error instanceof member);
   } catch {

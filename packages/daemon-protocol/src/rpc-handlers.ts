@@ -29,8 +29,8 @@ import {
   IncompatibleHostError,
   RequestReusedError,
 } from '@moonbase/contracts/host-errors';
-import { chatRpcErrors } from '@moonbase/contracts/chat-rpc';
-import { localHostRpcErrors, providerSetupRpcErrors } from '@moonbase/contracts/daemon-rpc';
+import { chatErrorSchemaOf } from '@moonbase/contracts/chat-rpc';
+import { daemonErrorSchemas } from '@moonbase/contracts/daemon-rpc';
 import {
   ChatAccessError,
   ChatBusyError,
@@ -60,17 +60,18 @@ const forHost = (services: RpcServices, host: ChatHostTarget, operation: string)
  * sent as it is (its tag and fields, never a cause); anything else is the host's own failure.
  */
 const toWire =
-  (errors: readonly (abstract new (...args: never) => unknown)[]) => (error: unknown) => {
+  (union: { members: readonly unknown[] }) =>
+  (error: unknown): unknown => {
     try {
-      if (errors.some((member) => error instanceof member)) return error as never;
+      if (union.members.some((member) => error instanceof (member as abstract new () => unknown)))
+        return error;
     } catch {
       // A value whose prototype can't be read is no error of ours.
     }
     return new HostUnavailableError({ reason: 'failed' });
   };
-const toChatWire = toWire(chatRpcErrors),
-  toLocalHostWire = toWire(localHostRpcErrors),
-  toProviderSetupWire = toWire(providerSetupRpcErrors);
+const toChatWire = (operation: Parameters<typeof chatErrorSchemaOf>[0]) =>
+  toWire(chatErrorSchemaOf(operation));
 
 /** A watch's update: a whole value, or a delta from the last one sent. */
 export type Update<K extends SocketSubscriptionKind> =
@@ -111,7 +112,7 @@ export function makeChatHandlers(services: RpcServices) {
     watchChat: ({ host, target }: { host: ChatHostTarget; target: never }) =>
       Stream.unwrap(
         Effect.as(forHost(services, host, 'watchChat'), toUpdates('chat', chat.watch({ target }))),
-      ).pipe(Stream.mapError(toChatWire)),
+      ).pipe(Stream.mapError(toChatWire('watchChat'))),
     watchChatList: ({ host, session }: { host: ChatHostTarget; session: never }) =>
       Stream.unwrap(
         Effect.as(
@@ -127,7 +128,7 @@ export function makeChatHandlers(services: RpcServices) {
             ),
           ),
         ),
-      ).pipe(Stream.mapError(toChatWire)),
+      ).pipe(Stream.mapError(toChatWire('watchChatList'))),
   };
   for (const operation of Object.keys(chatInputSchemas) as ChatCommand[]) {
     handlers[operation] = ({ host, input }: { host: ChatHostTarget; input: never }) => {
@@ -136,7 +137,7 @@ export function makeChatHandlers(services: RpcServices) {
         Effect.suspend(() =>
           (chat[operation] as unknown as (input: never) => Effect.Effect<unknown, unknown>)(input),
         ),
-      ).pipe(Effect.mapError(toChatWire));
+      ).pipe(Effect.mapError(toChatWire(operation)));
       return isCancellableChatRead(operation) ? run : Rpc.uninterruptible(run);
     };
   }
@@ -182,8 +183,8 @@ export function makeDaemonHandlers(services: RpcServices) {
         ? Effect.void
         : Effect.fail(notServed()),
     );
-    const toWireError = operation in localHostInputSchemas ? toLocalHostWire : toProviderSetupWire;
-    const run = () => Effect.suspend(service).pipe(Effect.mapError(toWireError));
+    const run = () =>
+      Effect.suspend(service).pipe(Effect.mapError(toWire(daemonErrorSchemas[operation])));
     if (!isDaemonMutation(operation)) return Effect.andThen(checked, run());
     return Rpc.uninterruptible(
       Effect.andThen(
@@ -292,7 +293,7 @@ export function makeDaemonHandlers(services: RpcServices) {
           ),
           toUpdates('providerSetup', daemon.providers.watch(ownerId)),
         ),
-      ).pipe(Stream.mapError(toProviderSetupWire)),
+      ).pipe(Stream.mapError(toWire(daemonErrorSchemas.watchProviderSetup))),
   };
   return { local: local as never, providers: providers as never };
 }

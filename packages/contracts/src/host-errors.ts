@@ -1,5 +1,5 @@
 import * as Schema from 'effect/Schema';
-import { UnauthorizedError, UncertainError } from './errors.ts';
+import { UnauthorizedError, type UncertainError } from './errors.ts';
 import type { ConnectionFailure } from './connection-errors.ts';
 
 // What a chat host (the daemon) and the clients of its RPC link fail with, apart from what each of
@@ -72,16 +72,17 @@ export class RequestReusedError extends Schema.TaggedError<RequestReusedError>()
   }
 }
 
-/** The error classes a host's RPC procedures share, whatever service answers them. */
-export const hostErrors = [
-  HostUnavailableError,
-  IncompatibleHostError,
-  RequestReusedError,
-  UnauthorizedError,
-  UncertainError,
-] as const;
+/**
+ * What any RPC procedure of a host can fail with, whatever service answers it: a refused admission
+ * or a failed handler, a request for another host, an operation the host does not serve.
+ */
+export const hostErrors = [HostUnavailableError, UnauthorizedError, IncompatibleHostError] as const;
 /**
  * What a service reached over a daemon link fails with besides its own errors: the host's shared
- * errors, and the link's connection failures.
+ * errors, a mutation whose reply was lost, and the link's connection failures.
  */
-export type DaemonLinkError = InstanceType<(typeof hostErrors)[number]> | ConnectionFailure;
+export type DaemonLinkError =
+  | InstanceType<(typeof hostErrors)[number]>
+  | UncertainError
+  | RequestReusedError
+  | ConnectionFailure;
