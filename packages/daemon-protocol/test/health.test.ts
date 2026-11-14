@@ -4,7 +4,11 @@ import { once } from 'node:events';
 import { createServer, type RequestListener } from 'node:http';
 import { test, type TestContext } from 'node:test';
 import { Cause, Effect, Exit } from 'effect';
-import { ApplicationError, type ApplicationErrorCode } from '@moonbase/contracts/errors';
+import type { ApplicationErrorCode } from '@moonbase/contracts/errors';
+import {
+  HostVerificationError,
+  toConnectionApplicationError,
+} from '@moonbase/contracts/connection-errors';
 import {
   chatHostVersion,
   chatProtocolVersion,
@@ -15,7 +19,7 @@ import {
   createHostHealthReply,
   type ChatHostEndpoint,
   type HostHealthReply,
-} from '../src/host-health.ts';
+} from '../src/health.ts';
 
 const expected = { hostId: 'host-a', storeId: 'store-a' };
 const health: ChatHostHealth = {
@@ -40,6 +44,9 @@ async function endpoint(t: TestContext, handler: RequestListener): Promise<ChatH
   assert(address && typeof address !== 'string');
   return { origin: `http://127.0.0.1:${address.port}`, token, expected };
 }
+/** A `HostVerificationError` whose legacy code is `code`. */
+const refused = (code: ApplicationErrorCode) => (error: unknown) =>
+  error instanceof HostVerificationError && toConnectionApplicationError(error).code === code;
 async function fails(input: ChatHostEndpoint, code: ApplicationErrorCode) {
   const result = await Effect.runPromiseExit(checkHostHealth(input));
   assert(Exit.isFailure(result), 'health must fail');
@@ -48,10 +55,7 @@ async function fails(input: ChatHostEndpoint, code: ApplicationErrorCode) {
     if (Cause.isDieReason(reason)) return [reason.defect];
     return [];
   });
-  assert(
-    failures.some((error) => ApplicationError.is(error) && error.code === code),
-    `expected ${code}`,
-  );
+  assert(failures.some(refused(code)), `expected ${code}`);
 }
 
 test('health authenticates the loopback request and retains the exact configured identity', async (t) => {
@@ -133,7 +137,7 @@ test('the server health helper rejects an unproved client without returning a si
   ]) {
     assert.throws(
       () => createHostHealthReply({ token, health, nonce: 'A'.repeat(43), authorization }),
-      (error) => ApplicationError.is(error) && error.code === 'Unauthorized',
+      refused('Unauthorized'),
     );
   }
 });
@@ -284,7 +288,7 @@ test('health proofs under the protocol 1 domain are refused both ways, and capab
         nonce,
         authorization: `Moonbase-HMAC-SHA256 ${oldProof('request', nonce)}`,
       }),
-    { code: 'Unauthorized' },
+    refused('Unauthorized'),
   );
   const daemonHealth = {
     ...health,

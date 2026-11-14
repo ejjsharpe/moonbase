@@ -26,7 +26,7 @@ import {
   chatProtocolVersion,
   type ChatHostHealth,
 } from '@moonbase/contracts/host';
-import { checkHostHealth, healthDomain } from '@moonbase/ssh/host-health';
+import { checkHostHealth, healthDomain } from '../src/health.ts';
 import {
   localDaemonCapabilities,
   makeWorkspaceClient,
@@ -411,7 +411,7 @@ test('one connection serves requests and chat, chat-list and provider subscripti
   assert.deepEqual(failures, []);
 });
 
-test('the handshake and every authenticated frame refuse forgery, replay, reordering and oversize without disclosure', async (t) => {
+test('the handshake and every authenticated frame refuse forgery, replay, reordering, oversize and invalid input without disclosure', async (t) => {
   const source = controlledClient(),
     clock = manualClock();
   const { token, port } = await serve(t, source.client, { clock });
@@ -451,6 +451,24 @@ test('the handshake and every authenticated frame refuse forgery, replay, reorde
       JSON.parse(Buffer.from(large.data as string, 'base64').toString()).error.code,
       'InvalidInput',
     );
+    // Wire input is decoded here, once: a chat or daemon input outside its schema never reaches
+    // the service, which trusts what it is given.
+    const served = source.calls.length;
+    for (const [seq, operation, input] of [
+      [3, 'sendChat', { target, requestId: 'invalid', text: '\0' }],
+      [4, 'getProviders', { host, ownerId: 'owner', future: true }],
+    ] as const) {
+      raw.send(
+        sealSocketMessage(keys.client, { type: 'request', seq, id: `r${seq}`, operation, input }),
+      );
+      const refused = await readSealed(raw, keys);
+      assert(refused !== 'closed' && refused !== 'timeout');
+      assert.equal(
+        JSON.parse(Buffer.from(refused.data as string, 'base64').toString()).error.code,
+        'InvalidInput',
+      );
+    }
+    assert.equal(source.calls.length, served);
     raw.socket.destroy();
   }
   const dispatched = source.calls.length;

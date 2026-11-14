@@ -29,10 +29,7 @@ const packages = new Map([
     '@moonbase/daemon-protocol',
     { directory: 'packages/daemon-protocol', exports: { './remote': './src/remote.ts' } },
   ],
-  [
-    '@moonbase/ssh',
-    { directory: 'packages/ssh', exports: { './host-health': './src/host-health.ts' } },
-  ],
+  ['@moonbase/ssh', { directory: 'packages/ssh', exports: { '.': './src/index.ts' } }],
   ['@moonbase/effect', { directory: 'packages/effect', exports: { '.': './src/index.ts' } }],
 ]);
 function check(sources) {
@@ -153,19 +150,11 @@ assert(
     'packages/application/src/index.ts': '',
   }).some((error) => error.includes('reusable infrastructure')),
 );
-assert.deepEqual(
-  check({
-    'packages/chat-runtime/src/index.ts': "import '@moonbase/ssh/host-health';",
-    'packages/ssh/src/host-health.ts':
-      "import '@moonbase/contracts'; import '@moonbase/effect'; import 'node:crypto';",
-    'packages/contracts/src/index.ts': '',
-    'packages/effect/src/application-error.ts': "import '@moonbase/contracts';",
-  }),
-  [],
-);
 for (const [path, specifier] of [
   ['packages/daemon-protocol/src/remote.ts', '@moonbase/chat-runtime'],
   ['packages/chat-runtime/src/index.ts', '@moonbase/daemon-protocol/remote'],
+  ['packages/ssh/src/index.ts', '@moonbase/daemon-protocol/remote'],
+  ['packages/daemon-protocol/src/remote.ts', '@moonbase/ssh'],
 ])
   assert(
     check({ [path]: `import type {} from '${specifier}';` }).some((error) =>
@@ -173,12 +162,6 @@ for (const [path, specifier] of [
     ),
     `${path} -> ${specifier}`,
   );
-assert(
-  check({
-    'packages/ssh/src/host-health.ts': "import type {} from './process.ts';",
-    'packages/ssh/src/process.ts': '',
-  }).some((error) => error.includes('named authentication helper reaches implementation')),
-);
 assert(
   check({
     'packages/contracts/src/index.ts': "import '@moonbase/effect';",

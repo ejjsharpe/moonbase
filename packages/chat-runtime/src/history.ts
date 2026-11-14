@@ -25,7 +25,8 @@ import { Metadata, cid, eid, getSettings, type ChatSettings } from './documents.
 import { checkCursor, previewText } from './text.ts';
 import { readObject } from '@moonbase/contracts/common';
 import { fail } from '@moonbase/contracts/errors';
-import * as S from './schema.ts';
+import { decodeHistoryCursor } from './cursors.ts';
+import { decodeStoredMetadata } from './stored-records.ts';
 import {
   NestedSourceRetired,
   captureTranscript,
@@ -68,7 +69,7 @@ const readCursor = (
 ): Cursor | undefined => {
   if (value === undefined) return undefined;
   try {
-    const decoded = S.cursorEnvelope(
+    const decoded = decodeHistoryCursor(
       JSON.parse(
         new TextDecoder('utf8', { fatal: true }).decode(
           Buffer.from(checkCursor(value), 'base64url'),
@@ -140,7 +141,7 @@ export async function readListedConversation(
 ): Promise<ChatSummary | undefined> {
   const meta = await harness.snapshot(Metadata, cid(conversationId), 'metadata', context);
   if (meta?.identity !== identity) return undefined;
-  const saved = S.savedMetadata(meta);
+  const saved = decodeStoredMetadata(meta);
   return {
     ...summarizeConversation(session, conversationId, saved, getSettings(saved)),
     activity: await readActivity(harness, conversationId, saved.createdAt),

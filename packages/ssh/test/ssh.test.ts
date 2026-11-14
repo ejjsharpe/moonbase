@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, mock } from 'node:test';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { createServer as httpServer } from 'node:http';
 import { createServer as tcpServer, type AddressInfo } from 'node:net';
 import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -12,12 +12,27 @@ import { Effect, ManagedRuntime, Queue } from 'effect';
 import { ApplicationError, type ObservationClose } from '@moonbase/contracts/workspace';
 import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { chatHostVersion, chatProtocolVersion } from '@moonbase/contracts/host';
-import { createHostHealthReply } from '@moonbase/ssh/host-health';
+import {
+  ConnectionError,
+  HostVerificationError,
+  toConnectionApplicationError,
+} from '@moonbase/contracts/connection-errors';
+import { CancelledError } from '@moonbase/contracts/errors';
+import type { ChatHostEndpoint } from '@moonbase/contracts/services';
+import type { ChatHostHealth } from '@moonbase/contracts/host';
 import { ConnectionService } from '@moonbase/contracts/services';
 import { makeConnectionClient } from '@moonbase/application/runtime/clients';
 import { SshLive, type SshConfiguration, type SshOptions } from '@moonbase/ssh';
-const failure = (code: ApplicationError['code']) => (e: unknown) =>
-  ApplicationError.is(e) && e.code === code;
+/** An error with the legacy code `code`, as clients see it. */
+const failure = (code: ApplicationError['code']) => (e: unknown) => {
+  const error =
+    e instanceof ConnectionError ||
+    e instanceof HostVerificationError ||
+    e instanceof CancelledError
+      ? toConnectionApplicationError(e)
+      : e;
+  return ApplicationError.is(error) && error.code === code;
+};
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 10));
 async function until(
   check: () => boolean | Promise<boolean>,
@@ -64,7 +79,38 @@ async function free(port: number) {
   });
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
-async function fixture(mode = 'normal', healthMode = 'valid', options: SshOptions = {}) {
+/**
+ * A stand-in for the protocol's health check, which the consumer injects: it reads the forwarded
+ * health route and checks only the identity, so these tests cover forwarding, not the protocol.
+ */
+const verify: SshOptions['verify'] = (endpoint: ChatHostEndpoint) =>
+  Effect.tryPromise({
+    try: async (signal) => {
+      // Like the real check, each attempt has its own short deadline.
+      const attempt = AbortSignal.any([signal, AbortSignal.timeout(50)]);
+      const response = await fetch(`${endpoint.origin}/v1/health`, { signal: attempt }).catch(
+        () => {
+          throw new HostVerificationError({ reason: 'unreachable' });
+        },
+      );
+      if (response.status === 401) throw new HostVerificationError({ reason: 'rejected' });
+      const value = (await response.json().catch(() => {
+        throw new HostVerificationError({ reason: 'read-failed' });
+      })) as ChatHostHealth;
+      if (value.hostId !== endpoint.expected.hostId || value.storeId !== endpoint.expected.storeId)
+        throw new HostVerificationError({ reason: 'identity' });
+      return value;
+    },
+    catch: (error) =>
+      error instanceof HostVerificationError
+        ? error
+        : new HostVerificationError({ reason: 'unreachable' }),
+  });
+async function fixture(
+  mode = 'normal',
+  healthMode = 'valid',
+  options: Omit<SshOptions, 'verify'> = {},
+) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-ssh-'))),
     key = randomBytes(32).toString('base64url'),
     log = join(base, 'children.jsonl'),
@@ -78,25 +124,21 @@ async function fixture(mode = 'normal', healthMode = 'valid', options: SshOption
       res.write('{');
       return;
     }
-    try {
-      const body = createHostHealthReply({
-        token: healthMode === 'auth' ? 'different-synthetic-host-key' : key,
-        nonce: req.headers['x-moonbase-nonce'] as string,
-        authorization: req.headers.authorization,
-        health: {
-          hostId: healthMode === 'identity' ? 'other-host' : expected.hostId,
-          storeId: healthMode === 'store' ? 'other-store' : expected.storeId,
-          protocol: chatProtocolVersion,
-          version: chatHostVersion,
-          capabilities: ['chat-v0'],
-        },
-      });
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(healthMode === 'version' ? { ...body, version: '99.0.0' } : body));
-    } catch {
+    if (healthMode === 'auth') {
       res.writeHead(401);
       res.end();
+      return;
     }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        hostId: healthMode === 'identity' ? 'other-host' : expected.hostId,
+        storeId: expected.storeId,
+        protocol: chatProtocolVersion,
+        version: chatHostVersion,
+        capabilities: ['chat-v0'],
+      }),
+    );
   });
   await new Promise<void>((resolve) => health.listen(0, '127.0.0.1', resolve));
   const remotePort = (health.address() as AddressInfo).port;
@@ -123,7 +165,7 @@ async function fixture(mode = 'normal', healthMode = 'valid', options: SshOption
   };
   const config = { profile, token: key, sshExecutable: executable };
   const start = (configuration: SshConfiguration = config) => {
-    const runtime = ManagedRuntime.make(SshLive(configuration, options));
+    const runtime = ManagedRuntime.make(SshLive(configuration, { verify, ...options }));
     return { runtime, client: makeConnectionClient(runtime) };
   };
   const current = start();
@@ -308,8 +350,6 @@ test('observation unsubscribe is not disconnect; generation exit fails visibly a
 for (const [mode, code] of [
   ['auth', 'Unauthorized'],
   ['identity', 'Incompatible'],
-  ['store', 'Incompatible'],
-  ['version', 'Incompatible'],
 ] as const)
   test('forwarded health rejects ' + mode + ' without publishing a private endpoint', async () => {
     const f = await fixture('normal', mode);
@@ -367,65 +407,13 @@ for (const [mode, diagnostic, code] of [
     },
   );
 
-test('private config is projected explicitly and invalid commands/config cannot spawn or select a target', async () => {
+test('a command for another profile or host cannot spawn or select a target', async () => {
   const f = await fixture();
-  const extra = {
-    ...f.config,
-    profile: {
-      ...f.profile,
-      token: f.key,
-      origin: 'http://127.0.0.1:9999',
-      expected: { ...f.profile.expected, token: f.key },
-    },
-  };
-  const other = f.start(extra);
   try {
-    assert.deepEqual((await other.client.command('getConnection', {})).profile, f.profile);
-    for (const bad of [
-      { ...f.config, token: 'short' },
-      { ...f.config, profile: { ...f.profile, destination: '-oProxyCommand=bad' } },
-      { ...f.config, profile: { ...f.profile, remotePort: 0 } },
-      { ...f.config, profile: { ...f.profile, label: f.key } },
-      { ...f.config, sshExecutable: 'relative' },
-    ]) {
-      const invalid = f.start(bad);
-      try {
-        await assert.rejects(invalid.client.command('getConnection', {}), failure('InvalidInput'));
-      } finally {
-        await invalid.runtime.dispose();
-      }
-    }
-    await assert.rejects(
-      f.client.command('getConnection', { token: f.key } as never),
-      failure('InvalidInput'),
-    );
     await assert.rejects(
       f.client.command('connect', { profileId: 'other' }),
       failure('InvalidInput'),
     );
-    for (const [operation, input] of [
-      ['getConnection', null],
-      ['getConnection', []],
-      ['connect', {}],
-      ['connect', { profileId: 'configured', destination: f.profile.destination }],
-      ['connect', { profileId: f.key + ' invalid' }],
-      ['disconnect', {}],
-      ['disconnect', { connectionId: 'valid', token: f.key }],
-      ['disconnect', { connectionId: 'line\n' }],
-    ] as const)
-      await assert.rejects(
-        f.client.command(operation, input as never),
-        (error) => failure('InvalidInput')(error) && !JSON.stringify(error).includes(f.key),
-      );
-    for (const input of [
-      { host: { ...f.profile.expected, token: f.key } },
-      { host: f.profile.expected, origin: 'http://127.0.0.1:9999' },
-      { host: { ...f.profile.expected, hostId: 'line\n' } },
-    ])
-      await assert.rejects(
-        f.runtime.runPromise(Effect.flatMap(ConnectionService, (s) => s.endpoint(input))),
-        failure('InvalidInput'),
-      );
     await assert.rejects(
       f.runtime.runPromise(
         Effect.flatMap(ConnectionService, (s) =>
@@ -443,7 +431,6 @@ test('private config is projected explicitly and invalid commands/config cannot 
     );
     assert.equal(f.spawned().length, 0);
   } finally {
-    await other.runtime.dispose();
     await f.close();
   }
 });
@@ -679,64 +666,19 @@ test('disconnect and root disposal during startup release the pending generation
   }
 });
 
-test('a stalled forwarded health response hits the startup deadline and releases the reader, child and port', async () => {
-  const f = await fixture('normal', 'stall', { startupMs: 500 });
+test('a stalled forwarded health response is read again until the startup deadline, then releases the reader, child and port', async () => {
+  const f = await fixture('normal', 'stall', { startupMs: 2000 });
   try {
     await assert.rejects(
       f.client.command('connect', { profileId: 'configured' }),
       (e) => failure('Unavailable')(e) && /startup deadline/.test((e as ApplicationError).message),
     );
+    // Each read that timed out (`read-failed`) was tried again.
+    assert(f.requests.length > 1);
     assert.equal((await f.client.command('getConnection', {})).state, 'failed');
     await assert.rejects(f.endpoint(), failure('Unavailable'));
     await until(() => f.spawned().every((child) => !alive(child.pid)));
     for (const port of f.ports()) await free(port);
-  } finally {
-    await f.close();
-  }
-});
-
-test('runnable consumer composition root uses the public package and never prints its private configuration', async () => {
-  const f = await fixture(),
-    configuration = join(f.base, 'private-config.json');
-  const execute = () =>
-    new Promise<{ error: Error | null; stdout: string; stderr: string }>((resolve) => {
-      execFile(
-        process.execPath,
-        [
-          '--experimental-strip-types',
-          fileURLToPath(new URL('../examples/connect.ts', import.meta.url)),
-          configuration,
-        ],
-        { timeout: 10000 },
-        (error, stdout, stderr) => resolve({ error, stdout, stderr }),
-      );
-    });
-  try {
-    writeFileSync(configuration, JSON.stringify(f.config), { mode: 0o600 });
-    const good = await execute();
-    assert.equal(good.error, null);
-    assert(good.stdout.includes('"profile"'));
-    assert(!good.stdout.includes(f.key));
-    assert(!good.stderr.includes(f.key));
-    assert(!good.stdout.includes('http://127.0.0.1:'));
-    assert.equal(f.forwards().length, 1);
-    assert(f.spawned().every((child) => !alive(child.pid)));
-    writeFileSync(
-      configuration,
-      JSON.stringify({ ...f.config, sshExecutable: 'relative/' + f.key }),
-    );
-    const invalid = await execute();
-    assert(invalid.error);
-    assert.match(invalid.stderr, /Could not read the private connection configuration JSON/);
-    assert(!invalid.stderr.includes(f.key));
-    assert(!invalid.stderr.includes(f.base));
-    assert.equal(f.forwards().length, 1);
-    writeFileSync(configuration, '{ malformed private JSON ' + f.key);
-    const bad = await execute();
-    assert(bad.error);
-    assert.match(bad.stderr, /Could not read the private connection configuration JSON/);
-    assert(!bad.stderr.includes(f.key));
-    assert.equal(f.forwards().length, 1);
   } finally {
     await f.close();
   }

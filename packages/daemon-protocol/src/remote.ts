@@ -29,7 +29,7 @@ import type {
   LocalHostCommand,
   LocalHostInput,
 } from '@moonbase/contracts/daemon';
-import { decodeDaemonInput, isDaemonMutation } from '@moonbase/contracts/daemon-schema';
+import { isDaemonMutation } from '@moonbase/contracts/daemon-schema';
 import { decodeChatHostTarget } from '@moonbase/contracts/host-schema';
 import type { HostCommand, HostInput, HostOutput } from '@moonbase/contracts/workspace-host';
 import {
@@ -40,20 +40,16 @@ import {
   isHostMutation,
 } from '@moonbase/contracts/workspace-host-schema';
 import { socketLimits } from '@moonbase/contracts/socket';
+import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
 import type { ProviderCommand, ProviderInput, ProviderState } from '@moonbase/contracts/providers';
-import { decodeProviderInput, readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
+import { readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
 import type {
   SocketSubscriptionKind,
   SocketSubscriptionTarget,
   SocketSubscriptionValue,
 } from '@moonbase/contracts/socket';
 import * as P from './protocol.ts';
-import { decodeChatInput } from '@moonbase/contracts/chat-schema';
-import {
-  decodeChatTarget,
-  isChatMutation,
-  isSameChatHost,
-} from '@moonbase/contracts/chat-validation';
+import { isChatMutation, isSameChatHost } from '@moonbase/contracts/chat-validation';
 import { fail } from '@moonbase/contracts/errors';
 import {
   connectDaemonSocket,
@@ -148,6 +144,9 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
   DaemonLink,
   Effect.gen(function* () {
     const connections = yield* ConnectionService;
+    // A connection failure reaches chat, folder and provider callers as the legacy error.
+    const lookUpEndpoint = (host: ChatHostTarget) =>
+      connections.endpoint({ host }).pipe(Effect.mapError(toConnectionApplicationError));
     const clock = yield* DaemonLinkClock;
     const scope = yield* Effect.scope;
     const sleep = (ms: number) =>
@@ -193,7 +192,7 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
     };
     const acquire = (host: ChatHostTarget) =>
       Effect.gen(function* () {
-        const endpoint = yield* connections.endpoint({ host });
+        const endpoint = yield* lookUpEndpoint(host);
         const socket = yield* Effect.tryPromise({
           try: () => open(endpoint),
           catch: (error) =>
@@ -207,7 +206,7 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
         return { endpoint, socket };
       });
     const isCurrent = (host: ChatHostTarget, endpoint: VerifiedChatEndpoint) =>
-      Effect.map(Effect.exit(connections.endpoint({ host })), (now) =>
+      Effect.map(Effect.exit(lookUpEndpoint(host)), (now) =>
         Exit.isSuccess(now) ? sameEndpoint(now.value, endpoint) : false,
       );
 
@@ -222,7 +221,7 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
       sink: Sink<K>,
     ) =>
       Effect.gen(function* () {
-        const first = yield* connections.endpoint({ host });
+        const first = yield* lookUpEndpoint(host);
         const stale = Effect.flatMap(isCurrent(host, first), (same) =>
           same ? Effect.void : Effect.fail(generationChanged(false)),
         );
@@ -234,7 +233,12 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
             Effect.forkScoped,
           );
         // A connection publication fails the subscription once its generation is gone.
-        yield* failWith(connections.watch().pipe(Stream.runForEach(() => stale)));
+        yield* failWith(
+          connections.watch().pipe(
+            Stream.mapError(toConnectionApplicationError),
+            Stream.runForEach(() => stale),
+          ),
+        );
         let state: SocketSubscriptionState<K> | undefined,
           delivered = false,
           failures = 0;
@@ -466,13 +470,9 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
     const link = yield* DaemonLink;
     const call = <K extends ChatCommand>(
       operation: K,
-      unknown: ChatInput<K>,
+      input: ChatInput<K>,
     ): Effect.Effect<ChatOutput<K>, ApplicationError> =>
       Effect.gen(function* () {
-        const input = yield* Effect.try({
-          try: () => decodeChatInput(operation, unknown),
-          catch: normalizeApplicationError,
-        });
         const shape = input as {
           host?: ChatHostTarget;
           session?: { host: ChatHostTarget };
@@ -501,8 +501,6 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
           },
         )) as ChatOutput<K>;
       });
-    const validate = <A>(read: () => A) =>
-      Effect.try({ try: read, catch: normalizeApplicationError });
     return {
       getChatHost: (d) => call('getChatHost', d),
       listChats: (d) => call('listChats', d),
@@ -519,74 +517,54 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> 
       findChatFiles: (d) => call('findChatFiles', d),
       // While the connection is down the last snapshot is shown as reconnecting.
       watch: ({ target }) =>
-        Stream.unwrap(
-          Effect.map(
-            validate(() => decodeChatTarget(target)),
-            (checked) => {
-              let last: SocketSubscriptionValue<'chat'> | undefined;
-              return link.subscribe(checked.host, 'chat', checked).pipe(
-                Stream.filter((update) => !('reconnecting' in update) || last !== undefined),
-                Stream.map((update) => {
-                  if ('reconnecting' in update)
-                    return {
-                      ...last!,
-                      observationStatus: 'reconnecting' as const,
-                    };
-                  last = update.value;
-                  return {
-                    ...update.value,
-                    observationStatus: 'connected' as const,
-                  };
-                }),
-              );
-            },
-          ),
-        ),
+        Stream.suspend(() => {
+          let last: SocketSubscriptionValue<'chat'> | undefined;
+          return link.subscribe(target.host, 'chat', target).pipe(
+            Stream.filter((update) => !('reconnecting' in update) || last !== undefined),
+            Stream.map((update) => {
+              if ('reconnecting' in update)
+                return {
+                  ...last!,
+                  observationStatus: 'reconnecting' as const,
+                };
+              last = update.value;
+              return {
+                ...update.value,
+                observationStatus: 'connected' as const,
+              };
+            }),
+          );
+        }),
       watchChatList: ({ session }) =>
-        Stream.unwrap(
-          Effect.map(
-            validate(() => decodeChatInput('listChats', { session }).session),
-            (checked) =>
-              link.subscribe(checked.host, 'chatList', checked).pipe(
-                Stream.filter((update) => !('reconnecting' in update)),
-                Stream.map((update) => {
-                  const { value, reset } = update as Exclude<typeof update, { reconnecting: true }>;
-                  return { ...value, reset };
-                }),
-              ),
-          ),
+        link.subscribe(session.host, 'chatList', session).pipe(
+          Stream.filter((update) => !('reconnecting' in update)),
+          Stream.map((update) => {
+            const { value, reset } = update as Exclude<typeof update, { reconnecting: true }>;
+            return { ...value, reset };
+          }),
         ),
     } satisfies ChatServiceShape;
   }),
 ).pipe(Layer.provide(DaemonLinkLive));
 
 /**
- * Sends one daemon operation: decoded and bounded before it leaves, refused unless the daemon's
- * authenticated health advertises its capability, and its reply decoded strictly with any request
- * ID it carried echoed back.
+ * Sends one daemon operation: refused unless the daemon's authenticated health advertises its
+ * capability, and its reply decoded strictly with any request ID it carried echoed back.
  */
 function sendDaemonCommand<K extends DaemonCommand>(
   link: DaemonLink['Service'],
   operation: K,
-  unknown: DaemonInput<K>,
+  input: DaemonInput<K>,
   check?: (output: DaemonOutput<K>, input: DaemonInput<K>) => void,
 ): Effect.Effect<DaemonOutput<K>, ApplicationError> {
-  return Effect.flatMap(
-    Effect.try({
-      try: () => decodeDaemonInput(operation, unknown),
-      catch: normalizeApplicationError,
-    }),
-    (input) => {
-      const shape = input as { host?: ChatHostTarget; target?: ChatTarget };
-      return link.request(
-        shape.host ?? shape.target!.host,
-        operation,
-        input as never,
-        isDaemonMutation(operation),
-        check && ((output) => check(output as DaemonOutput<K>, input)),
-      ) as Effect.Effect<DaemonOutput<K>, ApplicationError>;
-    },
-  );
+  const shape = input as { host?: ChatHostTarget; target?: ChatTarget };
+  return link.request(
+    shape.host ?? shape.target!.host,
+    operation,
+    input as never,
+    isDaemonMutation(operation),
+    check && ((output) => check(output as DaemonOutput<K>, input)),
+  ) as Effect.Effect<DaemonOutput<K>, ApplicationError>;
 }
 
 /** A daemon's folder approvals and control, over an injected `ConnectionService`. */
@@ -639,7 +617,7 @@ export const RemoteProviderSetupLive = (
     ProviderSetupService,
     Effect.gen(function* () {
       const link = yield* DaemonLink;
-      const host = decodeChatHostTarget(config.host);
+      const host = config.host;
       // Which ChatGPT sign-in path applies depends on where the browser is, which only the client
       // knows; its OAuth flow is the one whose callback listens on the host.
       const present = (state: ProviderState): ProviderState =>
@@ -677,25 +655,18 @@ export const RemoteProviderSetupLive = (
       const forOwner = (ownerId: string): ProviderSetupHandlers => {
         const send = <K extends ProviderCommand & HostProviderCommand>(
           operation: K,
-          unknown: ProviderInput<K>,
+          input: ProviderInput<K>,
         ) =>
-          Effect.flatMap(
-            Effect.try({
-              try: () => decodeProviderInput(operation, unknown),
-              catch: normalizeApplicationError,
-            }),
-            (input) =>
-              sendDaemonCommand(
-                link,
-                operation,
-                {
-                  host,
-                  ownerId,
-                  ...(isDaemonMutation(operation) ? { requestId: randomUUID() } : {}),
-                  ...input,
-                } as DaemonInput<K>,
-                operation === 'openProviderUrl' ? (checkUrl as never) : undefined,
-              ),
+          sendDaemonCommand(
+            link,
+            operation,
+            {
+              host,
+              ownerId,
+              ...(isDaemonMutation(operation) ? { requestId: randomUUID() } : {}),
+              ...input,
+            } as DaemonInput<K>,
+            operation === 'openProviderUrl' ? (checkUrl as never) : undefined,
           );
         const state =
           <K extends ProviderCommand & HostProviderCommand>(operation: K) =>
@@ -720,18 +691,9 @@ export const RemoteProviderSetupLive = (
         releaseOwner: (ownerId) =>
           sendDaemonCommand(link, 'releaseProviderOwner', { host, ownerId }),
         watch: (ownerId) =>
-          Stream.unwrap(
-            Effect.map(
-              Effect.try({
-                try: () => decodeDaemonInput('getProviders', { host, ownerId }),
-                catch: normalizeApplicationError,
-              }),
-              (target) =>
-                link.subscribe(host, 'providerSetup', target).pipe(
-                  Stream.filter((update) => !('reconnecting' in update)),
-                  Stream.map((update) => present((update as { value: ProviderState }).value)),
-                ),
-            ),
+          link.subscribe(host, 'providerSetup', { host, ownerId }).pipe(
+            Stream.filter((update) => !('reconnecting' in update)),
+            Stream.map((update) => present((update as { value: ProviderState }).value)),
           ),
         getProviderUrl: (ownerId, flowId) =>
           Effect.map(

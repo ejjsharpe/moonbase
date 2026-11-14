@@ -7,11 +7,7 @@ type AuthPrompt = Parameters<Interaction['prompt']>[0];
 type AuthEvent = Parameters<Interaction['notify']>[0];
 import { ProviderSetupService, type ProviderSetupHandlers } from '@moonbase/contracts/services';
 import type { ProviderCommand, ProviderInput, ProviderState } from '@moonbase/contracts/providers';
-import {
-  decodeProviderInput,
-  decodeProviderOutput,
-  readProviderSignInUrl,
-} from '@moonbase/contracts/providers-schema';
+import { decodeProviderOutput, readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { daemonErrorReasons, type DaemonErrorReason } from '@moonbase/contracts/daemon';
 import type { ChatReasoningEffort } from '@moonbase/contracts/chat';
@@ -224,10 +220,9 @@ export const ProviderSetupLive = (
       const invoke = async <K extends ProviderCommand>(
         owner: string,
         operation: K,
-        input: ProviderInput<K>,
+        value: ProviderInput<K>,
       ): Promise<ProviderState> => {
         if (released.has(owner)) fail('owner-released');
-        const value = decodeProviderInput(operation, input);
         await sweepOwners(owner);
         let startedFlow: Flow | undefined;
         if (operation === 'startProviderLogin') {
@@ -396,6 +391,7 @@ export const ProviderSetupLive = (
         }
         if (operation !== 'getProviders' && operation !== 'openProviderUrl') changed();
         try {
+          // The state carries the provider SDK's catalog and sign-in prompts, which enter here.
           return decodeProviderOutput(operation, await getStatus(owner));
         } catch (error) {
           if (startedFlow) {
@@ -450,10 +446,9 @@ export const ProviderSetupLive = (
           Effect.tryPromise({
             try: async () => {
               if (released.has(owner)) fail('owner-released');
-              const { flowId: id } = decodeProviderInput('openProviderUrl', { flowId });
               // Reading the URL is use: the owner keeps its flow as when it polls.
               await sweepOwners(owner);
-              return getProviderUrl(owner, id);
+              return getProviderUrl(owner, flowId);
             },
             catch: (error) => (ApplicationError.is(error) ? error : unavailable()),
           }),

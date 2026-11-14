@@ -8,6 +8,7 @@ import { Context, Effect, Exit, Layer, Scope } from 'effect';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
 import type { ProviderState } from '@moonbase/contracts/providers';
 import type { ApplicationError } from '@moonbase/contracts/errors';
+import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
 import {
   ConnectionService,
   LocalHostService,
@@ -73,7 +74,11 @@ async function connectLoopback(directory: string) {
       };
     const service = Context.get(built.value, ConnectionService);
     const initial = await Effect.runPromise(service.getConnection({}));
-    const connected = await Effect.runPromiseExit(service.connect({ profileId: 'loopback' }));
+    const connected = await Effect.runPromiseExit(
+      service
+        .connect({ profileId: 'loopback' })
+        .pipe(Effect.mapError(toConnectionApplicationError)),
+    );
     const refused = describeExit(connected);
     if (refused !== 'ok')
       return {

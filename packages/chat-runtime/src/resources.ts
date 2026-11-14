@@ -6,12 +6,12 @@ import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
 import { Cause, Effect, Exit, FiberSet, Ref, Scope } from 'effect';
 import { releaseResource } from '@moonbase/effect';
-import type { ApplicationError } from '@moonbase/contracts/workspace';
+import { ApplicationError } from '@moonbase/contracts/workspace';
 import { Host, safeError } from './commands.ts';
 import { Store, readOwnedMetadata, getSettings } from './documents.ts';
-import type { RuntimeConfiguration, RetainedWork } from './runtime-types.ts';
+import type { LocalPiRuntimeConfiguration, RetainedWork } from './runtime-types.ts';
 import { fail } from '@moonbase/contracts/errors';
-import * as S from './schema.ts';
+import { decodeStoreOwner } from './stored-records.ts';
 
 // Abort requests and terminal cleanup failures remain observable after a caller's deadline.
 function retainedWork(kind: 'abort' | 'waiter'): Effect.Effect<RetainedWork, never, Scope.Scope> {
@@ -63,20 +63,17 @@ function isQualifiedRuntime(versions: NodeJS.ProcessVersions) {
   return major > 26 || (major === 26 && minor >= 13);
 }
 
-export function openHost(config: RuntimeConfiguration) {
+export function openHost(config: LocalPiRuntimeConfiguration) {
   return Effect.gen(function* () {
-    const validated = yield* Effect.tryPromise({
-      try: async () => {
-        if (!isQualifiedRuntime(process.versions))
-          fail(
-            'Incompatible',
+    if (!isQualifiedRuntime(process.versions))
+      return yield* Effect.fail(
+        new ApplicationError({
+          code: 'Incompatible',
+          message:
             'The Pi host requires Node 26.13 or newer, or exactly Bun 1.4.4. The remote client has its own runtime boundary.',
-          );
-        return S.localConfiguration(config);
-      },
-      catch: safeError,
-    });
-    const session = { host: validated.host, actorId: validated.actorId },
+        }),
+      );
+    const session = { host: config.host, actorId: config.actorId },
       identity = JSON.stringify({ ...session, mode: 'local' });
     const environments = new Map<string, NodeExecutionEnv>();
     yield* Effect.addFinalizer(() =>
@@ -117,7 +114,7 @@ export function openHost(config: RuntimeConfiguration) {
       storageOwned = true;
     const database = yield* Effect.acquireRelease(
       Effect.tryPromise({
-        try: () => openNodeSqliteDatabase(validated.databasePath, { busyTimeoutMs: 30 }),
+        try: () => openNodeSqliteDatabase(config.databasePath, { busyTimeoutMs: 30 }),
         catch: safeError,
       }),
       (database) => releaseResource(() => (databaseOwned ? database.close() : undefined)),
@@ -140,7 +137,7 @@ export function openHost(config: RuntimeConfiguration) {
     );
     databaseOwned = false;
     const aborts = yield* retainedWork('abort');
-    const registry = validated.registry ?? createRegistry();
+    const registry = config.registry ?? createRegistry();
     let host: Host | undefined = undefined;
     const harness = yield* Effect.acquireRelease(
       Effect.tryPromise({
@@ -148,7 +145,7 @@ export function openHost(config: RuntimeConfiguration) {
           Harness.open(
             storage,
             {
-              models: validated.models,
+              models: config.models,
               registry,
               env: getToolEnvironment,
               settings: {
@@ -172,7 +169,7 @@ export function openHost(config: RuntimeConfiguration) {
     yield* Effect.tryPromise({
       try: async () => {
         const existing = await harness.snapshot(Store, 'identity', context);
-        if (existing) S.savedStore(existing);
+        if (existing) decodeStoreOwner(existing);
         await harness.commit(async (tx) => {
           if (!existing && (await tx.scanConversations({}, 1)).items.length)
             fail(
@@ -180,7 +177,7 @@ export function openHost(config: RuntimeConfiguration) {
               'This store contains data without Moonbase ownership metadata; no import is authorized.',
             );
           const store = await tx.doc(Store, 'identity', identity);
-          S.savedStore(store);
+          decodeStoreOwner(store);
           if (store.identity !== identity)
             fail(
               'Incompatible',
@@ -199,7 +196,7 @@ export function openHost(config: RuntimeConfiguration) {
         Scope.close(scope, Exit.void),
       );
     host = new Host(
-      { ...validated, registry },
+      { ...config, registry },
       harness,
       identity,
       work,

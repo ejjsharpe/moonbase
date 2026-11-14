@@ -294,7 +294,7 @@ for (const typed of [false, true])
     );
   });
 
-test('lost typed commit acknowledgement stays uncertain while proven create validation stays definite', async (t) => {
+test('lost typed commit acknowledgement stays uncertain while a refused create stays definite', async (t) => {
   const original = Harness.open;
   let harness: Harness | undefined;
   mock.method(
@@ -322,9 +322,6 @@ test('lost typed commit acknowledgement stays uncertain while proven create vali
   });
   const input = { session, requestId: 'lost-commit', title: 'Committed', settings: f.settings };
   try {
-    await assert.rejects(f.client.command('createChat', { ...input, title: '' }), {
-      code: 'InvalidInput',
-    });
     await assert.rejects(
       f.client.command('createChat', { ...input, session: { ...session, actorId: 'other' } }),
       { code: 'Unauthorized' },
@@ -516,37 +513,9 @@ test('unsupported app-owned document version is rejected unchanged before resume
   assert.equal(f.faux.state.callCount, 0);
 });
 
-test('strict programmatic configuration and cursor envelopes reject nested unfamiliar fields without diagnostics or execution', async (t) => {
+test('cursor envelopes reject unfamiliar fields without execution', async (t) => {
   const f = await fixture(t),
-    canary = 'private-config-field-canary';
-  for (const change of [
-    { future: canary },
-    { host: { ...session.host, future: canary } },
-    { databasePath: '/private/' + 'x'.repeat(4096) },
-  ]) {
-    const runtime = ManagedRuntime.make(
-      LocalPiRuntimeLive({
-        ...session,
-        databasePath: f.config.databasePath,
-        models: f.config.models,
-        ...change,
-      }),
-    );
-    try {
-      await assert.rejects(
-        makeChatClient(runtime).command('getChatHost', { host: session.host }),
-        (error: unknown) => {
-          assert(ApplicationError.is(error));
-          assert.equal(error.code, 'InvalidInput');
-          assert(!error.message.includes(canary));
-          assert(!error.message.includes(f.config.cwd));
-          return true;
-        },
-      );
-    } finally {
-      await runtime.dispose();
-    }
-  }
+    canary = 'private-cursor-field-canary';
   const target = await f.create();
   for (const payload of [
     { kind: 'history', scan: null, future: canary },
