@@ -16,10 +16,10 @@ Data may be lost between versions while Moonbase is prerelease: a change can sta
 
 ## Files and folders
 
-- Start flat. When a few files belong to one thing and are used together, group them in a folder named for it (`renderer/chat/transcript/`, `workbench/src/files-tree/`). Don't add generic folders like `utils/` or `logic/`.
+- Start flat. When a few files belong to one thing and are used together, group them in a folder named for it (`renderer/chat/transcript/`, `workbench/src/files-tree/`). Code shared by several features sits in kind folders at the root (`renderer/components/`, `renderer/hooks/`); code one feature uses lives in that feature. Don't add generic folders like `utils/` or `logic/`.
 - Code that runs in different processes gets a folder per process: desktop `main/`, `preload/` and `renderer/`, with the IPC contract they share in `ipc/`; workspace `host/` and `client/`, with what they share at `src/`.
 - Client state in `packages/application` is one folder per concept, with `x.ts`, `x-service.ts` and `x-atoms.ts` for its three layers (see its README).
-- Desktop tests: unit tests in `test/`, Playwright specs in `test/e2e/`, harnesses and faux processes in `test/fixtures/`.
+- Tests sit in each module's `test/`, mirroring `src/` where it has folders. Playwright specs go in `test/e2e/`; desktop's harnesses and faux processes in `test/fixtures/`. Suites that run a real daemon go in the root `test/` folder.
 - Test helpers: `x-fixture.ts` for shared setup, `faux-x` for a fake process or provider, `x-process.ts` for a script a test spawns. A unit test is named after the file it tests (`editor-session.test.ts` for `editor-session.ts`).
 
 ## Effect
