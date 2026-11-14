@@ -353,7 +353,9 @@ test('capture cancellation settles its helper and releases descriptors before re
     await waitFor(ready);
     abort.abort();
     await rejected;
-    assert.equal(readdirSync('/dev/fd').length, before);
+    // Nothing the capture opened is left open. Pipes of earlier helper runs may close meanwhile,
+    // so there can be fewer descriptors than before, never more.
+    assert.ok(readdirSync('/dev/fd').length <= before);
     assert.equal(
       (await client.command('readFile', { checkout, path: 'file.txt' })).text,
       'original',

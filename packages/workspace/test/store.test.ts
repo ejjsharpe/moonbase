@@ -20,9 +20,7 @@ test('concurrent transactions and plain writes on one store neither collide nor 
         Array.from({ length: 500 }, (_, index) => index),
         (index) =>
           Effect.gen(function* () {
-            yield* store.transaction(
-              Effect.sync(() => store.put('rows', `t-${worker}-${index}`, index)),
-            );
+            yield* store.transaction(() => store.put('rows', `t-${worker}-${index}`, index));
             // A plain write between transactions, and a transaction that fails and rolls back.
             yield* Effect.sync(() => store.put('rows', `p-${worker}-${index}`, index));
             yield* Effect.exit(
