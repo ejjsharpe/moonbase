@@ -32,7 +32,7 @@
         "inputs": [
           "default",
           "^default",
-          "{workspaceRoot}/tests/chat/**/*",
+          "{workspaceRoot}/test/chat/**/*",
           {
             "input": "default",
             "projects": [
