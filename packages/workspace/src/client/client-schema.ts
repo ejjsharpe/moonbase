@@ -1,14 +1,11 @@
 import { Schema } from 'effect';
-import {
-  type CommandInput,
-  type EditorRecovery,
-  type SaveResult,
-} from '@moonbase/contracts/workspace';
+import { type CommandInput, type SaveResult } from '@moonbase/contracts/workspace';
+import type { RecoveryState } from '@moonbase/contracts/recovery';
+import { RecoveryStateSchema } from '@moonbase/contracts/recovery-schema';
 import { hash } from '../validation.ts';
 import { InvalidRecoveryRequestError } from '@moonbase/contracts/workspace-errors';
 import { InvalidRequestError } from '@moonbase/contracts/workspace-host-errors';
 import {
-  EditorRecoverySchema,
   OperationResultSchema,
   RecoveryChangeSchema,
   RecoveryPublicationSchema,
@@ -134,9 +131,15 @@ const PublicationRecordSchema = struct({
   receipt: RecoveryPublicationSchema,
 });
 export const FeedCursorSchema = struct({ sequence: natural, epoch: Schema.String });
-export const FeedGapSchema = struct({ hostId: Schema.String, checkoutId: Schema.String });
+export const FeedGapSchema = struct({
+  hostId: Schema.String,
+  checkoutId: Schema.String,
+  /** Drafts that stayed at their path when their file moved onto another draft. */
+  stranded: optional(array(Schema.String)),
+});
 export type OperationRecord = typeof OperationRecordSchema.Type;
 export type FeedCursor = typeof FeedCursorSchema.Type;
+export type FeedGap = typeof FeedGapSchema.Type;
 export const clientDecoders = {
   ...strictDecoders({
     publications: natural,
@@ -146,6 +149,11 @@ export const clientDecoders = {
     /** Per host and checkout, a feed gap that left drafts at their old paths. */
     'feed-gaps': FeedGapSchema,
     meta: WorkspaceIdentifierSchema,
+    /** Per client and buffer, an open clean buffer a move replaced, until the client closes it. */
+    'replaced-buffers': struct({
+      clientId: WorkspaceIdentifierSchema,
+      bufferId: WorkspaceIdentifierSchema,
+    }),
     /** Per call, the request ID its host operation was (or is to be) sent under. */
     requests: struct({ requestId: WorkspaceIdentifierSchema }),
     saves: StoredSaveSchema,
@@ -157,9 +165,9 @@ export function savedRevision(value: unknown): number {
   return value;
 }
 /** A recovery state as stored: each draft's baseline is the text its version names. */
-const StoredRecoverySchema = EditorRecoverySchema.check(
+const StoredRecoverySchema = RecoveryStateSchema.check(
   Schema.makeFilter((state) =>
-    state.drafts.every((draft) => hash(draft.disk.text) === draft.disk.version),
+    state.buffers.every((b) => !b.draft || hash(b.draft.disk.text) === b.draft.disk.version),
   ),
 );
 const storedRecovery = Schema.decodeUnknownSync(StoredRecoverySchema, {
@@ -167,7 +175,7 @@ const storedRecovery = Schema.decodeUnknownSync(StoredRecoverySchema, {
   reportInput: false,
 });
 /** A client's stored recovery from its row's body. */
-export function parseRecovery(body: unknown, clientId: string): EditorRecovery {
+export function parseRecovery(body: unknown, clientId: string): RecoveryState {
   try {
     if (typeof body !== 'string') throw Error();
     const state = storedRecovery(JSON.parse(body));
@@ -181,7 +189,7 @@ export function parseRecovery(body: unknown, clientId: string): EditorRecovery {
  * The body to store for a client's recovery, decoded as `parseRecovery` will read it back;
  * refuses one that would not read, so a written row never hides its drafts.
  */
-export function encodeStorableRecovery(state: EditorRecovery, clientId: string): string {
+export function encodeStorableRecovery(state: RecoveryState, clientId: string): string {
   const body = JSON.stringify(state);
   try {
     parseRecovery(body, clientId);

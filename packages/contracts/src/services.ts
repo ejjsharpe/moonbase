@@ -11,6 +11,7 @@ import {
 import type { HostCommand, HostInput, HostOutput } from './workspace-host.ts';
 import type { WorkspaceHostError } from './workspace-host-errors.ts';
 import type { WorkspaceError } from './workspace-errors.ts';
+import type { RecoveryEdit, RecoveryEditInput, RecoveryOutline } from './recovery.ts';
 import type {
   ConnectionCommand,
   ConnectionInput,
@@ -34,12 +35,19 @@ export type WorkspaceHandler<K extends WorkspaceCommand> = (
   input: CommandInput<K>,
 ) => Effect.Effect<CommandOutput<K>, WorkspaceError>;
 export type WorkspaceHandlers = { [K in WorkspaceCommand]: WorkspaceHandler<K> };
-export type WorkspaceServiceShape = WorkspaceHandlers & {
-  watch(input: {
-    checkout: CheckoutTarget;
-    paths: string[];
-  }): Stream.Stream<WorkspaceEvent, WorkspaceError>;
+/** The recovery store's edits; each returns once committed. */
+export type RecoveryEditHandlers = {
+  [K in RecoveryEdit]: (input: RecoveryEditInput<K>) => Effect.Effect<void, WorkspaceError>;
 };
+export type WorkspaceServiceShape = WorkspaceHandlers &
+  RecoveryEditHandlers & {
+    watch(input: {
+      checkout: CheckoutTarget;
+      paths: string[];
+    }): Stream.Stream<WorkspaceEvent, WorkspaceError>;
+    /** A client's recovery without draft text, then again each time that changes. */
+    watchRecovery(input: { clientId: string }): Stream.Stream<RecoveryOutline, WorkspaceError>;
+  };
 export type WorkspaceHostHandlers = {
   [K in HostCommand]: (input: HostInput<K>) => Effect.Effect<HostOutput<K>, WorkspaceHostError>;
 };

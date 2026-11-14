@@ -4,10 +4,10 @@ import type { SQLInputValue } from 'node:sqlite';
 import { Effect } from 'effect';
 import {
   type CommandInput,
-  type EditorRecovery,
   type FileDocument,
   type RecoveryPublication,
 } from '@moonbase/contracts/workspace';
+import type { RecoveryState } from '@moonbase/contracts/recovery';
 import { Store } from '../store.ts';
 import { canonical, errorText, hash, key, text, textDocument } from '../validation.ts';
 import {
@@ -40,7 +40,7 @@ export type StoredRecovery = {
   client: string;
   revision: number;
   body: string;
-  state: EditorRecovery;
+  state: RecoveryState;
 };
 
 /** One client's recovery, saves and operations, and publication receipts; the file name is stable. */
@@ -73,7 +73,7 @@ export class ClientStore extends Store {
    * that has not changed since is not parsed and checked again. A row changed by anything else,
    * or a write that rolled back, no longer matches its body and is parsed afresh.
    */
-  private readonly recoveries = new Map<string, { body: string; state: EditorRecovery }>();
+  private readonly recoveries = new Map<string, { body: string; state: RecoveryState }>();
   /** A client's recovery state from its stored body; the caller may change what it gets. */
   private decodeRecovery(client: string, body: unknown) {
     const known = this.recoveries.get(client);
@@ -82,14 +82,23 @@ export class ClientStore extends Store {
     this.recoveries.set(client, { body: body as string, state: structuredClone(state) });
     return state;
   }
-  private writeRecovery(client: string, revision: number, state: EditorRecovery) {
+  /** Clients whose recovery was written since `takeWrittenClients` last took them. */
+  private written = new Set<string>();
+  private writeRecovery(client: string, revision: number, state: RecoveryState) {
     const body = encodeStorableRecovery(state, client);
     this.statement(
       'INSERT INTO recovery VALUES(?,?,?) ON CONFLICT(client) DO UPDATE SET revision=excluded.revision, body=excluded.body',
     ).run(client, revision, body);
     this.recoveries.set(client, { body, state: structuredClone(state) });
+    this.written.add(client);
   }
-  readRecovery(client: string): { revision: number; state: EditorRecovery } | null {
+  /** The clients whose recovery may have changed since the last call (a write may have rolled back). */
+  takeWrittenClients() {
+    const clients = [...this.written];
+    this.written.clear();
+    return clients;
+  }
+  readRecovery(client: string): { revision: number; state: RecoveryState } | null {
     const row = this.statement('SELECT revision, body FROM recovery WHERE client=?').get(client);
     if (!row) return null;
     const revision = savedRevision(row.revision);
@@ -157,15 +166,32 @@ export class ClientStore extends Store {
    * Writes a state the caller read and checked in the same transaction, advancing the revision
    * without impersonating a client publication.
    */
-  writeInternalRecovery(client: string, revision: number, state: EditorRecovery) {
+  writeInternalRecovery(client: string, revision: number, state: RecoveryState) {
     this.writeRecovery(client, revision + 1, state);
   }
-  persist(input: CommandInput<'persistRecovery'>, digest: string) {
+  /**
+   * Writes a client's own word (a publication or an edit) as its next revision; saves begun
+   * before it no longer restore their text over it.
+   */
+  writeClientRecovery(client: string, revision: number, state: RecoveryState) {
+    this.writeRecovery(client, revision + 1, state);
+    this.put('publications', client, revision + 1);
+  }
+  /**
+   * Publishes `input` as the client's next revision, translated from the renderer's path-keyed
+   * snapshot against the recovery it replaces, in one transaction.
+   */
+  persist(
+    input: CommandInput<'persistRecovery'>,
+    digest: string,
+    translate: (retained: RecoveryState | null) => RecoveryState,
+  ) {
     return this.transaction((): RecoveryPublication => {
       const previous = this.replayPublication(input, digest);
       if (previous) return previous;
-      const { clientId: client, requestId, expectedRevision: expected, state } = input;
-      const revision = this.readRecovery(client)?.revision ?? 0;
+      const { clientId: client, requestId, expectedRevision: expected } = input;
+      const stored = this.readRecovery(client);
+      const revision = stored?.revision ?? 0;
       if (revision !== expected) throw new RecoveryConflictError({ conflict: 'recovery-changed' });
       const receipt = {
         clientId: client,
@@ -173,8 +199,7 @@ export class ClientStore extends Store {
         previousRevision: revision,
         revision: revision + 1,
       };
-      this.writeRecovery(client, revision + 1, state);
-      this.put('publications', client, revision + 1);
+      this.writeClientRecovery(client, revision, translate(stored?.state ?? null));
       this.put('recovery-publications', hash(canonical([client, requestId])), {
         digest,
         receipt,

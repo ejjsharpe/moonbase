@@ -1,75 +1,105 @@
+import { randomUUID } from 'node:crypto';
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
-import type { CheckoutTarget, EditorRecovery } from '@moonbase/contracts/workspace';
+import type { CheckoutTarget } from '@moonbase/contracts/workspace';
+import type { RecoveryBuffer, RecoveryState } from '@moonbase/contracts/recovery';
 import { isCheckoutPath } from '@moonbase/contracts/workspace-schema';
 import { same } from '../validation.ts';
 import type { OperationRecord } from './client-schema.ts';
 
 /**
- * Applies completed moves, copies and Trash to one recovery. A move onto a path that already holds
- * a draft leaves the moving draft where it was; the checkouts where that happened are returned.
+ * Applies completed moves, copies and Trash to one recovery. A move re-paths the buffers it
+ * moves, so their tabs, views and drafts follow; Trash leaves every buffer where it was; a copy
+ * gives each draft it copies a buffer of its own. A clean buffer open at a destination gives way
+ * to what arrives there; one with a draft holds it, so neither draft is lost and the arriving one
+ * stays where it was. Returns the drafts left behind, per checkout, and the IDs of the clean
+ * buffers that gave way.
  */
-export function reconcile(state: EditorRecovery, records: OperationRecord[]) {
-  const collisions = new Map<string, CheckoutTarget>();
+export function reconcile(
+  state: RecoveryState,
+  records: OperationRecord[],
+  mintId: () => string = randomUUID,
+) {
+  const collisions = new Map<string, { checkout: CheckoutTarget; paths: string[] }>();
+  const replaced: string[] = [];
   for (const record of records) {
-    if (!state.checkouts.some((c) => same(c, record.input.checkout))) continue;
+    const checkout = record.input.checkout;
+    if (!state.checkouts.some((c) => same(c, checkout))) continue;
     for (const item of record.result.items) {
       if (item.outcome !== 'completed') continue;
       const kind = record.input.kind;
       if (!['move', 'copy', 'trash'].includes(kind)) continue;
-      if (kind !== 'trash' && !item.destination) continue;
+      // Trash never proves permission to discard another client's dirty work.
+      if (kind === 'trash' || !item.destination) continue;
       // An item that names no exact checkout path (a host's reply is untrusted) moves nothing.
-      if (!isCheckoutPath(item.source) || (kind !== 'trash' && !isCheckoutPath(item.destination!)))
-        continue;
+      if (!isCheckoutPath(item.source) || !isCheckoutPath(item.destination)) continue;
+      const destination = item.destination;
+      const inCheckout = (target: { checkout: CheckoutTarget }) => same(target.checkout, checkout);
       const matches = (target: { checkout: CheckoutTarget; path: string }) =>
-        same(target.checkout, record.input.checkout) && isPathAtOrInside(target.path, item.source);
-      const move = (p: string) => item.destination! + p.slice(item.source.length);
-      const occupied = (path: string) =>
-        state.drafts.some(
-          (d) => same(d.target.checkout, record.input.checkout) && d.target.path === path,
-        );
+        inCheckout(target) && isPathAtOrInside(target.path, item.source);
+      const move = (p: string) => destination + p.slice(item.source.length);
+      const occupant = (path: string, except?: RecoveryBuffer) =>
+        state.buffers.find((b) => b !== except && inCheckout(b.target) && b.target.path === path);
       if (kind === 'copy') {
-        // oxlint-disable-next-line no-useless-spread -- Copies append to state.drafts; iterate only the original drafts.
-        for (const draft of [...state.drafts])
-          if (matches(draft.target) && !occupied(move(draft.target.path)))
-            state.drafts.push({
-              ...draft,
-              target: { ...draft.target, path: move(draft.target.path) },
-            });
+        // oxlint-disable-next-line no-useless-spread -- Copies append to state.buffers; visit only the originals.
+        for (const buffer of [...state.buffers]) {
+          if (!buffer.draft || !matches(buffer.target)) continue;
+          const path = move(buffer.target.path),
+            held = occupant(path);
+          if (held?.draft) continue;
+          const draft = structuredClone(buffer.draft);
+          if (held) held.draft = draft;
+          else state.buffers.push({ id: mintId(), target: { ...buffer.target, path }, draft });
+        }
         continue;
       }
-      // Trash never proves permission to discard another client's dirty work.
-      if (kind === 'move') {
-        state.drafts = state.drafts.map((d) => {
-          if (!matches(d.target)) return d;
-          // Another draft already holds the destination: neither is dropped, and the checkout's
-          // history is marked so the draft left behind is reported.
-          if (occupied(move(d.target.path))) {
-            collisions.set(record.input.checkout.checkoutId, record.input.checkout);
-            return d;
+      // oxlint-disable-next-line no-useless-spread -- A buffer that gives way leaves state.buffers.
+      for (const buffer of [...state.buffers]) {
+        if (!state.buffers.includes(buffer) || !matches(buffer.target)) continue;
+        const moved = move(buffer.target.path),
+          held = occupant(moved, buffer);
+        if (held?.draft) {
+          if (buffer.draft) {
+            const stranded = collisions.get(checkout.checkoutId) ?? { checkout, paths: [] };
+            stranded.paths.push(buffer.target.path);
+            collisions.set(checkout.checkoutId, stranded);
           }
-          return { ...d, target: { ...d.target, path: move(d.target.path) } };
-        });
-        state.recentFiles = state.recentFiles.map((t) =>
-          matches(t) ? { ...t, path: move(t.path) } : t,
-        );
-        const view = state.views[record.input.checkout.checkoutId];
-        if (view) {
-          const rename = (p: string) => (isPathAtOrInside(p, item.source) ? move(p) : p);
-          view.openFiles = [...new Set(view.openFiles.map(rename))];
-          view.active = rename(view.active);
-          if (view.preview) view.preview = rename(view.preview);
-          view.fileViews = Object.fromEntries(
-            Object.entries(view.fileViews).map(([p, mode]) => [rename(p), mode]),
-          );
-          view.positions = Object.fromEntries(
-            Object.entries(view.positions).map(([p, positions]) => [rename(p), positions]),
-          );
-          view.tree.expanded = view.tree.expanded.map(rename);
-          view.tree.selected = view.tree.selected.map(rename);
-          view.tree.focus = rename(view.tree.focus);
+          continue;
         }
+        if (held) {
+          giveWay(state, held, buffer);
+          replaced.push(held.id);
+        }
+        buffer.target = { ...buffer.target, path: moved };
+      }
+      state.recentFiles = state.recentFiles.map((t) =>
+        matches(t) ? { ...t, path: move(t.path) } : t,
+      );
+      const view = state.views[checkout.checkoutId];
+      if (view) {
+        const rename = (p: string) => (isPathAtOrInside(p, item.source) ? move(p) : p);
+        view.remembered = Object.fromEntries(
+          Object.entries(view.remembered).map(([p, file]) => [rename(p), file]),
+        );
+        view.tree.expanded = view.tree.expanded.map(rename);
+        view.tree.selected = view.tree.selected.map(rename);
+        view.tree.focus = rename(view.tree.focus);
       }
     }
   }
-  return collisions;
+  return { collisions, replaced };
+}
+
+/** Removes a clean buffer for the one arriving at its file, which takes over its tab and view. */
+function giveWay(state: RecoveryState, leaving: RecoveryBuffer, arriving: RecoveryBuffer) {
+  state.buffers.splice(state.buffers.indexOf(leaving), 1);
+  const view = state.views[leaving.target.checkout.checkoutId];
+  if (!view) return;
+  const swap = (id: string) => (id === leaving.id ? arriving.id : id);
+  view.tabs = [...new Set(view.tabs.map(swap))];
+  if (view.active !== null) view.active = swap(view.active);
+  if (view.preview !== null) view.preview = swap(view.preview);
+  for (const memory of [view.fileViews, view.positions] as Record<string, unknown>[]) {
+    if (leaving.id in memory && !(arriving.id in memory)) memory[arriving.id] = memory[leaving.id];
+    delete memory[leaving.id];
+  }
 }

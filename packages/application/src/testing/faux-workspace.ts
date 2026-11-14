@@ -1,8 +1,8 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { decodeEditorRecovery } from '@moonbase/contracts/workspace-schema';
 import { readOwn } from '../editor/record.ts';
-import { Effect, Layer, Queue, Stream } from 'effect';
-import { WorkspaceService, type WorkspaceServiceShape } from '@moonbase/contracts/services';
+import { Effect, Queue, Stream } from 'effect';
+import { snapshotWorkspaceLayer, type SnapshotWorkspace } from './faux-workspace-layer.ts';
 import {
   ApplicationError,
   emptyRecovery,
@@ -323,7 +323,7 @@ export function fauxWorkspace(seeds: Seed[]) {
           ? error
           : new ApplicationError({ code: 'Unavailable', message: String(error) }),
     });
-  const service: WorkspaceServiceShape = {
+  const service: SnapshotWorkspace = {
     openCheckout: ({ root }) =>
       call(
         'openCheckout',
@@ -847,7 +847,7 @@ export function fauxWorkspace(seeds: Seed[]) {
       ),
   };
   return {
-    layer: Layer.succeed(WorkspaceService, service),
+    layer: snapshotWorkspaceLayer(service),
     stats,
     externalWrite(target: FileTarget, text: string) {
       read(target);
