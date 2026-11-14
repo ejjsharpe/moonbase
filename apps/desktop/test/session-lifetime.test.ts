@@ -9,7 +9,7 @@ import {
 } from '@moonbase/contracts/workspace';
 import type { ChatClient } from '@moonbase/contracts/chat';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
-import { EditorSession } from '../src/main/session.ts';
+import { EditorSession } from '../src/main/editor-session.ts';
 import { ChatIpcSession } from '../src/main/chat/session.ts';
 
 const checkout = {

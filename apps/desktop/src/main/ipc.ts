@@ -1,7 +1,7 @@
 import type { BrowserWindow, IpcMain, IpcMainEvent, IpcMainInvokeEvent } from 'electron';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import type { EditorSession } from './session.ts';
-import type { DesktopChatBackends } from './chat-backends.ts';
+import type { EditorSession } from './editor-session.ts';
+import type { DesktopChatBackends } from './chat/chat-backends.ts';
 import type { WindowLifecycle } from './window-lifecycle.ts';
 import { channels, errorDTO, keys, record } from '../ipc/wire.ts';
 import {

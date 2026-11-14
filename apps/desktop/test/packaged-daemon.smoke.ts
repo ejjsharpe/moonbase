@@ -20,7 +20,7 @@ import {
   RemoteProviderSetupLive,
   RemoteWorkspaceHostLive,
 } from '@moonbase/daemon-protocol/remote';
-import { findDaemonCommand } from '../src/main/daemon-command.ts';
+import { findDaemonCommand } from '../src/main/daemon/daemon-command.ts';
 import {
   bounded,
   launchFrom,

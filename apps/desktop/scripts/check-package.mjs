@@ -55,7 +55,7 @@ assert(
   main.includes('src/main/chat/transcript-native.ts'),
   'Missing native transcript authority owner',
 );
-for (const entry of ['native-actions', 'ipc', 'window-lifecycle', 'chat-backends'])
+for (const entry of ['native-actions', 'ipc', 'window-lifecycle', 'chat/chat-backends'])
   assert(main.includes(`src/main/${entry}.ts`), `Missing packaged main owner: ${entry}`);
 
 for (const entry of [

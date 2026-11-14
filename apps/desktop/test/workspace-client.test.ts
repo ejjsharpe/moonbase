@@ -22,9 +22,12 @@ import {
   LocalDaemonConnectionLive,
   readDaemonSession,
   restartDaemon,
-} from '../src/main/local-daemon.ts';
-import { createDaemonWorkspaceHost } from '../src/main/workspace-host.ts';
-import { createLocalDaemonClient, type LocalDaemonClient } from '../src/main/chat/daemon.ts';
+} from '../src/main/daemon/local-daemon.ts';
+import { createDaemonWorkspaceHost } from '../src/main/daemon/workspace-host.ts';
+import {
+  createLocalDaemonClient,
+  type LocalDaemonClient,
+} from '../src/main/daemon/local-daemon-client.ts';
 import {
   makeFauxDaemonCommand,
   prepareDaemonData,

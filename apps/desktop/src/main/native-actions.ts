@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import type { BrowserWindow, Clipboard, Dialog, Shell } from 'electron';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
-import type { NativeActions } from './session.ts';
+import type { NativeActions } from './editor-session.ts';
 
 /** The raw pasteboard type under which Finder lists copied files, all of them in one plist. */
 const finderFiles = 'electron application/osclipboard;format="NSFilenamesPboardType"';

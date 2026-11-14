@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { DaemonCommand } from '../../src/main/daemon-command.ts';
+import type { DaemonCommand } from '../../src/main/daemon/daemon-command.ts';
 
 export async function bounded<T>(promise: Promise<T>, ms = 20000): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;

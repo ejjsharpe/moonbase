@@ -3,8 +3,8 @@ import { randomUUID } from 'node:crypto';
 import type { App, BrowserWindow, Dialog, IpcMain, IpcMainEvent } from 'electron';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { decodeApplicationErrorDTO } from '@moonbase/contracts/error-schema';
-import type { EditorSession } from './session.ts';
-import type { DesktopChatBackends } from './chat-backends.ts';
+import type { EditorSession } from './editor-session.ts';
+import type { DesktopChatBackends } from './chat/chat-backends.ts';
 import { channels, errorDTO, keys, record, requestId } from '../ipc/wire.ts';
 
 export function installWindowLifecycle({

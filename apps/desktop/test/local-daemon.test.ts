@@ -17,7 +17,7 @@ import {
   findDaemonDirectory,
   LocalDaemonConnectionLive,
   readDaemonSession,
-} from '../src/main/local-daemon.ts';
+} from '../src/main/daemon/local-daemon.ts';
 import {
   makeFauxDaemonCommand,
   prepareDaemonData,

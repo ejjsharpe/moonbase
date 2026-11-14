@@ -16,7 +16,7 @@ import { readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
 import { bindChatClient, bindConnectionClient } from '@moonbase/application/runtime/clients';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import type { ChatConfiguration } from './config.ts';
-import type { RemoteChat } from '../chat-backends.ts';
+import type { RemoteChat } from './chat-backends.ts';
 
 /**
  * A remote host's daemon in host mode, over the configured SSH forward: the same chat, folder and

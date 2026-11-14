@@ -16,27 +16,27 @@ import { Effect, ManagedRuntime } from 'effect';
 import { WorkspaceService } from '@moonbase/contracts/services';
 import { readInstallationId, WorkspaceRecoveryLive } from '@moonbase/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { acquireDaemonChat, createLocalDaemonClient } from './chat/daemon.ts';
+import { acquireDaemonChat, createLocalDaemonClient } from './daemon/local-daemon-client.ts';
 import { mkdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { EditorSession } from './session.ts';
+import { EditorSession } from './editor-session.ts';
 import { channels } from '../ipc/wire.ts';
 import { readConfiguration } from './chat/config.ts';
 import { acquireRemoteChat } from './chat/remote.ts';
 import { channels as chatChannels } from '../ipc/chat-wire.ts';
 import { respondTranscriptImage, transcriptImagePath } from './chat/transcript-native.ts';
 import { createNativeActions } from './native-actions.ts';
-import { createChatBackends } from './chat-backends.ts';
+import { createChatBackends } from './chat/chat-backends.ts';
 import { createFileRequestIds } from './request-ids.ts';
-import { createDaemonWorkspaceHost } from './workspace-host.ts';
-import { findDaemonCommand, type DaemonCommand } from './daemon-command.ts';
+import { createDaemonWorkspaceHost } from './daemon/workspace-host.ts';
+import { findDaemonCommand, type DaemonCommand } from './daemon/daemon-command.ts';
 import {
   createLocalDaemon,
   findDaemonDirectory,
   readDaemonSession,
   restartDaemon,
-} from './local-daemon.ts';
+} from './daemon/local-daemon.ts';
 import { createTrustedDocumentGuard, installCommandIpc } from './ipc.ts';
 import { installWindowLifecycle } from './window-lifecycle.ts';
 

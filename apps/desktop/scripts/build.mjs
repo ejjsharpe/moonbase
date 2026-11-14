@@ -131,9 +131,9 @@ assert(
 for (const entry of [
   'daemon-protocol/src/remote.ts',
   'daemon-protocol/src/loopback.ts',
-  'src/main/local-daemon.ts',
-  'src/main/daemon-command.ts',
-  'src/main/chat/daemon.ts',
+  'src/main/daemon/local-daemon.ts',
+  'src/main/daemon/daemon-command.ts',
+  'src/main/daemon/local-daemon-client.ts',
 ])
   assert(
     mainInputs.some((path) => path.endsWith(entry)),
@@ -143,7 +143,7 @@ assert(
   mainInputs.includes('src/main/chat/transcript-native.ts'),
   'Missing native transcript authority owner',
 );
-for (const entry of ['native-actions', 'ipc', 'window-lifecycle', 'chat-backends'])
+for (const entry of ['native-actions', 'ipc', 'window-lifecycle', 'chat/chat-backends'])
   assert(mainInputs.includes(`src/main/${entry}.ts`), `Missing main owner: ${entry}`);
 for (const entry of [
   'apps/daemon/src/main.ts',
