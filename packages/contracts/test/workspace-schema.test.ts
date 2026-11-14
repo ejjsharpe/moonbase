@@ -307,6 +307,7 @@ test('a recovery state names only its own checkouts, once each, with exact relat
     { ...state, views: { [checkout.checkoutId]: { ...view, active: 'closed.txt' } } },
     { ...state, views: { [checkout.checkoutId]: { ...view, openFiles: ['.git/config'] } } },
     { ...state, sidebarWidth: 99 },
+    { ...state, checkouts: [{ ...checkout, root: 'relative' }], drafts: [] },
   ])
     assert.throws(() => decodeEditorRecovery(bad));
   assert.throws(() =>

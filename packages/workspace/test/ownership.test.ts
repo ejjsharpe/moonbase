@@ -7,10 +7,15 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
-import { ApplicationError, emptyRecovery } from '@moonbase/contracts/workspace';
+import {
+  ApplicationError,
+  emptyRecovery,
+  type EditorRecovery,
+} from '@moonbase/contracts/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import { WorkspaceNative } from '@moonbase/workspace';
+import { reconcile } from '../src/client/recovery.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { fixture, isError, quote, waitFor } from './recovery-fixture.ts';
 
@@ -687,16 +692,43 @@ test('saved recovery naming a foreign checkout, an escaping path or a wrong base
       ...state,
       drafts: [{ ...state.drafts[0], disk: { ...disk, version: 'f'.repeat(64) } }],
     };
+    const escapingPosition: EditorRecovery = {
+      ...state,
+      views: {
+        [checkout.checkoutId]: {
+          openFiles: [],
+          active: '',
+          preview: null,
+          fileViews: {},
+          tree: { expanded: [], selected: [], focus: '', scroll: 0 },
+          positions: { '../escape.txt': { file: { line: 1, column: 1, top: 0, left: 0 } } },
+        },
+      },
+    };
     // A recovery the store could not read back is never written.
-    await assert.rejects(
-      client.command('persistRecovery', {
-        clientId: 'alice',
-        requestId: 'wrong-baseline',
-        expectedRevision: 0,
-        state: wrongBaseline,
-      }),
-      isError('InvalidInput'),
-    );
+    for (const [index, unreadable] of [wrongBaseline, escapingPosition].entries())
+      await assert.rejects(
+        client.command('persistRecovery', {
+          clientId: 'alice',
+          requestId: 'unreadable-' + index,
+          expectedRevision: 0,
+          state: unreadable,
+        }),
+        isError('InvalidInput'),
+      );
+    // A host's move to a path outside the checkout moves nothing in the recovery.
+    const moved = structuredClone(escapingPosition);
+    moved.views[checkout.checkoutId]!.positions = { 'file.txt': {} };
+    reconcile(moved, [
+      {
+        input: { kind: 'move', checkout },
+        result: {
+          items: [{ source: 'file.txt', destination: '../escape.txt', outcome: 'completed' }],
+        },
+      } as never,
+    ]);
+    assert.deepEqual(moved.drafts, state.drafts);
+    assert.deepEqual(Object.keys(moved.views[checkout.checkoutId]!.positions), ['file.txt']);
     await client.command('persistRecovery', {
       clientId: 'alice',
       requestId: 'initial-domain',

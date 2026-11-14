@@ -169,7 +169,6 @@ const storedRecovery = Schema.decodeUnknownSync(StoredRecoverySchema, {
   onExcessProperty: 'error',
   reportInput: false,
 });
-const isStoredRecovery = Schema.is(StoredRecoverySchema);
 /** A client's stored recovery from its row's body. */
 export function parseRecovery(body: unknown, clientId: string): EditorRecovery {
   try {
@@ -181,8 +180,16 @@ export function parseRecovery(body: unknown, clientId: string): EditorRecovery {
     throw invalidStored();
   }
 }
-/** Refuses to store a client's recovery that would not read back. */
-export function ensureStorable(state: EditorRecovery, clientId: string) {
-  if (state.clientId !== clientId || !isStoredRecovery(state))
+/**
+ * The body to store for a client's recovery, decoded as `parseRecovery` will read it back;
+ * refuses one that would not read, so a written row never hides its drafts.
+ */
+export function encodeStorableRecovery(state: EditorRecovery, clientId: string): string {
+  const body = JSON.stringify(state);
+  try {
+    parseRecovery(body, clientId);
+  } catch {
     fail('InvalidInput', 'Invalid recovery state.');
+  }
+  return body;
 }

@@ -42,6 +42,7 @@ import {
   hash,
 } from '../validation.ts';
 import { fail } from '@moonbase/contracts/errors';
+import { isCheckoutPath } from '@moonbase/contracts/workspace-schema';
 
 /**
  * Applies completed moves, copies and Trash to one recovery. A move onto a path that already holds
@@ -56,6 +57,9 @@ export function reconcile(state: EditorRecovery, records: OperationRecord[]) {
       const kind = record.input.kind;
       if (!['move', 'copy', 'trash'].includes(kind)) continue;
       if (kind !== 'trash' && !item.destination) continue;
+      // An item that names no exact checkout path (a host's reply is untrusted) moves nothing.
+      if (!isCheckoutPath(item.source) || (kind !== 'trash' && !isCheckoutPath(item.destination!)))
+        continue;
       const matches = (target: { checkout: CheckoutTarget; path: string }) =>
         same(target.checkout, record.input.checkout) && isPathAtOrInside(target.path, item.source);
       const move = (p: string) => item.destination! + p.slice(item.source.length);

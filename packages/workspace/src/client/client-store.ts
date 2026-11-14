@@ -16,7 +16,7 @@ import {
   type StoredSave,
   clientDecoders,
   fromStoredSave,
-  ensureStorable,
+  encodeStorableRecovery,
   parseRecovery,
   savedRevision,
   toStoredSave,
@@ -78,8 +78,7 @@ export class ClientStore extends Store {
     return state;
   }
   private writeRecovery(client: string, revision: number, state: EditorRecovery) {
-    ensureStorable(state, client);
-    const body = JSON.stringify(state);
+    const body = encodeStorableRecovery(state, client);
     this.statement(
       'INSERT INTO recovery VALUES(?,?,?) ON CONFLICT(client) DO UPDATE SET revision=excluded.revision, body=excluded.body',
     ).run(client, revision, body);

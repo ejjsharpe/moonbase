@@ -77,8 +77,12 @@ const checkoutFolder = Schema.String.check(
 );
 const isUnique = (values: readonly unknown[]) =>
   new Set(values.map(getJsonKey)).size === values.length;
+/** A checkout in recovery: its root is an absolute path. */
+const recoveryCheckout = CheckoutTargetSchema.check(
+  Schema.makeFilter((target) => target.root.startsWith('/')),
+);
 /** A file in recovery: an exact checkout-relative path. */
-const recoveryTarget = struct({ checkout: CheckoutTargetSchema, path: checkoutPath });
+const recoveryTarget = struct({ checkout: recoveryCheckout, path: checkoutPath });
 export const CheckoutViewSchema = struct({
   openFiles: array(checkoutPath).check(Schema.isMaxLength(1000)),
   active: checkoutFolder,
@@ -116,7 +120,7 @@ export const maximumRecoveryBytes = 32 * 1024 * 1024;
 export const EditorRecoverySchema = struct({
   version: Schema.Literal(1),
   clientId: WorkspaceIdentifierSchema,
-  checkouts: array(CheckoutTargetSchema).check(Schema.isMaxLength(128)),
+  checkouts: array(recoveryCheckout).check(Schema.isMaxLength(128)),
   openCheckoutIds: array(nonempty).check(Schema.isMaxLength(128)),
   selectedCheckoutId: Schema.NullOr(nonempty),
   views: Schema.Record(Schema.String, Schema.mutableKey(CheckoutViewSchema)),
