@@ -5,7 +5,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { Layer, ManagedRuntime } from 'effect';
+import { Effect, Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
 import {
   ApplicationError,
@@ -18,7 +18,7 @@ import { reconcile } from '../src/client/reconcile.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { fixture, isError, quote, waitFor } from './recovery-fixture.ts';
 import { captureNative, releaseNative } from './workspace-fixture.ts';
-import type { WorkspaceHostService } from '@moonbase/contracts/services';
+import { WorkspaceHostService } from '@moonbase/contracts/services';
 
 function native<R>(
   runtime: ManagedRuntime.ManagedRuntime<WorkspaceHostService | R, ApplicationError>,
@@ -467,13 +467,20 @@ test('admitted cancellation retains its overlap lease and root resources until t
     abort.abort();
     await rejected;
     let successorSettled = false;
-    successor = client.command('saveFile', {
-      target,
-      clientId: 'alice',
-      requestId: 'overlap',
-      text: 'must not race',
-      expectedVersion: disk.version,
-    });
+    // Sent to the host itself: the client refuses it at once, as the copy is still unresolved,
+    // so only the host's lease can hold it.
+    successor = runtime.runPromise(
+      Effect.flatMap(WorkspaceHostService, (host) =>
+        host.saveFile({
+          installationId: 'test-installation',
+          target,
+          clientId: 'alice',
+          requestId: 'overlap',
+          text: 'must not race',
+          expectedVersion: disk.version,
+        }),
+      ),
+    );
     void successor.then(
       () => {
         successorSettled = true;

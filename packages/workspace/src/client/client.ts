@@ -131,6 +131,8 @@ export const makeClientWorkspace = ({
         if (running) return (yield* Effect.interruptible(Deferred.await(running))) as A;
         const outcome = Deferred.makeUnsafe<unknown, WorkspaceFailure>();
         requests.set(name, outcome);
+        // Lets a duplicate sent at the same time find this one in flight and share it.
+        yield* Effect.yieldNow;
         const exit = yield* Effect.exit(
           Effect.gen(function* () {
             const kept = (yield* attempt(() => store.get<{ requestId: string }>('requests', name)))
