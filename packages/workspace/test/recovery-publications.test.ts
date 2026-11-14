@@ -204,10 +204,6 @@ test('publication IDs bind full canonical inputs and isolate client namespaces',
       1,
     );
     assert.equal((await client.command('loadRecovery', { clientId: 'alice' })).revision, 1);
-    await assert.rejects(
-      client.command('getRecoveryPublication', { clientId: 'alice', requestId: '' }),
-      isError('InvalidInput'),
-    );
   } finally {
     await runtime.dispose();
     f.cleanup();

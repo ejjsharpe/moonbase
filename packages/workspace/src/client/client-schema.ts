@@ -5,8 +5,10 @@ import {
   type EditorRecovery,
   type SaveResult,
 } from '@moonbase/contracts/workspace';
-import { recovery } from '../validation.ts';
+import { hash } from '../validation.ts';
+import { fail } from '@moonbase/contracts/errors';
 import {
+  EditorRecoverySchema,
   OperationResultSchema,
   RecoveryChangeSchema,
   RecoveryPublicationSchema,
@@ -157,11 +159,37 @@ export function savedRevision(value: unknown): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw invalidStored();
   return value;
 }
+/** A recovery state as stored: each draft's baseline is the text its version names. */
+const StoredRecoverySchema = EditorRecoverySchema.check(
+  Schema.makeFilter((state) =>
+    state.drafts.every((draft) => hash(draft.disk.text) === draft.disk.version),
+  ),
+);
+const storedRecovery = Schema.decodeUnknownSync(StoredRecoverySchema, {
+  onExcessProperty: 'error',
+  reportInput: false,
+});
+/** A client's stored recovery from its row's body. */
 export function parseRecovery(body: unknown, clientId: string): EditorRecovery {
   try {
     if (typeof body !== 'string') throw Error();
-    return recovery(JSON.parse(body), clientId);
+    const state = storedRecovery(JSON.parse(body));
+    if (state.clientId !== clientId) throw Error();
+    return state;
   } catch {
     throw invalidStored();
   }
+}
+/**
+ * The body to store for a client's recovery, decoded as `parseRecovery` will read it back;
+ * refuses one that would not read, so a written row never hides its drafts.
+ */
+export function encodeStorableRecovery(state: EditorRecovery, clientId: string): string {
+  const body = JSON.stringify(state);
+  try {
+    parseRecovery(body, clientId);
+  } catch {
+    fail('InvalidInput', 'Invalid recovery state.');
+  }
+  return body;
 }

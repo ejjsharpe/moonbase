@@ -291,6 +291,29 @@ test('file bytes, finite values, identity grammars and collection bounds retain 
     ready: true,
   });
 });
+test('a recovery state names only its own checkouts, once each, with exact relative paths', () => {
+  const view = state.views[checkout.checkoutId];
+  const other = { ...checkout, root: '/elsewhere' };
+  assert.deepEqual(decodeEditorRecovery(state), state);
+  for (const bad of [
+    { ...state, checkouts: [checkout, checkout] },
+    { ...state, openCheckoutIds: [checkout.checkoutId, checkout.checkoutId] },
+    { ...state, openCheckoutIds: ['missing'], selectedCheckoutId: null },
+    { ...state, selectedCheckoutId: 'missing' },
+    { ...state, views: { missing: view } },
+    { ...state, drafts: [state.drafts[0], state.drafts[0]] },
+    { ...state, drafts: [{ ...state.drafts[0], target: { ...target, checkout: other } }] },
+    { ...state, recentFiles: [{ ...target, path: '../outside' }] },
+    { ...state, views: { [checkout.checkoutId]: { ...view, active: 'closed.txt' } } },
+    { ...state, views: { [checkout.checkoutId]: { ...view, openFiles: ['.git/config'] } } },
+    { ...state, sidebarWidth: 99 },
+    { ...state, checkouts: [{ ...checkout, root: 'relative' }], drafts: [] },
+  ])
+    assert.throws(() => decodeEditorRecovery(bad));
+  assert.throws(() =>
+    decodeWorkspaceInput('persistRecovery', { ...inputs.persistRecovery, clientId: 'other' }),
+  );
+});
 const host = { hostId: 'host', storeId: 'store' };
 const health = { ...host, protocol: 2, version: '0.1.0', capabilities: ['', 'chat-v0', 'chat-v0'] };
 const profile = {

@@ -1,13 +1,11 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { fail } from '@moonbase/contracts/errors';
 import { normalizeApplicationError } from '@moonbase/effect';
-import { decodeEditorRecovery, isWellFormed } from '@moonbase/contracts/workspace-schema';
-import { isAbsolute } from 'node:path';
+import { isCheckoutPath, isWellFormed } from '@moonbase/contracts/workspace-schema';
 import { createHash } from 'node:crypto';
 import {
   maximumFileBytes,
   type CheckoutTarget,
-  type EditorRecovery,
   type FileDocument,
   type GitCheckoutTarget,
   type OperationResult,
@@ -19,43 +17,12 @@ export const ensure: (condition: unknown, message: string) => asserts condition 
 ) => {
   if (!condition) fail('InvalidInput', message);
 };
-export function identifier(value: unknown): asserts value is string {
-  ensure(
-    typeof value === 'string' && /^[\w.-]{1,160}$/.test(value),
-    'Invalid client/request identity.',
-  );
-}
+/** Refuses a path that is not exactly checkout-relative (see `isCheckoutPath`). */
 export function path(value: unknown, directory = false): asserts value is string {
   ensure(
-    typeof value === 'string' &&
-      value.length <= 4096 &&
-      (directory || !!value) &&
-      !isAbsolute(value) &&
-      !/[\\\0]/.test(value) &&
-      (value === '' ||
-        !value.split('/').some((p) => !p || p === '.' || p === '..' || p.toLowerCase() === '.git')),
+    typeof value === 'string' && isCheckoutPath(value, directory),
     'Use an exact checkout-relative path without traversal, links or metadata.',
   );
-}
-export function checkout(value: unknown): asserts value is CheckoutTarget {
-  ensure(
-    record(value) &&
-      typeof value.root === 'string' &&
-      isAbsolute(value.root) &&
-      !value.root.includes('\0') &&
-      value.root.length <= 4096,
-    'Invalid checkout root.',
-  );
-  ensure(value.vcs === 'git' || value.vcs === 'none', 'Invalid checkout version control.');
-  const keys = ['hostId', 'checkoutId', 'projectId', ...(value.vcs === 'git' ? ['branch'] : [])];
-  for (const key of keys)
-    ensure(
-      typeof value[key] === 'string' && value[key].length > 0 && value[key].length <= 4096,
-      'Invalid checkout identity.',
-    );
-  if (value.vcs === 'git')
-    ensure(value.worktree === 'main' || value.worktree === 'linked', 'Invalid checkout worktree.');
-  else ensure(!('branch' in value) && !('worktree' in value), 'A folder checkout has no branch.');
 }
 /** Refuses a Git-only operation on a plain-folder checkout. */
 export function requireGit(target: CheckoutTarget): asserts target is GitCheckoutTarget {
@@ -99,126 +66,6 @@ export function canonical(value: unknown): string {
         )
       : v,
   );
-}
-const optionalBoolean = (v: unknown) => v === undefined || typeof v === 'boolean';
-const record = (v: unknown): v is Record<string, unknown> =>
-  !!v && typeof v === 'object' && !Array.isArray(v);
-/** Checks a recovery state and returns it as decoded (with any defaults the schema supplies). */
-export function recovery(input: unknown, clientId: string): EditorRecovery {
-  const state = decodeEditorRecovery(input);
-  ensure(
-    record(state) &&
-      state.version === 1 &&
-      state.clientId === clientId &&
-      Buffer.byteLength(JSON.stringify(state)) <= 32 * 1024 * 1024,
-    'Invalid or oversized recovery state.',
-  );
-  ensure(
-    Array.isArray(state.checkouts) &&
-      state.checkouts.length <= 128 &&
-      record(state.views) &&
-      Array.isArray(state.drafts) &&
-      state.drafts.length <= 512 &&
-      Array.isArray(state.recentFiles) &&
-      state.recentFiles.length <= 1000 &&
-      Number.isFinite(state.sidebarWidth) &&
-      state.sidebarWidth >= 100 &&
-      state.sidebarWidth <= 2000 &&
-      optionalBoolean(state.followActiveFile),
-    'Invalid recovery state.',
-  );
-  state.checkouts.forEach(checkout);
-  const identities = new Map(state.checkouts.map((c) => [c.checkoutId, c]));
-  ensure(
-    Array.isArray(state.openCheckoutIds) &&
-      state.openCheckoutIds.length <= 128 &&
-      new Set(state.openCheckoutIds).size === state.openCheckoutIds.length &&
-      state.openCheckoutIds.every((id) => typeof id === 'string' && identities.has(id)),
-    'Invalid open checkout membership.',
-  );
-  ensure(
-    identities.size === state.checkouts.length &&
-      (state.selectedCheckoutId === null ||
-        state.openCheckoutIds.includes(state.selectedCheckoutId)),
-    'Invalid recovery checkout selection.',
-  );
-  const target = (t: unknown) => {
-    ensure(record(t), 'Invalid recovery target.');
-    path(t.path);
-    checkout(t.checkout);
-    ensure(
-      same(identities.get(t.checkout.checkoutId), t.checkout),
-      'Recovery target has mismatched checkout.',
-    );
-  };
-  const seen = new Set<string>();
-  for (const draft of state.drafts) {
-    target(draft?.target);
-    text(draft.text);
-    ensure(
-      record(draft.disk) && textDocument(draft.disk.text).version === draft.disk.version,
-      'Invalid recovery baseline.',
-    );
-    const key = canonical(draft.target);
-    ensure(!seen.has(key), 'Duplicate recovery draft.');
-    seen.add(key);
-  }
-  state.recentFiles.forEach(target);
-  const modes = ['file', 'staged', 'unstaged', 'untracked', 'conflict'];
-  for (const [id, view] of Object.entries(state.views)) {
-    ensure(
-      identities.has(id) &&
-        record(view) &&
-        Array.isArray(view.openFiles) &&
-        view.openFiles.length <= 1000 &&
-        new Set(view.openFiles).size === view.openFiles.length,
-      'Invalid recovery view.',
-    );
-    view.openFiles.forEach((p) => path(p));
-    path(view.active, true);
-    ensure(
-      (!view.active || view.openFiles.includes(view.active)) &&
-        (view.preview === null || view.openFiles.includes(view.preview)) &&
-        record(view.fileViews) &&
-        record(view.positions),
-      'Invalid recovery tabs.',
-    );
-    for (const [p, mode] of Object.entries(view.fileViews)) {
-      path(p);
-      ensure(modes.includes(mode), 'Invalid file view.');
-    }
-    for (const [p, positions] of Object.entries(view.positions)) {
-      path(p);
-      ensure(record(positions), 'Invalid positions.');
-      for (const [mode, pos] of Object.entries(positions)) {
-        ensure(
-          modes.includes(mode.replace(/:original$/, '')) &&
-            record(pos) &&
-            Number.isInteger(pos.line) &&
-            pos.line >= 1 &&
-            Number.isInteger(pos.column) &&
-            pos.column >= 1 &&
-            Number.isFinite(pos.top) &&
-            pos.top >= 0 &&
-            Number.isFinite(pos.left) &&
-            pos.left >= 0,
-          'Invalid editor position.',
-        );
-      }
-    }
-    ensure(
-      record(view.tree) &&
-        Array.isArray(view.tree.expanded) &&
-        Array.isArray(view.tree.selected) &&
-        Number.isFinite(view.tree.scroll) &&
-        view.tree.scroll >= 0 &&
-        optionalBoolean(view.tree.hideIgnoredFiles) &&
-        optionalBoolean(view.tree.hideIgnored),
-      'Invalid tree memory.',
-    );
-    [...view.tree.expanded, ...view.tree.selected, view.tree.focus].forEach((p) => path(p, true));
-  }
-  return state;
 }
 /** Journal key of one request: a hash of its owner and identifier parts. */
 export const key = (...parts: string[]) => hash(canonical(parts));

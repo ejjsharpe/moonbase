@@ -1,8 +1,9 @@
-import { Schema, Struct } from 'effect';
+import { Effect, Schema, Struct } from 'effect';
 import { isAbsolute } from 'node:path';
 import type { ChatTarget } from '@moonbase/contracts/chat';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { hash } from './validation.ts';
+import { systemGit } from './filesystem.ts';
 import {
   CheckoutTargetSchema,
   FileDocumentSchema,
@@ -38,7 +39,8 @@ export const WorkspaceConfigurationSchema = struct({
   dataDirectory: absolute,
   hostId: WorkspaceIdentifierSchema,
   filesystemHelper: optional(absolute),
-  gitExecutable: optional(absolute),
+  /** The Git the host runs; system Git by default. */
+  gitExecutable: absolute.pipe(Schema.withDecodingDefaultKey(Effect.succeed(systemGit))),
   ripgrepExecutable: optional(absolute),
   /**
    * Paths no checkout root, worktree location or import source may hold or sit inside, such as a
@@ -53,7 +55,10 @@ export const WorkspaceConfigurationSchema = struct({
    */
   nativeImports: optional(Schema.Boolean),
 });
-export type WorkspaceConfiguration = typeof WorkspaceConfigurationSchema.Type;
+/** The file host's configuration as its owner gives it. */
+export type WorkspaceConfiguration = typeof WorkspaceConfigurationSchema.Encoded;
+/** The file host's configuration as decoded, with its defaults. */
+export type HostConfiguration = typeof WorkspaceConfigurationSchema.Type;
 /**
  * Whether the host may open `real` as a checkout root. `requested` is the path as the client named
  * it, so a predicate can refuse one reached through a link. Called on open, before a worktree is
@@ -78,7 +83,7 @@ export type WorkspaceHostConfiguration = WorkspaceConfiguration & {
 const configuration = Schema.decodeUnknownSync(WorkspaceConfigurationSchema, {
   reportInput: false,
 });
-export function decodeConfiguration(value: unknown) {
+export function decodeConfiguration(value: unknown): HostConfiguration {
   try {
     return configuration(value);
   } catch {

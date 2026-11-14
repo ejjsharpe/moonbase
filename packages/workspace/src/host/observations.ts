@@ -1,9 +1,9 @@
 import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
-import type { ApplicationError, CheckoutTarget } from '@moonbase/contracts/workspace';
-import {
-  decodeWorkspaceEvent,
-  decodeWorkspaceWatchInput,
-} from '@moonbase/contracts/workspace-schema';
+import type {
+  ApplicationError,
+  CheckoutTarget,
+  WorkspaceEvent,
+} from '@moonbase/contracts/workspace';
 import { Cause, Deferred, Effect, Exit, Fiber, Queue, Scope, Stream } from 'effect';
 import fs, { readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
@@ -126,10 +126,6 @@ export class WorkspaceObservations {
     const self = this;
     return Stream.unwrap(
       Effect.gen(function* () {
-        const captured = yield* Effect.try({
-          try: () => decodeWorkspaceWatchInput(input),
-          catch: normalizeApplicationError,
-        });
         const scope = yield* Effect.acquireRelease(Scope.fork(self.scope, 'parallel'), (scope) =>
           Scope.close(scope, Exit.void),
         );
@@ -148,8 +144,8 @@ export class WorkspaceObservations {
           try: () => {
             ensure(
               !self.isClosed() &&
-                captured.paths.length > 0 &&
-                captured.paths.length <= 128 &&
+                input.paths.length > 0 &&
+                input.paths.length <= 128 &&
                 self.subscriptions.size < 64,
               'Watch subscription limit reached.',
             );
@@ -157,8 +153,8 @@ export class WorkspaceObservations {
           },
           catch: normalizeApplicationError,
         });
-        const directory = yield* self.runCommand(() => self.directory(captured.checkout));
-        const common = self.getCommonGitPath(captured.checkout);
+        const directory = yield* self.runCommand(() => self.directory(input.checkout));
+        const common = self.getCommonGitPath(input.checkout);
         // Changed paths since the last event; `undefined` when a watcher could not name one.
         let changedPaths: Set<string> | undefined = new Set();
         const changed = (failure?: string, changedPath?: string) => {
@@ -205,7 +201,7 @@ export class WorkspaceObservations {
                 ),
               ),
           ).pipe(Scope.provide(scope));
-        for (const p of new Set(captured.paths)) {
+        for (const p of new Set(input.paths)) {
           yield* Effect.try({ try: () => path(p, true), catch: normalizeApplicationError });
           const before = yield* self.runCommand(() => directory.entry(p));
           yield* Effect.try({
@@ -249,7 +245,11 @@ export class WorkspaceObservations {
                 } catch (failure) {
                   error = normalizeApplicationError(failure).message;
                 }
-                const event = decodeWorkspaceEvent({ ...captured, error });
+                const event: WorkspaceEvent = {
+                  checkout: input.checkout,
+                  paths: input.paths,
+                  ...(error === undefined ? {} : { error }),
+                };
                 error = undefined;
                 return event;
               });
@@ -257,7 +257,7 @@ export class WorkspaceObservations {
           ),
         );
         return Stream.concat(
-          Stream.succeed(decodeWorkspaceEvent({ ...captured, ready: true })),
+          Stream.succeed<WorkspaceEvent>({ ...input, ready: true }),
           events.pipe(Stream.filter((event) => event !== undefined)),
         );
       }),

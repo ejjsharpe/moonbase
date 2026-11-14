@@ -157,6 +157,7 @@ export const hostInputSchemas = {
     clientId: WorkspaceIdentifierSchema,
     references: array(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(160))).check(
       Schema.isMaxLength(128),
+      Schema.makeFilter((references) => new Set(references).size === references.length),
     ),
   }),
 };
