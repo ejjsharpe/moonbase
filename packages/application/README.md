@@ -4,6 +4,18 @@
 
 `createMoonbaseApplication` composes editor-only, chat-only or combined applications in one client runtime, with coordinated Quit (preservation, Save/Discard/Cancel prompts) and disposal. [`examples/headless.ts`](examples/headless.ts) runs all three compositions without Electron.
 
+## Layout
+
+`src/editor/` and `src/chat/` hold the two features, each exported through its `index.ts`; `src/runtime/` composes them. Within a feature, each concept (saves, tabs, chat list, sends, transcript…) gets its own folder with up to three files:
+
+| File | Holds |
+| --- | --- |
+| `x.ts` | Pure functions for derived decisions: no services, no state |
+| `x-service.ts` | The `Context.Service` and its `Layer`, holding the concept's `SubscriptionRef` |
+| `x-atoms.ts` | Atoms over the service and the RPC group, for subscription and caching, with no domain logic |
+
+A concept that needs only pure functions has only `x.ts`. Tests mirror `src/` under `test/`. The editor and chat controllers predate this and are being split into concept folders (#287, #295).
+
 | Export | Purpose |
 | --- | --- |
 | `.` | Application factory, lifecycle snapshots and types |
