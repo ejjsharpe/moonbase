@@ -99,8 +99,7 @@ const forbiddenPortable =
   /^(?:node:|electron(?:\/|$)|react(?:-dom)?(?:\/|$)|monaco-editor(?:\/|$)|@effect\/platform|@earendil-works\/|(?:fs|path|crypto|http|net|child_process)$)/;
 const owner = (path) => path.match(/^packages\/([^/]+)\//)?.[1];
 const moduleOwner = (path) => path.match(/^(?:packages|apps)\/[^/]+/)?.[0];
-const production = (path) =>
-  /^packages\/[^/]+\/src\//.test(path) || /^packages\/ui\/[^/]+\.ts$/.test(path);
+const production = (path) => /^packages\/[^/]+\/src\//.test(path);
 
 /** Check source ownership separately from emitted bundles, which erase type-only imports. */
 export function checkBoundaries({ files, packages }) {

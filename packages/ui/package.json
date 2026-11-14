@@ -3,10 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./*": "./*.ts",
+    "./*": "./src/*.ts",
     "./fonts.css": "./fonts.css",
     "./reset.css": "./reset.css",
-    "./tokens.stylex": "./tokens.stylex.ts"
+    "./tokens.stylex": "./src/tokens.stylex.ts"
   },
   "dependencies": {
     "@stylexjs/stylex": "0.19.1",
