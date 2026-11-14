@@ -1,10 +1,6 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
-import { normalizeApplicationError } from '@moonbase/effect';
-import {
-  InvalidPathError,
-  InvalidRequestError,
-  isWorkspaceHostError,
-} from '@moonbase/contracts/workspace-host-errors';
+import { InvalidPathError, InvalidRequestError } from '@moonbase/contracts/workspace-host-errors';
+import { isWorkspaceError } from '@moonbase/contracts/workspace-errors';
 import { isCheckoutPath, isWellFormed } from '@moonbase/contracts/workspace-schema';
 import { createHash } from 'node:crypto';
 import {
@@ -68,7 +64,7 @@ export const isOriginalResult = (
 ) => kind === 'trash' || item.destination !== undefined;
 /** The text an error may show: a workspace error's own, and a fixed one for anything else. */
 export const errorText = (error: unknown) =>
-  isWorkspaceHostError(error) ? error.message : normalizeApplicationError(error).message;
+  isWorkspaceError(error) ? error.message : 'Application effect failed';
 export const folded = (p: string) => p.normalize('NFC').toLowerCase();
 /** Whether any path of `a` is, contains or is contained by a path of `b`; '' is the whole checkout. */
 export const overlaps = (a: string[], b: string[]) =>

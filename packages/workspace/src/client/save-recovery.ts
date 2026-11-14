@@ -9,13 +9,13 @@ import {
 } from '@moonbase/contracts/workspace';
 import type { SaveStatus } from '@moonbase/contracts/workspace-host';
 import {
-  InterruptedSaveError,
   InvalidRecoveryRequestError,
   RecoveryConflictError,
   RecoveryPublicationError,
   SaveNotSentError,
 } from '@moonbase/contracts/workspace-errors';
 import { WorkspaceConflictError } from '@moonbase/contracts/workspace-host-errors';
+import { UncertainError } from '@moonbase/contracts/errors';
 import { attempt, type WorkspaceFailure } from '../attempt.ts';
 import { errorText, hash, same } from '../validation.ts';
 import { fromStoredSave, toStoredSave, type SaveRecord, type StoredSave } from './client-schema.ts';
@@ -116,7 +116,7 @@ export const replaySave = (
     }
     if (record.result) return record.result;
     if (record.state === 'done') return yield* new SaveNotSentError();
-    return yield* new InterruptedSaveError();
+    return yield* new UncertainError({ operation: 'Save', target: input.target });
   });
 
 /** Tells the host settled saves need no more replay; a failure is retried at the next load. */

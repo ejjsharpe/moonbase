@@ -105,15 +105,6 @@ export class SaveNotSentError extends Schema.TaggedError<SaveNotSentError>()(
     return 'The save never reached the host; its text was kept as a draft. Save it again as a new request.';
   }
 }
-/** A save whose outcome is still unknown: its intent is kept, never repeated. */
-export class InterruptedSaveError extends Schema.TaggedError<InterruptedSaveError>()(
-  'InterruptedSaveError',
-  {},
-) {
-  override get message() {
-    return 'Interrupted save retained its intent. Inspect disk and recovered draft before a new deliberate save.';
-  }
-}
 /** The host's reply says something the request cannot have produced. */
 export class UnexpectedHostReplyError extends Schema.TaggedError<UnexpectedHostReplyError>()(
   'UnexpectedHostReplyError',
@@ -132,7 +123,6 @@ export type RecoveryError =
   | UnreadableRecoveryError
   | ObserverAccessError
   | SaveNotSentError
-  | InterruptedSaveError
   | UnexpectedHostReplyError;
 /** Every way a `WorkspaceService` command fails: the host's errors and the recovery store's. */
 export type WorkspaceError = WorkspaceHostError | RecoveryError;
@@ -144,7 +134,6 @@ const codes: Record<RecoveryError['_tag'], ApplicationErrorCode> = {
   UnreadableRecoveryError: 'InvalidInput',
   ObserverAccessError: 'Unauthorized',
   SaveNotSentError: 'Unavailable',
-  InterruptedSaveError: 'Uncertain',
   UnexpectedHostReplyError: 'Incompatible',
 };
 const isRecoveryError = (value: unknown): value is RecoveryError => {
