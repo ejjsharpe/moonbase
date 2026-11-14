@@ -5,7 +5,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { Effect, Layer, ManagedRuntime } from 'effect';
+import { Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
 import {
   ApplicationError,
@@ -14,23 +14,20 @@ import {
 } from '@moonbase/contracts/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
-import { WorkspaceNative } from '@moonbase/workspace';
 import { reconcile } from '../src/client/recovery.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { fixture, isError, quote, waitFor } from './recovery-fixture.ts';
+import { captureNative, releaseNative } from './workspace-fixture.ts';
+import type { WorkspaceHostService } from '@moonbase/contracts/services';
 
-function native<R>(runtime: ManagedRuntime.ManagedRuntime<WorkspaceNative | R, ApplicationError>) {
+function native<R>(
+  runtime: ManagedRuntime.ManagedRuntime<WorkspaceHostService | R, ApplicationError>,
+) {
   return {
-    capture: (input: Parameters<Effect.Success<typeof WorkspaceNative>['capture']>[0]) =>
-      runApplicationEffect(
-        runtime,
-        Effect.flatMap(WorkspaceNative, (service) => service.capture(input)),
-      ),
-    release: (input: Parameters<Effect.Success<typeof WorkspaceNative>['release']>[0]) =>
-      runApplicationEffect(
-        runtime,
-        Effect.flatMap(WorkspaceNative, (service) => service.release(input)),
-      ),
+    capture: (input: Parameters<typeof captureNative>[0]) =>
+      runApplicationEffect(runtime, captureNative(input)),
+    release: (input: Parameters<typeof releaseNative>[0]) =>
+      runApplicationEffect(runtime, releaseNative(input)),
   };
 }
 
@@ -349,9 +346,7 @@ test('capture cancellation settles its helper and releases descriptors before re
     const before = readdirSync('/dev/fd').length;
     const capturing = runApplicationEffect(
       runtime,
-      Effect.flatMap(WorkspaceNative, (service) =>
-        service.capture({ checkout, clientId: 'alice', paths: [join(f.base, 'external')] }),
-      ),
+      captureNative({ checkout, clientId: 'alice', paths: [join(f.base, 'external')] }),
       { signal: abort.signal },
     );
     const rejected = assert.rejects(capturing, isError('Cancelled'));

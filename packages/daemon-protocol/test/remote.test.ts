@@ -10,6 +10,7 @@ import {
   type VerifiedChatEndpoint,
 } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/errors';
+import { toWireError, type WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
 import type { DaemonClient } from '@moonbase/contracts/daemon';
 import { chatHostCapabilities } from '@moonbase/contracts/host';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
@@ -337,8 +338,8 @@ test('a workspace call or watch for another host is refused before it is sent, a
   };
   const d = await daemon(t, workspace);
   const host = await remote(t, d, undefined, true).workspace();
-  const code = async (effect: Effect.Effect<unknown, { code: string }>) =>
-    (await Effect.runPromise(Effect.flip(effect))).code;
+  const code = async (effect: Effect.Effect<unknown, WorkspaceHostError>) =>
+    toWireError(await Effect.runPromise(Effect.flip(effect))).code;
   assert.equal(await code(host.readFile({ checkout: foreign, path: 'a.txt' })), 'Unauthorized');
   assert.equal(
     await code(Stream.runDrain(host.watch({ checkout: foreign, paths: [''] }))),
@@ -387,11 +388,11 @@ test('a mutation past its deadline keeps its place until the daemon replies, sta
   });
   await client.advance(120_000);
   assert.deepEqual(
-    (await Promise.all(hung)).map((error) => error.code),
+    (await Promise.all(hung)).map((error) => toWireError(error).code),
     Array(limit).fill('Uncertain'),
   );
   // The place was never obtained, so the read was never sent.
-  assert.equal((await waitingRead).code, 'Unavailable');
+  assert.equal(toWireError(await waitingRead).code, 'Unavailable');
   assert.equal(answers.length, limit);
   // A late reply frees its place.
   answers.shift()!();
@@ -403,6 +404,6 @@ test('a mutation past its deadline keeps its place until the daemon replies, sta
   // Closing the connection frees the rest: the waiting read gets a place and fails at once.
   const waiting = read();
   await d.stop();
-  assert.ok((await waiting).code);
+  assert.ok(ApplicationError.is(await waiting));
   await after;
 });

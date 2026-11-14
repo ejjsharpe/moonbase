@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ApplicationError } from '@moonbase/contracts/workspace';
+import { GitStatusFormatError } from '@moonbase/contracts/workspace-host-errors';
 import { parseGitStatus } from '../src/host/git-status.ts';
 
 const records = (...rows: string[]) => rows.map((row) => row + '\0').join('');
@@ -89,8 +89,7 @@ test('empty output has no changes and malformed records are refused', () => {
     assert.throws(
       () => parseGitStatus(output),
       (error) =>
-        error instanceof ApplicationError &&
-        error.code === 'Unavailable' &&
+        error instanceof GitStatusFormatError &&
         error.message.startsWith('Unrecognized Git status record'),
     );
 });

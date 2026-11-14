@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { toWireError, type WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
 import { execFileSync } from 'node:child_process';
 import { chmod, mkdir, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -27,8 +28,8 @@ import { createFauxProviders, fauxModelId, fauxProviderId } from './faux-provide
 const minute = 60_000;
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
 /** The error code a refused workspace call carries. */
-const refusal = async <A>(effect: Effect.Effect<A, { code: string }>) =>
-  (await run(Effect.flip(effect))).code;
+const refusal = async <A>(effect: Effect.Effect<A, WorkspaceHostError>) =>
+  toWireError(await run(Effect.flip(effect))).code;
 const gone = (pid: number) => {
   try {
     process.kill(pid, 0);

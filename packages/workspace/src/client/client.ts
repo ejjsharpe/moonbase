@@ -1,7 +1,12 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
-import { Cause, Effect, Exit, Scope, type FiberSet } from 'effect';
+import { Cause, Effect, Exit, Scope, Stream, type FiberSet } from 'effect';
+import {
+  isWorkspaceHostError,
+  toWireError,
+  type WorkspaceHostError,
+} from '@moonbase/contracts/workspace-host-errors';
 import { releaseResource } from '@moonbase/effect';
 import type {
   WorkspaceHostServiceShape,
@@ -15,25 +20,30 @@ import {
   type WorkspaceCommand,
   type WorkspaceOperation,
 } from '@moonbase/contracts/workspace';
-import { admit, releaseAll, type AdmissionOwner } from '../admission.ts';
+import { releaseAll, runOwned, type WorkOwner } from '../owned-work.ts';
 import { ClientStore } from './client-store.ts';
 import type { OperationRecord, SaveRecord } from './client-schema.ts';
 import { WorkspaceRecovery, type HostPorts, type Recoveries } from './recovery.ts';
-import { canonical, ensure, errorText, folded, hash, key, path } from '../validation.ts';
+import { canonical, errorText, folded, hash, key, path } from '../validation.ts';
 import { fail } from '@moonbase/contracts/errors';
+import { ensureInput } from './ensure-input.ts';
 
 export type ClientOwnership = {
   operations: FiberSet.FiberSet<unknown, ApplicationError>;
   operationScope: Scope.Closeable;
 };
 
-/** Runs a host effect for a Promise caller; cancelling the signal interrupts the host request. */
-async function run<A>(effect: Effect.Effect<A, ApplicationError>, signal: AbortSignal) {
+/**
+ * Runs a host effect for a Promise caller; cancelling the signal interrupts the host request. A
+ * host error arrives as the wire error the client's recovery reads (until CL-11 moves it to tags).
+ */
+async function run<A>(effect: Effect.Effect<A, WorkspaceHostError>, signal: AbortSignal) {
   const exit = await Effect.runPromiseExit(effect, { signal });
   if (Exit.isSuccess(exit)) return exit.value;
   if (Cause.hasInterrupts(exit.cause))
     throw new ApplicationError({ code: 'Cancelled', message: 'Workspace command cancelled.' });
-  throw Cause.squash(exit.cause);
+  const error = Cause.squash(exit.cause);
+  throw isWorkspaceHostError(error) ? toWireError(error) : error;
 }
 /** A settled question is asked on a fresh signal, so a cancelled caller still learns the answer. */
 const settled = () => new AbortController().signal;
@@ -44,7 +54,7 @@ const settled = () => new AbortController().signal;
  * save or operation is recorded durably before it is sent, and a lost reply is resolved through
  * the host's status queries, never sent again as new work.
  */
-export class ClientWorkspace implements AdmissionOwner {
+export class ClientWorkspace implements WorkOwner {
   readonly ownership: ClientOwnership;
   readonly store: ClientStore;
   readonly service: WorkspaceServiceShape;
@@ -153,11 +163,11 @@ export class ClientWorkspace implements AdmissionOwner {
         (input, signal) => this.recovery.persistRecovery(input, signal),
         true,
       ),
-      watch: (input) => host.watch(input),
+      watch: (input) => host.watch(input).pipe(Stream.mapError(toWireError)),
     };
   }
   effect<A>(fn: (signal: AbortSignal) => Promise<A>, persistence = false) {
-    return admit(this, fn, persistence);
+    return runOwned(this, fn, persistence);
   }
 
   private async initializeRepository(
@@ -165,11 +175,11 @@ export class ClientWorkspace implements AdmissionOwner {
     signal: AbortSignal,
     host: WorkspaceHostServiceShape,
   ) {
-    ensure(
+    ensureInput(
       !this.recovery.getPendingSaves(target).length,
       'A save awaits recovery. Resolve it before initializing Git.',
     );
-    ensure(
+    ensureInput(
       !this.recovery.getUnsettledCheckoutOperations(target).length,
       'A file operation awaits recovery publication or inspection. Resolve it before initializing Git.',
     );

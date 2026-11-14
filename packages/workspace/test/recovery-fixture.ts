@@ -20,6 +20,7 @@ import {
   type EditorRecovery,
 } from '@moonbase/contracts/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { isWorkspaceHostError, toWireError } from '@moonbase/contracts/workspace-host-errors';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 export const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
 export const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
@@ -50,8 +51,11 @@ export function fixture() {
     cleanup: () => rmSync(base, { recursive: true, force: true }),
   };
 }
-export const isError = (code: ApplicationError['code']) => (value: unknown) =>
-  ApplicationError.is(value) && value.code === code;
+/** Whether `value` is, or a host error sent as, the wire error with `code`. */
+export const isError = (code: ApplicationError['code']) => (value: unknown) => {
+  const wire = isWorkspaceHostError(value) ? toWireError(value) : value;
+  return ApplicationError.is(wire) && wire.code === code;
+};
 export function state(
   checkout: CheckoutTarget,
   disk: { text: string; version: string },

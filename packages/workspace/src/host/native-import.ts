@@ -76,10 +76,8 @@ export class NativeImport {
       fs.closeSync(fd);
     }
   }
-  private closed = false;
+  /** Closes the source's descriptor; whoever holds the reference closes it once. */
   close() {
-    if (this.closed) return;
-    this.closed = true;
     fs.closeSync(this.fd);
   }
 }

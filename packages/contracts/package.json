@@ -13,6 +13,7 @@
     "./workspace-schema": "./src/workspace-schema.ts",
     "./workspace-host": "./src/workspace-host.ts",
     "./workspace-host-schema": "./src/workspace-host-schema.ts",
+    "./workspace-host-errors": "./src/workspace-host-errors.ts",
     "./connection-schema": "./src/connection-schema.ts",
     "./host-schema": "./src/host-schema.ts",
     "./error-schema": "./src/error-schema.ts",
