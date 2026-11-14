@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { Cause, Context, Deferred, Effect, Exit, Layer, Semaphore } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
+import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
 import type { ChatSession } from '@moonbase/contracts/chat';
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
@@ -306,11 +307,14 @@ export const LocalDaemonConnectionLive = (
     Effect.gen(function* () {
       const inner = yield* ConnectionService;
       const lock = yield* Semaphore.make(1);
+      // The loopback connection's failures are legacy errors this wrapper reads by code.
       const connected = Effect.map(
-        inner.getConnection({}),
+        inner.getConnection({}).pipe(Effect.mapError(toConnectionApplicationError)),
         (state) => state.state === 'connected' && daemon.isRunning(),
       );
-      const connect = inner.connect({ profileId: loopbackProfileId });
+      const connect = inner
+        .connect({ profileId: loopbackProfileId })
+        .pipe(Effect.mapError(toConnectionApplicationError));
       const promise = <A>(run: () => Promise<A>) =>
         Effect.tryPromise({
           try: run,

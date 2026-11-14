@@ -40,6 +40,7 @@ import {
   isHostMutation,
 } from '@moonbase/contracts/workspace-host-schema';
 import { socketLimits } from '@moonbase/contracts/socket';
+import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
 import type { ProviderCommand, ProviderInput, ProviderState } from '@moonbase/contracts/providers';
 import { readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
 import type {
@@ -143,6 +144,9 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
   DaemonLink,
   Effect.gen(function* () {
     const connections = yield* ConnectionService;
+    // A connection failure reaches chat, folder and provider callers as the legacy error.
+    const lookUpEndpoint = (host: ChatHostTarget) =>
+      connections.endpoint({ host }).pipe(Effect.mapError(toConnectionApplicationError));
     const clock = yield* DaemonLinkClock;
     const scope = yield* Effect.scope;
     const sleep = (ms: number) =>
@@ -188,7 +192,7 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
     };
     const acquire = (host: ChatHostTarget) =>
       Effect.gen(function* () {
-        const endpoint = yield* connections.endpoint({ host });
+        const endpoint = yield* lookUpEndpoint(host);
         const socket = yield* Effect.tryPromise({
           try: () => open(endpoint),
           catch: (error) =>
@@ -202,7 +206,7 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
         return { endpoint, socket };
       });
     const isCurrent = (host: ChatHostTarget, endpoint: VerifiedChatEndpoint) =>
-      Effect.map(Effect.exit(connections.endpoint({ host })), (now) =>
+      Effect.map(Effect.exit(lookUpEndpoint(host)), (now) =>
         Exit.isSuccess(now) ? sameEndpoint(now.value, endpoint) : false,
       );
 
@@ -217,7 +221,7 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
       sink: Sink<K>,
     ) =>
       Effect.gen(function* () {
-        const first = yield* connections.endpoint({ host });
+        const first = yield* lookUpEndpoint(host);
         const stale = Effect.flatMap(isCurrent(host, first), (same) =>
           same ? Effect.void : Effect.fail(generationChanged(false)),
         );
@@ -229,7 +233,12 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
             Effect.forkScoped,
           );
         // A connection publication fails the subscription once its generation is gone.
-        yield* failWith(connections.watch().pipe(Stream.runForEach(() => stale)));
+        yield* failWith(
+          connections.watch().pipe(
+            Stream.mapError(toConnectionApplicationError),
+            Stream.runForEach(() => stale),
+          ),
+        );
         let state: SocketSubscriptionState<K> | undefined,
           delivered = false,
           failures = 0;

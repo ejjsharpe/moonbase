@@ -11,6 +11,7 @@ import {
   type WorkspaceHandlers,
 } from '@moonbase/contracts/services';
 import type { ConnectionCommand, ConnectionInput } from '@moonbase/contracts/connection';
+import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
 import type { ChatCommand, ChatInput } from '@moonbase/contracts/chat';
 
 /** UI, native actions and transport adapters all enter these handlers. */
@@ -26,6 +27,8 @@ export const workspaceCommand = <K extends WorkspaceCommand>(
 export const workspaceWatch = (input: Parameters<WorkspaceService['Service']['watch']>[0]) =>
   Stream.unwrap(Effect.map(WorkspaceService, (service) => service.watch(input)));
 
+// Connection failures become the legacy `ApplicationError` here, the one place they reach
+// clients and renderers, with the codes they have always had.
 export const connectionCommand = <K extends ConnectionCommand>(
   operation: K,
   input: ConnectionInput<K>,
@@ -33,10 +36,12 @@ export const connectionCommand = <K extends ConnectionCommand>(
   Effect.flatMap(ConnectionService, (service) => {
     const handlers: ConnectionHandlers = service;
     return handlers[operation](input);
-  });
+  }).pipe(Effect.mapError(toConnectionApplicationError));
 
 export const connectionWatch = () =>
-  Stream.unwrap(Effect.map(ConnectionService, (service) => service.watch()));
+  Stream.unwrap(Effect.map(ConnectionService, (service) => service.watch())).pipe(
+    Stream.mapError(toConnectionApplicationError),
+  );
 
 export const chatCommand = <K extends ChatCommand>(operation: K, input: ChatInput<K>) =>
   Effect.flatMap(ChatService, (service) => {

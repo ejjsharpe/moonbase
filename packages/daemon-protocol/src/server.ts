@@ -28,7 +28,11 @@ import {
   isHostMutation,
 } from '@moonbase/contracts/workspace-host-schema';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
-import { createHostHealthReply } from '@moonbase/ssh/host-health';
+import { createHostHealthReply } from './health.ts';
+import {
+  HostVerificationError,
+  toConnectionApplicationError,
+} from '@moonbase/contracts/connection-errors';
 import {
   chatHostCapabilities,
   chatHostVersion,
@@ -275,7 +279,11 @@ export const serveChat = (
               }
               response.writeHead(200, { 'content-type': 'application/json' });
               response.end(JSON.stringify(value));
-            } catch (error) {
+            } catch (thrown) {
+              const error =
+                thrown instanceof HostVerificationError
+                  ? toConnectionApplicationError(thrown)
+                  : thrown;
               response.writeHead(
                 ApplicationError.is(error) && error.code === 'Unauthorized' ? 401 : 503,
                 { 'content-type': 'application/json' },

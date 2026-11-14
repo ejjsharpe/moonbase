@@ -10,7 +10,8 @@ import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { chatProtocolVersion, type ChatHostHealth } from '@moonbase/contracts/host';
 import { ConnectionService, type ConnectionServiceShape } from '@moonbase/contracts/services';
 import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
-import { checkHostHealth } from '@moonbase/ssh/host-health';
+import { checkHostHealth } from './health.ts';
+import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
 import { isSameChatHost } from '@moonbase/contracts/chat-validation';
 import { readObject } from '@moonbase/contracts/common';
 import { isPrivateTo } from '@moonbase/contracts/files';
@@ -185,8 +186,11 @@ export function LoopbackConnectionLive(
           observers.clear();
         }),
       );
+      // This connection is still on the legacy error, so a health failure becomes one here.
       const verify = (origin: string, token: string) =>
-        checkHostHealth({ origin, token, expected });
+        checkHostHealth({ origin, token, expected }).pipe(
+          Effect.mapError(toConnectionApplicationError),
+        );
       const connect = Effect.gen(function* () {
         yield* isOpen;
         const files = yield* read().pipe(

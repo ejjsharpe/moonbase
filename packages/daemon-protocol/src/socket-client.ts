@@ -39,7 +39,11 @@ import {
   decodeSocketSubscriptionValue,
 } from '@moonbase/contracts/socket-schema';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import { validateHostHealth } from '@moonbase/ssh/host-health';
+import { validateHostHealth } from './health.ts';
+import {
+  HostVerificationError,
+  toConnectionApplicationError,
+} from '@moonbase/contracts/connection-errors';
 import * as P from './protocol.ts';
 import { checkChatOutput, isChatMutation } from '@moonbase/contracts/chat-validation';
 import { readObject } from '@moonbase/contracts/common';
@@ -359,7 +363,9 @@ export function connectDaemonSocket(
         return;
       }
       receive(message);
-    } catch (error) {
+    } catch (thrown) {
+      const error =
+        thrown instanceof HostVerificationError ? toConnectionApplicationError(thrown) : thrown;
       // Whatever was wrong, the daemon is told nothing and the connection closes.
       end(
         ApplicationError.is(error) && error.code !== 'InvalidInput'

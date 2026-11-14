@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { ApplicationError } from '@moonbase/contracts/workspace';
+import { ConnectionError, type ConnectionErrorReason } from '@moonbase/contracts/connection-errors';
 
-const unavailable = (message: string) => new ApplicationError({ code: 'Unavailable', message });
+const failure = (reason: ConnectionErrorReason) => new ConnectionError({ reason });
 export type ProcessExit = {
   code: number | null;
   signal: NodeJS.Signals | null;
@@ -86,36 +86,20 @@ export class SshProcess {
       });
     });
   }
-  failure(): ApplicationError {
-    if (this.exited?.spawnFailed)
-      return unavailable(
-        'Could not start system SSH. Verify the configured executable and its permissions.',
-      );
+  failure(): ConnectionError {
+    if (this.exited?.spawnFailed) return failure('spawn-failed');
     if (/REMOTE HOST IDENTIFICATION HAS CHANGED|host key verification failed/i.test(this.stderr))
-      return unavailable(
-        'SSH host key verification failed. Have the operator verify the known host key before retrying.',
-      );
+      return failure('host-key');
     if (
       /address already in use|cannot listen to port|could not request local forwarding/i.test(
         this.stderr,
       )
     )
-      return unavailable(
-        'SSH could not bind its local forward. Another listener may have claimed the port; retry with a new connection.',
-      );
+      return failure('forward-bind');
     if (/permission denied|authentication failed/i.test(this.stderr))
-      return new ApplicationError({
-        code: 'Unauthorized',
-        message:
-          'SSH authentication failed. Verify the configured SSH alias, agent and key access.',
-      });
-    if (this.overflow)
-      return unavailable(
-        'SSH configuration output exceeded its bound. Use a focused connection profile.',
-      );
-    return unavailable(
-      'SSH exited. Check the configured alias, network, host key policy and independently running chat host.',
-    );
+      return failure('authentication');
+    if (this.overflow) return failure('output-overflow');
+    return failure('exited');
   }
   private signal(signal: NodeJS.Signals | 0) {
     const pid = this.child.pid;
@@ -142,8 +126,7 @@ export class SshProcess {
       };
       const send = async (signal: NodeJS.Signals) => {
         while (attempt(signal) === undefined) {
-          if (Date.now() >= deadline)
-            throw unavailable('Owned SSH process group access remained unresolved.');
+          if (Date.now() >= deadline) throw failure('teardown');
           await new Promise((resolve) => setTimeout(resolve, 10));
         }
       };
@@ -161,8 +144,7 @@ export class SshProcess {
         await send('SIGTERM');
         if (!(await gone(Math.min(500, Math.max(0, deadline - Date.now()))))) {
           await send('SIGKILL');
-          if (!(await gone(Math.max(0, deadline - Date.now()))))
-            throw unavailable('Owned SSH process group did not terminate.');
+          if (!(await gone(Math.max(0, deadline - Date.now())))) throw failure('teardown');
         }
       }
       const drained = async (milliseconds: number) => {
@@ -181,14 +163,11 @@ export class SshProcess {
       if (!(await drained(Math.min(100, Math.max(0, deadline - Date.now()))))) {
         this.child.stdout?.destroy();
         this.child.stderr?.destroy();
-        if (!(await drained(Math.max(0, deadline - Date.now()))))
-          throw unavailable('Owned SSH output pipes did not close.');
+        if (!(await drained(Math.max(0, deadline - Date.now())))) throw failure('teardown');
       }
     })().catch(() => {
       this.stopping = undefined;
-      throw unavailable(
-        'Owned SSH process group teardown failed. Retry release after resolving the process access failure.',
-      );
+      throw failure('teardown');
     });
     return this.stopping;
   }

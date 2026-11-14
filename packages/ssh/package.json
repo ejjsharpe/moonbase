@@ -4,8 +4,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./configuration": "./src/configuration.ts",
-    "./host-health": "./src/host-health.ts"
+    "./configuration": "./src/configuration.ts"
   },
   "scripts": {
     "build": "tsc --noEmit -p tsconfig.json",
