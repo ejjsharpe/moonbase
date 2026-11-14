@@ -9,7 +9,7 @@ import type {
   ChatTranscriptPart,
   ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
-import { controlledHostFixture, until } from '../../../tests/chat/fixture.ts';
+import { controlledHostFixture, until } from '../../../test/chat/fixture.ts';
 import { createImageRuntime, retainedImage } from './fixtures/stored-image-fixture.ts';
 import { ChatIpcSession } from '../src/main/chat/session.ts';
 import { respondTranscriptImage } from '../src/main/chat/transcript-native.ts';

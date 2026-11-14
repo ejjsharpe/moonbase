@@ -1,7 +1,7 @@
 import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
 import { closeSettings, openSettings, selectRemoteChat } from '../fixtures/chat-target.ts';
 import { test, expect, _electron as electron } from '@playwright/test';
-import { fixture } from '../../../../tests/chat/tool-fixture.ts';
+import { fixture } from '../../../../test/chat/tool-fixture.ts';
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';

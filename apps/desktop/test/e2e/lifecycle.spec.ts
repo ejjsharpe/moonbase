@@ -8,7 +8,7 @@ import {
 import { createRemoteChat, selectRemoteChat } from '../fixtures/chat-target.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
-import { fixture, until } from '../../../../tests/chat/tool-fixture.ts';
+import { fixture, until } from '../../../../test/chat/tool-fixture.ts';
 import { join, resolve } from 'node:path';
 import { mkdir, writeFile, appendFile, readFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';

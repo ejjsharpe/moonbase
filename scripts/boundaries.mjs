@@ -73,7 +73,7 @@ export function readRepository(root) {
         files.set(path, imports(readFileSync(join(root, path), 'utf8'), path));
     }
   }
-  for (const directory of ['packages', 'apps', 'tests']) walk(directory);
+  for (const directory of ['packages', 'apps', 'test']) walk(directory);
   for (const parent of ['packages', 'apps']) {
     for (const item of readdirSync(join(root, parent), { withFileTypes: true })) {
       const directory = `${parent}/${item.name}`;

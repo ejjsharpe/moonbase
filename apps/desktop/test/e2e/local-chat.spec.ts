@@ -10,7 +10,7 @@ import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { controlledHostFixture } from '../../../../tests/chat/fixture.ts';
+import { controlledHostFixture } from '../../../../test/chat/fixture.ts';
 import {
   closeSettings,
   createRemoteChat,
@@ -519,7 +519,7 @@ for (const mode of ['local', 'remote'] as const)
     const host =
       mode === 'remote'
         ? await controlledHostFixture(
-            new URL('../../../../tests/chat/faux-tool.mjs', import.meta.url),
+            new URL('../../../../test/chat/faux-tool.mjs', import.meta.url),
             true,
           )
         : undefined;
@@ -645,7 +645,7 @@ for (const mode of ['local', 'remote'] as const)
 test('transcript remote first/next chunks render through authenticated stream and Electron IPC before held completion', async () => {
   test.setTimeout(60000);
   const host = await controlledHostFixture(
-    new URL('../../../../tests/chat/faux-stream.mjs', import.meta.url),
+    new URL('../../../../test/chat/faux-stream.mjs', import.meta.url),
     true,
   );
   const userData = join(host.directory, 'desktop');

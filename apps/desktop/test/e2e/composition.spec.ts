@@ -15,7 +15,7 @@ import {
   type ElectronApplication,
   type Page,
 } from '@playwright/test';
-import { fixture, until } from '../../../../tests/chat/tool-fixture.ts';
+import { fixture, until } from '../../../../test/chat/tool-fixture.ts';
 import { openCallCard } from '../fixtures/transcript-list.ts';
 import { mkdir, writeFile, readFile, appendFile, readdir } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';

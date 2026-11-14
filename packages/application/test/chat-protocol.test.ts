@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { type DraftStorage } from '@moonbase/application/chat';
 import { modelRoot } from './chat-model-fixture.ts';
-import { fixture, until } from '../../../tests/chat/tool-fixture.ts';
+import { fixture, until } from '../../../test/chat/tool-fixture.ts';
 class Storage implements DraftStorage {
   value: string | null = null;
   read() {

@@ -9,7 +9,7 @@ import {
 import { createRegistry, defineExtension, defineTool } from '@earendil-works/pi-durable';
 import { Type } from 'typebox';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
-import { fauxModel, fauxModelOptions, installFaux } from '../../../../tests/chat/faux-model.ts';
+import { fauxModel, fauxModelOptions, installFaux } from '../../../../test/chat/faux-model.ts';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import type { ChatSession } from '@moonbase/contracts/chat';
 

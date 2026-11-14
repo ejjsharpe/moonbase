@@ -12,8 +12,8 @@
     "test": "node --test scripts/*.test.mjs && nx run-many -t test --parallel=1",
     "build": "nx run-many -t build",
     "check:foundation": "node scripts/check-foundation.mjs",
-    "test:editor-integration": "tsc --noEmit -p tests/editor-workspace/tsconfig.json && node packages/workspace/scripts/build-native.mjs && bun test --timeout 60000 ./tests/editor-workspace",
-    "test:chat-integration": "tsc --noEmit -p tests/chat/tsconfig.json && node --experimental-strip-types --test --test-concurrency=1 tests/chat/*.test.ts",
+    "test:editor-integration": "tsc --noEmit -p test/editor-workspace/tsconfig.json && node packages/workspace/scripts/build-native.mjs && bun test --timeout 60000 ./test/editor-workspace",
+    "test:chat-integration": "tsc --noEmit -p test/chat/tsconfig.json && node --experimental-strip-types --test --test-concurrency=1 test/chat/*.test.ts",
     "lint:fix": "bun run lint --fix --ignore-pattern \"packages/ui/**\"",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check ."

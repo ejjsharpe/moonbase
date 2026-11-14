@@ -8,7 +8,7 @@ import {
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { controlledHostFixture, until } from '../../../../tests/chat/fixture.ts';
+import { controlledHostFixture, until } from '../../../../test/chat/fixture.ts';
 import { createRemoteChat, selectRemoteChat } from '../fixtures/chat-target.ts';
 import { captureNative } from '../fixtures/editor-regressions.ts';
 import { readFindHighlight } from '../fixtures/find-highlight.ts';
@@ -186,7 +186,7 @@ async function image(app: ElectronApplication, page: Page) {
 
 test('integrated remote archive/runtime reveals early/middle/end Find in real history and streams held progress without polling', async () => {
   const host = await controlledHostFixture(
-    new URL('../../../../tests/chat/faux-stream.mjs', import.meta.url),
+    new URL('../../../../test/chat/faux-stream.mjs', import.meta.url),
     true,
   );
   let app: ElectronApplication | undefined;
