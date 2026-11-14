@@ -51,6 +51,7 @@ for (const entry of [
   'workspace-schema',
   'workspace-host-schema',
   'workspace-host-errors',
+  'workspace-errors',
   'connection-schema',
   'host-schema',
   'daemon-schema',

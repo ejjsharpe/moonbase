@@ -1,14 +1,15 @@
-import { Context, Effect, FiberSet, Layer, Scope } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 import { WorkspaceHostService, WorkspaceService } from '@moonbase/contracts/services';
 import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
-import { ApplicationError } from '@moonbase/contracts/workspace';
-import { normalizeApplicationError } from '@moonbase/effect';
-import { ClientWorkspace } from './client/client.ts';
+import type { ApplicationError } from '@moonbase/contracts/workspace';
+import { makeClientWorkspace } from './client/client.ts';
+import { attempt } from './attempt.ts';
+import { asWorkspaceError } from './owned-work.ts';
 import { ClientStore } from './client/client-store.ts';
 import { decodeClientConfiguration } from './client/client-schema.ts';
 import { FileHost, makeFileHostLayer } from './host/host.ts';
 import type { WorkspaceHostConfiguration } from './schema.ts';
-import { toWireError } from '@moonbase/contracts/workspace-host-errors';
+import { toWireError } from '@moonbase/contracts/workspace-errors';
 
 export type {
   ChatFolders,
@@ -73,30 +74,17 @@ export function WorkspaceRecoveryLive(
 ) {
   return Layer.effect(
     WorkspaceService,
-    Effect.map(
-      Effect.acquireRelease(
-        Effect.gen(function* () {
-          const config = yield* Effect.try({
-            try: () => decodeClientConfiguration(configuration),
-            catch: normalizeApplicationError,
-          });
-          const parent = yield* Effect.scope;
-          const operationScope = yield* Scope.fork(parent, 'parallel');
-          const operations = yield* FiberSet.make<unknown, ApplicationError>().pipe(
-            Scope.provide(operationScope),
-          );
-          return yield* Effect.try({
-            try: () => new ClientWorkspace(config, { operations, operationScope }, host),
-            catch: (error) =>
-              normalizeApplicationError(
-                error,
-                new ApplicationError({ code: 'Persistence', message: 'Application effect failed' }),
-              ),
-          });
-        }),
-        (client) => client.close(),
-      ),
-      (client) => client.service,
+    Effect.gen(function* () {
+      const config = yield* attempt(() => decodeClientConfiguration(configuration));
+      const store = yield* Effect.acquireRelease(
+        attempt(() => new ClientStore(config.dataDirectory, config.installationId)),
+        (store) => Effect.sync(() => store.close()),
+      );
+      return yield* makeClientWorkspace({ store, host, hostWaitMs: config.hostWaitMs ?? 5000 });
+    }).pipe(
+      // A client store that cannot open fails its composition with the wire error its owners
+      // expect, until the workspace moves to Effect RPC (CL-07).
+      Effect.mapError((failure) => toWireError(asWorkspaceError(failure, true))),
     ),
   );
 }

@@ -18,7 +18,7 @@ import { attempt } from '../attempt.ts';
 import { HelperFailure } from '../system-failures.ts';
 import { identity, type Directory } from '../filesystem.ts';
 import { errorText, requireGit } from '../validation.ts';
-import { cancellationPoint } from './cancellation.ts';
+import { cancellationPoint } from '../cancellation.ts';
 import { Checkouts } from './checkouts.ts';
 
 /** What Git reported, when `error` is the helper's failure. */

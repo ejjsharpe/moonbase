@@ -1,4 +1,6 @@
+import type { Effect } from 'effect';
 import { O_NOFOLLOW_ANY } from './filesystem.ts';
+import { attempt, type WorkspaceFailure } from './attempt.ts';
 import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
 import { chmodSync, constants, closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
@@ -122,22 +124,27 @@ export class Store {
   delete(bucket: string, key: string) {
     this.statement('DELETE FROM records WHERE bucket=? AND key=?').run(bucket, key);
   }
-  /** Runs `fn` in one write transaction; a throw rolls everything back. */
-  transaction<T>(fn: () => T): T {
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      const value = fn();
-      this.db.exec('COMMIT');
-      return value;
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
+  /**
+   * Runs `work` in one write transaction: it commits when `work` returns and rolls back when it
+   * throws. The transaction opens, runs and ends in one synchronous step, so no other fiber's
+   * work on this connection can run inside it.
+   */
+  transaction<A>(work: () => A): Effect.Effect<A, WorkspaceFailure> {
+    return attempt(() => {
+      this.db.exec('BEGIN IMMEDIATE');
+      try {
+        const value = work();
+        this.db.exec('COMMIT');
+        return value;
+      } catch (error) {
+        // Nothing is open when `COMMIT` itself failed and SQLite undid it.
+        if (this.db.isTransaction) this.db.exec('ROLLBACK');
+        throw error;
+      }
+    });
   }
-  private closed = false;
+  /** Closes the database; its owner's scope does this once. */
   close() {
-    if (this.closed) return;
-    this.closed = true;
     this.db.close();
   }
 }

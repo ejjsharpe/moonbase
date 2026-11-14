@@ -1,27 +1,13 @@
-import {
-  Cause,
-  Context,
-  Effect,
-  Exit,
-  Fiber,
-  FiberSet,
-  Layer,
-  Option,
-  type Scope,
-  Stream,
-} from 'effect';
+import { Cause, Context, Effect, FiberSet, Layer, type Scope, Stream } from 'effect';
 import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import type { HostInput } from '@moonbase/contracts/workspace-host';
 import {
-  isWorkspaceHostError,
   toWireError,
-  WorkspaceStoreError,
-  WorkspaceUnavailableError,
   WorkspaceUnsupportedError,
   type WorkspaceHostError,
 } from '@moonbase/contracts/workspace-host-errors';
-import { attempt, type HostFailure } from '../attempt.ts';
-import { SystemFailure } from '../system-failures.ts';
+import { attempt, type WorkspaceFailure } from '../attempt.ts';
+import { asWorkspaceError, runOwned, withWorkspaceErrors } from '../owned-work.ts';
 import { decodeConfiguration, type WorkspaceHostConfiguration } from '../schema.ts';
 import { path } from '../validation.ts';
 import { Checkouts } from './checkouts.ts';
@@ -53,26 +39,6 @@ type HostServices =
   | WorkspaceDiscovery
   | WorkspaceWorktrees;
 
-/**
- * The file host's error for a failure: its own errors as they are, and a fixed one for what a
- * helper or system call reported (a store failure for work on the journals), so their
- * diagnostics never reach a client.
- */
-const asHostError = (failure: HostFailure, persistence: boolean): WorkspaceHostError => {
-  if (isWorkspaceHostError(failure)) return failure;
-  return persistence
-    ? new WorkspaceStoreError({ failure: 'failed' })
-    : new WorkspaceUnavailableError({ cause: 'failed' });
-};
-/** A cause's failure as the host's error; a defect (a bug) gets the same fixed error. */
-const fromCause = (cause: Cause.Cause<HostFailure>, persistence: boolean) => {
-  const failure = Cause.findErrorOption(cause);
-  return asHostError(
-    Option.isSome(failure) ? failure.value : new SystemFailure({ code: undefined, cause }),
-    persistence,
-  );
-};
-
 type RunOptions<A> = {
   /** Work on the journals, whose unknown failures are store failures. */
   persistence?: boolean;
@@ -84,7 +50,7 @@ type RunOptions<A> = {
    */
   interruptible?: boolean;
   /** Undoes a result nobody will receive, such as the reply to a cancelled request. */
-  abandoned?: (result: A) => Effect.Effect<void, HostFailure>;
+  abandoned?: (result: A) => Effect.Effect<void, WorkspaceFailure>;
 };
 
 /**
@@ -118,53 +84,27 @@ const makeFileHost = Effect.gen(function* () {
    * stop without waiting for it, and it keeps its lease, helpers and descriptors until it ends.
    */
   const run = <A>(
-    work: Effect.Effect<A, HostFailure, HostServices | Scope.Scope>,
+    work: Effect.Effect<A, WorkspaceFailure, HostServices | Scope.Scope>,
     { persistence = false, lease, interruptible = false, abandoned }: RunOptions<A> = {},
-  ): Effect.Effect<A, WorkspaceHostError> =>
-    Effect.uninterruptibleMask((restore) =>
+  ): Effect.Effect<A, WorkspaceHostError> => {
+    const scoped = Effect.scoped(
       Effect.gen(function* () {
-        // What the work returned, kept for `abandoned` even when the work ends interrupted.
-        let result: { value: A } | undefined;
-        const scoped = Effect.scoped(
-          Effect.gen(function* () {
-            if (lease) yield* leases.hold(lease);
-            const value = yield* work;
-            result = { value };
-            return value;
-          }),
-        );
-        const owned: Effect.Effect<A, WorkspaceHostError> = (
-          interruptible ? Effect.interruptible(scoped) : Effect.uninterruptible(scoped)
-        ).pipe(
-          Effect.provideContext(services),
-          Effect.catchCause((cause) =>
-            Cause.hasInterruptsOnly(cause)
-              ? Effect.failCause(cause as Cause.Cause<never>)
-              : Effect.fail(fromCause(cause, persistence)),
-          ),
-        );
-        const fiber = yield* FiberSet.run(operations, owned);
-        // A cancelled caller ends interrupted; it asks the work to stop without waiting for it,
-        // unless a result it may abandon has to be undone.
-        const exit = yield* restore(Fiber.await(fiber)).pipe(
-          Effect.onInterrupt(() =>
-            Effect.gen(function* () {
-              // Asked at once, so the work sees it at its next interruptible point.
-              fiber.interruptUnsafe();
-              if (!abandoned) return;
-              yield* Fiber.await(fiber);
-              if (result) yield* Effect.exit(abandoned(result.value));
-            }),
-          ),
-        );
-        if (Exit.isSuccess(exit)) return exit.value as A;
-        // The work stopped while its caller still waits: the host is closing.
-        if (Cause.hasInterruptsOnly(exit.cause))
-          return yield* new WorkspaceUnavailableError({ cause: 'closed' });
-        return yield* Effect.failCause(exit.cause);
+        if (lease) yield* leases.hold(lease);
+        return yield* work;
       }),
     );
-  const read = <A>(work: Effect.Effect<A, HostFailure, HostServices | Scope.Scope>) =>
+    return runOwned(
+      operations,
+      withWorkspaceErrors(
+        (interruptible ? Effect.interruptible(scoped) : scoped).pipe(
+          Effect.provideContext(services),
+        ),
+        persistence,
+      ) as Effect.Effect<A, WorkspaceHostError>,
+      abandoned,
+    );
+  };
+  const read = <A>(work: Effect.Effect<A, WorkspaceFailure, HostServices | Scope.Scope>) =>
     run(work, { interruptible: true });
   const requireNativeImports = Effect.suspend(() =>
     config.nativeImports === false
@@ -215,16 +155,9 @@ const makeFileHost = Effect.gen(function* () {
       }),
     operationStatus: (input) => run(journal.operationStatus(input), { persistence: true }),
     acknowledgeOperation: (input) =>
-      run(
-        attempt(() => journal.acknowledgeOperation(input)),
-        { persistence: true },
-      ),
+      run(journal.acknowledgeOperation(input), { persistence: true }),
     saveStatus: (input) => run(journal.saveStatus(input), { persistence: true }),
-    acknowledgeSave: (input) =>
-      run(
-        attempt(() => journal.acknowledgeSave(input)),
-        { persistence: true },
-      ),
+    acknowledgeSave: (input) => run(journal.acknowledgeSave(input), { persistence: true }),
     listOperations: (input) =>
       run(
         attempt(() => {
@@ -246,7 +179,9 @@ const makeFileHost = Effect.gen(function* () {
       ),
     releaseImports: (input) => run(Effect.andThen(requireNativeImports, references.release(input))),
     watch: (input) =>
-      observations.watch(input).pipe(Stream.mapError((error) => asHostError(error, false))),
+      observations
+        .watch(input)
+        .pipe(Stream.mapError((error) => asWorkspaceError(error, false) as WorkspaceHostError)),
   };
   return { service, hasFolder: (folder: string) => read(checkouts.hasFolder(folder)) };
 });
@@ -284,7 +219,11 @@ export function makeFileHostLayer(configuration: WorkspaceHostConfiguration, now
     Layer.catchCause((cause) =>
       Layer.effect(
         FileHost,
-        Effect.fail(toWireError(fromCause(cause as Cause.Cause<HostFailure>, true))),
+        Effect.fail(
+          toWireError(
+            asWorkspaceError(Cause.squash(cause) as WorkspaceFailure, true) as WorkspaceHostError,
+          ),
+        ),
       ),
     ),
   );

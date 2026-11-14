@@ -15,7 +15,7 @@ import type {
 } from '@moonbase/contracts/workspace-host';
 import { randomUUID } from 'node:crypto';
 import type { Store } from '../store.ts';
-import { attempt, type HostFailure } from '../attempt.ts';
+import { attempt, type WorkspaceFailure } from '../attempt.ts';
 import { Checkouts } from './checkouts.ts';
 import { HostSettings } from './host-settings.ts';
 import { HostStore } from './host-store.ts';
@@ -76,7 +76,7 @@ export class Journal {
   /** The requests running in this process, so a concurrent duplicate waits for the first. */
   readonly runningRequests = new Map<
     string,
-    { input: unknown; outcome: Deferred.Deferred<CheckoutTarget, HostFailure> }
+    { input: unknown; outcome: Deferred.Deferred<CheckoutTarget, WorkspaceFailure> }
   >();
   private readonly store: Store;
   private readonly checkouts: JournalDependencies['checkouts'];
@@ -94,7 +94,6 @@ export class Journal {
     this.retentionMs = retentionMs;
     this.epoch = store.get<string>('meta', 'feed-epoch') ?? randomUUID();
     store.put('meta', 'feed-epoch', this.epoch);
-    this.compact();
   }
 
   saveId = (i: SaveIdentity) => key(i.installationId, i.clientId, i.requestId);
@@ -133,12 +132,18 @@ export class Journal {
   }
   /** Starts an acknowledged entry's retention window. */
   private retain(kind: JournalKind, id: string) {
-    this.store.write(
-      'UPDATE journal SET retained_at=? WHERE kind=? AND id=? AND retained_at IS NULL',
-      [this.now(), kind, id],
+    return Effect.andThen(
+      attempt(() =>
+        this.store.write(
+          'UPDATE journal SET retained_at=? WHERE kind=? AND id=? AND retained_at IS NULL',
+          [this.now(), kind, id],
+        ),
+      ),
+      // Discarding is not urgent: once an hour at most, besides when the store opens.
+      Effect.suspend(() =>
+        this.now() - this.compactedAt >= hourMs ? this.compact() : Effect.void,
+      ),
     );
-    // Discarding is not urgent: once an hour at most, besides when the store opens.
-    if (this.now() - this.compactedAt >= hourMs) this.compact();
   }
   private rows<T>(sql: string, parameters: string[]) {
     return this.store
@@ -197,7 +202,7 @@ export class Journal {
     }
     return result;
   }
-  saveStatus(input: SaveIdentity): Effect.Effect<SaveStatus, HostFailure> {
+  saveStatus(input: SaveIdentity): Effect.Effect<SaveStatus, WorkspaceFailure> {
     return Effect.gen({ self: this }, function* () {
       const id = this.saveId(input),
         record = yield* attempt(() => this.getSave(id));
@@ -245,13 +250,16 @@ export class Journal {
       this.retainSave(id, record);
     }
   }
-  acknowledgeSave(input: SaveIdentity) {
-    const id = this.saveId(input),
-      record = this.getSave(id);
-    if (!record || record === 'fenced') return;
-    if (!record.result) throw new UnresolvedWorkError({ state: 'save-unacknowledgeable' });
-    if (this.volatileSaves.has(id)) this.settleSave(id, record);
-    this.retain('saves', id);
+  acknowledgeSave(input: SaveIdentity): Effect.Effect<void, WorkspaceFailure> {
+    return Effect.gen({ self: this }, function* () {
+      const id = this.saveId(input),
+        record = yield* attempt(() => this.getSave(id));
+      if (!record || record === 'fenced') return;
+      if (!record.result)
+        return yield* new UnresolvedWorkError({ state: 'save-unacknowledgeable' });
+      if (this.volatileSaves.has(id)) yield* attempt(() => this.settleSave(id, record));
+      yield* this.retain('saves', id);
+    });
   }
   /** Saves started but with no outcome yet, in one checkout. */
   getPendingSaves(target: CheckoutTarget) {
@@ -293,73 +301,80 @@ export class Journal {
     );
   }
   replayOperation(id: string, input: HostInput<'mutate'>, record: HostOperationRecord | Fenced) {
-    if (record === 'fenced')
-      throw new WorkspaceConflictError({ conflict: 'operation-not-started' });
-    if (!same(record.input, input))
-      throw new WorkspaceConflictError({ conflict: 'operation-payload' });
-    if (this.volatileOperations.has(id)) {
-      try {
-        this.finalizeOperation(id, record);
-      } catch {
-        /* The outcome stays in memory; the next replay tries again. */
-      }
-    }
-    return record.result;
+    return Effect.gen({ self: this }, function* () {
+      if (record === 'fenced')
+        return yield* new WorkspaceConflictError({ conflict: 'operation-not-started' });
+      if (!same(record.input, input))
+        return yield* new WorkspaceConflictError({ conflict: 'operation-payload' });
+      // The outcome stays in memory when this fails; the next replay tries again.
+      if (this.volatileOperations.has(id)) yield* Effect.ignore(this.finalizeOperation(id, record));
+      return record.result;
+    });
   }
   /**
    * Computes the operation's outcome from its items and records it together with the feed entry
    * for items completed since the last one.
    */
-  finalizeOperation(id: string, record: HostOperationRecord) {
-    const items = record.result.items;
-    const originals = items.filter((item) => isOriginalResult(record.input.kind, item));
-    let outcome: HostOperationResult['outcome'];
-    if (
-      originals.length !== record.planned.length ||
-      originals.some((item) => item.outcome === 'uncertain')
-    )
-      outcome = 'uncertain';
-    else if (originals.every((item) => item.outcome === 'completed')) outcome = 'completed';
-    else outcome = 'failed';
-    const fed = record.fed ?? [];
-    const fresh = feeds(record.input.kind)
-      ? originals.filter((item) => item.outcome === 'completed' && !fed.includes(canonical(item)))
-      : [];
-    const result = { ...record.result, outcome };
-    if (outcome !== 'uncertain') delete result.message;
-    const updated: HostOperationRecord = {
-      ...record,
-      result,
-      fed: [...fed, ...fresh.map(canonical)],
-    };
-    this.store.transaction(() => {
-      if (fresh.length) {
-        const sequence = (this.store.get<number>('counters', 'feed') ?? 0) + 1;
-        this.store.put('counters', 'feed', sequence);
-        const entry: OperationFeedEntry = {
-          sequence,
-          installationId: record.input.installationId,
-          clientId: record.input.clientId,
-          id: record.input.id,
-          checkout: record.input.checkout,
-          kind: record.input.kind,
-          items: fresh,
-        };
-        this.store.write('INSERT INTO feed VALUES(?,?,?,?)', [
-          record.input.checkout.checkoutId,
-          sequence,
-          id,
-          JSON.stringify(entry),
-        ]);
-      }
-      this.update('operations', id, outcome === 'uncertain', updated);
+  finalizeOperation(
+    id: string,
+    record: HostOperationRecord,
+  ): Effect.Effect<void, WorkspaceFailure> {
+    return Effect.suspend(() => {
+      const items = record.result.items;
+      const originals = items.filter((item) => isOriginalResult(record.input.kind, item));
+      let outcome: HostOperationResult['outcome'];
+      if (
+        originals.length !== record.planned.length ||
+        originals.some((item) => item.outcome === 'uncertain')
+      )
+        outcome = 'uncertain';
+      else if (originals.every((item) => item.outcome === 'completed')) outcome = 'completed';
+      else outcome = 'failed';
+      const fed = record.fed ?? [];
+      const fresh = feeds(record.input.kind)
+        ? originals.filter((item) => item.outcome === 'completed' && !fed.includes(canonical(item)))
+        : [];
+      const result = { ...record.result, outcome };
+      if (outcome !== 'uncertain') delete result.message;
+      const updated: HostOperationRecord = {
+        ...record,
+        result,
+        fed: [...fed, ...fresh.map(canonical)],
+      };
+      return this.store
+        .transaction(() => {
+          if (fresh.length) {
+            const sequence = (this.store.get<number>('counters', 'feed') ?? 0) + 1;
+            this.store.put('counters', 'feed', sequence);
+            const entry: OperationFeedEntry = {
+              sequence,
+              installationId: record.input.installationId,
+              clientId: record.input.clientId,
+              id: record.input.id,
+              checkout: record.input.checkout,
+              kind: record.input.kind,
+              items: fresh,
+            };
+            this.store.write('INSERT INTO feed VALUES(?,?,?,?)', [
+              record.input.checkout.checkoutId,
+              sequence,
+              id,
+              JSON.stringify(entry),
+            ]);
+          }
+          this.update('operations', id, outcome === 'uncertain', updated);
+        })
+        .pipe(
+          Effect.map(() => {
+            Object.assign(record, updated);
+            this.volatileOperations.delete(id);
+          }),
+        );
     });
-    Object.assign(record, updated);
-    this.volatileOperations.delete(id);
   }
   operationStatus(
     input: OperationIdentity,
-  ): Effect.Effect<HostOperationResult | null, HostFailure> {
+  ): Effect.Effect<HostOperationResult | null, WorkspaceFailure> {
     return Effect.gen({ self: this }, function* () {
       const id = this.operationId(input),
         record = yield* attempt(() => this.getOperation(id));
@@ -424,21 +439,23 @@ export class Journal {
           });
         }
       }
-      try {
-        this.finalizeOperation(id, record);
-      } catch {
-        this.retainOperation(id, record);
-      }
+      yield* this.finalizeOperation(id, record).pipe(
+        Effect.catch(() => Effect.sync(() => this.retainOperation(id, record))),
+      );
     });
   }
-  acknowledgeOperation(input: HostInput<'acknowledgeOperation'>) {
-    const id = this.operationId(input),
-      record = this.getOperation(id);
-    if (!record || record === 'fenced') return;
-    if (record.result.outcome === 'uncertain')
-      throw new UnresolvedWorkError({ state: 'operation-unacknowledgeable' });
-    if (this.volatileOperations.has(id)) this.finalizeOperation(id, record);
-    this.retain('operations', id);
+  acknowledgeOperation(
+    input: HostInput<'acknowledgeOperation'>,
+  ): Effect.Effect<void, WorkspaceFailure> {
+    return Effect.gen({ self: this }, function* () {
+      const id = this.operationId(input),
+        record = yield* attempt(() => this.getOperation(id));
+      if (!record || record === 'fenced') return;
+      if (record.result.outcome === 'uncertain')
+        return yield* new UnresolvedWorkError({ state: 'operation-unacknowledgeable' });
+      if (this.volatileOperations.has(id)) yield* this.finalizeOperation(id, record);
+      yield* this.retain('operations', id);
+    });
   }
   /**
    * Refuses work on `paths` while a save or operation there is unresolved, after settling each
@@ -450,7 +467,7 @@ export class Journal {
     installationId: string,
     clientId: string,
     footprint: (input: HostInput<'mutate'>) => string[],
-  ): Effect.Effect<void, HostFailure> {
+  ): Effect.Effect<void, WorkspaceFailure> {
     return Effect.gen({ self: this }, function* () {
       let blocked = false;
       for (const { id, record } of yield* attempt(() => this.getPendingSaves(target))) {
@@ -512,11 +529,11 @@ export class Journal {
   }
 
   /** Discards entries whose retention window has passed; unacknowledged ones stay. */
-  compact() {
-    this.compactedAt = this.now();
-    const cutoff = this.compactedAt - this.retentionMs;
-    try {
-      this.store.transaction(() => {
+  compact(): Effect.Effect<void> {
+    return Effect.suspend(() => {
+      this.compactedAt = this.now();
+      const cutoff = this.compactedAt - this.retentionMs;
+      return this.store.transaction(() => {
         // Discarding one checkout's entries only raises that checkout's floor.
         const floors = this.store
           .statement(
@@ -538,9 +555,10 @@ export class Journal {
           );
         }
       });
-    } catch {
-      /* Retention is best effort; entries stay until the next attempt. */
-    }
+    }).pipe(
+      // Retention is best effort; entries stay until the next attempt.
+      Effect.ignore,
+    );
   }
 }
 
@@ -555,7 +573,7 @@ export class HostJournal extends Context.Service<HostJournal, Journal>()(
       const store = yield* HostStore;
       const checkouts = yield* Checkouts;
       const leases = yield* Leases;
-      return yield* attempt(
+      const journal = yield* attempt(
         () =>
           new Journal({
             store,
@@ -565,6 +583,9 @@ export class HostJournal extends Context.Service<HostJournal, Journal>()(
             retentionMs: config.journalRetentionMs ?? 7 * 24 * 60 * 60 * 1000,
           }),
       );
+      // Acknowledged entries past their window are discarded when the store opens.
+      yield* journal.compact();
+      return journal;
     }),
   );
 }

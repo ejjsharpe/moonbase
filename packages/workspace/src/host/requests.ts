@@ -12,8 +12,8 @@ import {
   WorkspaceUnsupportedError,
 } from '@moonbase/contracts/workspace-host-errors';
 import { join } from 'node:path';
-import { CancelledError } from '@moonbase/contracts/errors';
-import { asHostFailure, attempt, type HostFailure } from '../attempt.ts';
+import { asWorkspaceFailure, attempt, type WorkspaceFailure } from '../attempt.ts';
+import { asSharedOutcome } from '../owned-work.ts';
 import type { HostRequestRecord } from '../schema.ts';
 import { same } from '../validation.ts';
 import { makeChatWorktree } from './chat-worktrees.ts';
@@ -45,7 +45,7 @@ const once = <K extends RequestOperation>(
   input: HostInput<K>,
   work: Effect.Effect<
     HostOutput<K>,
-    HostFailure,
+    WorkspaceFailure,
     Checkouts | HostJournal | HostSettings | WorkspaceWorktrees
   >,
 ) =>
@@ -55,7 +55,7 @@ const once = <K extends RequestOperation>(
     const id = journal.requestId(operation, input);
     // Finding a running duplicate, or reserving and registering this request as running, is one
     // synchronous step, so two copies never both miss each other.
-    const outcome = Deferred.makeUnsafe<CheckoutTarget, HostFailure>();
+    const outcome = Deferred.makeUnsafe<CheckoutTarget, WorkspaceFailure>();
     const found = yield* attempt(() => {
       const first = requests.get(id);
       if (first) return { first };
@@ -76,12 +76,7 @@ const once = <K extends RequestOperation>(
     const exit = yield* Effect.exit(settleRequest(journal, id, input, work));
     requests.delete(id);
     // A duplicate whose first request was cancelled learns that, not that the host closed.
-    Deferred.doneUnsafe(
-      outcome,
-      Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
-        ? Exit.fail(new CancelledError({ operation }))
-        : exit,
-    );
+    Deferred.doneUnsafe(outcome, asSharedOutcome(exit, operation));
     return yield* exit;
   });
 
@@ -95,7 +90,7 @@ const settleRequest = <A extends CheckoutTarget, R>(
   journal: HostJournal['Service'],
   id: string,
   input: HostRequestRecord['input'],
-  work: Effect.Effect<A, HostFailure, R>,
+  work: Effect.Effect<A, WorkspaceFailure, R>,
 ) =>
   Effect.gen(function* () {
     const exit = yield* Effect.exit(work);
@@ -156,7 +151,7 @@ export const turnChatIntoProject = (input: HostInput<'turnChatIntoProject'>) =>
       if (!chats) return yield* new WorkspaceUnsupportedError({ feature: 'chat-projects' });
       const folder = yield* Effect.tryPromise({
         try: () => chats.findOwnFolder(input.target),
-        catch: asHostFailure,
+        catch: asWorkspaceFailure,
       });
       const target = yield* Effect.interruptible(checkouts.open(folder));
       // `open` resolves links: a folder replaced by one since it was checked opens elsewhere.
@@ -168,7 +163,7 @@ export const turnChatIntoProject = (input: HostInput<'turnChatIntoProject'>) =>
         return yield* new CheckoutAccessError({ refusal: 'chat-folder-repository' });
       yield* Effect.tryPromise({
         try: () => chats.markAsProject(input.requestId, input.target),
-        catch: asHostFailure,
+        catch: asWorkspaceFailure,
       });
       return target;
     }),

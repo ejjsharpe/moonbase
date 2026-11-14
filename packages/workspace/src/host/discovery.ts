@@ -8,7 +8,7 @@ import {
   InvalidRequestError,
   WorkspaceUnavailableError,
 } from '@moonbase/contracts/workspace-host-errors';
-import { attempt, type HostFailure } from '../attempt.ts';
+import { attempt, type WorkspaceFailure } from '../attempt.ts';
 import { HelperFailure, SystemFailure } from '../system-failures.ts';
 import { matchPath, compareMatches } from '@moonbase/contracts/lookup';
 import { document, errorText, path, requireGit } from '../validation.ts';
@@ -142,7 +142,7 @@ export class Discovery {
   }
   getIgnoredPaths(
     input: CommandInput<'getIgnoredPaths'>,
-  ): Effect.Effect<CommandOutput<'getIgnoredPaths'>, HostFailure> {
+  ): Effect.Effect<CommandOutput<'getIgnoredPaths'>, WorkspaceFailure> {
     return Effect.gen({ self: this }, function* () {
       yield* attempt(() => {
         path(input.path, true);
@@ -404,7 +404,7 @@ export class Discovery {
   /** Searches file contents with ripgrep, honouring ignore files like `lookupFiles`. */
   searchText(
     input: CommandInput<'searchText'>,
-  ): Effect.Effect<CommandOutput<'searchText'>, HostFailure> {
+  ): Effect.Effect<CommandOutput<'searchText'>, WorkspaceFailure> {
     return Effect.gen({ self: this }, function* () {
       const directory = yield* this.checkouts.directory(input.checkout);
       yield* this.checkouts.policy(input.checkout);

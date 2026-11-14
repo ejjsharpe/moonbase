@@ -9,7 +9,7 @@ import {
 import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { attempt, type HostFailure } from '../attempt.ts';
+import { attempt, type WorkspaceFailure } from '../attempt.ts';
 import { HelperFailure } from '../system-failures.ts';
 import {
   createGitGate,
@@ -75,17 +75,17 @@ export class Checkouts extends Context.Service<
     /** Refuses a path that holds, or sits inside, the host's state or a reserved path. */
     refuseReserved(path: string): void;
     /** The checkout's open directory, re-checked. */
-    directory(target: CheckoutTarget): Effect.Effect<Directory, HostFailure>;
+    directory(target: CheckoutTarget): Effect.Effect<Directory, WorkspaceFailure>;
     /** Whether `path` is the root of an approved checkout that still holds. */
-    hasFolder(path: string): Effect.Effect<boolean, HostFailure>;
+    hasFolder(path: string): Effect.Effect<boolean, WorkspaceFailure>;
     /** Refuses a repository whose ignore policy files are not what Git would read. */
-    policy(target: CheckoutTarget): Effect.Effect<void, HostFailure>;
+    policy(target: CheckoutTarget): Effect.Effect<void, WorkspaceFailure>;
     /** The root policy's answer for `real`; a refusal or a throw denies. */
-    permit(real: string, requested: string): Effect.Effect<void, HostFailure>;
+    permit(real: string, requested: string): Effect.Effect<void, WorkspaceFailure>;
     /** A new worktree's location: reserved paths and, as it doesn't exist yet, its parent's policy. */
-    permitLocation(location: string): Effect.Effect<void, HostFailure>;
+    permitLocation(location: string): Effect.Effect<void, WorkspaceFailure>;
     /** The folder a chat's worktrees go in, and the policy of its parent, where it is made. */
-    permitContainer(parent: string): Effect.Effect<void, HostFailure>;
+    permitContainer(parent: string): Effect.Effect<void, WorkspaceFailure>;
     /** The root's `.git` entry, or null when it has none. */
     gitEntry(root: string): Approval['gitEntry'];
     /**
@@ -96,7 +96,7 @@ export class Checkouts extends Context.Service<
     open(
       root: string,
       created?: { root: string; common: { path: string; identity: string } },
-    ): Effect.Effect<CheckoutTarget, HostFailure>;
+    ): Effect.Effect<CheckoutTarget, WorkspaceFailure>;
   }
 >()('moonbase/workspace/Checkouts') {
   static readonly layer = Layer.effect(
@@ -129,7 +129,7 @@ export class Checkouts extends Context.Service<
         for (const each of reserved)
           if (holdsOrIsInside(real, each)) throw new InvalidPathError({ problem: 'reserved' });
       };
-      const permit = (real: string, requested: string): Effect.Effect<void, HostFailure> =>
+      const permit = (real: string, requested: string): Effect.Effect<void, WorkspaceFailure> =>
         allowRoot
           ? Effect.tryPromise({
               try: async () => allowRoot(real, requested),
@@ -226,7 +226,7 @@ export class Checkouts extends Context.Service<
       const withTransient = <A>(
         root: string,
         expected: string,
-        use: (directory: Directory) => Effect.Effect<A, HostFailure>,
+        use: (directory: Directory) => Effect.Effect<A, WorkspaceFailure>,
       ) =>
         Effect.acquireUseRelease(
           attempt(() => makeDirectory(root, expected)),

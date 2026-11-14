@@ -10,6 +10,7 @@ import {
 } from './workspace.ts';
 import type { HostCommand, HostInput, HostOutput } from './workspace-host.ts';
 import type { WorkspaceHostError } from './workspace-host-errors.ts';
+import type { WorkspaceError } from './workspace-errors.ts';
 import type {
   ConnectionCommand,
   ConnectionInput,
@@ -31,13 +32,13 @@ import type { LocalHostCommand, LocalHostInput, LocalHostOutput } from './daemon
 
 export type WorkspaceHandler<K extends WorkspaceCommand> = (
   input: CommandInput<K>,
-) => Effect.Effect<CommandOutput<K>, ApplicationError>;
+) => Effect.Effect<CommandOutput<K>, WorkspaceError>;
 export type WorkspaceHandlers = { [K in WorkspaceCommand]: WorkspaceHandler<K> };
 export type WorkspaceServiceShape = WorkspaceHandlers & {
   watch(input: {
     checkout: CheckoutTarget;
     paths: string[];
-  }): Stream.Stream<WorkspaceEvent, ApplicationError>;
+  }): Stream.Stream<WorkspaceEvent, WorkspaceError>;
 };
 export type WorkspaceHostHandlers = {
   [K in HostCommand]: (input: HostInput<K>) => Effect.Effect<HostOutput<K>, WorkspaceHostError>;

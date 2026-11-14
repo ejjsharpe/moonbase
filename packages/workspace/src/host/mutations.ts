@@ -9,11 +9,12 @@ import {
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join, resolve } from 'node:path';
 import { attempt } from '../attempt.ts';
+import { getOperationPaths } from '../operation-paths.ts';
 import { SystemFailure } from '../system-failures.ts';
 import type { Directory } from '../filesystem.ts';
 import type { HostOperationRecord } from '../schema.ts';
 import { errorText, folded, path, same } from '../validation.ts';
-import { cancellationPoint, isCancelled } from './cancellation.ts';
+import { cancellationPoint, isCancelled } from '../cancellation.ts';
 import { Checkouts } from './checkouts.ts';
 import { HostJournal } from './host-journal.ts';
 import type { NativeImport } from './native-import.ts';
@@ -35,21 +36,15 @@ const containsSelectedSource = (
       ? source.native.parents.split(',').includes(entry.identity)
       : isPathAtOrInside(source.path, entry.path)));
 
-/** The paths an operation touches: its sources, and where each lands. */
+/** The paths an operation touches; a native import's items are named by their references. */
 export const getOperationFootprint =
-  (references: Pick<References, 'getSourceName'>) => (input: HostInput<'mutate'>) => {
-    const sources = input.sources.map((s) => s.target.path);
-    if (input.destination === undefined) return sources;
-    const names = sources.length
-      ? sources.map((p) => basename(p))
-      : (input.nativeReferences ?? []).map((token) => references.getSourceName(token));
-    return [
-      ...sources,
-      ...(names.length > 1
-        ? names.map((name) => (name ? join(input.destination!, name) : input.destination!))
-        : [input.destination]),
-    ];
-  };
+  (references: Pick<References, 'getSourceName'>) => (input: HostInput<'mutate'>) =>
+    getOperationPaths(
+      input,
+      input.sources.length
+        ? undefined
+        : (input.nativeReferences ?? []).map((token) => references.getSourceName(token)),
+    );
 
 /**
  * Runs a file operation: its selection is checked, durably planned and only then carried out item
@@ -69,7 +64,7 @@ export const mutate = (input: HostInput<'mutate'>) =>
     });
     const id = journal.operationId(input),
       previous = yield* attempt(() => journal.getOperation(id));
-    if (previous) return yield* attempt(() => journal.replayOperation(id, input, previous));
+    if (previous) return yield* journal.replayOperation(id, input, previous);
     yield* journal.assertSettled(
       input.checkout,
       getOperationFootprint(references)(input),
@@ -114,7 +109,7 @@ export const mutate = (input: HostInput<'mutate'>) =>
       if (!occupied) references.claimReferences(claims);
       return { claims, occupied };
     });
-    if (occupied) return yield* attempt(() => journal.replayOperation(id, input, occupied));
+    if (occupied) return yield* journal.replayOperation(id, input, occupied);
     yield* references.holdClaimedReferences(claims);
     /** Records a durable write that failed and returns the outcome held in memory. */
     const retained = (error: unknown) => {
@@ -249,7 +244,7 @@ export const mutate = (input: HostInput<'mutate'>) =>
         staging.filter(Boolean).join(', ') +
         '. Drafts and journal retained; no automatic retry.';
     else delete record.result.message;
-    const finalized = yield* Effect.exit(attempt(() => journal.finalizeOperation(id, record)));
+    const finalized = yield* Effect.exit(journal.finalizeOperation(id, record));
     if (Exit.isFailure(finalized)) return retained(Cause.squash(finalized.cause));
     return record.result as HostOperationResult;
   });

@@ -11,6 +11,7 @@ import {
   type WorkspaceHandlers,
 } from '@moonbase/contracts/services';
 import type { ConnectionCommand, ConnectionInput } from '@moonbase/contracts/connection';
+import { toWireError } from '@moonbase/contracts/workspace-errors';
 import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
 import type { ChatCommand, ChatInput } from '@moonbase/contracts/chat';
 
@@ -21,11 +22,16 @@ export const workspaceCommand = <K extends WorkspaceCommand>(
 ) =>
   Effect.flatMap(WorkspaceService, (service) => {
     const handlers: WorkspaceHandlers = service;
-    return handlers[operation](input);
+    // The editor reads workspace errors as wire errors, until CL-14 moves it to tags.
+    return handlers[operation](input).pipe(Effect.mapError(toWireError));
   });
 
 export const workspaceWatch = (input: Parameters<WorkspaceService['Service']['watch']>[0]) =>
-  Stream.unwrap(Effect.map(WorkspaceService, (service) => service.watch(input)));
+  Stream.unwrap(
+    Effect.map(WorkspaceService, (service) =>
+      service.watch(input).pipe(Stream.mapError(toWireError)),
+    ),
+  );
 
 // Connection failures become the legacy `ApplicationError` here, the one place they reach
 // clients and renderers, with the codes they have always had.

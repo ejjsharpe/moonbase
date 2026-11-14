@@ -11,7 +11,7 @@ import {
 import { attempt } from '../attempt.ts';
 import type { Directory } from '../filesystem.ts';
 import { requireGit } from '../validation.ts';
-import { cancellationPoint } from './cancellation.ts';
+import { cancellationPoint } from '../cancellation.ts';
 import { Checkouts } from './checkouts.ts';
 import { WorkspaceWorktrees } from './worktrees.ts';
 

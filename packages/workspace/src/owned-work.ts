@@ -1,83 +1,98 @@
-import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
-import { Cause, Effect, Exit, Fiber, FiberSet } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/workspace';
-import { fail } from '@moonbase/contracts/errors';
-import { isWorkspaceHostError, toWireError } from '@moonbase/contracts/workspace-host-errors';
+import { Cause, Effect, Exit, Fiber, FiberSet, Option } from 'effect';
+import {
+  WorkspaceStoreError,
+  WorkspaceUnavailableError,
+} from '@moonbase/contracts/workspace-host-errors';
+import { isWorkspaceError, type WorkspaceError } from '@moonbase/contracts/workspace-errors';
+import { CancelledError } from '@moonbase/contracts/errors';
+import type { WorkspaceFailure } from './attempt.ts';
+import { SystemFailure } from './system-failures.ts';
 
-/** Runs every release in order, even after one fails, then fails with all their failures. */
-export const releaseAll = (releases: readonly Effect.Effect<void>[]): Effect.Effect<void> =>
-  Effect.flatMap(Effect.forEach(releases, Effect.exit), (exits) => {
-    const failures = exits.flatMap((exit) => (Exit.isFailure(exit) ? [exit.cause] : []));
-    return failures.length
-      ? Effect.failCause(failures.reduce((all, cause) => Cause.combine(all, cause)))
-      : Effect.void;
-  });
-
-/** What owned work needs of its owner: whether it still accepts work, and where work is tracked. */
-export type WorkOwner = {
-  readonly closed: boolean;
-  readonly signals: Set<AbortController>;
-  readonly operations: FiberSet.FiberSet<unknown, ApplicationError>;
+/**
+ * The workspace error for a failure: the workspace's own errors as they are, and a fixed one for
+ * what a helper or system call reported (a store failure for work on the store), so their
+ * diagnostics never reach a client.
+ */
+export const asWorkspaceError = <E extends WorkspaceError>(
+  failure: WorkspaceFailure | E,
+  persistence: boolean,
+): WorkspaceError => {
+  if (isWorkspaceError(failure)) return failure;
+  return persistence
+    ? new WorkspaceStoreError({ failure: 'failed' })
+    : new WorkspaceUnavailableError({ cause: 'failed' });
 };
 
 /**
- * Runs `fn` as the owner's work: it is refused once the owner is closed, aborted when its caller
- * is interrupted or the owner closes, and settles before the owner releases its resources.
- * `surround` wraps the work, for a lease; `abandoned` receives a result nobody will take.
+ * `effect` failing only with workspace errors: a failure as its error, a defect (a bug) as the
+ * same fixed error, and an interruption kept as it is.
  */
-export function runOwned<A>(
-  owner: WorkOwner,
-  fn: (signal: AbortSignal) => Promise<A>,
+export const withWorkspaceErrors = <A, R>(
+  effect: Effect.Effect<A, WorkspaceFailure, R>,
   persistence = false,
-  surround?: (
-    signal: AbortSignal,
-    work: Effect.Effect<A, ApplicationError>,
-  ) => Effect.Effect<A, ApplicationError>,
-  abandoned?: (result: A) => void,
-): Effect.Effect<A, ApplicationError> {
-  return Effect.uninterruptibleMask((restore) =>
+): Effect.Effect<A, WorkspaceError, R> =>
+  Effect.catchCause(effect, (cause) => {
+    if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause as Cause.Cause<never>);
+    const failure = Cause.findErrorOption(cause);
+    return Effect.fail(
+      asWorkspaceError(
+        Option.isSome(failure) ? failure.value : new SystemFailure({ code: undefined, cause }),
+        persistence,
+      ),
+    );
+  });
+
+/**
+ * Runs owned work in `operations`, so closing its owner stops it and waits for it. A caller that
+ * cancels ends interrupted and asks the work to stop without waiting for it; the work keeps what
+ * it holds until it ends. `abandoned` undoes a result nobody will receive. Work stopped while its
+ * caller still waits (its owner is closing) fails as `Unavailable`.
+ */
+export const runOwned = <A, E>(
+  operations: FiberSet.FiberSet<unknown, E>,
+  work: Effect.Effect<A, E>,
+  abandoned?: (result: A) => Effect.Effect<void, unknown>,
+): Effect.Effect<A, E | WorkspaceUnavailableError> =>
+  Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
-      if (owner.closed)
-        return yield* Effect.fail(
-          new ApplicationError({ code: 'Unavailable', message: 'Workspace scope is closed.' }),
-        );
-      const abort = new AbortController();
-      owner.signals.add(abort);
+      // What the work returned, kept for `abandoned` even when the work ends interrupted.
       let result: { value: A } | undefined;
-      const work = Effect.tryPromise({
-        try: async () => {
-          if (abort.signal.aborted)
-            fail('Cancelled', 'Workspace command cancelled before admission.');
-          const value = await fn(abort.signal);
-          result = { value };
-          return value;
-        },
-        catch: (error) =>
-          normalizeApplicationError(
-            isWorkspaceHostError(error) ? toWireError(error) : error,
-            new ApplicationError({
-              code: persistence ? 'Persistence' : 'Unavailable',
-              message: 'Application effect failed',
+      const fiber = yield* FiberSet.run(
+        operations,
+        Effect.uninterruptible(
+          Effect.tap(work, (value) =>
+            Effect.sync(() => {
+              result = { value };
             }),
           ),
-      });
-      // Raw OS Promises must settle before the lease, descriptors or Store can be released.
-      const owned = (surround ? surround(abort.signal, work) : work).pipe(
-        Effect.uninterruptible,
-        Effect.ensuring(Effect.sync(() => owner.signals.delete(abort))),
+        ),
       );
-      const fiber = yield* FiberSet.run(owner.operations, owned);
-      return yield* restore(Fiber.join(fiber)).pipe(
+      const exit = yield* restore(Fiber.await(fiber)).pipe(
         Effect.onInterrupt(() =>
           Effect.gen(function* () {
-            abort.abort();
-            if (abandoned) {
-              yield* Fiber.await(fiber);
-              if (result) yield* releaseResource(() => abandoned(result!.value));
-            }
+            // Asked at once, so the work sees it at its next interruptible point.
+            fiber.interruptUnsafe();
+            if (!abandoned) return;
+            yield* Fiber.await(fiber);
+            if (result) yield* Effect.exit(abandoned(result.value));
           }),
         ),
       );
+      if (Exit.isSuccess(exit)) return exit.value as A;
+      if (Cause.hasInterruptsOnly(exit.cause))
+        return yield* new WorkspaceUnavailableError({ cause: 'closed' });
+      return yield* Effect.failCause(exit.cause);
     }),
   );
-}
+
+/**
+ * A shared call's outcome as a duplicate waiting on it sees it: a first call its caller
+ * cancelled is `Cancelled` for the duplicate too, not an interruption of the duplicate.
+ */
+export const asSharedOutcome = <A, E>(
+  exit: Exit.Exit<A, E>,
+  operation: string,
+): Exit.Exit<A, E | CancelledError> =>
+  Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
+    ? Exit.fail(new CancelledError({ operation }))
+    : exit;
