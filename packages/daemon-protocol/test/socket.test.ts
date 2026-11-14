@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { connect, type AddressInfo } from 'node:net';
+import { connect } from 'node:net';
 import { createServer } from 'node:http';
 import { test, type TestContext } from 'node:test';
 import { Effect, Exit, Queue, Scope, Stream, type Cause } from 'effect';
@@ -34,7 +34,8 @@ import {
   type SocketSources,
 } from '../src/server.ts';
 import { connectDaemonSocket } from '../src/socket-client.ts';
-import { createSocketServer } from '../src/socket-server.ts';
+import { createSocketServer, type SocketData } from '../src/socket-server.ts';
+import { serveBun } from '../src/bun-server.ts';
 import {
   deriveSocketKeys,
   systemSocketClock,
@@ -45,7 +46,7 @@ import {
   type SocketClock,
   type SocketKeys,
 } from '../src/socket-protocol.ts';
-import { encodeWebSocketFrame, WebSocketReader } from '../src/websocket.ts';
+import { encodeWebSocketFrame, WebSocketReader } from './websocket-frame-fixture.ts';
 import * as P from '../src/protocol.ts';
 import { fixture as runtimeFixture, manualClock, until } from './runtime-fixture.ts';
 
@@ -282,16 +283,99 @@ async function readSealed(raw: Raw, keys: SocketKeys) {
     seq: number;
   };
 }
-/** What follows a refusal: only a close frame with the policy code and no reason, if anything. */
-async function assertRefused(raw: Raw) {
+/**
+ * What follows a refusal: only a close frame with the policy code and no reason, if anything.
+ * Bun answers a ping itself, so the answer to a refused ping may come first.
+ */
+async function assertRefused(raw: Raw, framing = false) {
   for (;;) {
     const message = await raw.next();
     if (message === 'timeout') assert.fail('The connection stayed open.');
     if (message === 'closed') return;
+    if (message.opcode === 10) continue;
     assert.equal(message.opcode, 8);
+    // Bun refuses a malformed frame itself (a protocol error, text that isn't UTF-8 or a message
+    // too big) with its own fixed reason; the session refuses the rest with the policy code and
+    // no reason.
+    if (framing) {
+      assert([1002, 1007, 1009].includes(message.payload.readUInt16BE(0)));
+      continue;
+    }
     assert.deepEqual([...message.payload], [0x03, 0xf0]);
   }
 }
+
+/** The status line the daemon answers an upgrade request with, read from a bare TCP socket. */
+async function upgradeStatus(
+  port: number,
+  request: { line?: string; headers?: Record<string, string | undefined> } = {},
+) {
+  const socket = connect(port, '127.0.0.1');
+  await new Promise((resolve, reject) => socket.once('connect', resolve).once('error', reject));
+  const headers: Record<string, string | undefined> = {
+    Host: `127.0.0.1:${port}`,
+    Upgrade: 'websocket',
+    Connection: 'Upgrade',
+    'Sec-WebSocket-Version': '13',
+    'Sec-WebSocket-Key': Buffer.alloc(16, 7).toString('base64'),
+    ...request.headers,
+  };
+  let received = '';
+  const status = new Promise<string>((resolve) => {
+    socket.on('data', (bytes: Buffer) => {
+      received += bytes.toString('latin1');
+      const end = received.indexOf('\r\n');
+      if (end >= 0) resolve(received.slice(0, end));
+    });
+    socket.on('close', () => resolve(received));
+  });
+  socket.on('error', () => {});
+  socket.write(
+    [
+      request.line ?? `GET ${socketPath} HTTP/1.1`,
+      ...Object.entries(headers)
+        .filter(([, value]) => value !== undefined)
+        .map(([key, value]) => `${key}: ${value}`),
+      '',
+      '',
+    ].join('\r\n'),
+  );
+  try {
+    return await status;
+  } finally {
+    socket.destroy();
+  }
+}
+
+test('the upgrade admits only a local client’s plain WebSocket handshake, within the connection cap', async (t) => {
+  const source = controlledClient();
+  const { port, endpoint } = await serve(t, source.client);
+  const dispatched = source.calls.length;
+  assert.match(await upgradeStatus(port), /^HTTP\/1\.1 101/);
+  for (const [name, request, status] of [
+    ['a browser page', { headers: { Origin: 'http://127.0.0.1' } }, 403],
+    ['another host name', { headers: { Host: `localhost:${port}` } }, 400],
+    ['a host without a port', { headers: { Host: '127.0.0.1' } }, 400],
+    ['a host that is no URL', { headers: { Host: 'a b<c>' } }, 400],
+    ['another path', { line: 'GET /v1/health HTTP/1.1' }, 400],
+    ['a query', { line: `GET ${socketPath}?x=1 HTTP/1.1` }, 400],
+    ['another method', { line: `POST ${socketPath} HTTP/1.1` }, 400],
+    ['another WebSocket version', { headers: { 'Sec-WebSocket-Version': '8' } }, 400],
+    ['a malformed key', { headers: { 'Sec-WebSocket-Key': 'not-a-key' } }, 400],
+    [
+      'a key of the wrong length',
+      { headers: { 'Sec-WebSocket-Key': Buffer.alloc(15).toString('base64') } },
+      400,
+    ],
+    ['another protocol', { headers: { Upgrade: 'h2c' } }, 400],
+  ] as const)
+    assert.match(await upgradeStatus(port, request), new RegExp(`^HTTP/1\\.1 ${status}`), name);
+  // Past 32 authenticated connections an upgrade is refused before it is accepted.
+  // One at a time: more than 8 waiting for their hello at once would evict each other.
+  for (let index = 0; index < 32; index++) await open(t, endpoint);
+  assert.match(await upgradeStatus(port), /^HTTP\/1\.1 503/);
+  assert.equal(source.calls.length, dispatched);
+});
 
 test('one connection serves requests and chat, chat-list and provider subscriptions, streaming a held reply as deltas', async (t) => {
   const gate = Promise.withResolvers<void>(),
@@ -536,7 +620,7 @@ test('the handshake and every authenticated frame refuse forgery, replay, reorde
     'unknown field': afterWelcome((keys, raw) =>
       raw.send(sealSocketMessage(keys.client, { type: 'heartbeat', seq: 1, extra: true })),
     ),
-    'oversized frame': afterWelcome((_keys, raw) => {
+    'oversized frame (framing)': afterWelcome((_keys, raw) => {
       // Only the header is sent: the length alone is refused, before any payload is buffered.
       const header = Buffer.alloc(14);
       header[0] = 0x82;
@@ -544,24 +628,27 @@ test('the handshake and every authenticated frame refuse forgery, replay, reorde
       header.writeBigUInt64BE(BigInt(socketLimits.frameBytes + 1), 2);
       raw.socket.write(header);
     }),
-    'fragmented frame': async (raw) => {
+    'fragments that never complete a hello': async (raw) => {
       await raw.next();
-      // An empty first fragment and empty continuations would never complete a message.
+      // Bun holds fragments until their message completes; these never do, so the hello's
+      // deadline ends the connection.
       raw.socket.write(Buffer.from([0x02, 0x80, 0, 0, 0, 0]));
       raw.socket.write(
         Buffer.concat(Array.from({ length: 64 }, () => Buffer.from([0, 0x80, 0, 0, 0, 0]))),
       );
+      clock.advance(socketLimits.handshakeMs);
     },
     'oversized hello': async (raw) => {
       await raw.next();
       raw.send(Buffer.alloc(8192, 0x20));
     },
-    'unmasked frame': afterWelcome((keys, raw) =>
+    'unmasked frame (framing)': afterWelcome((keys, raw) =>
       raw.send(sealSocketMessage(keys.client, { type: 'heartbeat', seq: 1 }), 2, false),
     ),
-    'text frame': afterWelcome((keys, raw) =>
+    'text frame (framing)': afterWelcome((keys, raw) =>
       raw.send(sealSocketMessage(keys.client, { type: 'heartbeat', seq: 1 }), 1),
     ),
+    'text message': afterWelcome((_keys, raw) => raw.send(Buffer.from('{"type":"heartbeat"}'), 1)),
     'late hello': async (raw) => {
       await raw.next();
       clock.advance(socketLimits.handshakeMs);
@@ -584,14 +671,10 @@ test('the handshake and every authenticated frame refuse forgery, replay, reorde
   for (const [name, fault] of Object.entries(faults)) {
     const raw = await rawSocket(port);
     await fault(raw);
-    await assertRefused(raw).catch((error: unknown) => {
+    await assertRefused(raw, name.endsWith('(framing)')).catch((error: unknown) => {
       throw new Error(name, { cause: error });
     });
   }
-  // A page in a browser always sends Origin, and is refused before any upgrade.
-  const page = await rawSocket(port, { Origin: 'https://example.com' });
-  assert.equal(await page.next(), 'closed');
-  assert.match(page.status!, /^HTTP\/1\.1 403/);
   // Nothing refused reached the chat service.
   assert.equal(source.calls.length, dispatched);
 });
@@ -1045,15 +1128,21 @@ test('daemon requests are bound to this host and their request ID; a substituted
       value: substitute(operation, input as Record<string, unknown>),
     }),
   });
-  const hostile = createServer((_request, response) => response.writeHead(404).end());
-  hostile.on('upgrade', (request, upgraded, head) => sockets.upgrade(request, upgraded, head));
-  await new Promise<void>((resolve) => hostile.listen(0, '127.0.0.1', resolve));
+  const hostile = serveBun<SocketData>({
+    hostname: '127.0.0.1',
+    port: 0,
+    idleTimeout: 10,
+    development: false,
+    error: () => new Response(null, { status: 400 }),
+    fetch: (request, server) => sockets.upgrade(request, server),
+    websocket: sockets.websocket,
+  });
   t.after(async () => {
     await sockets.close();
-    await new Promise<void>((resolve) => hostile.close(() => resolve()));
+    await hostile.stop(true);
   });
   const endpoint = {
-    origin: `http://127.0.0.1:${(hostile.address() as AddressInfo).port}`,
+    origin: `http://127.0.0.1:${hostile.port}`,
     token,
     expected: host,
   };

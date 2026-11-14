@@ -1,7 +1,9 @@
-import { createHash, randomBytes } from 'node:crypto';
-import { fail } from '@moonbase/contracts/errors';
+import { randomBytes } from 'node:crypto';
 
-/** RFC 6455 framing for the daemon's WebSocket: binary messages, pings and close, no extensions. */
+// RFC 6455 framing for tests that speak to the daemon on a raw socket, or play a hostile daemon:
+// frames no conforming client or server would send. The daemon itself leaves framing to Bun.
+
+/** Frame opcodes: binary messages, pings and close, no extensions. */
 export const webSocketOpcodes = {
   continuation: 0,
   text: 1,
@@ -10,22 +12,6 @@ export const webSocketOpcodes = {
   ping: 9,
   pong: 10,
 };
-/** Close codes the daemon sends: going away on shutdown, policy violation for any refusal. */
-export const webSocketCloseCodes = { normal: 1000, goingAway: 1001, policy: 1008 };
-
-/** The `Sec-WebSocket-Accept` for a valid `Sec-WebSocket-Key`, or undefined for any other value. */
-export function acceptWebSocketKey(key: unknown): string | undefined {
-  if (
-    typeof key !== 'string' ||
-    !/^[A-Za-z0-9+/]{22}==$/.test(key) ||
-    Buffer.from(key, 'base64').length !== 16
-  )
-    return undefined;
-  return createHash('sha1')
-    .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
-    .digest('base64');
-}
-
 /** One frame; a client masks what it sends and a server never does. */
 export function encodeWebSocketFrame(opcode: number, payload: Uint8Array, masked = false) {
   const length = payload.length;
@@ -45,13 +31,9 @@ export function encodeWebSocketFrame(opcode: number, payload: Uint8Array, masked
   for (let i = 0; i < body.length; i++) body[i]! ^= mask[i & 3]!;
   return Buffer.concat([header, body]);
 }
-export const encodeWebSocketClose = (code: number, masked = false) => {
-  const payload = Buffer.alloc(2);
-  payload.writeUInt16BE(code);
-  return encodeWebSocketFrame(webSocketOpcodes.close, payload, masked);
+const violation = (): never => {
+  throw Error('WebSocket framing is invalid.');
 };
-
-const violation = (): never => fail('InvalidInput', 'WebSocket framing is invalid.');
 /** Unmasks a payload in place, four bytes at a time; `payload` must start its own buffer. */
 function unmask(payload: Buffer, mask: Buffer) {
   const words = payload.length >>> 2;
