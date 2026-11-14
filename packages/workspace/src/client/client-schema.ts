@@ -5,8 +5,10 @@ import {
   type EditorRecovery,
   type SaveResult,
 } from '@moonbase/contracts/workspace';
-import { recovery } from '../validation.ts';
+import { hash } from '../validation.ts';
+import { fail } from '@moonbase/contracts/errors';
 import {
+  EditorRecoverySchema,
   OperationResultSchema,
   RecoveryChangeSchema,
   RecoveryPublicationSchema,
@@ -157,11 +159,30 @@ export function savedRevision(value: unknown): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw invalidStored();
   return value;
 }
+/** A recovery state as stored: each draft's baseline is the text its version names. */
+const StoredRecoverySchema = EditorRecoverySchema.check(
+  Schema.makeFilter((state) =>
+    state.drafts.every((draft) => hash(draft.disk.text) === draft.disk.version),
+  ),
+);
+const storedRecovery = Schema.decodeUnknownSync(StoredRecoverySchema, {
+  onExcessProperty: 'error',
+  reportInput: false,
+});
+const isStoredRecovery = Schema.is(StoredRecoverySchema);
+/** A client's stored recovery from its row's body. */
 export function parseRecovery(body: unknown, clientId: string): EditorRecovery {
   try {
     if (typeof body !== 'string') throw Error();
-    return recovery(JSON.parse(body), clientId);
+    const state = storedRecovery(JSON.parse(body));
+    if (state.clientId !== clientId) throw Error();
+    return state;
   } catch {
     throw invalidStored();
   }
+}
+/** Refuses to store a client's recovery that would not read back. */
+export function ensureStorable(state: EditorRecovery, clientId: string) {
+  if (state.clientId !== clientId || !isStoredRecovery(state))
+    fail('InvalidInput', 'Invalid recovery state.');
 }

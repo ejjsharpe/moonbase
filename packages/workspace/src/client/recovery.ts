@@ -35,11 +35,9 @@ import {
   canonical,
   ensure,
   errorText,
-  identifier,
   isOriginalResult,
   key,
   overlaps,
-  recovery,
   same,
   hash,
 } from '../validation.ts';
@@ -224,8 +222,6 @@ export class WorkspaceRecovery {
     return this.store.publication(clientId);
   }
   getRecoveryPublication(input: CommandInput<'getRecoveryPublication'>) {
-    identifier(input.clientId);
-    identifier(input.requestId);
     return this.store.recoveryPublication(input.clientId, input.requestId)?.receipt ?? null;
   }
   readRecoveries(): Recoveries {
@@ -533,8 +529,6 @@ export class WorkspaceRecovery {
   }
   /** One operation's result, after asking the host about it if its outcome is unknown. */
   async getOperationStatus(input: CommandInput<'operationStatus'>, signal: AbortSignal) {
-    identifier(input.clientId);
-    identifier(input.id);
     const id = key(input.clientId, input.id),
       record = this.getOperation(id);
     if (!record) return null;
@@ -546,9 +540,6 @@ export class WorkspaceRecovery {
   }
   /** Returns whether the host should now be told this client's own operation is settled. */
   acknowledgeOperation(input: CommandInput<'acknowledgeOperation'>) {
-    identifier(input.clientId);
-    identifier(input.operationClientId);
-    identifier(input.id);
     const id = key(input.operationClientId, input.id),
       record = this.getOperation(id);
     if (!record || record.acknowledgedBy.includes(input.clientId)) return false;
@@ -591,13 +582,6 @@ export class WorkspaceRecovery {
   }
 
   persistRecovery = async (input: CommandInput<'persistRecovery'>, signal: AbortSignal) => {
-    identifier(input.clientId);
-    identifier(input.requestId);
-    ensure(
-      Number.isSafeInteger(input.expectedRevision) && input.expectedRevision >= 0,
-      'Invalid recovery revision.',
-    );
-    recovery(input.state, input.clientId);
     if (signal.aborted) fail('Cancelled', 'Recovery publication cancelled before commit.');
     const digest = hash(canonical(input)),
       previous = this.store.replayPublication(input, digest);
@@ -740,7 +724,6 @@ export class WorkspaceRecovery {
         );
         for (const target of collisions.values()) this.markGap(target);
         if (JSON.stringify(state) !== body) {
-          recovery(state, client);
           this.store.writeInternalRecovery(client, revision, state);
           const change = { clientId: client, previousRevision: revision, revision: revision + 1 };
           for (const m of fresh) m.updated.result.recoveryChanges.push(change);
@@ -939,7 +922,6 @@ export class WorkspaceRecovery {
         return { id, record, committed, updated, changed: drafted };
       });
       if (changed) {
-        recovery(state, clientId);
         this.store.writeInternalRecovery(clientId, revision, state);
       }
       const settling = updates.filter((u) => u.updated.state !== 'sent').map((u) => u.id);
@@ -1150,7 +1132,6 @@ export class WorkspaceRecovery {
   }
 
   async loadRecovery(clientId: string, signal: AbortSignal) {
-    identifier(clientId);
     const recoveries = this.store.readRecoveries();
     // This client's own recovery must read; another's that does not is reported.
     if (recoveries.unreadable.some((r) => r.client === clientId)) throw invalidStored();

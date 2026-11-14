@@ -670,7 +670,7 @@ test('public workspace IO normalizes unknown helper failures without rebranding 
   }
 });
 
-test('saved recovery naming a foreign checkout or escaping path blocks later publication without replacing the row', async () => {
+test('saved recovery naming a foreign checkout, an escaping path or a wrong baseline blocks later publication without replacing the row', async () => {
   const f = fixture(),
     { runtime, client } = f.start();
   try {
@@ -683,6 +683,20 @@ test('saved recovery naming a foreign checkout or escaping path blocks later pub
       openCheckoutIds: [checkout.checkoutId],
       drafts: [{ target, text: 'retained draft', disk }],
     };
+    const wrongBaseline = {
+      ...state,
+      drafts: [{ ...state.drafts[0], disk: { ...disk, version: 'f'.repeat(64) } }],
+    };
+    // A recovery the store could not read back is never written.
+    await assert.rejects(
+      client.command('persistRecovery', {
+        clientId: 'alice',
+        requestId: 'wrong-baseline',
+        expectedRevision: 0,
+        state: wrongBaseline,
+      }),
+      isError('InvalidInput'),
+    );
     await client.command('persistRecovery', {
       clientId: 'alice',
       requestId: 'initial-domain',
@@ -700,6 +714,7 @@ test('saved recovery naming a foreign checkout or escaping path blocks later pub
         ],
       },
       { ...state, drafts: [{ ...state.drafts[0], target: { ...target, path: '../escape' } }] },
+      wrongBaseline,
     ];
     const database = new DatabaseSync(join(f.base, 'state/moonbase-workspace-v1.sqlite'));
     try {
