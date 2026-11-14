@@ -34,7 +34,6 @@ import {
   IncompatibleHostError,
   type DaemonLinkError,
 } from '@moonbase/contracts/host-errors';
-import { CredentialKeyError } from '@moonbase/contracts/provider-errors';
 import {
   chatHostCapabilities,
   type ChatHostHealth,
@@ -115,8 +114,8 @@ const refusedReply = (error: unknown, reason: 'invalid-reply' | 'invalid-update'
 /**
  * A daemon's own error as the client shows it (D11): its tag and literal reason, decoded into the
  * client's own classes, so its message is the client's fixed text and it carries no cause. Free
- * text a host could fill (the operation an outcome names) is the client's own, and detail it
- * could add (a target, a command status) is dropped.
+ * text a host could fill (the operation an outcome names) is the client's own, and an outcome's
+ * target is dropped. A decoded number, such as a command's exit status, is kept.
  */
 export function presentRemoteError(error: RemoteError, operation: string): RemoteError {
   switch (error._tag) {
@@ -124,8 +123,6 @@ export function presentRemoteError(error: RemoteError, operation: string): Remot
       return new UncertainError({ operation });
     case 'UnauthorizedError':
       return new UnauthorizedError({ operation });
-    case 'CredentialKeyError':
-      return new CredentialKeyError({ problem: error.problem });
     default:
       return error;
   }
