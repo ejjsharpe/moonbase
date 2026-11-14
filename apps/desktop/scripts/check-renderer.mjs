@@ -15,7 +15,7 @@ assert.deepEqual(
   'Privileged implementation reached the actual Vite renderer graph',
 );
 assert(inputs.some((p) => p.endsWith('application/src/runtime/composition.ts')));
-assert(inputs.some((p) => p.endsWith('application/src/features/editor/editor.ts')));
+assert(inputs.some((p) => p.endsWith('application/src/editor/editor.ts')));
 assert(!inputs.some((p) => p.endsWith('desktop/src/renderer/cleanup.ts')));
 assert(inputs.some((p) => p.endsWith('contracts/src/errors.ts')));
 assert(inputs.some((p) => p.includes('monaco-editor')));
@@ -37,7 +37,7 @@ for (const entry of [
 ])
   assert(inputs.some((p) => p.endsWith(entry)));
 assert(!inputs.some((p) => /packages\/editor\//.test(p)));
-assert(inputs.some((p) => p.endsWith('application/src/features/chat/controller.ts')));
+assert(inputs.some((p) => p.endsWith('application/src/chat/controller.ts')));
 const assets = await readdir(new URL('renderer/assets/', output));
 assert.equal(
   assets.filter((name) => /^(editor|json|css|html|ts)\.worker.*\.js$/.test(name)).length,

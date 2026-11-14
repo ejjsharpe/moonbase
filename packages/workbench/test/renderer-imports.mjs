@@ -22,7 +22,7 @@ const prohibited = inputs.filter((path) =>
   ),
 );
 assert.deepEqual(prohibited, [], 'Privileged or reference application code reached renderer entry');
-assert(inputs.some((path) => path.endsWith('application/src/features/editor/editor.ts')));
+assert(inputs.some((path) => path.endsWith('application/src/editor/editor.ts')));
 assert(inputs.some((path) => path.endsWith('contracts/src/errors.ts')));
 assert.deepEqual(
   inputs.filter((path) =>
@@ -34,7 +34,7 @@ assert(inputs.some((path) => path.includes('monaco-editor')));
 assert(inputs.includes('src/workbench.tsx'), 'Missing project editor presentation');
 assert.deepEqual(
   inputs.filter((path) =>
-    /application\/src\/(?:features\/chat\/|runtime\/composition\.ts)|contracts\/src\/(?:chat|connection|host)(?:-schema)?\.ts|src\/(?:chat|shell)\//.test(
+    /application\/src\/(?:chat\/|runtime\/composition\.ts)|contracts\/src\/(?:chat|connection|host)(?:-schema)?\.ts|src\/(?:chat|shell)\//.test(
       path,
     ),
   ),

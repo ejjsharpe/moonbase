@@ -2,7 +2,7 @@ import { normalizeApplicationError, toApplicationError } from '@moonbase/effect'
 import { Cause, Deferred, Effect, Exit, Fiber, Schema, Scope, type ManagedRuntime } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ObservationClose } from '@moonbase/contracts/common';
-import { runApplicationEffect } from '../../runtime/effect-client.ts';
+import { runApplicationEffect } from '../runtime/effect-client.ts';
 import { decodeChatInput, ChatModelPreferenceSchema } from '@moonbase/contracts/chat-schema';
 import type {
   ChatCreationSettings,
@@ -39,13 +39,13 @@ import {
   type Pending,
 } from './saved.ts';
 export type { Pending } from './saved.ts';
-import { TranscriptOwner } from './transcript.ts';
+import { TranscriptOwner } from './transcript/transcript.ts';
 import {
   makeEmptyTranscriptState,
   transcriptLimits,
   type TranscriptState,
-} from './transcript-state.ts';
-import { TranscriptViewMemory, type TranscriptView } from './view-memory.ts';
+} from './transcript/transcript-state.ts';
+import { TranscriptViewMemory, type TranscriptView } from './transcript/view-memory.ts';
 import { ChatFileSearch } from './file-search.ts';
 
 export interface DraftStorage {

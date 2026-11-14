@@ -30,7 +30,7 @@ for (const entry of [
     if (entry === '' || entry === '/editor')
       for (const owner of ['recovery-publications', 'preservation', 'discovery'])
         assert(
-          `packages/application/src/features/editor/${owner}.ts` in bundle.metafile.inputs,
+          `packages/application/src/editor/${owner}.ts` in bundle.metafile.inputs,
           `The actual browser graph must include the private ${owner} owner`,
         );
   });

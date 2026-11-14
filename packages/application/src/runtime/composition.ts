@@ -7,7 +7,7 @@ import {
   type EditorController,
   type EditorDependencies,
   type EditorModel,
-} from '../features/editor/index.ts';
+} from '../editor/index.ts';
 import {
   TranscriptViewMemory,
   makeChatController,
@@ -15,7 +15,7 @@ import {
   type ChatController,
   type ChatDependencies,
   type ChatModel,
-} from '../features/chat/index.ts';
+} from '../chat/index.ts';
 import { runApplicationEffect } from './effect-client.ts';
 import { ApplicationCleanup, releaseInstance } from './lifecycle.ts';
 

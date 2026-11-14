@@ -6,7 +6,7 @@ import type {
   ChatTranscriptPart,
 } from '@moonbase/contracts/chat';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
-import { sameTarget } from './saved.ts';
+import { sameTarget } from '../saved.ts';
 import { makeTranscriptFailure } from './transcript-read.ts';
 
 export type HistoryDirection = 'earlier' | 'later';

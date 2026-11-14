@@ -1,7 +1,7 @@
 import type { ChatOutput, ChatTarget, ChatTranscriptMatch } from '@moonbase/contracts/chat';
 import { getChatFindExpression } from '@moonbase/contracts/chat';
 import { areJsonValuesEqual, getJsonKey } from '@moonbase/contracts/common';
-import { sameTarget } from './saved.ts';
+import { sameTarget } from '../saved.ts';
 import { makeTranscriptFailure, trackTranscriptCursor } from './transcript-read.ts';
 import { transcriptLimits, type TranscriptFindState } from './transcript-state.ts';
 
