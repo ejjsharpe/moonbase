@@ -12,7 +12,7 @@ import {
   WorkspaceUnsupportedError,
 } from '@moonbase/contracts/workspace-host-errors';
 import { join } from 'node:path';
-import { asHostFailure, attempt, type HostFailure } from '../attempt.ts';
+import { asWorkspaceFailure, attempt, type WorkspaceFailure } from '../attempt.ts';
 import type { HostRequestRecord } from '../schema.ts';
 import { same } from '../validation.ts';
 import { makeChatWorktree } from './chat-worktrees.ts';
@@ -44,7 +44,7 @@ const once = <K extends RequestOperation>(
   input: HostInput<K>,
   work: Effect.Effect<
     HostOutput<K>,
-    HostFailure,
+    WorkspaceFailure,
     Checkouts | HostJournal | HostSettings | WorkspaceWorktrees
   >,
 ) =>
@@ -63,7 +63,7 @@ const once = <K extends RequestOperation>(
       return (yield* attempt(() =>
         journal.replayRequest(record, operation, input),
       )) as HostOutput<K>;
-    const outcome = Deferred.makeUnsafe<CheckoutTarget, HostFailure>();
+    const outcome = Deferred.makeUnsafe<CheckoutTarget, WorkspaceFailure>();
     requests.set(id, { input, outcome });
     const exit = yield* Effect.exit(settleRequest(journal, id, input, work));
     requests.delete(id);
@@ -81,7 +81,7 @@ const settleRequest = <A extends CheckoutTarget, R>(
   journal: HostJournal['Service'],
   id: string,
   input: HostRequestRecord['input'],
-  work: Effect.Effect<A, HostFailure, R>,
+  work: Effect.Effect<A, WorkspaceFailure, R>,
 ) =>
   Effect.gen(function* () {
     const exit = yield* Effect.exit(work);
@@ -142,7 +142,7 @@ export const turnChatIntoProject = (input: HostInput<'turnChatIntoProject'>) =>
       if (!chats) return yield* new WorkspaceUnsupportedError({ feature: 'chat-projects' });
       const folder = yield* Effect.tryPromise({
         try: () => chats.findOwnFolder(input.target),
-        catch: asHostFailure,
+        catch: asWorkspaceFailure,
       });
       const target = yield* Effect.interruptible(checkouts.open(folder));
       // `open` resolves links: a folder replaced by one since it was checked opens elsewhere.
@@ -154,7 +154,7 @@ export const turnChatIntoProject = (input: HostInput<'turnChatIntoProject'>) =>
         return yield* new CheckoutAccessError({ refusal: 'chat-folder-repository' });
       yield* Effect.tryPromise({
         try: () => chats.markAsProject(input.requestId, input.target),
-        catch: asHostFailure,
+        catch: asWorkspaceFailure,
       });
       return target;
     }),

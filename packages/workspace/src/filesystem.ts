@@ -10,7 +10,7 @@ import {
   InvalidPathError,
   WorkspaceUnavailableError,
 } from '@moonbase/contracts/workspace-host-errors';
-import { asHostFailure, attempt, type HostFailure } from './attempt.ts';
+import { asWorkspaceFailure, attempt, type WorkspaceFailure } from './attempt.ts';
 import { HelperFailure } from './system-failures.ts';
 /** macOS `O_NOFOLLOW_ANY`: refuse a symlink anywhere in the path, not only the last component. */
 export const O_NOFOLLOW_ANY = 0x20000000;
@@ -259,8 +259,8 @@ export function createGitGate(
     }
     if (!found) throw new WorkspaceUnavailableError({ cause: 'git-tools' });
   };
-  return (): Effect.Effect<void, HostFailure> =>
-    Effect.tryPromise({ try: check, catch: asHostFailure });
+  return (): Effect.Effect<void, WorkspaceFailure> =>
+    Effect.tryPromise({ try: check, catch: asWorkspaceFailure });
 }
 export class Directory {
   readonly fd: number;
@@ -268,13 +268,13 @@ export class Directory {
   readonly expected: string;
   readonly run: Run;
   readonly gitExecutable: string;
-  readonly gitReady: () => Effect.Effect<void, HostFailure>;
+  readonly gitReady: () => Effect.Effect<void, WorkspaceFailure>;
   constructor(
     root: string,
     expected: string,
     run: Run,
     gitExecutable: string,
-    gitReady: () => Effect.Effect<void, HostFailure> = () => Effect.void,
+    gitReady: () => Effect.Effect<void, WorkspaceFailure> = () => Effect.void,
   ) {
     this.gitReady = gitReady;
     this.root = root;
@@ -382,7 +382,7 @@ export class Directory {
       fs.closeSync(fd);
     }
   }
-  read(p: string): Effect.Effect<FileDocument, HostFailure> {
+  read(p: string): Effect.Effect<FileDocument, WorkspaceFailure> {
     return attempt(() => path(p)).pipe(
       Effect.andThen(this.entry(p)),
       Effect.andThen(this.io(['read', p])),

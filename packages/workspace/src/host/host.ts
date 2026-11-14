@@ -20,7 +20,7 @@ import {
   WorkspaceUnsupportedError,
   type WorkspaceHostError,
 } from '@moonbase/contracts/workspace-host-errors';
-import { attempt, type HostFailure } from '../attempt.ts';
+import { attempt, type WorkspaceFailure } from '../attempt.ts';
 import { SystemFailure } from '../system-failures.ts';
 import { decodeConfiguration, type WorkspaceHostConfiguration } from '../schema.ts';
 import { path } from '../validation.ts';
@@ -58,14 +58,14 @@ type HostServices =
  * helper or system call reported (a store failure for work on the journals), so their
  * diagnostics never reach a client.
  */
-const asHostError = (failure: HostFailure, persistence: boolean): WorkspaceHostError => {
+const asHostError = (failure: WorkspaceFailure, persistence: boolean): WorkspaceHostError => {
   if (isWorkspaceHostError(failure)) return failure;
   return persistence
     ? new WorkspaceStoreError({ failure: 'failed' })
     : new WorkspaceUnavailableError({ cause: 'failed' });
 };
 /** A cause's failure as the host's error; a defect (a bug) gets the same fixed error. */
-const fromCause = (cause: Cause.Cause<HostFailure>, persistence: boolean) => {
+const fromCause = (cause: Cause.Cause<WorkspaceFailure>, persistence: boolean) => {
   const failure = Cause.findErrorOption(cause);
   return asHostError(
     Option.isSome(failure) ? failure.value : new SystemFailure({ code: undefined, cause }),
@@ -84,7 +84,7 @@ type RunOptions<A> = {
    */
   interruptible?: boolean;
   /** Undoes a result nobody will receive, such as the reply to a cancelled request. */
-  abandoned?: (result: A) => Effect.Effect<void, HostFailure>;
+  abandoned?: (result: A) => Effect.Effect<void, WorkspaceFailure>;
 };
 
 /**
@@ -118,7 +118,7 @@ const makeFileHost = Effect.gen(function* () {
    * stop without waiting for it, and it keeps its lease, helpers and descriptors until it ends.
    */
   const run = <A>(
-    work: Effect.Effect<A, HostFailure, HostServices | Scope.Scope>,
+    work: Effect.Effect<A, WorkspaceFailure, HostServices | Scope.Scope>,
     { persistence = false, lease, interruptible = false, abandoned }: RunOptions<A> = {},
   ): Effect.Effect<A, WorkspaceHostError> =>
     Effect.uninterruptibleMask((restore) =>
@@ -164,7 +164,7 @@ const makeFileHost = Effect.gen(function* () {
         return yield* Effect.failCause(exit.cause);
       }),
     );
-  const read = <A>(work: Effect.Effect<A, HostFailure, HostServices | Scope.Scope>) =>
+  const read = <A>(work: Effect.Effect<A, WorkspaceFailure, HostServices | Scope.Scope>) =>
     run(work, { interruptible: true });
   const requireNativeImports = Effect.suspend(() =>
     config.nativeImports === false
@@ -284,7 +284,7 @@ export function makeFileHostLayer(configuration: WorkspaceHostConfiguration, now
     Layer.catchCause((cause) =>
       Layer.effect(
         FileHost,
-        Effect.fail(toWireError(fromCause(cause as Cause.Cause<HostFailure>, true))),
+        Effect.fail(toWireError(fromCause(cause as Cause.Cause<WorkspaceFailure>, true))),
       ),
     ),
   );

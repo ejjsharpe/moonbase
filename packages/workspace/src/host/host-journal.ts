@@ -15,7 +15,7 @@ import type {
 } from '@moonbase/contracts/workspace-host';
 import { randomUUID } from 'node:crypto';
 import type { Store } from '../store.ts';
-import { attempt, type HostFailure } from '../attempt.ts';
+import { attempt, type WorkspaceFailure } from '../attempt.ts';
 import { Checkouts } from './checkouts.ts';
 import { HostSettings } from './host-settings.ts';
 import { HostStore } from './host-store.ts';
@@ -76,7 +76,7 @@ export class Journal {
   /** The requests running in this process, so a concurrent duplicate waits for the first. */
   readonly runningRequests = new Map<
     string,
-    { input: unknown; outcome: Deferred.Deferred<CheckoutTarget, HostFailure> }
+    { input: unknown; outcome: Deferred.Deferred<CheckoutTarget, WorkspaceFailure> }
   >();
   private readonly store: Store;
   private readonly checkouts: JournalDependencies['checkouts'];
@@ -197,7 +197,7 @@ export class Journal {
     }
     return result;
   }
-  saveStatus(input: SaveIdentity): Effect.Effect<SaveStatus, HostFailure> {
+  saveStatus(input: SaveIdentity): Effect.Effect<SaveStatus, WorkspaceFailure> {
     return Effect.gen({ self: this }, function* () {
       const id = this.saveId(input),
         record = yield* attempt(() => this.getSave(id));
@@ -359,7 +359,7 @@ export class Journal {
   }
   operationStatus(
     input: OperationIdentity,
-  ): Effect.Effect<HostOperationResult | null, HostFailure> {
+  ): Effect.Effect<HostOperationResult | null, WorkspaceFailure> {
     return Effect.gen({ self: this }, function* () {
       const id = this.operationId(input),
         record = yield* attempt(() => this.getOperation(id));
@@ -450,7 +450,7 @@ export class Journal {
     installationId: string,
     clientId: string,
     footprint: (input: HostInput<'mutate'>) => string[],
-  ): Effect.Effect<void, HostFailure> {
+  ): Effect.Effect<void, WorkspaceFailure> {
     return Effect.gen({ self: this }, function* () {
       let blocked = false;
       for (const { id, record } of yield* attempt(() => this.getPendingSaves(target))) {
