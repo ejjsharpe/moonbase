@@ -61,7 +61,8 @@ export class CheckoutAccessError extends Schema.TaggedError<CheckoutAccessError>
 const changes = {
   directory: 'Checkout directory changed. Restore its original identity.',
   'git-metadata': 'Invalid checkout Git metadata.',
-  'git-metadata-identity': 'Checkout Git metadata identity changed. Restore the original repository.',
+  'git-metadata-identity':
+    'Checkout Git metadata identity changed. Restore the original repository.',
   'common-directory': 'Repository common directory identity changed.',
   'ignore-policy': 'Invalid repository ignore policy.',
   identity: 'Checkout or repository identity changed. Restore the original directory.',
@@ -374,4 +375,3 @@ export function toWireError(error: WorkspaceHostError): ApplicationError {
   if (ApplicationError.is(error)) return error;
   return new ApplicationError({ code: getWireCode(error), message: error.message });
 }
-
