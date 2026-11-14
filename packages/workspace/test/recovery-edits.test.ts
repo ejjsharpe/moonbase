@@ -12,7 +12,7 @@ import type {
   RecoveryOutline,
 } from '@moonbase/contracts/recovery';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { toWireError } from '@moonbase/contracts/workspace-errors';
+import { InvalidRecoveryRequestError, toWireError } from '@moonbase/contracts/workspace-errors';
 import { dropReply, dropRequest, harness, openCheckout } from './split-fixture.ts';
 import { isError } from './recovery-fixture.ts';
 
@@ -206,6 +206,13 @@ test('an edit during a save, or after its reply was lost, is never overwritten b
     ]);
     await window.updateDraft({ bufferId: 'b1', text: 'saving', disk: saved.disk });
     assert.deepEqual((await load(alice, 'window')).state.drafts, []);
+    // The file changes outside the editor; the window reloads it, keeps its edit over the new
+    // text, and undoes back to the saved text. That text is now unsaved, so it stays a draft.
+    await window.updateDraft({ bufferId: 'b1', text: 'local edit', disk: saved.disk });
+    writeFileSync(join(h.root, 'file.txt'), 'changed outside');
+    const outside = await read('file.txt');
+    await window.updateDraft({ bufferId: 'b1', text: 'saving', disk: outside });
+    assert.equal((await load(alice, 'window')).state.drafts[0]?.text, 'saving');
     await alice.runtime.dispose();
 
     // The host saves, then the reply and every status question are lost; the next edit lands.
@@ -297,6 +304,24 @@ test('a move takes its buffers along, and a clean buffer at the destination give
       replacements: await alice.client.command('inspectEntries', { checkout, paths: ['q.txt'] }),
       destination: 'q.txt',
     });
+    // A late keystroke into the buffer that gave way is told it was replaced, until closed.
+    const refusal = () =>
+      alice.runtime.runPromise(
+        Effect.flatMap(WorkspaceService, (service) =>
+          Effect.flip(
+            service.updateDraft({ clientId: 'window', bufferId: 'q', text: 'late', disk }),
+          ),
+        ),
+      );
+    assert.deepEqual(
+      await refusal(),
+      new InvalidRecoveryRequestError({ problem: 'buffer-replaced' }),
+    );
+    await window.closeTab({ bufferId: 'q' });
+    assert.deepEqual(
+      await refusal(),
+      new InvalidRecoveryRequestError({ problem: 'unknown-buffer' }),
+    );
     const state = (await load(alice, 'window')).state;
     const view = state.views[checkout.checkoutId]!;
     assert.deepEqual(view.openFiles, ['moved.txt', 'second.txt', 'taken.txt', 'q.txt']);

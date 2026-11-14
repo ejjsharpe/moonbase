@@ -12,7 +12,7 @@ import {
   RecoveryPublicationError,
 } from '@moonbase/contracts/workspace-errors';
 import { attempt, type WorkspaceFailure } from '../attempt.ts';
-import { hash, same } from '../validation.ts';
+import { hash, key, same } from '../validation.ts';
 import { followCheckouts } from './feed-sync.ts';
 import type { RecoveryContext } from './recovery-context.ts';
 
@@ -97,7 +97,11 @@ export const makeRecoveryEdits = (context: RecoveryContext) => {
       clientId,
       commit(clientId, (state) => {
         const index = state.buffers.findIndex((b) => b.id === bufferId);
-        if (index < 0) return false;
+        // Closing a buffer a move replaced is how its client says it has dealt with it.
+        if (index < 0) {
+          store.delete('replaced-buffers', key(clientId, bufferId));
+          return false;
+        }
         const { target, draft } = state.buffers[index];
         if (draft) {
           if (!discard) throw new InvalidRecoveryRequestError({ problem: 'draft-open' });
@@ -139,7 +143,12 @@ export const makeRecoveryEdits = (context: RecoveryContext) => {
         if (hash(disk.text) !== disk.version) return yield* invalidState();
         yield* commit(clientId, (state) => {
           const buffer = state.buffers.find((b) => b.id === bufferId);
-          if (!buffer) throw new InvalidRecoveryRequestError({ problem: 'unknown-buffer' });
+          if (!buffer)
+            throw new InvalidRecoveryRequestError({
+              problem: store.get('replaced-buffers', key(clientId, bufferId))
+                ? 'buffer-replaced'
+                : 'unknown-buffer',
+            });
           const { draft } = buffer;
           if (!draft) {
             if (text === disk.text) return false;
@@ -148,8 +157,9 @@ export const makeRecoveryEdits = (context: RecoveryContext) => {
           }
           // A draft keeps the baseline the store holds: a save that settled since the caller last
           // heard moved it, and the caller's older one would leave the draft over text no longer
-          // on disk. Text equal to that baseline is no draft.
-          if (text === draft.disk.text) {
+          // on disk. The draft clears only when caller and store agree on its baseline and the
+          // text is that baseline's; text the caller holds over another file text is unsaved.
+          if (text === draft.disk.text && disk.version === draft.disk.version) {
             assertDroppable(buffer.target);
             delete buffer.draft;
             return;

@@ -220,11 +220,14 @@ export function applyOperations(
     let revision = current;
     const fresh = relevant.filter((m) => m.fresh.length);
     if (fresh.length) {
-      const collisions = reconcile(
+      const { collisions, replaced } = reconcile(
         state,
         fresh.map((m) => ({ ...m.updated, result: { ...m.updated.result, items: m.fresh } })),
       );
       for (const { checkout, paths } of collisions.values()) context.markGap(checkout, paths);
+      // A late edit to a buffer that gave way is told so, not that it never existed.
+      for (const bufferId of replaced)
+        store.put('replaced-buffers', key(client, bufferId), { clientId: client, bufferId });
       if (JSON.stringify(state) !== body) {
         store.writeInternalRecovery(client, revision, state);
         const change = { clientId: client, previousRevision: revision, revision: revision + 1 };

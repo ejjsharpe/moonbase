@@ -149,6 +149,11 @@ export const clientDecoders = {
     /** Per host and checkout, a feed gap that left drafts at their old paths. */
     'feed-gaps': FeedGapSchema,
     meta: WorkspaceIdentifierSchema,
+    /** Per client and buffer, an open clean buffer a move replaced, until the client closes it. */
+    'replaced-buffers': struct({
+      clientId: WorkspaceIdentifierSchema,
+      bufferId: WorkspaceIdentifierSchema,
+    }),
     /** Per call, the request ID its host operation was (or is to be) sent under. */
     requests: struct({ requestId: WorkspaceIdentifierSchema }),
     saves: StoredSaveSchema,

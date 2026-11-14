@@ -11,7 +11,8 @@ import type { OperationRecord } from './client-schema.ts';
  * moves, so their tabs, views and drafts follow; Trash leaves every buffer where it was; a copy
  * gives each draft it copies a buffer of its own. A clean buffer open at a destination gives way
  * to what arrives there; one with a draft holds it, so neither draft is lost and the arriving one
- * stays where it was. The drafts left behind are returned, per checkout.
+ * stays where it was. Returns the drafts left behind, per checkout, and the IDs of the clean
+ * buffers that gave way.
  */
 export function reconcile(
   state: RecoveryState,
@@ -19,6 +20,7 @@ export function reconcile(
   mintId: () => string = randomUUID,
 ) {
   const collisions = new Map<string, { checkout: CheckoutTarget; paths: string[] }>();
+  const replaced: string[] = [];
   for (const record of records) {
     const checkout = record.input.checkout;
     if (!state.checkouts.some((c) => same(c, checkout))) continue;
@@ -63,7 +65,10 @@ export function reconcile(
           }
           continue;
         }
-        if (held) giveWay(state, held, buffer);
+        if (held) {
+          giveWay(state, held, buffer);
+          replaced.push(held.id);
+        }
         buffer.target = { ...buffer.target, path: moved };
       }
       state.recentFiles = state.recentFiles.map((t) =>
@@ -81,7 +86,7 @@ export function reconcile(
       }
     }
   }
-  return collisions;
+  return { collisions, replaced };
 }
 
 /** Removes a clean buffer for the one arriving at its file, which takes over its tab and view. */
