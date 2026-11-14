@@ -7,15 +7,15 @@ import {
   type PickerOpenFile,
   type PickerRequest,
 } from './picker.tsx';
-import { FilesTree, type FollowedFiles, type TreeCreateRequest } from './files-tree.tsx';
-import { findCreateFolder } from './files-tree-rows.ts';
-import { gitStatusMarks } from './files-tree-status.ts';
+import { FilesTree, type FollowedFiles, type TreeCreateRequest } from './files-tree/files-tree.tsx';
+import { findCreateFolder } from './files-tree/files-tree-rows.ts';
+import { gitStatusMarks } from './files-tree/files-tree-status.ts';
 import { Mutation, type Action } from './mutation.tsx';
 import { useMutationRunner } from './mutation-runner.tsx';
-import { useMoveUndo } from './move-undo.ts';
-import { useFileClipboard } from './file-clipboard.ts';
-import { maxDraggedEntries } from './files-tree-drop.ts';
-import { formatKeys, isCommandKey } from './file-commands.ts';
+import { useMoveUndo } from './files-tree/move-undo.ts';
+import { useFileClipboard } from './files-tree/file-clipboard.ts';
+import { maxDraggedEntries } from './files-tree/files-tree-drop.ts';
+import { formatKeys, isCommandKey } from './files-tree/file-commands.ts';
 import { Popup } from './popup.tsx';
 import {
   forwardRef,

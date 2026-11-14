@@ -18,7 +18,7 @@ import {
 } from './files-tree-drop.ts';
 import { measureStem } from './files-tree-rows.ts';
 import { listFolders, selectEntries } from './move-undo.ts';
-import type { RunMutation } from './mutation-runner.tsx';
+import type { RunMutation } from '../mutation-runner.tsx';
 
 /** Entries cut or copied in a workbench's files tree, waiting to be pasted into a folder. */
 export type FileClipboard = { checkout: CheckoutTarget; paths: string[]; mode: 'copy' | 'cut' };

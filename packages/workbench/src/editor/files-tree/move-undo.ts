@@ -10,7 +10,7 @@ import {
   listUndoMoves,
   type MoveRecord,
 } from './files-tree-drop.ts';
-import type { RunMutation } from './mutation-runner.tsx';
+import type { RunMutation } from '../mutation-runner.tsx';
 
 /**
  * Expands the folders that show `paths` in a checkout's tree, lists the newly expanded ones, and

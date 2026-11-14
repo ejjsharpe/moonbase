@@ -1,7 +1,7 @@
 import { getParentPath, getPathName, joinPath } from '@moonbase/contracts/paths';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
-import { styles } from './styles.ts';
+import { styles } from '../styles.ts';
 import { Icon } from '@moonbase/ui/icons';
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { filesUI } from '@moonbase/ui/files';
@@ -54,7 +54,7 @@ import {
 } from './files-tree-drop.ts';
 import { selectEntries } from './move-undo.ts';
 import { copyName, type FileClipboard } from './file-clipboard.ts';
-import type { RunMutation } from './mutation-runner.tsx';
+import type { RunMutation } from '../mutation-runner.tsx';
 
 /**
  * A name being typed in the tree: renaming or duplicating `path`, or creating in folder `path`.
