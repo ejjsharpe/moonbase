@@ -6,7 +6,7 @@ import {
   type EditorClient,
   type RecoveryPublication,
 } from '@moonbase/contracts/workspace';
-import { chatCapabilities } from '../test/chat-capabilities-fixture.ts';
+import { chatCapabilities } from '../test/chat/chat-capabilities-fixture.ts';
 
 function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) throw Error(message);

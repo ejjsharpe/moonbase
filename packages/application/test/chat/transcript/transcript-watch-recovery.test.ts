@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ChatClient, ChatSnapshot, ChatTarget } from '@moonbase/contracts/chat';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { modelRoot } from './chat-model-fixture.ts';
+import { modelRoot } from '../chat-model-fixture.ts';
 import { tick, transcriptFixture } from './transcript-fixture.ts';
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

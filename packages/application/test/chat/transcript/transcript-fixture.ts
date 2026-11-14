@@ -10,8 +10,8 @@ import type {
   ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
 import type { ChatDependencies } from '@moonbase/application/chat';
-import { chatCapabilities } from './chat-capabilities-fixture.ts';
-import { modelRoot } from './chat-model-fixture.ts';
+import { chatCapabilities } from '../chat-capabilities-fixture.ts';
+import { modelRoot } from '../chat-model-fixture.ts';
 
 export const digest = (text: string) => createHash('sha256').update(text).digest('hex');
 export const part = (partId: string, text: string): ChatTranscriptPart => ({

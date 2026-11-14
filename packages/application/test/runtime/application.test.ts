@@ -1090,7 +1090,7 @@ test('named local/remote targets preserve separate drafts and wait for controlle
 });
 
 test('transcript anchors/expansions belong to application lifetime and exact backend identity, never saved drafts', async () => {
-  const { transcriptFixture } = await import('./transcript-fixture.ts');
+  const { transcriptFixture } = await import('../chat/transcript/transcript-fixture.ts');
   const a = transcriptFixture(),
     b = transcriptFixture();
   const options = {
@@ -1157,7 +1157,7 @@ test('transcript anchors/expansions belong to application lifetime and exact bac
 });
 
 test('independent failing watch cleanup remains observable while cancelled transcript IO settles', async () => {
-  const { transcriptFixture, part } = await import('./transcript-fixture.ts');
+  const { transcriptFixture, part } = await import('../chat/transcript/transcript-fixture.ts');
   const f = transcriptFixture(1),
     gate = Promise.withResolvers<void>(),
     entered = Promise.withResolvers<void>();
@@ -1202,7 +1202,7 @@ test('independent failing watch cleanup remains observable while cancelled trans
 });
 
 test('named-target replacement fences a cancelled late read failure and retains cleanup before reacquisition', async () => {
-  const { transcriptFixture } = await import('./transcript-fixture.ts');
+  const { transcriptFixture } = await import('../chat/transcript/transcript-fixture.ts');
   const a = transcriptFixture(1),
     b = transcriptFixture(1);
   const entered = Promise.withResolvers<void>(),

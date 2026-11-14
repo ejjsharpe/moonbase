@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { Effect, Exit, Layer, ManagedRuntime, Scope } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
-import { ApplicationCleanup, releaseInstance } from '../src/runtime/lifecycle.ts';
+import { ApplicationCleanup, releaseInstance } from '../../src/runtime/lifecycle.ts';
 
 test('root cleanup retains failed/pending instance ownership while another namespace works and Quit drains', async () => {
   const runtime = ManagedRuntime.make(Layer.empty),

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ChatInput } from '@moonbase/contracts/chat';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { modelRoot } from './chat-model-fixture.ts';
+import { modelRoot } from '../chat-model-fixture.ts';
 import {
   digest,
   part,

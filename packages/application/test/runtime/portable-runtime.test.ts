@@ -12,7 +12,7 @@ for (const entry of [
 ])
   test(`application${entry} bundles without privileged or UI implementations`, async () => {
     const bundle = await build({
-      absWorkingDir: fileURLToPath(new URL('../../../', import.meta.url)),
+      absWorkingDir: fileURLToPath(new URL('../../../../', import.meta.url)),
       entryPoints: [`@moonbase/application${entry}`],
       bundle: true,
       platform: 'browser',
