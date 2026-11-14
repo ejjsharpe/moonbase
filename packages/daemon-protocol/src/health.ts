@@ -1,14 +1,20 @@
 import { hostTokenPattern } from '@moonbase/contracts/host';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Effect } from 'effect';
-import { ApplicationError, fail } from '@moonbase/contracts/errors';
+import {
+  HostVerificationError,
+  type HostVerificationReason,
+} from '@moonbase/contracts/connection-errors';
 import type { ChatHostHealth, ChatHostTarget, HostHealthReply } from '@moonbase/contracts/host';
 import type { ChatHostEndpoint } from '@moonbase/contracts/services';
-import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
+import { releaseResource } from '@moonbase/effect';
 import { decodeChatHostHealth } from '@moonbase/contracts/host-schema';
 
 export type { ChatHostEndpoint } from '@moonbase/contracts/services';
 export type { HostHealthReply } from '@moonbase/contracts/host';
+const refuse = (reason: HostVerificationReason): never => {
+  throw new HostVerificationError({ reason });
+};
 const maximumHealthBytes = 8 * 1024;
 /** The HMAC domain for signed health proofs. */
 export const healthDomain = 'moonbase-daemon-health-v1';
@@ -19,8 +25,7 @@ const nonceValid = (value: unknown): value is string =>
   /^[A-Za-z0-9_-]{43}$/.test(value) &&
   Buffer.from(value, 'base64url').toString('base64url') === value;
 function configuredToken(value: string) {
-  if (typeof value !== 'string' || !hostTokenPattern.test(value))
-    fail('InvalidInput', 'Configure a valid host key outside the renderer.');
+  if (typeof value !== 'string' || !hostTokenPattern.test(value)) refuse('endpoint-key');
 }
 function signature(
   token: string,
@@ -56,7 +61,7 @@ export function createHostHealthReply(input: {
     !nonceValid(input.nonce) ||
     !matchesProof(requestProof, signature(input.token, 'request', input.nonce))
   )
-    return fail('Unauthorized', 'Chat host rejected health authentication.');
+    return refuse('request-rejected');
   return {
     ...input.health,
     nonce: input.nonce,
@@ -69,7 +74,7 @@ function endpointOrigin(endpoint: ChatHostEndpoint): string {
   try {
     url = new URL(endpoint.origin);
   } catch {
-    return fail('InvalidInput', 'Choose an explicit loopback chat endpoint.');
+    return refuse('endpoint');
   }
   if (
     url.protocol !== 'http:' ||
@@ -80,19 +85,15 @@ function endpointOrigin(endpoint: ChatHostEndpoint): string {
     url.search ||
     url.hash
   )
-    return fail(
-      'InvalidInput',
-      'Chat endpoints must be plain 127.0.0.1 origins without credentials, paths or queries.',
-    );
+    return refuse('endpoint-origin');
   if (!identity(endpoint.expected?.hostId) || !identity(endpoint.expected?.storeId))
-    return fail('InvalidInput', 'Configure the expected chat host and store identities.');
+    return refuse('endpoint-identity');
   configuredToken(endpoint.token);
   return url.origin;
 }
 
 export function validateHostHealth(value: unknown, expected: ChatHostTarget): ChatHostHealth {
-  if (!value || typeof value !== 'object')
-    return fail('Incompatible', 'Chat host returned invalid health data.');
+  if (!value || typeof value !== 'object') return refuse('invalid');
   const data = value as Record<string, unknown>;
   if (
     !identity(data.hostId) ||
@@ -100,17 +101,18 @@ export function validateHostHealth(value: unknown, expected: ChatHostTarget): Ch
     data.hostId !== expected.hostId ||
     data.storeId !== expected.storeId
   )
-    return fail(
-      'Incompatible',
-      'Chat host or store identity does not match the configured target.',
-    );
-  return decodeChatHostHealth(value);
+    return refuse('identity');
+  try {
+    return decodeChatHostHealth(value);
+  } catch {
+    return refuse('invalid');
+  }
 }
 
 /** Verification is an Effect in the caller's existing process scope, never a runtime. */
 export const checkHostHealth = (
   endpoint: ChatHostEndpoint,
-): Effect.Effect<ChatHostHealth, ApplicationError> =>
+): Effect.Effect<ChatHostHealth, HostVerificationError> =>
   Effect.flatMap(
     Effect.try({
       try: () => {
@@ -122,7 +124,10 @@ export const checkHostHealth = (
           authorization: `Moonbase-HMAC-SHA256 ${signature(endpoint.token, 'request', nonce)}`,
         };
       },
-      catch: normalizeApplicationError,
+      catch: (error) =>
+        error instanceof HostVerificationError
+          ? error
+          : new HostVerificationError({ reason: 'endpoint' }),
     }),
     ({ origin, nonce, authorization }) =>
       Effect.flatMap(
@@ -139,11 +144,7 @@ export const checkHostHealth = (
               cache: 'no-store',
               signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
             }),
-          catch: () =>
-            new ApplicationError({
-              code: 'Unavailable',
-              message: 'Chat host health could not be reached within its deadline.',
-            }),
+          catch: () => new HostVerificationError({ reason: 'unreachable' }),
         }),
         (response) =>
           Effect.acquireUseRelease(
@@ -151,28 +152,22 @@ export const checkHostHealth = (
             (reader) =>
               Effect.tryPromise({
                 try: async () => {
-                  if (response.status === 401 || response.status === 403)
-                    return fail('Unauthorized', 'Chat host rejected authentication.');
-                  if (!response.ok)
-                    return fail(
-                      'Incompatible',
-                      'Chat host health returned an unsuccessful status.',
-                    );
+                  if (response.status === 401 || response.status === 403) return refuse('rejected');
+                  if (!response.ok) return refuse('status');
                   if (
                     !/^application\/json(?:\s*;|$)/i.test(
                       response.headers.get('content-type') ?? '',
                     )
                   )
-                    return fail('Incompatible', 'Chat host health must be JSON.');
-                  if (!reader) return fail('Incompatible', 'Chat host returned empty health data.');
+                    return refuse('not-json');
+                  if (!reader) return refuse('empty');
                   const chunks: Uint8Array[] = [];
                   let length = 0;
                   while (true) {
                     const part = await reader.read();
                     if (part.done) break;
                     length += part.value.byteLength;
-                    if (length > maximumHealthBytes)
-                      return fail('Incompatible', 'Chat host health exceeds its size limit.');
+                    if (length > maximumHealthBytes) return refuse('too-large');
                     chunks.push(part.value);
                   }
                   const bytes = new Uint8Array(length);
@@ -185,7 +180,7 @@ export const checkHostHealth = (
                   try {
                     value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
                   } catch {
-                    return fail('Incompatible', 'Chat host returned malformed health JSON.');
+                    return refuse('malformed');
                   }
                   const health = validateHostHealth(value, endpoint.expected),
                     reply = value as Record<string, unknown>;
@@ -193,19 +188,13 @@ export const checkHostHealth = (
                     reply.nonce !== nonce ||
                     !matchesProof(reply.proof, signature(endpoint.token, 'response', nonce, health))
                   )
-                    return fail(
-                      'Unauthorized',
-                      'Chat host did not prove the configured health identity.',
-                    );
+                    return refuse('unproved');
                   return health;
                 },
                 catch: (error) =>
-                  ApplicationError.is(error)
+                  error instanceof HostVerificationError
                     ? error
-                    : new ApplicationError({
-                        code: 'Unavailable',
-                        message: 'Chat host health could not be read.',
-                      }),
+                    : new HostVerificationError({ reason: 'read-failed' }),
               }),
             (reader) =>
               releaseResource(async () => {

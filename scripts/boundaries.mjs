@@ -88,7 +88,6 @@ export function readRepository(root) {
 export const processRoots = new Set([
   'packages/daemon-protocol/examples/remote.ts',
   'packages/workspace/examples/local.ts',
-  'packages/ssh/examples/connect.ts',
 ]);
 // The daemon protocol is infrastructure beside the chat engine; neither imports the other.
 const infrastructure = new Set(['workspace', 'chat-runtime', 'daemon-protocol', 'ssh']);
@@ -218,32 +217,10 @@ export function checkBoundaries({ files, packages }) {
         infrastructure.has(sourceOwner) &&
         destination &&
         destination !== sourceOwner &&
-        !['contracts', 'effect', 'application'].includes(destination) &&
-        edge.specifier !== '@moonbase/ssh/host-health'
+        !['contracts', 'effect', 'application'].includes(destination)
       )
-        reject(path, edge, 'infrastructure imports another implementation outside named helper');
+        reject(path, edge, 'infrastructure imports another implementation');
     }
-  }
-  const healthLeaf = 'packages/ssh/src/host-health.ts';
-  if (files.has(healthLeaf)) {
-    const seen = new Set();
-    function visit(path) {
-      if (seen.has(path)) return;
-      seen.add(path);
-      for (const edge of graph.get(path) ?? []) {
-        if (
-          ['application', 'chat-runtime', 'daemon-protocol', 'workspace', 'ssh'].includes(
-            owner(edge.target),
-          ) &&
-          edge.target !== healthLeaf
-        )
-          errors.push(
-            `${healthLeaf}: named authentication helper reaches implementation ${edge.target}`,
-          );
-        else visit(edge.target);
-      }
-    }
-    visit(healthLeaf);
   }
   // A host entry-point exception cannot excuse imports reachable from reusable service exports.
   for (const [name, pkg] of packages) {

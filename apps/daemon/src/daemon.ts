@@ -19,7 +19,7 @@ import {
   createRootFolders,
   withCheckoutFolders,
 } from '@moonbase/daemon-protocol/folders';
-import type { DaemonSettings } from '@moonbase/chat-runtime/daemon-settings';
+import type { DaemonSettings } from './daemon-settings.ts';
 import { createLocalModels } from '@moonbase/chat-runtime/local-models';
 import { ProviderSetupChanges, ProviderSetupLive } from '@moonbase/chat-runtime/providers';
 import {

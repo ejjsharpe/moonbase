@@ -85,7 +85,7 @@ assert.deepEqual(
 // Local chat runs in the bundled daemon; packaged main holds only the protocol's client side.
 assert.deepEqual(
   main.filter((path) =>
-    /@earendil-works|chat-runtime\/src\/|daemon-protocol\/src\/(?!remote|loopback|protocol|validation|socket-client|socket-protocol)[^/]+\.ts$/.test(
+    /@earendil-works|chat-runtime\/src\/|daemon-protocol\/src\/(?!remote|loopback|health|protocol|validation|socket-client|socket-protocol)[^/]+\.ts$/.test(
       path,
     ),
   ),

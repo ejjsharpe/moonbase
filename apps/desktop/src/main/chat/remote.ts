@@ -5,6 +5,7 @@ import {
   RemoteProviderSetupLive,
 } from '@moonbase/daemon-protocol/remote';
 import { SshLive } from '@moonbase/ssh';
+import { checkHostHealth } from '@moonbase/daemon-protocol/health';
 import {
   ChatService,
   ConnectionService,
@@ -50,7 +51,7 @@ export async function acquireRemoteChat(
           // the user pastes the final redirect URL.
           sameMachine: false,
         }),
-      ).pipe(Layer.provideMerge(SshLive(configuration.ssh))),
+      ).pipe(Layer.provideMerge(SshLive(configuration.ssh, { verify: checkHostHealth }))),
       Scope.forkUnsafe(runtime.scope, 'parallel'),
     ),
   );

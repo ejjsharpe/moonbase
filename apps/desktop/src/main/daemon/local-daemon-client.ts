@@ -14,6 +14,7 @@ import {
   WorkspaceHostService,
 } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/errors';
+import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
 import { readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import {
@@ -70,7 +71,12 @@ export async function acquireDaemonChat(
     );
     const connection = Context.get(services, ConnectionService);
     // Connect now, so a daemon that can't be reached shows at startup.
-    await runApplicationEffect(runtime, connection.endpoint({ host: session.host }));
+    await runApplicationEffect(
+      runtime,
+      connection
+        .endpoint({ host: session.host })
+        .pipe(Effect.mapError(toConnectionApplicationError)),
+    );
     return {
       session,
       connection,
@@ -139,10 +145,12 @@ export function createLocalDaemonClient(
       Effect.flatMap(
         Effect.tryPromise({ try: get, catch: (error) => error as ApplicationError }),
         (acquired) =>
-          Effect.map(acquired.connection.endpoint({ host: acquired.session.host }), (endpoint) => ({
-            ...acquired,
-            endpoint,
-          })),
+          Effect.map(
+            acquired.connection
+              .endpoint({ host: acquired.session.host })
+              .pipe(Effect.mapError(toConnectionApplicationError)),
+            (endpoint) => ({ ...acquired, endpoint }),
+          ),
       ),
   };
 }

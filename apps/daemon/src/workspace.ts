@@ -4,7 +4,7 @@ import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FolderApprovals } from '@moonbase/contracts/daemon';
 import type { RootPredicate } from '@moonbase/workspace';
-import type { DaemonSettings } from '@moonbase/chat-runtime/daemon-settings';
+import type { DaemonSettings } from './daemon-settings.ts';
 import { describeFailure } from './failure.ts';
 import type { DaemonLog } from './log.ts';
 

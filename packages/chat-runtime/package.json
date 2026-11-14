@@ -7,8 +7,7 @@
     "./providers": "./src/providers.ts",
     "./credentials": "./src/credentials.ts",
     "./local-models": "./src/local-models.ts",
-    "./claude-code": "./src/claude-code.ts",
-    "./daemon-settings": "./src/daemon-settings.ts"
+    "./claude-code": "./src/claude-code.ts"
   },
   "scripts": {
     "build": "tsc --noEmit -p tsconfig.json",
