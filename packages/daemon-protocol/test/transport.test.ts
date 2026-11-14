@@ -155,6 +155,16 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     },
   };
 }
+/** Waits until the faux model has been called `count` times; an admitted Send calls it asynchronously. */
+const waitForModelCalls = async (f: { faux: { state: { callCount: number } } }, count: number) => {
+  const deadline = Date.now() + 10_000;
+  while (f.faux.state.callCount < count) {
+    if (Date.now() > deadline)
+      throw new Error(`The model was called ${f.faux.state.callCount} times, not ${count}.`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+};
+
 test('a host refuses to serve when its public configuration repeats its private key', async () => {
   const token = nonce(),
     scope = Effect.runSync(Scope.make());
@@ -359,6 +369,7 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
               requestId: input.requestId,
             });
             assert.equal(receipt?.admission, 'admitted');
+            await waitForModelCalls(f, 1);
             assert.deepEqual(
               await f.remote.command('sendChat', input as ChatInput<'sendChat'>),
               receipt,
@@ -409,6 +420,7 @@ test('a lost Send acknowledgement resolves through reconnect lookup without anot
     f.endpoint = { ...f.endpoint, connectionId: 'reconnected' };
     const receipt = await f.remote.command('getChatSend', { target, requestId: 'send' });
     assert.equal(receipt?.admission, 'admitted');
+    await waitForModelCalls(f, 1);
     assert.deepEqual(await f.remote.command('sendChat', input), receipt);
     assert.equal(f.faux.state.callCount, 1);
   } finally {

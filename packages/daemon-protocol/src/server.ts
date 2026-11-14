@@ -1,6 +1,4 @@
 import { decodeChatInput, isChatCommand } from '@moonbase/contracts/chat-schema';
-import type { AddressInfo } from 'node:net';
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { Effect, Exit, type ManagedRuntime } from 'effect';
 import type { ChatClient } from '@moonbase/contracts/chat';
 import type {
@@ -46,7 +44,8 @@ import { ApplicationError } from '@moonbase/contracts/workspace';
 import * as P from './protocol.ts';
 import { isCancellableChatRead, isSameChatHost } from '@moonbase/contracts/chat-validation';
 import { fail } from '@moonbase/contracts/errors';
-import { createSocketServer, type SocketSources } from './socket-server.ts';
+import { createSocketServer, type SocketData, type SocketSources } from './socket-server.ts';
+import { serveBun } from './bun-server.ts';
 import { systemSocketClock, type SocketClock } from './socket-protocol.ts';
 
 export type { SocketSources } from './socket-server.ts';
@@ -81,6 +80,13 @@ export const hostDaemonCapabilities: readonly ChatHostCapability[] = [
   ...localDaemonCapabilities,
   chatHostCapabilities.roots,
 ];
+/**
+ * Every plain HTTP answer is its connection's last: health is a one-off probe, and a client never
+ * carries a probe's connection over into its WebSocket.
+ */
+const plainHeaders = { 'Cache-Control': 'no-store', Connection: 'close' };
+/** HTTP requests the listener answers at once; more are refused `503`. */
+const maximumRequests = 128;
 /** Request IDs of recent daemon mutations; a repeat of one returns its outcome instead of rerunning. */
 const rememberedDaemonRequests = 256;
 // Codes a daemon raises only before it applies anything, so a refused request may be sent again.
@@ -233,88 +239,75 @@ export const serveChat = (
         });
         let closed = false,
           active = 0;
-        const server = createServer((request, response) => {
-          if (active >= 128) {
-            response.writeHead(503);
-            response.end();
-            return;
-          }
-          active++;
-          void handle(request, response)
-            .catch(() => {
-              if (!response.headersSent) {
-                response.writeHead(503, { 'content-type': 'application/json' });
-                response.end(JSON.stringify({ ok: false, error: P.publicError(null) }));
-              } else response.destroy();
-            })
-            .finally(() => {
-              active--;
+        /** Signed health: the proof is checked first, so an unauthenticated probe reaches nothing. */
+        const answerHealth = async (request: Request) => {
+          const headers = { ...plainHeaders, 'Content-Type': 'application/json' };
+          try {
+            const value = createHostHealthReply({
+              token,
+              nonce: request.headers.get('x-moonbase-nonce') ?? undefined,
+              authorization: request.headers.get('authorization') ?? undefined,
+              health,
             });
-        });
-        server.requestTimeout = P.requestDeadlineMs;
-        server.headersTimeout = 10000;
-        server.maxConnections = 128;
-        server.keepAliveTimeout = 1000;
-        async function handle(request: IncomingMessage, response: ServerResponse) {
-          if (closed) {
-            response.writeHead(503);
-            response.end();
-            return;
-          }
-          response.setHeader('Cache-Control', 'no-store');
-          if (request.method === 'GET' && request.url === '/v1/health') {
+            const release = admit();
             try {
-              // The proof is checked first: an unauthenticated probe never reaches the service.
-              const value = createHostHealthReply({
-                token,
-                nonce: request.headers['x-moonbase-nonce'] as string | undefined,
-                authorization: request.headers.authorization,
-                health,
-              });
-              const release = admit();
-              try {
-                await client.command('getChatHost', { host: expected });
-              } finally {
-                release();
-              }
-              response.writeHead(200, { 'content-type': 'application/json' });
-              response.end(JSON.stringify(value));
-            } catch (thrown) {
-              const error =
-                thrown instanceof HostVerificationError
-                  ? toConnectionApplicationError(thrown)
-                  : thrown;
-              response.writeHead(
-                ApplicationError.is(error) && error.code === 'Unauthorized' ? 401 : 503,
-                { 'content-type': 'application/json' },
-              );
-              response.end(JSON.stringify({ ok: false, error: P.publicError(error) }));
+              await client.command('getChatHost', { host: expected });
+            } finally {
+              release();
             }
-            return;
+            return new Response(JSON.stringify(value), { status: 200, headers });
+          } catch (thrown) {
+            const error =
+              thrown instanceof HostVerificationError
+                ? toConnectionApplicationError(thrown)
+                : thrown;
+            return new Response(JSON.stringify({ ok: false, error: P.publicError(error) }), {
+              status: ApplicationError.is(error) && error.code === 'Unauthorized' ? 401 : 503,
+              headers,
+            });
           }
-          response.writeHead(404);
-          response.end();
-        }
-        await new Promise<void>((resolve, reject) => {
-          server.once('error', reject);
-          server.listen(config.port, '127.0.0.1', () => {
-            server.off('error', reject);
-            resolve();
-          });
+        };
+        const server = serveBun<SocketData>({
+          hostname: '127.0.0.1',
+          port: config.port,
+          // An HTTP connection idle this long is closed; health answers well within it.
+          idleTimeout: 10,
+          development: false,
+          error: () => new Response(null, { status: 503, headers: plainHeaders }),
+          fetch: async (request, bun) => {
+            if (closed) return new Response(null, { status: 503, headers: plainHeaders });
+            if (request.headers.get('upgrade') !== null) {
+              try {
+                return sockets.upgrade(request, bun);
+              } catch {
+                return new Response(null, { status: 400, headers: plainHeaders });
+              }
+            }
+            if (active >= maximumRequests)
+              return new Response(null, { status: 503, headers: plainHeaders });
+            active++;
+            try {
+              const url = new URL(request.url);
+              if (request.method === 'GET' && url.pathname === '/v1/health' && url.search === '')
+                return await answerHealth(request);
+              return new Response(null, { status: 404, headers: plainHeaders });
+            } catch {
+              return new Response(JSON.stringify({ ok: false, error: P.publicError(null) }), {
+                status: 503,
+                headers: { ...plainHeaders, 'Content-Type': 'application/json' },
+              });
+            } finally {
+              active--;
+            }
+          },
+          websocket: sockets.websocket,
         });
-        server.on('upgrade', (request, upgraded, head) => sockets.upgrade(request, upgraded, head));
-        const address = server.address();
-        if (!address || typeof address === 'string')
-          fail('Unavailable', 'Chat loopback listener did not open.');
         return {
-          origin: `http://127.0.0.1:${(address as AddressInfo).port}`,
+          origin: `http://127.0.0.1:${server.port}`,
           close: async () => {
             closed = true;
             await sockets.close();
-            await new Promise<void>((resolve, reject) => {
-              server.close((error) => (error ? reject(error) : resolve()));
-              server.closeAllConnections();
-            });
+            await server.stop(true);
           },
         };
       },
