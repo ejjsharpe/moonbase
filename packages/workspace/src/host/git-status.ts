@@ -1,5 +1,7 @@
 import type { GitChange, GitChangeKind } from '@moonbase/contracts/workspace';
-import { fail } from '@moonbase/contracts/errors';
+import { GitStatusFormatError } from '@moonbase/contracts/workspace-host-errors';
+
+const unrecognized = (record: string) => new GitStatusFormatError({ record });
 
 /** XY pairs Git prints for an unmerged path. */
 const unmergedCodes = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
@@ -14,9 +16,8 @@ const kindsByCode: Readonly<Record<string, GitChangeKind>> = {
 };
 
 function readKind(code: string, record: string) {
-  return Object.hasOwn(kindsByCode, code)
-    ? kindsByCode[code]
-    : fail('Unavailable', `Unrecognized Git status record: ${JSON.stringify(record)}`);
+  if (!Object.hasOwn(kindsByCode, code)) throw unrecognized(record);
+  return kindsByCode[code];
 }
 
 /**
@@ -31,8 +32,7 @@ export function parseGitStatus(output: string): GitChange[] {
   for (let index = 0; index < records.length; index++) {
     const record = records[index];
     if (!record) continue;
-    if (record.length < 4 || record[2] !== ' ')
-      fail('Unavailable', `Unrecognized Git status record: ${JSON.stringify(record)}`);
+    if (record.length < 4 || record[2] !== ' ') throw unrecognized(record);
     const code = record.slice(0, 2),
       path = record.slice(3);
     // A rename or copy record is followed by its source path.

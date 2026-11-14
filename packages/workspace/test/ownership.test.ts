@@ -14,23 +14,20 @@ import {
 } from '@moonbase/contracts/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
-import { WorkspaceNative } from '@moonbase/workspace';
-import { reconcile } from '../src/client/recovery.ts';
+import { reconcile } from '../src/client/reconcile.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { fixture, isError, quote, waitFor } from './recovery-fixture.ts';
+import { captureNative, releaseNative } from './workspace-fixture.ts';
+import { WorkspaceHostService } from '@moonbase/contracts/services';
 
-function native<R>(runtime: ManagedRuntime.ManagedRuntime<WorkspaceNative | R, ApplicationError>) {
+function native<R>(
+  runtime: ManagedRuntime.ManagedRuntime<WorkspaceHostService | R, ApplicationError>,
+) {
   return {
-    capture: (input: Parameters<Effect.Success<typeof WorkspaceNative>['capture']>[0]) =>
-      runApplicationEffect(
-        runtime,
-        Effect.flatMap(WorkspaceNative, (service) => service.capture(input)),
-      ),
-    release: (input: Parameters<Effect.Success<typeof WorkspaceNative>['release']>[0]) =>
-      runApplicationEffect(
-        runtime,
-        Effect.flatMap(WorkspaceNative, (service) => service.release(input)),
-      ),
+    capture: (input: Parameters<typeof captureNative>[0]) =>
+      runApplicationEffect(runtime, captureNative(input)),
+    release: (input: Parameters<typeof releaseNative>[0]) =>
+      runApplicationEffect(runtime, releaseNative(input)),
   };
 }
 
@@ -334,6 +331,22 @@ test('strict private saved request rejection leaves pending journal data untouch
   }
 });
 
+/**
+ * This process's open descriptor count once it stops changing: pipes of earlier helper runs close
+ * a moment after their run ends. Gives up after 1,000 turns of the event loop.
+ */
+async function settledDescriptorCount() {
+  let count = readdirSync('/dev/fd').length,
+    unchanged = 0;
+  for (let turn = 0; turn < 1000 && unchanged < 20; turn++) {
+    await new Promise<void>((done) => setImmediate(done));
+    const next = readdirSync('/dev/fd').length;
+    unchanged = next === count ? unchanged + 1 : 0;
+    count = next;
+  }
+  return count;
+}
+
 test('capture cancellation settles its helper and releases descriptors before returning cancellation', async () => {
   const f = fixture(),
     ready = join(f.base, 'capture-ready');
@@ -346,19 +359,18 @@ test('capture cancellation settles its helper and releases descriptors before re
     const checkout = await client.command('openCheckout', { root: f.root });
     await client.command('readFile', { checkout, path: 'file.txt' });
     writeFileSync(join(f.base, 'external'), 'native bytes');
-    const before = readdirSync('/dev/fd').length;
+    const before = await settledDescriptorCount();
     const capturing = runApplicationEffect(
       runtime,
-      Effect.flatMap(WorkspaceNative, (service) =>
-        service.capture({ checkout, clientId: 'alice', paths: [join(f.base, 'external')] }),
-      ),
+      captureNative({ checkout, clientId: 'alice', paths: [join(f.base, 'external')] }),
       { signal: abort.signal },
     );
     const rejected = assert.rejects(capturing, isError('Cancelled'));
     await waitFor(ready);
     abort.abort();
     await rejected;
-    assert.equal(readdirSync('/dev/fd').length, before);
+    // Nothing the capture opened is left open.
+    assert.equal(await settledDescriptorCount(), before);
     assert.equal(
       (await client.command('readFile', { checkout, path: 'file.txt' })).text,
       'original',
@@ -472,13 +484,20 @@ test('admitted cancellation retains its overlap lease and root resources until t
     abort.abort();
     await rejected;
     let successorSettled = false;
-    successor = client.command('saveFile', {
-      target,
-      clientId: 'alice',
-      requestId: 'overlap',
-      text: 'must not race',
-      expectedVersion: disk.version,
-    });
+    // Sent to the host itself: the client refuses it at once, as the copy is still unresolved,
+    // so only the host's lease can hold it.
+    successor = runtime.runPromise(
+      Effect.flatMap(WorkspaceHostService, (host) =>
+        host.saveFile({
+          installationId: 'test-installation',
+          target,
+          clientId: 'alice',
+          requestId: 'overlap',
+          text: 'must not race',
+          expectedVersion: disk.version,
+        }),
+      ),
+    );
     void successor.then(
       () => {
         successorSettled = true;

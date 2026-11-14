@@ -1,14 +1,15 @@
-import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
-import type {
-  ApplicationError,
-  CheckoutTarget,
-  WorkspaceEvent,
-} from '@moonbase/contracts/workspace';
-import { Cause, Deferred, Effect, Exit, Fiber, Queue, Scope, Stream } from 'effect';
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Queue, Scope, Stream } from 'effect';
+import {
+  CheckoutChangedError,
+  InvalidPathError,
+  InvalidRequestError,
+} from '@moonbase/contracts/workspace-host-errors';
+import type { CheckoutTarget, WorkspaceEvent } from '@moonbase/contracts/workspace';
 import fs, { readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import type { Directory } from '../filesystem.ts';
-import { ensure, path, same } from '../validation.ts';
+import { attempt } from '../attempt.ts';
+import { errorText, path, same } from '../validation.ts';
+import { Checkouts } from './checkouts.ts';
 
 const isInside = (path: string, parent: string) => {
   const rel = relative(parent, path);
@@ -71,55 +72,15 @@ function isOtherWorktreeChange(
   );
 }
 
-export class WorkspaceObservations {
+/** Watches checkouts for changes, at most one event every 100 ms per watch. */
+export class Observations {
   private readonly subscriptions = new Set<Scope.Closeable>();
-  private readonly watcherReleases = new Set<Effect.Effect<void>>();
-  private readonly directory: (target: CheckoutTarget) => Promise<Directory>;
-  /** The repository's Git folder, or undefined for a plain folder. */
-  private readonly getCommonGitPath: (target: CheckoutTarget) => string | undefined;
-  private readonly scope: Scope.Closeable;
-  private readonly runCommand: <A>(fn: () => Promise<A>) => Effect.Effect<A, ApplicationError>;
-  private readonly isClosed: () => boolean;
-  private readonly reportCleanup: (cause: Cause.Cause<never>) => void;
-  constructor(
-    directory: (target: CheckoutTarget) => Promise<Directory>,
-    getCommonGitPath: (target: CheckoutTarget) => string | undefined,
-    scope: Scope.Closeable,
-    runCommand: <A>(fn: () => Promise<A>) => Effect.Effect<A, ApplicationError>,
-    isClosed: () => boolean,
-    reportCleanup: (cause: Cause.Cause<never>) => void,
-  ) {
-    this.directory = directory;
-    this.getCommonGitPath = getCommonGitPath;
+  private readonly checkouts: Checkouts['Service'];
+  /** Owns every watch; a watcher whose release failed stays here and is released again on close. */
+  private readonly scope: Scope.Scope;
+  constructor({ checkouts, scope }: { checkouts: Checkouts['Service']; scope: Scope.Scope }) {
+    this.checkouts = checkouts;
     this.scope = scope;
-    this.runCommand = runCommand;
-    this.isClosed = isClosed;
-    this.reportCleanup = reportCleanup;
-  }
-  close(): Effect.Effect<void> {
-    return Effect.gen({ self: this }, function* () {
-      const outcomes = yield* Effect.forEach(
-        [
-          Scope.close(this.scope, Exit.void),
-          Effect.suspend(() =>
-            Effect.forEach([...this.watcherReleases], Effect.exit).pipe(
-              Effect.flatMap((outcomes) => {
-                const failures = outcomes.flatMap((exit) =>
-                  Exit.isFailure(exit) ? [exit.cause] : [],
-                );
-                return failures.length
-                  ? Effect.failCause(failures.reduce((all, cause) => Cause.combine(all, cause)))
-                  : Effect.void;
-              }),
-            ),
-          ),
-        ],
-        Effect.exit,
-      );
-      const failures = outcomes.flatMap((exit) => (Exit.isFailure(exit) ? [exit.cause] : []));
-      if (failures.length)
-        return yield* Effect.failCause(failures.reduce((all, cause) => Cause.combine(all, cause)));
-    });
   }
   watch(input: { checkout: CheckoutTarget; paths: string[] }) {
     // oxlint-disable-next-line no-this-alias -- The Effect generator retains this observation owner.
@@ -140,25 +101,19 @@ export class WorkspaceObservations {
             Queue.shutdownUnsafe(changes);
           }),
         );
-        yield* Effect.try({
-          try: () => {
-            ensure(
-              !self.isClosed() &&
-                input.paths.length > 0 &&
-                input.paths.length <= 128 &&
-                self.subscriptions.size < 64,
-              'Watch subscription limit reached.',
-            );
-            self.subscriptions.add(scope);
-          },
-          catch: normalizeApplicationError,
+        yield* attempt(() => {
+          if (
+            !(input.paths.length > 0 && input.paths.length <= 128 && self.subscriptions.size < 64)
+          )
+            throw new InvalidRequestError({ problem: 'watch-limit' });
+          self.subscriptions.add(scope);
         });
-        const directory = yield* self.runCommand(() => self.directory(input.checkout));
-        const common = self.getCommonGitPath(input.checkout);
+        const directory = yield* self.checkouts.directory(input.checkout);
+        const common = (yield* attempt(() => self.checkouts.approval(input.checkout))).common?.path;
         // Changed paths since the last event; `undefined` when a watcher could not name one.
         let changedPaths: Set<string> | undefined = new Set();
         const changed = (failure?: string, changedPath?: string) => {
-          if (disposed || self.isClosed()) return;
+          if (disposed) return;
           error = failure ?? error;
           if (changedPath === undefined) changedPaths = undefined;
           else changedPaths?.add(changedPath);
@@ -166,58 +121,47 @@ export class WorkspaceObservations {
         };
         const acquire = (path: string) =>
           Effect.acquireRelease(
-            Effect.try({
-              try: () => {
-                const closed = Deferred.makeUnsafe<void>();
-                const watcher = fs
-                  .watch(path, { persistent: false, recursive: true }, (_kind, name) =>
-                    changed(undefined, name ? resolve(path, name) : undefined),
-                  )
-                  .on('error', (error) => {
-                    changed(normalizeApplicationError(error).message);
-                    // Node stops a failed watcher without guaranteeing a later close event.
-                    Deferred.doneUnsafe(closed, Effect.void);
-                  });
-                watcher.once('close', () => Deferred.doneUnsafe(closed, Effect.void));
-                const release = Effect.gen(function* () {
-                  yield* releaseResource(() => watcher.close());
-                  yield* Deferred.await(closed);
-                  yield* Effect.sync(() => {
-                    watcher.removeAllListeners();
-                    self.watcherReleases.delete(release);
-                  });
+            attempt(() => {
+              const closed = Deferred.makeUnsafe<void>();
+              const watcher = fs
+                .watch(path, { persistent: false, recursive: true }, (_kind, name) =>
+                  changed(undefined, name ? resolve(path, name) : undefined),
+                )
+                .on('error', (error) => {
+                  changed(errorText(error));
+                  // Node stops a failed watcher without guaranteeing a later close event.
+                  Deferred.doneUnsafe(closed, Effect.void);
                 });
-                self.watcherReleases.add(release);
-                return release;
-              },
-              catch: normalizeApplicationError,
+              watcher.once('close', () => Deferred.doneUnsafe(closed, Effect.void));
+              return Effect.gen(function* () {
+                yield* attempt(() => watcher.close()).pipe(Effect.orDie);
+                yield* Deferred.await(closed);
+                watcher.removeAllListeners();
+              });
             }),
+            // A watcher that would not close stays the host's, which tries again when it closes
+            // and still reports the failure.
             (release) =>
               release.pipe(
-                Effect.onExit((exit) =>
-                  Effect.sync(() => {
-                    if (Exit.isFailure(exit)) self.reportCleanup(exit.cause);
-                  }),
+                Effect.onError((cause) =>
+                  Scope.addFinalizer(
+                    self.scope,
+                    Effect.andThen(Effect.exit(release), Effect.failCause(cause)),
+                  ),
                 ),
               ),
           ).pipe(Scope.provide(scope));
         for (const p of new Set(input.paths)) {
-          yield* Effect.try({ try: () => path(p, true), catch: normalizeApplicationError });
-          const before = yield* self.runCommand(() => directory.entry(p));
-          yield* Effect.try({
-            try: () =>
-              ensure(
-                before.directory,
-                'Watch directory paths, including parent directories of files.',
-              ),
-            catch: normalizeApplicationError,
-          });
+          // Each watcher is a native call: other commands run between them.
+          yield* Effect.yieldNow;
+          yield* attempt(() => path(p, true));
+          const before = yield* directory.entry(p);
+          if (!before.directory)
+            return yield* new InvalidPathError({ problem: 'watch-not-folder' });
           yield* acquire(resolve(directory.root, p));
-          const after = yield* self.runCommand(() => directory.entry(p));
-          yield* Effect.try({
-            try: () => ensure(same(before, after), 'Watch directory changed during subscription.'),
-            catch: normalizeApplicationError,
-          });
+          const after = yield* directory.entry(p);
+          if (!same(before, after))
+            return yield* new CheckoutChangedError({ change: 'watch-directory' });
         }
         if (common && !common.startsWith(directory.root + '/')) yield* acquire(common);
         const events = Stream.fromQueue(changes).pipe(
@@ -243,7 +187,7 @@ export class WorkspaceObservations {
                 try {
                   directory.check();
                 } catch (failure) {
-                  error = normalizeApplicationError(failure).message;
+                  error = errorText(failure);
                 }
                 const event: WorkspaceEvent = {
                   checkout: input.checkout,
@@ -263,4 +207,17 @@ export class WorkspaceObservations {
       }),
     );
   }
+}
+
+/** The host's checkout watches. */
+export class WorkspaceObservations extends Context.Service<WorkspaceObservations, Observations>()(
+  'moonbase/workspace/Observations',
+) {
+  static readonly layer = Layer.effect(
+    WorkspaceObservations,
+    Effect.gen(function* () {
+      const checkouts = yield* Checkouts;
+      return new Observations({ checkouts, scope: yield* Effect.scope });
+    }),
+  );
 }

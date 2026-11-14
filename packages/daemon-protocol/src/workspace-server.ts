@@ -3,10 +3,11 @@ import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import type { HostCommand, WorkspaceHostClient } from '@moonbase/contracts/workspace-host';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { toApplicationError } from '@moonbase/effect';
+import { isWorkspaceHostError, toWireError } from '@moonbase/contracts/workspace-host-errors';
 
 const failure = (cause: Cause.Cause<unknown>) =>
   toApplicationError(
-    cause,
+    Cause.map(cause, (error) => (isWorkspaceHostError(error) ? toWireError(error) : error)),
     new ApplicationError({ code: 'Unavailable', message: 'Workspace operation failed.' }),
   );
 

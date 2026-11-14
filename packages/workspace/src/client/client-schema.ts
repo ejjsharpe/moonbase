@@ -1,12 +1,12 @@
 import { Schema } from 'effect';
 import {
-  ApplicationError,
   type CommandInput,
   type EditorRecovery,
   type SaveResult,
 } from '@moonbase/contracts/workspace';
 import { hash } from '../validation.ts';
-import { fail } from '@moonbase/contracts/errors';
+import { InvalidRecoveryRequestError } from '@moonbase/contracts/workspace-errors';
+import { InvalidRequestError } from '@moonbase/contracts/workspace-host-errors';
 import {
   EditorRecoverySchema,
   OperationResultSchema,
@@ -39,10 +39,7 @@ export function decodeClientConfiguration(value: unknown) {
   try {
     return configuration(value);
   } catch {
-    throw new ApplicationError({
-      code: 'InvalidInput',
-      message: 'Invalid workspace configuration.',
-    });
+    throw new InvalidRequestError({ problem: 'configuration' });
   }
 }
 const { text: _text, ...saveRequestFields } = workspaceInputSchemas.saveFile.fields;
@@ -189,7 +186,7 @@ export function encodeStorableRecovery(state: EditorRecovery, clientId: string):
   try {
     parseRecovery(body, clientId);
   } catch {
-    fail('InvalidInput', 'Invalid recovery state.');
+    throw new InvalidRecoveryRequestError({ problem: 'invalid-state' });
   }
   return body;
 }

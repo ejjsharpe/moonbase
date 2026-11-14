@@ -50,6 +50,8 @@ for (const entry of [
   'chat-validation',
   'workspace-schema',
   'workspace-host-schema',
+  'workspace-host-errors',
+  'workspace-errors',
   'connection-schema',
   'host-schema',
   'daemon-schema',

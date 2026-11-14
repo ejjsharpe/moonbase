@@ -1,4 +1,5 @@
 import { Effect, Stream } from 'effect';
+import { toWireError, type WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { chatHostCapabilities } from '@moonbase/contracts/host';
 import type { VerifiedChatEndpoint, WorkspaceHostServiceShape } from '@moonbase/contracts/services';
@@ -54,9 +55,9 @@ export function createDaemonWorkspaceHost(
       (input: never) =>
         Effect.flatMap(reach(operation), ({ workspace, endpoint }) =>
           Effect.mapError(
-            (workspace[operation] as (input: never) => Effect.Effect<unknown, ApplicationError>)(
+            (workspace[operation] as (input: never) => Effect.Effect<unknown, WorkspaceHostError>)(
               input,
-            ),
+            ).pipe(Effect.mapError(toWireError)),
             explain(endpoint),
           ),
         ),
@@ -67,7 +68,9 @@ export function createDaemonWorkspaceHost(
     watch: (input) =>
       Stream.unwrap(
         Effect.map(reach('watch'), ({ workspace, endpoint }) =>
-          workspace.watch(input).pipe(Stream.mapError(explain(endpoint))),
+          workspace
+            .watch(input)
+            .pipe(Stream.mapError((error) => explain(endpoint)(toWireError(error)))),
         ),
       ),
   };

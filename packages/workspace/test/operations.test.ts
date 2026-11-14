@@ -13,13 +13,13 @@ import {
 } from 'node:fs';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
-import { Effect, Layer, ManagedRuntime } from 'effect';
+import { Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { emptyRecovery } from '@moonbase/contracts/workspace';
-import { WorkspaceNative } from '../src/index.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { quote, fixture, isError, waitFor } from './recovery-fixture.ts';
+import { captureNative, releaseNative } from './workspace-fixture.ts';
 
 for (const kind of ['move', 'copy'] as const)
   for (const [name, alias] of [
@@ -105,9 +105,7 @@ for (const kind of ['copy', 'import'] as const)
           : {
               sources: [],
               nativeReferences: await runtime.runPromise(
-                Effect.flatMap(WorkspaceNative, (native) =>
-                  native.capture({ checkout, clientId: 'alice', paths: [source] }),
-                ),
+                captureNative({ checkout, clientId: 'alice', paths: [source] }),
               ),
             };
       const result = await client.command('mutate', {
@@ -160,9 +158,7 @@ for (const kind of ['copy', 'import'] as const)
           : {
               sources: [],
               nativeReferences: await runtime.runPromise(
-                Effect.flatMap(WorkspaceNative, (native) =>
-                  native.capture({ checkout, clientId: 'alice', paths: [source] }),
-                ),
+                captureNative({ checkout, clientId: 'alice', paths: [source] }),
               ),
             };
       const result = await client.command('mutate', {
@@ -299,9 +295,7 @@ test('concurrent different operations can consume a native token only once', asy
     writeFileSync(external, 'native bytes');
     const checkout = await client.command('openCheckout', { root: f.root });
     const nativeReferences = await runtime.runPromise(
-      Effect.flatMap(WorkspaceNative, (native) =>
-        native.capture({ checkout, clientId: 'alice', paths: [external] }),
-      ),
+      captureNative({ checkout, clientId: 'alice', paths: [external] }),
     );
     const inputs = ['one', 'two'].map((id) => ({
       clientId: 'alice',
@@ -353,9 +347,7 @@ test('expiry cannot close native descriptors across a multi-item operation longe
     mkdirSync(join(f.root, 'imports'));
     const checkout = await client.command('openCheckout', { root: f.root });
     const nativeReferences = await runtime.runPromise(
-      Effect.flatMap(WorkspaceNative, (native) =>
-        native.capture({ checkout, clientId: 'alice', paths: external }),
-      ),
+      captureNative({ checkout, clientId: 'alice', paths: external }),
     );
     const pending = client.command('mutate', {
       clientId: 'alice',
@@ -377,9 +369,7 @@ test('expiry cannot close native descriptors across a multi-item operation longe
     for (const name of names)
       assert.equal(readFileSync(join(f.root, 'imports', name), 'utf8'), 'native bytes');
     await runtime.runPromise(
-      Effect.flatMap(WorkspaceNative, (native) =>
-        native.release({ checkout, clientId: 'alice', references: nativeReferences }),
-      ),
+      releaseNative({ checkout, clientId: 'alice', references: nativeReferences }),
     );
   } finally {
     for (const name of names) writeFileSync(join(f.base, 'resume-' + name), 'continue');
@@ -470,9 +460,7 @@ test('a native import onto a path holding a draft is refused', async () => {
     const external = join(f.base, 'external.txt');
     writeFileSync(external, 'native bytes');
     const nativeReferences = await runtime.runPromise(
-      Effect.flatMap(WorkspaceNative, (native) =>
-        native.capture({ checkout, clientId: 'alice', paths: [external] }),
-      ),
+      captureNative({ checkout, clientId: 'alice', paths: [external] }),
     );
     await assert.rejects(
       client.command('mutate', {
@@ -517,9 +505,7 @@ for (const selection of ['self', 'descendant', 'ancestor'] as const)
         destination = 'source';
       }
       const nativeReferences = await runtime.runPromise(
-        Effect.flatMap(WorkspaceNative, (native) =>
-          native.capture({ checkout, clientId: 'alice', paths: [join(f.root, source)] }),
-        ),
+        captureNative({ checkout, clientId: 'alice', paths: [join(f.root, source)] }),
       );
       const replacements = await client.command('inspectEntries', {
         checkout,

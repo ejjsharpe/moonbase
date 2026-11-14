@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { toWireError, type WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
 import { execFileSync } from 'node:child_process';
 import {
   existsSync,
@@ -62,8 +63,8 @@ function setup({
     },
   };
 }
-const code = async <A>(effect: Effect.Effect<A, { code: string }>) =>
-  (await Effect.runPromise(Effect.flip(effect))).code;
+const code = async <A>(effect: Effect.Effect<A, WorkspaceHostError>) =>
+  toWireError(await Effect.runPromise(Effect.flip(effect))).code;
 
 test('a root that holds, is or sits inside a reserved path is refused, whether or not the path exists yet', async () => {
   const f = setup({
@@ -189,14 +190,17 @@ test('a missing command-line tools install is Unavailable, is looked for again a
     retryMs: 1000,
     now: () => clock,
   });
-  await assert.rejects(gate(), { code: 'Unavailable' });
-  await assert.rejects(gate(), { code: 'Unavailable' });
+  const missing = { _tag: 'WorkspaceUnavailableError' };
+  await assert.rejects(Effect.runPromise(gate()), missing);
+  await assert.rejects(Effect.runPromise(gate()), missing);
   assert.equal(probes, 1);
   installed = true;
   clock = 1000;
-  await gate();
-  await gate();
+  await Effect.runPromise(gate());
+  await Effect.runPromise(gate());
   assert.equal(probes, 2);
   // Only the system Git stub offers an installer; any other executable is run as given.
-  await createGitGate('/opt/homebrew/bin/git', async () => assert.fail('probed'))();
+  await Effect.runPromise(
+    createGitGate('/opt/homebrew/bin/git', async () => assert.fail('probed'))(),
+  );
 });

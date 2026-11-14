@@ -13,13 +13,12 @@ import {
   existsSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { ManagedRuntime, Effect } from 'effect';
+import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { emptyRecovery } from '@moonbase/contracts/workspace';
-import { WorkspaceNative } from '../src/index.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 
-import { fixture, rejects, draft } from './workspace-fixture.ts';
+import { captureNative, fixture, rejects, draft } from './workspace-fixture.ts';
 test('known move preserves drafts and exact target, acknowledgement requires recovery publication; replay does not move twice', async () => {
   const f = fixture();
   try {
@@ -143,9 +142,7 @@ test('create/copy and scoped native import use actual files; single-use referenc
     assert.equal(readFileSync(join(f.root, 'copy.txt'), 'utf8'), 'created');
     writeFileSync(join(f.base, 'external.txt'), 'native bytes');
     const references = await f.runtime.runPromise(
-      Effect.flatMap(WorkspaceNative, (native) =>
-        native.capture({ checkout, clientId: 'alice', paths: [join(f.base, 'external.txt')] }),
-      ),
+      captureNative({ checkout, clientId: 'alice', paths: [join(f.base, 'external.txt')] }),
     );
     assert.equal(
       (

@@ -32,7 +32,8 @@ import {
   type EditorBuffer,
   type CloseChoice,
 } from '@moonbase/application/editor';
-import { WorkspaceLocalLive, WorkspaceNative } from '@moonbase/workspace';
+import { WorkspaceLocalLive } from '@moonbase/workspace';
+import { WorkspaceHostService } from '@moonbase/contracts/services';
 
 function answering<A>(
   controller: EditorController,
@@ -224,8 +225,11 @@ test('create and native import consumer payloads need no empty inspection and re
     writeFileSync(outside, 'NATIVE SOURCE\n');
     const capture = (paths: string[]) =>
       f.runtime.runPromise(
-        Effect.flatMap(WorkspaceNative, (native) =>
-          native.capture({ checkout, clientId: editor.clientId, paths }),
+        Effect.flatMap(WorkspaceHostService, (host) =>
+          Effect.map(
+            host.captureImports({ checkout, clientId: editor.clientId, paths }),
+            (captured) => captured.references,
+          ),
         ),
       );
     const references = await capture([outside]);
