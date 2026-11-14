@@ -331,6 +331,22 @@ test('strict private saved request rejection leaves pending journal data untouch
   }
 });
 
+/**
+ * This process's open descriptor count once it stops changing: pipes of earlier helper runs close
+ * a moment after their run ends. Gives up after 1,000 turns of the event loop.
+ */
+async function settledDescriptorCount() {
+  let count = readdirSync('/dev/fd').length,
+    unchanged = 0;
+  for (let turn = 0; turn < 1000 && unchanged < 20; turn++) {
+    await new Promise<void>((done) => setImmediate(done));
+    const next = readdirSync('/dev/fd').length;
+    unchanged = next === count ? unchanged + 1 : 0;
+    count = next;
+  }
+  return count;
+}
+
 test('capture cancellation settles its helper and releases descriptors before returning cancellation', async () => {
   const f = fixture(),
     ready = join(f.base, 'capture-ready');
@@ -343,7 +359,7 @@ test('capture cancellation settles its helper and releases descriptors before re
     const checkout = await client.command('openCheckout', { root: f.root });
     await client.command('readFile', { checkout, path: 'file.txt' });
     writeFileSync(join(f.base, 'external'), 'native bytes');
-    const before = readdirSync('/dev/fd').length;
+    const before = await settledDescriptorCount();
     const capturing = runApplicationEffect(
       runtime,
       captureNative({ checkout, clientId: 'alice', paths: [join(f.base, 'external')] }),
@@ -353,9 +369,8 @@ test('capture cancellation settles its helper and releases descriptors before re
     await waitFor(ready);
     abort.abort();
     await rejected;
-    // Nothing the capture opened is left open. Pipes of earlier helper runs may close meanwhile,
-    // so there can be fewer descriptors than before, never more.
-    assert.ok(readdirSync('/dev/fd').length <= before);
+    // Nothing the capture opened is left open.
+    assert.equal(await settledDescriptorCount(), before);
     assert.equal(
       (await client.command('readFile', { checkout, path: 'file.txt' })).text,
       'original',

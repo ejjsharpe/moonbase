@@ -53,20 +53,22 @@ const once = <K extends RequestOperation>(
     const journal = yield* HostJournal;
     const requests = journal.runningRequests;
     const id = journal.requestId(operation, input);
-    const first = requests.get(id);
-    if (first) {
-      if (!same(first.input, input))
-        return yield* new WorkspaceConflictError({ conflict: 'request-payload' });
-      return (yield* Effect.interruptible(Deferred.await(first.outcome))) as HostOutput<K>;
-    }
-    // Reserved and registered as running in one step, so a duplicate waits for it instead of
-    // finding a reservation nothing runs and reporting it interrupted.
+    // Finding a running duplicate, or reserving and registering this request as running, is one
+    // synchronous step, so two copies never both miss each other.
     const outcome = Deferred.makeUnsafe<CheckoutTarget, WorkspaceFailure>();
-    const record = yield* attempt(() => {
+    const found = yield* attempt(() => {
+      const first = requests.get(id);
+      if (first) return { first };
       const record = journal.reserveRequest(id, input);
       if (!record) requests.set(id, { input, outcome });
-      return record;
+      return { record };
     });
+    if (found.first) {
+      if (!same(found.first.input, input))
+        return yield* new WorkspaceConflictError({ conflict: 'request-payload' });
+      return (yield* Effect.interruptible(Deferred.await(found.first.outcome))) as HostOutput<K>;
+    }
+    const record = found.record;
     if (record)
       return (yield* attempt(() =>
         journal.replayRequest(record, operation, input),

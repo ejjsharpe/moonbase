@@ -197,16 +197,22 @@ export class Checkouts extends Context.Service<
         });
       const retained = (target: CheckoutTarget, approved: Approval) =>
         Effect.gen(function* () {
-          const open = directories.get(target.checkoutId);
-          if (open) return open;
-          if (!(directories.size < 128))
-            return yield* new InvalidRequestError({ problem: 'checkout-limit' });
-          const directory = yield* attempt(() => makeDirectory(target.root, approved.identity));
-          directories.set(target.checkoutId, directory);
-          yield* Scope.addFinalizer(
-            directoryScope,
-            Effect.sync(() => directory.close()),
-          );
+          // Found, or checked against the cap, opened and registered in one synchronous step, so
+          // two first uses never both open one.
+          const { directory, opened } = yield* attempt(() => {
+            const open = directories.get(target.checkoutId);
+            if (open) return { directory: open, opened: false };
+            if (directories.size >= 128)
+              throw new InvalidRequestError({ problem: 'checkout-limit' });
+            const directory = makeDirectory(target.root, approved.identity);
+            directories.set(target.checkoutId, directory);
+            return { directory, opened: true };
+          });
+          if (opened)
+            yield* Scope.addFinalizer(
+              directoryScope,
+              Effect.sync(() => directory.close()),
+            );
           return directory;
         }).pipe(Effect.uninterruptible);
       const directory = (target: CheckoutTarget) =>
