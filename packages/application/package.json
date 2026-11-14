@@ -8,7 +8,7 @@
     "./runtime/effect-client": "./src/runtime/effect-client.ts",
     "./chat": "./src/chat/index.ts",
     "./editor": "./src/editor/index.ts",
-    "./testing/memory-workspace": "./src/testing/memory-workspace.ts",
+    "./testing/faux-workspace": "./src/testing/faux-workspace.ts",
     ".": "./src/index.ts"
   },
   "scripts": {

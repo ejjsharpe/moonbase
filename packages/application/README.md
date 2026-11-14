@@ -21,7 +21,7 @@ A concept that needs only pure functions has only `x.ts`. Tests mirror `src/` un
 | `.` | Application factory, lifecycle snapshots and types |
 | `chat` | Headless chat model and controller, including transcript navigation and Find |
 | `editor` | Headless editor model and controller |
-| `testing/memory-workspace` | In-memory workspace capability for tests and demos |
+| `testing/faux-workspace` | In-memory workspace capability for tests and demos |
 | `runtime/handlers` | Shared command dispatch and subscriptions |
 | `runtime/clients` | Editor, chat and connection clients bound to an existing runtime |
 | `runtime/effect-client` | Invocation and observation helpers bound to a supplied runtime |

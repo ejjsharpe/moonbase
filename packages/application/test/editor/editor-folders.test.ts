@@ -10,7 +10,7 @@ import {
 } from '@moonbase/contracts/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { checkoutKey } from '@moonbase/application/editor';
-import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
+import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 
 const folder: CheckoutTarget = {
   hostId: 'local',
@@ -48,7 +48,7 @@ async function fixture(
     loseInitReply?: boolean;
   } = {},
 ) {
-  const memory = memoryWorkspace([
+  const memory = fauxWorkspace([
     { checkout: folder, files: { 'a.ts': 'a', 'b.ts': 'b' } },
     { checkout: repository, files: { 'r.ts': 'r' }, head: { 'r.ts': 'r' } },
   ]);

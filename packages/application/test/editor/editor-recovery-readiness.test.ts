@@ -10,7 +10,7 @@ import {
   type EditorClient,
   type CommandInput,
 } from '@moonbase/contracts/workspace';
-import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
+import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 
 const checkout: CheckoutTarget = {
   hostId: 'local',
@@ -30,7 +30,7 @@ const gate = () => {
   return { promise, release };
 };
 async function fixture() {
-  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'disk' } }]),
+  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'disk' } }]),
     runtime = ManagedRuntime.make(memory.layer),
     raw = makeEditorClient(runtime);
   let hold: ReturnType<typeof gate> | undefined,

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
+import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 
 const checkout = {
   hostId: 'local',
@@ -43,7 +43,7 @@ function protectPrototypes() {
 
 test('filename caret state never mutates inherited prototypes', async () => {
   const prototypes = protectPrototypes();
-  const memory = memoryWorkspace([
+  const memory = fauxWorkspace([
     { checkout, files: Object.fromEntries([['__proto__', 'baseline']]) },
   ]);
   const runtime = ManagedRuntime.make(memory.layer),
@@ -71,7 +71,7 @@ test('filename caret state never mutates inherited prototypes', async () => {
 test('prototype-shaped filenames keep own JSON view keys through Save, reopen, restart and move reconciliation', async () => {
   const prototypes = protectPrototypes(),
     files = Object.fromEntries(['sibling.ts', ...names].map((path) => [path, 'baseline ' + path]));
-  const memory = memoryWorkspace([{ checkout, files, head: files, index: files }]);
+  const memory = fauxWorkspace([{ checkout, files, head: files, index: files }]);
   const runtime = ManagedRuntime.make(memory.layer),
     client = makeEditorClient(runtime);
   let editor = await acquireEditor(runtime, { client, clientId: 'filenames' });
@@ -178,7 +178,7 @@ test('prototype-shaped filenames keep own JSON view keys through Save, reopen, r
 });
 
 test('untracked prototype-shaped filenames never inherit a demo Git baseline', async () => {
-  const memory = memoryWorkspace([
+  const memory = fauxWorkspace([
     {
       checkout,
       files: Object.fromEntries(names.map((path) => [path, 'working'])),

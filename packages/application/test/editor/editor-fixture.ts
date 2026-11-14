@@ -2,7 +2,7 @@ import { acquireEditor } from './editor-model-fixture.ts';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { type CheckoutTarget, type EditorClient } from '@moonbase/contracts/workspace';
-import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
+import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 
 export const checkout: CheckoutTarget = {
   hostId: 'local',
@@ -24,7 +24,7 @@ export const second: CheckoutTarget = {
 };
 export const target = (path: string, c: CheckoutTarget = checkout) => ({ checkout: c, path });
 export async function fixture(clientId = 'editor-one', observe = true) {
-  const memory = memoryWorkspace(
+  const memory = fauxWorkspace(
     [checkout, second].map((checkout) => ({
       checkout,
       files: {

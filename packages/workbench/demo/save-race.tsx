@@ -6,7 +6,7 @@ import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import type { CommandInput, EditorClient } from '@moonbase/contracts/workspace';
 import { Workbench } from '../src/index.ts';
 import { configureMonacoWorkers } from '../src/workers.ts';
-import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
+import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 import '@moonbase/ui/reset.css';
 import '@moonbase/ui/fonts.css';
 import 'virtual:stylex:runtime';
@@ -22,7 +22,7 @@ const checkout = {
   worktree: 'main' as 'main' | 'linked',
 };
 const files = { 'a.ts': 'A', 'b.ts': 'B' };
-const memory = memoryWorkspace([{ checkout, files, head: { ...files } }]);
+const memory = fauxWorkspace([{ checkout, files, head: { ...files } }]);
 const runtime = ManagedRuntime.make(memory.layer),
   raw = makeEditorClient(runtime);
 let entered!: () => void, release!: () => void;

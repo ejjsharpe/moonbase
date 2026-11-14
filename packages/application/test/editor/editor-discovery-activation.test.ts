@@ -11,7 +11,7 @@ import {
   type CommandInput,
 } from '@moonbase/contracts/workspace';
 import { fileKey } from '@moonbase/application/editor';
-import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
+import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 
 describe('checkout discovery and activation', () => {
   const { checkout, second, target, fixture, held, observedFixture } = controllerFixture;
@@ -310,7 +310,7 @@ describe('checkout discovery and activation', () => {
     });
 
   async function missingWorkingFixture(area: 'staged' | 'unstaged' | 'untracked') {
-    const memory = memoryWorkspace([
+    const memory = fauxWorkspace([
       {
         checkout,
         files: { 'b.ts': 'other file' },

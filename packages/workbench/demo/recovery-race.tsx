@@ -12,7 +12,7 @@ import { ApplicationError, type CommandInput } from '@moonbase/contracts/workspa
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { Workbench } from '../src/index.ts';
 import { configureMonacoWorkers } from '../src/workers.ts';
-import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
+import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 import '@moonbase/ui/reset.css';
 import '@moonbase/ui/fonts.css';
 import 'virtual:stylex:runtime';
@@ -31,7 +31,7 @@ const alpha = {
   worktree: 'main' as 'main' | 'linked',
 };
 const beta = { ...alpha, checkoutId: 'beta', root: '/race/beta' };
-const memory = memoryWorkspace(
+const memory = fauxWorkspace(
   [alpha, beta].map((checkout) => {
     const files: Record<string, string> =
       checkout === alpha && missingArea

@@ -1,5 +1,5 @@
 import { ManagedRuntime } from 'effect';
-import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
+import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 
 export const checkout = {
@@ -13,7 +13,7 @@ export const checkout = {
 };
 export const target = { checkout, path: 'a.ts' };
 export function editorCapabilities() {
-  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'original', 'b.ts': 'second' } }]);
+  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'original', 'b.ts': 'second' } }]);
   const runtime = ManagedRuntime.make(memory.layer);
   return { memory, runtime, client: makeEditorClient(runtime) };
 }

@@ -7,7 +7,7 @@ import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { DesktopShell, type DesktopShellHandle } from '../src/renderer/shell/desktop-shell.tsx';
 import { configureMonacoWorkers } from '@moonbase/workbench/workers';
-import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
+import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import * as monaco from 'monaco-editor';
 import * as stylex from '@stylexjs/stylex';
@@ -40,7 +40,7 @@ const committedSeed = (target: typeof checkout, files: Record<string, string>) =
   files,
   head: { ...files },
 });
-const memory = memoryWorkspace([
+const memory = fauxWorkspace([
   {
     checkout,
     files: {

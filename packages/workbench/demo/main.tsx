@@ -5,7 +5,7 @@ import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { isFileDropTaken, Workbench, type WorkbenchHandle } from '../src/index.ts';
 import { configureMonacoWorkers } from '../src/workers.ts';
-import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
+import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import * as monaco from 'monaco-editor';
 import * as stylex from '@stylexjs/stylex';
@@ -45,7 +45,7 @@ const merge: { files: Record<string, string>; head: Record<string, string>; conf
         conflicted: ['merge/both.ts', 'merge/gone.ts'],
       }
     : { files: {}, head: {}, conflicted: [] };
-const memory = memoryWorkspace([
+const memory = fauxWorkspace([
   {
     checkout,
     files: {

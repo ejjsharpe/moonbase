@@ -11,7 +11,7 @@ import {
   type EditorClient,
 } from '@moonbase/contracts/workspace';
 import { type EditorController } from '@moonbase/application/editor';
-import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
+import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 
 const checkout: CheckoutTarget = {
   hostId: 'receipts',
@@ -31,7 +31,7 @@ const gate = () => {
   return { promise, release };
 };
 async function fixture(wrap: (raw: EditorClient) => EditorClient = (raw) => raw) {
-  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A', 'b.ts': 'B', 'c.ts': 'C' } }]);
+  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A', 'b.ts': 'B', 'c.ts': 'C' } }]);
   const runtime = ManagedRuntime.make(memory.layer),
     raw = makeEditorClient(runtime),
     client = wrap(raw);

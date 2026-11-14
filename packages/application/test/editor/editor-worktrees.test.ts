@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { ManagedRuntime } from 'effect';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
+import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 
 const main: CheckoutTarget = {
   hostId: 'local',
@@ -31,7 +31,7 @@ const other: CheckoutTarget = {
 };
 
 async function fixture() {
-  const memory = memoryWorkspace([
+  const memory = fauxWorkspace([
     { checkout: main, files: { 'a.ts': 'working' }, head: { 'a.ts': 'committed' } },
     { checkout: linked, files: { 'a.ts': 'topic' } },
     { checkout: other, files: {} },

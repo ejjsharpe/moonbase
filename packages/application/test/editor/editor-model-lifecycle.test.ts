@@ -10,7 +10,7 @@ import {
 } from '@moonbase/contracts/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { makeEditorController, makeEditorModel } from '@moonbase/application/editor';
-import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
+import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 import { acquireEditor } from './editor-model-fixture.ts';
 import { checkout, target } from './editor-fixture.ts';
 
@@ -23,7 +23,7 @@ const gate = () => {
 };
 
 test('one acquired model binds once; two models share one runtime and failed held cleanup stays pending and observable', async () => {
-  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
+  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
   const runtime = ManagedRuntime.make(memory.layer),
     root = Scope.makeUnsafe();
   const raw = makeEditorClient(runtime),
@@ -106,7 +106,7 @@ test('one acquired model binds once; two models share one runtime and failed hel
 });
 
 test('prior producer unfamiliar nested saved draft blocks load/edit/publication and leaves original saved bytes unchanged', async () => {
-  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
+  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
   const runtime = ManagedRuntime.make(memory.layer),
     raw = makeEditorClient(runtime);
   const state = emptyRecovery('strict-producer');
@@ -160,7 +160,7 @@ test('prior producer unfamiliar nested saved draft blocks load/edit/publication 
 });
 
 test('exact close prompts ignore stale answers and disposal cancels an outstanding prompt', async () => {
-  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
+  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
   const runtime = ManagedRuntime.make(memory.layer);
   const editor = await acquireEditor(runtime, {
     client: makeEditorClient(runtime),
@@ -196,7 +196,7 @@ test('exact close prompts ignore stale answers and disposal cancels an outstandi
 test('lookup debounce and A-B-A queries cancel obsolete reads and retain only the exact current result', async () => {
   const { Layer } = await import('effect');
   const { TestClock } = await import('effect/testing');
-  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A', 'b.ts': 'B' } }]);
+  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A', 'b.ts': 'B' } }]);
   const runtime = ManagedRuntime.make(Layer.merge(memory.layer, TestClock.layer()));
   const raw = makeEditorClient(runtime),
     entered = gate(),
@@ -264,7 +264,7 @@ test('lookup debounce and A-B-A queries cancel obsolete reads and retain only th
 test('a refresh neither cancels an open from a lookup nor keeps restarting its query', async () => {
   const { Layer } = await import('effect');
   const { TestClock } = await import('effect/testing');
-  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A', 'b.ts': 'B', 'c.ts': 'C' } }]);
+  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A', 'b.ts': 'B', 'c.ts': 'C' } }]);
   const runtime = ManagedRuntime.make(Layer.merge(memory.layer, TestClock.layer()));
   const raw = makeEditorClient(runtime);
   let read = gate(),
@@ -373,7 +373,7 @@ test('a refresh neither cancels an open from a lookup nor keeps restarting its q
 test('a failed open stays on screen through refreshes until the reader types again', async () => {
   const { Layer } = await import('effect');
   const { TestClock } = await import('effect/testing');
-  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A', 'b.ts': 'B' } }]);
+  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A', 'b.ts': 'B' } }]);
   const runtime = ManagedRuntime.make(Layer.merge(memory.layer, TestClock.layer()));
   const raw = makeEditorClient(runtime);
   let searches = 0;
@@ -434,7 +434,7 @@ test('a failed open stays on screen through refreshes until the reader types aga
 });
 
 test('dismissing inspection admits no mutation; dismissing after dispatch retains model-owned outcome exactly once', async () => {
-  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
+  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
   const runtime = ManagedRuntime.make(memory.layer),
     raw = makeEditorClient(runtime);
   const inspecting = gate(),
@@ -496,7 +496,7 @@ test('dismissing inspection admits no mutation; dismissing after dispatch retain
 });
 
 test('checkout close cancels its in-flight observer refresh without reporting obsolete read cancellation', async () => {
-  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
+  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
   const runtime = ManagedRuntime.make(memory.layer),
     raw = makeEditorClient(runtime),
     entered = gate(),
@@ -538,7 +538,7 @@ test('checkout close cancels its in-flight observer refresh without reporting ob
 });
 
 test('selected file replacement cancels held comparison refresh and checkout close cancels held reveal reads', async () => {
-  const memory = memoryWorkspace([
+  const memory = fauxWorkspace([
     {
       checkout,
       files: { 'a.ts': 'A', 'b.ts': 'B', 'folder/c.ts': 'C' },
@@ -595,7 +595,7 @@ test('selected file replacement cancels held comparison refresh and checkout clo
 });
 
 test('model disposal joins an already-detached checkout watch close and retains its failed outcome', async () => {
-  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
+  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
   const runtime = ManagedRuntime.make(memory.layer),
     raw = makeEditorClient(runtime),
     entered = gate(),
@@ -658,7 +658,7 @@ test('model disposal joins an already-detached checkout watch close and retains 
 
 test('cached and implicit checkout selection retain an exact owner for comparison refresh cancellation', async () => {
   const other = { ...checkout, checkoutId: 'other', root: '/memory/other' };
-  const memory = memoryWorkspace(
+  const memory = fauxWorkspace(
     [checkout, other].map((checkout) => ({
       checkout,
       files: { 'a.ts': 'A', 'b.ts': 'B' },
@@ -720,7 +720,7 @@ test('cached and implicit checkout selection retain an exact owner for compariso
 });
 
 test('UI report callbacks ignore only cancellation from a closed captured read owner', async () => {
-  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A', 'folder/c.ts': 'C' } }]);
+  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A', 'folder/c.ts': 'C' } }]);
   const runtime = ManagedRuntime.make(memory.layer),
     raw = makeEditorClient(runtime),
     entered = gate(),
@@ -768,7 +768,7 @@ test('UI report callbacks ignore only cancellation from a closed captured read o
 });
 
 test('raw observation cleanup rejection is safely normalized without losing typed cleanup failures', async () => {
-  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
+  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
   const runtime = ManagedRuntime.make(memory.layer),
     raw = makeEditorClient(runtime);
   const sentinel = 'api_key=SYNTHETIC_PRIVATE_RELEASE_VALUE';
@@ -803,7 +803,7 @@ test('raw observation cleanup rejection is safely normalized without losing type
 });
 
 test('typed compound Cancelled failures remain visible for active and newly closed read owners', async () => {
-  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
+  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
   const runtime = ManagedRuntime.make(memory.layer),
     raw = makeEditorClient(runtime);
   const compound = new ApplicationError({
@@ -865,7 +865,7 @@ test('typed compound Cancelled failures remain visible for active and newly clos
 test('untyped injected read, lookup and inspection errors cannot publish private diagnostics', async () => {
   const { Layer } = await import('effect');
   const { TestClock } = await import('effect/testing');
-  const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
+  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
   const runtime = ManagedRuntime.make(Layer.merge(memory.layer, TestClock.layer())),
     raw = makeEditorClient(runtime);
   const sentinel = 'api_key=SYNTHETIC_PRIVATE_CLIENT_VALUE';
@@ -914,7 +914,7 @@ test('untyped injected read, lookup and inspection errors cannot publish private
 
 for (const outcome of ['success', 'held-failure', 'throw'] as const)
   test(`reentrant watch disposal owns the returned handle and acquisition outcome (${outcome})`, async () => {
-    const memory = memoryWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
+    const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
     const runtime = ManagedRuntime.make(memory.layer),
       raw = makeEditorClient(runtime);
     const entered = gate(),

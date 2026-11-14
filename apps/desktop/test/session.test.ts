@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Layer, ManagedRuntime } from 'effect';
 import { createMoonbaseApplication } from '@moonbase/application';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
+import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 const runtime = ManagedRuntime.make(Layer.empty);
 after(() => runtime.dispose());
 import {
@@ -312,7 +312,7 @@ test('ignore classification accepts a full folder listing only for an approved e
 });
 
 test('superseded classifications release desktop capacity for unrelated file commands', async () => {
-  const memory = memoryWorkspace([
+  const memory = fauxWorkspace([
     { checkout: target, files: { 'a.ts': 'A', 'folder/nested.ts': 'nested' } },
   ]);
   const backend = ManagedRuntime.make(memory.layer),
@@ -869,7 +869,7 @@ test('copy-paths and reveal reach native actions only for approved checkouts and
   await writeFile(join(base, 'secret'), 'S');
   await symlink(base, join(root, 'out'));
   const checkout = { ...target, root };
-  const memory = memoryWorkspace([{ checkout, files: { 'src/a.ts': 'A' } }]);
+  const memory = fauxWorkspace([{ checkout, files: { 'src/a.ts': 'A' } }]);
   const backend = ManagedRuntime.make(memory.layer);
   const copied: string[] = [],
     revealed: string[] = [];

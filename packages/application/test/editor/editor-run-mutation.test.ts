@@ -244,7 +244,7 @@ test('a batch import with known names asks before replacing what they would land
   const f = await counted();
   try {
     const dispatched: Parameters<typeof f.editor.mutate>[0][] = [];
-    // The memory workspace has no native file authority; record what would be imported.
+    // The faux workspace has no native file authority; record what would be imported.
     f.editor.mutate = async (input) => {
       dispatched.push(structuredClone(input));
       return {
