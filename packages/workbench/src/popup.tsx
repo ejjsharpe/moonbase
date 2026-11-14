@@ -3,7 +3,7 @@ import * as stylex from '@stylexjs/stylex';
 import { Dialog } from '@base-ui/react/dialog';
 import { overlays } from '@moonbase/ui/overlays';
 import { workbench } from '@moonbase/ui/workbench';
-import { styles } from './styles.ts';
+import { styles } from './workbench-styles.ts';
 
 export function Popup({
   title,

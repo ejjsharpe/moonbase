@@ -1,6 +1,6 @@
 import * as stylex from '@stylexjs/stylex';
 import { workbench } from '@moonbase/ui/workbench';
-import { styles } from './styles.ts';
+import { styles } from './shell-styles.ts';
 
 export function WorkbenchStartupFailure({ message }: { message: string }) {
   return (

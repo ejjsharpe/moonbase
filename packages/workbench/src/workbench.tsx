@@ -52,7 +52,7 @@ import { WorktreeSwitcher } from './worktree-switcher.tsx';
 import { ExplorerMenu, type ExplorerAction } from './explorer-menu.tsx';
 import { CheatSheet, editorShortcuts, type Shortcut } from './cheat-sheet.tsx';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { styles } from './styles.ts';
+import { styles } from './workbench-styles.ts';
 import { Icon } from '@moonbase/ui/icons';
 import { FileIcon } from '@moonbase/ui/file-icons';
 

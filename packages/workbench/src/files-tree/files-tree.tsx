@@ -1,7 +1,7 @@
 import { getParentPath, getPathName, joinPath } from '@moonbase/contracts/paths';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
-import { styles } from '../styles.ts';
+import { styles } from '../workbench-styles.ts';
 import { Icon } from '@moonbase/ui/icons';
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { filesUI } from '@moonbase/ui/files';

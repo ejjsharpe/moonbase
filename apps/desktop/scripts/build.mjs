@@ -73,8 +73,8 @@ const rendererInputs = JSON.parse(
 );
 
 for (const entry of [
-  'packages/workbench/src/editor/workbench.tsx',
-  'apps/desktop/src/renderer/shell/workbench.tsx',
+  'packages/workbench/src/workbench.tsx',
+  'apps/desktop/src/renderer/shell/desktop-shell.tsx',
   'apps/desktop/src/renderer/chat/view.tsx',
 ])
   assert(

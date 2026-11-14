@@ -8,7 +8,7 @@ import { checkoutKey } from '@moonbase/application/editor';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { controls } from '@moonbase/ui/controls';
 import { checkoutName, projectHue, projectInitials, projectTiles } from '@moonbase/ui/projects';
-import { styles } from './styles.ts';
+import { styles } from './shell-styles.ts';
 import { Icon } from '@moonbase/ui/icons';
 import { AnimatedTab } from './animated-tab.tsx';
 import { ProjectOpener } from './project-opener.tsx';

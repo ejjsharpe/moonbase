@@ -5,7 +5,7 @@ import { createRoot } from 'react-dom/client';
 import { createRef, StrictMode, useState } from 'react';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { DesktopShell, type DesktopShellHandle } from '../src/renderer/shell/workbench.tsx';
+import { DesktopShell, type DesktopShellHandle } from '../src/renderer/shell/desktop-shell.tsx';
 import { configureMonacoWorkers } from '@moonbase/workbench/workers';
 import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';

@@ -8,7 +8,7 @@ import {
   measureStem,
   placeholderPath,
   selectMountedIndexes,
-} from '../src/editor/files-tree/files-tree-rows.ts';
+} from '../src/files-tree/files-tree-rows.ts';
 
 const checkout = 'checkout';
 const listing = (...entries: DirectoryListing['entries']): DirectoryListing => ({

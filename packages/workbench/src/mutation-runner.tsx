@@ -10,7 +10,7 @@ import {
   type MutationRunResult,
 } from '@moonbase/application/editor';
 import { Popup } from './popup.tsx';
-import { styles } from './styles.ts';
+import { styles } from './workbench-styles.ts';
 
 /**
  * Runs a file operation without its dialog, asking only before replacing existing entries.

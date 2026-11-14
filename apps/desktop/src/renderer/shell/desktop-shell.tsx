@@ -34,7 +34,7 @@ import {
   pickerMode,
   type WorkbenchHandle,
 } from '@moonbase/workbench';
-import { styles } from './styles.ts';
+import { styles } from './shell-styles.ts';
 import {
   emptyHistory,
   findStep,

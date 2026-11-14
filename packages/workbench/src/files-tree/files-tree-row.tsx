@@ -2,7 +2,7 @@ import * as stylex from '@stylexjs/stylex';
 import type { ReactNode } from 'react';
 import type { GitChangeKind } from '@moonbase/contracts/workspace';
 import { filesUI, gitStatusHues, gitStatusUI } from '@moonbase/ui/files';
-import { styles } from '../styles.ts';
+import { styles } from '../workbench-styles.ts';
 import { Icon } from '@moonbase/ui/icons';
 import { FileIcon } from '@moonbase/ui/file-icons';
 import { rowHeight, type VisibleRow } from './files-tree-rows.ts';

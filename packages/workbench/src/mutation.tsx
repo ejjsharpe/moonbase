@@ -1,6 +1,6 @@
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
-import { styles } from './styles.ts';
+import { styles } from './workbench-styles.ts';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { Button } from '@base-ui/react/button';
 import { Dialog } from '@base-ui/react/dialog';
