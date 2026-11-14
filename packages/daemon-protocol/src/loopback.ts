@@ -6,9 +6,7 @@ import { isAbsolute, join } from 'node:path';
 import { Effect, Layer, Queue, Semaphore, Stream, type Cause } from 'effect';
 import { ApplicationError, fail } from '@moonbase/contracts/errors';
 import type { ConnectionProfile, ConnectionSnapshot } from '@moonbase/contracts/connection';
-import { decodeConnectionInput } from '@moonbase/contracts/connection-schema';
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
-import { decodeChatHostTarget } from '@moonbase/contracts/host-schema';
 import { chatProtocolVersion, type ChatHostHealth } from '@moonbase/contracts/host';
 import { ConnectionService, type ConnectionServiceShape } from '@moonbase/contracts/services';
 import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
@@ -236,50 +234,27 @@ export function LoopbackConnectionLive(
         return structuredClone(state);
       });
       const service: ConnectionServiceShape = {
-        getConnection: (input) =>
-          Effect.flatMap(
-            Effect.try({
-              try: () => decodeConnectionInput('getConnection', input),
-              catch: normalizeApplicationError,
+        getConnection: () => Effect.as(isOpen, structuredClone(state)),
+        connect: ({ profileId }) =>
+          profileId === loopbackProfileId
+            ? lock.withPermits(1)(connect)
+            : Effect.fail(failure('InvalidInput', 'Choose the loopback connection profile.')),
+        disconnect: ({ connectionId }) =>
+          lock.withPermits(1)(
+            Effect.gen(function* () {
+              yield* isOpen;
+              if (state.connectionId === null) return;
+              if (state.connectionId !== connectionId)
+                return yield* Effect.fail(
+                  failure('Conflict', 'This disconnect names a stale connection generation.'),
+                );
+              current = undefined;
+              publish({ profile, state: 'disconnected', connectionId: null });
             }),
-            () => Effect.as(isOpen, structuredClone(state)),
           ),
-        connect: (input) =>
-          Effect.flatMap(
-            Effect.try({
-              try: () => {
-                if (decodeConnectionInput('connect', input).profileId !== loopbackProfileId)
-                  fail('InvalidInput', 'Choose the loopback connection profile.');
-              },
-              catch: normalizeApplicationError,
-            }),
-            () => lock.withPermits(1)(connect),
-          ),
-        disconnect: (input) =>
-          Effect.flatMap(
-            Effect.try({
-              try: () => decodeConnectionInput('disconnect', input).connectionId,
-              catch: normalizeApplicationError,
-            }),
-            (connectionId) =>
-              lock.withPermits(1)(
-                Effect.gen(function* () {
-                  yield* isOpen;
-                  if (state.connectionId === null) return;
-                  if (state.connectionId !== connectionId)
-                    return yield* Effect.fail(
-                      failure('Conflict', 'This disconnect names a stale connection generation.'),
-                    );
-                  current = undefined;
-                  publish({ profile, state: 'disconnected', connectionId: null });
-                }),
-              ),
-          ),
-        endpoint: (input) =>
+        endpoint: ({ host }) =>
           Effect.try({
             try: () => {
-              readObject(input, ['host']);
-              const host = decodeChatHostTarget(input.host);
               if (closed) fail('Unavailable', 'Loopback connection scope is closed.');
               if (!isSameChatHost(host, expected))
                 fail('Conflict', 'Connection target does not match the daemon’s host and store.');

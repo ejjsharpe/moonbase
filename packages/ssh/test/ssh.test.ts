@@ -367,65 +367,13 @@ for (const [mode, diagnostic, code] of [
     },
   );
 
-test('private config is projected explicitly and invalid commands/config cannot spawn or select a target', async () => {
+test('a command for another profile or host cannot spawn or select a target', async () => {
   const f = await fixture();
-  const extra = {
-    ...f.config,
-    profile: {
-      ...f.profile,
-      token: f.key,
-      origin: 'http://127.0.0.1:9999',
-      expected: { ...f.profile.expected, token: f.key },
-    },
-  };
-  const other = f.start(extra);
   try {
-    assert.deepEqual((await other.client.command('getConnection', {})).profile, f.profile);
-    for (const bad of [
-      { ...f.config, token: 'short' },
-      { ...f.config, profile: { ...f.profile, destination: '-oProxyCommand=bad' } },
-      { ...f.config, profile: { ...f.profile, remotePort: 0 } },
-      { ...f.config, profile: { ...f.profile, label: f.key } },
-      { ...f.config, sshExecutable: 'relative' },
-    ]) {
-      const invalid = f.start(bad);
-      try {
-        await assert.rejects(invalid.client.command('getConnection', {}), failure('InvalidInput'));
-      } finally {
-        await invalid.runtime.dispose();
-      }
-    }
-    await assert.rejects(
-      f.client.command('getConnection', { token: f.key } as never),
-      failure('InvalidInput'),
-    );
     await assert.rejects(
       f.client.command('connect', { profileId: 'other' }),
       failure('InvalidInput'),
     );
-    for (const [operation, input] of [
-      ['getConnection', null],
-      ['getConnection', []],
-      ['connect', {}],
-      ['connect', { profileId: 'configured', destination: f.profile.destination }],
-      ['connect', { profileId: f.key + ' invalid' }],
-      ['disconnect', {}],
-      ['disconnect', { connectionId: 'valid', token: f.key }],
-      ['disconnect', { connectionId: 'line\n' }],
-    ] as const)
-      await assert.rejects(
-        f.client.command(operation, input as never),
-        (error) => failure('InvalidInput')(error) && !JSON.stringify(error).includes(f.key),
-      );
-    for (const input of [
-      { host: { ...f.profile.expected, token: f.key } },
-      { host: f.profile.expected, origin: 'http://127.0.0.1:9999' },
-      { host: { ...f.profile.expected, hostId: 'line\n' } },
-    ])
-      await assert.rejects(
-        f.runtime.runPromise(Effect.flatMap(ConnectionService, (s) => s.endpoint(input))),
-        failure('InvalidInput'),
-      );
     await assert.rejects(
       f.runtime.runPromise(
         Effect.flatMap(ConnectionService, (s) =>
@@ -443,7 +391,6 @@ test('private config is projected explicitly and invalid commands/config cannot 
     );
     assert.equal(f.spawned().length, 0);
   } finally {
-    await other.runtime.dispose();
     await f.close();
   }
 });

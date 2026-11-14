@@ -1,9 +1,8 @@
 import { normalizeApplicationError, toApplicationError } from '@moonbase/effect';
-import { Cause, Deferred, Effect, Exit, Fiber, Schema, Scope, type ManagedRuntime } from 'effect';
+import { Cause, Deferred, Effect, Exit, Fiber, Scope, type ManagedRuntime } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ObservationClose } from '@moonbase/contracts/common';
 import { runApplicationEffect } from '../runtime/effect-client.ts';
-import { decodeChatInput, ChatModelPreferenceSchema } from '@moonbase/contracts/chat-schema';
 import type {
   ChatCreationSettings,
   ChatMention,
@@ -216,9 +215,7 @@ class ChatModelState {
           healthyMs: this.transcriptWatchHealthyMs,
         })
       : null;
-    this.session = structuredClone(
-      decodeChatInput('listChats', { session: dependencies.context }).session,
-    );
+    this.session = structuredClone(dependencies.context);
     this.storage = dependencies.storage;
     this.newId = dependencies.newId ?? (() => crypto.randomUUID());
     this.saved = {
@@ -913,11 +910,7 @@ class ChatModelState {
   setModelPreference(value: ChatModelPreference) {
     if (!this.accepting) return;
     try {
-      const preference = Schema.decodeUnknownSync(ChatModelPreferenceSchema, {
-        onExcessProperty: 'error',
-        reportInput: false,
-      })(value);
-      this.commit({ ...structuredClone(this.saved), modelPreference: structuredClone(preference) });
+      this.commit({ ...structuredClone(this.saved), modelPreference: structuredClone(value) });
     } catch (error) {
       this.error(
         ApplicationError.is(error) ? error : invalid('Choose a valid model and reasoning effort.'),
@@ -994,10 +987,9 @@ class ChatModelState {
         const target = this.saved.selected,
           cwd = options.cwd;
         if (!target && !cwd) throw invalid('Choose a working folder to search its files.');
-        const input = decodeChatInput(
-          'findChatFiles',
-          target ? { target, query } : { session: this.session, cwd, query },
-        );
+        const input: ChatInput<'findChatFiles'> = target
+          ? { target, query }
+          : { session: this.session, cwd: cwd!, query };
         return yield* Effect.tryPromise({
           try: (signal) => {
             return this.chat.command('findChatFiles', input, {
@@ -1016,7 +1008,7 @@ class ChatModelState {
   select = (target: ChatTarget): Promise<void> => {
     if (!this.accepting) return Promise.resolve();
     try {
-      const captured = decodeChatInput('getChat', { target }).target;
+      const captured = structuredClone(target);
       if (!sameSession(captured, this.session)) throw invalid('Chat belongs to another context.');
       const next = structuredClone(this.saved);
       next.selected = captured;
@@ -1238,15 +1230,14 @@ class ChatModelState {
         if (!text(title, 200) || !title.trim())
           throw invalid('Use a chat title of 1–200 UTF-8 bytes.');
         if (!settings) throw invalid('Choose a folder and model for this chat.');
-        const captured = decodeChatInput('createChat', {
-          session: this.session,
-          requestId: this.newId(),
-          title,
-          settings,
-        });
         const pending: Pending = {
           operation: 'createChat',
-          input: structuredClone(captured),
+          input: structuredClone({
+            session: this.session,
+            requestId: this.newId(),
+            title,
+            settings,
+          }),
           message: 'Outcome pending. Original creation identity retained.',
         };
         yield* this.dispatch(pending, () => this.reserve(pending));
@@ -1285,7 +1276,7 @@ class ChatModelState {
           }
           const pending: Pending = {
             operation: 'createChat',
-            input: decodeChatInput('createChat', {
+            input: structuredClone({
               session: this.session,
               requestId: this.newId(),
               title: title || 'New conversation',
@@ -1306,11 +1297,7 @@ class ChatModelState {
           throw invalid('Resolve the retained Send before starting another in this chat.');
         const pending: Pending = {
           operation: 'sendChat',
-          input: decodeChatInput('sendChat', {
-            target: structuredClone(target),
-            requestId: this.newId(),
-            ...message,
-          }),
+          input: { target: structuredClone(target), requestId: this.newId(), ...message },
           message: 'Outcome pending. Original Send identity and text retained.',
         };
         yield* this.dispatch(pending, () => this.reserve(pending));
@@ -1347,7 +1334,7 @@ class ChatModelState {
       'settle',
       Effect.gen({ self: this }, function* () {
         this.connected();
-        const input = decodeChatInput('settleChat', { target, settled });
+        const input = { target: structuredClone(target), settled };
         if (!sameSession(input.target, this.session))
           throw invalid('Chat belongs to another context.');
         const summary = yield* this.call('settleChat', input);

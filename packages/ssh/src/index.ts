@@ -3,15 +3,13 @@ import { createServer, type Server, type AddressInfo } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
-import { decodeConnectionInput } from '@moonbase/contracts/connection-schema';
-import { decodeChatHostTarget } from '@moonbase/contracts/host-schema';
 import type { ChatHostHealth } from '@moonbase/contracts/host';
 import { checkHostHealth } from '@moonbase/ssh/host-health';
 import { releaseResource, toApplicationError } from '@moonbase/effect';
 import { ConnectionService, type ConnectionServiceShape } from '@moonbase/contracts/services';
 import { SshProcess } from './process.ts';
 import {
-  decodeSshConfiguration,
+  defaultSshExecutable,
   type DecodedSshConfiguration,
   type SshConfiguration,
 } from './configuration.ts';
@@ -21,20 +19,10 @@ const error = (code: ApplicationError['code'], message: string) =>
 const ensure: (condition: unknown, message: string) => asserts condition = (condition, message) => {
   if (!condition) throw error('InvalidInput', message);
 };
-function fields(input: unknown, names: string[]) {
-  ensure(
-    input !== null &&
-      typeof input === 'object' &&
-      !Array.isArray(input) &&
-      Object.keys(input).every((name) => names.includes(name)),
-    'Invalid connection command fields.',
-  );
-}
 const command = <A>(run: () => A): Effect.Effect<A, ApplicationError> =>
   Effect.try({
     try: run,
-    catch: (e) =>
-      ApplicationError.is(e) ? e : error('InvalidInput', 'Invalid SSH configuration or command.'),
+    catch: (e) => (ApplicationError.is(e) ? e : error('InvalidInput', 'Invalid SSH command.')),
   });
 type Generation = {
   id: string;
@@ -50,18 +38,20 @@ export type SshOptions = {
   /** How long a connection may take to verify its host; 20 seconds unless a test shortens it. */
   startupMs?: number;
 };
-/** Root-scoped capability only. The consumer composes the process runtime and shared handlers. */
+/**
+ * Root-scoped capability only. The consumer composes the process runtime and shared handlers, and
+ * decodes the configuration where it reads it (`decodeSshConfiguration`).
+ */
 export function SshLive(input: SshConfiguration, options: SshOptions = {}) {
   return Layer.effect(
     ConnectionService,
     Effect.gen(function* () {
       const config = yield* command(() => {
-          const value = decodeSshConfiguration(input);
           ensure(
             process.platform !== 'win32',
             'SSH process-group ownership requires a POSIX platform.',
           );
-          return value;
+          return { ...input, sshExecutable: input.sshExecutable ?? defaultSshExecutable };
         }),
         scope = yield* Effect.scope;
       const owner = yield* Effect.acquireRelease(
@@ -88,34 +78,26 @@ class Connection {
     this.scope = scope;
     this.state = { profile: config.profile, state: 'disconnected', connectionId: null };
     this.service = {
-      getConnection: (input) =>
+      getConnection: () =>
         command(() => {
-          decodeConnectionInput('getConnection', input);
           this.open();
           return this.snapshot();
         }),
-      connect: (input) =>
+      connect: ({ profileId }) =>
         Effect.flatMap(
           command(() => {
-            const value = decodeConnectionInput('connect', input);
-            ensure(value.profileId === config.profile.id, 'Choose the configured SSH profile.');
+            ensure(profileId === config.profile.id, 'Choose the configured SSH profile.');
             this.open();
           }),
           () => this.connect(),
         ),
-      disconnect: (input) =>
+      disconnect: ({ connectionId }) =>
         Effect.flatMap(
-          command(() => {
-            const value = decodeConnectionInput('disconnect', input);
-            this.open();
-            return value.connectionId;
-          }),
-          (id) => this.disconnect(id),
+          command(() => this.open()),
+          () => this.disconnect(connectionId),
         ),
-      endpoint: (input) =>
+      endpoint: ({ host }) =>
         command(() => {
-          fields(input, ['host']);
-          const host = decodeChatHostTarget(input.host);
           this.open();
           if (
             host.hostId !== config.profile.expected.hostId ||

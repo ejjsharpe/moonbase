@@ -7,11 +7,13 @@ import {
   ConnectionProfileSchema,
 } from '@moonbase/contracts/connection-schema';
 
+/** The OpenSSH a configuration without `sshExecutable` runs. */
+export const defaultSshExecutable = '/usr/bin/ssh';
 const executable = Schema.NullOr(Schema.String).pipe(
   Schema.decodeTo(
     Schema.String.check(Schema.makeFilter((value) => isAbsolute(value) && !value.includes('\0'))),
     {
-      decode: SchemaGetter.transform((value) => value ?? '/usr/bin/ssh'),
+      decode: SchemaGetter.transform((value) => value ?? defaultSshExecutable),
       encode: SchemaGetter.passthrough(),
     },
   ),

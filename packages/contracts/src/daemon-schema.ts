@@ -9,14 +9,7 @@ import {
   providerInputSchemas,
 } from './providers-schema.ts';
 import { chatHostCapabilities, type ChatHostCapability } from './host.ts';
-import type {
-  DaemonCommand,
-  DaemonInput,
-  DaemonOutput,
-  LocalHostCommand,
-  LocalHostInput,
-  LocalHostOutput,
-} from './daemon.ts';
+import type { DaemonCommand, DaemonInput, DaemonOutput, LocalHostCommand } from './daemon.ts';
 
 /** An absolute path: at most 4 KiB of well-formed text without NULs. */
 export const AbsolutePathSchema = Schema.String.check(
@@ -167,11 +160,3 @@ export function decodeDaemonOutput<K extends DaemonCommand>(
     throw new ApplicationError({ code: 'Incompatible', message: 'Invalid daemon reply.' });
   }
 }
-export const decodeLocalHostInput: <K extends LocalHostCommand>(
-  operation: K,
-  value: unknown,
-) => LocalHostInput<K> = decodeDaemonInput;
-export const decodeLocalHostOutput: <K extends LocalHostCommand>(
-  operation: K,
-  value: unknown,
-) => LocalHostOutput<K> = decodeDaemonOutput;
