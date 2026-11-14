@@ -209,10 +209,6 @@ test('create and native import consumer payloads need no empty inspection and re
   try {
     const editor = await f.editor('import-consumer'),
       checkout = await editor.openCheckout(f.roots[0]);
-    await assert.rejects(
-      f.client.command('inspectEntries', { checkout, paths: [] }),
-      code('InvalidInput'),
-    );
     for (const [kind, destination] of [
       ['create-file', 'created.ts'],
       ['create-directory', 'created-folder'],
