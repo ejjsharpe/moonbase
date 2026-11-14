@@ -224,7 +224,7 @@ export function applyOperations(
         state,
         fresh.map((m) => ({ ...m.updated, result: { ...m.updated.result, items: m.fresh } })),
       );
-      for (const target of collisions.values()) context.markGap(target);
+      for (const { checkout, paths } of collisions.values()) context.markGap(checkout, paths);
       if (JSON.stringify(state) !== body) {
         store.writeInternalRecovery(client, revision, state);
         const change = { clientId: client, previousRevision: revision, revision: revision + 1 };

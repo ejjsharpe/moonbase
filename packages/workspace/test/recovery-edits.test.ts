@@ -198,6 +198,14 @@ test('an edit during a save, or after its reply was lost, is never overwritten b
     assert.deepEqual((await load(alice, 'window')).state.drafts, [
       { target: at('file.txt'), text: 'typed during save', disk: saved.disk },
     ]);
+    // A keystroke sent before the window heard of the save keeps the baseline the save left,
+    // so typing back to the saved text leaves no draft.
+    await window.updateDraft({ bufferId: 'b1', text: 'typed after save', disk });
+    assert.deepEqual((await load(alice, 'window')).state.drafts, [
+      { target: at('file.txt'), text: 'typed after save', disk: saved.disk },
+    ]);
+    await window.updateDraft({ bufferId: 'b1', text: 'saving', disk: saved.disk });
+    assert.deepEqual((await load(alice, 'window')).state.drafts, []);
     await alice.runtime.dispose();
 
     // The host saves, then the reply and every status question are lost; the next edit lands.
@@ -234,62 +242,76 @@ test('an edit during a save, or after its reply was lost, is never overwritten b
   }
 });
 
-test("an edit after another client's move applies where the move put its buffer, with its tab and view", async () => {
+test('a move takes its buffers along, and a clean buffer at the destination gives way to a dirty one', async () => {
   const h = harness();
   try {
     const { host, checkout, at, read } = await setup(h, {
       'file.txt': 'original',
       'second.txt': 'second',
+      'p.txt': 'p',
+      'q.txt': 'q',
     });
     const disk = await read('file.txt');
     const alice = h.startClient('alice', host);
     const window = editor(alice, 'window');
-    await window.openTab({ bufferId: 'clean', target: at('file.txt') });
-    await window.openTab({ bufferId: 'dirty', target: at('second.txt') });
-    await window.updateDraft({
-      bufferId: 'dirty',
-      text: 'dirty text',
-      disk: await read('second.txt'),
-    });
-    // A buffer open at a path that does not exist yet holds it against a move.
-    await window.openTab({ bufferId: 'holder', target: at('taken.txt') });
-    const outlines = window.watch();
-    await outlines.until(1);
-    const layout = layoutOf(outlines.seen[0]);
+    const open = async (bufferId: string, path: string, text?: string) => {
+      await window.openTab({ bufferId, target: at(path) });
+      if (text !== undefined)
+        await window.updateDraft({ bufferId, text, disk: await read(path).catch(() => disk) });
+    };
+    await open('clean', 'file.txt');
+    await open('dirty', 'second.txt', 'dirty text');
+    // A buffer with a draft at a path that does not exist yet holds it against a move.
+    await open('holder', 'taken.txt', 'holder text');
+    await open('own', 'p.txt', 'own text');
+    await open('q', 'q.txt');
     const position = { file: { line: 3, column: 1, top: 40, left: 0 } };
+    const layout = await window.layout();
     layout.views[checkout.checkoutId] = {
       ...layout.views[checkout.checkoutId]!,
-      active: 'clean',
+      active: 'q',
       preview: 'clean',
       fileViews: { clean: 'file' },
-      positions: { clean: position },
+      positions: { clean: position, q: position },
     };
     await window.updateLayout({ layout });
-    await outlines.stop();
-    // Another installation moves both files; the feed brings the moves in when alice loads.
+    // Another installation moves two files; the feed brings the moves in when alice loads.
     const bob = h.startClient('bob', host);
     await moveWith(bob, checkout, 'file.txt', 'moved.txt');
     await moveWith(bob, checkout, 'second.txt', 'taken.txt');
     const loaded = await load(alice, 'window');
+    // The draft whose destination held another draft stays where it was, and is named.
+    assert(loaded.errors.some((error) => error.includes('second.txt')));
     // The clean buffer's first keystroke and a layout written before the window heard of the
     // move both land on the moved buffer, not at the old path.
     await window.updateDraft({ bufferId: 'clean', text: 'typed after move', disk });
     await window.updateLayout({ layout });
+    // This client's own move of a dirty file onto an open clean one replaces it: the clean
+    // buffer gives way, and its tab, focus and position go to the moved draft.
+    await alice.client.command('mutate', {
+      id: 'replace',
+      clientId: 'window',
+      checkout,
+      kind: 'move',
+      sources: await alice.client.command('inspectEntries', { checkout, paths: ['p.txt'] }),
+      replacements: await alice.client.command('inspectEntries', { checkout, paths: ['q.txt'] }),
+      destination: 'q.txt',
+    });
     const state = (await load(alice, 'window')).state;
     const view = state.views[checkout.checkoutId]!;
-    assert.deepEqual(view.openFiles, ['moved.txt', 'second.txt', 'taken.txt']);
-    assert.equal(view.active, 'moved.txt');
+    assert.deepEqual(view.openFiles, ['moved.txt', 'second.txt', 'taken.txt', 'q.txt']);
+    assert.equal(view.active, 'q.txt');
     assert.equal(view.preview, 'moved.txt');
-    assert.deepEqual(view.positions, { 'moved.txt': position });
-    // The draft whose destination another buffer held stays where it was, and is reported.
+    assert.deepEqual(view.positions, { 'moved.txt': position, 'q.txt': position });
     assert.deepEqual(
       state.drafts.map((d) => [d.target.path, d.text]),
       [
         ['moved.txt', 'typed after move'],
         ['second.txt', 'dirty text'],
+        ['taken.txt', 'holder text'],
+        ['q.txt', 'own text'],
       ],
     );
-    assert(loaded.errors.some((error) => error.includes('incomplete')));
   } finally {
     await h.close();
   }

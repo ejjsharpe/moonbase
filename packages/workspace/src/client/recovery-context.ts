@@ -10,7 +10,7 @@ import { UnresolvedWorkError } from '@moonbase/contracts/workspace-host-errors';
 import { attempt, type WorkspaceFailure } from '../attempt.ts';
 import { getOperationPaths } from '../operation-paths.ts';
 import { canonical, key, overlaps, same } from '../validation.ts';
-import type { FeedCursor, OperationRecord, StoredSave } from './client-schema.ts';
+import type { FeedCursor, FeedGap, OperationRecord, StoredSave } from './client-schema.ts';
 import { openOperations, pendingSaves, type ClientStore } from './client-store.ts';
 
 /** The file host as the client's recovery asks it, with the installation already bound. */
@@ -181,11 +181,17 @@ export class RecoveryContext {
       ),
     );
   }
-  /** Marks a checkout's history incomplete: its drafts may be at paths a missed move left behind. */
-  markGap(target: CheckoutTarget) {
+  /**
+   * Marks a checkout's history incomplete: its drafts may be at paths a missed move left behind.
+   * `stranded` names drafts known to have stayed behind when their file moved.
+   */
+  markGap(target: CheckoutTarget, stranded: string[] = []) {
+    const known = this.store.get<FeedGap>('feed-gaps', feedKey(target))?.stranded ?? [];
+    const paths = [...new Set([...known, ...stranded])];
     this.store.put('feed-gaps', feedKey(target), {
       hostId: target.hostId,
       checkoutId: target.checkoutId,
+      ...(paths.length ? { stranded: paths } : {}),
     });
   }
   getFeedCursor(target: CheckoutTarget) {

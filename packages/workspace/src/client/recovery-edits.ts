@@ -141,21 +141,21 @@ export const makeRecoveryEdits = (context: RecoveryContext) => {
           const buffer = state.buffers.find((b) => b.id === bufferId);
           if (!buffer) throw new InvalidRecoveryRequestError({ problem: 'unknown-buffer' });
           const { draft } = buffer;
-          // Text is dropped only as the file text the store knows the buffer is over; over an
-          // older one (a save settled since) it is still unsaved, so it stays a draft there.
-          if (text === disk.text) {
-            if (!draft) return false;
-            if (draft.disk.version === disk.version) {
-              assertDroppable(buffer.target);
-              delete buffer.draft;
-              return;
-            }
-            if (draft.text === text) return false;
-            draft.text = text;
+          if (!draft) {
+            if (text === disk.text) return false;
+            buffer.draft = { text, disk };
             return;
           }
-          if (draft?.text === text && draft.disk.version === disk.version) return false;
-          buffer.draft = { text, disk };
+          // A draft keeps the baseline the store holds: a save that settled since the caller last
+          // heard moved it, and the caller's older one would leave the draft over text no longer
+          // on disk. Text equal to that baseline is no draft.
+          if (text === draft.disk.text) {
+            assertDroppable(buffer.target);
+            delete buffer.draft;
+            return;
+          }
+          if (draft.text === text) return false;
+          draft.text = text;
         });
       }),
     );

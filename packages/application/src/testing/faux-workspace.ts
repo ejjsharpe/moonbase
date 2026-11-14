@@ -1,8 +1,8 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { decodeEditorRecovery } from '@moonbase/contracts/workspace-schema';
 import { readOwn } from '../editor/record.ts';
-import { Effect, Layer, Queue, Stream } from 'effect';
-import { WorkspaceService, type WorkspaceServiceShape } from '@moonbase/contracts/services';
+import { Effect, Queue, Stream } from 'effect';
+import { snapshotWorkspaceLayer, type SnapshotWorkspace } from './faux-workspace-layer.ts';
 import {
   ApplicationError,
   emptyRecovery,
@@ -323,12 +323,7 @@ export function fauxWorkspace(seeds: Seed[]) {
           ? error
           : new ApplicationError({ code: 'Unavailable', message: String(error) }),
     });
-  const editsUnsupported = () =>
-    new ApplicationError({
-      code: 'Incompatible',
-      message: 'The faux workspace has no recovery edits.',
-    });
-  const service: WorkspaceServiceShape = {
+  const service: SnapshotWorkspace = {
     openCheckout: ({ root }) =>
       call(
         'openCheckout',
@@ -821,12 +816,6 @@ export function fauxWorkspace(seeds: Seed[]) {
           fail('Invalid recovery publication identity.');
         return publications.get(JSON.stringify([clientId, requestId]))?.receipt ?? null;
       }),
-    // The editor publishes whole snapshots until CL-13 moves it to the recovery store's edits.
-    openTab: () => Effect.fail(editsUnsupported()),
-    closeTab: () => Effect.fail(editsUnsupported()),
-    updateDraft: () => Effect.fail(editsUnsupported()),
-    updateLayout: () => Effect.fail(editsUnsupported()),
-    watchRecovery: () => Stream.fail(editsUnsupported()),
     watch: ({ checkout }) =>
       Stream.unwrap(
         Effect.gen(function* () {
@@ -858,7 +847,7 @@ export function fauxWorkspace(seeds: Seed[]) {
       ),
   };
   return {
-    layer: Layer.succeed(WorkspaceService, service),
+    layer: snapshotWorkspaceLayer(service),
     stats,
     externalWrite(target: FileTarget, text: string) {
       read(target);

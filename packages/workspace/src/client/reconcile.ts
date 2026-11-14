@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import type { RecoveryState } from '@moonbase/contracts/recovery';
+import type { RecoveryBuffer, RecoveryState } from '@moonbase/contracts/recovery';
 import { isCheckoutPath } from '@moonbase/contracts/workspace-schema';
 import { same } from '../validation.ts';
 import type { OperationRecord } from './client-schema.ts';
@@ -9,15 +9,16 @@ import type { OperationRecord } from './client-schema.ts';
 /**
  * Applies completed moves, copies and Trash to one recovery. A move re-paths the buffers it
  * moves, so their tabs, views and drafts follow; Trash leaves every buffer where it was; a copy
- * gives each draft it copies a buffer of its own. A buffer whose destination another buffer
- * already holds stays where it was; the checkouts where that left a draft behind are returned.
+ * gives each draft it copies a buffer of its own. A clean buffer open at a destination gives way
+ * to what arrives there; one with a draft holds it, so neither draft is lost and the arriving one
+ * stays where it was. The drafts left behind are returned, per checkout.
  */
 export function reconcile(
   state: RecoveryState,
   records: OperationRecord[],
   mintId: () => string = randomUUID,
 ) {
-  const collisions = new Map<string, CheckoutTarget>();
+  const collisions = new Map<string, { checkout: CheckoutTarget; paths: string[] }>();
   for (const record of records) {
     const checkout = record.input.checkout;
     if (!state.checkouts.some((c) => same(c, checkout))) continue;
@@ -34,28 +35,35 @@ export function reconcile(
       const matches = (target: { checkout: CheckoutTarget; path: string }) =>
         inCheckout(target) && isPathAtOrInside(target.path, item.source);
       const move = (p: string) => destination + p.slice(item.source.length);
-      const occupied = (path: string) =>
-        state.buffers.some((b) => inCheckout(b.target) && b.target.path === path);
+      const occupant = (path: string, except?: RecoveryBuffer) =>
+        state.buffers.find((b) => b !== except && inCheckout(b.target) && b.target.path === path);
       if (kind === 'copy') {
         // oxlint-disable-next-line no-useless-spread -- Copies append to state.buffers; visit only the originals.
-        for (const buffer of [...state.buffers])
-          if (buffer.draft && matches(buffer.target) && !occupied(move(buffer.target.path)))
-            state.buffers.push({
-              id: mintId(),
-              target: { ...buffer.target, path: move(buffer.target.path) },
-              draft: structuredClone(buffer.draft),
-            });
+        for (const buffer of [...state.buffers]) {
+          if (!buffer.draft || !matches(buffer.target)) continue;
+          const path = move(buffer.target.path),
+            held = occupant(path);
+          if (held?.draft) continue;
+          const draft = structuredClone(buffer.draft);
+          if (held) held.draft = draft;
+          else state.buffers.push({ id: mintId(), target: { ...buffer.target, path }, draft });
+        }
         continue;
       }
-      for (const buffer of state.buffers) {
-        if (!matches(buffer.target)) continue;
-        const moved = move(buffer.target.path);
-        // Another buffer already holds the destination: neither is dropped, and a draft left
-        // behind marks the checkout's history so it is reported.
-        if (occupied(moved)) {
-          if (buffer.draft) collisions.set(checkout.checkoutId, checkout);
+      // oxlint-disable-next-line no-useless-spread -- A buffer that gives way leaves state.buffers.
+      for (const buffer of [...state.buffers]) {
+        if (!state.buffers.includes(buffer) || !matches(buffer.target)) continue;
+        const moved = move(buffer.target.path),
+          held = occupant(moved, buffer);
+        if (held?.draft) {
+          if (buffer.draft) {
+            const stranded = collisions.get(checkout.checkoutId) ?? { checkout, paths: [] };
+            stranded.paths.push(buffer.target.path);
+            collisions.set(checkout.checkoutId, stranded);
+          }
           continue;
         }
+        if (held) giveWay(state, held, buffer);
         buffer.target = { ...buffer.target, path: moved };
       }
       state.recentFiles = state.recentFiles.map((t) =>
@@ -74,4 +82,19 @@ export function reconcile(
     }
   }
   return collisions;
+}
+
+/** Removes a clean buffer for the one arriving at its file, which takes over its tab and view. */
+function giveWay(state: RecoveryState, leaving: RecoveryBuffer, arriving: RecoveryBuffer) {
+  state.buffers.splice(state.buffers.indexOf(leaving), 1);
+  const view = state.views[leaving.target.checkout.checkoutId];
+  if (!view) return;
+  const swap = (id: string) => (id === leaving.id ? arriving.id : id);
+  view.tabs = [...new Set(view.tabs.map(swap))];
+  if (view.active !== null) view.active = swap(view.active);
+  if (view.preview !== null) view.preview = swap(view.preview);
+  for (const memory of [view.fileViews, view.positions] as Record<string, unknown>[]) {
+    if (leaving.id in memory && !(arriving.id in memory)) memory[arriving.id] = memory[leaving.id];
+    delete memory[leaving.id];
+  }
 }

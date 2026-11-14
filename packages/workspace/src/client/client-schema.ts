@@ -131,9 +131,15 @@ const PublicationRecordSchema = struct({
   receipt: RecoveryPublicationSchema,
 });
 export const FeedCursorSchema = struct({ sequence: natural, epoch: Schema.String });
-export const FeedGapSchema = struct({ hostId: Schema.String, checkoutId: Schema.String });
+export const FeedGapSchema = struct({
+  hostId: Schema.String,
+  checkoutId: Schema.String,
+  /** Drafts that stayed at their path when their file moved onto another draft. */
+  stranded: optional(array(Schema.String)),
+});
 export type OperationRecord = typeof OperationRecordSchema.Type;
 export type FeedCursor = typeof FeedCursorSchema.Type;
+export type FeedGap = typeof FeedGapSchema.Type;
 export const clientDecoders = {
   ...strictDecoders({
     publications: natural,
