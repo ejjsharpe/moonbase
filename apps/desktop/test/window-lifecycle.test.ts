@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
-import type { App, Dialog, IpcMain } from 'electron';
+import type { App, Dialog } from 'electron';
+import { ApplicationError } from '@moonbase/contracts/errors';
+import type { WindowAction } from '../src/ipc/window-rpcs.ts';
 import { installWindowLifecycle } from '../src/main/window-lifecycle.ts';
-import { channels } from '../src/ipc/wire.ts';
 import { createTestWindow } from './fixtures/main-window.ts';
 
 function fixture() {
   const f = createTestWindow(),
-    ipc = new EventEmitter(),
-    appEvents = new EventEmitter();
+    appEvents = new EventEmitter(),
+    actions: WindowAction[] = [];
   const released: string[] = [],
     prompts: string[] = [];
   let failChat = false;
@@ -25,20 +26,19 @@ function fixture() {
   const lifecycle = installWindowLifecycle({
     app,
     window: f.window,
-    ipcMain: ipc as IpcMain,
-    requireTrusted: f.requireTrusted,
+    sendAction: (action) => void actions.push(action),
     dialog: {
       showMessageBox: async (_window: unknown, options: { message: string }) => {
         prompts.push(options.message);
         return { response: 1, checkboxChecked: false };
       },
     } as Pick<Dialog, 'showMessageBox'>,
-    editorSession: {
+    ipc: {
       releaseDocument: async () => {
-        released.push('editor-document');
+        released.push('ipc-document');
       },
       dispose: async () => {
-        released.push('editor');
+        released.push('ipc');
       },
     },
     chatBackends: {
@@ -62,15 +62,14 @@ function fixture() {
       released.push('transport');
     },
   });
-  const ready = (event = f.event) => ipc.emit(channels.ready, event);
-  const ack = async (value: unknown, event = f.event) => {
-    await ipc.listeners(channels.quit)[0]!(event, value);
-  };
-  const last = () => f.actions.at(-1)!;
+  const ready = () => lifecycle.markReady();
+  const ack = (answer: { id: string; consent: boolean; cleanupError?: ApplicationError }) =>
+    lifecycle.answerQuit(answer);
+  const last = () => actions.at(-1) as Extract<WindowAction, { id: string }>;
   const replace = () => f.contents.emit('did-frame-navigate', {}, '', 200, 'OK', true);
   return {
     ...f,
-    ipc,
+    actions,
     appEvents,
     lifecycle,
     released,
@@ -92,21 +91,17 @@ for (const stage of ['preserve', 'dispose'])
   test(`replacement during ${stage} requires fresh ready, preservation and disposal IDs`, async () => {
     const f = fixture();
     f.lifecycle.requestQuit();
-    for (const event of f.badEvents()) f.ready(event);
+    // Quit waits for a document ready to answer it.
     assert.equal(f.actions.length, 0);
     f.ready();
     const preserve = f.last().id;
-    for (const event of f.badEvents()) await f.ack({ id: preserve, consent: false }, event);
-    f.contents.mainFrame.url += '?asset=1';
-    await f.ack({ id: preserve, consent: false });
-    f.contents.mainFrame.url = 'moonbase://editor/index.html';
     assert.equal(f.lifecycle.isQuitting(), true);
     f.lifecycle.requestQuit();
     assert.equal(f.actions.length, 1);
     if (stage === 'dispose') await f.ack({ id: preserve, consent: true });
     const obsolete = f.last().id;
     f.replace();
-    assert.deepEqual(f.released, ['editor-document', 'chat-document']);
+    assert.deepEqual(f.released, ['ipc-document', 'chat-document']);
     await f.ack({ id: obsolete, consent: true });
     assert.equal(f.released.includes('root'), false);
     f.ready();
@@ -118,17 +113,11 @@ for (const stage of ['preserve', 'dispose'])
     await f.ack({ id: fresh, consent: true });
     const dispose = f.last().id;
     assert.equal(f.last().action, 'dispose');
-    for (const event of f.badEvents()) await f.ack({ id: dispose, consent: true }, event);
-    for (const cleanupError of [
-      { code: 'Persistence', message: 'x'.repeat(513) },
-      { code: 'Unknown', message: 'bad' },
-      { code: 'Persistence', message: 'bad', private: true },
-    ])
-      await f.ack({ id: dispose, consent: true, cleanupError });
+    // Disposal cannot return to the live workbench.
     await f.ack({ id: dispose, consent: false });
     assert.equal(f.released.includes('root'), false);
     await f.ack({ id: dispose, consent: true });
-    assert.deepEqual(f.released.slice(-5), ['chat', 'editor', 'root', 'transport', 'quit']);
+    assert.deepEqual(f.released.slice(-5), ['chat', 'ipc', 'root', 'transport', 'quit']);
   });
 
 test('Quit veto returns to the workbench; actual cleanup is awaited and a failing release cannot skip later owners', async () => {
@@ -146,8 +135,6 @@ test('Quit veto returns to the workbench; actual cleanup is awaited and a failin
     }),
   );
   f.failChat();
-  const unrelated = () => {};
-  f.ipc.on(channels.ready, unrelated);
   const finishing = f.ack({ id: f.last().id, consent: true });
   await Promise.resolve();
   assert.deepEqual(f.released, ['chat']);
@@ -155,10 +142,8 @@ test('Quit veto returns to the workbench; actual cleanup is awaited and a failin
   assert.equal(f.actions.length, 3);
   release();
   await finishing;
-  assert.deepEqual(f.released, ['chat', 'editor', 'root', 'transport', 'exit:1']);
+  assert.deepEqual(f.released, ['chat', 'ipc', 'root', 'transport', 'exit:1']);
   assert(f.prompts.includes('Moonbase could not finish cleanup.'));
-  assert.deepEqual(f.ipc.listeners(channels.ready), [unrelated]);
-  assert.equal(f.ipc.listenerCount(channels.quit), 0);
 });
 
 test('close hides; activation shows; Quit asks nothing about local agents and releases only clients', async () => {
@@ -181,7 +166,7 @@ test('close hides; activation shows; Quit asks nothing about local agents and re
   assert.equal(f.last().action, 'dispose');
   await f.ack({ id: f.last().id, consent: true });
   assert.deepEqual(f.prompts, []);
-  assert.deepEqual(f.released, ['chat', 'editor', 'root', 'transport', 'quit']);
+  assert.deepEqual(f.released, ['chat', 'ipc', 'root', 'transport', 'quit']);
 });
 
 test('a crashed renderer quits on request without asking about local agents', async () => {
@@ -191,7 +176,7 @@ test('a crashed renderer quits on request without asking about local agents', as
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(f.prompts, ['The workbench stopped unexpectedly.']);
-  assert.deepEqual(f.released.slice(-5), ['chat', 'editor', 'root', 'transport', 'quit']);
+  assert.deepEqual(f.released.slice(-5), ['chat', 'ipc', 'root', 'transport', 'quit']);
 });
 
 test('Quit retains a held document cleanup failure before releasing the root', async () => {
@@ -210,5 +195,26 @@ test('Quit retains a held document cleanup failure before releasing the root', a
   assert.deepEqual(f.released, []);
   reject(Error('old document failed'));
   await closing;
-  assert.deepEqual(f.released, ['chat', 'editor', 'root', 'transport', 'exit:1']);
+  assert.deepEqual(f.released, ['chat', 'ipc', 'root', 'transport', 'exit:1']);
+});
+
+test('a ready document hears of earlier cleanup failures, and a disposal’s own failure quits with code 1', async () => {
+  const f = fixture();
+  f.lifecycle.reportCleanup(
+    Promise.reject(new ApplicationError({ code: 'Persistence', message: 'Old' })),
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  f.ready();
+  assert.deepEqual(f.actions[0], {
+    action: 'cleanup-error',
+    error: new ApplicationError({ code: 'Persistence', message: 'Old' }),
+  });
+  f.lifecycle.requestQuit();
+  await f.ack({ id: f.last().id, consent: true });
+  await f.ack({
+    id: f.last().id,
+    consent: true,
+    cleanupError: new ApplicationError({ code: 'Persistence', message: 'Disposal failed' }),
+  });
+  assert.equal(f.released.at(-1), 'exit:1');
 });

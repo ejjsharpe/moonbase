@@ -1,16 +1,19 @@
-// Test-only Electron entry. Public ipcMain registration wraps delivery, never workspace effects.
-import { app, ipcMain } from 'electron';
+// Test-only Electron entry. It sees each IPC request main serves (main's `moonbaseTestIpc` hook,
+// unpackaged builds only) and can delay or replace its outcome, never workspace effects.
+import { app } from 'electron';
 import { writeFileSync } from 'node:fs';
 import { installFauxDaemon } from './faux-daemon.mjs';
 // Local chat runs in the faux daemon, never the real one or the Keychain.
 installFauxDaemon();
-const register = ipcMain.handle.bind(ipcMain);
 const control = {
   startupFailure: process.env.MOONBASE_TEST_STARTUP_FAILURE ?? null,
+  /** Every request main received: its procedure, payload and sequence number. */
   calls: [],
-  chatCalls: [],
-  cancelIds: [],
-  chatCancelIds: [],
+  /** The sequence numbers of requests running now, to the requests. */
+  active: new Map(),
+  /** Sequence numbers of requests cancelled before they settled, as by their document going. */
+  interrupted: [],
+  sequence: 0,
   results: [],
   fault: null,
   noStatus: false,
@@ -22,108 +25,59 @@ const control = {
     this.released?.();
     this.released = null;
   },
-  cancels: 0,
-  holdChatCancel: false,
-  chatCancelHeld: false,
-  failChatCancel: false,
-  chatCancelGate: null,
-  chatCancelRelease: null,
-  releaseChatCancel() {
-    this.holdChatCancel = false;
-    this.chatCancelRelease?.();
-  },
 };
 globalThis.desktopTest = control;
-ipcMain.handle = (name, listener) =>
-  register(name, async (event, input) => {
-    if (name === 'moonbase:cancel') {
-      control.cancels++;
-      control.cancelIds.push(input);
-    }
-    if (name === 'moonbase-chat:cancel') {
-      control.chatCancelIds.push(input.id);
-      if (control.holdChatCancel) {
-        control.chatCancelHeld = true;
-        control.chatCancelGate ??= new Promise((resolve) => {
-          control.chatCancelRelease = resolve;
-        });
-        await control.chatCancelGate;
-      }
-      const reply = await listener(event, input);
-      if (control.failChatCancel)
-        return {
-          ok: false,
-          error: { code: 'Persistence', message: 'Controlled cancellation acknowledgment failure' },
-        };
-      return reply;
-    }
-    if (name === 'moonbase-chat:call') {
-      control.chatCalls.push(structuredClone(input));
-      if (control.startupFailure === 'chat-context' && input?.kind === 'context')
-        return {
-          ok: false,
-          error: { code: 'Unavailable', message: 'Controlled chat context initialization failure' },
-        };
-    }
-    if (name !== 'moonbase:call') return listener(event, input);
-    control.calls.push(structuredClone(input));
-    if (control.startupFailure === 'editor' && input?.input?.operation === 'loadRecovery')
-      return {
-        ok: false,
-        error: {
-          code: 'Persistence',
-          message: 'Controlled editor recovery initialization failure',
-        },
-      };
-    if (control.restoreOn === input?.input?.operation) {
-      control.outage = null;
-      control.restoreOn = null;
-    }
-    if (control.outage === input?.input?.operation)
-      return {
-        ok: false,
-        error: { code: 'Unavailable', message: 'Controlled observation transport outage' },
-      };
-    const reply = await listener(event, input);
-    const operation = input?.input?.operation;
-    control.results.push({ operation, reply: structuredClone(reply) });
-    if (control.held === operation) {
-      control.held = 'waiting';
-      await new Promise((resolve) => {
-        control.released = resolve;
-      });
-    }
-    if (
-      (control.fault === operation ||
-        (control.fault === 'final-publication' &&
-          operation === 'persistRecovery' &&
-          input.input.input.state.drafts.length === 0)) &&
-      reply.ok
-    ) {
-      if (control.fault === 'final-publication') control.noStatus = true;
-      control.fault = null;
-      return {
-        ok: false,
-        error: { code: 'Uncertain', message: 'Controlled committed reply loss' },
-      };
-    }
-    if (control.noStatus && operation === 'getRecoveryPublication')
-      return {
-        ok: false,
-        error: { code: 'Unavailable', message: 'Controlled exact-status outage' },
-      };
-    return reply;
-  });
+const failure = (code, message) => ({ ok: false, error: { code, message } });
+globalThis.moonbaseTestIpc = async (request, proceed) => {
+  const { tag, payload } = request;
+  const seq = control.sequence++;
+  const seen = { tag, payload: structuredClone(payload), seq };
+  control.calls.push(seen);
+  if (control.startupFailure === 'chat-context' && tag === 'getChatContext')
+    return failure('Unavailable', 'Controlled chat context initialization failure');
+  if (control.startupFailure === 'editor' && tag === 'loadRecovery')
+    return failure('Persistence', 'Controlled editor recovery initialization failure');
+  if (control.restoreOn === tag) {
+    control.outage = null;
+    control.restoreOn = null;
+  }
+  if (control.outage === tag)
+    return failure('Unavailable', 'Controlled observation transport outage');
+  control.active.set(seq, seen);
+  let reply;
+  try {
+    reply = await proceed();
+  } finally {
+    control.active.delete(seq);
+  }
+  if (reply.interrupted) control.interrupted.push(seq);
+  control.results.push({ operation: tag, reply: { ok: reply.ok, value: reply.value } });
+  if (control.held === tag) {
+    control.held = 'waiting';
+    await new Promise((resolve) => {
+      control.released = resolve;
+    });
+  }
+  if (
+    (control.fault === tag ||
+      (control.fault === 'final-publication' &&
+        tag === 'persistRecovery' &&
+        payload.state.drafts.length === 0)) &&
+    reply.ok
+  ) {
+    if (control.fault === 'final-publication') control.noStatus = true;
+    control.fault = null;
+    return failure('Uncertain', 'Controlled committed reply loss');
+  }
+  if (control.noStatus && tag === 'getRecoveryPublication')
+    return failure('Unavailable', 'Controlled exact-status outage');
+  return reply;
+};
 app.on('will-quit', () => {
   if (process.env.MOONBASE_TEST_REPORT)
     writeFileSync(
       process.env.MOONBASE_TEST_REPORT,
-      JSON.stringify({
-        resources: process.getActiveResourcesInfo(),
-        cancels: control.cancels,
-        cancelListeners: ipcMain.listenerCount('moonbase:cancel'),
-        chatCancelListeners: ipcMain.listenerCount('moonbase-chat:cancel'),
-      }),
+      JSON.stringify({ resources: process.getActiveResourcesInfo(), active: control.active.size }),
     );
 });
 if (process.env.MOONBASE_TEST_QUIT_EARLY)

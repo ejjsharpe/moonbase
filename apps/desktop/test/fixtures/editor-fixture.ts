@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { test, expect, type Page, type ElectronApplication } from '@playwright/test';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { callMain, editorClientId } from './window-ipc-fixture.ts';
 
 /** Runs one of the explorer's "…" menu actions: New File…, Go to File…, Refresh and so on. */
 export async function explorerAction(page: Page, name: string) {
@@ -41,19 +42,11 @@ export async function expectSaveEnabled(editor: Page | Locator, enabled: boolean
 }
 
 export const filenameCases = ['__proto__', 'constructor', 'toString', 'hasOwnProperty'];
-export const recoveryState = async (page: Page): Promise<RecoveryLoad> =>
-  JSON.parse(
-    await page.evaluate(async () => {
-      const reply = await window.moonbase.call(
-        'command',
-        { operation: 'loadRecovery', input: { clientId: window.moonbase.clientId } },
-        crypto.randomUUID(),
-      );
-      if (!reply.ok) throw Error(reply.error.message);
-      // Preserve own __proto__ keys across Playwright's evaluation-result serializer.
-      return JSON.stringify(reply.value);
-    }),
-  );
+export const recoveryState = async (page: Page): Promise<RecoveryLoad> => {
+  const reply = await callMain(page, 'loadRecovery', { clientId: editorClientId });
+  if (!reply.ok) throw Error(JSON.stringify(reply.error));
+  return reply.value as RecoveryLoad;
+};
 const prototypes = (page: Page) =>
   page.evaluate(() =>
     JSON.stringify(

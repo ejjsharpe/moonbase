@@ -8,8 +8,29 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { ApplicationError } from '@moonbase/contracts/errors';
+import type { ChatSession } from '@moonbase/contracts/chat';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { ChatIpcSession } from '../src/main/chat/session.ts';
+import { makeIpcFixture, noChat } from './fixtures/ipc-fixture.ts';
+
+/** Local chat over desktop IPC, as the renderer sends it, to `runtime`'s chat. */
+const overIpc = (runtime: ManagedRuntime.ManagedRuntime<never, never>, context: ChatSession) => {
+  const session = new ChatIpcSession(
+    runtime as never,
+    makeChatClient(runtime as never),
+    { mode: 'local' },
+    context,
+  );
+  return makeIpcFixture({
+    chat: {
+      backends: {
+        ...noChat,
+        getTargets: () => [{ id: 'local', label: 'Local', mode: 'local' }],
+        getSession: () => session,
+      },
+    },
+  });
+};
 
 test('desktop recovers an exact committed Create before renewed folder approval, while new Create still requires approval', async (t) => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-local-retry-'))),
@@ -36,15 +57,9 @@ test('desktop recovers an exact committed Create before renewed folder approval,
   };
   let runtime = ManagedRuntime.make(LocalPiRuntimeLive(config));
   await makeChatClient(runtime).command('getChatHost', { host: context.host });
-  let owner = new ChatIpcSession(
-    runtime,
-    makeChatClient(runtime),
-    { mode: 'local' },
-    context,
-    () => {},
-  );
+  let ipc = await overIpc(runtime as never, context);
   t.after(async () => {
-    await owner.dispose();
+    await ipc.dispose();
     await runtime.dispose();
     await rm(root, { recursive: true, force: true });
   });
@@ -54,26 +69,21 @@ test('desktop recovers an exact committed Create before renewed folder approval,
     title: 'Committed',
     settings: { cwd, model: { provider: faux.provider.id, modelId: faux.getModel().id } },
   };
-  const committed = await owner.call('chat', 'createChat', input, 'first');
-  assert(committed.ok);
+  const committed = await ipc.target('local').chat.command('createChat', input);
   assert.equal(validations, 1);
-  await owner.dispose();
+  await ipc.dispose();
   await runtime.dispose();
   await rm(cwd, { recursive: true });
   approved = false;
   runtime = ManagedRuntime.make(LocalPiRuntimeLive(config));
   await makeChatClient(runtime).command('getChatHost', { host: context.host });
-  owner = new ChatIpcSession(
-    runtime,
-    makeChatClient(runtime),
-    { mode: 'local' },
-    context,
-    () => {},
-  );
-  assert.deepEqual(await owner.call('chat', 'createChat', input, 'retry'), committed);
+  ipc = await overIpc(runtime as never, context);
+  assert.deepEqual(await ipc.target('local').chat.command('createChat', input), committed);
   assert.equal(validations, 1);
   await mkdir(cwd);
-  const denied = await owner.call('chat', 'createChat', { ...input, requestId: 'new' }, 'new');
-  assert(!denied.ok && denied.error.code === 'Unauthorized');
+  await assert.rejects(
+    ipc.target('local').chat.command('createChat', { ...input, requestId: 'new' }),
+    { code: 'Unauthorized' },
+  );
   assert.equal(validations, 2);
 });

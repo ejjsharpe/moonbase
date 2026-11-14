@@ -13,6 +13,7 @@ import { controlledHostFixture, until } from '../../../test/chat/controlled-host
 import { createImageRuntime, retainedImage } from './fixtures/stored-image-fixture.ts';
 import { ChatIpcSession } from '../src/main/chat/session.ts';
 import { respondTranscriptImage } from '../src/main/chat/transcript-native.ts';
+import { makeIpcFixture, noChat } from './fixtures/ipc-fixture.ts';
 
 const ipcRuntime = ManagedRuntime.make(Layer.empty);
 after(() => ipcRuntime.dispose());
@@ -81,26 +82,28 @@ for (const mode of ['local', 'remote'] as const)
           return reply;
         },
       };
-      const ipc = new ChatIpcSession(ipcRuntime, reader, { mode: 'local' }, session, () => {});
-      let id = 0;
+      const ipc = new ChatIpcSession(ipcRuntime, reader, { mode: 'local' }, session);
+      const desktop = await makeIpcFixture({
+        chat: {
+          backends: {
+            ...noChat,
+            getTargets: () => [{ id: 'local', label: 'Local', mode: 'local' }],
+            getSession: () => ipc,
+          },
+        },
+      });
       const serve = async (source: ChatTranscriptSource, part: ChatTranscriptPart) => {
-        const reply = await ipc
-          .call(
-            'transcript',
-            'image',
-            {
-              source,
-              selection: { partId: part.partId, bytes: part.bytes, revision: part.revision },
-              mimeType: part.mimeType,
-            },
-            `image-${id++}`,
-          )
-          .catch((error: { code: string }) => ({ ok: false as const, error }));
-        if (!reply.ok) return reply.error.code;
-        const response = await respondTranscriptImage(
-          new Request(reply.value as string),
-          'csp',
-          (token) => ipc.findImage(token),
+        const url = await desktop
+          .target('local')
+          .transcript.imageUrl({
+            source,
+            selection: { partId: part.partId, bytes: part.bytes, revision: part.revision },
+            mimeType: part.mimeType as 'image/png',
+          })
+          .catch((error: { code: string }) => error.code);
+        if (!url.startsWith('moonbase:')) return url;
+        const response = await respondTranscriptImage(new Request(url), 'csp', (token) =>
+          ipc.findImage(token),
         );
         return response.ok ? Buffer.from(await response.arrayBuffer()) : response.status;
       };
@@ -128,8 +131,8 @@ for (const mode of ['local', 'remote'] as const)
       // A truncated PNG keeps its signature, so Chromium's decoder reports it; HTML is refused here.
       assert.deepEqual(await serve(transcript.source, images[1]!), retainedImage.subarray(0, -1));
       assert.equal(await serve(transcript.source, images[2]!), 415);
+      await desktop.dispose();
       await ipc.dispose();
-      assert.equal(ipc.count, 0);
     } finally {
       if (root && connectionId)
         await root.connection.command('disconnect', { connectionId }).catch(() => {});

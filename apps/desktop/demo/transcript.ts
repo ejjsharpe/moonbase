@@ -8,7 +8,7 @@ import type {
   ChatTranscript,
 } from '@moonbase/contracts/chat';
 import { chatLiveTextBytes } from '@moonbase/contracts/chat';
-import type { TranscriptNative } from '../src/ipc/chat-wire.ts';
+import type { TranscriptNative } from '../src/renderer/chat/transcript/transcript-actions.ts';
 import type { chatCapabilities } from './chat.ts';
 import { parseTranscriptMarkdown } from '../src/ipc/transcript-markdown.ts';
 import { markdownWork } from '../src/renderer/chat/transcript/markdown-model.ts';

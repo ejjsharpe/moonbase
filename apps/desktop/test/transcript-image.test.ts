@@ -7,6 +7,8 @@ import type { ChatClient, ChatTranscriptSource } from '@moonbase/contracts/chat'
 import type { ConnectionClient } from '@moonbase/contracts/connection';
 import { ChatIpcSession, transcriptImageTokenLifetime } from '../src/main/chat/session.ts';
 import { respondTranscriptImage } from '../src/main/chat/transcript-native.ts';
+import type { TranscriptImage } from '../src/ipc/chat-rpcs.ts';
+import { makeIpcFixture, noChat } from './fixtures/ipc-fixture.ts';
 
 const runtime = ManagedRuntime.make(Layer.empty);
 after(() => runtime.dispose());
@@ -19,14 +21,17 @@ const source: ChatTranscriptSource = {
 const png = readFileSync(new URL('./fixtures/images/checker.png', import.meta.url));
 const jpeg = readFileSync(new URL('./fixtures/images/retained.jpg', import.meta.url));
 const csp = "default-src 'none'; img-src 'self' data:";
+const snapshot = {
+  profile: { id: 'host', label: 'Host', destination: 'host', expected: context.host },
+  state: 'disconnected',
+  connectionId: null,
+};
 
 function fixture(
   bytes: Buffer,
   options: {
     perf?: { now(): number };
     connection?: ConnectionClient;
-    /** Holds unrelated chat commands so they occupy request capacity. */
-    commands?: Promise<void>;
   } = {},
 ) {
   const selection = {
@@ -41,10 +46,6 @@ function fixture(
   const chat: ChatClient = {
     watchChatList: () => async () => {},
     async command(operation, input, commandOptions) {
-      if (operation === 'getChat') {
-        await options.commands;
-        return null as never;
-      }
       assert.equal(operation, 'getChatTranscriptContent');
       reads++;
       signals.push(commandOptions!.signal!);
@@ -69,22 +70,25 @@ function fixture(
     chat,
     options.connection ? { mode: 'remote', connection: options.connection } : { mode: 'local' },
     context,
-    () => {},
-    {
-      perf: options.perf,
-    },
+    { perf: options.perf },
   );
-  let id = 0;
-  const issue = async (mimeType: string, value = selection) => {
-    const reply = await session.call(
-      'transcript',
-      'image',
-      { source, selection: value, mimeType },
-      `issue-${id++}`,
-    );
-    assert(reply.ok);
-    return reply.value as string;
-  };
+  const issue = async (mimeType: string, value = selection) =>
+    session.issueImage({
+      source,
+      selection: value,
+      mimeType: mimeType as TranscriptImage['mimeType'],
+    }) as string;
+  /** The session as the remote target of desktop IPC, for what reaches it as a request. */
+  const ipc = () =>
+    makeIpcFixture({
+      chat: {
+        backends: {
+          ...noChat,
+          getTargets: () => [{ id: 'remote', label: 'Host', mode: 'remote' }],
+          getSession: () => session,
+        },
+      },
+    });
   const serve = (url: string, signal?: AbortSignal, method = 'GET') =>
     respondTranscriptImage(new Request(url, { signal, method }), csp, (token) =>
       session.findImage(token),
@@ -92,6 +96,7 @@ function fixture(
   return {
     session,
     issue,
+    ipc,
     serve,
     selection,
     signals,
@@ -136,7 +141,7 @@ test('unknown, revoked and wrong-host image URLs grant nothing', async () => {
     assert.equal((await f.serve(url, undefined, method)).status, 405);
   await f.session.dispose();
   assert.equal((await f.serve(url)).status, 404);
-  await assert.rejects(f.issue('image/png'), { code: 'InvalidInput' });
+  assert.equal(await f.issue('image/png'), undefined, 'a disposed session issues nothing');
   assert.equal(f.reads, 0);
 });
 
@@ -161,23 +166,25 @@ test('connecting or disconnecting revokes issued tokens', async () => {
   const connection: ConnectionClient = {
     command: async (operation) => {
       operations.push(operation);
-      return (operation === 'disconnect' ? undefined : { state: 'disconnected' }) as never;
+      return (operation === 'disconnect' ? undefined : snapshot) as never;
     },
     watch: () => async () => {},
   };
   const f = fixture(png, { connection });
+  const ipc = await f.ipc();
   const url = await f.issue('image/png');
-  assert((await f.session.call('connection', 'getConnection', {}, 'status')).ok);
+  assert((await ipc.call('getConnection', { input: {} })).ok);
   assert.equal((await f.serve(url)).status, 200, 'reading status keeps tokens');
   for (const [operation, input] of [
     ['disconnect', { connectionId: 'connection' }],
     ['connect', { profileId: 'profile' }],
   ] as const) {
     const issued = await f.issue('image/png');
-    assert((await f.session.call('connection', operation, input, operation)).ok);
+    await ipc.call(operation, { input });
     assert.equal((await f.serve(issued)).status, 404);
   }
   assert.deepEqual(operations, ['getConnection', 'disconnect', 'connect']);
+  await ipc.dispose();
   await f.session.dispose();
 });
 
@@ -188,18 +195,20 @@ test('a token issued while connect is held is revoked once connect settles', asy
     command: async () => {
       entered.resolve();
       await gate.promise;
-      return { state: 'connected' } as never;
+      return snapshot as never;
     },
     watch: () => async () => {},
   };
   const f = fixture(png, { connection });
-  const connecting = f.session.call('connection', 'connect', { profileId: 'profile' }, 'connect');
+  const ipc = await f.ipc();
+  const connecting = ipc.call('connect', { input: { profileId: 'profile' } });
   await entered.promise;
   const issued = await f.issue('image/png');
   gate.resolve();
-  assert((await connecting).ok);
+  await connecting;
   assert.equal((await f.serve(issued)).status, 404);
   assert.equal(f.reads, 0);
+  await ipc.dispose();
   await f.session.dispose();
 });
 
@@ -209,6 +218,7 @@ test('revocation fails queued reads and cancels in-flight ones', async () => {
     watch: () => async () => {},
   };
   const f = fixture(png, { connection });
+  const ipc = await f.ipc();
   const urls = await Promise.all(
     Array.from({ length: 7 }, (_, index) =>
       f.issue('image/png', { ...f.selection, partId: `image-${index}` }),
@@ -220,15 +230,13 @@ test('revocation fails queued reads and cancels in-flight ones', async () => {
   while (f.reads < 6) await new Promise((resolve) => setImmediate(resolve));
   const queued = f.serve(urls[6]!);
   await new Promise((resolve) => setImmediate(resolve));
-  assert(
-    (await f.session.call('connection', 'disconnect', { connectionId: 'c' }, 'disconnect')).ok,
-  );
+  await ipc.call('disconnect', { input: { connectionId: 'c' } });
   assert.equal((await queued).status, 502);
   assert(f.signals.every((signal) => signal.aborted));
   gate.resolve();
   for (const response of await Promise.all(running)) assert.equal(response.status, 502);
   assert.equal(f.reads, 6);
-  assert.equal(f.session.count, 0);
+  await ipc.dispose();
   await f.session.dispose();
 });
 
@@ -253,25 +261,6 @@ test('the image read queue is bounded and refuses overflow as busy', async () =>
   await f.session.dispose();
 });
 
-test('a read slot is released when the session request limit is full', async () => {
-  const commands = Promise.withResolvers<void>();
-  const f = fixture(png, { commands: commands.promise });
-  const url = await f.issue('image/png');
-  const target = { ...context, conversationId: 'chat' };
-  const held = Array.from({ length: 64 }, (_, index) =>
-    f.session.call('chat', 'getChat', { target }, `held-${index}`),
-  );
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(f.session.count, 64);
-  for (let attempt = 0; attempt < 7; attempt++)
-    assert.equal((await f.serve(url)).status, 502, 'Image reads are busy');
-  assert.equal(f.reads, 0);
-  commands.resolve();
-  for (const reply of await Promise.all(held)) assert(reply.ok);
-  assert.equal((await f.serve(url)).status, 200, 'every refused read released its slot');
-  await f.session.dispose();
-});
-
 test('reads beyond the concurrency limit queue instead of failing', async () => {
   const f = fixture(png);
   const urls = await Promise.all(
@@ -285,10 +274,8 @@ test('reads beyond the concurrency limit queue instead of failing', async () => 
   while (f.reads < 6) await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(f.reads, 6, 'two reads wait for a slot');
-  assert.equal(f.session.count, 6);
   gate.resolve();
   for (const response of await responses) assert.equal(response.status, 200);
-  assert.equal(f.session.count, 0);
   await f.session.dispose();
 });
 
@@ -312,7 +299,6 @@ test('an aborted queued read leaves without reading and frees no extra slot', as
   assert.equal(f.reads, 6, 'neither queued read started');
   gate.resolve();
   for (const response of await Promise.all([...running, later])) assert.equal(response.status, 200);
-  assert.equal(f.session.count, 0);
   await f.session.dispose();
 });
 
@@ -336,7 +322,6 @@ test('disposal fails queued reads and cancels in-flight ones', async () => {
   await disposing;
   assert.equal(f.reads, 6);
   assert(f.signals.every((signal) => signal.aborted));
-  assert.equal(f.session.count, 0);
 });
 
 test('the 256-token cap evicts the least recently requested binding', async () => {
@@ -354,30 +339,25 @@ test('the 256-token cap evicts the least recently requested binding', async () =
 
 test('issuance rejects SVG/HTML types and foreign authority before any read', async () => {
   const f = fixture(png);
+  const ipc = await f.ipc();
+  const request = (image: unknown) =>
+    ipc.call('getTranscriptImageUrl', { backendId: 'remote', image });
   for (const mimeType of ['image/svg+xml', 'text/html', 'image/gif'])
-    await assert.rejects(
-      f.session.call(
-        'transcript',
-        'image',
-        { source, selection: f.selection, mimeType },
-        `bad-${mimeType}`,
-      ),
-      { code: 'InvalidInput' },
-    );
-  await assert.rejects(
-    f.session.call(
-      'transcript',
-      'image',
-      {
-        source: { ...source, target: { ...source.target, actorId: 'foreign' } },
-        selection: f.selection,
-        mimeType: 'image/png',
-      },
-      'foreign',
-    ),
-    { code: 'Unauthorized' },
+    assert.equal((await request({ source, selection: f.selection, mimeType })).error?._tag, 'Die');
+  assert.deepEqual(
+    await request({
+      source: { ...source, target: { ...source.target, actorId: 'foreign' } },
+      selection: f.selection,
+      mimeType: 'image/png',
+    }),
+    { ok: false, error: { _tag: 'IpcAuthorityError', refusal: 'actor' } },
+  );
+  assert.match(
+    String((await request({ source, selection: f.selection, mimeType: 'image/png' })).value),
+    /^moonbase:/,
   );
   assert.equal(f.reads, 0);
+  await ipc.dispose();
   await f.session.dispose();
 });
 
@@ -407,7 +387,7 @@ test('sources over 4 MiB are refused without reading', async () => {
   await f.session.dispose();
 });
 
-test('a cancelled request aborts its read and releases the session request', async () => {
+test('a cancelled request aborts its read, and its token stays valid', async () => {
   const f = fixture(png);
   const url = await f.issue('image/png');
   const gate = Promise.withResolvers<void>();
@@ -415,13 +395,11 @@ test('a cancelled request aborts its read and releases the session request', asy
   const abort = new AbortController();
   const pending = f.serve(url, abort.signal);
   while (!f.reads) await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(f.session.count, 1);
   abort.abort();
   assert.equal(f.signals[0]!.aborted, true);
   // The response still joins the actual held IO before the request is released.
   gate.resolve();
   assert.equal((await pending).status, 502);
-  assert.equal(f.session.count, 0);
   f.hold(Promise.resolve());
   assert.equal((await f.serve(url)).status, 200, 'the token remains valid for a later request');
   await f.session.dispose();

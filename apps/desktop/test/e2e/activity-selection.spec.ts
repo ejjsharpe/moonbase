@@ -3,7 +3,8 @@ import { test, expect, type Page, type Locator } from '@playwright/test';
 import { Layer, ManagedRuntime } from 'effect';
 import type { ChatClient } from '@moonbase/contracts/chat';
 import { ChatIpcSession } from '../../src/main/chat/session.ts';
-import { browserTranscriptActions, type TranscriptCopy } from '../../src/ipc/chat-wire.ts';
+import type { TranscriptCopy } from '../../src/ipc/chat-rpcs.ts';
+import { makeIpcFixture, noChat } from '../fixtures/ipc-fixture.ts';
 
 async function open(page: Page) {
   await page.goto('/?local&design&transcript');
@@ -77,7 +78,7 @@ async function installCopy(page: Page) {
       };
     },
   };
-  const owner = new ChatIpcSession(runtime, client, { mode: 'local' }, context, () => {}, {
+  const owner = new ChatIpcSession(runtime, client, { mode: 'local' }, context, {
     transcript: {
       writeText: async (text) => {
         writes.push(text);
@@ -85,15 +86,17 @@ async function installCopy(page: Page) {
       openExternal: async () => {},
     },
   });
-  const actions = browserTranscriptActions(
-    {
-      context: async () => context,
-      call: (kind, operation, input, id) => owner.call(kind, operation, input, id),
-      cancel: (id) => owner.cancel(id),
-      events: () => () => {},
+  // Copy as the desktop renderer sends it: over IPC to main's session for this target.
+  const desktop = await makeIpcFixture({
+    chat: {
+      backends: {
+        ...noChat,
+        getTargets: () => [{ id: 'local', label: 'Local', mode: 'local' }],
+        getSession: () => owner,
+      },
     },
-    'local',
-  );
+  });
+  const actions = desktop.target('local').transcript;
   await page.exposeFunction('copySelectedBody', async (input: TranscriptCopy) => {
     inputs.push(input);
     await actions.copy(input);
@@ -108,6 +111,7 @@ async function installCopy(page: Page) {
     writes,
     inputs,
     dispose: async () => {
+      await desktop.dispose();
       await owner.dispose();
       await runtime.dispose();
     },

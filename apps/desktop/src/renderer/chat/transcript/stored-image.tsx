@@ -17,11 +17,8 @@ import { overlays } from '@moonbase/ui/overlays';
 import { workbench } from '@moonbase/ui/workbench';
 import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
 import type { ChatTranscriptPart, ChatTranscriptSource } from '@moonbase/contracts/chat';
-import {
-  maximumTranscriptImageBytes,
-  type TranscriptImage,
-  type TranscriptNative,
-} from '../../../ipc/chat-wire.ts';
+import { maximumTranscriptImageBytes, type TranscriptImage } from '../../../ipc/chat-rpcs.ts';
+import type { TranscriptNative } from './transcript-actions.ts';
 
 type ImageRequest = { source: ChatTranscriptSource; part: ChatTranscriptPart; key: string };
 type Viewer = ImageRequest & { trigger: HTMLElement };
@@ -158,14 +155,14 @@ function Picture({ request, thumbnail }: { request: ImageRequest; thumbnail: boo
   }>({ attempt });
   const issue = getImageIssue(part, native);
   useEffect(() => {
-    if (!enabled || issue) return;
+    if (!enabled || issue || !native) return;
     const job = new AbortController();
     const image: TranscriptImage = {
       source,
       selection: { partId: part.partId, bytes: part.bytes, revision: part.revision },
       mimeType: part.mimeType as TranscriptImage['mimeType'],
     };
-    native!.imageUrl(image, job.signal).then(
+    native.imageUrl(image, job.signal).then(
       // An unchanged element keeps its loaded size; React does not fire onLoad again.
       (url) =>
         setLoaded((previous) =>

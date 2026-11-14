@@ -1,3 +1,4 @@
+import { disconnectHost } from '../fixtures/window-ipc-fixture.ts';
 import {
   test,
   expect,
@@ -19,7 +20,6 @@ const transcriptRegion = (page: Page) =>
   page.getByRole('region', { name: 'Chat transcript', exact: true });
 
 type Control = {
-  calls: { kind: string; operation: string }[];
   copied: string[];
   beforeMain: boolean;
 };
@@ -115,26 +115,8 @@ async function cleanup(app: ElectronApplication | undefined, host?: Host) {
       await test.info().attach('failed-test-cleanup', {
         body: 'Normal journey did not finish; releasing the owned test connection before forced failure cleanup.',
       });
-      await app
-        .windows()[0]
-        ?.evaluate(async () => {
-          const reply = await window.moonbaseChat.call(
-            'connection',
-            'getConnection',
-            {},
-            crypto.randomUUID(),
-            'remote',
-          );
-          if (reply.ok && (reply.value as { connectionId: string | null }).connectionId)
-            await window.moonbaseChat.call(
-              'connection',
-              'disconnect',
-              { connectionId: (reply.value as { connectionId: string }).connectionId },
-              crypto.randomUUID(),
-              'remote',
-            );
-        })
-        .catch(() => {});
+      const window = app.windows()[0];
+      if (window) await disconnectHost(window).catch(() => {});
       await app.evaluate(({ app }) => app.exit(1));
       await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
     }

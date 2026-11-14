@@ -1,3 +1,4 @@
+import { callMain, disconnectHost, editorClientId } from '../fixtures/window-ipc-fixture.ts';
 import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
 import { saveFile, captureNative } from '../fixtures/editor-fixture.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
@@ -67,16 +68,11 @@ test('native Reload retains text painted before ordinary recovery debounce @pack
     if (!error.message.includes("reading 'getItemsByProvider'")) errors.push(error.message);
   });
   await app.context().tracing.start({ screenshots: true, snapshots: true, sources: true });
-  const recovery = () =>
-    page.evaluate(async () => {
-      const reply = await window.moonbase.call(
-        'command',
-        { operation: 'loadRecovery', input: { clientId: window.moonbase.clientId } },
-        crypto.randomUUID(),
-      );
-      if (!reply.ok) throw Error(reply.error.message);
-      return reply.value as RecoveryLoad;
-    });
+  const recovery = async () => {
+    const reply = await callMain(page, 'loadRecovery', { clientId: editorClientId });
+    if (!reply.ok) throw Error(JSON.stringify(reply.error));
+    return reply.value as RecoveryLoad;
+  };
   const reload = () =>
     app.evaluate(
       ({ BrowserWindow }) =>
@@ -127,18 +123,11 @@ test('native Reload retains text painted before ordinary recovery debounce @pack
         'new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))',
       );
     });
-    const before = await page.evaluate(async () => {
-      const persisted = await window.moonbase.call(
-        'command',
-        { operation: 'loadRecovery', input: { clientId: window.moonbase.clientId } },
-        crypto.randomUUID(),
-      );
-      return {
-        text: document.querySelector('.view-lines')?.textContent?.replace(/\u00a0/g, ' '),
-        elapsed: performance.now() - (window as unknown as { reloadInputAt: number }).reloadInputAt,
-        persisted,
-      };
-    });
+    const shown = await page.evaluate(() => ({
+      text: document.querySelector('.view-lines')?.textContent?.replace(/\u00a0/g, ' '),
+      elapsed: performance.now() - (window as unknown as { reloadInputAt: number }).reloadInputAt,
+    }));
+    const before = { ...shown, persisted: await recovery() };
     expect(before.text).toContain('fresh visible tail');
     expect(before.elapsed).toBeLessThan(150);
     const outcome = await reload();
@@ -187,28 +176,7 @@ test('native Reload retains text painted before ordinary recovery debounce @pack
         pids.add(pid);
       await app.context().tracing.stop({ path: test.info().outputPath('trace.zip') });
       // Fault teardown releases the optional public connection before intentional exit.
-      await page
-        .evaluate(async () => {
-          const bridge = (
-            window as unknown as {
-              moonbaseChat?: {
-                call(
-                  ...args: unknown[]
-                ): Promise<{ ok: boolean; value?: { connectionId?: string } }>;
-              };
-            }
-          ).moonbaseChat;
-          if (!bridge) return;
-          const state = await bridge.call('connection', 'getConnection', {}, crypto.randomUUID());
-          if (state.ok && state.value?.connectionId)
-            await bridge.call(
-              'connection',
-              'disconnect',
-              { connectionId: state.value.connectionId },
-              crypto.randomUUID(),
-            );
-        })
-        .catch(() => {});
+      await disconnectHost(page).catch(() => {});
       await app.evaluate(({ app }) => app.exit(0));
       await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
       for (const pid of pids)

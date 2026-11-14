@@ -1,5 +1,6 @@
 import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
 import { closeSettings, openSettings, selectRemoteChat } from '../fixtures/chat-fixture.ts';
+import { disconnectHost, getConnection } from '../fixtures/window-ipc-fixture.ts';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { fixture } from '../../../../test/chat/tool-fixture.ts';
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
@@ -120,10 +121,6 @@ for (const configured of [false, true])
     try {
       const page = await app.firstWindow();
       await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible();
-      expect(await page.evaluate(() => window.moonbase.chatConfigured())).toEqual({
-        ok: true,
-        value: true,
-      });
       await page
         .getByRole('tablist', { name: 'Workbench views', exact: true })
         .getByRole('tab', { name: 'Agents', exact: true })
@@ -139,12 +136,11 @@ for (const configured of [false, true])
         expect(stats.calls).toBe(0);
         expect(stats.tools).toBe(0);
         expect(stats.commands).toEqual(before!.commands);
-        const status = await page.evaluate(() =>
-          window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
-        );
-        expect(status.ok).toBe(true);
-        if (status.ok)
-          expect(status.value).toMatchObject({ state: 'disconnected', connectionId: null });
+        const status = await getConnection(page);
+        expect(status).toMatchObject({
+          ok: true,
+          value: { state: 'disconnected', connectionId: null },
+        });
         writeFileSync(
           test.info().outputPath('configured-no-connect.json'),
           JSON.stringify({ before, stats, status }, null, 2),
@@ -167,21 +163,7 @@ for (const configured of [false, true])
           app.getAppMetrics().map((value) => value.pid),
         ))
           pids.add(pid);
-        await app.windows()[0].evaluate(async () => {
-          const state = await window.moonbaseChat.call(
-            'connection',
-            'getConnection',
-            {},
-            crypto.randomUUID(),
-          );
-          if (state.ok && (state.value as { connectionId?: string }).connectionId)
-            await window.moonbaseChat.call(
-              'connection',
-              'disconnect',
-              { connectionId: (state.value as { connectionId: string }).connectionId },
-              crypto.randomUUID(),
-            );
-        });
+        await disconnectHost(app.windows()[0]!);
         await app.evaluate(({ app }) => app.exit(0));
         await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
         for (const pid of pids)
@@ -237,17 +219,7 @@ test('a new chat on a remote daemon host chooses a folder from its approved root
     await selectRemoteChat(page);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
     await expect
-      .poll(() =>
-        page.evaluate(async () => {
-          const reply = await window.moonbaseChat.call(
-            'connection',
-            'getConnection',
-            {},
-            crypto.randomUUID(),
-          );
-          return reply.ok && (reply.value as { state: string }).state;
-        }),
-      )
+      .poll(async () => ((await getConnection(page)).value as { state?: string })?.state)
       .toBe('connected');
     // No picker reaches the host's disk: the menu offers its approved root and the folders in it.
     await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
@@ -271,21 +243,7 @@ test('a new chat on a remote daemon host chooses a folder from its approved root
     await expect.poll(async () => (await f.stats()).tools).toBe(1);
   } finally {
     try {
-      await app.windows()[0].evaluate(async () => {
-        const state = await window.moonbaseChat.call(
-          'connection',
-          'getConnection',
-          {},
-          crypto.randomUUID(),
-        );
-        if (state.ok && (state.value as { connectionId?: string }).connectionId)
-          await window.moonbaseChat.call(
-            'connection',
-            'disconnect',
-            { connectionId: (state.value as { connectionId: string }).connectionId },
-            crypto.randomUUID(),
-          );
-      });
+      await disconnectHost(app.windows()[0]!);
       const child = app.process();
       await app.evaluate(({ app }) => app.exit(0));
       await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);

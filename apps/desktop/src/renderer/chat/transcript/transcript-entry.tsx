@@ -29,7 +29,6 @@ import type {
   ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
-import type { TranscriptNative } from '../../../ipc/chat-wire.ts';
 import { Markdown } from './markdown.tsx';
 import type { MarkdownCache } from './markdown-model.ts';
 import {
@@ -62,7 +61,7 @@ import {
   useDisclosure,
   useRetainedCalls,
 } from './transcript-disclosure.ts';
-import type { TranscriptActions } from './transcript-actions.ts';
+import type { TranscriptActions, TranscriptNative } from './transcript-actions.ts';
 import { compareProps } from './stable-props.ts';
 import { transcriptStyles as styles } from './transcript-styles.ts';
 import { Icon } from '@moonbase/ui/icons';

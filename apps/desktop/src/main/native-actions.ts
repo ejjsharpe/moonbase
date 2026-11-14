@@ -1,7 +1,27 @@
 import { execFileSync } from 'node:child_process';
 import type { BrowserWindow, Clipboard, Dialog, Shell } from 'electron';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
-import type { NativeActions } from './editor-session.ts';
+
+/** What the editor's document may ask of this Mac, through main. */
+export type NativeActions = {
+  chooseCheckout(): Promise<string | null>;
+  /** Captured references, none when there is nothing to import, or null for a declined prompt. */
+  imports(
+    target: CheckoutTarget,
+    kind: 'picker' | 'clipboard',
+    paths?: string[],
+    signal?: AbortSignal,
+  ): Promise<string[] | null>;
+  release(input: {
+    checkout: CheckoutTarget;
+    clientId: string;
+    references: string[];
+  }): Promise<void>;
+  /** Writes text to the OS clipboard. */
+  copyText(text: string): Promise<void>;
+  /** Shows an absolute path in the OS file manager. */
+  reveal(path: string): Promise<void>;
+};
 
 /** The raw pasteboard type under which Finder lists copied files, all of them in one plist. */
 const finderFiles = 'electron application/osclipboard;format="NSFilenamesPboardType"';

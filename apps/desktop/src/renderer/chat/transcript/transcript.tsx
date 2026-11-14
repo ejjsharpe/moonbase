@@ -31,7 +31,6 @@ import {
 } from '@moonbase/application/chat';
 import type { ChatRun, ChatTranscriptMatch, ChatTranscriptSource } from '@moonbase/contracts/chat';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
-import type { TranscriptNative } from '../../../ipc/chat-wire.ts';
 import { MarkdownCache } from './markdown-model.ts';
 import {
   collectActivityEvidence,
@@ -59,7 +58,7 @@ import {
   useRememberedFold,
   useRetainedCalls,
 } from './transcript-disclosure.ts';
-import { useTranscriptActions } from './transcript-actions.ts';
+import { useTranscriptActions, type TranscriptNative } from './transcript-actions.ts';
 import { groupBySource } from './stable-props.ts';
 import { TranscriptScroller, revealFindMatch } from './transcript-geometry.ts';
 import { createViewSaver, type ViewSaver } from './transcript-view-saving.ts';

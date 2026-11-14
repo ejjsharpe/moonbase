@@ -87,9 +87,6 @@ test('local chat shares one attempt to reach the daemon, answers a failed one fo
     installationId: 'installation',
     requestIds: await makeRequestIds(t),
     local,
-    emit: () => {
-      assert.fail('No observation should be started');
-    },
     pickFolder: () =>
       new Promise((resolve) => {
         completePicker = resolve;
@@ -137,84 +134,6 @@ test('local chat shares one attempt to reach the daemon, answers a failed one fo
   }
 });
 
-for (const failure of [false, true])
-  test(`document replacement routes a reused ID to the new session and joins ${failure ? 'failing' : 'held'} old release`, async (t) => {
-    const runtime = ManagedRuntime.make(Layer.empty);
-    const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' };
-    const target = { ...context, conversationId: 'chat' };
-    const releasing = Promise.withResolvers<void>(),
-      gate = Promise.withResolvers<void>();
-    const receives: ((snapshot: never) => void)[] = [],
-      releases = [0, 0],
-      emitted: [string, string][] = [];
-    const remoteChat: NonNullable<Dependencies['remote']>['chat'] = {
-      watchChatList: () => async () => {},
-      command: async () => null as never,
-      watch: (_input, receive) => {
-        const index = receives.length;
-        receives.push(receive as (snapshot: never) => void);
-        return async () => {
-          releases[index]++;
-          if (index === 0) {
-            releasing.resolve();
-            await gate.promise;
-          }
-        };
-      },
-    };
-    const backends = createChatBackends({
-      runtime,
-      installationId: 'installation',
-      requestIds: await makeRequestIds(t),
-      local: reached(null),
-      // Only the remote context and label, the chat and owner release are used here.
-      remote: {
-        configuration: { context, ssh: { profile: { label: 'Remote' } } },
-        chat: remoteChat,
-        connection: { command: async () => ({}) as never, watch: () => async () => {} },
-        providers: { releaseOwner: () => Effect.void },
-        folders: {},
-      } as unknown as Dependencies['remote'],
-      emit: (backendId, id) => emitted.push([backendId, id]),
-      pickFolder: async () => null,
-    });
-    try {
-      const old = backends.getSession('remote')!;
-      assert((await old.call('watch-chat', '', { target }, 'reused')).ok);
-      const replacement = backends.releaseDocument().then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      let settled = false;
-      void replacement.then(() => {
-        settled = true;
-      });
-      await releasing.promise;
-      const current = backends.getSession('remote')!;
-      assert.notEqual(current, old);
-      assert((await current.call('watch-chat', '', { target }, 'reused')).ok);
-      receives[0]!({} as never);
-      receives[1]!({} as never);
-      assert.deepEqual(emitted, [['remote', 'reused']], 'the old watch is fenced');
-      assert((await current.call('connection', 'getConnection', {}, 'unrelated')).ok);
-      assert.equal(settled, false, 'replacement joins the held old release');
-      if (failure)
-        gate.reject(new ApplicationError({ code: 'Persistence', message: 'Old release failed' }));
-      else gate.resolve();
-      const error = await replacement;
-      if (failure) {
-        assert(ApplicationError.is(error));
-        assert.equal(error.code, 'Persistence');
-      } else assert.equal(error, undefined);
-      assert((await current.cancel('reused')).ok);
-      assert.deepEqual(releases, [1, 1]);
-    } finally {
-      gate.resolve();
-      for (const session of backends.getSessions()) await session.dispose().catch(() => {});
-      await runtime.dispose();
-    }
-  });
-
 const checkout = (root: string) => ({
   hostId: 'local',
   checkoutId: `checkout-${root}`,
@@ -254,7 +173,6 @@ test('a new worktree starts only from a folder the daemon approves, under the re
     installationId: 'installation',
     requestIds: await makeRequestIds(t),
     local: reached(backend),
-    emit: () => {},
     pickFolder: async () => null,
     adoptCheckout: (target) => adopted.push(target.root),
   });
@@ -322,7 +240,6 @@ test('turning a chat into a project is one daemon operation, asked again only wh
       installationId: 'installation',
       requestIds,
       local: reached(backend),
-      emit: () => {},
       pickFolder: async () => null,
       adoptCheckout: (target) => adopted.push(target.root),
     });
@@ -391,7 +308,6 @@ test('a remote daemon host offers its approved roots for folders, its own provid
           }),
       },
     } as unknown as Dependencies['remote'],
-    emit: () => {},
     pickFolder: async () => assert.fail('A remote host has no native picker'),
   });
   try {
@@ -410,18 +326,9 @@ test('a remote daemon host offers its approved roots for folders, its own provid
     // Local chat is not available, so its recent folders are empty and nothing reaches the host.
     assert.deepEqual(await backends.recentFolders('local'), []);
     const session = backends.getSession('remote')!;
-    assert((await session.call('providers', 'getProviders', {}, 'providers')).ok);
+    assert(session.capabilities.providers);
+    await session.capabilities.providers.command('getProviders', {});
     assert.equal(providerCalls.length, 1);
-    // A chat on the host names its settings; one without them is refused before it is sent.
-    await assert.rejects(
-      session.call(
-        'chat',
-        'createChat',
-        { session: context, requestId: 'missing', title: 'Missing settings' },
-        'missing',
-      ),
-      { code: 'InvalidInput' },
-    );
     await backends.releaseDocument();
     assert.deepEqual(released, [providerCalls[0]![0]]);
   } finally {
