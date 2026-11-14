@@ -1,8 +1,8 @@
-import { disconnectChat } from './chat-target.ts';
+import { disconnectChat } from '../fixtures/chat-target.ts';
 import { test, expect, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { readFindHighlight } from './find-highlight.ts';
+import { readFindHighlight } from '../fixtures/find-highlight.ts';
 import {
   scrollToEnd,
   scrollToStart,
@@ -10,12 +10,12 @@ import {
   transcriptList,
   waitForRowOrder,
   openActivity,
-} from './transcript-list.ts';
-import type * as readingPins from '../src/renderer/chat/transcript/reading-pin.ts';
+} from '../fixtures/transcript-list.ts';
+import type * as readingPins from '../../src/renderer/chat/transcript/reading-pin.ts';
 
 type ReadingPins = typeof readingPins;
 const imagePng = (
-  await readFile(new URL('./fixtures/images/checker.png', import.meta.url))
+  await readFile(new URL('../fixtures/images/checker.png', import.meta.url))
 ).toString('base64');
 async function open(page: Page) {
   await page.goto('/?local&design&transcript');

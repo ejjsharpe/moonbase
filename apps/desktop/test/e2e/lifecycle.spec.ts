@@ -1,14 +1,14 @@
-import { findTestBun, prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
+import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
 import {
   expectSaveEnabled,
   saveFile,
   prepareCrashRecovery,
   recoverCrashedWorkbench,
-} from './editor-regressions.ts';
-import { createRemoteChat, selectRemoteChat } from './chat-target.ts';
+} from '../fixtures/editor-regressions.ts';
+import { createRemoteChat, selectRemoteChat } from '../fixtures/chat-target.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
-import { fixture, until } from '../../../tests/chat/tool-fixture.ts';
+import { fixture, until } from '../../../../tests/chat/tool-fixture.ts';
 import { join, resolve } from 'node:path';
 import { mkdir, writeFile, appendFile, readFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
@@ -41,7 +41,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
                 ),
             }
           : {}),
-        args: packaged ? [] : [resolve('test/harness.mjs')],
+        args: packaged ? [] : [resolve('test/fixtures/harness.mjs')],
         env: {
           PATH: '/usr/bin:/bin',
           PI_CLAUDE_CODE_COMMAND: '/nonexistent/claude',

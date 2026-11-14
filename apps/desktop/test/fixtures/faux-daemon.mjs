@@ -7,9 +7,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const daemonTests = fileURLToPath(new URL('../../daemon/test/', import.meta.url));
+const daemonTests = fileURLToPath(new URL('../../../daemon/test/', import.meta.url));
 // The ripgrep `scripts/prepare-ripgrep.mjs` prepares, which the app bundles; a test's PATH has none.
-const ripgrep = fileURLToPath(new URL('../../../dist/tools/ripgrep', import.meta.url));
+const ripgrep = fileURLToPath(new URL('../../../../dist/tools/ripgrep', import.meta.url));
 
 /** The Bun that runs test daemons: `MOONBASE_TEST_BUN`, else the `bun` on this process's PATH. */
 export function findTestBun() {

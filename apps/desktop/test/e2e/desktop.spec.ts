@@ -1,5 +1,5 @@
-import { findTestBun, prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
-import { closeSettings, openSettings } from './chat-target.ts';
+import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
+import { closeSettings, openSettings } from '../fixtures/chat-target.ts';
 import {
   openTabMenu,
   saveFile,
@@ -10,7 +10,7 @@ import {
   checkFilenameMaps,
   checkTabMenu,
   explorerAction,
-} from './editor-regressions.ts';
+} from '../fixtures/editor-regressions.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron } from '@playwright/test';
 import type { ElectronApplication, Page } from '@playwright/test';
@@ -105,7 +105,11 @@ async function launch() {
     GIT_CONFIG_NOSYSTEM: '1',
   } as Record<string, string>;
   delete env.ELECTRON_RUN_AS_NODE;
-  app = await electron.launch({ args: [resolve('test/harness.mjs')], env, timeout: 20000 });
+  app = await electron.launch({
+    args: [resolve('test/fixtures/harness.mjs')],
+    env,
+    timeout: 20000,
+  });
   child = app.process();
   child.stderr?.on('data', (value) => console.log(String(value)));
   page = await app.firstWindow();
@@ -1338,7 +1342,11 @@ test('an explicit native Quit arriving before renderer startup is not lost', asy
     GIT_CONFIG_NOSYSTEM: '1',
   } as Record<string, string>;
   delete env.ELECTRON_RUN_AS_NODE;
-  app = await electron.launch({ args: [resolve('test/harness.mjs')], env, timeout: 20000 });
+  app = await electron.launch({
+    args: [resolve('test/fixtures/harness.mjs')],
+    env,
+    timeout: 20000,
+  });
   child = app.process();
   await app.waitForEvent('close', { timeout: 5000 });
   expect(existsSync(join(base, 'early-quit.json'))).toBe(true);

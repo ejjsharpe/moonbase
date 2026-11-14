@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test';
-import { fauxModel } from '../../../tests/chat/faux-model.ts';
+import { fauxModel } from '../../../../tests/chat/faux-model.ts';
 
 /** Opens Settings from the rail at one section; hosts, connection and providers live there. */
 export async function openSettings(page: Page, section: 'Hosts' | 'Providers' = 'Hosts') {

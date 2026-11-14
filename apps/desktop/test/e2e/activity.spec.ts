@@ -5,9 +5,9 @@ import {
   scrollToStart,
   stepToggle,
   transcriptList,
-} from './transcript-list.ts';
+} from '../fixtures/transcript-list.ts';
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { readFindHighlight } from './find-highlight.ts';
+import { readFindHighlight } from '../fixtures/find-highlight.ts';
 
 async function open(page: Page) {
   await page.goto('/?local&design&transcript');

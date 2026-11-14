@@ -1,18 +1,18 @@
-import { prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
-import { closeSettings, openSettings } from './chat-target.ts';
+import { prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
+import { closeSettings, openSettings } from '../fixtures/chat-target.ts';
 import {
   saveFile,
   selectFileView,
   captureNative,
   pasteNativeFile,
   explorerAction,
-} from './editor-regressions.ts';
+} from '../fixtures/editor-regressions.ts';
 import {
   filenameCases,
   checkFilenameMaps,
   checkTabMenu,
   recoveryState,
-} from './editor-regressions.ts';
+} from '../fixtures/editor-regressions.ts';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

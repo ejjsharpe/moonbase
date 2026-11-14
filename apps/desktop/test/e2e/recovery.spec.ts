@@ -1,5 +1,5 @@
-import { findTestBun, prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
-import { prepareCrashRecovery } from './editor-regressions.ts';
+import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
+import { prepareCrashRecovery } from '../fixtures/editor-regressions.ts';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,7 +14,7 @@ for (const action of ['Recover workbench', 'Quit Moonbase', 'cleanup failure'])
     const data = mkdtempSync(join(tmpdir(), 'moonbase-recovery-'));
     await prepareDaemonData(data);
     const app = await electron.launch({
-      args: ['-r', resolve('test/faux-daemon-preload.cjs'), resolve('dist/main.mjs')],
+      args: ['-r', resolve('test/fixtures/faux-daemon-preload.cjs'), resolve('dist/main.mjs')],
       env: {
         PATH: '/usr/bin:/bin',
         PI_CLAUDE_CODE_COMMAND: '/nonexistent/claude',

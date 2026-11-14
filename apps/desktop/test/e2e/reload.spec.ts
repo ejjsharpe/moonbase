@@ -1,5 +1,5 @@
-import { findTestBun, prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
-import { saveFile, captureNative } from './editor-regressions.ts';
+import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
+import { saveFile, captureNative } from '../fixtures/editor-regressions.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
@@ -43,7 +43,7 @@ test('native Reload retains text painted before ordinary recovery debounce @pack
       ? []
       : [
           '-r',
-          resolve('test/faux-daemon-preload.cjs'),
+          resolve('test/fixtures/faux-daemon-preload.cjs'),
           process.env.MOONBASE_RELOAD_MAIN ?? resolve('dist/main.mjs'),
         ],
     env: {

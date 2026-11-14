@@ -24,7 +24,7 @@ import {
   readDaemonPid,
   stopDaemon,
   writeFauxScript,
-} from './faux-daemon.mjs';
+} from './fixtures/faux-daemon.mjs';
 
 const isAlive = (pid: number) => {
   try {

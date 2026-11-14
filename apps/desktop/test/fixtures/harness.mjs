@@ -130,4 +130,4 @@ if (process.env.MOONBASE_TEST_QUIT_EARLY)
   app.on('browser-window-created', () => queueMicrotask(() => app.quit()));
 // Never probe or use the developer's own Claude Code login.
 process.env.PI_CLAUDE_CODE_COMMAND ??= '/nonexistent/claude';
-await import(process.env.MOONBASE_TEST_MAIN ?? '../dist/main.mjs');
+await import(process.env.MOONBASE_TEST_MAIN ?? '../../dist/main.mjs');

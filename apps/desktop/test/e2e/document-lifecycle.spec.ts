@@ -1,5 +1,5 @@
-import { findTestBun, prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
-import { prepareCrashRecovery, recoverCrashedWorkbench } from './editor-regressions.ts';
+import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
+import { prepareCrashRecovery, recoverCrashedWorkbench } from '../fixtures/editor-regressions.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { mkdtempSync, realpathSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
@@ -30,7 +30,7 @@ for (const mode of ['reload', 'veto', 'crash'])
               resolve('release/mac-arm64/Moonbase.app/Contents/MacOS/Moonbase'),
           }
         : {}),
-      args: packaged ? [] : [resolve('test/harness.mjs')],
+      args: packaged ? [] : [resolve('test/fixtures/harness.mjs')],
       env: {
         PATH: '/usr/bin:/bin',
         PI_CLAUDE_CODE_COMMAND: '/nonexistent/claude',

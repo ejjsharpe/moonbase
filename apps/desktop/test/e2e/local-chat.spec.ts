@@ -10,7 +10,7 @@ import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { controlledHostFixture } from '../../../tests/chat/fixture.ts';
+import { controlledHostFixture } from '../../../../tests/chat/fixture.ts';
 import {
   closeSettings,
   createRemoteChat,
@@ -18,8 +18,8 @@ import {
   openSettings,
   selectRemoteChat,
   showChat,
-} from './chat-target.ts';
-import { captureNative } from './editor-regressions.ts';
+} from '../fixtures/chat-target.ts';
+import { captureNative } from '../fixtures/editor-regressions.ts';
 import {
   findTestBun,
   type FauxScript,
@@ -28,9 +28,9 @@ import {
   readFauxCalls,
   stopDaemon,
   writeFauxScript,
-} from './faux-daemon.mjs';
-import { openCallCard, openWorkingFold } from './transcript-list.ts';
-import { retainedImage } from './stored-image-fixture.ts';
+} from '../fixtures/faux-daemon.mjs';
+import { openCallCard, openWorkingFold } from '../fixtures/transcript-list.ts';
+import { retainedImage } from '../fixtures/stored-image-fixture.ts';
 
 const main = pathToFileURL(resolve('dist/main.mjs')).href;
 const isAlive = (pid: number) => {
@@ -85,7 +85,7 @@ async function localProfile(prefix: string, script: FauxScript) {
   await prepareDaemonData(userData, { idleMs: 120_000, pollMs: 500, ...script });
   const launch = async (env: Record<string, string> = {}) => {
     const app = await electron.launch({
-      args: [resolve('test/local-harness.mjs')],
+      args: [resolve('test/fixtures/local-harness.mjs')],
       env: {
         PATH: '/usr/bin:/bin',
         HOME: process.env.HOME!,
@@ -519,7 +519,7 @@ for (const mode of ['local', 'remote'] as const)
     const host =
       mode === 'remote'
         ? await controlledHostFixture(
-            new URL('../../../tests/chat/faux-tool.mjs', import.meta.url),
+            new URL('../../../../tests/chat/faux-tool.mjs', import.meta.url),
             true,
           )
         : undefined;
@@ -541,7 +541,7 @@ for (const mode of ['local', 'remote'] as const)
       ],
     });
     const app = await electron.launch({
-      args: [resolve('test/local-harness.mjs')],
+      args: [resolve('test/fixtures/local-harness.mjs')],
       env: {
         PATH: '/usr/bin:/bin',
         HOME: process.env.HOME!,
@@ -645,13 +645,13 @@ for (const mode of ['local', 'remote'] as const)
 test('transcript remote first/next chunks render through authenticated stream and Electron IPC before held completion', async () => {
   test.setTimeout(60000);
   const host = await controlledHostFixture(
-    new URL('../../../tests/chat/faux-stream.mjs', import.meta.url),
+    new URL('../../../../tests/chat/faux-stream.mjs', import.meta.url),
     true,
   );
   const userData = join(host.directory, 'desktop');
   await prepareDaemonData(userData);
   const app = await electron.launch({
-    args: [resolve('test/local-harness.mjs')],
+    args: [resolve('test/fixtures/local-harness.mjs')],
     env: {
       PATH: '/usr/bin:/bin',
       HOME: process.env.HOME!,
@@ -709,7 +709,7 @@ for (const mode of ['local', 'remote'] as const)
   test(`stored image ${mode} record is served over moonbase:// under production CSP; viewer keyboard, close and actual zoom`, async () => {
     const host =
       mode === 'remote'
-        ? await controlledHostFixture(new URL('./stored-image-faux.mjs', import.meta.url))
+        ? await controlledHostFixture(new URL('../fixtures/stored-image-faux.mjs', import.meta.url))
         : undefined;
     const directory =
       host?.directory ?? (await realpath(await mkdtemp(join(tmpdir(), 'moonbase-image-native-'))));
@@ -720,7 +720,7 @@ for (const mode of ['local', 'remote'] as const)
       steps: [{ tool: 'read', args: { path: 'retained.png' } }, { reply: 'Image read' }],
     });
     const app = await electron.launch({
-      args: [resolve('test/local-harness.mjs')],
+      args: [resolve('test/fixtures/local-harness.mjs')],
       env: {
         PATH: '/usr/bin:/bin',
         HOME: process.env.HOME!,

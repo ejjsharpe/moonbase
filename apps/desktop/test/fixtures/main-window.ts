@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import type { BrowserWindow, IpcMainEvent, IpcMainInvokeEvent } from 'electron';
-import { createTrustedDocumentGuard } from '../src/main/ipc.ts';
+import { createTrustedDocumentGuard } from '../../src/main/ipc.ts';
 
 export function createTestWindow() {
   const url = 'moonbase://editor/index.html';

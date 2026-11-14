@@ -37,4 +37,4 @@ if (process.env.MOONBASE_TEST_STARTUP_FAILURE === 'editor') {
 }
 // Never probe or use the developer's own Claude Code login.
 process.env.PI_CLAUDE_CODE_COMMAND ??= '/nonexistent/claude';
-await import(process.env.MOONBASE_TEST_MAIN ?? '../dist/main.mjs');
+await import(process.env.MOONBASE_TEST_MAIN ?? '../../dist/main.mjs');

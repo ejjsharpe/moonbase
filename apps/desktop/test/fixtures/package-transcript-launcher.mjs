@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const executable = fileURLToPath(
   new URL(
-    `../release/${process.arch === 'arm64' ? 'mac-arm64' : 'mac'}/Moonbase.app/Contents/MacOS/Moonbase`,
+    `../../release/${process.arch === 'arm64' ? 'mac-arm64' : 'mac'}/Moonbase.app/Contents/MacOS/Moonbase`,
     import.meta.url,
   ),
 );

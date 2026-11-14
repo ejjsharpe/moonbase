@@ -1,12 +1,12 @@
-import { findTestBun, prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
-import { expectSaveEnabled, saveFile, captureNative } from './editor-regressions.ts';
+import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
+import { expectSaveEnabled, saveFile, captureNative } from '../fixtures/editor-regressions.ts';
 import {
   closeSettings,
   createRemoteChat,
   disconnectChat,
   openSettings,
   selectRemoteChat,
-} from './chat-target.ts';
+} from '../fixtures/chat-target.ts';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
   test,
@@ -15,8 +15,8 @@ import {
   type ElectronApplication,
   type Page,
 } from '@playwright/test';
-import { fixture, until } from '../../../tests/chat/tool-fixture.ts';
-import { openCallCard } from './transcript-list.ts';
+import { fixture, until } from '../../../../tests/chat/tool-fixture.ts';
+import { openCallCard } from '../fixtures/transcript-list.ts';
 import { mkdir, writeFile, readFile, appendFile, readdir } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
@@ -41,7 +41,7 @@ async function launch(
             ),
         }
       : {}),
-    args: packaged ? [] : [resolve('test/harness.mjs')],
+    args: packaged ? [] : [resolve('test/fixtures/harness.mjs')],
     env: {
       PATH: '/usr/bin:/bin',
       PI_CLAUDE_CODE_COMMAND: '/nonexistent/claude',

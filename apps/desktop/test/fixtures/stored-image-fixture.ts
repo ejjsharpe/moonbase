@@ -9,13 +9,11 @@ import {
 import { createRegistry, defineExtension, defineTool } from '@earendil-works/pi-durable';
 import { Type } from 'typebox';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
-import { fauxModel, fauxModelOptions, installFaux } from '../../../tests/chat/faux-model.ts';
+import { fauxModel, fauxModelOptions, installFaux } from '../../../../tests/chat/faux-model.ts';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import type { ChatSession } from '@moonbase/contracts/chat';
 
-export const retainedImage = readFileSync(
-  new URL('./fixtures/images/retained.png', import.meta.url),
-);
+export const retainedImage = readFileSync(new URL('./images/retained.png', import.meta.url));
 /**
  * A faux model that calls `retained_images` once, then replies, with the controlled tool that
  * returns retained bytes: a real PNG, a truncated one and HTML labelled as a PNG.

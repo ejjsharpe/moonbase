@@ -1,18 +1,18 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
-import { readFindHighlight } from './find-highlight.ts';
+import { readFindHighlight } from '../fixtures/find-highlight.ts';
 
 type ImageWindow = Window & { imageUrls: number; releaseImageUrl(): void };
-const png = (await readFile(new URL('./fixtures/images/retained.png', import.meta.url))).toString(
+const png = (await readFile(new URL('../fixtures/images/retained.png', import.meta.url))).toString(
   'base64',
 );
 const checker = (
-  await readFile(new URL('./fixtures/images/checker.png', import.meta.url))
+  await readFile(new URL('../fixtures/images/checker.png', import.meta.url))
 ).toString('base64');
-const jpeg = (await readFile(new URL('./fixtures/images/retained.jpg', import.meta.url))).toString(
+const jpeg = (await readFile(new URL('../fixtures/images/retained.jpg', import.meta.url))).toString(
   'base64',
 );
-const tall = (await readFile(new URL('./fixtures/images/tall.png', import.meta.url))).toString(
+const tall = (await readFile(new URL('../fixtures/images/tall.png', import.meta.url))).toString(
   'base64',
 );
 async function open(

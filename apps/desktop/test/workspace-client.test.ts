@@ -30,7 +30,7 @@ import {
   prepareDaemonData,
   readDaemonPid,
   stopDaemon,
-} from './faux-daemon.mjs';
+} from './fixtures/faux-daemon.mjs';
 
 const unavailable = new ApplicationError({ code: 'Unavailable', message: 'No daemon.' });
 

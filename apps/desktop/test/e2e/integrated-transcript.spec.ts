@@ -8,12 +8,12 @@ import {
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { controlledHostFixture, until } from '../../../tests/chat/fixture.ts';
-import { createRemoteChat, selectRemoteChat } from './chat-target.ts';
-import { captureNative } from './editor-regressions.ts';
-import { readFindHighlight } from './find-highlight.ts';
-import { openActivity } from './transcript-list.ts';
-import { findTestBun, prepareDaemonData, stopDaemon } from './faux-daemon.mjs';
+import { controlledHostFixture, until } from '../../../../tests/chat/fixture.ts';
+import { createRemoteChat, selectRemoteChat } from '../fixtures/chat-target.ts';
+import { captureNative } from '../fixtures/editor-regressions.ts';
+import { readFindHighlight } from '../fixtures/find-highlight.ts';
+import { openActivity } from '../fixtures/transcript-list.ts';
+import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
 
 const transcriptRegion = (page: Page) =>
   page.getByRole('region', { name: 'Chat transcript', exact: true });
@@ -53,7 +53,9 @@ async function launch(directory: string, host?: Host) {
           executablePath: launcher,
         }
       : {}),
-    args: packaged ? [] : ['-r', resolve('test/integrated-harness.cjs'), resolve('dist/main.mjs')],
+    args: packaged
+      ? []
+      : ['-r', resolve('test/fixtures/integrated-harness.cjs'), resolve('dist/main.mjs')],
     env: {
       PATH: '/usr/bin:/bin',
       PI_CLAUDE_CODE_COMMAND: '/nonexistent/claude',
@@ -184,7 +186,7 @@ async function image(app: ElectronApplication, page: Page) {
 
 test('integrated remote archive/runtime reveals early/middle/end Find in real history and streams held progress without polling', async () => {
   const host = await controlledHostFixture(
-    new URL('../../../tests/chat/faux-stream.mjs', import.meta.url),
+    new URL('../../../../tests/chat/faux-stream.mjs', import.meta.url),
     true,
   );
   let app: ElectronApplication | undefined;
@@ -238,7 +240,9 @@ test('integrated remote archive/runtime reveals early/middle/end Find in real hi
 });
 
 test('integrated remote archive/runtime displays retained images with production CSP and releases its viewer @packaged', async () => {
-  const host = await controlledHostFixture(new URL('./stored-image-faux.mjs', import.meta.url));
+  const host = await controlledHostFixture(
+    new URL('../fixtures/stored-image-faux.mjs', import.meta.url),
+  );
   let app: ElectronApplication | undefined;
   try {
     const launched = await launch(host.directory, host);
