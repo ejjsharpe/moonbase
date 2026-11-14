@@ -19,9 +19,15 @@ export const chatHostCapabilities = {
   folders: 'folders-v1',
   roots: 'roots-v1',
   socket: 'socket-v1',
+  rpc: 'rpc-v1',
   workspace: 'workspace-v1',
 } as const;
 export type ChatHostCapability = (typeof chatHostCapabilities)[keyof typeof chatHostCapabilities];
 export type ChatHostTarget = typeof ChatHostTargetSchema.Type;
 export type ChatHostHealth = typeof ChatHostHealthSchema.Type;
-export type HostHealthReply = ChatHostHealth & { nonce: string; proof: string };
+/** Signed health; a host that serves RPC also signs a single-use nonce for the next upgrade. */
+export type HostHealthReply = ChatHostHealth & {
+  nonce: string;
+  upgradeNonce?: string;
+  proof: string;
+};

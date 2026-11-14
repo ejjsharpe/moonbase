@@ -1,35 +1,14 @@
 import { normalizeApplicationError } from '@moonbase/effect';
 import { Cause, Context, Effect, Exit, Fiber, Layer, Queue, Semaphore, Stream } from 'effect';
 import { getJsonKey } from '@moonbase/contracts/common';
-import {
-  chatHostCapabilities,
-  type ChatHostHealth,
-  type ChatHostTarget,
-} from '@moonbase/contracts/host';
+import type { ChatHostHealth, ChatHostTarget } from '@moonbase/contracts/host';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import type { ChatCommand, ChatInput, ChatOutput, ChatTarget } from '@moonbase/contracts/chat';
 import {
-  ChatService,
   ConnectionService,
-  LocalHostService,
-  ProviderSetupService,
   WorkspaceHostService,
-  type ChatServiceShape,
   type WorkspaceHostServiceShape,
-  type LocalHostHandlers,
-  type ProviderSetupHandlers,
   type VerifiedChatEndpoint,
 } from '@moonbase/contracts/services';
-import { randomUUID } from 'node:crypto';
-import type {
-  DaemonCommand,
-  DaemonInput,
-  DaemonOutput,
-  HostProviderCommand,
-  LocalHostCommand,
-  LocalHostInput,
-} from '@moonbase/contracts/daemon';
-import { isDaemonMutation } from '@moonbase/contracts/daemon-schema';
 import { decodeChatHostTarget } from '@moonbase/contracts/host-schema';
 import type { HostCommand, HostInput, HostOutput } from '@moonbase/contracts/workspace-host';
 import {
@@ -41,15 +20,13 @@ import {
 } from '@moonbase/contracts/workspace-host-schema';
 import { socketLimits } from '@moonbase/contracts/socket';
 import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
-import type { ProviderCommand, ProviderInput, ProviderState } from '@moonbase/contracts/providers';
-import { readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
 import type {
   SocketSubscriptionKind,
   SocketSubscriptionTarget,
   SocketSubscriptionValue,
 } from '@moonbase/contracts/socket';
 import * as P from './protocol.ts';
-import { isChatMutation, isSameChatHost } from '@moonbase/contracts/chat-validation';
+import { isSameChatHost } from '@moonbase/contracts/chat-validation';
 import { fail } from '@moonbase/contracts/errors';
 import {
   connectDaemonSocket,
@@ -59,7 +36,6 @@ import {
   type SocketOutput,
   type SocketSubscriptionState,
 } from './socket-client.ts';
-import { systemSocketClock, type SocketClock } from './socket-protocol.ts';
 
 /** What a subscription delivers: a value (`reset` after one that replaced missed updates) or a gap. */
 type LinkUpdate<K extends SocketSubscriptionKind> =
@@ -111,13 +87,8 @@ class DaemonLink extends Context.Service<
   }
 >()('moonbase/DaemonLink') {}
 
-/**
- * The clock a daemon link's sockets and reconnect backoff run on: the system's unless a test
- * provides one.
- */
-export const DaemonLinkClock = Context.Reference<SocketClock>('moonbase/DaemonLinkClock', {
-  defaultValue: () => systemSocketClock,
-});
+export { DaemonLinkClock } from './link-clock.ts';
+import { DaemonLinkClock } from './link-clock.ts';
 const sameEndpoint = (a: VerifiedChatEndpoint, b: VerifiedChatEndpoint) =>
   a.connectionId === b.connectionId &&
   a.origin === b.origin &&
@@ -463,247 +434,6 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
   }),
 );
 
-/** Client graph imports no engine, SQLite, provider or local workspace implementation. */
-export const RemoteChatLive: Layer.Layer<ChatService, never, ConnectionService> = Layer.effect(
-  ChatService,
-  Effect.gen(function* () {
-    const link = yield* DaemonLink;
-    const call = <K extends ChatCommand>(
-      operation: K,
-      input: ChatInput<K>,
-    ): Effect.Effect<ChatOutput<K>, ApplicationError> =>
-      Effect.gen(function* () {
-        const shape = input as {
-          host?: ChatHostTarget;
-          session?: { host: ChatHostTarget };
-          target?: ChatTarget;
-          source?: { target: ChatTarget };
-          stop?: { target: ChatTarget };
-        };
-        const host =
-          shape.host ??
-          shape.session?.host ??
-          shape.target?.host ??
-          shape.source?.target.host ??
-          shape.stop!.target.host;
-        return (yield* link.request(
-          host,
-          operation,
-          input as never,
-          isChatMutation(operation),
-          (output, health) => {
-            // Every host is a daemon whose chats choose their own folder and model.
-            if (
-              operation === 'getChatHost' &&
-              !health.capabilities.includes(chatHostCapabilities.local)
-            )
-              fail('Incompatible', 'This host does not run the Moonbase daemon. Update it.');
-          },
-        )) as ChatOutput<K>;
-      });
-    return {
-      getChatHost: (d) => call('getChatHost', d),
-      listChats: (d) => call('listChats', d),
-      createChat: (d) => call('createChat', d),
-      getChat: (d) => call('getChat', d),
-      getChatHistory: (d) => call('getChatHistory', d),
-      getChatTranscriptContent: (d) => call('getChatTranscriptContent', d),
-      findChatTranscript: (d) => call('findChatTranscript', d),
-      getChatHistoryAround: (d) => call('getChatHistoryAround', d),
-      sendChat: (d) => call('sendChat', d),
-      getChatSend: (d) => call('getChatSend', d),
-      stopChat: (d) => call('stopChat', d),
-      settleChat: (d) => call('settleChat', d),
-      findChatFiles: (d) => call('findChatFiles', d),
-      // While the connection is down the last snapshot is shown as reconnecting.
-      watch: ({ target }) =>
-        Stream.suspend(() => {
-          let last: SocketSubscriptionValue<'chat'> | undefined;
-          return link.subscribe(target.host, 'chat', target).pipe(
-            Stream.filter((update) => !('reconnecting' in update) || last !== undefined),
-            Stream.map((update) => {
-              if ('reconnecting' in update)
-                return {
-                  ...last!,
-                  observationStatus: 'reconnecting' as const,
-                };
-              last = update.value;
-              return {
-                ...update.value,
-                observationStatus: 'connected' as const,
-              };
-            }),
-          );
-        }),
-      watchChatList: ({ session }) =>
-        link.subscribe(session.host, 'chatList', session).pipe(
-          Stream.filter((update) => !('reconnecting' in update)),
-          Stream.map((update) => {
-            const { value, reset } = update as Exclude<typeof update, { reconnecting: true }>;
-            return { ...value, reset };
-          }),
-        ),
-    } satisfies ChatServiceShape;
-  }),
-).pipe(Layer.provide(DaemonLinkLive));
-
-/**
- * Sends one daemon operation: refused unless the daemon's authenticated health advertises its
- * capability, and its reply decoded strictly with any request ID it carried echoed back.
- */
-function sendDaemonCommand<K extends DaemonCommand>(
-  link: DaemonLink['Service'],
-  operation: K,
-  input: DaemonInput<K>,
-  check?: (output: DaemonOutput<K>, input: DaemonInput<K>) => void,
-): Effect.Effect<DaemonOutput<K>, ApplicationError> {
-  const shape = input as { host?: ChatHostTarget; target?: ChatTarget };
-  return link.request(
-    shape.host ?? shape.target!.host,
-    operation,
-    input as never,
-    isDaemonMutation(operation),
-    check && ((output) => check(output as DaemonOutput<K>, input)),
-  ) as Effect.Effect<DaemonOutput<K>, ApplicationError>;
-}
-
-/** A daemon's folder approvals and control, over an injected `ConnectionService`. */
-export const RemoteLocalHostLive: Layer.Layer<LocalHostService, never, ConnectionService> =
-  Layer.effect(
-    LocalHostService,
-    Effect.gen(function* () {
-      const link = yield* DaemonLink;
-      const send =
-        <K extends LocalHostCommand>(operation: K) =>
-        (input: LocalHostInput<K>) =>
-          sendDaemonCommand(link, operation, input);
-      return {
-        approveFolder: send('approveFolder'),
-        listRecentFolders: send('listRecentFolders'),
-        checkChatFolder: send('checkChatFolder'),
-        checkApprovedFolder: send('checkApprovedFolder'),
-        getActiveWork: send('getActiveWork'),
-        markFolderAsProject: send('markFolderAsProject'),
-        listHostFolders: send('listHostFolders'),
-      } satisfies LocalHostHandlers;
-    }),
-  ).pipe(Layer.provide(DaemonLinkLive));
-
-export type RemoteProviderSetupConfiguration = {
-  /** The local-mode host whose providers are set up. */
-  host: ChatHostTarget;
-  /** Opens a validated sign-in URL in the user's browser. */
-  openUrl(url: string): Promise<void>;
-  /**
-   * Whether that browser runs on the host's machine, where a provider's loopback sign-in callback
-   * (ChatGPT's `127.0.0.1:1455`) reaches the host and finishes sign-in by itself. Otherwise the
-   * user pastes the final redirect URL.
-   */
-  sameMachine: boolean;
-};
-const sameMachineCallback =
-  'Finish signing in in your browser; Moonbase completes it by itself. If it does not, paste the final redirect URL here.';
-const pastedCallback =
-  'Your browser cannot reach the host’s sign-in callback. After signing in, paste the final redirect URL here.';
-
-/**
- * Provider setup on a local-mode host, scoped to owners the client names. Sign-in links come back
- * validated and open through the client's `openUrl`; setup state is pushed to `watch`.
- */
-export const RemoteProviderSetupLive = (
-  config: RemoteProviderSetupConfiguration,
-): Layer.Layer<ProviderSetupService, never, ConnectionService> =>
-  Layer.effect(
-    ProviderSetupService,
-    Effect.gen(function* () {
-      const link = yield* DaemonLink;
-      const host = config.host;
-      // Which ChatGPT sign-in path applies depends on where the browser is, which only the client
-      // knows; its OAuth flow is the one whose callback listens on the host.
-      const present = (state: ProviderState): ProviderState =>
-        state.flow?.providerId === 'openai' && state.flow.prompt?.type === 'manual_code'
-          ? {
-              ...state,
-              flow: {
-                ...state.flow,
-                prompt: {
-                  ...state.flow.prompt,
-                  message: config.sameMachine ? sameMachineCallback : pastedCallback,
-                },
-              },
-            }
-          : state;
-      const checkUrl = (
-        output: DaemonOutput<'openProviderUrl'>,
-        input: DaemonInput<'openProviderUrl'>,
-      ) => {
-        if (
-          readProviderSignInUrl(output.url) !== output.url ||
-          output.state.flow?.id !== input.flowId
-        )
-          fail('Incompatible', 'Provider sign-in link is invalid.');
-      };
-      const openUrl = (url: string) =>
-        Effect.tryPromise({
-          try: () => config.openUrl(url),
-          catch: () =>
-            new ApplicationError({
-              code: 'Unavailable',
-              message: 'The provider sign-in page could not be opened.',
-            }),
-        });
-      const forOwner = (ownerId: string): ProviderSetupHandlers => {
-        const send = <K extends ProviderCommand & HostProviderCommand>(
-          operation: K,
-          input: ProviderInput<K>,
-        ) =>
-          sendDaemonCommand(
-            link,
-            operation,
-            {
-              host,
-              ownerId,
-              ...(isDaemonMutation(operation) ? { requestId: randomUUID() } : {}),
-              ...input,
-            } as DaemonInput<K>,
-            operation === 'openProviderUrl' ? (checkUrl as never) : undefined,
-          );
-        const state =
-          <K extends ProviderCommand & HostProviderCommand>(operation: K) =>
-          (input: ProviderInput<K>) =>
-            Effect.map(send(operation, input), (output) =>
-              present((output as { state: ProviderState }).state),
-            );
-        return {
-          getProviders: state('getProviders'),
-          startProviderLogin: state('startProviderLogin'),
-          answerProviderPrompt: state('answerProviderPrompt'),
-          cancelProviderLogin: state('cancelProviderLogin'),
-          openProviderUrl: (input) =>
-            Effect.flatMap(send('openProviderUrl', input), (output) =>
-              Effect.as(openUrl(output.url), present(output.state)),
-            ),
-          logoutProvider: state('logoutProvider'),
-        };
-      };
-      return {
-        forOwner,
-        releaseOwner: (ownerId) =>
-          sendDaemonCommand(link, 'releaseProviderOwner', { host, ownerId }),
-        watch: (ownerId) =>
-          link.subscribe(host, 'providerSetup', { host, ownerId }).pipe(
-            Stream.filter((update) => !('reconnecting' in update)),
-            Stream.map((update) => present((update as { value: ProviderState }).value)),
-          ),
-        getProviderUrl: (ownerId, flowId) =>
-          Effect.map(
-            sendDaemonCommand(link, 'openProviderUrl', { host, ownerId, flowId }, checkUrl),
-            (output) => output.url,
-          ),
-      };
-    }),
-  ).pipe(Layer.provide(DaemonLinkLive));
-
 /**
  * The file host of a daemon that advertises `workspace-v1`, over the shared WebSocket: every host
  * operation, each decoded before it leaves, refused unless the daemon advertises the capability
@@ -880,3 +610,13 @@ export const RemoteWorkspaceHostLive = (config: {
       } satisfies WorkspaceHostServiceShape;
     }),
   ).pipe(Layer.provide(DaemonLinkLive));
+
+export {
+  RemoteChatLive,
+  RemoteDaemonLive,
+  RemoteLocalHostLive,
+  RemoteProviderSetupLive,
+  type RemoteProviderSetupConfiguration,
+} from './rpc-services.ts';
+export { DaemonRpcLink, DaemonRpcLinkLive } from './rpc-link.ts';
+export { EndpointConnectionLive } from './endpoint-connection.ts';

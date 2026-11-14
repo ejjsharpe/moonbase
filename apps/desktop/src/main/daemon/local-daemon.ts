@@ -13,9 +13,10 @@ import {
   ConnectionService,
   LocalHostService,
   type ConnectionServiceShape,
+  type LocalHostHandlers,
 } from '@moonbase/contracts/services';
 import { LoopbackConnectionLive, loopbackProfileId } from '@moonbase/daemon-protocol/loopback';
-import { RemoteLocalHostLive } from '@moonbase/daemon-protocol/remote';
+import { DaemonRpcLinkLive, RemoteLocalHostLive } from '@moonbase/daemon-protocol/remote';
 import type { DaemonCommand } from './daemon-command.ts';
 import { isPrivateTo } from '@moonbase/contracts/files';
 
@@ -374,16 +375,21 @@ export const LocalDaemonConnectionLive = (
       } satisfies ConnectionServiceShape;
       // Its own daemon link, since the shared one is built over this connection: it opens a
       // second socket only once an outdated daemon is asked whether it is idle.
-      const host = Context.get(
-        yield* Layer.build(
-          RemoteLocalHostLive.pipe(Layer.provide(Layer.succeed(ConnectionService, connection))),
-        ),
-        LocalHostService,
-      );
+      let host: LocalHostHandlers | undefined;
       // Asking keeps the outdated daemon from idling out, so it is replaced rather than left.
       const replaceOnceIdle = Effect.gen(function* () {
         if (!daemon.isOutdated() || !daemon.isRunning()) return;
         const session = yield* promise(() => readDaemonSession(daemon.directory));
+        host ??= Context.get(
+          yield* Layer.buildWithScope(
+            RemoteLocalHostLive.pipe(
+              Layer.provide(DaemonRpcLinkLive({ host: session.host })),
+              Layer.provide(Layer.succeed(ConnectionService, connection)),
+            ),
+            scope,
+          ),
+          LocalHostService,
+        );
         const { active } = yield* host.getActiveWork({ host: session.host });
         if (!active && daemon.isOutdated()) yield* replace;
       });

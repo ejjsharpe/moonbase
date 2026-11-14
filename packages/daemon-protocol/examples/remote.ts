@@ -3,14 +3,19 @@ import type { ConnectionService } from '@moonbase/contracts/services';
 import type { ApplicationError } from '@moonbase/contracts/workspace';
 import type { ChatSession } from '@moonbase/contracts/chat';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
-import { RemoteChatLive } from '@moonbase/daemon-protocol/remote';
+import { DaemonRpcLinkLive, RemoteChatLive } from '@moonbase/daemon-protocol/remote';
 
 /** Consumer process composition root; supply the application's existing connection capability. */
 export async function readSavedChats(
   connections: Layer.Layer<ConnectionService, ApplicationError>,
   session: ChatSession,
 ) {
-  const runtime = ManagedRuntime.make(RemoteChatLive.pipe(Layer.provide(connections)));
+  const runtime = ManagedRuntime.make(
+    RemoteChatLive.pipe(
+      Layer.provide(DaemonRpcLinkLive({ host: session.host })),
+      Layer.provide(connections),
+    ),
+  );
   try {
     const client = makeChatClient(runtime);
     const host = await client.command('getChatHost', { host: session.host });

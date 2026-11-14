@@ -1,6 +1,7 @@
 import type { ChatFolders } from '@moonbase/workspace';
-import type { ChatClient } from '@moonbase/contracts/chat';
-import type { DaemonClient } from '@moonbase/contracts/daemon';
+import type { Effect } from 'effect';
+import type { ApplicationError } from '@moonbase/contracts/errors';
+import type { ChatServiceShape, LocalHostHandlers } from '@moonbase/contracts/services';
 
 /**
  * A local-mode daemon's chats as its workspace sees them, for Turn into project. The folder is the
@@ -9,15 +10,19 @@ import type { DaemonClient } from '@moonbase/contracts/daemon';
  * whatever a client names. A chat already turned keeps its folder there, so turning it again
  * reopens the same checkout.
  */
-export function createChatFolders(chat: ChatClient, daemon: DaemonClient): ChatFolders {
+export function createChatFolders(
+  chat: ChatServiceShape,
+  localHost: LocalHostHandlers,
+  run: <A>(effect: Effect.Effect<A, ApplicationError>) => Promise<A>,
+): ChatFolders {
   return {
     async findOwnFolder(target) {
-      const { conversation } = await chat.command('getChat', { target });
-      await daemon.command('checkChatFolder', { host: target.host, path: conversation.cwd });
+      const { conversation } = await run(chat.getChat({ target }));
+      await run(localHost.checkChatFolder({ host: target.host, path: conversation.cwd }));
       return conversation.cwd;
     },
     async markAsProject(requestId, target) {
-      await daemon.command('markFolderAsProject', { requestId, target });
+      await run(localHost.markFolderAsProject({ requestId, target }));
     },
   };
 }
