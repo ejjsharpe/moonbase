@@ -1,6 +1,6 @@
 import { Effect, Stream } from 'effect';
-import { normalizeApplicationError } from '@moonbase/effect';
 import type { ChatCommand, ChatInput } from '@moonbase/contracts/chat';
+import type { ApplicationError } from '@moonbase/contracts/errors';
 import type { ConnectionCommand, ConnectionInput } from '@moonbase/contracts/connection';
 import type { ProviderCommand, ProviderInput } from '@moonbase/contracts/providers';
 import { DesktopChatRpcs, type ChatTargetId } from '../../ipc/chat-rpcs.ts';
@@ -33,8 +33,8 @@ export type ChatIpcOptions = {
   /** Reports a cleanup failure no request is left to answer with. */
   reportCleanup(error: unknown): void;
 };
-const promise = <A>(run: (signal: AbortSignal) => Promise<A>) =>
-  Effect.tryPromise({ try: run, catch: normalizeApplicationError });
+/** A request's work in main: cancelled, it is aborted and waited for, as its document is. */
+const promise = settledPromise;
 /** The chat request refusal the renderer has always had for a target that lacks a capability. */
 const unsupported = () => new IpcInputError({ problem: 'chat-request' });
 
@@ -178,15 +178,20 @@ export function makeChatIpcHandlers({ backends, isQuitting, reportCleanup }: Cha
         const session = yield* findSession(backendId, copy);
         const transcript = session.capabilities.transcript;
         if (!transcript) return yield* unsupported();
-        // Taken and counted in one step, so two requests can't both see a free place.
-        const admitted = yield* Effect.sync(
-          () => session.copies < maximumTranscriptCopies && ++session.copies > 0,
+        // Taken, and given its release, in one step: two requests can't both see a free place.
+        yield* Effect.uninterruptibleMask((restore) =>
+          Effect.suspend((): Effect.Effect<void, IpcBusyError | ApplicationError> => {
+            if (session.copies >= maximumTranscriptCopies)
+              return Effect.fail(new IpcBusyError({ limit: 'copies' }));
+            session.copies++;
+            // Cancelled, a Copy is told so and waited for, since it may be writing the clipboard.
+            return restore(
+              settledPromise((signal) =>
+                copyTranscript(session.chat, copy, { signal, reportCleanup }, transcript),
+              ),
+            ).pipe(Effect.ensuring(Effect.sync(() => session.copies--)));
+          }),
         );
-        if (!admitted) return yield* new IpcBusyError({ limit: 'copies' });
-        // Cancelled, a Copy is told so and waited for, since it may be writing the clipboard.
-        yield* settledPromise((signal) =>
-          copyTranscript(session.chat, copy, { signal, reportCleanup }, transcript),
-        ).pipe(Effect.ensuring(Effect.sync(() => session.copies--)));
       }),
     openTranscriptLink: ({ backendId, url }) =>
       Effect.gen(function* () {

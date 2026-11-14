@@ -41,41 +41,45 @@ const failed = () =>
 export function makeIpcAdmission(intercept?: IpcInterception) {
   const running = new Map<string, number>();
   return IpcAdmission.of((effect, { rpc, payload }) =>
-    Effect.suspend(() => {
-      const tag = rpc._tag;
-      const watch = RpcSchema.isStreamSchema(rpc.successSchema);
-      let kind = 'window',
-        limit: number = ipcLimits.windowRequests;
-      if (EditorRpcs.requests.has(tag)) {
-        kind = 'editor';
-        limit = ipcLimits.editorRequests;
-        const breach =
-          editorCommands.has(tag) || tag === workspaceWatch
-            ? findInputBoundBreach(
-                payload,
-                tag === 'getIgnoredPaths' ? ipcLimits.ignoredPathsLength : ipcLimits.arrayLength,
-              )
-            : undefined;
-        if (breach) return Effect.fail(new IpcInputError({ problem: breach }));
-      } else if (DesktopChatRpcs.requests.has(tag)) {
-        kind = `chat:${(payload as { backendId?: string } | undefined)?.backendId ?? 'remote'}`;
-        limit = ipcLimits.chatRequests;
-        if (!isWithinChatRequestBytes(payload ?? null))
-          return Effect.fail(new IpcInputError({ problem: 'chat-request' }));
-      }
-      const key = `${kind}:${watch ? 'watches' : 'requests'}`;
-      const count = running.get(key) ?? 0;
-      if (count >= limit)
-        return Effect.fail(new IpcBusyError({ limit: watch ? 'watches' : 'requests' }));
-      running.set(key, count + 1);
-      const handler = intercept ? (intercept({ tag, payload }, effect) as typeof effect) : effect;
-      return handler.pipe(
-        Effect.mapError((error) =>
-          ApplicationError.is(error) ? boundApplicationError(error) : error,
-        ),
-        Effect.catchDefect(() => Effect.fail(failed())),
-        Effect.ensuring(Effect.sync(() => running.set(key, running.get(key)! - 1))),
-      );
-    }),
+    // Counted and given its release in one step, so an interruption between them leaks no place.
+    Effect.uninterruptibleMask((restore) =>
+      Effect.suspend(() => {
+        const tag = rpc._tag;
+        const watch = RpcSchema.isStreamSchema(rpc.successSchema);
+        let kind = 'window',
+          limit: number = ipcLimits.windowRequests;
+        if (EditorRpcs.requests.has(tag)) {
+          kind = 'editor';
+          limit = ipcLimits.editorRequests;
+          const breach =
+            editorCommands.has(tag) || tag === workspaceWatch
+              ? findInputBoundBreach(
+                  payload,
+                  tag === 'getIgnoredPaths' ? ipcLimits.ignoredPathsLength : ipcLimits.arrayLength,
+                )
+              : undefined;
+          if (breach) return Effect.fail(new IpcInputError({ problem: breach }));
+        } else if (DesktopChatRpcs.requests.has(tag)) {
+          kind = `chat:${(payload as { backendId?: string } | undefined)?.backendId ?? 'remote'}`;
+          limit = ipcLimits.chatRequests;
+          if (!isWithinChatRequestBytes(payload ?? null))
+            return Effect.fail(new IpcInputError({ problem: 'chat-request' }));
+        }
+        const key = `${kind}:${watch ? 'watches' : 'requests'}`;
+        const count = running.get(key) ?? 0;
+        if (count >= limit)
+          return Effect.fail(new IpcBusyError({ limit: watch ? 'watches' : 'requests' }));
+        running.set(key, count + 1);
+        const handler = intercept ? (intercept({ tag, payload }, effect) as typeof effect) : effect;
+        return restore(
+          handler.pipe(
+            Effect.mapError((error) =>
+              ApplicationError.is(error) ? boundApplicationError(error) : error,
+            ),
+            Effect.catchDefect(() => Effect.fail(failed())),
+          ),
+        ).pipe(Effect.ensuring(Effect.sync(() => running.set(key, running.get(key)! - 1))));
+      }),
+    ),
   );
 }

@@ -1,7 +1,6 @@
 import { realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { Effect, Exit, Scope, Stream } from 'effect';
-import { normalizeApplicationError } from '@moonbase/effect';
 import type {
   CheckoutTarget,
   CommandInput,
@@ -36,8 +35,8 @@ const isInside = (root: string, path: string) => {
   return rest === '' || (rest !== '..' && !rest.startsWith(`..${sep}`) && !isAbsolute(rest));
 };
 const isRequestId = Schema.is(IpcRequestIdSchema);
-const promise = <A>(run: (signal: AbortSignal) => Promise<A>) =>
-  Effect.tryPromise({ try: run, catch: normalizeApplicationError });
+/** A request's work in main: cancelled, it is aborted and waited for, as its document is. */
+const promise = settledPromise;
 
 /**
  * The editor procedures for one document. Authority belongs to the document main served, never to
