@@ -1,4 +1,4 @@
-import { disconnectChat } from '../fixtures/chat-target.ts';
+import { disconnectChat } from '../fixtures/chat-fixture.ts';
 import { test, expect, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';

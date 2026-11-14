@@ -1,5 +1,5 @@
 import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
-import { prepareCrashRecovery } from '../fixtures/editor-regressions.ts';
+import { prepareCrashRecovery } from '../fixtures/editor-fixture.ts';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

@@ -5,7 +5,7 @@ import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
-import { controlledHostFixture, until } from './fixture.ts';
+import { controlledHostFixture, until } from './controlled-host-fixture.ts';
 import { keyedModel } from './faux-model.ts';
 
 async function fixture(t: { after(fn: () => Promise<void>): void }, hold = false) {

@@ -4,8 +4,8 @@ import {
   saveFile,
   prepareCrashRecovery,
   recoverCrashedWorkbench,
-} from '../fixtures/editor-regressions.ts';
-import { createRemoteChat, selectRemoteChat } from '../fixtures/chat-target.ts';
+} from '../fixtures/editor-fixture.ts';
+import { createRemoteChat, selectRemoteChat } from '../fixtures/chat-fixture.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import { fixture, until } from '../../../../test/chat/tool-fixture.ts';
@@ -41,7 +41,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
                 ),
             }
           : {}),
-        args: packaged ? [] : [resolve('test/fixtures/harness.mjs')],
+        args: packaged ? [] : [resolve('test/fixtures/editor-harness.mjs')],
         env: {
           PATH: '/usr/bin:/bin',
           PI_CLAUDE_CODE_COMMAND: '/nonexistent/claude',

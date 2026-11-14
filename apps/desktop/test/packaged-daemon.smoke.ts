@@ -31,7 +31,7 @@ import {
   startDaemonCommand,
   withLocalRegistry,
   writeHostilePreload,
-} from './fixtures/daemon-process.ts';
+} from './fixtures/daemon-fixture.ts';
 
 // Runs against the package that `bun run package` made; `test:package` runs it.
 const contents = resolve(

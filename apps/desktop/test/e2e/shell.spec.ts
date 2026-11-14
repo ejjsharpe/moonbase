@@ -1,4 +1,4 @@
-import { selectFileView } from '../fixtures/editor-regressions.ts';
+import { selectFileView } from '../fixtures/editor-fixture.ts';
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 

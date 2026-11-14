@@ -1,5 +1,5 @@
 import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
-import { closeSettings, openSettings } from '../fixtures/chat-target.ts';
+import { closeSettings, openSettings } from '../fixtures/chat-fixture.ts';
 import {
   openTabMenu,
   saveFile,
@@ -10,7 +10,7 @@ import {
   checkFilenameMaps,
   checkTabMenu,
   explorerAction,
-} from '../fixtures/editor-regressions.ts';
+} from '../fixtures/editor-fixture.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron } from '@playwright/test';
 import type { ElectronApplication, Page } from '@playwright/test';
@@ -106,7 +106,7 @@ async function launch() {
   } as Record<string, string>;
   delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({
-    args: [resolve('test/fixtures/harness.mjs')],
+    args: [resolve('test/fixtures/editor-harness.mjs')],
     env,
     timeout: 20000,
   });
@@ -1343,7 +1343,7 @@ test('an explicit native Quit arriving before renderer startup is not lost', asy
   } as Record<string, string>;
   delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({
-    args: [resolve('test/fixtures/harness.mjs')],
+    args: [resolve('test/fixtures/editor-harness.mjs')],
     env,
     timeout: 20000,
   });

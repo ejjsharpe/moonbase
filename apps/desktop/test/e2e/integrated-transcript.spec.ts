@@ -8,9 +8,9 @@ import {
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { controlledHostFixture, until } from '../../../../test/chat/fixture.ts';
-import { createRemoteChat, selectRemoteChat } from '../fixtures/chat-target.ts';
-import { captureNative } from '../fixtures/editor-regressions.ts';
+import { controlledHostFixture, until } from '../../../../test/chat/controlled-host-fixture.ts';
+import { createRemoteChat, selectRemoteChat } from '../fixtures/chat-fixture.ts';
+import { captureNative } from '../fixtures/editor-fixture.ts';
 import { readFindHighlight } from '../fixtures/find-highlight.ts';
 import { openActivity } from '../fixtures/transcript-list.ts';
 import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';

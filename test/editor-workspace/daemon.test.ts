@@ -11,7 +11,7 @@ import { WorkspaceHostService } from '@moonbase/contracts/services';
 import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
 import { RemoteWorkspaceHostLive } from '@moonbase/daemon-protocol/remote';
 import { WorkspaceRecoveryLive } from '@moonbase/workspace';
-import { startDaemonCommand } from '../../apps/desktop/test/fixtures/daemon-process.ts';
+import { startDaemonCommand } from '../../apps/desktop/test/fixtures/daemon-fixture.ts';
 import {
   makeFauxDaemonCommand,
   prepareDaemonData,

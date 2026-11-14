@@ -62,11 +62,11 @@ export type CleanupReport = {
   processGroups: number[];
   reboundPorts: number[];
 };
-const daemonEntry = new URL('./daemon-host.ts', import.meta.url).pathname;
+const daemonEntry = new URL('./daemon-host-process.ts', import.meta.url).pathname;
 const noNetwork = new URL('../../apps/daemon/test/no-network.ts', import.meta.url).pathname;
 /**
  * A controlled remote host: the daemon in host mode in temporary data, on Bun, with the faux
- * providers and tools of `behaviour` (a `faux-*.mjs` module), reached through `forward.mjs` in
+ * providers and tools of `behaviour` (a `faux-*.mjs` module), reached through `forward-process.mjs` in
  * place of OpenSSH. Its approved root is `cwd`; chats choose `model`.
  */
 export async function controlledHostFixture(behaviour: URL, hold = false) {
@@ -105,7 +105,7 @@ export async function controlledHostFixture(behaviour: URL, hold = false) {
     '#!' +
       process.execPath +
       '\n' +
-      (await readFile(new URL('./forward.mjs', import.meta.url), 'utf8')),
+      (await readFile(new URL('./forward-process.mjs', import.meta.url), 'utf8')),
   );
   await chmod(executable, 0o700);
   const oldLog = process.env.MOONBASE_CHAT_FORWARD_LOG,

@@ -14,7 +14,7 @@ import {
   startDaemonCommand,
   withLocalRegistry,
   writeHostilePreload,
-} from './fixtures/daemon-process.ts';
+} from './fixtures/daemon-fixture.ts';
 
 const dist = fileURLToPath(new URL('../dist', import.meta.url));
 const source = fileURLToPath(new URL('../../daemon/src/main.ts', import.meta.url));

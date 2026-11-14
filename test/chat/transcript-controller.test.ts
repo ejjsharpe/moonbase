@@ -11,7 +11,7 @@ import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { createMoonbaseApplication } from '@moonbase/application';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import type { ChatState } from '@moonbase/application/chat';
-import { controlledHostFixture, until } from './fixture.ts';
+import { controlledHostFixture, until } from './controlled-host-fixture.ts';
 
 function storage() {
   let value: string | null = null;

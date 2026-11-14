@@ -1,4 +1,4 @@
-// The controlled remote host: the real daemon in host mode, run on Bun by `fixture.ts` over IPC. A
+// The controlled remote host: the real daemon in host mode, run on Bun by `controlled-host-fixture.ts` over IPC. A
 // behaviour module (`faux-*.mjs`) supplies its faux providers and tools; `host-control.ts` counts
 // and holds requests through the daemon's chat client. No provider or network is reached.
 import { readFileSync } from 'node:fs';

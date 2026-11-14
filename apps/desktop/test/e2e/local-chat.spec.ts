@@ -10,7 +10,7 @@ import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { controlledHostFixture } from '../../../../test/chat/fixture.ts';
+import { controlledHostFixture } from '../../../../test/chat/controlled-host-fixture.ts';
 import {
   closeSettings,
   createRemoteChat,
@@ -18,8 +18,8 @@ import {
   openSettings,
   selectRemoteChat,
   showChat,
-} from '../fixtures/chat-target.ts';
-import { captureNative } from '../fixtures/editor-regressions.ts';
+} from '../fixtures/chat-fixture.ts';
+import { captureNative } from '../fixtures/editor-fixture.ts';
 import {
   findTestBun,
   type FauxScript,

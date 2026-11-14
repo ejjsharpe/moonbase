@@ -1,12 +1,12 @@
 import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
-import { expectSaveEnabled, saveFile, captureNative } from '../fixtures/editor-regressions.ts';
+import { expectSaveEnabled, saveFile, captureNative } from '../fixtures/editor-fixture.ts';
 import {
   closeSettings,
   createRemoteChat,
   disconnectChat,
   openSettings,
   selectRemoteChat,
-} from '../fixtures/chat-target.ts';
+} from '../fixtures/chat-fixture.ts';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
   test,
@@ -41,7 +41,7 @@ async function launch(
             ),
         }
       : {}),
-    args: packaged ? [] : [resolve('test/fixtures/harness.mjs')],
+    args: packaged ? [] : [resolve('test/fixtures/editor-harness.mjs')],
     env: {
       PATH: '/usr/bin:/bin',
       PI_CLAUDE_CODE_COMMAND: '/nonexistent/claude',

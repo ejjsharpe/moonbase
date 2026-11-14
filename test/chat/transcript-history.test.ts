@@ -11,7 +11,7 @@ import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { mkdtemp, realpath, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { controlledHostFixture, until } from './fixture.ts';
+import { controlledHostFixture, until } from './controlled-host-fixture.ts';
 import {
   instrumentTranscriptReads,
   seedTranscriptHistory,

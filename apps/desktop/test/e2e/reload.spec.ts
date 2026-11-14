@@ -1,5 +1,5 @@
 import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
-import { saveFile, captureNative } from '../fixtures/editor-regressions.ts';
+import { saveFile, captureNative } from '../fixtures/editor-fixture.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';

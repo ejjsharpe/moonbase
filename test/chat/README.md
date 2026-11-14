@@ -6,4 +6,4 @@ Runs public application clients against the real daemon in host mode, in tempora
 bun run test:chat-integration
 ```
 
-`daemon-host.ts` is the host's test entry: `runDaemon` with the faux providers and tools of a behaviour module (`faux-reply.mjs`, `faux-stream.mjs`, `faux-tool.mjs`, or the desktop's `faux-stored-image.mjs`), and `host-control.ts` counting and holding requests over IPC. These and `forward.mjs` are test fixtures, not product code. Run this suite serially with other resource-heavy suites.
+`daemon-host-process.ts` is the host's test entry: `runDaemon` with the faux providers and tools of a behaviour module (`faux-reply.mjs`, `faux-stream.mjs`, `faux-tool.mjs`, or the desktop's `faux-stored-image.mjs`), and `host-control.ts` counting and holding requests over IPC. These and `forward-process.mjs` are test fixtures, not product code. Run this suite serially with other resource-heavy suites.
