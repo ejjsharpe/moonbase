@@ -24,7 +24,7 @@ import {
   restartDaemon,
 } from '../src/main/local-daemon.ts';
 import { createDaemonWorkspaceHost } from '../src/main/workspace-host.ts';
-import { createLocalDaemonClient, type LocalDaemonClient } from '../src/chat/daemon.ts';
+import { createLocalDaemonClient, type LocalDaemonClient } from '../src/main/chat/daemon.ts';
 import {
   makeFauxDaemonCommand,
   prepareDaemonData,

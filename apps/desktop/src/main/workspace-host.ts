@@ -8,7 +8,7 @@ import {
   hostDeadlinesMs,
   hostInputSchemas,
 } from '@moonbase/contracts/workspace-host-schema';
-import type { LocalDaemonClient } from '../chat/daemon.ts';
+import type { LocalDaemonClient } from './chat/daemon.ts';
 
 const unreachable = () =>
   new ApplicationError({

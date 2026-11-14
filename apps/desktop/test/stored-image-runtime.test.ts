@@ -11,8 +11,8 @@ import type {
 } from '@moonbase/contracts/chat';
 import { controlledHostFixture, until } from '../../../tests/chat/fixture.ts';
 import { createImageRuntime, retainedImage } from './stored-image-fixture.ts';
-import { ChatIpcSession } from '../src/chat/session.ts';
-import { respondTranscriptImage } from '../src/chat/transcript-native.ts';
+import { ChatIpcSession } from '../src/main/chat/session.ts';
+import { respondTranscriptImage } from '../src/main/chat/transcript-native.ts';
 
 const ipcRuntime = ManagedRuntime.make(Layer.empty);
 after(() => ipcRuntime.dispose());

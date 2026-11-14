@@ -9,7 +9,7 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
-import { ChatIpcSession } from '../src/chat/session.ts';
+import { ChatIpcSession } from '../src/main/chat/session.ts';
 
 test('desktop recovers an exact committed Create before renewed folder approval, while new Create still requires approval', async (t) => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-local-retry-'))),

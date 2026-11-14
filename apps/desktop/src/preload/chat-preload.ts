@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { channels, isChatWatchKind, unwrap, type ChatBridge, type Reply } from './chat/wire.ts';
+import {
+  channels,
+  isChatWatchKind,
+  unwrap,
+  type ChatBridge,
+  type Reply,
+} from '../ipc/chat-wire.ts';
 
 const active = new Map<string, string>();
 const bridge: ChatBridge = {

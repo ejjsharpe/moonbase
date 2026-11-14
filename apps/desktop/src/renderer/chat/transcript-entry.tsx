@@ -29,7 +29,7 @@ import type {
   ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
-import type { TranscriptNative } from '../../chat/wire.ts';
+import type { TranscriptNative } from '../../ipc/chat-wire.ts';
 import { Markdown } from './markdown.tsx';
 import type { MarkdownCache } from './markdown-model.ts';
 import {

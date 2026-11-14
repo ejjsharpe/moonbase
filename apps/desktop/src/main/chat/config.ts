@@ -10,7 +10,7 @@ import {
 import type { ChatSession } from '@moonbase/contracts/chat';
 import * as Schema from 'effect/Schema';
 import { ChatIdentifierSchema } from '@moonbase/contracts/chat-schema';
-import { invalid } from './wire.ts';
+import { invalid } from '../../ipc/chat-wire.ts';
 import { isPrivateTo } from '@moonbase/contracts/files';
 
 const configurationSchema = Schema.Struct({

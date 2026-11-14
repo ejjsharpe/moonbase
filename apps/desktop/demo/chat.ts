@@ -19,7 +19,7 @@ export const demoFiles = [
   'apps/desktop/README.md',
   'apps/desktop/src/renderer/chat/view.tsx',
   'apps/desktop/src/renderer/chat/composer.tsx',
-  'apps/desktop/src/main.ts',
+  'apps/desktop/src/main/main.ts',
   'packages/workbench/src/editor/workbench.tsx',
   'packages/workbench/src/editor/file-lookup.tsx',
   'docs/Release notes.md',

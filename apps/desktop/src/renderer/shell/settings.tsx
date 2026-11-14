@@ -10,7 +10,7 @@ import { colors, radius, shadow, space, type } from '@moonbase/ui/tokens.stylex'
 import { workbench } from '@moonbase/ui/workbench';
 import { ProviderSetup } from '../chat/setup.tsx';
 import { Icon } from '@moonbase/ui/icons';
-import { errorDTO } from '../../wire.ts';
+import { errorDTO } from '../../ipc/wire.ts';
 
 export type SettingsSection = 'hosts' | 'providers';
 const noSubscription = () => () => {};

@@ -9,7 +9,7 @@ import {
   decodeConnectionSnapshot,
   isConnectionCommand,
 } from '@moonbase/contracts/connection-schema';
-import { cancellation, errorDTO, unwrap as unwrapReply } from '../wire.ts';
+import { cancellation, errorDTO, unwrap as unwrapReply } from './wire.ts';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import type {
   ChatClient,

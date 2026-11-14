@@ -23,7 +23,7 @@ import {
   isChatWatchKind,
   type Reply,
   type TranscriptImage,
-} from './wire.ts';
+} from '../../ipc/chat-wire.ts';
 import {
   copyTranscript,
   decodeTranscriptCopy,

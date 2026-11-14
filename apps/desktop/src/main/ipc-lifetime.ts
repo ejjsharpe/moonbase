@@ -2,7 +2,7 @@ import { normalizeApplicationError } from '@moonbase/effect';
 import { Effect, Exit, Scope, type ManagedRuntime } from 'effect';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import { ApplicationError, type ObservationClose } from '@moonbase/contracts/workspace';
-import type { ErrorDTO, Reply } from './wire.ts';
+import type { ErrorDTO, Reply } from '../ipc/wire.ts';
 
 export type IpcRequest = {
   signal: AbortSignal;

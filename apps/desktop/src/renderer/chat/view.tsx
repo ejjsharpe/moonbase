@@ -19,7 +19,7 @@ import {
 import { formatChatAge } from './age.ts';
 import { activateChatFind, FindBar, handleChatFindKeyDown } from './find.tsx';
 import { Transcript } from './transcript.tsx';
-import type { TranscriptNative } from '../../chat/wire.ts';
+import type { TranscriptNative } from '../../ipc/chat-wire.ts';
 import { Choice } from './choice.tsx';
 import { ModelPicker } from './model-picker.tsx';
 import { FolderPicker, type ChatFolderProject } from './folder-picker.tsx';

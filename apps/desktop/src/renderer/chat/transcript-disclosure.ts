@@ -8,7 +8,7 @@ import {
 } from 'react';
 import type { ChatController } from '@moonbase/application/chat';
 import type { ChatTranscriptMatch } from '@moonbase/contracts/chat';
-import { getTranscriptDisclosureId } from '../../chat/transcript-source.ts';
+import { getTranscriptDisclosureId } from '../../main/chat/transcript-source.ts';
 
 /**
  * The view-memory expansion ID of disclosure `id` in a row: null while it is being computed, and

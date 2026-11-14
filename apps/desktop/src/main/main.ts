@@ -21,24 +21,24 @@ import { mkdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EditorSession } from './session.ts';
-import { channels } from './wire.ts';
+import { channels } from '../ipc/wire.ts';
 import { readConfiguration } from './chat/config.ts';
 import { acquireRemoteChat } from './chat/remote.ts';
-import { channels as chatChannels } from './chat/wire.ts';
+import { channels as chatChannels } from '../ipc/chat-wire.ts';
 import { respondTranscriptImage, transcriptImagePath } from './chat/transcript-native.ts';
-import { createNativeActions } from './main/native-actions.ts';
-import { createChatBackends } from './main/chat-backends.ts';
-import { createFileRequestIds } from './main/request-ids.ts';
-import { createDaemonWorkspaceHost } from './main/workspace-host.ts';
-import { findDaemonCommand, type DaemonCommand } from './main/daemon-command.ts';
+import { createNativeActions } from './native-actions.ts';
+import { createChatBackends } from './chat-backends.ts';
+import { createFileRequestIds } from './request-ids.ts';
+import { createDaemonWorkspaceHost } from './workspace-host.ts';
+import { findDaemonCommand, type DaemonCommand } from './daemon-command.ts';
 import {
   createLocalDaemon,
   findDaemonDirectory,
   readDaemonSession,
   restartDaemon,
-} from './main/local-daemon.ts';
-import { createTrustedDocumentGuard, installCommandIpc } from './main/ipc.ts';
-import { installWindowLifecycle } from './main/window-lifecycle.ts';
+} from './local-daemon.ts';
+import { createTrustedDocumentGuard, installCommandIpc } from './ipc.ts';
+import { installWindowLifecycle } from './window-lifecycle.ts';
 
 const directory = fileURLToPath(new URL('.', import.meta.url));
 /** The packaged daemon bundle's build identifier, which `scripts/build.mjs` defines. */

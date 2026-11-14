@@ -16,8 +16,8 @@ import {
   type CheckoutTarget,
   type WorkspaceEvent,
 } from '@moonbase/contracts/workspace';
-import { EditorSession } from '../src/session.ts';
-import { bridgeClient, errorDTO, failure, type Reply } from '../src/wire.ts';
+import { EditorSession } from '../src/main/session.ts';
+import { bridgeClient, errorDTO, failure, type Reply } from '../src/ipc/wire.ts';
 const target: CheckoutTarget = {
   hostId: 'local',
   checkoutId: 'checkout',

@@ -1,5 +1,5 @@
 import { useStoredToggle } from '../hooks/use-stored-toggle.ts';
-import type { TranscriptNative } from '../../chat/wire.ts';
+import type { TranscriptNative } from '../../ipc/chat-wire.ts';
 import {
   Fragment,
   forwardRef,

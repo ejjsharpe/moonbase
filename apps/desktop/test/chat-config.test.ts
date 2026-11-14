@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { mkdtemp, writeFile, chmod, symlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readConfiguration } from '../src/chat/config.ts';
+import { readConfiguration } from '../src/main/chat/config.ts';
 test('private configuration is owner-only, bounded, explicit and projected; bad files never initialize transport', async (t) => {
   await assert.rejects(readConfiguration(''), {
     code: 'InvalidInput',

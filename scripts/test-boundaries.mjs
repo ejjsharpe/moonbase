@@ -68,7 +68,7 @@ assert(
 );
 for (const specifier of ['@moonbase/chat', '@moonbase/editor', '@moonbase/application/client'])
   assert(
-    check({ 'apps/desktop/src/main.ts': `import '${specifier}';` }).some((error) =>
+    check({ 'apps/desktop/src/main/main.ts': `import '${specifier}';` }).some((error) =>
       error.includes('public package export'),
     ),
   );
@@ -190,15 +190,11 @@ console.log(
 );
 
 for (const entry of [
-  'main.ts',
-  'main/native-actions.ts',
-  'main/ipc.ts',
-  'main/window-lifecycle.ts',
-  'main/chat-backends.ts',
+  'main/main.ts',
+  'main/chat/session.ts',
   'main/future-owner.ts',
-  'ipc-lifetime.ts',
-  'chat/local.ts',
+  'preload/preload.ts',
 ])
   assert(isPrivilegedDesktopInput(`/checkout/apps/desktop/src/${entry}`), entry);
 assert(!isPrivilegedDesktopInput('/checkout/apps/desktop/src/renderer/main.tsx'));
-assert(!isPrivilegedDesktopInput('/checkout/apps/desktop/src/chat/wire.ts'));
+assert(!isPrivilegedDesktopInput('/checkout/apps/desktop/src/ipc/chat-wire.ts'));

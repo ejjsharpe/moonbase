@@ -15,7 +15,7 @@ import {
   record,
   type TranscriptCopy,
   type TranscriptImage,
-} from './wire.ts';
+} from '../../ipc/chat-wire.ts';
 import type { IpcRequest } from '../ipc-lifetime.ts';
 
 export type NativeTranscriptActions = {

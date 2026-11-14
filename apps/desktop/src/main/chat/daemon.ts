@@ -22,7 +22,7 @@ import {
   olderDaemonMessage,
   type LocalDaemon,
   readDaemonSession,
-} from '../main/local-daemon.ts';
+} from '../local-daemon.ts';
 
 /**
  * Local chat and files as a client of the local daemon: finds or starts it, then binds chat, folder,

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChatState } from '@moonbase/application/chat';
-import type { TranscriptNative } from '../../chat/wire.ts';
+import type { TranscriptNative } from '../../ipc/chat-wire.ts';
 
 export type NativeActionKind = 'copy' | 'open';
 /** `success` clears itself; `error` stays until replaced. Neither ever reports another's outcome. */

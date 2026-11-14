@@ -24,7 +24,7 @@ import {
   requestId,
   string,
   type Reply,
-} from './wire.ts';
+} from '../ipc/wire.ts';
 
 /** Whether `path` is `root` or lies within it. */
 const inside = (root: string, path: string) => {

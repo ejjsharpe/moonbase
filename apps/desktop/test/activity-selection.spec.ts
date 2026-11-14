@@ -2,8 +2,8 @@ import { openActivity, openActivityGroups, stepToggle } from './transcript-list.
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import { Layer, ManagedRuntime } from 'effect';
 import type { ChatClient } from '@moonbase/contracts/chat';
-import { ChatIpcSession } from '../src/chat/session.ts';
-import { browserTranscriptActions, type TranscriptCopy } from '../src/chat/wire.ts';
+import { ChatIpcSession } from '../src/main/chat/session.ts';
+import { browserTranscriptActions, type TranscriptCopy } from '../src/ipc/chat-wire.ts';
 
 async function open(page: Page) {
   await page.goto('/?local&design&transcript');

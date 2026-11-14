@@ -1,4 +1,4 @@
-import type { NativeTranscriptActions } from '../chat/transcript-native.ts';
+import type { NativeTranscriptActions } from './chat/transcript-native.ts';
 import { randomUUID } from 'node:crypto';
 import type { Effect, ManagedRuntime } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
@@ -7,10 +7,10 @@ import type { ChatClient } from '@moonbase/contracts/chat';
 import type { ConnectionClient } from '@moonbase/contracts/connection';
 import { bindChatClient, bindProviderSetupClient } from '@moonbase/application/runtime/clients';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
-import type { DaemonChat, LocalDaemonClient } from '../chat/daemon.ts';
-import type { ChatConfiguration } from '../chat/config.ts';
-import { ChatIpcSession } from '../chat/session.ts';
-import type { Reply, DesktopChatTarget } from '../chat/wire.ts';
+import type { DaemonChat, LocalDaemonClient } from './chat/daemon.ts';
+import type { ChatConfiguration } from './chat/config.ts';
+import { ChatIpcSession } from './chat/session.ts';
+import type { Reply, DesktopChatTarget } from '../ipc/chat-wire.ts';
 import type { RequestIds } from './request-ids.ts';
 
 /** A remote host's daemon in host mode, over its SSH connection. */

@@ -6,7 +6,7 @@ import {
   type DesktopAction,
   type ErrorDTO,
   type Reply,
-} from './wire.ts';
+} from '../ipc/wire.ts';
 const active = new Set<string>();
 const call = async <T = unknown>(method: string, input: unknown, id: string) => {
   active.add(id);
