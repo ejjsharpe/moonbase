@@ -14,6 +14,12 @@ Data may be lost between versions while Moonbase is prerelease: a change can sta
 - Name functions with verb phrases (`findFile`, `saveDraft`) and variables/types with noun phrases.
 - UI uses `packages/ui` StyleX tokens/recipes and Base UI. The tokens are the design reference.
 
+## Files and folders
+
+- Start flat. When a few files belong to one thing and are used together, group them in a folder named for it (`renderer/chat/transcript/`, `workbench/src/editor/files-tree/`). Don't add generic folders like `utils/` or `logic/`.
+- Code that runs in different processes gets a folder per process: desktop `main/`, `preload/` and `renderer/`, with the IPC contract they share in `ipc/`; workspace `host/` and `client/`, with what they share at `src/`.
+- Desktop tests: unit tests in `test/`, Playwright specs in `test/e2e/`, harnesses and faux processes in `test/fixtures/`.
+
 ## Effect
 
 Write code as if Moonbase had been Effect-native from the start (epic #273, D14 and D15). Code that predates this is being moved; don't copy its patterns.
