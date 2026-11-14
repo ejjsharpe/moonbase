@@ -17,7 +17,8 @@ export async function callMainFromPage({
   payload,
   interrupt,
 }: Request): Promise<WindowIpcReply> {
-  const nonce = crypto.randomUUID();
+  // about:blank has no secure-context crypto.randomUUID.
+  const nonce = Math.random().toString(36).slice(2);
   let port: MessagePort;
   try {
     port = await new Promise<MessagePort>((resolve, reject) => {

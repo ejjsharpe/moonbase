@@ -279,12 +279,13 @@ async function main() {
       return new Response('Not found', { status: 404 });
     }
   });
-  const actions = await runtime.runPromise(PubSub.unbounded<WindowAction>());
+  // Built synchronously: Quit may arrive any time after the window exists, and the lifecycle
+  // below must be installed before it can.
+  const actions = runtime.runSync(PubSub.unbounded<WindowAction>());
   const testIpc = app.isPackaged
     ? undefined
     : (globalThis as { moonbaseTestIpc?: TestIpcHook }).moonbaseTestIpc;
-  const ipc = await runApplicationEffect(
-    runtime,
+  const ipc = runtime.runSync(
     Scope.provide(
       makeIpcServer(
         makeDocumentHandlers({

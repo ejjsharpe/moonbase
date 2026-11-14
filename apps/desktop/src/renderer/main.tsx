@@ -50,17 +50,21 @@ function useWindowActions(
         action.action === 'cleanup-error'
           ? on(action.action, '', action.error)
           : on(action.action, action.id),
-      (error) => console.error(error.message),
+      // The watch ends only as the document goes (its port closes on Quit and reload).
+      () => {},
     );
     return () => void close().catch(() => {});
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- one watch per dependency
   }, [dependency]);
 }
-/** Answers main's Quit request; a lost answer leaves main asking again on the next Quit. */
+/**
+ * Answers main's Quit request, as a message: main may close the window before replying, and a
+ * lost answer leaves main asking again on the next Quit.
+ */
 const answerQuit = (id: string, consent: boolean, cleanupError?: ApplicationError) =>
   void shell
     .answerQuit(id, consent, cleanupError && boundApplicationError(cleanupError))
-    .catch((error: unknown) => console.error(normalizeApplicationError(error).message));
+    .catch(() => {});
 function Desktop({ application }: { application: MoonbaseApplication }) {
   const handle = useRef<DesktopShellHandle>(null),
     [closing, setClosing] = useState(false),
