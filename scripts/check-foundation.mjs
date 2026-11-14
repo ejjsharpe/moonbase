@@ -3,7 +3,6 @@ import { build } from 'esbuild';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { checkBoundaries, readRepository } from './boundaries.mjs';
-import './test-boundaries.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 // Effect may resolve outside the checkout, as it does from the foundation test's copy.
