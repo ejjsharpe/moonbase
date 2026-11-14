@@ -13,7 +13,7 @@ import {
 import { readProviderSignInUrl } from '../src/providers-schema.ts';
 import { daemonErrorReasons, findDaemonErrorReason, readDaemonErrorReason } from '../src/daemon.ts';
 import { decodeConnectionProfile } from '../src/connection-schema.ts';
-import { chatHostCapabilities } from '../src/host.ts';
+import { chatHostCapabilities, chatProtocolVersion } from '../src/host.ts';
 import { decodeChatHostHealth } from '../src/host-schema.ts';
 
 const host = { hostId: 'host', storeId: 'store' };
@@ -100,15 +100,17 @@ test('sign-in links are accepted only as https pages on a provider sign-in origi
     assert.equal(readProviderSignInUrl(value), undefined, String(value));
 });
 
-test('health accepts protocol 2 with daemon capabilities and refuses protocol 1', () => {
+test('health accepts the current protocol with daemon capabilities and refuses an older one', () => {
   const health = {
     ...host,
-    protocol: 2,
+    protocol: chatProtocolVersion,
     version: '0.1.0',
     capabilities: Object.values(chatHostCapabilities),
   };
   assert.deepEqual(decodeChatHostHealth(health), health);
-  assert.throws(() => decodeChatHostHealth({ ...health, protocol: 1 }), { code: 'Incompatible' });
+  assert.throws(() => decodeChatHostHealth({ ...health, protocol: chatProtocolVersion - 1 }), {
+    code: 'Incompatible',
+  });
 });
 
 test('daemon error reasons pair one code with one fixed message, and are read only for that code', () => {

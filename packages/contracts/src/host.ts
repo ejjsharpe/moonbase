@@ -1,7 +1,7 @@
 import type { ChatHostTargetSchema, ChatHostHealthSchema } from './host-schema.ts';
 
 /** Browser-safe identities; credentials and forwarded endpoints remain privileged. */
-export const chatProtocolVersion = 2;
+export const chatProtocolVersion = 3;
 export const chatHostVersion = '0.1.0';
 /** A host token: 16 to 4096 printable ASCII characters. */
 export const hostTokenPattern = /^[\x21-\x7e]{16,4096}$/;

@@ -338,12 +338,6 @@ export const DaemonRpcLinkLive = (config: { host: ChatHostTarget }) =>
               )
                 return yield* Effect.fail(error);
               if (isTransport(error) || !ApplicationError.is(error)) {
-                console.error(
-                  'DEBUG-CALL',
-                  operation,
-                  String(error),
-                  (error as { reason?: unknown }).reason,
-                );
                 return yield* Effect.fail(lostReply(options.mutation));
               }
             }

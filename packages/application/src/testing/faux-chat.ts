@@ -1,4 +1,5 @@
 import { ApplicationError } from '@moonbase/contracts/errors';
+import { chatProtocolVersion } from '@moonbase/contracts/host';
 import type { ChatDependencies } from '../chat/index.ts';
 import type { ChatClient, ChatSnapshot } from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
@@ -97,7 +98,12 @@ export function fauxChat() {
           state: 'connected',
           connectionId: 'connection-' + ++connectionGeneration,
           profile,
-          health: { ...context.host, protocol: 2, version: '0.1.0', capabilities: ['chat-v0'] },
+          health: {
+            ...context.host,
+            protocol: chatProtocolVersion,
+            version: '0.1.0',
+            capabilities: ['chat-v0'],
+          },
         };
       if (operation === 'disconnect')
         connectionState = { state: 'disconnected', connectionId: null, profile };

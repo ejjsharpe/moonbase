@@ -30,6 +30,7 @@ import * as P from '../src/protocol.ts';
 import { controlledChat, host, session, target } from './controlled-chat-fixture.ts';
 import { refusingDaemon } from './served-services.ts';
 import { manualClock, until } from './runtime-fixture.ts';
+import { chatProtocolVersion } from '@moonbase/contracts/host';
 
 async function serve(
   t: TestContext,
@@ -133,7 +134,7 @@ async function rawHello(raw: Raw, token: string, hello: Record<string, unknown> 
   const { challenge: value } = JSON.parse(challenge.payload.toString());
   const nonce = P.nonce(),
     keys = deriveSocketKeys(token, { nonce, challenge: value, host });
-  const message = { type: 'hello', seq: 0, protocol: 2, host, nonce, ...hello };
+  const message = { type: 'hello', seq: 0, protocol: chatProtocolVersion, host, nonce, ...hello };
   raw.send(sealSocketMessage(keys.client, message));
   return { keys, nonce, challenge: value, message };
 }
@@ -409,7 +410,13 @@ test('the handshake and every authenticated frame refuse forgery, replay, reorde
         challenge: JSON.parse(challenge.payload.toString()).challenge,
         host,
       });
-    captured = sealSocketMessage(keys.client, { type: 'hello', seq: 0, protocol: 2, host, nonce });
+    captured = sealSocketMessage(keys.client, {
+      type: 'hello',
+      seq: 0,
+      protocol: chatProtocolVersion,
+      host,
+      nonce,
+    });
     raw.socket.destroy();
   }
   for (const [name, fault] of Object.entries(faults)) {
@@ -441,7 +448,9 @@ test('a client refuses a daemon that cannot prove the token, skips a frame or ne
       socket.write(
         encodeWebSocketFrame(
           2,
-          Buffer.from(JSON.stringify({ type: 'challenge', protocol: 2, challenge })),
+          Buffer.from(
+            JSON.stringify({ type: 'challenge', protocol: chatProtocolVersion, challenge }),
+          ),
         ),
       );
       const reader = new WebSocketReader(1 << 20, true);
@@ -456,7 +465,7 @@ test('a client refuses a daemon that cannot prove the token, skips a frame or ne
           });
           const health = {
             ...host,
-            protocol: 2,
+            protocol: chatProtocolVersion,
             version: '0.1.0',
             capabilities: ['chat-v0', 'socket-v1'],
           };

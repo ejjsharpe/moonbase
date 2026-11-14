@@ -27,12 +27,13 @@ import { ProviderSetupLive, localProviderIds } from '@moonbase/chat-runtime/prov
 import { DaemonRpcLinkLive, RemoteChatLive, RemoteDaemonLive } from '../src/remote.ts';
 import { localDaemonCapabilities, serveChat } from '../src/server.ts';
 import { hooked, hookedProviders, refusingDaemon } from './served-services.ts';
+import { chatProtocolVersion } from '@moonbase/contracts/host';
 
 const host = { hostId: 'transport-host', storeId: 'transport-store' },
   session = { host, actorId: 'personal' },
   health = {
     ...host,
-    protocol: 2 as const,
+    protocol: chatProtocolVersion as typeof chatProtocolVersion,
     version: '0.1.0' as const,
     capabilities: ['chat-v0', 'daemon-local-v1'],
   };
@@ -741,7 +742,12 @@ async function setupLocal(t: { after: (fn: () => Promise<void>) => void }) {
     token,
     expected: localHost,
     connectionId: 'local-one',
-    health: { ...localHost, protocol: 2, version: '0.1.0', capabilities: daemonCapabilities },
+    health: {
+      ...localHost,
+      protocol: chatProtocolVersion,
+      version: '0.1.0',
+      capabilities: daemonCapabilities,
+    },
   };
   const unavailable = () =>
     Effect.fail(new ApplicationError({ code: 'Unavailable', message: 'Disconnected' }));
@@ -1088,7 +1094,12 @@ test('a client refuses a chat host that does not advertise local mode, and its l
     token: f.token,
     expected: localHost,
     connectionId: 'local-only',
-    health: { ...localHost, protocol: 2, version: '0.1.0', capabilities: ['chat-v0'] },
+    health: {
+      ...localHost,
+      protocol: chatProtocolVersion,
+      version: '0.1.0',
+      capabilities: ['chat-v0'],
+    },
   };
   const unadvertised = ManagedRuntime.make(
     RemoteDaemonLive({ host: localHost, sameMachine: false, openUrl: async () => {} }).pipe(

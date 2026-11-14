@@ -14,6 +14,7 @@ import {
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ChatTarget } from '@moonbase/contracts/chat';
+import { chatProtocolVersion } from '@moonbase/contracts/host';
 import { decodeDaemonSettings } from '../src/daemon-settings.ts';
 import {
   bounded,
@@ -84,7 +85,7 @@ test('a daemon makes a private data directory, prints ready, writes endpoint.jso
       port: ready.port,
       pid: first.child.pid,
       version: '0.1.0',
-      protocol: 2,
+      protocol: chatProtocolVersion,
       build: 'development',
     });
     const identity = await readJson(join(directory, 'identity.json'));
@@ -236,7 +237,7 @@ test('a daemon killed during a run resumes the run on its next start', async () 
       port: ready.port,
       pid: second.child.pid,
       version: '0.1.0',
-      protocol: 2,
+      protocol: chatProtocolVersion,
       build: 'development',
     });
     client = createFauxClient(ready.port, token, identity.host);

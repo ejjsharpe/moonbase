@@ -26,6 +26,7 @@ import { refusingDaemon } from './served-services.ts';
 import * as P from '../src/protocol.ts';
 import { socketLimits } from '@moonbase/contracts/socket';
 import { fixture as runtimeFixture, manualClock, session, until } from './runtime-fixture.ts';
+import { chatProtocolVersion } from '@moonbase/contracts/host';
 
 /** A daemon over a local-mode runtime that can stop and start again on its port. */
 async function daemon(t: TestContext, workspace?: WorkspaceHostClient) {
@@ -97,7 +98,7 @@ async function daemon(t: TestContext, workspace?: WorkspaceHostClient) {
       connectionId: 'one',
       health: {
         ...session.host,
-        protocol: 2,
+        protocol: chatProtocolVersion,
         version: '0.1.0',
         capabilities: [],
       },

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ApplicationError } from '@moonbase/contracts/workspace';
+import { chatProtocolVersion } from '@moonbase/contracts/host';
 import { Effect } from 'effect';
 import type {
   ChatClient,
@@ -144,7 +145,12 @@ async function fixture(
           state: 'connected',
           connectionId: 'generation-' + ++id,
           profile,
-          health: { ...context.host, protocol: 2, version: '0.1.0', capabilities: ['chat-v0'] },
+          health: {
+            ...context.host,
+            protocol: chatProtocolVersion,
+            version: '0.1.0',
+            capabilities: ['chat-v0'],
+          },
         };
         receiveConnection(connectionState);
       }
@@ -1469,7 +1475,12 @@ test('generation replacement cancels held host reads and does not accept stale h
     state: 'connected',
     connectionId: 'replacement',
     profile,
-    health: { ...context.host, protocol: 2, version: '0.1.0', capabilities: ['chat-v0'] },
+    health: {
+      ...context.host,
+      protocol: chatProtocolVersion,
+      version: '0.1.0',
+      capabilities: ['chat-v0'],
+    },
   });
   await f.controller.refresh();
   assert(old.aborted);
@@ -1663,7 +1674,12 @@ test('detach during initial status cancels its read and ignores the old attachme
     state: 'connected',
     connectionId: 'old-attachment',
     profile,
-    health: { ...context.host, protocol: 2, version: '0.1.0', capabilities: ['chat-v0'] },
+    health: {
+      ...context.host,
+      protocol: chatProtocolVersion,
+      version: '0.1.0',
+      capabilities: ['chat-v0'],
+    },
   };
   const original = f.connection.command,
     watch = f.connection.watch;
@@ -1735,7 +1751,12 @@ test('a connection watch supersedes an older initial status reply within the sam
     state: 'connected',
     connectionId: 'newer-observed-generation',
     profile,
-    health: { ...context.host, protocol: 2, version: '0.1.0', capabilities: ['chat-v0'] },
+    health: {
+      ...context.host,
+      protocol: chatProtocolVersion,
+      version: '0.1.0',
+      capabilities: ['chat-v0'],
+    },
   });
   await f.controller.refresh();
   held.resolve({ state: 'disconnected', connectionId: null, profile });
@@ -1780,7 +1801,12 @@ test('a held Connect reply cannot resurrect a generation that its watch already 
     state: 'connected',
     connectionId: 'lost-generation',
     profile,
-    health: { ...context.host, protocol: 2, version: '0.1.0', capabilities: ['chat-v0'] },
+    health: {
+      ...context.host,
+      protocol: chatProtocolVersion,
+      version: '0.1.0',
+      capabilities: ['chat-v0'],
+    },
   };
   f.publishConnection(old);
   f.publishConnection({ state: 'disconnected', connectionId: null, profile });
@@ -1948,7 +1974,12 @@ for (const changedId of [false, true])
             ? 'replacement-during-close'
             : f.controller.getSnapshot().connection!.connectionId!,
           profile,
-          health: { ...context.host, protocol: 2, version: '0.1.0', capabilities: ['chat-v0'] },
+          health: {
+            ...context.host,
+            protocol: chatProtocolVersion,
+            version: '0.1.0',
+            capabilities: ['chat-v0'],
+          },
         });
       };
     };
@@ -2273,7 +2304,12 @@ test('a held Disconnect status read cannot replace a newer watched generation', 
     state: 'connected',
     connectionId: 'replacement-after-disconnect',
     profile,
-    health: { ...context.host, protocol: 2, version: '0.1.0', capabilities: ['chat-v0'] },
+    health: {
+      ...context.host,
+      protocol: chatProtocolVersion,
+      version: '0.1.0',
+      capabilities: ['chat-v0'],
+    },
   });
   await f.controller.refresh();
   held.resolve({ state: 'disconnected', connectionId: null, profile });

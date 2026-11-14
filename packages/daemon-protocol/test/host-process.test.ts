@@ -17,6 +17,7 @@ import { ApplicationError } from '@moonbase/contracts/workspace';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { DaemonRpcLinkLive, RemoteChatLive } from '../src/remote.ts';
 import { createRequire } from 'node:module';
+import { chatProtocolVersion } from '@moonbase/contracts/host';
 
 async function bounded<T>(promise: Promise<T>, ms = 5000): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -130,7 +131,7 @@ test('actual child host crash resumes Pi-owned work without resubmitting reserve
               connectionId: 'controlled',
               health: {
                 ...host,
-                protocol: 2,
+                protocol: chatProtocolVersion,
                 version: '0.1.0',
                 capabilities: ['chat-v0', 'daemon-local-v1'],
               },
@@ -233,7 +234,7 @@ test('compiled remote entry runs on Electron Node24 against the separate product
     async function main(){
       const config=JSON.parse(readFileSync(process.argv[2],'utf8'));
       const unavailable=()=>Effect.die('No implicit connection command');
-      const connection=Layer.succeed(ConnectionService,{getConnection:unavailable,connect:unavailable,disconnect:unavailable,watch:()=>Stream.empty,endpoint:()=>Effect.succeed({origin:'http://127.0.0.1:'+config.port,token:config.token,expected:config.host,connectionId:'controlled',health:{...config.host,protocol:2,version:'0.1.0',capabilities:['chat-v0','daemon-local-v1']}})});
+      const connection=Layer.succeed(ConnectionService,{getConnection:unavailable,connect:unavailable,disconnect:unavailable,watch:()=>Stream.empty,endpoint:()=>Effect.succeed({origin:'http://127.0.0.1:'+config.port,token:config.token,expected:config.host,connectionId:'controlled',health:{...config.host,protocol:${chatProtocolVersion},version:'0.1.0',capabilities:['chat-v0','daemon-local-v1']}})});
       const runtime=ManagedRuntime.make(RemoteChatLive.pipe(Layer.provide(DaemonRpcLinkLive({host:config.host})),Layer.provide(connection))),client=makeChatClient(runtime);
       try{const publicHost=await client.command('getChatHost',{host:config.host});const target=(await client.command('createChat',{session:{host:config.host,actorId:'personal'},requestId:'electron-create',title:'Electron remote',settings:{cwd:config.cwd,model:config.model}})).conversation.target;
         let off; await boundedWatch();
@@ -348,7 +349,7 @@ test('repeated actual process interruption parks Pi work visibly instead of repo
               connectionId: 'controlled',
               health: {
                 ...host,
-                protocol: 2,
+                protocol: chatProtocolVersion,
                 version: '0.1.0',
                 capabilities: ['chat-v0', 'daemon-local-v1'],
               },
