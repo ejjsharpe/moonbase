@@ -7,8 +7,8 @@ import {
 import { Cause, Deferred, Effect, Exit, Fiber, Queue, Scope, Stream } from 'effect';
 import fs, { readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import type { Directory } from './filesystem.ts';
-import { ensure, path, same } from './validation.ts';
+import type { Directory } from '../filesystem.ts';
+import { ensure, path, same } from '../validation.ts';
 
 const isInside = (path: string, parent: string) => {
   const rel = relative(parent, path);

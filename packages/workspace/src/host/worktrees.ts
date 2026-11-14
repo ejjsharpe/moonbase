@@ -7,8 +7,8 @@ import {
   type CommandInput,
   type Worktree,
 } from '@moonbase/contracts/workspace';
-import { identity, type Directory } from './filesystem.ts';
-import { ensure, errorText, requireGit } from './validation.ts';
+import { identity, type Directory } from '../filesystem.ts';
+import { ensure, errorText, requireGit } from '../validation.ts';
 import { fail } from '@moonbase/contracts/errors';
 
 const gitFailure = (error: unknown) =>

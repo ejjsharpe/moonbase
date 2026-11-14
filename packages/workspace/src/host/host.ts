@@ -15,8 +15,8 @@ import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync }
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { Store } from './store.ts';
-import { admit, releaseAll, type AdmissionOwner } from './admission.ts';
+import { Store } from '../store.ts';
+import { admit, releaseAll, type AdmissionOwner } from '../admission.ts';
 import { HostJournal, journalSchema, type RequestOperation } from './host-journal.ts';
 import { makeChatWorktree } from './chat-worktrees.ts';
 import {
@@ -28,7 +28,7 @@ import {
   type ChatFolders,
   type RootPredicate,
   type WorkspaceConfiguration,
-} from './schema.ts';
+} from '../schema.ts';
 import { WorkspaceDiscovery } from './discovery.ts';
 import { WorkspaceObservations } from './observations.ts';
 import {
@@ -38,7 +38,7 @@ import {
   makeRunner,
   O_NOFOLLOW_ANY,
   systemGit,
-} from './filesystem.ts';
+} from '../filesystem.ts';
 import type { NativeImport } from './native-import.ts';
 import { NativeReferences } from './native-references.ts';
 import { WorkspaceWorktrees } from './worktrees.ts';
@@ -54,7 +54,7 @@ import {
   path,
   same,
   textDocument,
-} from './validation.ts';
+} from '../validation.ts';
 import { fail } from '@moonbase/contracts/errors';
 
 const dayMs = 24 * 60 * 60 * 1000;
@@ -163,7 +163,7 @@ export class FileHost implements AdmissionOwner {
     ensureQualifiedRuntime();
     identifier(config.hostId);
     const helper =
-      config.filesystemHelper ?? fileURLToPath(new URL('../dist/filesystem', import.meta.url));
+      config.filesystemHelper ?? fileURLToPath(new URL('../../dist/filesystem', import.meta.url));
     ensure(
       isAbsolute(helper) && isAbsolute(this.git),
       'Filesystem/Git executables must be absolute.',

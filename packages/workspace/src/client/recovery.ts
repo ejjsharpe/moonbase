@@ -30,7 +30,7 @@ import {
   openOperations,
   pendingSaves,
 } from './client-store.ts';
-import { invalidStored } from './store.ts';
+import { invalidStored } from '../store.ts';
 import {
   canonical,
   ensure,
@@ -42,7 +42,7 @@ import {
   recovery,
   same,
   hash,
-} from './validation.ts';
+} from '../validation.ts';
 import { fail } from '@moonbase/contracts/errors';
 
 /**

@@ -16,7 +16,7 @@ import {
   type WorkspaceCommand,
   type WorkspaceOperation,
 } from '@moonbase/contracts/workspace';
-import { admit, releaseAll, type AdmissionOwner } from './admission.ts';
+import { admit, releaseAll, type AdmissionOwner } from '../admission.ts';
 import { ClientStore } from './client-store.ts';
 import type { OperationRecord, SaveRecord } from './client-schema.ts';
 import { WorkspaceRecovery, type HostPorts, type Recoveries } from './recovery.ts';
@@ -30,7 +30,7 @@ import {
   key,
   path,
   textDocument,
-} from './validation.ts';
+} from '../validation.ts';
 import { fail } from '@moonbase/contracts/errors';
 
 export type ClientOwnership = {

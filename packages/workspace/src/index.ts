@@ -3,10 +3,10 @@ import { WorkspaceHostService, WorkspaceService } from '@moonbase/contracts/serv
 import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
 import { normalizeApplicationError } from '@moonbase/effect';
-import { ClientWorkspace } from './client.ts';
-import { ClientStore } from './client-store.ts';
-import { decodeClientConfiguration } from './client-schema.ts';
-import { FileHost } from './host.ts';
+import { ClientWorkspace } from './client/client.ts';
+import { ClientStore } from './client/client-store.ts';
+import { decodeClientConfiguration } from './client/client-schema.ts';
+import { FileHost } from './host/host.ts';
 import { decodeConfiguration, type WorkspaceHostConfiguration } from './schema.ts';
 
 export type {

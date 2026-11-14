@@ -5,7 +5,7 @@ import {
   type EditorRecovery,
   type SaveResult,
 } from '@moonbase/contracts/workspace';
-import { recovery } from './validation.ts';
+import { recovery } from '../validation.ts';
 import {
   OperationResultSchema,
   RecoveryChangeSchema,
@@ -14,7 +14,7 @@ import {
   WorkspaceOperationSchema,
   workspaceInputSchemas,
 } from '@moonbase/contracts/workspace-schema';
-import { invalidStored } from './store.ts';
+import { invalidStored } from '../store.ts';
 import {
   array,
   natural,
@@ -23,7 +23,7 @@ import {
   strictDecoders,
   struct,
   absolute,
-} from './schema.ts';
+} from '../schema.ts';
 
 export const ClientConfigurationSchema = struct({
   dataDirectory: absolute,

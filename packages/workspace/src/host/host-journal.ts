@@ -12,14 +12,14 @@ import type {
   SaveStatus,
 } from '@moonbase/contracts/workspace-host';
 import { randomUUID } from 'node:crypto';
-import type { Directory } from './filesystem.ts';
-import type { Store } from './store.ts';
+import type { Directory } from '../filesystem.ts';
+import type { Store } from '../store.ts';
 import type {
   HostOperationRecord,
   HostRequestRecord,
   HostSaveRecord,
   PlannedItem,
-} from './schema.ts';
+} from '../schema.ts';
 import {
   canonical,
   errorText,
@@ -28,7 +28,7 @@ import {
   key,
   overlaps,
   same,
-} from './validation.ts';
+} from '../validation.ts';
 import { fail } from '@moonbase/contracts/errors';
 
 /** The operations whose first outcome is remembered by request ID and replayed. */

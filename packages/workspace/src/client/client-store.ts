@@ -8,8 +8,8 @@ import {
   type RecoveryPublication,
 } from '@moonbase/contracts/workspace';
 import { normalizeApplicationError } from '@moonbase/effect';
-import { Store } from './store.ts';
-import { canonical, errorText, hash, key, text, textDocument } from './validation.ts';
+import { Store } from '../store.ts';
+import { canonical, errorText, hash, key, text, textDocument } from '../validation.ts';
 import { fail } from '@moonbase/contracts/errors';
 import {
   type SaveRecord,
@@ -20,7 +20,7 @@ import {
   savedRevision,
   toStoredSave,
 } from './client-schema.ts';
-import { invalidStored } from './store.ts';
+import { invalidStored } from '../store.ts';
 
 // shortcut: settled save and operation records and publication receipts still grow on disk; compact
 // them only with proven replay and recovery compatibility. The file host's journal does compact.

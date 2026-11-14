@@ -10,7 +10,7 @@ import { Effect, Layer, ManagedRuntime } from 'effect';
 import { ApplicationError, emptyRecovery, type CommandInput } from '@moonbase/contracts/workspace';
 import { WorkspaceService } from '@moonbase/contracts/services';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { openOperations, pendingSaves } from '../src/client-store.ts';
+import { openOperations, pendingSaves } from '../src/client/client-store.ts';
 import { WorkspaceLive } from './workspace-live.ts';
 const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
 const isError = (code: ApplicationError['code']) => (e: unknown) =>

@@ -1,4 +1,4 @@
-import { O_NOFOLLOW_ANY } from './filesystem.ts';
+import { O_NOFOLLOW_ANY } from '../filesystem.ts';
 import fs, { openSync, fstatSync, constants } from 'node:fs';
 import { basename, dirname, isAbsolute } from 'node:path';
 
