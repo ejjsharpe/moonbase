@@ -12,7 +12,7 @@ import {
   type GitStatus,
   type ObservationClose,
 } from '@moonbase/contracts/workspace';
-import { watchRetry } from '../runtime/watch-retry.ts';
+import { watchRetry } from '../watch-retry.ts';
 import { checkoutKey } from './references.ts';
 
 /** How long a watch must stay up for its failure to renew the retry cap. */

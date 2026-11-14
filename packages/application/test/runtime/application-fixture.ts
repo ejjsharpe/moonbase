@@ -18,4 +18,4 @@ export function editorCapabilities() {
   return { memory, runtime, client: makeEditorClient(runtime) };
 }
 
-export { chatCapabilities } from '../chat/chat-capabilities-fixture.ts';
+export { fauxChat } from '@moonbase/application/testing/faux-chat';

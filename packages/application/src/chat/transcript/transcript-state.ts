@@ -8,7 +8,7 @@ import type {
 import type { TranscriptView } from './view-memory.ts';
 import type { TranscriptRow } from './transcript-rows.ts';
 import { countTranscriptBytes, type TranscriptChunk } from './transcript-read.ts';
-import { watchRetry } from '../../runtime/watch-retry.ts';
+import { watchRetry } from '../../watch-retry.ts';
 
 export const transcriptLimits = {
   /** Retained history: entry summaries (each a 4 KiB text preview) and part descriptors. */

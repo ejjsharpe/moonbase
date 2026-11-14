@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { chatWorktreeBranch } from '../src/renderer/chat/worktree.ts';
+import { chatWorktreeBranch } from '../src/renderer/chat/composer/worktree.ts';
 
 test('a new chat’s worktree branch is named from the first words of its message', () => {
   assert.equal(

@@ -1,10 +1,10 @@
 import { ApplicationError } from '@moonbase/contracts/errors';
-import type { ChatDependencies } from '@moonbase/application/chat';
+import type { ChatDependencies } from '../chat/index.ts';
 import type { ChatClient, ChatSnapshot } from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
 
 /** Pure controlled capabilities, shared by lifecycle tests and portable consumers. */
-export function chatCapabilities() {
+export function fauxChat() {
   const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' };
   const target = { ...context, conversationId: 'conversation' };
   const conversation = {

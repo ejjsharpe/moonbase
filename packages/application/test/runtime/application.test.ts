@@ -4,7 +4,7 @@ import { createMoonbaseApplication, type MoonbaseApplication } from '@moonbase/a
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { emptyRecovery, type EditorClient, type CommandInput } from '@moonbase/contracts/workspace';
 import type { EditorController, ClosePrompt } from '@moonbase/application/editor';
-import { chatCapabilities, editorCapabilities, checkout, target } from './application-fixture.ts';
+import { fauxChat, editorCapabilities, checkout, target } from './application-fixture.ts';
 
 async function tick() {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -35,7 +35,7 @@ function closePrompt(editor: EditorController): Promise<ClosePrompt> {
 
 test('public factory composes independent editors and optional chat without remote admissions', async () => {
   const editor = editorCapabilities(),
-    chat = chatCapabilities();
+    chat = fauxChat();
   const app = await createMoonbaseApplication({
     editors: [
       { client: editor.client, clientId: 'one' },
@@ -111,7 +111,7 @@ for (const failure of ['once', 'always'] as const)
   });
 
 test('throwing chat view subscribers cannot veto unload or Quit after a successful draft write', async () => {
-  const chat = chatCapabilities();
+  const chat = fauxChat();
   const app = await createMoonbaseApplication({ chat: async () => chat.dependencies });
   try {
     const controller = app.chat!;
@@ -173,7 +173,7 @@ test('sole chat is required, combined optional startup failure stays visible and
 });
 
 test('invalid saved chat bytes remain in a live model and block unsafe close without reset', async () => {
-  const chat = chatCapabilities();
+  const chat = fauxChat();
   chat.storage.value = '{unfamiliar saved evidence';
   const app = await createMoonbaseApplication({ chat: async () => chat.dependencies });
   try {
@@ -191,7 +191,7 @@ test('invalid saved chat bytes remain in a live model and block unsafe close wit
 
 test('quit veto restores admissions and a later successful preparation fences every head entry', async () => {
   const editor = editorCapabilities(),
-    chat = chatCapabilities();
+    chat = fauxChat();
   const app = await createMoonbaseApplication({
     editors: [{ client: editor.client, clientId: 'one' }],
     chat: async () => chat.dependencies,
@@ -241,7 +241,7 @@ test('quit veto restores admissions and a later successful preparation fences ev
 
 test('all models are fenced before the final synchronous storage write, including reentrant Quit/open', async () => {
   const editor = editorCapabilities(),
-    chat = chatCapabilities();
+    chat = fauxChat();
   const app = await createMoonbaseApplication({
     editors: [
       { client: editor.client, clientId: 'one' },
@@ -283,7 +283,7 @@ test('all models are fenced before the final synchronous storage write, includin
 
 test('final preservation failure restores admissions without reversing completed editor discard', async () => {
   const editor = editorCapabilities(),
-    chat = chatCapabilities();
+    chat = fauxChat();
   const app = await createMoonbaseApplication({
     editors: [{ client: editor.client, clientId: 'one' }],
     chat: async () => chat.dependencies,
@@ -314,7 +314,7 @@ test('final preservation failure restores admissions without reversing completed
 for (const fail of [false, true])
   test(`removed chat cleanup stays owned and namespace blocked (failure ${fail})`, async () => {
     const editor = editorCapabilities(),
-      chat = chatCapabilities(),
+      chat = fauxChat(),
       held = Promise.withResolvers<void>();
     const app = await createMoonbaseApplication({
       editors: [{ client: editor.client, clientId: 'one' }],
@@ -362,7 +362,7 @@ for (const fail of [false, true])
   });
 
 test('duplicate panel open shares acquisition; Quit waits and fences the acquired model', async () => {
-  const chat = chatCapabilities(),
+  const chat = fauxChat(),
     held = Promise.withResolvers<typeof chat.dependencies | null>();
   let opens = 0;
   const app = await createMoonbaseApplication({
@@ -406,7 +406,7 @@ test('document loss cancels a pending prompt without awaiting quit and drains la
   assert.equal(await quit, false);
   assert.equal(model.getSnapshot().disposed, true);
   await editor.runtime.dispose();
-  const chat = chatCapabilities(),
+  const chat = fauxChat(),
     held = Promise.withResolvers<typeof chat.dependencies | null>();
   let opens = 0;
   const other = await createMoonbaseApplication({
@@ -577,7 +577,7 @@ test('required startup failure joins real held cleanup and retains both safe fai
 
 test('prepared controllers block all IO and state admissions while teardown setters stay safe', async () => {
   const editor = editorCapabilities(),
-    chat = chatCapabilities();
+    chat = fauxChat();
   let commands = 0;
   const client: EditorClient = {
     ...editor.client,
@@ -682,7 +682,7 @@ test('prepared controllers block all IO and state admissions while teardown sett
 });
 
 test('reentrant panel close and lifecycle subscribers join the already-published ownership outcome', async () => {
-  const chat = chatCapabilities();
+  const chat = fauxChat();
   const app = await createMoonbaseApplication({ chat: async () => chat.dependencies });
   let close: boolean | undefined, disposal: Promise<void> | undefined;
   app.chat!.subscribe(() => {
@@ -699,7 +699,7 @@ test('reentrant panel close and lifecycle subscribers join the already-published
 });
 
 test('a reentrant head removing a newly acquired panel cannot receive its disposed controller', async () => {
-  const chat = chatCapabilities();
+  const chat = fauxChat();
   const app = await createMoonbaseApplication({ chat: async () => chat.dependencies });
   app.closeChat();
   await cleanupSettled(app);
@@ -714,7 +714,7 @@ test('a reentrant head removing a newly acquired panel cannot receive its dispos
 
 test('the synchronous unload preservation check fences reentrant edits and restores live admission', async () => {
   const editor = editorCapabilities(),
-    chat = chatCapabilities();
+    chat = fauxChat();
   const app = await createMoonbaseApplication({
     editors: [{ client: editor.client, clientId: 'one' }],
     chat: async () => chat.dependencies,
@@ -848,7 +848,7 @@ test('a synchronous edit during the final editor notification vetoes stale Quit 
 
 for (const fail of [false, true])
   test(`closing chat fences storage reentrancy and restores admissions on veto (failure ${fail})`, async () => {
-    const chat = chatCapabilities();
+    const chat = fauxChat();
     const app = await createMoonbaseApplication({ chat: async () => chat.dependencies });
     try {
       const controller = app.chat!;
@@ -888,7 +888,7 @@ for (const fail of [false, true])
 
 test('the first Quit preservation fences storage reentrancy then accepts drafts during editor prompts', async () => {
   const editor = editorCapabilities(),
-    chat = chatCapabilities();
+    chat = fauxChat();
   const app = await createMoonbaseApplication({
     editors: [{ client: editor.client, clientId: 'one' }],
     chat: async () => chat.dependencies,
@@ -1036,8 +1036,8 @@ test('uncertain final Quit metadata keeps its original publication and vetoes un
 });
 
 test('named local/remote targets preserve separate drafts and wait for controller cleanup without Stop or replay', async () => {
-  const local = chatCapabilities(),
-    remote = chatCapabilities();
+  const local = fauxChat(),
+    remote = fauxChat();
   const localDependencies = { ...local.dependencies, connection: undefined };
   const remoteDependencies = remote.dependencies;
   const localChat = localDependencies.chat;

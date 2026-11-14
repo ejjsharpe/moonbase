@@ -6,7 +6,7 @@ import {
   type EditorClient,
   type RecoveryPublication,
 } from '@moonbase/contracts/workspace';
-import { chatCapabilities } from '../test/chat/chat-capabilities-fixture.ts';
+import { fauxChat } from '@moonbase/application/testing/faux-chat';
 
 function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) throw Error(message);
@@ -81,7 +81,7 @@ export async function checkHeadlessApplication() {
   const completed: string[] = [];
   for (const mode of ['editor', 'chat', 'combined']) {
     const editor = editorCapabilities(),
-      chat = chatCapabilities();
+      chat = fauxChat();
     const application = await createMoonbaseApplication({
       editors:
         mode === 'chat' ? undefined : [{ client: editor.client, clientId: `example-${mode}` }],

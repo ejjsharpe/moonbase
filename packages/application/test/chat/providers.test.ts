@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { createMoonbaseApplication } from '@moonbase/application';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ProviderSetupClient, ProviderState } from '@moonbase/contracts/providers';
-import { chatCapabilities } from './chat-capabilities-fixture.ts';
+import { fauxChat } from '@moonbase/application/testing/faux-chat';
 
 const status: ProviderState = { providers: [], flow: null };
 const running: ProviderState = {
@@ -18,7 +18,7 @@ const running: ProviderState = {
   },
 };
 test('setup rejects stale status replies and keeps transient answers out of snapshots/storage', async () => {
-  const fixture = chatCapabilities(),
+  const fixture = fauxChat(),
     held = Promise.withResolvers<ProviderState>();
   const providers: ProviderSetupClient = {
     command: async (operation) => {
@@ -47,7 +47,7 @@ test('setup rejects stale status replies and keeps transient answers out of snap
   }
 });
 test('provider setup cleanup failure remains part of the root disposal outcome', async () => {
-  const fixture = chatCapabilities();
+  const fixture = fauxChat();
   const providers: ProviderSetupClient = {
     command: async (operation) => {
       if (operation === 'cancelProviderLogin')
@@ -64,7 +64,7 @@ test('provider setup cleanup failure remains part of the root disposal outcome',
   assert.equal(application.getSnapshot().phase, 'failed');
 });
 test('sign-in progress comes from the watch, never from polling, and a failed watch reopens', async () => {
-  const fixture = chatCapabilities(),
+  const fixture = fauxChat(),
     calls: string[] = [];
   let receive: ((state: ProviderState) => void) | undefined,
     fail: ((error: ApplicationError) => void) | undefined,

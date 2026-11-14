@@ -9,6 +9,7 @@
     "./chat": "./src/chat/index.ts",
     "./editor": "./src/editor/index.ts",
     "./testing/faux-workspace": "./src/testing/faux-workspace.ts",
+    "./testing/faux-chat": "./src/testing/faux-chat.ts",
     ".": "./src/index.ts"
   },
   "scripts": {

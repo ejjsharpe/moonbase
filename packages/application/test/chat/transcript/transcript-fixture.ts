@@ -10,7 +10,7 @@ import type {
   ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
 import type { ChatDependencies } from '@moonbase/application/chat';
-import { chatCapabilities } from '../chat-capabilities-fixture.ts';
+import { fauxChat } from '@moonbase/application/testing/faux-chat';
 import { modelRoot } from '../chat-model-fixture.ts';
 
 export const digest = (text: string) => createHash('sha256').update(text).digest('hex');
@@ -26,7 +26,7 @@ export const part = (partId: string, text: string): ChatTranscriptPart => ({
   truncated: text.length > 64,
 });
 export function transcriptFixture(count = 640, local = true) {
-  const base = chatCapabilities();
+  const base = fauxChat();
   const target = base.target;
   const sources = new Map<string, { source: ChatTranscriptSource; data: string[] }>();
   const entries: ChatEntry[] = Array.from({ length: count }, (_, index) => {
