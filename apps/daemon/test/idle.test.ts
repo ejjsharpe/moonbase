@@ -94,12 +94,12 @@ test('unauthenticated requests never delay a local daemon going idle; an authent
       assert.equal(response.status, 401);
       await response.arrayBuffer();
     }
-    // A client holding the wrong key is refused at its hello.
+    // A client holding the wrong key is refused at signed health, before it can upgrade.
     await assert.rejects(
       createFauxClient(daemon.port, wrongKey, daemon.session.host).command('listChats', {
         session: daemon.session,
       }),
-      { code: 'Unavailable' },
+      { code: 'Unauthorized' },
     );
     await time.advance(minute + 30_000);
     assert.equal(

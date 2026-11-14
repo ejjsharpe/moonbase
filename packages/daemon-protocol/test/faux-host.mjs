@@ -1,5 +1,6 @@
 import { readFile, appendFile } from 'node:fs/promises';
-import { Effect, ManagedRuntime } from 'effect';
+import { Effect, ManagedRuntime, Stream } from 'effect';
+import { ChatService } from '@moonbase/contracts/services';
 import { createModels } from '@earendil-works/pi-ai/models';
 import {
   fauxProvider,
@@ -8,7 +9,6 @@ import {
 } from '@earendil-works/pi-ai/providers/faux';
 import { createRegistry, defineExtension, defineTool } from '@earendil-works/pi-durable';
 import { Type } from 'typebox';
-import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { chatHostCapabilities } from '@moonbase/contracts/host';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
@@ -62,15 +62,14 @@ registry.install(
   }),
 );
 const runtime = ManagedRuntime.make(
-    LocalPiRuntimeLive({
-      host: config.host,
-      actorId: config.actorId,
-      databasePath: config.databasePath,
-      models,
-      registry,
-    }),
-  ),
-  client = makeChatClient(runtime);
+  LocalPiRuntimeLive({
+    host: config.host,
+    actorId: config.actorId,
+    databasePath: config.databasePath,
+    models,
+    registry,
+  }),
+);
 let ended;
 const done = new Promise((resolve) => (ended = resolve));
 process.once('SIGTERM', () => ended());
@@ -79,16 +78,24 @@ try {
     Effect.scoped(
       Effect.gen(function* () {
         // A local-mode chat host advertises local mode; it serves no other daemon operation.
-        const daemon = {
-          command: async () => {
-            throw new ApplicationError({ code: 'Unavailable', message: 'Not served here.' });
-          },
-        };
+        const refused = () =>
+          Effect.fail(new ApplicationError({ code: 'Unavailable', message: 'Not served here.' }));
+        const handlers = new Proxy({}, { get: () => refused });
         yield* serveChat(
           { host: config.host, token: config.token, port: config.port },
-          client,
-          daemon,
-          [chatHostCapabilities.local],
+          {
+            chat: yield* ChatService,
+            daemon: {
+              localHost: handlers,
+              providers: {
+                forOwner: () => handlers,
+                releaseOwner: refused,
+                watch: () => Stream.fromEffect(refused()),
+                getProviderUrl: refused,
+              },
+              capabilities: [chatHostCapabilities.local],
+            },
+          },
         );
         console.log(JSON.stringify({ event: 'ready' }));
         yield* Effect.promise(() => done);

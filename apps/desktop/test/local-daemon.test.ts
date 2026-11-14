@@ -10,7 +10,7 @@ import { Effect, Layer, ManagedRuntime } from 'effect';
 import { ChatService, ConnectionService } from '@moonbase/contracts/services';
 import type { ApplicationError } from '@moonbase/contracts/errors';
 import { LoopbackConnectionLive, loopbackProfileId } from '@moonbase/daemon-protocol/loopback';
-import { RemoteChatLive } from '@moonbase/daemon-protocol/remote';
+import { DaemonRpcLinkLive, RemoteChatLive } from '@moonbase/daemon-protocol/remote';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
 import {
   createLocalDaemon,
@@ -144,7 +144,12 @@ test('a daemon of another build is used while it has work, then replaced in a ne
   const session = await readDaemonSession(directory);
   /** Chat over a connection to the directory's daemon. */
   const chatOver = async (connection: Layer.Layer<ConnectionService, ApplicationError>) => {
-    const runtime = ManagedRuntime.make(RemoteChatLive.pipe(Layer.provideMerge(connection)));
+    const runtime = ManagedRuntime.make(
+      RemoteChatLive.pipe(
+        Layer.provide(DaemonRpcLinkLive({ host: session.host })),
+        Layer.provideMerge(connection),
+      ),
+    );
     t.after(() => runtime.dispose());
     return {
       runtime,
@@ -450,7 +455,10 @@ test('the mock profile seeds the daemon store, and its daemon starts with the se
   await daemon.ensure();
   assert.deepEqual(await readDaemonSession(directory), session, 'the daemon keeps the identity');
   const runtime = ManagedRuntime.make(
-    RemoteChatLive.pipe(Layer.provide(LocalDaemonConnectionLive(daemon))),
+    RemoteChatLive.pipe(
+      Layer.provide(DaemonRpcLinkLive({ host: session.host })),
+      Layer.provide(LocalDaemonConnectionLive(daemon)),
+    ),
   );
   t.after(() => runtime.dispose());
   const { conversations } = await runtime.runPromise(

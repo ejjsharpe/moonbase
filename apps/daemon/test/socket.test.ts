@@ -8,18 +8,23 @@ import { chatInputSchemas } from '@moonbase/contracts/chat-schema';
 import { daemonInputSchemas } from '@moonbase/contracts/daemon-schema';
 import type { ProviderState } from '@moonbase/contracts/providers';
 import { ApplicationError } from '@moonbase/contracts/errors';
+import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
+import type { DaemonCommand, DaemonInput, DaemonOutput } from '@moonbase/contracts/daemon';
+import { daemonCommandCapabilities, isDaemonMutation } from '@moonbase/contracts/daemon-schema';
+import type { ChatCommand, ChatInput } from '@moonbase/contracts/chat';
+import { isChatMutation } from '@moonbase/contracts/chat-validation';
+import { chatHostCapabilities } from '@moonbase/contracts/host';
 import {
-  connectDaemonSocket,
-  type SocketInput,
-  type SocketOperation,
-  type SocketOutput,
-} from '@moonbase/daemon-protocol/socket';
+  DaemonRpcLink,
+  DaemonRpcLinkLive,
+  EndpointConnectionLive,
+} from '@moonbase/daemon-protocol/remote';
 import { bounded, readJson, startDaemon, temporaryRoot, until } from './daemon-fixture.ts';
 import { fauxModelId, fauxProviderId, fauxSignInCode } from './faux-provider.ts';
 
 const model = { provider: fauxProviderId, modelId: fauxModelId };
 
-test('one WebSocket runs every operation and holds chat, chat-list and provider subscriptions', async () => {
+test('one RPC connection runs every procedure and holds chat, chat-list and provider watches', async () => {
   const root = await temporaryRoot(),
     directory = join(root, 'data');
   const daemon = startDaemon([directory]);
@@ -29,21 +34,67 @@ test('one WebSocket runs every operation and holds chat, chat-list and provider 
     const host = identity.host,
       session = { host, actorId: identity.actorId };
     const token = (await readFile(join(directory, 'token'), 'utf8')).trim();
-    const socket = await connectDaemonSocket({
-      origin: `http://127.0.0.1:${ready.port}`,
-      token,
-      expected: host,
-    });
+    const failures: ApplicationError[] = [];
+    const runtime = ManagedRuntime.make(
+      DaemonRpcLinkLive({ host }).pipe(
+        Layer.provide(
+          EndpointConnectionLive({
+            origin: `http://127.0.0.1:${ready.port}`,
+            token,
+            expected: host,
+          }),
+        ),
+      ),
+    );
+    const subscribe = <K extends 'chat' | 'chatList' | 'providerSetup'>(
+      operation: string,
+      kind: K,
+      payload: object,
+      receive: (value: never) => void,
+    ) =>
+      runtime.runFork(
+        Effect.flatMap(DaemonRpcLink, (link) =>
+          Stream.runForEach(
+            link.watch(operation, kind, payload, {
+              capability: chatHostCapabilities.chat,
+              kindOfErrors: kind === 'providerSetup' ? 'daemon' : 'chat',
+            }),
+            (update) => Effect.sync(() => 'value' in update && receive(update.value as never)),
+          ),
+        ).pipe(Effect.catch((error: ApplicationError) => Effect.sync(() => failures.push(error)))),
+      );
     try {
-      assert(socket.health.capabilities.includes('socket-v1'));
       const ran = new Set<string>();
       /** One request's reply, or the code it was refused with. */
-      const run = async <K extends SocketOperation>(
+      const run = async <K extends ChatCommand | DaemonCommand>(
         operation: K,
-        input: SocketInput<K>,
-      ): Promise<SocketOutput<K>> => {
+        input: K extends ChatCommand
+          ? ChatInput<K>
+          : K extends DaemonCommand
+            ? DaemonInput<K>
+            : never,
+      ): Promise<
+        K extends ChatCommand ? ChatOutput<K> : K extends DaemonCommand ? DaemonOutput<K> : never
+      > => {
         ran.add(operation);
-        return socket.request(operation, input);
+        const daemon = Object.hasOwn(daemonCommandCapabilities, operation);
+        return runtime.runPromise(
+          Effect.flatMap(DaemonRpcLink, (link) =>
+            link.call(
+              operation,
+              { host, input },
+              {
+                kind: daemon ? 'daemon' : 'chat',
+                mutation: daemon
+                  ? isDaemonMutation(operation as DaemonCommand)
+                  : isChatMutation(operation as ChatCommand),
+                capability: daemon
+                  ? daemonCommandCapabilities[operation as DaemonCommand]
+                  : chatHostCapabilities.chat,
+              },
+            ),
+          ),
+        ) as never;
       };
       const refusal = (promise: Promise<unknown>) =>
         promise.then(
@@ -52,16 +103,12 @@ test('one WebSocket runs every operation and holds chat, chat-list and provider 
         );
 
       const lists: ChatOutput<'listChats'>[] = [],
-        setups: ProviderState[] = [],
-        failures: ApplicationError[] = [];
-      socket.subscribe('chatList', session, {
-        receive: (value) => lists.push(value.list),
-        onError: (error) => failures.push(error),
-      });
-      socket.subscribe(
-        'providerSetup',
-        { host, ownerId: 'document' },
-        { receive: (value) => setups.push(value), onError: (error) => failures.push(error) },
+        setups: ProviderState[] = [];
+      subscribe('watchChatList', 'chatList', { host, session }, (value: { list: never }) =>
+        lists.push(value.list),
+      );
+      subscribe('watchProviderSetup', 'providerSetup', { host, ownerId: 'document' }, (value) =>
+        setups.push(value),
       );
 
       const project = join(root, 'project');
@@ -90,10 +137,7 @@ test('one WebSocket runs every operation and holds chat, chat-list and provider 
         (list) => list?.conversations[0]?.target.conversationId === target.conversationId,
       );
       const chats: ChatSnapshot[] = [];
-      socket.subscribe('chat', target, {
-        receive: (value) => chats.push(value),
-        onError: (error) => failures.push(error),
-      });
+      subscribe('watchChat', 'chat', { host, target }, (value) => chats.push(value));
       assert.deepEqual(
         (await run('findChatFiles', { target, query: 'readme' })).matches.map((m) => m.path),
         ['readme.md'],
@@ -175,7 +219,7 @@ test('one WebSocket runs every operation and holds chat, chat-list and provider 
         [...Object.keys(chatInputSchemas), ...Object.keys(daemonInputSchemas)].sort(),
       );
     } finally {
-      socket.close();
+      await runtime.dispose();
     }
   } finally {
     await daemon.stop('SIGKILL');

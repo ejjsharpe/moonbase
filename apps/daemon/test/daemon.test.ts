@@ -135,10 +135,10 @@ test('chat commands work through the authenticated WebSocket, and logs keep no t
       session = { host: identity.host, actorId: identity.actorId };
     const client = createFauxClient(port, token, identity.host);
 
-    // Wrong token: the daemon closes the connection at its hello, before any command runs.
+    // Wrong token: signed health refuses it, so it never upgrades and no command runs.
     await assert.rejects(
       createFauxClient(port, 'x'.repeat(43), identity.host).command('listChats', { session }),
-      { code: 'Unavailable' },
+      { code: 'Unauthorized' },
     );
     const created = await client.command('createChat', {
       session,

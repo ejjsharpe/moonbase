@@ -16,8 +16,8 @@ if (args.includes('-G')) {
     let pending = Buffer.alloc(0),
       drop = false,
       tamper = false;
-    // The client's bytes: the upgrade request, then masked WebSocket frames, each a 32-byte MAC
-    // and JSON. A request for the directive's operation drops or tampers with what follows it.
+    // The client's bytes: the upgrade request, then masked WebSocket frames, each an RPC message
+    // as JSON. A request for the directive's operation drops or tampers with what follows it.
     let upgraded = false;
     socket.on('data', (chunk) => {
       pending = Buffer.concat([pending, chunk]);
@@ -51,12 +51,13 @@ if (args.includes('-G')) {
         if (masked)
           for (let i = 0; i < payload.length; i++) payload[i] ^= pending[offset + (i % 4)];
         pending = pending.subarray(start + length);
-        if (!existsSync(process.env.MOONBASE_CHAT_DROP_SEND) || payload.length <= 32) continue;
+        if (!existsSync(process.env.MOONBASE_CHAT_DROP_SEND)) continue;
         try {
           const directive = readFileSync(process.env.MOONBASE_CHAT_DROP_SEND, 'utf8') || 'sendChat';
           const operation = directive.replace(/^tamper:/, '');
-          const message = JSON.parse(payload.subarray(32).toString());
-          if (message.type === 'request' && message.operation === operation) {
+          // An RPC request frame: `{ _tag: 'Request', tag, payload, ... }`.
+          const message = JSON.parse(payload.toString());
+          if (message._tag === 'Request' && message.tag === operation) {
             unlinkSync(process.env.MOONBASE_CHAT_DROP_SEND);
             if (directive.startsWith('tamper:')) tamper = true;
             else drop = true;
