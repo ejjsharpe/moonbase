@@ -125,11 +125,6 @@ test('bounded escaped Unicode history pages retain every durable entry ID withou
     page = { ...page, ...older };
   }
   assert.equal(count, 40);
-  for (const bad of ['\ud800', '\0', 'x'.repeat(32769)])
-    await assert.rejects(
-      f.client.command('sendChat', { target, requestId: 'invalid', text: bad }),
-      { code: 'InvalidInput' },
-    );
   const other = await f.create('other');
   const initial = await f.client.command('getChat', { target });
   assert(initial.olderCursor);

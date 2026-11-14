@@ -16,7 +16,6 @@ export type LocalPiRuntimeConfiguration = ChatSession & {
   /** Absolute ripgrep for chat file search; otherwise `rg` on PATH, then Git. */
   ripgrepExecutable?: string;
 };
-export type RuntimeConfiguration = LocalPiRuntimeConfiguration & { mode: 'local' };
 export type RetainedWork = {
   run<A>(
     effect: Effect.Effect<A, ApplicationError>,

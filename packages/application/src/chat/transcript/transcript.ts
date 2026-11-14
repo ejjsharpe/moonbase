@@ -14,7 +14,6 @@ import type {
   ChatTranscriptSource,
   ChatTranscriptSelection,
 } from '@moonbase/contracts/chat';
-import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { areJsonValuesEqual, getJsonKey } from '@moonbase/contracts/common';
 import { sameTarget } from '../saved.ts';
 import type { TranscriptViewMemory, TranscriptView } from './transcript-view-memory.ts';
@@ -168,17 +167,13 @@ export class TranscriptOwner {
     source?: ChatTranscriptSource,
   ): Effect.Effect<ChatOutput<K>, ApplicationError> {
     return Effect.try({
-      try: () => {
-        this.assertCurrent(source);
-        // Transcript content inputs were decoded once by loadManifest/loadPart.
-        return operation === 'getChatTranscriptContent' ? input : decodeChatInput(operation, input);
-      },
+      try: () => this.assertCurrent(source),
       catch: normalizeApplicationError,
     }).pipe(
-      Effect.flatMap((decoded) =>
+      Effect.flatMap(() =>
         Effect.tryPromise({
           try: (signal) => {
-            const read = this.dependencies.chat.command(operation, decoded, { signal });
+            const read = this.dependencies.chat.command(operation, input, { signal });
             this.reads.add(read);
             const settle = () => this.reads.delete(read);
             void read.then(settle, settle);
@@ -528,7 +523,6 @@ export class TranscriptOwner {
         return;
       }
       const target = this.dependencies.target;
-      decodeChatInput('findChatTranscript', { target, query });
       const pass = new TranscriptFindPass(target, query);
       let cursor: string | null = null;
       do {
@@ -778,7 +772,7 @@ export class TranscriptOwner {
     this.publish();
   }
   loadManifest(source: ChatTranscriptSource, restart = false) {
-    const captured = decodeChatInput('getChatTranscriptContent', { source }).source;
+    const captured = structuredClone(source);
     const replace = restart || !areJsonValuesEqual(this.state.manifest?.source, captured);
     if (replace) {
       this.manifestAdvance = trackTranscriptCursor();
@@ -819,7 +813,7 @@ export class TranscriptOwner {
     });
   }
   loadPart(source: ChatTranscriptSource, selection: ChatTranscriptSelection, restart = false) {
-    const captured = decodeChatInput('getChatTranscriptContent', { source, selection });
+    const captured = structuredClone({ source, selection });
     const selected = captured.selection!;
     const entryId = captured.source.kind === 'entry' ? captured.source.entryId : undefined;
     this.selectedEntry =

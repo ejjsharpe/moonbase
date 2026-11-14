@@ -32,7 +32,7 @@ import {
 import { ApplicationError, fail } from '@moonbase/contracts/errors';
 import { cid, eid } from './documents.ts';
 import { checkCursor, previewText } from './text.ts';
-import * as S from './schema.ts';
+import { decodeTranscriptCursor, type FindPartPosition, type TranscriptCursor } from './cursors.ts';
 
 /** Long reads yield to other work after this many parts. */
 const partsPerTurn = 32;
@@ -60,7 +60,7 @@ export class NestedSourceRetired extends ApplicationError {
     super({ code: 'Conflict', message: 'Nested tool source ended; reload the consistent view.' });
   }
 }
-export function sealCursor(harness: Harness, value: S.TranscriptCursor) {
+export function sealCursor(harness: Harness, value: TranscriptCursor) {
   const body = Buffer.from(JSON.stringify(value)).toString('base64url');
   const mac = createHmac('sha256', getKey(harness)).update(body).digest('base64url');
   return checkCursor(body + '.' + mac);
@@ -68,7 +68,7 @@ export function sealCursor(harness: Harness, value: S.TranscriptCursor) {
 export function openCursor(
   harness: Harness,
   encoded: string,
-  kind: S.TranscriptCursor['kind'],
+  kind: TranscriptCursor['kind'],
   binding: string,
 ) {
   try {
@@ -82,7 +82,9 @@ export function openCursor(
       !timingSafeEqual(actual, expected)
     )
       throw Error();
-    const value = S.transcriptCursor(JSON.parse(Buffer.from(body, 'base64url').toString('utf8')));
+    const value = decodeTranscriptCursor(
+      JSON.parse(Buffer.from(body, 'base64url').toString('utf8')),
+    );
     if (value.kind !== kind || value.binding !== binding) throw Error();
     return value;
   } catch {
@@ -308,8 +310,8 @@ type TranscriptValue = {
   extra: Partial<ChatTranscriptPart>;
 };
 type TranscriptTextStep = {
-  position: S.FindPartPosition;
-  next: S.FindPartPosition;
+  position: FindPartPosition;
+  next: FindPartPosition;
   part: TranscriptValue | null;
 };
 function makeValuePart({ id, kind, role, value, extra }: TranscriptValue): Part {
@@ -323,7 +325,7 @@ function makeValuePart({ id, kind, role, value, extra }: TranscriptValue): Part 
 function* buildMessageParts(messages: readonly Message[], prefix: string): Generator<Part> {
   for (const { part } of getMessageSteps(messages, prefix)) if (part) yield makeValuePart(part);
 }
-const origin: S.FindPartPosition = { message: 0, block: 0, auxiliary: 0 };
+const origin: FindPartPosition = { message: 0, block: 0, auxiliary: 0 };
 /**
  * The single display policy for a saved entry, in order. Direct source positions let Find resume
  * without constructing preceding parts.
@@ -374,7 +376,7 @@ function getEntryMarker(
 function* getMessageSteps(
   messages: readonly Message[],
   prefix = '',
-  start: S.FindPartPosition = { ...origin, message: 1 },
+  start: FindPartPosition = { ...origin, message: 1 },
 ): Generator<TranscriptTextStep> {
   for (let m = Math.max(1, start.message) - 1; m < messages.length; m++) {
     const message = messages[m];

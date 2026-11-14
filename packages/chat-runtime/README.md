@@ -9,6 +9,8 @@
 | `./claude-code` | Claude Pro/Max subscription through the user's Claude Code login ([pi-claude-code](https://github.com/earendil-works/pi-claude-code)) |
 | `./daemon-settings` | `decodeDaemonSettings` for the daemon's `daemon.json` |
 
+The runtime trusts its typed configuration and inputs, which the daemon protocol's server decoded from the wire. It decodes only what comes back to it: its stored records, each time it reads one (`stored-records.ts`), and the cursors clients return (`cursors.ts`).
+
 The daemon serves the runtime over [`@moonbase/daemon-protocol`](../daemon-protocol/README.md), which owns the wire protocol, its server and the remote client services. **A working folder is tool context, not a filesystem sandbox.**
 
 ## Behavior worth knowing
