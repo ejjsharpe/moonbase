@@ -16,6 +16,7 @@ Data may be lost between versions while Moonbase is prerelease: a change can sta
 
 ## Files and folders
 
+- One concept per file, named for what it holds. A file whose summary needs "and" is two files. Source files stay under about 600 lines (lint enforces this from #296). The files still over that are being split by the #273 tickets: don't grow them; put a new concept in its own file.
 - Start flat. When a few files belong to one thing and are used together, group them in a folder named for it (`renderer/chat/transcript/`, `workbench/src/files-tree/`). Code shared by several features sits in kind folders at the root (`renderer/components/`, `renderer/hooks/`); code one feature uses lives in that feature. Don't add generic folders like `utils/` or `logic/`.
 - Code that runs in different processes gets a folder per process: desktop `main/`, `preload/` and `renderer/`, with the IPC contract they share in `ipc/`; workspace `host/` and `client/`, with what they share at `src/`.
 - Client state in `packages/application` is one folder per concept, with `x.ts`, `x-service.ts` and `x-atoms.ts` for its three layers (see its README).
