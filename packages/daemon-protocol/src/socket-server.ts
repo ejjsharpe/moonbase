@@ -203,17 +203,23 @@ export function createSocketServer(context: SocketServerContext) {
   function upgrade(request: Request, server: BunServer<SocketData>): Response | undefined {
     const refuse = (status: number) =>
       new Response(null, { status, headers: { Connection: 'close' } });
-    const headers = request.headers,
-      url = new URL(request.url);
+    const headers = request.headers;
     // A browser page always sends Origin; only privileged local processes may connect.
     if (headers.get('origin') !== null) return refuse(403);
+    // Any port: through an SSH forward, Host names the client's local end of the tunnel. Bun
+    // builds the request's URL from Host, so it is checked before the URL is read.
+    if (!/^127\.0\.0\.1:\d+$/.test(headers.get('host') ?? '')) return refuse(400);
+    let url: URL;
+    try {
+      url = new URL(request.url);
+    } catch {
+      return refuse(400);
+    }
     if (
       closed ||
       request.method !== 'GET' ||
       url.pathname !== socketPath ||
       url.search !== '' ||
-      // Any port: through an SSH forward, Host names the client's local end of the tunnel.
-      !/^127\.0\.0\.1:\d+$/.test(headers.get('host') ?? '') ||
       headers.get('upgrade')?.toLowerCase() !== 'websocket' ||
       headers.get('sec-websocket-version') !== '13' ||
       !isWebSocketKey(headers.get('sec-websocket-key'))
@@ -236,24 +242,40 @@ export function createSocketServer(context: SocketServerContext) {
     closeOnBackpressureLimit: false,
     perMessageDeflate: false,
     open(socket) {
-      if (closed) return socket.terminate();
-      for (const oldest of handshakes) {
-        if (handshakes.size < maximumHandshakes) break;
-        oldest.evict();
+      try {
+        if (closed) return socket.terminate();
+        for (const oldest of handshakes) {
+          if (handshakes.size < maximumHandshakes) break;
+          oldest.evict();
+        }
+        const session: Session = new Session(
+          socket,
+          context,
+          registry(() => session),
+        );
+        socket.data.session = session;
+        handshakes.add(session);
+      } catch {
+        socket.terminate();
       }
-      const session: Session = new Session(
-        socket,
-        context,
-        registry(() => session),
-      );
-      socket.data.session = session;
-      handshakes.add(session);
     },
-    message: (socket, message) => socket.data.session?.receive(message),
-    ping: (socket) => socket.data.session?.ping(),
-    drain: (socket) => socket.data.session?.drained(),
-    close: (socket) => socket.data.session?.closed(),
+    message: (socket, message) => guard(socket, (session) => session.receive(message)),
+    ping: (socket) => guard(socket, (session) => session.ping()),
+    drain: (socket) => guard(socket, (session) => session.drained()),
+    close: (socket) => guard(socket, (session) => session.closed()),
   };
+  /** Runs one event on its session; a failure cuts the connection and is never Bun's to report. */
+  function guard(socket: BunWebSocket<SocketData>, run: (session: Session) => void) {
+    const session = socket.data.session;
+    if (!session) return;
+    try {
+      run(session);
+    } catch {
+      try {
+        socket.terminate();
+      } catch {}
+    }
+  }
 
   return {
     upgrade,

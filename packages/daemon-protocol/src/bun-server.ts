@@ -25,6 +25,10 @@ export type BunServeOptions<Data> = {
   port: number;
   /** Seconds an HTTP connection may stay idle; at most 255. */
   idleTimeout: number;
+  /** Off, so Bun never answers with its development error page (paths, source and a stack). */
+  development: false;
+  /** Answers a request whose handler threw; Bun's own answer would describe the failure. */
+  error(error: unknown): Response;
   fetch(
     request: Request,
     server: BunServer<Data>,

@@ -356,6 +356,7 @@ test('the upgrade admits only a local client’s plain WebSocket handshake, with
     ['a browser page', { headers: { Origin: 'http://127.0.0.1' } }, 403],
     ['another host name', { headers: { Host: `localhost:${port}` } }, 400],
     ['a host without a port', { headers: { Host: '127.0.0.1' } }, 400],
+    ['a host that is no URL', { headers: { Host: 'a b<c>' } }, 400],
     ['another path', { line: 'GET /v1/health HTTP/1.1' }, 400],
     ['a query', { line: `GET ${socketPath}?x=1 HTTP/1.1` }, 400],
     ['another method', { line: `POST ${socketPath} HTTP/1.1` }, 400],
@@ -1131,6 +1132,8 @@ test('daemon requests are bound to this host and their request ID; a substituted
     hostname: '127.0.0.1',
     port: 0,
     idleTimeout: 10,
+    development: false,
+    error: () => new Response(null, { status: 400 }),
     fetch: (request, server) => sockets.upgrade(request, server),
     websocket: sockets.websocket,
   });

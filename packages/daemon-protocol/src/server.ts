@@ -272,9 +272,17 @@ export const serveChat = (
           port: config.port,
           // An HTTP connection idle this long is closed; health answers well within it.
           idleTimeout: 10,
+          development: false,
+          error: () => new Response(null, { status: 503, headers: plainHeaders }),
           fetch: async (request, bun) => {
             if (closed) return new Response(null, { status: 503, headers: plainHeaders });
-            if (request.headers.get('upgrade') !== null) return sockets.upgrade(request, bun);
+            if (request.headers.get('upgrade') !== null) {
+              try {
+                return sockets.upgrade(request, bun);
+              } catch {
+                return new Response(null, { status: 400, headers: plainHeaders });
+              }
+            }
             if (active >= maximumRequests)
               return new Response(null, { status: 503, headers: plainHeaders });
             active++;
