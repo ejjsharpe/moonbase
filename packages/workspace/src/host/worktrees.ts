@@ -1,23 +1,29 @@
 import { randomUUID } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
-import { Cause, Context, Effect, Exit, Layer, Scope, Semaphore } from 'effect';
+import { Cause, Context, Data, Effect, Exit, Layer, Scope, Semaphore } from 'effect';
 import type { CheckoutTarget, CommandInput, Worktree } from '@moonbase/contracts/workspace';
 import {
-  InvalidWorkspaceRequestError,
+  BranchTakenError,
+  CheckoutChangedError,
+  IncompleteCleanupError,
+  InvalidBaseError,
+  InvalidPathError,
+  InvalidRequestError,
   isWorkspaceHostError,
-  UnresolvedWorkError,
   WorkspaceConflictError,
-  WorkspaceUnavailableError,
+  WorktreeGitError,
 } from '@moonbase/contracts/workspace-host-errors';
 import { attempt } from '../attempt.ts';
+import { HelperFailure } from '../system-failures.ts';
 import { identity, type Directory } from '../filesystem.ts';
-import { ensure, errorText, requireGit } from '../validation.ts';
+import { errorText, requireGit } from '../validation.ts';
 import { cancellationPoint } from './cancellation.ts';
 import { Checkouts } from './checkouts.ts';
 
-const gitFailure = (error: unknown) =>
-  error as { status?: number; uncertain?: boolean; stderr?: string };
+/** What Git reported, when `error` is the helper's failure. */
+const gitFailure = (error: unknown): Partial<HelperFailure> =>
+  error instanceof HelperFailure ? error : {};
 const failureText = (error: unknown) => gitFailure(error)?.stderr?.trim() || errorText(error);
 const branchName = (head: string | undefined, ref: string | undefined) =>
   ref?.startsWith('refs/heads/')
@@ -140,33 +146,25 @@ export class Worktrees {
       yield* attempt(() => requireGit(input.checkout));
       const directory = yield* this.checkouts.directory(input.checkout);
       const { base, branch } = input;
-      yield* attempt(() =>
-        ensure(
+      if (
+        !(
           isAbsolute(input.location) &&
-            resolve(input.location) === input.location &&
-            basename(input.location) !== '',
-          'Choose an absolute worktree location without traversal.',
-        ),
-      );
+          resolve(input.location) === input.location &&
+          basename(input.location) !== ''
+        )
+      )
+        return yield* new InvalidPathError({ problem: 'location-not-absolute' });
       const parent = yield* attempt(() => realpathSync.native(dirname(input.location))).pipe(
-        Effect.mapError(
-          () =>
-            new InvalidWorkspaceRequestError({
-              reason: 'The worktree location parent folder does not exist.',
-            }),
-        ),
+        Effect.mapError(() => new InvalidPathError({ problem: 'location-parent-missing' })),
       );
       const parentIdentity = folderIdentity(parent);
-      yield* attempt(() =>
-        ensure(parentIdentity, 'The worktree location parent must be a folder.'),
-      );
+      if (!parentIdentity)
+        return yield* new InvalidPathError({ problem: 'location-parent-not-folder' });
       // Git precomposes the paths it is given, so the folder it makes is named in NFC.
       const location = join(parent, basename(input.location).normalize('NFC'));
       yield* this.checkouts.permitLocation(location);
       if (yield* attempt(() => exists(location)))
-        return yield* new WorkspaceConflictError({
-          reason: 'The worktree location already exists.',
-        });
+        return yield* new WorkspaceConflictError({ conflict: 'location-exists' });
       // A worktree whose folder is missing (moved, or on an unmounted drive) still owns its location.
       const before = readWorktrees(
         (yield* Effect.interruptible(
@@ -174,16 +172,15 @@ export class Worktrees {
         )).toString(),
       );
       if (before.some((worktree) => sameRoot(worktree.root, location)))
-        return yield* new WorkspaceConflictError({
-          reason: 'Another worktree is registered at the worktree location.',
-        });
+        return yield* new WorkspaceConflictError({ conflict: 'location-registered' });
       const formatted = yield* Effect.interruptible(
         directory.git(['check-ref-format', '--branch', branch]),
       ).pipe(
         Effect.map((output) => output.toString().trim()),
         Effect.orElseSucceed(() => ''),
       );
-      yield* attempt(() => ensure(formatted === branch, 'Invalid branch name.'));
+      if (!(formatted === branch))
+        return yield* new InvalidRequestError({ problem: 'branch-name' });
       const ref = 'refs/heads/' + branch;
       const existing = yield* Effect.interruptible(
         directory.git(['show-ref', '--verify', '--quiet', ref]),
@@ -195,17 +192,14 @@ export class Worktrees {
             : Effect.fail(error),
         ),
       );
-      if (existing)
-        return yield* new WorkspaceConflictError({ reason: `Branch ${branch} already exists.` });
+      if (existing) return yield* new BranchTakenError({ branch, inside: false });
       const commit = yield* Effect.interruptible(
         directory.git(['rev-parse', '--verify', '--quiet', '--end-of-options', base + '^{commit}']),
       ).pipe(
         Effect.map((output) => output.toString().trim()),
         Effect.orElseSucceed(() => ''),
       );
-      yield* attempt(() =>
-        ensure(/^[a-f0-9]{40,64}$/.test(commit), `Base ${base} is not a commit.`),
-      );
+      if (!/^[a-f0-9]{40,64}$/.test(commit)) return yield* new InvalidBaseError({ base });
       // The empty old value creates the branch only if it does not exist, and the reflog entry and
       // the new worktree's lock reason name this creation, so cleanup removes only what it made.
       const created = { ref, commit, nonce: `moonbase: create worktree ${randomUUID()}` };
@@ -223,8 +217,9 @@ export class Worktrees {
             ? yield* this.removeBranch(directory, created, false)
             : undefined;
         if (cleanup)
-          return yield* new UnresolvedWorkError({
-            reason: `Worktree creation stopped and cleanup is incomplete (${cleanup}). Inspect branch ${branch}.`,
+          return yield* new IncompleteCleanupError({
+            remains: cleanup,
+            inspect: `branch ${branch}`,
           });
         if (cancelled) return yield* Effect.interrupt;
         return yield* Effect.fail(asCreationFailure(failure));
@@ -232,12 +227,8 @@ export class Worktrees {
       const added = yield* Effect.exit(
         Effect.gen({ self: this }, function* () {
           // A parent swapped for a link since it was checked would put the worktree elsewhere.
-          yield* attempt(() =>
-            ensure(
-              folderIdentity(parent) === parentIdentity,
-              'The worktree location parent changed. Choose the location again.',
-            ),
-          );
+          if (!(folderIdentity(parent) === parentIdentity))
+            return yield* new CheckoutChangedError({ change: 'worktree-parent' });
           // Locked from its start until approved, with a reason only this creation knows.
           yield* Effect.interruptible(
             directory.git([
@@ -269,8 +260,10 @@ export class Worktrees {
           created,
         );
         if (cleanup)
-          return yield* new UnresolvedWorkError({
-            reason: `Worktree creation failed and cleanup is incomplete (${cleanup}). Inspect ${location} and branch ${branch}. ${failureText(failure)}`,
+          return yield* new IncompleteCleanupError({
+            remains: cleanup,
+            inspect: `${location} and branch ${branch}`,
+            failure: failureText(failure),
           });
         if (failure === undefined) return yield* Effect.interrupt;
         return yield* Effect.fail(asCreationFailure(failure));
@@ -282,11 +275,7 @@ export class Worktrees {
         Effect.catch((error) =>
           Scope.addFinalizer(
             this.reports,
-            Effect.die(
-              new UnresolvedWorkError({
-                reason: `Worktree ${location} was created but is still locked (${failureText(error)}). Run git worktree unlock on it.`,
-              }),
-            ),
+            Effect.die(new WorktreeLockedError({ location, detail: failureText(error) })),
           ),
         ),
       );
@@ -389,6 +378,16 @@ export class WorkspaceWorktrees extends Context.Service<WorkspaceWorktrees, Work
   );
 }
 
+/** A worktree made and approved but left locked: reported when the host closes. */
+class WorktreeLockedError extends Data.TaggedError('WorktreeLockedError')<{
+  readonly location: string;
+  readonly detail: string;
+}> {
+  override get message() {
+    return `Worktree ${this.location} was created but is still locked (${this.detail}). Run git worktree unlock on it.`;
+  }
+}
+
 /** A folder's identity, or undefined when the path is not a folder itself (a link, say). */
 function folderIdentity(path: string) {
   try {
@@ -410,11 +409,7 @@ function exists(path: string) {
 }
 
 function asCreationFailure(error: unknown) {
-  return isWorkspaceHostError(error)
-    ? error
-    : new WorkspaceUnavailableError({
-        reason: 'Git could not create the worktree. ' + failureText(error),
-      });
+  return isWorkspaceHostError(error) ? error : new WorktreeGitError({ detail: failureText(error) });
 }
 /** A failure from `cause`, which may be an interruption: the first failure, or none. */
 const failureOf = (cause: Cause.Cause<unknown>) =>

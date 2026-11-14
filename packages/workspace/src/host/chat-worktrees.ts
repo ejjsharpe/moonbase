@@ -3,10 +3,14 @@ import { join } from 'node:path';
 import { Effect } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { maximumBranchName } from '@moonbase/contracts/workspace-host-schema';
-import { WorkspaceConflictError } from '@moonbase/contracts/workspace-host-errors';
+import {
+  BranchTakenError,
+  InvalidRequestError,
+  WorkspaceConflictError,
+} from '@moonbase/contracts/workspace-host-errors';
 import { attempt } from '../attempt.ts';
 import type { Directory } from '../filesystem.ts';
-import { ensure, requireGit } from '../validation.ts';
+import { requireGit } from '../validation.ts';
 import { cancellationPoint } from './cancellation.ts';
 import { Checkouts } from './checkouts.ts';
 import { WorkspaceWorktrees } from './worktrees.ts';
@@ -25,15 +29,15 @@ export const makeChatWorktree = ({ root, branch }: { root: string; branch: strin
   Effect.gen(function* () {
     const checkouts = yield* Checkouts;
     const worktrees = yield* WorkspaceWorktrees;
-    yield* attempt(() =>
-      ensure(
+    if (
+      !(
         branchPattern.test(branch) &&
-          branch.length <= maximumBranchName &&
-          !branch.includes('..') &&
-          !branch.endsWith('.lock'),
-        'Choose a simple branch name for the worktree.',
-      ),
-    );
+        branch.length <= maximumBranchName &&
+        !branch.includes('..') &&
+        !branch.endsWith('.lock')
+      )
+    )
+      return yield* new InvalidRequestError({ problem: 'chat-branch-name' });
     const target = yield* Effect.interruptible(checkouts.open(root));
     yield* attempt(() => requireGit(target));
     const listed = yield* Effect.interruptible(worktrees.listWorktrees(target));
@@ -64,9 +68,7 @@ export const makeChatWorktree = ({ root, branch }: { root: string; branch: strin
       // Branches inside the name (`chat/topic` for `chat`) block it as a taken one would.
       const made = yield* Effect.exit(
         clash === 'inside'
-          ? Effect.fail(
-              new WorkspaceConflictError({ reason: `Branches inside ${name}/ already exist.` }),
-            )
+          ? Effect.fail(new BranchTakenError({ branch: name, inside: true }))
           : worktrees.createWorktree({
               checkout: target,
               base: 'HEAD',
@@ -78,7 +80,9 @@ export const makeChatWorktree = ({ root, branch }: { root: string; branch: strin
       const failure = made.cause.reasons.find((reason) => reason._tag === 'Fail');
       if (
         failure?._tag === 'Fail' &&
-        failure.error instanceof WorkspaceConflictError &&
+        // A taken branch or location: try the next name.
+        (failure.error instanceof BranchTakenError ||
+          failure.error instanceof WorkspaceConflictError) &&
         tries < maximumAttempts
       )
         continue;

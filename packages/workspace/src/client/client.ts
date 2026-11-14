@@ -24,8 +24,9 @@ import { releaseAll, runOwned, type WorkOwner } from '../owned-work.ts';
 import { ClientStore } from './client-store.ts';
 import type { OperationRecord, SaveRecord } from './client-schema.ts';
 import { WorkspaceRecovery, type HostPorts, type Recoveries } from './recovery.ts';
-import { canonical, ensure, errorText, folded, hash, key, path } from '../validation.ts';
+import { canonical, errorText, folded, hash, key, path } from '../validation.ts';
 import { fail } from '@moonbase/contracts/errors';
+import { ensureInput } from './ensure-input.ts';
 
 export type ClientOwnership = {
   operations: FiberSet.FiberSet<unknown, ApplicationError>;
@@ -174,11 +175,11 @@ export class ClientWorkspace implements WorkOwner {
     signal: AbortSignal,
     host: WorkspaceHostServiceShape,
   ) {
-    ensure(
+    ensureInput(
       !this.recovery.getPendingSaves(target).length,
       'A save awaits recovery. Resolve it before initializing Git.',
     );
-    ensure(
+    ensureInput(
       !this.recovery.getUnsettledCheckoutOperations(target).length,
       'A file operation awaits recovery publication or inspection. Resolve it before initializing Git.',
     );

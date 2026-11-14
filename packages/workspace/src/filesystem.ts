@@ -3,12 +3,15 @@ import { execFile, spawn } from 'node:child_process';
 import fs, { constants, fstatSync, openSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import type { FileDocument } from '@moonbase/contracts/workspace';
-import { document, ensure, path } from './validation.ts';
+import { document, path } from './validation.ts';
 import {
-  WorkspaceAccessDeniedError,
+  CheckoutAccessError,
+  CheckoutChangedError,
+  InvalidPathError,
   WorkspaceUnavailableError,
 } from '@moonbase/contracts/workspace-host-errors';
-import { attempt } from './attempt.ts';
+import { asHostFailure, attempt, type HostFailure } from './attempt.ts';
+import { HelperFailure } from './system-failures.ts';
 /** macOS `O_NOFOLLOW_ANY`: refuse a symlink anywhere in the path, not only the last component. */
 export const O_NOFOLLOW_ANY = 0x20000000;
 const flags = constants.O_RDONLY | constants.O_DIRECTORY | O_NOFOLLOW_ANY;
@@ -28,7 +31,7 @@ export type Run = (
     /** Overrides for the helper's environment; `undefined` removes a variable. */
     env?: Record<string, string | undefined>;
   },
-) => Effect.Effect<Buffer, unknown>;
+) => Effect.Effect<Buffer, HelperFailure>;
 /** Untranslated Git output, for commands whose text is read back. */
 const gitLocale = { LC_ALL: 'C', LANGUAGE: undefined };
 const helperEnvironment = (overrides: Record<string, string | undefined> = {}) => {
@@ -91,7 +94,7 @@ export function makeRunner(helper: string): Run {
       Effect.gen(function* () {
         const state = yield* Effect.acquireRelease(
           Effect.sync(() => {
-            const completion = Deferred.makeUnsafe<Buffer, unknown>();
+            const completion = Deferred.makeUnsafe<Buffer, HelperFailure>();
             // Its own process group, so stopping reaches Git's children (checkout, hooks,
             // filters) as Ctrl-C would, and Git can remove what it half-created.
             const child = spawn(helper, args, {
@@ -179,21 +182,17 @@ export function makeRunner(helper: string): Run {
                 Deferred.doneUnsafe(
                   completion,
                   Effect.fail(
-                    spawnError ??
-                      Object.assign(
-                        Error(
-                          errors ||
-                            (state.capped
-                              ? 'Filesystem output/time limit reached; refine request.'
-                              : 'Filesystem helper unavailable.'),
-                        ),
-                        {
-                          status: code,
-                          stderr: errors,
-                          uncertain: !!killed || state.capped,
-                          output,
-                        },
-                      ),
+                    new HelperFailure({
+                      message:
+                        errors ||
+                        (state.capped
+                          ? 'Filesystem output/time limit reached; refine request.'
+                          : 'Filesystem helper unavailable.'),
+                      status: spawnError ? null : code,
+                      stderr: errors,
+                      uncertain: !spawnError && (!!killed || state.capped),
+                      output,
+                    }),
                   ),
                 );
             };
@@ -258,13 +257,10 @@ export function createGitGate(
       if (await probing) found = true;
       else missingAt = now();
     }
-    if (!found)
-      throw new WorkspaceUnavailableError({
-        reason: 'Git is unavailable. Install the Xcode command-line tools on this Mac.',
-      });
+    if (!found) throw new WorkspaceUnavailableError({ cause: 'git-tools' });
   };
-  return (): Effect.Effect<void, unknown> =>
-    Effect.tryPromise({ try: check, catch: (error) => error });
+  return (): Effect.Effect<void, HostFailure> =>
+    Effect.tryPromise({ try: check, catch: asHostFailure });
 }
 export class Directory {
   readonly fd: number;
@@ -272,13 +268,13 @@ export class Directory {
   readonly expected: string;
   readonly run: Run;
   readonly gitExecutable: string;
-  readonly gitReady: () => Effect.Effect<void, unknown>;
+  readonly gitReady: () => Effect.Effect<void, HostFailure>;
   constructor(
     root: string,
     expected: string,
     run: Run,
     gitExecutable: string,
-    gitReady: () => Effect.Effect<void, unknown> = () => Effect.void,
+    gitReady: () => Effect.Effect<void, HostFailure> = () => Effect.void,
   ) {
     this.gitReady = gitReady;
     this.root = root;
@@ -287,16 +283,12 @@ export class Directory {
     this.gitExecutable = gitExecutable;
     this.fd = openSync(root, flags);
     try {
-      ensure(
-        identity(fstatSync(this.fd)) === expected && realpathSync(root) === root,
-        'Checkout directory changed. Restore its original identity.',
-      );
+      if (!(identity(fstatSync(this.fd)) === expected && realpathSync(root) === root))
+        throw new CheckoutChangedError({ change: 'directory' });
       let parent = '/';
       for (const component of root.split('/').filter(Boolean)) {
-        ensure(
-          readdirSync(parent).includes(component),
-          'Choose the actual checkout spelling without case or Unicode aliases.',
-        );
+        if (!readdirSync(parent).includes(component))
+          throw new InvalidPathError({ problem: 'root-spelling' });
         parent = resolve(parent, component);
       }
     } catch (error) {
@@ -312,9 +304,7 @@ export class Directory {
     const fd = openSync(this.root, flags);
     try {
       if (identity(fstatSync(fd)) !== this.expected)
-        throw new WorkspaceAccessDeniedError({
-          reason: 'Checkout directory replaced. Reopen its original directory.',
-        });
+        throw new CheckoutAccessError({ refusal: 'replaced' });
     } finally {
       fs.closeSync(fd);
     }
@@ -369,18 +359,13 @@ export class Directory {
     path(p, true);
     this.check();
     if (p) {
-      ensure(
-        relative(this.root, realpathSync(resolve(this.root, p))) === p,
-        'Use exact paths without mount or symbolic-link aliases.',
-      );
+      if (!(relative(this.root, realpathSync(resolve(this.root, p))) === p))
+        throw new InvalidPathError({ problem: 'alias' });
       let parent = this.root;
       for (const component of p.split('/')) {
         const names = spellings?.get(parent) ?? new Set(readdirSync(parent));
         spellings?.set(parent, names);
-        ensure(
-          names.has(component),
-          'Use the actual on-disk spelling without case or Unicode aliases.',
-        );
+        if (!names.has(component)) throw new InvalidPathError({ problem: 'spelling' });
         parent = resolve(parent, component);
       }
     }
@@ -390,13 +375,14 @@ export class Directory {
     );
     try {
       const info = fstatSync(fd);
-      ensure(info.isFile() || info.isDirectory(), 'Unsupported filesystem object.');
+      if (!(info.isFile() || info.isDirectory()))
+        throw new InvalidPathError({ problem: 'unsupported' });
       return { identity: identity(info), directory: info.isDirectory() };
     } finally {
       fs.closeSync(fd);
     }
   }
-  read(p: string): Effect.Effect<FileDocument, unknown> {
+  read(p: string): Effect.Effect<FileDocument, HostFailure> {
     return attempt(() => path(p)).pipe(
       Effect.andThen(this.entry(p)),
       Effect.andThen(this.io(['read', p])),
@@ -409,7 +395,7 @@ export class Directory {
       path(p);
       const parent = dirname(p);
       const item = this.entryNow(parent === '.' ? '' : parent);
-      ensure(item.directory, 'Destination parent must be a directory.');
+      if (!item.directory) throw new InvalidPathError({ problem: 'destination-parent' });
       return item.identity;
     });
   }

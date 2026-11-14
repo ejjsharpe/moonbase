@@ -1,7 +1,7 @@
 import { Effect, Schema, Struct } from 'effect';
 import { isAbsolute } from 'node:path';
 import type { ChatTarget } from '@moonbase/contracts/chat';
-import { InvalidWorkspaceRequestError } from '@moonbase/contracts/workspace-host-errors';
+import { InvalidRequestError } from '@moonbase/contracts/workspace-host-errors';
 import { hash } from './validation.ts';
 import { systemGit } from './filesystem.ts';
 import {
@@ -87,7 +87,7 @@ export function decodeConfiguration(value: unknown): HostConfiguration {
   try {
     return configuration(value);
   } catch {
-    throw new InvalidWorkspaceRequestError({ reason: 'Invalid workspace configuration.' });
+    throw new InvalidRequestError({ problem: 'configuration' });
   }
 }
 /** A plain-folder checkout's approval has no repository: `common` and `gitEntry` are null. */

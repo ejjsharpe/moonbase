@@ -1,10 +1,7 @@
 import type { GitChange, GitChangeKind } from '@moonbase/contracts/workspace';
-import { WorkspaceUnavailableError } from '@moonbase/contracts/workspace-host-errors';
+import { GitStatusFormatError } from '@moonbase/contracts/workspace-host-errors';
 
-const unrecognized = (record: string) =>
-  new WorkspaceUnavailableError({
-    reason: `Unrecognized Git status record: ${JSON.stringify(record)}`,
-  });
+const unrecognized = (record: string) => new GitStatusFormatError({ record });
 
 /** XY pairs Git prints for an unmerged path. */
 const unmergedCodes = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);

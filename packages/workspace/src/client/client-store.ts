@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { InvalidRequestError } from '@moonbase/contracts/workspace-host-errors';
 import type { SQLInputValue } from 'node:sqlite';
 import {
   ApplicationError,
@@ -56,7 +57,7 @@ export class ClientStore extends Store {
     });
     try {
       const claimed = installationId ?? this.get<string>('meta', 'installation') ?? randomUUID();
-      this.claim('installation', claimed, 'Workspace store belongs to a different client.');
+      this.claim('installation', claimed, new InvalidRequestError({ problem: 'store-client' }));
       this.installationId = claimed;
     } catch (error) {
       this.close();

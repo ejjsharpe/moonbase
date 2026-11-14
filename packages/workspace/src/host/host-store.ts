@@ -1,5 +1,8 @@
 import { Context, Effect, Layer } from 'effect';
-import { WorkspaceUnsupportedError } from '@moonbase/contracts/workspace-host-errors';
+import {
+  InvalidRequestError,
+  WorkspaceUnsupportedError,
+} from '@moonbase/contracts/workspace-host-errors';
 import { Store } from '../store.ts';
 import { attempt } from '../attempt.ts';
 import { hostDecoders } from '../schema.ts';
@@ -12,11 +15,7 @@ import { HostSettings } from './host-settings.ts';
  */
 const requireQualifiedRuntime = Effect.suspend(() =>
   process.platform !== 'darwin' || process.versions.bun !== '1.4.4'
-    ? Effect.fail(
-        new WorkspaceUnsupportedError({
-          reason: 'The workspace file host requires macOS on exactly Bun 1.4.4.',
-        }),
-      )
+    ? Effect.fail(new WorkspaceUnsupportedError({ feature: 'runtime' }))
     : Effect.void,
 );
 
@@ -42,7 +41,7 @@ export class HostStore extends Context.Service<HostStore, Store>()('moonbase/wor
         (store) => Effect.sync(() => store.close()),
       );
       yield* attempt(() =>
-        store.claim('host', config.hostId, 'Workspace store belongs to a different host.'),
+        store.claim('host', config.hostId, new InvalidRequestError({ problem: 'store-host' })),
       );
       return store;
     }),

@@ -2,12 +2,13 @@ import { Cause, Context, Deferred, Effect, Exit, FiberSet, Layer, Scope } from '
 import { randomUUID } from 'node:crypto';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
-  WorkspaceAccessDeniedError,
+  CheckoutAccessError,
+  InvalidRequestError,
   WorkspaceUnavailableError,
 } from '@moonbase/contracts/workspace-host-errors';
 import { attempt } from '../attempt.ts';
 import type { Directory } from '../filesystem.ts';
-import { ensure, same } from '../validation.ts';
+import { same } from '../validation.ts';
 import { cancellationPoint } from './cancellation.ts';
 import { Checkouts } from './checkouts.ts';
 import { NativeImport } from './native-import.ts';
@@ -23,12 +24,11 @@ type NativeReference = {
 type NativeClaim = { token: string; ref: NativeReference };
 
 /** Fails a release that went wrong as the fixed, safe text a client sees. */
-const asReleaseFailure = (message: string) =>
-  Effect.catchCause((cause: Cause.Cause<unknown>) =>
-    Cause.hasInterruptsOnly(cause)
-      ? Effect.failCause(cause)
-      : Effect.fail(new WorkspaceUnavailableError({ reason: message })),
-  );
+const asReleaseFailure = Effect.catchCause((cause: Cause.Cause<unknown>) =>
+  Cause.hasInterruptsOnly(cause)
+    ? Effect.failCause(cause as Cause.Cause<never>)
+    : Effect.fail(new WorkspaceUnavailableError({ cause: 'native-cleanup' })),
+);
 
 /**
  * Native files a picker or drop named, held as single-use references for five minutes, bound to
@@ -63,9 +63,7 @@ export class References {
     return tokens.map((token) => {
       const ref = this.unclaimed.get(token);
       if (!ref || ref.clientId !== clientId || !same(ref.checkout, checkout))
-        throw new WorkspaceAccessDeniedError({
-          reason: 'Native reference expired, used or belongs to another client/checkout.',
-        });
+        throw new CheckoutAccessError({ refusal: 'native-reference-unusable' });
       ref.source.validate();
       return { token, ref };
     });
@@ -97,9 +95,7 @@ export class References {
       for (const token of known) {
         const entry = this.unclaimed.get(token)!;
         if (entry.clientId !== input.clientId || !same(entry.checkout, input.checkout))
-          return yield* new WorkspaceAccessDeniedError({
-            reason: 'Native reference belongs to another client/checkout.',
-          });
+          return yield* new CheckoutAccessError({ refusal: 'native-reference-owner' });
       }
       if (known.length) yield* attempt(() => this.checkouts.approval(input.checkout));
       // Every reference is released, whichever fail.
@@ -107,18 +103,14 @@ export class References {
         Effect.forEach(known, (token) => Effect.addFinalizer(() => this.releaseUnclaimed(token)), {
           discard: true,
         }),
-      ).pipe(asReleaseFailure('Native reference cleanup failed.'));
+      ).pipe(asReleaseFailure);
     });
   }
   capture(input: { checkout: CheckoutTarget; clientId: string; paths: string[] }) {
     return Effect.gen({ self: this }, function* () {
       const directory = yield* this.checkouts.directory(input.checkout);
-      yield* attempt(() =>
-        ensure(
-          this.unclaimed.size + this.activeNative + this.capturing + input.paths.length <= 256,
-          'Native import selection limit reached.',
-        ),
-      );
+      if (!(this.unclaimed.size + this.activeNative + this.capturing + input.paths.length <= 256))
+        return yield* new InvalidRequestError({ problem: 'native-limit' });
       const references: string[] = [];
       this.capturing += input.paths.length;
       return yield* Effect.gen({ self: this }, function* () {

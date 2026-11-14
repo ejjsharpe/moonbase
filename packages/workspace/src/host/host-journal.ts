@@ -1,7 +1,8 @@
 import { Context, type Deferred, Effect, Layer } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
-  fromWireError,
+  InterruptedRequestError,
+  RecordedRefusalError,
   UnresolvedWorkError,
   WorkspaceConflictError,
 } from '@moonbase/contracts/workspace-host-errors';
@@ -14,7 +15,7 @@ import type {
 } from '@moonbase/contracts/workspace-host';
 import { randomUUID } from 'node:crypto';
 import type { Store } from '../store.ts';
-import { attempt } from '../attempt.ts';
+import { attempt, type HostFailure } from '../attempt.ts';
 import { Checkouts } from './checkouts.ts';
 import { HostSettings } from './host-settings.ts';
 import { HostStore } from './host-store.ts';
@@ -75,7 +76,7 @@ export class Journal {
   /** The requests running in this process, so a concurrent duplicate waits for the first. */
   readonly runningRequests = new Map<
     string,
-    { input: unknown; outcome: Deferred.Deferred<CheckoutTarget, unknown> }
+    { input: unknown; outcome: Deferred.Deferred<CheckoutTarget, HostFailure> }
   >();
   private readonly store: Store;
   private readonly checkouts: JournalDependencies['checkouts'];
@@ -178,18 +179,9 @@ export class Journal {
     return { ...input, version };
   }
   replaySave(id: string, input: HostSaveRecord['input'], record: HostSaveRecord | Fenced) {
-    if (record === 'fenced')
-      throw new WorkspaceConflictError({
-        reason: 'The save request was reported as not started and can no longer run.',
-      });
-    if (!same(record.input, input))
-      throw new WorkspaceConflictError({
-        reason: 'Save request ID already belongs to a different payload or target.',
-      });
-    if (!record.result)
-      throw new UnresolvedWorkError({
-        reason: 'Interrupted save retained its intent. Ask for its status; do not repeat it.',
-      });
+    if (record === 'fenced') throw new WorkspaceConflictError({ conflict: 'save-not-started' });
+    if (!same(record.input, input)) throw new WorkspaceConflictError({ conflict: 'save-payload' });
+    if (!record.result) throw new UnresolvedWorkError({ state: 'save-interrupted' });
     const result: HostSaveResult = record.result;
     if (this.volatileSaves.has(id)) {
       try {
@@ -205,7 +197,7 @@ export class Journal {
     }
     return result;
   }
-  saveStatus(input: SaveIdentity): Effect.Effect<SaveStatus, unknown> {
+  saveStatus(input: SaveIdentity): Effect.Effect<SaveStatus, HostFailure> {
     return Effect.gen({ self: this }, function* () {
       const id = this.saveId(input),
         record = yield* attempt(() => this.getSave(id));
@@ -257,8 +249,7 @@ export class Journal {
     const id = this.saveId(input),
       record = this.getSave(id);
     if (!record || record === 'fenced') return;
-    if (!record.result)
-      throw new UnresolvedWorkError({ reason: 'An unresolved save cannot be acknowledged away.' });
+    if (!record.result) throw new UnresolvedWorkError({ state: 'save-unacknowledgeable' });
     if (this.volatileSaves.has(id)) this.settleSave(id, record);
     this.retain('saves', id);
   }
@@ -303,13 +294,9 @@ export class Journal {
   }
   replayOperation(id: string, input: HostInput<'mutate'>, record: HostOperationRecord | Fenced) {
     if (record === 'fenced')
-      throw new WorkspaceConflictError({
-        reason: 'The operation was reported as not started and can no longer run.',
-      });
+      throw new WorkspaceConflictError({ conflict: 'operation-not-started' });
     if (!same(record.input, input))
-      throw new WorkspaceConflictError({
-        reason: 'Operation ID already belongs to another payload/client/checkout.',
-      });
+      throw new WorkspaceConflictError({ conflict: 'operation-payload' });
     if (this.volatileOperations.has(id)) {
       try {
         this.finalizeOperation(id, record);
@@ -370,7 +357,9 @@ export class Journal {
     Object.assign(record, updated);
     this.volatileOperations.delete(id);
   }
-  operationStatus(input: OperationIdentity): Effect.Effect<HostOperationResult | null, unknown> {
+  operationStatus(
+    input: OperationIdentity,
+  ): Effect.Effect<HostOperationResult | null, HostFailure> {
     return Effect.gen({ self: this }, function* () {
       const id = this.operationId(input),
         record = yield* attempt(() => this.getOperation(id));
@@ -447,10 +436,7 @@ export class Journal {
       record = this.getOperation(id);
     if (!record || record === 'fenced') return;
     if (record.result.outcome === 'uncertain')
-      throw new UnresolvedWorkError({
-        reason:
-          'Uncertain operation evidence cannot be acknowledged away. Inspect the affected paths.',
-      });
+      throw new UnresolvedWorkError({ state: 'operation-unacknowledgeable' });
     if (this.volatileOperations.has(id)) this.finalizeOperation(id, record);
     this.retain('operations', id);
   }
@@ -464,7 +450,7 @@ export class Journal {
     installationId: string,
     clientId: string,
     footprint: (input: HostInput<'mutate'>) => string[],
-  ): Effect.Effect<void, unknown> {
+  ): Effect.Effect<void, HostFailure> {
     return Effect.gen({ self: this }, function* () {
       let blocked = false;
       for (const { id, record } of yield* attempt(() => this.getPendingSaves(target))) {
@@ -487,11 +473,7 @@ export class Journal {
           current.result.outcome === 'uncertain' ||
           (current.input.installationId === installationId && current.input.clientId === clientId);
       }
-      if (blocked)
-        return yield* new UnresolvedWorkError({
-          reason:
-            'An operation awaits recovery publication or inspection. Query its status; do not repeat the mutation.',
-        });
+      if (blocked) return yield* new UnresolvedWorkError({ state: 'awaits-recovery' });
     });
   }
 
@@ -519,18 +501,14 @@ export class Journal {
   /** Replays a request's recorded outcome. */
   replayRequest(record: HostRequestRecord, operation: RequestOperation, input: unknown) {
     if (!same(record.input, input))
-      throw new WorkspaceConflictError({
-        reason: 'Request ID already belongs to a different payload.',
-      });
+      throw new WorkspaceConflictError({ conflict: 'request-payload' });
     if (record.result) return record.result;
     if (record.error)
-      throw fromWireError(
-        record.error.code as Parameters<typeof fromWireError>[0],
-        record.error.message,
-      );
-    throw new UnresolvedWorkError({
-      reason: `The earlier ${operation} was interrupted. Inspect the repository; do not repeat it.`,
-    });
+      throw new RecordedRefusalError({
+        code: record.error.code as RecordedRefusalError['code'],
+        text: record.error.message,
+      });
+    throw new InterruptedRequestError({ operation });
   }
 
   /** Discards entries whose retention window has passed; unacknowledged ones stay. */

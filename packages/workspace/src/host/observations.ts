@@ -1,9 +1,14 @@
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Queue, Scope, Stream } from 'effect';
+import {
+  CheckoutChangedError,
+  InvalidPathError,
+  InvalidRequestError,
+} from '@moonbase/contracts/workspace-host-errors';
 import type { CheckoutTarget, WorkspaceEvent } from '@moonbase/contracts/workspace';
 import fs, { readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { attempt } from '../attempt.ts';
-import { ensure, errorText, path, same } from '../validation.ts';
+import { errorText, path, same } from '../validation.ts';
 import { Checkouts } from './checkouts.ts';
 
 const isInside = (path: string, parent: string) => {
@@ -97,10 +102,10 @@ export class Observations {
           }),
         );
         yield* attempt(() => {
-          ensure(
-            input.paths.length > 0 && input.paths.length <= 128 && self.subscriptions.size < 64,
-            'Watch subscription limit reached.',
-          );
+          if (
+            !(input.paths.length > 0 && input.paths.length <= 128 && self.subscriptions.size < 64)
+          )
+            throw new InvalidRequestError({ problem: 'watch-limit' });
           self.subscriptions.add(scope);
         });
         const directory = yield* self.checkouts.directory(input.checkout);
@@ -151,17 +156,12 @@ export class Observations {
           yield* Effect.yieldNow;
           yield* attempt(() => path(p, true));
           const before = yield* directory.entry(p);
-          yield* attempt(() =>
-            ensure(
-              before.directory,
-              'Watch directory paths, including parent directories of files.',
-            ),
-          );
+          if (!before.directory)
+            return yield* new InvalidPathError({ problem: 'watch-not-folder' });
           yield* acquire(resolve(directory.root, p));
           const after = yield* directory.entry(p);
-          yield* attempt(() =>
-            ensure(same(before, after), 'Watch directory changed during subscription.'),
-          );
+          if (!same(before, after))
+            return yield* new CheckoutChangedError({ change: 'watch-directory' });
         }
         if (common && !common.startsWith(directory.root + '/')) yield* acquire(common);
         const events = Stream.fromQueue(changes).pipe(

@@ -1,7 +1,8 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { normalizeApplicationError } from '@moonbase/effect';
 import {
-  InvalidWorkspaceRequestError,
+  InvalidPathError,
+  InvalidRequestError,
   isWorkspaceHostError,
 } from '@moonbase/contracts/workspace-host-errors';
 import { isCheckoutPath, isWellFormed } from '@moonbase/contracts/workspace-schema';
@@ -14,45 +15,33 @@ import {
   type OperationResult,
   type WorkspaceOperation,
 } from '@moonbase/contracts/workspace';
-export const ensure: (condition: unknown, message: string) => asserts condition = (
-  condition,
-  message,
-) => {
-  if (!condition) throw new InvalidWorkspaceRequestError({ reason: message });
-};
 /** Refuses a path that is not exactly checkout-relative (see `isCheckoutPath`). */
 export function path(value: unknown, directory = false): asserts value is string {
-  ensure(
-    typeof value === 'string' && isCheckoutPath(value, directory),
-    'Use an exact checkout-relative path without traversal, links or metadata.',
-  );
+  if (!(typeof value === 'string' && isCheckoutPath(value, directory)))
+    throw new InvalidPathError({ problem: 'not-relative' });
 }
 /** Refuses a Git-only operation on a plain-folder checkout. */
 export function requireGit(target: CheckoutTarget): asserts target is GitCheckoutTarget {
-  ensure(target.vcs === 'git', 'This project is not a Git repository. Initialize Git first.');
+  if (!(target.vcs === 'git')) throw new InvalidRequestError({ problem: 'not-git' });
 }
 export const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 export function document(bytes: Buffer): FileDocument {
-  ensure(
-    bytes.length <= maximumFileBytes && !bytes.includes(0),
-    'Text unavailable: binary or exceeds 2 MiB.',
-  );
+  if (!(bytes.length <= maximumFileBytes && !bytes.includes(0)))
+    throw new InvalidRequestError({ problem: 'text-too-large' });
   let decoded: string;
   try {
     decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch {
-    throw new InvalidWorkspaceRequestError({ reason: 'Text unavailable: invalid UTF-8.' });
+    throw new InvalidRequestError({ problem: 'text-not-utf8' });
   }
   return { text: decoded, version: hash(bytes) };
 }
 /** Checks that `text` is a file's worth of well-formed text, without hashing it. */
 export function text(value: unknown): asserts value is string {
-  ensure(typeof value === 'string', 'Invalid text.');
-  ensure(isWellFormed(value), 'Invalid Unicode text.');
-  ensure(
-    !value.includes('\0') && Buffer.byteLength(value) <= maximumFileBytes,
-    'Text unavailable: binary or exceeds 2 MiB.',
-  );
+  if (!(typeof value === 'string')) throw new InvalidRequestError({ problem: 'text-not-string' });
+  if (!isWellFormed(value)) throw new InvalidRequestError({ problem: 'text-not-unicode' });
+  if (!(!value.includes('\0') && Buffer.byteLength(value) <= maximumFileBytes))
+    throw new InvalidRequestError({ problem: 'text-too-large' });
 }
 export function textDocument(value: string): FileDocument {
   text(value);

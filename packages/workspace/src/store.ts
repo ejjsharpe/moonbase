@@ -1,16 +1,15 @@
 import { O_NOFOLLOW_ANY } from './filesystem.ts';
-import { normalizeApplicationError } from '@moonbase/effect';
 import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
 import { chmodSync, constants, closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
-import { WorkspaceStoreError } from '@moonbase/contracts/workspace-host-errors';
-import { ensure } from './validation.ts';
+import {
+  InvalidRequestError,
+  WorkspaceStoreError,
+} from '@moonbase/contracts/workspace-host-errors';
+import { errorText } from './validation.ts';
 
 export type Decoders = Record<string, (value: unknown) => unknown>;
-export const invalidStored = () =>
-  new WorkspaceStoreError({
-    reason: 'Invalid workspace saved data. Original data retained; publication blocked.',
-  });
+export const invalidStored = () => new WorkspaceStoreError({ failure: 'invalid-data' });
 
 /**
  * A private SQLite file of keyed records, each decoded strictly by its bucket. The file host and
@@ -31,7 +30,7 @@ export class Store {
       decoders: Decoders;
     },
   ) {
-    ensure(isAbsolute(directory), 'Choose an explicit absolute Moonbase workspace data directory.');
+    if (!isAbsolute(directory)) throw new InvalidRequestError({ problem: 'data-directory' });
     this.decoders = options.decoders;
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     this.directory = realpathSync(directory);
@@ -49,10 +48,8 @@ export class Store {
       this.db.exec('PRAGMA busy_timeout=0; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
       const application = this.db.prepare('PRAGMA application_id').get()!.application_id;
       const tables = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
-      ensure(
-        application === options.applicationId || (application === 0 && tables.length === 0),
-        'This is not a Moonbase workspace store. Existing data retained.',
-      );
+      if (!(application === options.applicationId || (application === 0 && tables.length === 0)))
+        throw new InvalidRequestError({ problem: 'not-a-store' });
       this.db.exec(
         `PRAGMA application_id=${options.applicationId}; CREATE TABLE IF NOT EXISTS records (bucket TEXT NOT NULL, key TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(bucket,key));` +
           options.schema,
@@ -64,9 +61,9 @@ export class Store {
     }
   }
   /** Binds the store to one identity the first time and refuses any other afterwards. */
-  claim(key: string, value: string, message: string) {
+  claim(key: string, value: string, refusal: Error) {
     const identity = this.get<string>('meta', key);
-    ensure(!identity || identity === value, message);
+    if (identity && identity !== value) throw refusal;
     if (!identity) this.put('meta', key, value);
   }
   parse<T>(bucket: string, body: unknown): T {
@@ -109,11 +106,7 @@ export class Store {
     try {
       return this.statement(sql).run(...parameters);
     } catch (error) {
-      throw new WorkspaceStoreError({
-        reason:
-          'Workspace journal publication failed; retain drafts and retry. ' +
-          normalizeApplicationError(error).message,
-      });
+      throw new WorkspaceStoreError({ failure: 'publication', detail: errorText(error) });
     }
   }
   reserve<T>(bucket: string, key: string, value: T): T | null {
@@ -123,11 +116,7 @@ export class Store {
       ).run(bucket, key, JSON.stringify(value));
       return Number(result.changes) === 0 ? this.get<T>(bucket, key) : null;
     } catch (error) {
-      throw new WorkspaceStoreError({
-        reason:
-          'Workspace request reservation failed; no mutation admitted. ' +
-          normalizeApplicationError(error).message,
-      });
+      throw new WorkspaceStoreError({ failure: 'reservation', detail: errorText(error) });
     }
   }
   delete(bucket: string, key: string) {

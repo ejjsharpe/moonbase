@@ -33,7 +33,6 @@ import {
 import { invalidStored } from '../store.ts';
 import {
   canonical,
-  ensure,
   errorText,
   isOriginalResult,
   key,
@@ -42,6 +41,7 @@ import {
   hash,
 } from '../validation.ts';
 import { fail } from '@moonbase/contracts/errors';
+import { ensureInput } from './ensure-input.ts';
 import { isCheckoutPath } from '@moonbase/contracts/workspace-schema';
 
 /**
@@ -469,14 +469,14 @@ export class WorkspaceRecovery {
     { readable, unreadable }: Recoveries,
   ) {
     // An unreadable recovery may hold a draft here.
-    ensure(
+    ensureInput(
       !unreadable.length,
       'Recovery of ' +
         unreadable[0]?.client +
         ' is unreadable and may hold drafts at the destination.',
     );
     for (const { state } of readable)
-      ensure(
+      ensureInput(
         !state.drafts.some(
           (d) => d.target.checkout.checkoutId === target.checkoutId && conflicts(d.target.path),
         ),
@@ -827,7 +827,7 @@ export class WorkspaceRecovery {
   ) {
     if (!records.length) return;
     const clientId = records[0].input.clientId;
-    ensure(
+    ensureInput(
       records.every((record) => record.input.clientId === clientId),
       'A Save publication group belongs to one client.',
     );

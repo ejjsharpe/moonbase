@@ -3,12 +3,15 @@ import { accessSync, constants } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import type { CheckoutTarget, CommandInput, CommandOutput } from '@moonbase/contracts/workspace';
 import {
-  InvalidWorkspaceRequestError,
+  InvalidPathError,
+  InvalidPatternError,
+  InvalidRequestError,
   WorkspaceUnavailableError,
 } from '@moonbase/contracts/workspace-host-errors';
-import { attempt } from '../attempt.ts';
+import { attempt, type HostFailure } from '../attempt.ts';
+import { HelperFailure, SystemFailure } from '../system-failures.ts';
 import { matchPath, compareMatches } from '@moonbase/contracts/lookup';
-import { document, ensure, errorText, path, requireGit } from '../validation.ts';
+import { document, errorText, path, requireGit } from '../validation.ts';
 import { Checkouts, readBranch } from './checkouts.ts';
 import { HostSettings } from './host-settings.ts';
 import { parseGitStatus } from './git-status.ts';
@@ -57,9 +60,9 @@ export function regexFailure(stderr: string) {
   return reason || first.replace(/:$/, '') || undefined;
 }
 
-/** A helper failure as the runner reports it. */
-const helperFailure = (error: unknown) =>
-  error as { status?: number; stderr?: string; uncertain?: boolean; output?: Buffer };
+/** What the helper reported, when `error` is its failure. */
+const helperFailure = (error: unknown): Partial<HelperFailure> =>
+  error instanceof HelperFailure ? error : {};
 
 /** The first standalone ripgrep on `PATH`, when none is configured. */
 const findRipgrep = () =>
@@ -98,10 +101,8 @@ export class Discovery {
     return Effect.gen({ self: this }, function* () {
       yield* attempt(() => {
         path(input.path, true);
-        ensure(
-          input.includeIgnoredStatus !== false || !input.hideIgnored,
-          'Ignore filtering requires ignore classification.',
-        );
+        if (!(input.includeIgnoredStatus !== false || !input.hideIgnored))
+          throw new InvalidRequestError({ problem: 'ignore-filtering' });
       });
       const directory = yield* this.checkouts.directory(input.checkout);
       yield* directory.entry(input.path);
@@ -141,16 +142,14 @@ export class Discovery {
   }
   getIgnoredPaths(
     input: CommandInput<'getIgnoredPaths'>,
-  ): Effect.Effect<CommandOutput<'getIgnoredPaths'>, unknown> {
+  ): Effect.Effect<CommandOutput<'getIgnoredPaths'>, HostFailure> {
     return Effect.gen({ self: this }, function* () {
       yield* attempt(() => {
         path(input.path, true);
         input.paths.forEach((item) => {
           path(item);
-          ensure(
-            dirname(item) === (input.path || '.'),
-            'Ignore paths must be immediate directory children.',
-          );
+          if (!(dirname(item) === (input.path || '.')))
+            throw new InvalidPathError({ problem: 'ignore-not-child' });
         });
       });
       const directory = yield* this.checkouts.directory(input.checkout);
@@ -234,7 +233,7 @@ export class Discovery {
         .read(p)
         .pipe(
           Effect.catch((error) =>
-            (error as NodeJS.ErrnoException).code !== 'ENOENT' &&
+            !(error instanceof SystemFailure && error.code === 'ENOENT') &&
             !helperFailure(error).stderr?.includes('No such file')
               ? Effect.fail(error)
               : Effect.succeed(null),
@@ -265,11 +264,7 @@ export class Discovery {
           if (entries) {
             const rows = entries.split('\0').filter(Boolean);
             const stage = rows.find((row) => row.split(' ')[2]?.startsWith('0\t'));
-            if (!stage)
-              return yield* new WorkspaceUnavailableError({
-                reason:
-                  'Index contains unresolved merge stages; no single index baseline is available.',
-              });
+            if (!stage) return yield* new WorkspaceUnavailableError({ cause: 'merge-stages' });
             const blob = yield* directory.git(['cat-file', 'blob', stage.split(' ')[1]]);
             original = (yield* attempt(() => document(blob))).text;
           }
@@ -404,17 +399,12 @@ export class Discovery {
   private requireRipgrep() {
     return this.ripgrep
       ? Effect.succeed(this.ripgrep)
-      : Effect.fail(
-          new WorkspaceUnavailableError({
-            reason:
-              'Standalone ripgrep is unavailable. Supply the packaged ripgrepExecutable asset.',
-          }),
-        );
+      : Effect.fail(new WorkspaceUnavailableError({ cause: 'ripgrep' }));
   }
   /** Searches file contents with ripgrep, honouring ignore files like `lookupFiles`. */
   searchText(
     input: CommandInput<'searchText'>,
-  ): Effect.Effect<CommandOutput<'searchText'>, unknown> {
+  ): Effect.Effect<CommandOutput<'searchText'>, HostFailure> {
     return Effect.gen({ self: this }, function* () {
       const directory = yield* this.checkouts.directory(input.checkout);
       yield* this.checkouts.policy(input.checkout);
@@ -523,13 +513,7 @@ export class Discovery {
           if (!received) {
             // A bad pattern fails before any file is searched, so it leaves no JSON behind.
             const reason = failure.status === 2 ? regexFailure(stderr) : undefined;
-            return Effect.fail(
-              reason
-                ? new InvalidWorkspaceRequestError({
-                    reason: 'Invalid regular expression: ' + reason,
-                  })
-                : cause,
-            );
+            return Effect.fail(reason ? new InvalidPatternError({ reason }) : cause);
           }
           // Exit 2 after searching means some files could not be read; the rest are complete.
           if (failure.status === 2)

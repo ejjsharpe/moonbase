@@ -1,18 +1,20 @@
-import { Cause, Deferred, Effect, Exit } from 'effect';
+import { Cause, Deferred, Effect, Exit, Option } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import type { HostInput, HostOutput } from '@moonbase/contracts/workspace-host';
 import {
+  CheckoutAccessError,
+  CheckoutChangedError,
+  InvalidRequestError,
   isWorkspaceHostError,
   toWireError,
-  WorkspaceAccessDeniedError,
   WorkspaceConflictError,
   WorkspaceUnavailableError,
   WorkspaceUnsupportedError,
 } from '@moonbase/contracts/workspace-host-errors';
 import { join } from 'node:path';
-import { attempt } from '../attempt.ts';
+import { asHostFailure, attempt, type HostFailure } from '../attempt.ts';
 import type { HostRequestRecord } from '../schema.ts';
-import { ensure, same } from '../validation.ts';
+import { same } from '../validation.ts';
 import { makeChatWorktree } from './chat-worktrees.ts';
 import { Checkouts } from './checkouts.ts';
 import { HostJournal, type RequestOperation } from './host-journal.ts';
@@ -29,9 +31,7 @@ const deterministicRefusals: ReadonlySet<string> = new Set([
 /** The wire code and text a request's failure is recorded with; anything unknown is `Unavailable`. */
 const recordedFailure = (error: unknown) =>
   toWireError(
-    isWorkspaceHostError(error)
-      ? error
-      : new WorkspaceUnavailableError({ reason: 'Application effect failed' }),
+    isWorkspaceHostError(error) ? error : new WorkspaceUnavailableError({ cause: 'failed' }),
   );
 
 /**
@@ -44,7 +44,7 @@ const once = <K extends RequestOperation>(
   input: HostInput<K>,
   work: Effect.Effect<
     HostOutput<K>,
-    unknown,
+    HostFailure,
     Checkouts | HostJournal | HostSettings | WorkspaceWorktrees
   >,
 ) =>
@@ -55,9 +55,7 @@ const once = <K extends RequestOperation>(
     const first = requests.get(id);
     if (first) {
       if (!same(first.input, input))
-        return yield* new WorkspaceConflictError({
-          reason: 'Request ID already belongs to a different payload.',
-        });
+        return yield* new WorkspaceConflictError({ conflict: 'request-payload' });
       return (yield* Effect.interruptible(Deferred.await(first.outcome))) as HostOutput<K>;
     }
     const record = yield* attempt(() => journal.reserveRequest(id, input));
@@ -65,7 +63,7 @@ const once = <K extends RequestOperation>(
       return (yield* attempt(() =>
         journal.replayRequest(record, operation, input),
       )) as HostOutput<K>;
-    const outcome = Deferred.makeUnsafe<CheckoutTarget, unknown>();
+    const outcome = Deferred.makeUnsafe<CheckoutTarget, HostFailure>();
     requests.set(id, { input, outcome });
     const exit = yield* Effect.exit(settleRequest(journal, id, input, work));
     requests.delete(id);
@@ -83,7 +81,7 @@ const settleRequest = <A extends CheckoutTarget, R>(
   journal: HostJournal['Service'],
   id: string,
   input: HostRequestRecord['input'],
-  work: Effect.Effect<A, unknown, R>,
+  work: Effect.Effect<A, HostFailure, R>,
 ) =>
   Effect.gen(function* () {
     const exit = yield* Effect.exit(work);
@@ -92,8 +90,8 @@ const settleRequest = <A extends CheckoutTarget, R>(
       yield* Effect.exit(attempt(() => journal.settleRequest(id, { input, result: exit.value })));
       return exit.value;
     }
-    const error = Cause.hasInterruptsOnly(exit.cause) ? undefined : Cause.squash(exit.cause);
-    const recorded = error === undefined ? undefined : recordedFailure(error);
+    const failure = Cause.findErrorOption(exit.cause);
+    const recorded = Option.isSome(failure) ? recordedFailure(failure.value) : undefined;
     // A failed record makes a replay of this ID report the request interrupted.
     yield* Effect.exit(
       attempt(() => {
@@ -141,29 +139,22 @@ export const turnChatIntoProject = (input: HostInput<'turnChatIntoProject'>) =>
     Effect.gen(function* () {
       const { chats } = yield* HostSettings;
       const checkouts = yield* Checkouts;
-      if (!chats)
-        return yield* new WorkspaceUnsupportedError({
-          reason: 'This host cannot turn a chat into a project.',
-        });
+      if (!chats) return yield* new WorkspaceUnsupportedError({ feature: 'chat-projects' });
       const folder = yield* Effect.tryPromise({
         try: () => chats.findOwnFolder(input.target),
-        catch: (error) => error,
+        catch: asHostFailure,
       });
       const target = yield* Effect.interruptible(checkouts.open(folder));
       // `open` resolves links: a folder replaced by one since it was checked opens elsewhere.
       if (target.root !== folder)
-        return yield* new WorkspaceAccessDeniedError({
-          reason: 'The folder changed before it opened as a project. Inspect it.',
-        });
+        return yield* new CheckoutAccessError({ refusal: 'chat-folder-changed' });
       // Only its own `.git` folder: a `.git` file (or a link) would make it another repository's.
       const { common, gitEntry } = yield* attempt(() => checkouts.approval(target));
       if (common && (gitEntry?.pointer !== null || common.path !== join(folder, '.git')))
-        return yield* new WorkspaceAccessDeniedError({
-          reason: 'The chat folder belongs to another repository. Inspect its .git.',
-        });
+        return yield* new CheckoutAccessError({ refusal: 'chat-folder-repository' });
       yield* Effect.tryPromise({
         try: () => chats.markAsProject(input.requestId, input.target),
-        catch: (error) => error,
+        catch: asHostFailure,
       });
       return target;
     }),
@@ -182,30 +173,22 @@ export const initializeRepository = (input: HostInput<'initializeRepository'>) =
       const checkouts = yield* Checkouts;
       const journal = yield* HostJournal;
       const target = input.checkout;
-      yield* attempt(() =>
-        ensure(target.vcs === 'none', 'This project is already a Git repository.'),
-      );
+      if (!(target.vcs === 'none'))
+        return yield* new InvalidRequestError({ problem: 'already-git' });
       const directory = yield* checkouts.directory(target);
       if (yield* attempt(() => checkouts.gitEntry(target.root)))
-        return yield* new WorkspaceConflictError({
-          reason: 'This folder already has a .git entry. Reopen it to use its repository.',
-        });
+        return yield* new WorkspaceConflictError({ conflict: 'git-entry' });
       yield* attempt(() => {
-        ensure(
-          !journal.getPendingSaves(target).length,
-          'A save awaits recovery. Resolve it before initializing Git.',
-        );
-        ensure(
-          !journal.getUnsettledCheckoutOperations(target, input.installationId).length,
-          'A file operation awaits recovery publication or inspection. Resolve it before initializing Git.',
-        );
+        if (journal.getPendingSaves(target).length)
+          throw new InvalidRequestError({ problem: 'save-pending' });
+        if (journal.getUnsettledCheckoutOperations(target, input.installationId).length)
+          throw new InvalidRequestError({ problem: 'operation-pending' });
       });
       yield* Effect.interruptible(directory.initializeGit());
       // `open` approves a Git target here only as the main worktree of the folder's own `.git`.
       const initialized = yield* Effect.interruptible(checkouts.open(target.root));
-      yield* attempt(() =>
-        ensure(initialized.vcs === 'git', 'Git did not initialize this folder. Inspect it.'),
-      );
+      if (!(initialized.vcs === 'git'))
+        return yield* new CheckoutChangedError({ change: 'not-initialized' });
       return initialized as HostOutput<'initializeRepository'>;
     }),
   );
