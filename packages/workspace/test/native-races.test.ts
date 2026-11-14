@@ -244,7 +244,7 @@ for (const kind of ['folder', 'file'] as const) {
 
 for (const swap of ['source', 'ancestor', 'parent', 'root', 'stage'] as const) {
   test(`native import rejects ${swap} replacement before publish and retains staging without cleanup`, async () => {
-    const { NativeImport } = await import('../src/native-import.ts');
+    const { NativeImport } = await import('../src/host/native-import.ts');
     const fixture = mkdtempSync(join(base, 'import-'));
     const root = join(fixture, 'repo'),
       external = join(fixture, 'external');
@@ -324,7 +324,7 @@ for (const swap of ['source', 'ancestor', 'parent', 'root', 'stage'] as const) {
 }
 
 test('native helper rejects destination ancestry before any staging even without the host preflight', async () => {
-  const { NativeImport } = await import('../src/native-import.ts');
+  const { NativeImport } = await import('../src/host/native-import.ts');
   const root = mkdtempSync(join(base, 'import-descendant-'));
   mkdirSync(join(root, 'source'));
   mkdirSync(join(root, 'source/child'));

@@ -19,9 +19,12 @@ import {
   type ActivityHeadline,
   groupTranscriptRows,
   type TranscriptItem,
-} from '../src/renderer/chat/activity.ts';
-import { parseRecordedPatch, type PatchLine } from '../src/renderer/chat/recorded-patch.ts';
-import { getTranscriptParts } from '../src/renderer/chat/transcript-parts.ts';
+} from '../src/renderer/chat/transcript/activity.ts';
+import {
+  parseRecordedPatch,
+  type PatchLine,
+} from '../src/renderer/chat/transcript/recorded-patch-model.ts';
+import { getTranscriptParts } from '../src/renderer/chat/transcript/transcript-parts.ts';
 const part = (
   id: string,
   kind: ChatTranscriptPart['kind'],

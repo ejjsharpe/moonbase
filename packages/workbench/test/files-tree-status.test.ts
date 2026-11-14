@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { GitChange } from '@moonbase/contracts/workspace';
-import { rollUpGitStatus, selectStrongerKind } from '../src/editor/files-tree-status.ts';
+import { rollUpGitStatus, selectStrongerKind } from '../src/files-tree/files-tree-status.ts';
 
 test('a path shows its strongest kind and each folder its strongest descendant', () => {
   const changes: GitChange[] = [

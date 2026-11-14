@@ -4,14 +4,14 @@ import { fileURLToPath } from 'node:url';
 import { ManagedRuntime } from 'effect';
 import { createMoonbaseApplication } from '@moonbase/application';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { memoryWorkspace } from '@moonbase/application/testing/memory-workspace';
+import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 
 // Fail rather than measure a different checkout through stale workspace links.
 const applicationRoot = fileURLToPath(new URL('../', import.meta.url));
 for (const entry of [
   '@moonbase/application',
   '@moonbase/application/runtime/clients',
-  '@moonbase/application/testing/memory-workspace',
+  '@moonbase/application/testing/faux-workspace',
 ])
   assert(realpathSync(fileURLToPath(import.meta.resolve(entry))).startsWith(applicationRoot));
 
@@ -40,7 +40,7 @@ async function measure(count, activeBytes, restored = false) {
       return [`file${index}.ts`, 'x'.repeat(size - 8) + String(index).padStart(8, '0')];
     }),
   );
-  const memory = memoryWorkspace([{ checkout, files }]);
+  const memory = fauxWorkspace([{ checkout, files }]);
   const runtime = ManagedRuntime.make(memory.layer);
   const client = { ...makeEditorClient(runtime), watch: () => async () => {} };
   const options = { editors: [{ client, clientId: 'snapshot-measurement' }] };

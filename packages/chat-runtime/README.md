@@ -7,7 +7,7 @@
 | `.` | `LocalPiRuntimeLive(config)`, where each chat keeps its own folder and model, privileged `LocalPiControl`, and `LocalHostLive(config)`: the contracts `LocalHostService` (folder approvals, chat folder checks, active work, mark as project) over `LocalPiControl` and the daemon's `FolderApprovals` |
 | `./local-models`, `./providers`, `./credentials` | Local provider catalog, provider sign-in and injected encrypted credential storage |
 | `./claude-code` | Claude Pro/Max subscription through the user's Claude Code login ([pi-claude-code](https://github.com/earendil-works/pi-claude-code)) |
-| `./host-configuration` | `decodeDaemonSettings` for the daemon's `daemon.json` |
+| `./daemon-settings` | `decodeDaemonSettings` for the daemon's `daemon.json` |
 
 The daemon serves the runtime over [`@moonbase/daemon-protocol`](../daemon-protocol/README.md), which owns the wire protocol, its server and the remote client services. **A working folder is tool context, not a filesystem sandbox.**
 

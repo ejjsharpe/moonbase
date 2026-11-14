@@ -6,7 +6,12 @@ import { overlays } from '@moonbase/ui/overlays';
 import { projectHue, projectInitials, projectTiles } from '@moonbase/ui/projects';
 import { colors, radius } from '@moonbase/ui/tokens.stylex';
 import { Icon } from '@moonbase/ui/icons';
-import { FolderMenu, folderMenuStyles, folderName, parentPath } from '../folder-menu.tsx';
+import {
+  FolderMenu,
+  folderMenuStyles,
+  folderName,
+  parentPath,
+} from '../components/folder-menu.tsx';
 
 /** A checkout the editor has opened, which local chat may use as its working folder. */
 export type ChatFolderProject = {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ChatController, TranscriptView } from '@moonbase/application/chat';
-import { createViewSaver } from '../src/renderer/chat/transcript-view-saving.ts';
+import { createViewSaver } from '../src/renderer/chat/transcript/transcript-view-saving.ts';
 
 function fakeController() {
   const state = {

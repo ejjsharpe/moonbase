@@ -3,8 +3,8 @@ import { createHash } from 'node:crypto';
 import { test, after } from 'node:test';
 import { visit } from 'unist-util-visit';
 import type { Code } from 'mdast';
-import { parseTranscriptMarkdown } from '../src/chat/transcript-source.ts';
-import { MarkdownCache } from '../src/renderer/chat/markdown-model.ts';
+import { parseTranscriptMarkdown } from '../src/ipc/transcript-markdown.ts';
+import { MarkdownCache } from '../src/renderer/chat/transcript/markdown-model.ts';
 import { Layer, ManagedRuntime } from 'effect';
 import {
   maximumChatReplyBytes,
@@ -13,18 +13,18 @@ import {
   type ChatTranscriptPart,
   type ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
-import { ChatIpcSession } from '../src/chat/session.ts';
+import { ChatIpcSession } from '../src/main/chat/session.ts';
 import {
   maximumTranscriptCodeCopyBytes,
   maximumTranscriptCopyBytes,
-} from '../src/chat/transcript-native.ts';
+} from '../src/main/chat/transcript-native.ts';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import {
   browserClients,
   browserTranscriptActions,
   type ChatBridge,
   type Reply,
-} from '../src/chat/wire.ts';
+} from '../src/ipc/chat-wire.ts';
 const runtime = ManagedRuntime.make(Layer.empty);
 after(() => runtime.dispose());
 const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' },

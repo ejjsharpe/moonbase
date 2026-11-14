@@ -20,7 +20,7 @@ import {
   RemoteProviderSetupLive,
   RemoteWorkspaceHostLive,
 } from '@moonbase/daemon-protocol/remote';
-import { findDaemonCommand } from '../src/main/daemon-command.ts';
+import { findDaemonCommand } from '../src/main/daemon/daemon-command.ts';
 import {
   bounded,
   launchFrom,
@@ -31,7 +31,7 @@ import {
   startDaemonCommand,
   withLocalRegistry,
   writeHostilePreload,
-} from './daemon-process.ts';
+} from './fixtures/daemon-fixture.ts';
 
 // Runs against the package that `bun run package` made; `test:package` runs it.
 const contents = resolve(

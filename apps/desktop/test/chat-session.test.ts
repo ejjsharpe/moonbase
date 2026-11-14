@@ -11,8 +11,8 @@ import {
 } from '@moonbase/contracts/chat';
 import type { ConnectionClient } from '@moonbase/contracts/connection';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import { ChatIpcSession } from '../src/chat/session.ts';
-import { browserClients, type ChatBridge, type Reply } from '../src/chat/wire.ts';
+import { ChatIpcSession } from '../src/main/chat/session.ts';
+import { browserClients, type ChatBridge, type Reply } from '../src/ipc/chat-wire.ts';
 const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'owner' },
   target = { ...context, conversationId: 'saved' };
 function fixture() {

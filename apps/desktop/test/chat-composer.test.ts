@@ -6,7 +6,7 @@ import {
   type ChatMention,
   type ChatTarget,
 } from '@moonbase/contracts/chat';
-import { ChatComposer, getChatComposer } from '../src/renderer/chat/composer.ts';
+import { ChatComposer, getChatComposer } from '../src/renderer/chat/composer/composer.ts';
 import { ApplicationError } from '@moonbase/contracts/errors';
 
 const target = (conversationId: string) =>

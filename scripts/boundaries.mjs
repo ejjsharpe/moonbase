@@ -73,7 +73,7 @@ export function readRepository(root) {
         files.set(path, imports(readFileSync(join(root, path), 'utf8'), path));
     }
   }
-  for (const directory of ['packages', 'apps', 'tests']) walk(directory);
+  for (const directory of ['packages', 'apps', 'test']) walk(directory);
   for (const parent of ['packages', 'apps']) {
     for (const item of readdirSync(join(root, parent), { withFileTypes: true })) {
       const directory = `${parent}/${item.name}`;
@@ -99,8 +99,7 @@ const forbiddenPortable =
   /^(?:node:|electron(?:\/|$)|react(?:-dom)?(?:\/|$)|monaco-editor(?:\/|$)|@effect\/platform|@earendil-works\/|(?:fs|path|crypto|http|net|child_process)$)/;
 const owner = (path) => path.match(/^packages\/([^/]+)\//)?.[1];
 const moduleOwner = (path) => path.match(/^(?:packages|apps)\/[^/]+/)?.[0];
-const production = (path) =>
-  /^packages\/[^/]+\/src\//.test(path) || /^packages\/ui\/[^/]+\.ts$/.test(path);
+const production = (path) => /^packages\/[^/]+\/src\//.test(path);
 
 /** Check source ownership separately from emitted bundles, which erase type-only imports. */
 export function checkBoundaries({ files, packages }) {
@@ -312,7 +311,4 @@ export function checkBoundaries({ files, packages }) {
   return [...new Set(errors)];
 }
 
-export const isPrivilegedDesktopInput = (path) =>
-  /(?:^|\/)apps\/desktop\/src\/(?:main(?:\/|\.ts$)|(?:session|ipc-lifetime)\.ts$|chat\/(?:config|local|session|transcript-native)\.ts$)/.test(
-    path,
-  );
+export const isPrivilegedDesktopInput = (path) => /(?:^|\/)apps\/desktop\/src\/main\//.test(path);

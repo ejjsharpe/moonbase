@@ -7,7 +7,7 @@ assert.deepEqual(
   inputs.filter(
     (p) =>
       isPrivilegedDesktopInput(p) ||
-      /(?:^|\/)node_modules\/(?:electron|@moonbase\/(?:workspace|chat-runtime|daemon-protocol|ssh|connection))\/|packages\/(?:workspace|chat-runtime|daemon-protocol|ssh|connection)\/|packages\/workbench\/(?:demo|test)\/|packages\/contracts\/src\/services\.ts|packages\/application\/src\/testing\/|packages\/application\/src\/runtime\/(?:handlers|clients)\.ts|apps\/desktop\/src\/(?:main|session|preload|chat-preload|chat\/(?:config|session))\.ts|@earendil-works|pi-ai|pi-durable|node:sqlite|source-snapshot|node:/.test(
+      /(?:^|\/)node_modules\/(?:electron|@moonbase\/(?:workspace|chat-runtime|daemon-protocol|ssh|connection))\/|packages\/(?:workspace|chat-runtime|daemon-protocol|ssh|connection)\/|packages\/workbench\/(?:demo|test)\/|packages\/contracts\/src\/services\.ts|packages\/application\/src\/testing\/|packages\/application\/src\/runtime\/(?:handlers|clients)\.ts|apps\/desktop\/src\/(?:main|preload)\/|@earendil-works|pi-ai|pi-durable|node:sqlite|source-snapshot|node:/.test(
         p,
       ),
   ),
@@ -15,7 +15,7 @@ assert.deepEqual(
   'Privileged implementation reached the actual Vite renderer graph',
 );
 assert(inputs.some((p) => p.endsWith('application/src/runtime/composition.ts')));
-assert(inputs.some((p) => p.endsWith('application/src/features/editor/editor.ts')));
+assert(inputs.some((p) => p.endsWith('application/src/editor/editor.ts')));
 assert(!inputs.some((p) => p.endsWith('desktop/src/renderer/cleanup.ts')));
 assert(inputs.some((p) => p.endsWith('contracts/src/errors.ts')));
 assert(inputs.some((p) => p.includes('monaco-editor')));
@@ -29,15 +29,15 @@ assert(
   'Missing direct maintained Markdown parser',
 );
 for (const entry of [
-  'packages/workbench/src/editor/workbench.tsx',
-  'apps/desktop/src/renderer/shell/workbench.tsx',
+  'packages/workbench/src/workbench.tsx',
+  'apps/desktop/src/renderer/shell/desktop-shell.tsx',
   'apps/desktop/src/renderer/chat/view.tsx',
-  'apps/desktop/src/renderer/chat/transcript.tsx',
-  'apps/desktop/src/renderer/chat/markdown.tsx',
+  'apps/desktop/src/renderer/chat/transcript/transcript.tsx',
+  'apps/desktop/src/renderer/chat/transcript/markdown.tsx',
 ])
   assert(inputs.some((p) => p.endsWith(entry)));
 assert(!inputs.some((p) => /packages\/editor\//.test(p)));
-assert(inputs.some((p) => p.endsWith('application/src/features/chat/controller.ts')));
+assert(inputs.some((p) => p.endsWith('application/src/chat/controller.ts')));
 const assets = await readdir(new URL('renderer/assets/', output));
 assert.equal(
   assets.filter((name) => /^(editor|json|css|html|ts)\.worker.*\.js$/.test(name)).length,

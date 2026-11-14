@@ -21,8 +21,8 @@ import {
   temporaryRoot,
   until,
   type ControlledClock,
-} from './fixture.ts';
-import { createFauxProviders, fauxModelId, fauxProviderId } from './faux.ts';
+} from './daemon-fixture.ts';
+import { createFauxProviders, fauxModelId, fauxProviderId } from './faux-provider.ts';
 
 const minute = 60_000;
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);

@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { IpcMain } from 'electron';
 import { installCommandIpc } from '../src/main/ipc.ts';
-import { channels } from '../src/wire.ts';
-import { channels as chatChannels } from '../src/chat/wire.ts';
-import { createTestWindow } from './main-window.ts';
+import { channels } from '../src/ipc/wire.ts';
+import { channels as chatChannels } from '../src/ipc/chat-wire.ts';
+import { createTestWindow } from './fixtures/main-window.ts';
 
 test('command IPC authenticates every channel, validates envelopes and tears down only its registrations', async () => {
   const f = createTestWindow();

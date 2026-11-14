@@ -17,7 +17,7 @@ import { ManagedRuntime, Effect } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { emptyRecovery } from '@moonbase/contracts/workspace';
 import { WorkspaceNative } from '../src/index.ts';
-import { WorkspaceLive } from './workspace-live.ts';
+import { WorkspaceLive } from './workspace-live-fixture.ts';
 
 import { fixture, rejects, draft } from './workspace-fixture.ts';
 test('known move preserves drafts and exact target, acknowledgement requires recovery publication; replay does not move twice', async () => {
@@ -489,7 +489,7 @@ test('unavailable persistence and real filesystem file-size exhaustion report ty
         'size-limited-workspace',
         process.execPath,
         '--experimental-strip-types',
-        fileURLToPath(new URL('./persistence-limit.fixture.ts', import.meta.url)),
+        fileURLToPath(new URL('./persistence-limit-process.ts', import.meta.url)),
         f.root,
         join(f.base, 'limited-state'),
       ],

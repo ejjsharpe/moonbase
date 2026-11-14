@@ -11,7 +11,7 @@ import { ApplicationError, emptyRecovery } from '@moonbase/contracts/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import { WorkspaceNative } from '@moonbase/workspace';
-import { WorkspaceLive } from './workspace-live.ts';
+import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { fixture, isError, quote, waitFor } from './recovery-fixture.ts';
 
 function native<R>(runtime: ManagedRuntime.ManagedRuntime<WorkspaceNative | R, ApplicationError>) {

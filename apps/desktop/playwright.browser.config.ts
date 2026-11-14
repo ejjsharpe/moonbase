@@ -1,7 +1,7 @@
 import { defineConfig } from '@playwright/test';
 const port = Number(process.env.MOONBASE_BROWSER_PORT ?? 4177);
 export default defineConfig({
-  testDir: './test',
+  testDir: './test/e2e',
   testMatch: [
     'shell.spec.ts',
     'folders.spec.ts',

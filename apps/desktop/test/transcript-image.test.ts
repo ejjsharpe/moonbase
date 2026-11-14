@@ -5,8 +5,8 @@ import { after, test } from 'node:test';
 import { Layer, ManagedRuntime } from 'effect';
 import type { ChatClient, ChatTranscriptSource } from '@moonbase/contracts/chat';
 import type { ConnectionClient } from '@moonbase/contracts/connection';
-import { ChatIpcSession, transcriptImageTokenLifetime } from '../src/chat/session.ts';
-import { respondTranscriptImage } from '../src/chat/transcript-native.ts';
+import { ChatIpcSession, transcriptImageTokenLifetime } from '../src/main/chat/session.ts';
+import { respondTranscriptImage } from '../src/main/chat/transcript-native.ts';
 
 const runtime = ManagedRuntime.make(Layer.empty);
 after(() => runtime.dispose());

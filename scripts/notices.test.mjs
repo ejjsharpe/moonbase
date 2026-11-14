@@ -66,7 +66,7 @@ test('bundled first-party assets carry their own upstream notice', async (t) => 
   const directory = await mkdtemp(join(tmpdir(), 'moonbase-notices-')),
     output = join(directory, 'notices.txt');
   t.after(() => rm(directory, { recursive: true, force: true }));
-  await notices([join(directory, 'packages/ui/tokens.stylex.ts')], output);
+  await notices([join(directory, 'packages/ui/src/tokens.stylex.ts')], output);
   assert.equal(await readFile(output, 'utf8'), '');
   await notices([join(directory, 'packages/ui/fonts.css?used')], output);
   const text = await readFile(output, 'utf8');

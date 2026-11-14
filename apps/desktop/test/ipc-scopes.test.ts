@@ -7,8 +7,8 @@ import { ConnectionService } from '@moonbase/contracts/services';
 import { releaseResource } from '@moonbase/effect';
 import { makeConnectionClient } from '@moonbase/application/runtime/clients';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
-import { cancellation } from '../src/wire.ts';
-import { ChatIpcSession } from '../src/chat/session.ts';
+import { cancellation } from '../src/ipc/wire.ts';
+import { ChatIpcSession } from '../src/main/chat/session.ts';
 
 for (const closing of ['cancel', 'dispose'] as const) {
   test(`${closing} acknowledgment joins actual runtime-client stream finalizers and retains safe failures`, async () => {

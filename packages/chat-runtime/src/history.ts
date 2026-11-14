@@ -25,7 +25,7 @@ import { Metadata, cid, eid, getSettings, type ChatSettings } from './documents.
 import { checkCursor, previewText } from './text.ts';
 import { readObject } from '@moonbase/contracts/common';
 import { fail } from '@moonbase/contracts/errors';
-import * as S from './private-schema.ts';
+import * as S from './schema.ts';
 import {
   NestedSourceRetired,
   captureTranscript,

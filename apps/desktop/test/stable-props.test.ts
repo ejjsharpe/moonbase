@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ChatTranscriptSource } from '@moonbase/contracts/chat';
-import { groupBySource } from '../src/renderer/chat/stable-props.ts';
+import { groupBySource } from '../src/renderer/chat/transcript/stable-props.ts';
 
 test('source groups match whatever the source key order', () => {
   const source = {

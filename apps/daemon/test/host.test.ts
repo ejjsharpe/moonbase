@@ -12,8 +12,8 @@ import {
   temporaryRoot,
   until,
   type DaemonProcess,
-} from './fixture.ts';
-import { fauxModelId, fauxProviderId, fauxSignInCode } from './faux.ts';
+} from './daemon-fixture.ts';
+import { fauxModelId, fauxProviderId, fauxSignInCode } from './faux-provider.ts';
 
 const model = { provider: fauxProviderId, modelId: fauxModelId };
 

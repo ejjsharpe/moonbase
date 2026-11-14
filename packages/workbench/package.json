@@ -13,7 +13,7 @@
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "demo": "vp dev --config vite.config.ts --host 127.0.0.1",
     "test:ui": "playwright test --config playwright.config.ts",
-    "check:renderer": "node test/renderer-imports.mjs"
+    "check:renderer": "node scripts/check-renderer.mjs"
   },
   "dependencies": {
     "@moonbase/application": "workspace:*",

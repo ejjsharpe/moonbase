@@ -5,7 +5,7 @@ import {
   findFreeName,
   findPasteFolder,
   planPaste,
-} from '../src/editor/file-clipboard.ts';
+} from '../src/files-tree/file-clipboard.ts';
 
 const file = (path: string) => ({ path, directory: false });
 const folder = (path: string) => ({ path, directory: true });

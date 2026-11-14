@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import { parseGitStatus } from '../src/git-status.ts';
+import { parseGitStatus } from '../src/host/git-status.ts';
 
 const records = (...rows: string[]) => rows.map((row) => row + '\0').join('');
 

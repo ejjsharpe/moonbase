@@ -14,6 +14,14 @@ Data may be lost between versions while Moonbase is prerelease: a change can sta
 - Name functions with verb phrases (`findFile`, `saveDraft`) and variables/types with noun phrases.
 - UI uses `packages/ui` StyleX tokens/recipes and Base UI. The tokens are the design reference.
 
+## Files and folders
+
+- Start flat. When a few files belong to one thing and are used together, group them in a folder named for it (`renderer/chat/transcript/`, `workbench/src/files-tree/`). Code shared by several features sits in kind folders at the root (`renderer/components/`, `renderer/hooks/`); code one feature uses lives in that feature. Don't add generic folders like `utils/` or `logic/`.
+- Code that runs in different processes gets a folder per process: desktop `main/`, `preload/` and `renderer/`, with the IPC contract they share in `ipc/`; workspace `host/` and `client/`, with what they share at `src/`.
+- Client state in `packages/application` is one folder per concept, with `x.ts`, `x-service.ts` and `x-atoms.ts` for its three layers (see its README).
+- Tests sit in each module's `test/`, mirroring `src/` where it has folders. Playwright specs go in `test/e2e/`; desktop's harnesses and faux processes in `test/fixtures/`. Suites that run a real daemon go in the root `test/` folder.
+- Test helpers: `x-fixture.ts` for shared setup, `faux-x` for a fake process or provider, `x-process.ts` for a script a test spawns. A unit test is named after the file it tests (`editor-session.test.ts` for `editor-session.ts`).
+
 ## Effect
 
 Write code as if Moonbase had been Effect-native from the start (epic #273, D14 and D15). Code that predates this is being moved; don't copy its patterns.

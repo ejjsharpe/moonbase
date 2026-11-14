@@ -3,8 +3,8 @@ import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
 import type { App, Dialog, IpcMain } from 'electron';
 import { installWindowLifecycle } from '../src/main/window-lifecycle.ts';
-import { channels } from '../src/wire.ts';
-import { createTestWindow } from './main-window.ts';
+import { channels } from '../src/ipc/wire.ts';
+import { createTestWindow } from './fixtures/main-window.ts';
 
 function fixture() {
   const f = createTestWindow(),

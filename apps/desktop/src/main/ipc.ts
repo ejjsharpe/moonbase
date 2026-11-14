@@ -1,16 +1,16 @@
 import type { BrowserWindow, IpcMain, IpcMainEvent, IpcMainInvokeEvent } from 'electron';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import type { EditorSession } from '../session.ts';
-import type { DesktopChatBackends } from './chat-backends.ts';
+import type { EditorSession } from './editor-session.ts';
+import type { DesktopChatBackends } from './chat/chat-backends.ts';
 import type { WindowLifecycle } from './window-lifecycle.ts';
-import { channels, errorDTO, keys, record } from '../wire.ts';
+import { channels, errorDTO, keys, record } from '../ipc/wire.ts';
 import {
   channels as chatChannels,
   record as chatRecord,
   fields,
   errorReply,
   requestId,
-} from '../chat/wire.ts';
+} from '../ipc/chat-wire.ts';
 
 export function createTrustedDocumentGuard(window: BrowserWindow, appURL: string) {
   return (event: IpcMainEvent | IpcMainInvokeEvent) => {

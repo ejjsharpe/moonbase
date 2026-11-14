@@ -38,7 +38,7 @@ const daemonBuild = JSON.parse(await readFile(join(root, 'dist/daemon-build.json
 assert.match(daemonBuild, /^[0-9a-f]{64}$/, 'The daemon bundle has no build identifier');
 const main = await build({
   absWorkingDir: root,
-  entryPoints: ['src/main.ts'],
+  entryPoints: ['src/main/main.ts'],
   outfile: 'dist/main.mjs',
   bundle: true,
   platform: 'node',
@@ -54,7 +54,7 @@ const main = await build({
 });
 const preload = await build({
   absWorkingDir: root,
-  entryPoints: ['src/preload.ts'],
+  entryPoints: ['src/preload/preload.ts'],
   outfile: 'dist/preload.cjs',
   bundle: true,
   platform: 'node',
@@ -73,8 +73,8 @@ const rendererInputs = JSON.parse(
 );
 
 for (const entry of [
-  'packages/workbench/src/editor/workbench.tsx',
-  'apps/desktop/src/renderer/shell/workbench.tsx',
+  'packages/workbench/src/workbench.tsx',
+  'apps/desktop/src/renderer/shell/desktop-shell.tsx',
   'apps/desktop/src/renderer/chat/view.tsx',
 ])
   assert(
@@ -131,19 +131,19 @@ assert(
 for (const entry of [
   'daemon-protocol/src/remote.ts',
   'daemon-protocol/src/loopback.ts',
-  'src/main/local-daemon.ts',
-  'src/main/daemon-command.ts',
-  'src/chat/daemon.ts',
+  'src/main/daemon/local-daemon.ts',
+  'src/main/daemon/daemon-command.ts',
+  'src/main/daemon/local-daemon-client.ts',
 ])
   assert(
     mainInputs.some((path) => path.endsWith(entry)),
     `Missing local daemon client input: ${entry}`,
   );
 assert(
-  mainInputs.includes('src/chat/transcript-native.ts'),
+  mainInputs.includes('src/main/chat/transcript-native.ts'),
   'Missing native transcript authority owner',
 );
-for (const entry of ['native-actions', 'ipc', 'window-lifecycle', 'chat-backends'])
+for (const entry of ['native-actions', 'ipc', 'window-lifecycle', 'chat/chat-backends'])
   assert(mainInputs.includes(`src/main/${entry}.ts`), `Missing main owner: ${entry}`);
 for (const entry of [
   'apps/daemon/src/main.ts',

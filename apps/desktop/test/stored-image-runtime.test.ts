@@ -9,10 +9,10 @@ import type {
   ChatTranscriptPart,
   ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
-import { controlledHostFixture, until } from '../../../tests/chat/fixture.ts';
-import { createImageRuntime, retainedImage } from './stored-image-fixture.ts';
-import { ChatIpcSession } from '../src/chat/session.ts';
-import { respondTranscriptImage } from '../src/chat/transcript-native.ts';
+import { controlledHostFixture, until } from '../../../test/chat/controlled-host-fixture.ts';
+import { createImageRuntime, retainedImage } from './fixtures/stored-image-fixture.ts';
+import { ChatIpcSession } from '../src/main/chat/session.ts';
+import { respondTranscriptImage } from '../src/main/chat/transcript-native.ts';
 
 const ipcRuntime = ManagedRuntime.make(Layer.empty);
 after(() => ipcRuntime.dispose());
@@ -21,7 +21,7 @@ for (const mode of ['local', 'remote'] as const)
   test(`${mode} retained real images are served by main from exact record ownership and independently padded authenticated chunks`, async () => {
     const host =
       mode === 'remote'
-        ? await controlledHostFixture(new URL('./stored-image-faux.mjs', import.meta.url))
+        ? await controlledHostFixture(new URL('./fixtures/faux-stored-image.mjs', import.meta.url))
         : undefined;
     const directory =
       host?.directory ?? (await realpath(await mkdtemp(join(tmpdir(), 'moonbase-images-'))));

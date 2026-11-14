@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { findDaemonCommand } from '../src/main/daemon-command.ts';
+import { findDaemonCommand } from '../src/main/daemon/daemon-command.ts';
 import {
   bounded,
   launchFrom,
@@ -14,7 +14,7 @@ import {
   startDaemonCommand,
   withLocalRegistry,
   writeHostilePreload,
-} from './daemon-process.ts';
+} from './fixtures/daemon-fixture.ts';
 
 const dist = fileURLToPath(new URL('../dist', import.meta.url));
 const source = fileURLToPath(new URL('../../daemon/src/main.ts', import.meta.url));

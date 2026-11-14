@@ -2,7 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { useEffect, useRef, useState } from 'react';
 import { createMoonbaseApplication, type MoonbaseApplication } from '@moonbase/application';
-import { DesktopShell, type DesktopShellHandle } from './shell/workbench.tsx';
+import { DesktopShell, type DesktopShellHandle } from './shell/desktop-shell.tsx';
 import { WorkbenchStartupFailure } from './shell/startup-failure.tsx';
 import { configureMonacoWorkers } from '@moonbase/workbench/workers';
 import {
@@ -10,7 +10,7 @@ import {
   browserTranscriptActions,
   unwrap as unwrapChat,
   type ChatBridge,
-} from '../chat/wire.ts';
+} from '../ipc/chat-wire.ts';
 import {
   bridgeClient,
   unwrap,
@@ -18,7 +18,7 @@ import {
   failure,
   type ErrorDTO,
   type DesktopBridge,
-} from '../wire.ts';
+} from '../ipc/wire.ts';
 import * as stylex from '@stylexjs/stylex';
 import { workbench } from '@moonbase/ui/workbench';
 import '@moonbase/ui/reset.css';

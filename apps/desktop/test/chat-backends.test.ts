@@ -5,8 +5,11 @@ import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { createChatBackends } from '../src/main/chat-backends.ts';
-import { createLocalDaemonClient, type DaemonChat } from '../src/chat/daemon.ts';
+import { createChatBackends } from '../src/main/chat/chat-backends.ts';
+import {
+  createLocalDaemonClient,
+  type DaemonChat,
+} from '../src/main/daemon/local-daemon-client.ts';
 import { createFileRequestIds } from '../src/main/request-ids.ts';
 
 type Dependencies = Parameters<typeof createChatBackends>[0];
