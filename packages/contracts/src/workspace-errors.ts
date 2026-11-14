@@ -66,6 +66,9 @@ const recoveryProblems = {
   'destination-drafts': 'Destination has recovery drafts. Preserve them before replacement.',
   'invalid-state': 'Invalid recovery state.',
   'publication-id': 'Recovery request ID already belongs to a different immutable publication.',
+  'unknown-buffer': 'No such buffer is open in this recovery.',
+  'buffer-target': 'Another buffer is already open for this file.',
+  'draft-open': 'The buffer has unsaved changes. Save or discard them before closing it.',
 } as const;
 /** The request asks the recovery store for something it refuses as given. */
 export class InvalidRecoveryRequestError extends Schema.TaggedError<InvalidRecoveryRequestError>()(

@@ -1,5 +1,6 @@
 import { Effect, Exit } from 'effect';
-import type { CheckoutTarget, EditorRecovery } from '@moonbase/contracts/workspace';
+import type { CheckoutTarget } from '@moonbase/contracts/workspace';
+import type { RecoveryState } from '@moonbase/contracts/recovery';
 import type { OperationFeed, OperationFeedEntry } from '@moonbase/contracts/workspace-host';
 import { attempt } from '../attempt.ts';
 import { canonical, errorText, key } from '../validation.ts';
@@ -207,7 +208,7 @@ function readFeedRecords(context: RecoveryContext, entries: OperationFeedEntry[]
 }
 
 /** A gap's mark stays while any local recovery still holds a draft in its checkout. */
-export function getFeedGapErrors(context: RecoveryContext, state: EditorRecovery) {
+export function getFeedGapErrors(context: RecoveryContext, state: RecoveryState) {
   const { store } = context;
   const gaps = store.all<{ hostId: string; checkoutId: string }>('feed-gaps');
   if (!gaps.length) return [];
@@ -219,10 +220,10 @@ export function getFeedGapErrors(context: RecoveryContext, state: EditorRecovery
     const held =
       unreadable.length > 0 ||
       readable.some((r) =>
-        r.state.drafts.some((d) => d.target.checkout.checkoutId === gap.checkoutId),
+        r.state.buffers.some((b) => b.draft && b.target.checkout.checkoutId === gap.checkoutId),
       );
     if (!held) store.delete('feed-gaps', key(gap.hostId, gap.checkoutId));
-    else if (state.drafts.some((d) => d.target.checkout.checkoutId === gap.checkoutId))
+    else if (state.buffers.some((b) => b.draft && b.target.checkout.checkoutId === gap.checkoutId))
       errors.push(
         'Operation history for ' +
           gap.checkoutId +

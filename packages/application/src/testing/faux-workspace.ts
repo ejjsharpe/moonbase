@@ -323,6 +323,11 @@ export function fauxWorkspace(seeds: Seed[]) {
           ? error
           : new ApplicationError({ code: 'Unavailable', message: String(error) }),
     });
+  const editsUnsupported = () =>
+    new ApplicationError({
+      code: 'Incompatible',
+      message: 'The faux workspace has no recovery edits.',
+    });
   const service: WorkspaceServiceShape = {
     openCheckout: ({ root }) =>
       call(
@@ -816,6 +821,12 @@ export function fauxWorkspace(seeds: Seed[]) {
           fail('Invalid recovery publication identity.');
         return publications.get(JSON.stringify([clientId, requestId]))?.receipt ?? null;
       }),
+    // The editor publishes whole snapshots until CL-13 moves it to the recovery store's edits.
+    openTab: () => Effect.fail(editsUnsupported()),
+    closeTab: () => Effect.fail(editsUnsupported()),
+    updateDraft: () => Effect.fail(editsUnsupported()),
+    updateLayout: () => Effect.fail(editsUnsupported()),
+    watchRecovery: () => Stream.fail(editsUnsupported()),
     watch: ({ checkout }) =>
       Stream.unwrap(
         Effect.gen(function* () {

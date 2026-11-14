@@ -1,12 +1,12 @@
+import { randomUUID } from 'node:crypto';
 import { Cause, Effect } from 'effect';
-import {
-  emptyRecovery,
-  type CheckoutTarget,
-  type CommandInput,
-  type EditorRecovery,
-  type FileDocument,
-  type SaveResult,
+import type {
+  CheckoutTarget,
+  CommandInput,
+  FileDocument,
+  SaveResult,
 } from '@moonbase/contracts/workspace';
+import { emptyRecoveryState, type RecoveryState } from '@moonbase/contracts/recovery';
 import type { SaveStatus } from '@moonbase/contracts/workspace-host';
 import {
   InvalidRecoveryRequestError,
@@ -29,15 +29,13 @@ import { saveKey, unresolvedSaves, type RecoveryContext } from './recovery-conte
  * versions are content hashes, so any draft's baseline with that version is the same text.
  */
 function findBaseline(
-  state: EditorRecovery,
+  state: RecoveryState,
   target: { checkout: CheckoutTarget; path: string },
   baseline: SaveRecord['baseline'],
 ) {
   if (baseline.text !== undefined) return { text: baseline.text, version: baseline.version };
-  const disk = (
-    state.drafts.find((d) => same(d.target, target) && d.disk.version === baseline.version) ??
-    state.drafts.find((d) => d.disk.version === baseline.version)
-  )?.disk;
+  const drafted = state.buffers.filter((b) => b.draft?.disk.version === baseline.version);
+  const disk = (drafted.find((b) => same(b.target, target)) ?? drafted[0])?.draft?.disk;
   return disk && { ...disk };
 }
 
@@ -52,7 +50,7 @@ export const getBaseline = (
   Effect.gen(function* () {
     const draft = (yield* attempt(() =>
       context.store.readRecovery(input.clientId),
-    ))?.state.drafts.find((d) => same(d.target, input.target));
+    ))?.state.buffers.find((b) => same(b.target, input.target))?.draft;
     if (draft && draft.disk.version === input.expectedVersion)
       return { version: draft.disk.version };
     return yield* context.host.readFile(input.target);
@@ -176,7 +174,7 @@ export const publishSaves = (
       const stored = store.readRecovery(clientId),
         revision = stored?.revision ?? 0,
         publication = store.publication(clientId),
-        state = stored?.state ?? emptyRecovery(clientId);
+        state = stored?.state ?? emptyRecoveryState(clientId);
       let changed = false;
       // Baselines this publication replaces in drafts, which a save may still have begun from.
       const replaced: FileDocument[] = [];
@@ -210,9 +208,13 @@ export const publishSaves = (
             state.checkouts.push(record.input.target.checkout);
             drafted = true;
           }
-          const existing = state.drafts.find((d) => same(d.target, record.input.target));
+          // The buffer open at the save's path takes the text back; one is opened if none is.
+          let buffer = state.buffers.find((b) => same(b.target, record.input.target));
+          if (!buffer)
+            state.buffers.push((buffer = { id: randomUUID(), target: record.input.target }));
+          const existing = buffer.draft;
           if (!existing) {
-            state.drafts.push({ target: record.input.target, text: record.input.text, disk });
+            buffer.draft = { text: record.input.text, disk };
             drafted = true;
           } else if (
             existing.text !== record.input.text ||
@@ -225,9 +227,10 @@ export const publishSaves = (
           }
         }
         if (result?.kind === 'saved')
-          for (const draft of state.drafts)
+          for (const { target, draft } of state.buffers)
             if (
-              same(draft.target, record.input.target) &&
+              draft &&
+              same(target, record.input.target) &&
               draft.disk.version !== result.disk.version
             ) {
               replaced.push(draft.disk);
