@@ -1,7 +1,6 @@
-import * as Schema from 'effect/Schema';
 import { areJsonValuesEqual } from './common.ts';
 import { fail } from './errors.ts';
-import { ChatTargetSchema, decodeChatOutput } from './chat-schema.ts';
+import { decodeChatOutput } from './chat-schema.ts';
 import {
   maximumChatReplyBytes,
   type ChatTranscript,
@@ -15,16 +14,8 @@ import {
 } from './chat.ts';
 import type { ChatHostTarget } from './host.ts';
 
-// Checks shared by the chat engine and the daemon protocol: both project the replies they hand
-// on, so a reply's authority is checked the same way on either side of the wire.
-const decodeTarget = Schema.decodeUnknownSync(ChatTargetSchema, { onExcessProperty: 'error' });
-export const decodeChatTarget = (value: unknown): ChatTarget => {
-  try {
-    return decodeTarget(value);
-  } catch {
-    return fail('InvalidInput', 'Invalid chat identity or shape.');
-  }
-};
+// Chat identity and authority checks. A client checks each reply once, where it arrives from the
+// wire; inside a process typed values are trusted.
 export const isSameChatHost = (a: ChatHostTarget, b: ChatHostTarget) =>
   a.hostId === b.hostId && a.storeId === b.storeId;
 export const isSameChatTarget = (a: ChatTarget, b: ChatTarget) =>
@@ -48,7 +39,7 @@ export function checkChatReplySize<T>(value: T): T {
     fail('InvalidInput', 'Chat reply exceeds its delivery limit.');
   return value;
 }
-/** Project network results explicitly; schemas grant no remote authority. */
+/** Decodes a chat reply from the wire and checks it answers the request; schemas grant no remote authority. */
 export function checkChatOutput<K extends ChatCommand>(
   operation: K,
   value: unknown,

@@ -1,6 +1,5 @@
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
-import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import type {
   ChatClient,
   ChatInput,
@@ -125,8 +124,7 @@ export type TranscriptIterationOptions = {
 export function iterateTranscriptSource(
   options: TranscriptIterationOptions,
 ): AsyncGenerator<TranscriptChunk> {
-  const captured = decodeChatInput(
-    'getChatTranscriptContent',
+  const captured = structuredClone(
     options.selection
       ? { source: options.source, selection: options.selection }
       : { source: options.source },

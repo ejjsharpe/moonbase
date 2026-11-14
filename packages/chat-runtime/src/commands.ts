@@ -48,13 +48,10 @@ import {
   summarizeConversation,
   type SnapshotCache,
 } from './history.ts';
-import type { RuntimeConfiguration, RetainedWork } from './runtime-types.ts';
+import type { LocalPiRuntimeConfiguration, RetainedWork } from './runtime-types.ts';
 import { findTranscript } from './find.ts';
 import { NestedSourceRetired, readTranscriptContent } from './transcript.ts';
-import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import {
-  checkChatOutput,
-  decodeChatTarget,
   isCancellableChatRead,
   isChatMutation,
   isSameChatHost,
@@ -62,7 +59,12 @@ import {
 } from '@moonbase/contracts/chat-validation';
 import { fail } from '@moonbase/contracts/errors';
 import { makeChatFolder } from './chat-folders.ts';
-import * as S from './schema.ts';
+import {
+  decodeStoreOwner,
+  decodeStoredBinding,
+  decodeStoredMetadata,
+  decodeStoredRequest,
+} from './stored-records.ts';
 
 const unknownOutcome = () =>
   new ApplicationError({
@@ -207,7 +209,7 @@ export class Host {
   observers = 0;
   admissionsOpen = true;
   mutations = 0;
-  readonly config: RuntimeConfiguration;
+  readonly config: LocalPiRuntimeConfiguration;
   readonly harness: Harness;
   readonly identity: string;
   readonly work: FiberSet.FiberSet<unknown, ApplicationError>;
@@ -217,7 +219,7 @@ export class Host {
   readonly statusListeners = new Set<(conversationId: ConversationId) => void>();
   readonly files: ChatFileIndex;
   constructor(
-    config: RuntimeConfiguration,
+    config: LocalPiRuntimeConfiguration,
     harness: Harness,
     identity: string,
     work: FiberSet.FiberSet<unknown, ApplicationError>,
@@ -305,17 +307,13 @@ export class Host {
   }
   run<K extends ChatCommand>(
     operation: K,
-    value: ChatInput<K>,
+    data: ChatInput<K>,
     handle: (
       data: ChatInput<K>,
     ) => Promise<ChatOutput<K>> | Effect.Effect<ChatOutput<K>, ApplicationError>,
   ): Effect.Effect<ChatOutput<K>, ApplicationError> {
     const mutation = isChatMutation(operation);
     return Effect.gen({ self: this }, function* () {
-      const data = yield* Effect.try({
-        try: () => decodeChatInput(operation, value),
-        catch: normalizeApplicationError,
-      });
       if (this.closed) return yield* Effect.fail(safeError(null));
       if (mutation && !this.admissionsOpen)
         return yield* Effect.fail(
@@ -338,14 +336,7 @@ export class Host {
         return Effect.isEffect(result)
           ? result
           : Effect.tryPromise({ try: () => result, catch: (error) => safeError(error, mutation) });
-      }).pipe(
-        Effect.flatMap((result) =>
-          Effect.try({
-            try: () => checkChatOutput(operation, result, data),
-            catch: (error) => (mutation ? unknownOutcome() : safeError(error)),
-          }),
-        ),
-      );
+      });
       if (mutation) this.mutations++;
       let admission = invoke;
       if (operation === 'sendChat')
@@ -418,7 +409,7 @@ export class Host {
   async getHost(d: ChatInput<'getChatHost'>): Promise<ChatOutput<'getChatHost'>> {
     if (!isSameChatHost(d.host, this.config.host))
       fail('Incompatible', 'Chat host/store does not match this host.');
-    S.savedStore(await this.harness.snapshot(Store, 'identity', context));
+    decodeStoreOwner(await this.harness.snapshot(Store, 'identity', context));
     return { host: { ...this.config.host }, actorId: this.config.actorId, mode: 'local' };
   }
   /** One chat as a listing shows it; undefined when it is missing or not this session's. */
@@ -439,7 +430,7 @@ export class Host {
       context,
     );
     if (existing) {
-      S.savedRequest(existing, d.session.actorId, d.requestId);
+      decodeStoredRequest(existing, d.session.actorId, d.requestId);
       if (existing.binding !== binding)
         fail('InvalidInput', 'Request ID is already bound to different chat input.');
       if (existing.conversationId)
@@ -482,7 +473,7 @@ export class Host {
       conversationId = await this.harness.commit(async (tx) => {
         const request = await tx.doc(Request, key(d.session.actorId, d.requestId), binding);
         try {
-          S.savedRequest(request, d.session.actorId, d.requestId);
+          decodeStoredRequest(request, d.session.actorId, d.requestId);
         } catch (error) {
           definiteRejection = normalizeApplicationError(error);
           throw definiteRejection;
@@ -540,7 +531,7 @@ export class Host {
       requestKey = key(d.target.actorId, d.requestId);
     await this.harness.commit(async (tx) => {
       const request = await tx.doc(Request, requestKey, binding);
-      S.savedRequest(request, d.target.actorId, d.requestId);
+      decodeStoredRequest(request, d.target.actorId, d.requestId);
       if (request.binding !== binding)
         fail('InvalidInput', 'Request ID is already bound to different chat input.');
       const meta = await tx.doc(Metadata, cid(d.target.conversationId), 'metadata', {
@@ -548,7 +539,7 @@ export class Host {
         title: '',
         createdAt: '',
       });
-      S.savedMetadata(meta);
+      decodeStoredMetadata(meta);
       if (!request.submissionId && !request.pending) {
         if (
           !Number.isSafeInteger(meta.pending) ||
@@ -596,7 +587,7 @@ export class Host {
         title: '',
         createdAt: '',
       });
-      S.savedMetadata(meta);
+      decodeStoredMetadata(meta);
       change(meta);
     }, context);
   }
@@ -629,8 +620,8 @@ export class Host {
     const requestKey = key(target.actorId, requestId),
       old = await this.harness.snapshot(Request, requestKey, context);
     if (!old) return null;
-    S.savedRequest(old, target.actorId, requestId);
-    const value = S.savedBinding(old.binding);
+    decodeStoredRequest(old, target.actorId, requestId);
+    const value = decodeStoredBinding(old.binding);
     if (value.operation !== 'sendChat' || !isSameChatTarget(value.target, target))
       return fail('InvalidInput', 'Request ID is bound to another operation or target.');
     if (old.conversationId !== target.conversationId)
@@ -638,7 +629,7 @@ export class Host {
     const submissionId = await this.harness.commit(async (tx) => {
       const found = await tx.submissionByRequest(cid(target.conversationId), requestKey);
       const request = await tx.doc(Request, requestKey, old.binding);
-      S.savedRequest(request, target.actorId, requestId);
+      decodeStoredRequest(request, target.actorId, requestId);
       if (request.submissionId && (!found || String(found.id) !== request.submissionId))
         fail('Persistence', 'Stored admission identity is invalid.');
       if (found && found.type !== 'input')
@@ -650,7 +641,7 @@ export class Host {
           title: '',
           createdAt: '',
         });
-        S.savedMetadata(meta);
+        decodeStoredMetadata(meta);
         if (request.pending) {
           if (!Number.isSafeInteger(meta.pending) || meta.pending < 1)
             fail('Persistence', 'Stored pending-intent metadata is invalid.');
@@ -671,7 +662,7 @@ export class Host {
   ): Promise<ChatSnapshot> {
     const meta = await this.metadata(target);
     signal?.throwIfAborted();
-    const owner = S.savedStore(await this.harness.snapshot(Store, 'identity', context));
+    const owner = decodeStoreOwner(await this.harness.snapshot(Store, 'identity', context));
     if (owner.identity !== this.identity)
       fail('Unauthorized', 'Chat store authority changed. Preserve this store.');
     if (cache && cache.boundary === undefined) {
@@ -718,7 +709,7 @@ export class Host {
             requestKey = key(d.stop.target.actorId, d.requestId);
           await this.harness.commit(async (tx) => {
             const request = await tx.doc(Request, requestKey, binding);
-            S.savedRequest(request, d.stop.target.actorId, d.requestId);
+            decodeStoredRequest(request, d.stop.target.actorId, d.requestId);
             if (request.binding !== binding)
               fail('InvalidInput', 'Request ID is already bound to different chat input.');
           }, context);
@@ -814,7 +805,6 @@ export class Host {
             yield* Effect.acquireRelease(
               Effect.try({
                 try: () => {
-                  decodeChatTarget(target);
                   this.session(target);
                   if (this.closed || this.observers >= 64)
                     fail('Unavailable', 'Chat observation is unavailable.');
@@ -897,14 +887,8 @@ export class Host {
             const version = revision;
             if (ended || this.closed) return Effect.fail(safeError(null));
             return this.own(this.read((signal) => this.snapshot(target, cache, signal))).pipe(
-              Effect.flatMap((snapshot) =>
-                Effect.try({
-                  try: () =>
-                    active && version === revision
-                      ? Option.some(checkChatOutput('getChat', snapshot, { target }))
-                      : Option.none(),
-                  catch: safeError,
-                }),
+              Effect.map((snapshot) =>
+                active && version === revision ? Option.some(snapshot) : Option.none(),
               ),
               Effect.catch((error) =>
                 error instanceof NestedSourceRetired && version !== revision

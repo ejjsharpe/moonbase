@@ -1,17 +1,18 @@
 import { hostTokenPattern } from '@moonbase/contracts/host';
 import { Effect, Schema, SchemaGetter } from 'effect';
 import { isAbsolute } from 'node:path';
-import { ApplicationError } from '@moonbase/contracts/workspace';
 import {
   ConnectionPortSchema,
   ConnectionProfileSchema,
 } from '@moonbase/contracts/connection-schema';
 
+/** The OpenSSH a configuration without `sshExecutable` runs. */
+export const defaultSshExecutable = '/usr/bin/ssh';
 const executable = Schema.NullOr(Schema.String).pipe(
   Schema.decodeTo(
     Schema.String.check(Schema.makeFilter((value) => isAbsolute(value) && !value.includes('\0'))),
     {
-      decode: SchemaGetter.transform((value) => value ?? '/usr/bin/ssh'),
+      decode: SchemaGetter.transform((value) => value ?? defaultSshExecutable),
       encode: SchemaGetter.passthrough(),
     },
   ),
@@ -47,11 +48,20 @@ export type SshConfiguration = Omit<DecodedSshConfiguration, 'sshExecutable'> & 
   sshExecutable?: string;
 };
 
+/** An SSH configuration that does not decode; it names no input, so no private value escapes. */
+export class SshConfigurationError extends Schema.TaggedError<SshConfigurationError>()(
+  'SshConfigurationError',
+  {},
+) {
+  override get message(): string {
+    return 'Invalid SSH configuration.';
+  }
+}
 const decode = Schema.decodeUnknownSync(SshConfigurationSchema, { reportInput: false });
 export function decodeSshConfiguration(value: unknown): DecodedSshConfiguration {
   try {
     return decode(value);
   } catch {
-    throw new ApplicationError({ code: 'InvalidInput', message: 'Invalid SSH configuration.' });
+    throw new SshConfigurationError();
   }
 }

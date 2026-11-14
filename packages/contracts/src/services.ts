@@ -19,6 +19,7 @@ import type {
   ConnectionSnapshot,
 } from './connection.ts';
 import type { ChatHostTarget, ChatHostHealth } from './host.ts';
+import type { ConnectionFailure } from './connection-errors.ts';
 import type {
   ChatCommand,
   ChatInput,
@@ -68,7 +69,7 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
 export type ConnectionHandlers = {
   [K in ConnectionCommand]: (
     input: ConnectionInput<K>,
-  ) => Effect.Effect<ConnectionOutput<K>, ApplicationError>;
+  ) => Effect.Effect<ConnectionOutput<K>, ConnectionFailure>;
 };
 /** Privileged configuration; never expose this shape through a renderer bridge. */
 export type ChatHostEndpoint = { origin: string; token: string; expected: ChatHostTarget };
@@ -77,9 +78,9 @@ export type VerifiedChatEndpoint = ChatHostEndpoint & {
   health: ChatHostHealth;
 };
 export type ConnectionServiceShape = ConnectionHandlers & {
-  watch(): Stream.Stream<ConnectionSnapshot, ApplicationError>;
+  watch(): Stream.Stream<ConnectionSnapshot, ConnectionFailure>;
   /** Privileged consumers only; lookup never connects or changes the expected authority. */
-  endpoint(input: { host: ChatHostTarget }): Effect.Effect<VerifiedChatEndpoint, ApplicationError>;
+  endpoint(input: { host: ChatHostTarget }): Effect.Effect<VerifiedChatEndpoint, ConnectionFailure>;
 };
 export class ConnectionService extends Context.Service<ConnectionService, ConnectionServiceShape>()(
   'moonbase/Connection',

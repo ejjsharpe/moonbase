@@ -21,7 +21,7 @@ The data directory is its only argument (a second one is refused); everything el
 | `approved-folders.json` | Local mode: folders a client approved |
 | `logs/` | `daemon.log`, rotated at 1 MiB to `daemon.1.log`…`daemon.3.log` |
 
-`daemon.json`, decoded strictly:
+`daemon.json`, decoded strictly by `src/daemon-settings.ts`:
 
 ```json
 { "mode": "local", "credentialKey": { "source": "keychain" } }

@@ -11,7 +11,7 @@ import type { ChatCreationSettings, ChatTarget } from '@moonbase/contracts/chat'
 /** A chat's saved folder and model; `ownFolder` marks a folder made for a chat without a project. */
 export type ChatSettings = ChatCreationSettings & { cwd: string; ownFolder?: true };
 import { fail } from '@moonbase/contracts/errors';
-import * as S from './schema.ts';
+import { decodeStoredBinding, decodeStoredMetadata } from './stored-records.ts';
 
 export const Request = defineDocFamily({
   kind: 'moonbase.chat.request',
@@ -19,7 +19,7 @@ export const Request = defineDocFamily({
   scope: 'session',
   family: true,
   initial: (binding: string) => {
-    const input = S.savedBinding(binding);
+    const input = decodeStoredBinding(binding);
     return {
       binding,
       conversationId: input.operation === 'sendChat' ? input.target.conversationId : null,
@@ -71,7 +71,7 @@ export async function readOwnedMetadata(harness: Harness, identity: string, targ
   const meta = await harness.snapshot(Metadata, cid(target.conversationId), 'metadata', context);
   if (!meta || meta.identity !== identity)
     return fail('Unauthorized', 'Conversation does not belong to this configured actor/store.');
-  const saved = S.savedMetadata(meta);
+  const saved = decodeStoredMetadata(meta);
   if (!saved.settings)
     return fail(
       'Persistence',

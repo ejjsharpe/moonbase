@@ -190,7 +190,7 @@ test('a local chat searches its own folder; a new chat only an approved one', as
   assert.equal(result.matches[0]?.path, 'src/app/My notes.md');
 });
 
-test('a Send carries mentions the text spells, and refuses ones it does not', async (t) => {
+test('a Send carries the mentions its text spells', async (t) => {
   const f = await fixture(t);
   const target = await f.create();
   const receipt = await f.client.command('sendChat', {
@@ -200,15 +200,6 @@ test('a Send carries mentions the text spells, and refuses ones it does not', as
     mentions: [{ path: 'README.md' }, { path: 'docs/My notes.md' }],
   });
   assert.equal(receipt.admission, 'admitted');
-  await assert.rejects(
-    f.client.command('sendChat', {
-      target,
-      requestId: 'send-2',
-      text: 'Read the readme',
-      mentions: [{ path: 'README.md' }],
-    }),
-    (error) => ApplicationError.is(error) && error.code === 'InvalidInput',
-  );
 });
 
 /**
