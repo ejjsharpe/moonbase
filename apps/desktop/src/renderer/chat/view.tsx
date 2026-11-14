@@ -35,7 +35,7 @@ import {
   type ChatCommandOption,
 } from './composer/commands.ts';
 import { getChatPlace } from './folder.ts';
-import { folderName } from '../folder-menu.tsx';
+import { folderName } from '../components/folder-menu.tsx';
 import { projectInitials, projectTiles } from '@moonbase/ui/projects';
 const compactLayout = window.matchMedia('(max-width: 640px)');
 const subscribeLayout = (listener: () => void) => {

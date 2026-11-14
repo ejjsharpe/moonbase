@@ -23,7 +23,7 @@ import { formatChatAge } from '../chat/age.ts';
 import { getChatPlace } from '../chat/folder.ts';
 import { ChatView } from '../chat/view.tsx';
 import { checkoutName } from '@moonbase/ui/projects';
-import { homePath } from '../folder-menu.tsx';
+import { homePath } from '../components/folder-menu.tsx';
 import { readOwn } from '@moonbase/application/editor';
 import { Icon } from '@moonbase/ui/icons';
 import {

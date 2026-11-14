@@ -4,7 +4,7 @@ import * as stylex from '@stylexjs/stylex';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { controls } from '@moonbase/ui/controls';
 import { overlays } from '@moonbase/ui/overlays';
-import { FolderMenu, folderMenuStyles, homePath } from '../folder-menu.tsx';
+import { FolderMenu, folderMenuStyles, homePath } from '../components/folder-menu.tsx';
 import { Icon } from '@moonbase/ui/icons';
 import { styles } from './shell-styles.ts';
 
