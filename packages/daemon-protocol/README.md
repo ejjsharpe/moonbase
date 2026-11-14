@@ -1,6 +1,6 @@
 # Daemon protocol
 
-`@moonbase/daemon-protocol` is the daemon's wire protocol, shared by the daemon and every client: the signed health route, Effect RPC for chat, folders, control and provider setup (`/v3/rpc`), the HMAC-framed WebSocket that still carries the workspace (`/v2/socket`, until CL-07), its server, and the client-side services over them. It needs no chat engine: the server receives the chat, folder and provider setup services, and clients get the contracts services back.
+`@moonbase/daemon-protocol` is the daemon's wire protocol, shared by the daemon and every client: the signed health route, Effect RPC for chat, folders, control and provider setup (`/v3/rpc`), the HMAC-framed WebSocket that still carries the workspace (`/v2/socket`, until CL-07), its server, and the client-side services over them. It needs no chat engine: the server receives the chat, folder and provider setup services, and clients get the contracts services back. Folder approval policy belongs to the [daemon](../../apps/daemon/README.md).
 
 | Export | Role |
 | --- | --- |
@@ -8,7 +8,6 @@
 | `./remote` | `RemoteDaemonLive({host, openUrl, sameMachine})`: chat, folder and provider setup services over one RPC link to a host's daemon (`DaemonRpcLinkLive`), built from `RemoteChatLive`, `RemoteLocalHostLive` and `RemoteProviderSetupLive`; `EndpointConnectionLive(endpoint)`, a `ConnectionService` for one known endpoint (tests and scripts on the daemon's machine) |
 | `./remote` (workspace) | `RemoteWorkspaceHostLive({host})` (the file host's `WorkspaceHostService`) over the legacy WebSocket, one per connection generation |
 | `./socket` | `connectDaemonSocket(endpoint)`: one authenticated WebSocket to a daemon that advertises `socket-v1`, for requests and subscriptions; the `./remote` services use it |
-| `./folders` | Host-side folder authority, for the daemon only: `createFolderApprovals(file)`: approved working folders, re-checked by identity on use; `createRootFolders(roots, { reserved })`: a host-mode daemon's approved roots and the folders under them, refusing a root that holds or sits in a `reserved` path. Both return the contracts `FolderApprovals`; `withCheckoutFolders(folders, checkouts)` widens a local daemon's `has` to the roots of the workspace's approved checkouts (picker approvals, `approve` and the recent list are unchanged) |
 | `./health` | The signed health check: `checkHostHealth(endpoint)` (the client side, which `LoopbackConnectionLive` uses and consumers inject into `SshLive`), `createHostHealthReply` (the server side) and `validateHostHealth`; HMAC-SHA256 proofs under `moonbase-daemon-health-v1` in both directions, over the host's identity, protocol version, version and capabilities. It fails with the contracts `HostVerificationError` |
 | `./loopback` | `LoopbackConnectionLive({directory})`: privileged `ConnectionService` for a daemon on this machine |
 

@@ -23,11 +23,6 @@ import {
   makeWorkspaceClient,
   serveChat,
 } from '@moonbase/daemon-protocol/server';
-import {
-  createFolderApprovals,
-  createRootFolders,
-  withCheckoutFolders,
-} from '@moonbase/daemon-protocol/folders';
 import type { ClaudeCodeSubscription } from '@moonbase/chat-runtime/claude-code';
 import type { ChatCreationSettings, ChatSession } from '@moonbase/contracts/chat';
 import {
@@ -56,6 +51,11 @@ import { acquireDaemonLock } from './lock.ts';
 import { openDaemonLog, type DaemonLog } from './log.ts';
 import { closeWorkspace, createRootPolicy } from './workspace.ts';
 import { createChatFolders } from './chat-folders.ts';
+import {
+  createFolderApprovals,
+  createRootFolders,
+  withCheckoutFolders,
+} from './folder-approvals.ts';
 
 /** What an entry point adds to a daemon in either mode. */
 export type DaemonProviders = {

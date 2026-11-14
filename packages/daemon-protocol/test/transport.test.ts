@@ -1,6 +1,7 @@
 import type { ConversationId, Harness as HarnessType } from '@earendil-works/pi-durable';
 import type { ChatInput, ChatStopTarget } from '@moonbase/contracts/chat';
-import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
+import type { FolderApprovals } from '@moonbase/contracts/daemon';
+import { FolderMissingError, FolderRefusedError } from '@moonbase/contracts/folder-errors';
 import { ChatStoreError } from '@moonbase/contracts/chat-errors';
 import { ProviderSetupRefusedError } from '@moonbase/contracts/provider-errors';
 import { HostKeyExposedError } from '@moonbase/contracts/host-errors';
@@ -26,7 +27,6 @@ import {
 } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { LocalHostLive, LocalPiRuntimeLive } from '@moonbase/chat-runtime';
-import { createFolderApprovals } from '../src/folders.ts';
 import { ProviderSetupLive, localProviderIds } from '@moonbase/chat-runtime/providers';
 import { DaemonRpcLinkLive, RemoteChatLive, RemoteDaemonLive } from '../src/remote.ts';
 import { localDaemonCapabilities, serveChat } from '../src/server.ts';
@@ -704,8 +704,22 @@ async function setupLocal(t: { after: (fn: () => Promise<void>) => void }) {
       auth: auth(),
     });
   }
-  const folders = createFolderApprovals(join(dir, 'approved-folders.json')),
-    chatFolders = join(dir, 'chats');
+  // Folders approved by their real path; the daemon's own approval store is tested with it.
+  const approved = new Set<string>();
+  const folders: FolderApprovals = {
+    refusal: 'not-approved',
+    has: async (path) => approved.has(path),
+    approve: async (path) => {
+      const real = await realpath(path).catch(() => {
+        throw new FolderMissingError();
+      });
+      approved.add(real);
+      return real;
+    },
+    touch: async () => {},
+    listRecent: async () => [...approved].reverse(),
+  };
+  const chatFolders = join(dir, 'chats');
   const requireApproved = async (path: string) => {
     if (!(await folders.has(path))) throw new FolderRefusedError({ refusal: 'not-approved' });
   };

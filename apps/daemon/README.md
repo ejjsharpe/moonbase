@@ -18,7 +18,7 @@ The data directory is its only argument (a second one is refused); everything el
 | `chat.sqlite` | Pi Durable store |
 | `credentials/`, `chats/` | Encrypted provider credentials; folders of chats without a project |
 | `workspace/` | 0700. The workspace file host's store `workspace-host.sqlite`: approvals and the save and operation journals (below) |
-| `approved-folders.json` | Local mode: folders a client approved |
+| `approved-folders.json` | Local mode: folders a client approved (`src/folder-approvals.ts`, which also holds a host's root folders) |
 | `logs/` | `daemon.log`, rotated at 1 MiB to `daemon.1.log`…`daemon.3.log` |
 
 `daemon.json`, decoded strictly by `src/daemon-settings.ts`:
