@@ -157,16 +157,19 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       if (crash) {
         // Playwright retains a crashed Page flag; inspect the recovered real renderer through native APIs.
         await recoverCrashedWorkbench(current);
-        const read = () =>
-          current.evaluate(async ({ BrowserWindow }) =>
-            BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(`(async () => {
+        const readScript = `(async () => {
           const project = [...document.querySelectorAll('[role="tab"]')].find(tab => tab.textContent.endsWith(' · main'));
           if (!project) return null;
           project.click();
           if (!document.querySelector('[aria-label="a.ts editor"]')?.getClientRects().length) return null;
           const r = await ${callMainScript('loadRecovery', { clientId: editorClientId })};
           return { recovery: r, saved: JSON.parse(localStorage.getItem("moonbase.chat.remote.v2")), connection: await ${callMainScript('getConnection', { input: {} })} };
-        })()`),
+        })()`;
+        const read = () =>
+          current.evaluate(
+            async ({ BrowserWindow }, script) =>
+              BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(script),
+            readScript,
           );
         const restored = (await until(read, Boolean)) as {
           recovery: { value: RecoveryLoad };
@@ -189,16 +192,16 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
         let readiness: unknown;
         await until(
           () =>
-            current.evaluate(async ({ BrowserWindow }) =>
-              BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(
-                `(async () => {
+            current.evaluate(
+              async ({ BrowserWindow }, script) =>
+                BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(script),
+              `(async () => {
                   const reply = await ${callMainScript('loadRecovery', { clientId: editorClientId })};
                   return { reply,
                     alerts: [...document.querySelectorAll('[role="alert"]')].filter(element => element.getClientRects().length && element.textContent.trim()).map(element => element.textContent),
                     statuses: [...document.querySelectorAll('[role="status"]')].map(element => element.textContent)
                   };
                 })()`,
-              ),
             ),
           (value) => {
             readiness = value;
