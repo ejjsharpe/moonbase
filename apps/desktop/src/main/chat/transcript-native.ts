@@ -7,7 +7,7 @@ import {
   makeTranscriptReader,
   type TranscriptRead,
 } from '@moonbase/application/chat';
-import { parseTranscriptMarkdown } from './transcript-source.ts';
+import { parseTranscriptMarkdown } from '../../ipc/transcript-markdown.ts';
 import {
   fields,
   invalid,

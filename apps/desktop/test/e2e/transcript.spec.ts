@@ -2596,7 +2596,7 @@ test('reading pins share one set of document listeners, released with the last s
       document.removeEventListener = remove;
       return { listening, notified: [first, second], pinned, afterFirst, removed };
     },
-    `/@fs${resolve('src/renderer/chat/reading-pin.ts')}`,
+    `/@fs${resolve('src/renderer/chat/transcript/reading-pin.ts')}`,
   );
   expect(result.listening).toEqual(['selectionchange', 'focusin', 'focusout']);
   expect(result.notified[0]).toBeGreaterThan(0);

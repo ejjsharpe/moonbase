@@ -2,7 +2,7 @@ import type { Code, Root } from 'mdast';
 import {
   getTranscriptDisclosureId,
   parseTranscriptMarkdown,
-} from '../src/main/chat/transcript-source.ts';
+} from '../src/ipc/transcript-markdown.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { visit } from 'unist-util-visit';

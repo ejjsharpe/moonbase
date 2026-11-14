@@ -43,7 +43,7 @@ async function launch(directory: string, host?: Host) {
       throw Error('Controlled Node executable path contains whitespace');
     await writeFile(
       launcher,
-      `#!${process.execPath}\nvoid import(${JSON.stringify(pathToFileURL(resolve('test/package-transcript-launcher.mjs')).href)});\n`,
+      `#!${process.execPath}\nvoid import(${JSON.stringify(pathToFileURL(resolve('test/fixtures/package-transcript-launcher.mjs')).href)});\n`,
       { mode: 0o700 },
     );
   }

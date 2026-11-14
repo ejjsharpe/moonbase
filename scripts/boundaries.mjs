@@ -311,5 +311,4 @@ export function checkBoundaries({ files, packages }) {
   return [...new Set(errors)];
 }
 
-export const isPrivilegedDesktopInput = (path) =>
-  /(?:^|\/)apps\/desktop\/src\/(?:main|preload)\//.test(path);
+export const isPrivilegedDesktopInput = (path) => /(?:^|\/)apps\/desktop\/src\/main\//.test(path);
