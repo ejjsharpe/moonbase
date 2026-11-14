@@ -6,6 +6,7 @@ import {
   ConnectionError,
   type ConnectionErrorReason,
   type HostVerificationError,
+  type HostVerificationReason,
 } from '@moonbase/contracts/connection-errors';
 import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import type { ChatHostHealth } from '@moonbase/contracts/host';
@@ -25,6 +26,8 @@ import {
 /** What an SSH connection fails with. */
 type SshFailure = ConnectionError | HostVerificationError | CancelledError;
 const error = (reason: ConnectionErrorReason) => new ConnectionError({ reason });
+// While the forward comes up, its health route may not answer or may drop its reply.
+const retriedVerification = new Set<HostVerificationReason>(['unreachable', 'read-failed']);
 const cancelled = () => new CancelledError({ operation: 'SSH connection' });
 const ensure: (condition: unknown, reason: ConnectionErrorReason) => asserts condition = (
   condition,
@@ -35,7 +38,7 @@ const ensure: (condition: unknown, reason: ConnectionErrorReason) => asserts con
 const command = <A>(run: () => A): Effect.Effect<A, ConnectionError> =>
   Effect.try({
     try: run,
-    catch: (e) => (e instanceof ConnectionError ? e : error('closed')),
+    catch: (e) => (e instanceof ConnectionError ? e : error('invalid-command')),
   });
 type Generation = {
   id: string;
@@ -51,7 +54,8 @@ export type SshOptions = {
   /**
    * Checks the chat host's signed health on the forwarded port. The consumer supplies the
    * protocol's check (`checkHostHealth` from `@moonbase/daemon-protocol/health`); SSH only
-   * forwards the port. An `unreachable` failure is retried until the startup deadline.
+   * forwards the port. A health route that can't be reached (`unreachable`) or read
+   * (`read-failed`) is retried until the startup deadline; any other failure ends the attempt.
    */
   verify: (endpoint: ChatHostEndpoint) => Effect.Effect<ChatHostHealth, HostVerificationError>;
   /** How long a connection may take to verify its host; 20 seconds unless a test shortens it. */
@@ -407,7 +411,8 @@ class Connection {
             }),
           );
           if (result._tag === 'Success') return result.success;
-          if (result.failure.reason !== 'unreachable') return yield* Effect.fail(result.failure);
+          if (!retriedVerification.has(result.failure.reason))
+            return yield* Effect.fail(result.failure);
           yield* Effect.sleep('50 millis');
         }
       });

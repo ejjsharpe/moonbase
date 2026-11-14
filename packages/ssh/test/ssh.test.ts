@@ -86,9 +86,17 @@ async function free(port: number) {
 const verify: SshOptions['verify'] = (endpoint: ChatHostEndpoint) =>
   Effect.tryPromise({
     try: async (signal) => {
-      const response = await fetch(`${endpoint.origin}/v1/health`, { signal });
+      // Like the real check, each attempt has its own short deadline.
+      const attempt = AbortSignal.any([signal, AbortSignal.timeout(50)]);
+      const response = await fetch(`${endpoint.origin}/v1/health`, { signal: attempt }).catch(
+        () => {
+          throw new HostVerificationError({ reason: 'unreachable' });
+        },
+      );
       if (response.status === 401) throw new HostVerificationError({ reason: 'rejected' });
-      const value = (await response.json()) as ChatHostHealth;
+      const value = (await response.json().catch(() => {
+        throw new HostVerificationError({ reason: 'read-failed' });
+      })) as ChatHostHealth;
       if (value.hostId !== endpoint.expected.hostId || value.storeId !== endpoint.expected.storeId)
         throw new HostVerificationError({ reason: 'identity' });
       return value;
@@ -658,13 +666,15 @@ test('disconnect and root disposal during startup release the pending generation
   }
 });
 
-test('a stalled forwarded health response hits the startup deadline and releases the reader, child and port', async () => {
-  const f = await fixture('normal', 'stall', { startupMs: 500 });
+test('a stalled forwarded health response is read again until the startup deadline, then releases the reader, child and port', async () => {
+  const f = await fixture('normal', 'stall', { startupMs: 800 });
   try {
     await assert.rejects(
       f.client.command('connect', { profileId: 'configured' }),
       (e) => failure('Unavailable')(e) && /startup deadline/.test((e as ApplicationError).message),
     );
+    // Each read that timed out (`read-failed`) was tried again.
+    assert(f.requests.length > 1);
     assert.equal((await f.client.command('getConnection', {})).state, 'failed');
     await assert.rejects(f.endpoint(), failure('Unavailable'));
     await until(() => f.spawned().every((child) => !alive(child.pid)));

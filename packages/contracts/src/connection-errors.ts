@@ -12,6 +12,7 @@ const connectionReasons = {
     'Connection observer limit reached. Close an existing observation before subscribing.',
   ],
   'wrong-profile': ['InvalidInput', 'Choose the configured SSH profile.'],
+  'invalid-command': ['InvalidInput', 'Invalid SSH command.'],
   'host-mismatch': ['Conflict', 'Connection target does not match the configured host and store.'],
   'not-verified': ['Unavailable', 'No verified connection is available for that host and store.'],
   'stale-generation': ['Conflict', 'This disconnect names a stale connection generation.'],
