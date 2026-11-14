@@ -1,7 +1,10 @@
 import * as Schema from 'effect/Schema';
 import { voidResult } from './schema.ts';
 import { Rpc, RpcGroup } from 'effect/rpc';
-import { ApplicationError } from './errors.ts';
+import { chatErrors } from './chat-errors.ts';
+import { folderErrors } from './folder-errors.ts';
+import { hostErrors } from './host-errors.ts';
+import { providerSetupErrors } from './provider-errors.ts';
 import { ChatHostTargetSchema, ChatIdentifierSchema } from './host-schema.ts';
 import {
   hostProviderInputSchemas,
@@ -13,8 +16,15 @@ import { ProviderStateSchema } from './providers-schema.ts';
 import { ProviderSetupDeltaSchema } from './socket-schema.ts';
 import { RpcAdmission } from './rpc-admission.ts';
 
-/** What every daemon procedure fails with on the wire. */
-export const DaemonRpcErrorSchema = ApplicationError;
+/**
+ * What a folder or control procedure fails with on the wire: the folder approvals' errors, the
+ * chat engine's (active work, marking a project) and the host's.
+ */
+export const localHostRpcErrors = [...new Set([...folderErrors, ...chatErrors, ...hostErrors])];
+export const LocalHostRpcErrorSchema = Schema.Union(localHostRpcErrors);
+/** What a provider setup procedure fails with on the wire: provider setup's errors and the host's. */
+export const providerSetupRpcErrors = [...providerSetupErrors, ...hostErrors];
+export const ProviderSetupRpcErrorSchema = Schema.Union(providerSetupRpcErrors);
 const request = <S extends Schema.Top>(input: S) => ({ host: ChatHostTargetSchema, input });
 /** A reply's schema on the wire: no reply is `Schema.Void`, which encodes as JSON. */
 const wire = <S extends Schema.Top>(schema: S) =>
@@ -23,13 +33,13 @@ const localHost = <const K extends keyof typeof localHostInputSchemas>(operation
   Rpc.make(operation, {
     payload: request(localHostInputSchemas[operation]),
     success: wire(localHostOutputSchemas[operation]),
-    error: DaemonRpcErrorSchema,
+    error: LocalHostRpcErrorSchema,
   });
 const providers = <const K extends keyof typeof hostProviderInputSchemas>(operation: K) =>
   Rpc.make(operation, {
     payload: request(hostProviderInputSchemas[operation]),
     success: wire(hostProviderOutputSchemas[operation]),
-    error: DaemonRpcErrorSchema,
+    error: ProviderSetupRpcErrorSchema,
   });
 export const ProviderSetupUpdateSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal('snapshot'), value: ProviderStateSchema }),
@@ -59,7 +69,7 @@ export class ProviderSetupRpcs extends RpcGroup.make(
   Rpc.make('watchProviderSetup', {
     payload: { host: ChatHostTargetSchema, ownerId: ChatIdentifierSchema },
     success: ProviderSetupUpdateSchema,
-    error: DaemonRpcErrorSchema,
+    error: ProviderSetupRpcErrorSchema,
     stream: true,
   }),
 ).middleware(RpcAdmission) {}

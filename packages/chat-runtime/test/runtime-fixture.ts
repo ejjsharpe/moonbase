@@ -1,13 +1,13 @@
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ManagedRuntime } from 'effect';
+import { Cause, Effect, Exit, ManagedRuntime } from 'effect';
+import { isChatError } from '@moonbase/contracts/chat-errors';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { type Registry } from '@earendil-works/pi-durable';
 import { LocalPiRuntimeLive } from '../src/index.ts';
-import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 
 export const session = {
   host: { hostId: 'test-host', storeId: 'test-store' },
@@ -82,8 +82,14 @@ export async function fixture(
     async dispose() {
       await runtime.dispose();
     },
+    /** Disposes, returning the chat errors its cleanup failed with. */
     async disposeObserved() {
-      await runApplicationEffect(runtime, runtime.disposeEffect);
+      const exit = await Effect.runPromiseExit(runtime.disposeEffect);
+      return Exit.isFailure(exit)
+        ? exit.cause.reasons.flatMap((reason) =>
+            Cause.isDieReason(reason) && isChatError(reason.defect) ? [reason.defect] : [],
+          )
+        : [];
     },
     async create(requestId = 'create') {
       return (

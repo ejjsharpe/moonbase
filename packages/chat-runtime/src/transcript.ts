@@ -29,7 +29,11 @@ import {
   type ChatInput,
   type ChatOutput,
 } from '@moonbase/contracts/chat';
-import { ApplicationError, fail } from '@moonbase/contracts/errors';
+import {
+  ChatStoreError,
+  InvalidChatRequestError,
+  TranscriptChangedError,
+} from '@moonbase/contracts/chat-errors';
 import { cid, eid } from './documents.ts';
 import { checkCursor, previewText } from './text.ts';
 import { decodeTranscriptCursor, type FindPartPosition, type TranscriptCursor } from './cursors.ts';
@@ -55,11 +59,9 @@ export const hashJson = (value: unknown) =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const getLabel = (value: string, fallback = 'Tool') =>
   previewText(value, 128).text.replaceAll('\0', '').trim() || fallback;
-export class NestedSourceRetired extends ApplicationError {
-  constructor() {
-    super({ code: 'Conflict', message: 'Nested tool source ended; reload the consistent view.' });
-  }
-}
+/** Whether a read failed because a nested tool's source ended under it; reading again may pass. */
+export const isNestedSourceEnded = (error: unknown) =>
+  error instanceof TranscriptChangedError && error.change === 'nested-ended';
 export function sealCursor(harness: Harness, value: TranscriptCursor) {
   const body = Buffer.from(JSON.stringify(value)).toString('base64url');
   const mac = createHmac('sha256', getKey(harness)).update(body).digest('base64url');
@@ -88,13 +90,13 @@ export function openCursor(
     if (value.kind !== kind || value.binding !== binding) throw Error();
     return value;
   } catch {
-    return fail('InvalidInput', 'Transcript cursor does not belong to this read.');
+    throw new InvalidChatRequestError({ problem: 'transcript-cursor' });
   }
 }
 export async function readEntry(harness: Harness, target: ChatTarget, id: string) {
   const entry = await harness.commit((tx) => tx.entry(eid(id)), context);
   if (!entry || entry.conversationId !== cid(target.conversationId))
-    return fail('InvalidInput', 'Entry does not belong to this conversation.');
+    throw new InvalidChatRequestError({ problem: 'entry' });
   return entry;
 }
 /**
@@ -142,8 +144,7 @@ export async function captureTranscript(
   } = {},
 ) {
   return harness.commit(async (tx) => {
-    if (cache?.retired)
-      fail('Persistence', 'Pi live state was replaced. Reopen this conversation.');
+    if (cache?.retired) throw new ChatStoreError({ problem: 'live-replaced' });
     // LiveDoc already exists for every Harness-created conversation; this read changes no fields.
     const live = JSON.parse(
       JSON.stringify(await tx.doc(LiveDoc, cid(target.conversationId))),
@@ -193,7 +194,7 @@ export function getLiveSource(
   )
     return undefined;
   if (task.conversationId !== cid(target.conversationId))
-    fail('Persistence', 'Live task authority is invalid.');
+    throw new ChatStoreError({ problem: 'live-task' });
   const attempt = live.generation?.attempt ?? 0;
   const incarnation = createHmac('sha256', getKey(harness))
     .update(
@@ -674,7 +675,7 @@ async function readSavedTranscript(
   if (!cached)
     return getEntryTranscript(harness, await readEntry(harness, target, entryId), signal);
   if (cached.conversationId !== cid(target.conversationId))
-    return fail('InvalidInput', 'Entry does not belong to this conversation.');
+    throw new InvalidChatRequestError({ problem: 'entry' });
   return cached;
 }
 
@@ -692,7 +693,7 @@ async function readNestedCall(
     task.conversationId !== cid(target.conversationId) ||
     task.owner !== tool.parentTaskId
   )
-    return fail('Persistence', 'Nested tool authority is invalid.');
+    throw new ChatStoreError({ problem: 'nested-tool' });
   const input = task.input as ToolTaskInput;
   if (
     input.kind !== 'nested' ||
@@ -702,11 +703,11 @@ async function readNestedCall(
     input.call.name !== tool.name ||
     tool.callId !== `${input.parentCallId}/${input.key}`
   )
-    return fail('Persistence', 'Nested tool call identity is invalid.');
+    throw new ChatStoreError({ problem: 'nested-call' });
   const parent = await harness.getTask(input.parent, context);
   signal?.throwIfAborted();
   if (!parent || parent.kind !== 'pi.tool' || parent.conversationId !== task.conversationId)
-    return fail('Persistence', 'Nested tool parent authority is invalid.');
+    throw new ChatStoreError({ problem: 'nested-parent' });
   const record = await harness.snapshot(NestedCallDoc, input.parent, input.key, context);
   signal?.throwIfAborted();
   if (!record) {
@@ -717,15 +718,15 @@ async function readNestedCall(
       currentParent.kind !== 'pi.tool' ||
       currentParent.conversationId !== task.conversationId
     )
-      return fail('Persistence', 'Nested tool parent authority is invalid.');
+      throw new ChatStoreError({ problem: 'nested-parent' });
     if (currentParent.state.status === 'terminal' || currentParent.state.status === 'completing')
-      throw new NestedSourceRetired();
-    return fail('Conflict', 'Nested tool source is unavailable; reload the consistent view.');
+      throw new TranscriptChangedError({ change: 'nested-ended' });
+    throw new TranscriptChangedError({ change: 'nested-source' });
   }
   if (record.taskId !== task.id || (record.result && record.result.taskId !== task.id))
-    return fail('Persistence', 'Retained nested result identity is invalid.');
+    throw new ChatStoreError({ problem: 'nested-result' });
   if (tool.status === 'done' && tool.summary && !record.result)
-    return fail('Conflict', 'Retained nested result is unavailable; reload the source.');
+    throw new TranscriptChangedError({ change: 'nested-result' });
   return { task, input, result: record.result };
 }
 function getNestedOutput(
@@ -789,7 +790,7 @@ async function getLiveTranscript(
   signal?.throwIfAborted();
   const actual = getLiveSource(harness, source.target, capture);
   if (!actual || hashJson(actual) !== hashJson(source))
-    return fail('Conflict', 'Transcript source changed; reload the consistent view.');
+    throw new TranscriptChangedError({ change: 'view' });
   const message = capture.live.generation?.message as Message | undefined;
   const generation: Part[] = [];
   for (const part of buildMessageParts(message ? [message] : [], 'generation.')) {
@@ -820,7 +821,7 @@ async function* listLiveParts(
     if (i >= capture.toolTasks.length) throw new Error('Live tool slot was not captured.');
     const task = capture.toolTasks[i];
     if (task && task.conversationId !== conversationId)
-      fail('Persistence', 'Live tool authority is invalid.');
+      throw new ChatStoreError({ problem: 'live-tool' });
     const prefix = `tool${i}.`;
     const pairing = (task?.kind === 'pi.tool'
       ? await getTaskPairing(harness, task.conversationId, task.input as ToolTaskInput, signal)
@@ -844,7 +845,7 @@ async function* listLiveParts(
     if (tool.entry) {
       const entry = capture.tools[i];
       if (!entry || entry.conversationId !== conversationId)
-        return fail('Persistence', 'Recorded tool result is unavailable.');
+        throw new ChatStoreError({ problem: 'tool-result' });
       for (const part of (await getEntryTranscript(harness, entry, signal)).parts)
         yield {
           ...part,
@@ -990,7 +991,7 @@ async function projectManifest(
     revision !== undefined &&
     (seen.length < start || hashJson(seen.slice(0, start)) !== revision)
   )
-    fail('Conflict', 'Transcript manifest changed; reload the source.');
+    throw new TranscriptChangedError({ change: 'manifest' });
   return {
     source,
     parts: page,
@@ -1041,15 +1042,14 @@ async function findPart(parts: TranscriptParts['parts'], partId: string) {
 }
 /** Checks that the selection's fixed prefix still matches the part's value. */
 function checkSelection(part: Part | undefined, selection: ChatTranscriptSelection): Part {
-  if (!part || !isAvailable(part))
-    return fail('InvalidInput', 'Transcript part is unavailable or invalid.');
+  if (!part || !isAvailable(part)) throw new InvalidChatRequestError({ problem: 'part' });
   if (
     selection.bytes > part.value.length ||
     (selection.bytes === part.value.length
       ? getRevision(part)
       : hashPrefix(part, selection.bytes)) !== selection.revision
   )
-    return fail('Conflict', 'Transcript prefix changed; reload the selected part.');
+    throw new TranscriptChangedError({ change: 'prefix' });
   return part;
 }
 async function readSelectedPart(
@@ -1072,8 +1072,7 @@ async function readSelectedPart(
     (await getLiveTranscript(harness, source, { signal })).parts,
     selection.partId,
   );
-  if (!current || !isAvailable(current))
-    fail('Conflict', 'Transcript part disappeared; reload the source.');
+  if (!current || !isAvailable(current)) throw new TranscriptChangedError({ change: 'part' });
   checkSelection(current, selection);
   signal?.throwIfAborted();
   return part;
@@ -1111,7 +1110,7 @@ export async function readTranscriptContent(
   const offset = input.cursor ? openCursor(harness, input.cursor, 'content', binding).position : 0;
   const part = await readSelectedPart(harness, source, selection, signal);
   signal?.throwIfAborted();
-  if (offset > selection.bytes) fail('InvalidInput', 'Invalid content position.');
+  if (offset > selection.bytes) throw new InvalidChatRequestError({ problem: 'content-position' });
   const bytes = part.value;
   let end = Math.min(offset + chatContentChunkBytes, selection.bytes);
   if (part.encoding === 'utf8') {
@@ -1120,7 +1119,7 @@ export async function readTranscriptContent(
       (offset < bytes.length && (bytes[offset] & 0xc0) === 0x80) ||
       (selection.bytes < bytes.length && (bytes[selection.bytes] & 0xc0) === 0x80)
     )
-      fail('InvalidInput', 'Content selection splits Unicode.');
+      throw new InvalidChatRequestError({ problem: 'content-split' });
   }
   return {
     kind: 'content',

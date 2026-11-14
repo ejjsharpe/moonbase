@@ -7,9 +7,11 @@ import { join } from 'node:path';
 import { Cause, Effect, Fiber, Layer, ManagedRuntime, Stream } from 'effect';
 import type { ChatCommand, ChatInput, ChatOutput, ChatTarget } from '@moonbase/contracts/chat';
 import type { ApplicationError } from '@moonbase/contracts/errors';
+import { toChatApplicationError } from '@moonbase/contracts/chat-legacy-errors';
 import {
   ChatService,
   LocalHostService as LocalHostServiceTag,
+  type ChatServiceError,
   type LocalHostService,
   type ProviderSetupService,
 } from '@moonbase/contracts/services';
@@ -163,13 +165,14 @@ export function createFauxClient(port: number, token: string, host: ChatHostTarg
     try {
       return await runPromise(
         runtime,
+        // Chat failures reach a client as the legacy error with its code.
         Effect.flatMap(ChatService, (chat) =>
           (
             chat[operation] as (
               input: ChatInput<K>,
-            ) => Effect.Effect<ChatOutput<K>, ApplicationError>
+            ) => Effect.Effect<ChatOutput<K>, ChatServiceError>
           )(input),
-        ),
+        ).pipe(Effect.mapError(toChatApplicationError)),
       );
     } finally {
       await runtime.dispose();
@@ -177,7 +180,7 @@ export function createFauxClient(port: number, token: string, host: ChatHostTarg
   }
   /** A daemon operation on a connection of its own. */
   async function daemon<A>(
-    run: (host: LocalHostService['Service']) => Effect.Effect<A, ApplicationError>,
+    run: (host: LocalHostService['Service']) => Effect.Effect<A, unknown>,
   ): Promise<A> {
     const runtime = open();
     try {
@@ -343,7 +346,7 @@ export function connectClients(
     chat: makeChatClient(runtime),
     connection: makeConnectionClient(runtime),
     owner: (ownerId: string) => makeProviderSetupClient(runtime, ownerId),
-    run: <A>(effect: Effect.Effect<A, ApplicationError, LocalHostService | ProviderSetupService>) =>
+    run: <A>(effect: Effect.Effect<A, unknown, LocalHostService | ProviderSetupService>) =>
       runtime.runPromise(effect),
   };
 }

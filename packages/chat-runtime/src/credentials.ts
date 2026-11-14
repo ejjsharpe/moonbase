@@ -4,7 +4,7 @@ import { mkdir, lstat, open, rename, unlink } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import * as Schema from 'effect/Schema';
 import type { CreateModelsOptions } from '@earendil-works/pi-ai/models';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { CredentialKeyError, CredentialStoreError } from '@moonbase/contracts/provider-errors';
 import type { CredentialKeySource } from './credential-keys.ts';
 import { isPrivateTo } from '@moonbase/contracts/files';
 
@@ -24,18 +24,8 @@ export type CredentialEncryption = {
   encrypt(value: string, providerId: string): Promise<Uint8Array>;
   decrypt(value: Uint8Array, providerId: string): Promise<string>;
 };
-const failure = () =>
-  new ApplicationError({
-    code: 'Persistence',
-    message:
-      'Encrypted provider credentials could not be read or saved. Existing files were kept. Check that the credentials folder and its files are private to you, then retry.',
-  });
-const unreadableFailure = () =>
-  new ApplicationError({
-    code: 'Persistence',
-    message:
-      "A saved provider credential can't be read with the current credential key. Sign in to that provider again to replace it, or sign out to remove it.",
-  });
+const failure = () => new CredentialStoreError({ problem: 'failed' });
+const unreadableFailure = () => new CredentialStoreError({ problem: 'unreadable' });
 /** Thrown by `createKeyEncryption` when a file can't be opened under the key that loaded, or no key exists. */
 class UnreadableCredential extends Error {}
 /** A stored file that will never decode under this store's encryption, so it may be replaced. */
@@ -75,7 +65,7 @@ async function protectStorage<A>(operation: () => Promise<A>): Promise<A> {
     return await operation();
   } catch (error) {
     // A key source that can't work says why, such as a locked keychain; nothing else is disclosed.
-    if (ApplicationError.is(error) && error.code === 'Unavailable') throw error;
+    if (error instanceof CredentialKeyError) throw error;
     throw failure();
   }
 }
@@ -119,11 +109,7 @@ export function createKeyEncryption(source: CredentialKeySource): CredentialEncr
   return {
     available: async () => {
       if (await source.available()) return true;
-      throw new ApplicationError({
-        code: 'Unavailable',
-        message:
-          'The credential key store is unavailable on this system. Configure a private credential key file for this host instead.',
-      });
+      throw new CredentialKeyError({ problem: 'no-key-store' });
     },
     encrypt: async (value, providerId) => {
       const nonce = randomBytes(nonceBytes),

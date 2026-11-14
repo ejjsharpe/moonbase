@@ -12,6 +12,7 @@ import {
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
+import { ChatService } from '@moonbase/contracts/services';
 import {
   Harness,
   LiveDoc,
@@ -188,10 +189,10 @@ test('store authority rejects actor/host retargeting without executing work', as
       }),
     );
     try {
-      await assert.rejects(
-        makeChatClient(runtime).command('getChatHost', { host: change.host ?? session.host }),
-        { code: 'Incompatible' },
-      );
+      await assert.rejects(runtime.runPromise(ChatService), {
+        _tag: 'ChatStoreMismatchError',
+        mismatch: 'bound',
+      });
     } finally {
       await runtime.dispose();
     }
@@ -432,9 +433,7 @@ for (const family of ['store', 'metadata', 'request', 'binding'] as const)
     }
     await f.restart();
     if (kind === 'store')
-      await assert.rejects(f.client.command('getChatHost', { host: session.host }), {
-        code: 'Persistence',
-      });
+      await assert.rejects(f.runtime.runPromise(ChatService), { _tag: 'ChatStoreError' });
     else
       await assert.rejects(f.client.command('getChatSend', { target, requestId: 'saved-send' }), {
         code: 'Persistence',
@@ -505,9 +504,7 @@ test('unsupported app-owned document version is rejected unchanged before resume
   };
   const original = await change(true);
   await f.restart();
-  await assert.rejects(f.client.command('getChatHost', { host: session.host }), {
-    code: 'Persistence',
-  });
+  await assert.rejects(f.runtime.runPromise(ChatService), { _tag: 'ChatStoreError' });
   await f.dispose();
   assert.deepEqual(await change(false), { value: original.value, version: 2 });
   assert.equal(f.faux.state.callCount, 0);

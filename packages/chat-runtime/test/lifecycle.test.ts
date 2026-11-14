@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
+import { toChatApplicationError } from '@moonbase/contracts/chat-legacy-errors';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { createModels } from '@earendil-works/pi-ai/models';
 import {
@@ -822,7 +823,7 @@ test('partial acquisition attempts each transferred resource release once and pr
         Layer.build(
           LocalPiRuntimeLive({ ...session, databasePath: join(directory, 'chat.sqlite'), models }),
         ),
-      ),
+      ).pipe(Effect.mapError(toChatApplicationError)),
     ),
     (error: unknown) => {
       assert(ApplicationError.is(error));
@@ -861,7 +862,7 @@ for (const count of [1, 2])
           cancelled++;
           const message = 'Controlled shutdown waiter cleanup failure ' + id;
           failures.push(message);
-          throw new ApplicationError({ code: 'Persistence', message });
+          throw Error(message);
         } finally {
           waiters--;
         }
@@ -913,13 +914,10 @@ for (const count of [1, 2])
         .catch((error: unknown) => error),
     );
     await waiting;
-    await assert.rejects(f.disposeObserved(), (error: unknown) => {
-      assert(ApplicationError.is(error));
-      assert.equal(failures.length, count);
-      for (const failure of failures) assert(String(error).includes(failure));
-      assert(!String(error).includes(f.config.cwd));
-      return true;
-    });
+    // The failures are kept, hidden as the store's own failure (equal ones combine as one).
+    const errors = await f.disposeObserved();
+    assert.equal(failures.length, count);
+    assert(errors.length > 0 && errors.every((error) => error._tag === 'ChatStoreError'));
     for (const result of await Promise.all(stops)) {
       assert(ApplicationError.is(result));
       assert.equal(result.code, 'Cancelled');
@@ -944,7 +942,7 @@ test('multiple late abort failures remain composed after their Stop responses re
       await gate;
       const message = 'Controlled late abort failure ' + id;
       failures.push(message);
-      throw new ApplicationError({ code: 'Persistence', message });
+      throw Error(message);
     };
     return harness;
   });
@@ -989,9 +987,6 @@ test('multiple late abort failures remain composed after their Stop responses re
     () => Promise.resolve(failures.length),
     (count) => count === 2,
   );
-  await assert.rejects(f.disposeObserved(), (error: unknown) => {
-    assert(ApplicationError.is(error));
-    for (const failure of failures) assert(error.message.includes(failure), error.message);
-    return true;
-  });
+  const errors = await f.disposeObserved();
+  assert(errors.length > 0 && errors.every((error) => error._tag === 'ChatStoreError'));
 });

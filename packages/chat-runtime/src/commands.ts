@@ -12,9 +12,20 @@ import {
   type ConversationId,
 } from '@earendil-works/pi-durable';
 import { Effect, Exit, Fiber, FiberSet, Option, Queue, Scope, Semaphore, Stream } from 'effect';
-import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
+import { releaseResource } from '@moonbase/effect';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/models';
-import { ApplicationError } from '@moonbase/contracts/workspace';
+import {
+  ChatAccessError,
+  ChatBusyError,
+  ChatStoreError,
+  ChatStoreMismatchError,
+  ChatUnavailableError,
+  InvalidChatRequestError,
+  isChatError,
+  type ChatError,
+} from '@moonbase/contracts/chat-errors';
+import { UncertainError } from '@moonbase/contracts/errors';
+import { RequestReusedError } from '@moonbase/contracts/host-errors';
 import type {
   ChatCommand,
   ChatInput,
@@ -50,14 +61,13 @@ import {
 } from './history.ts';
 import type { LocalPiRuntimeConfiguration, RetainedWork } from './runtime-types.ts';
 import { findTranscript } from './find.ts';
-import { NestedSourceRetired, readTranscriptContent } from './transcript.ts';
+import { isNestedSourceEnded, readTranscriptContent } from './transcript.ts';
 import {
   isCancellableChatRead,
   isChatMutation,
   isSameChatHost,
   isSameChatTarget,
 } from '@moonbase/contracts/chat-validation';
-import { fail } from '@moonbase/contracts/errors';
 import { makeChatFolder } from './chat-folders.ts';
 import {
   decodeStoreOwner,
@@ -66,34 +76,20 @@ import {
   decodeStoredRequest,
 } from './stored-records.ts';
 
-const unknownOutcome = () =>
-  new ApplicationError({
-    code: 'Uncertain',
-    message:
-      'Chat operation may have committed. Preserve its exact request and query before retrying.',
-  });
-/** A chat failure safe to show: Pi's busy refusal as `Conflict`, any other unknown failure hidden. */
-export const safeError = (error: unknown, uncertain = false): ApplicationError => {
-  if (ApplicationError.is(error)) return error;
+/**
+ * A chat failure safe to show: Pi's busy refusal as `ChatBusyError`, any other unknown failure
+ * hidden, as a store failure, or for a mutation that may have committed as `UncertainError`.
+ */
+export const safeError = (error: unknown, uncertain = false): ChatError => {
+  if (isChatError(error)) return error;
   try {
-    if (error instanceof ConversationBusy)
-      return new ApplicationError({
-        code: 'Conflict',
-        message: 'Conversation is busy; retain this request and retry explicitly.',
-      });
+    if (error instanceof ConversationBusy) return new ChatBusyError();
   } catch {
     /* Unknown SDK diagnostics remain private. */
   }
-  return normalizeApplicationError(
-    error,
-    uncertain
-      ? unknownOutcome()
-      : new ApplicationError({
-          code: 'Persistence',
-          message:
-            'Pi storage or execution is unavailable. Reopen this explicit store after resolving its failure.',
-        }),
-  );
+  return uncertain
+    ? new UncertainError({ operation: 'The chat request' })
+    : new ChatStoreError({ problem: 'failed' });
 };
 /** What one commit means for a watched conversation's projection and its caches. */
 export type PublicationEffect = {
@@ -212,7 +208,7 @@ export class Host {
   readonly config: LocalPiRuntimeConfiguration;
   readonly harness: Harness;
   readonly identity: string;
-  readonly work: FiberSet.FiberSet<unknown, ApplicationError>;
+  readonly work: FiberSet.FiberSet<unknown, ChatError>;
   readonly aborts: RetainedWork;
   readonly waiters: RetainedWork;
   readonly observations: Scope.Closeable;
@@ -222,7 +218,7 @@ export class Host {
     config: LocalPiRuntimeConfiguration,
     harness: Harness,
     identity: string,
-    work: FiberSet.FiberSet<unknown, ApplicationError>,
+    work: FiberSet.FiberSet<unknown, ChatError>,
     aborts: RetainedWork,
     waiters: RetainedWork,
     observations: Scope.Closeable,
@@ -253,9 +249,9 @@ export class Host {
   }
   session(value: ChatSession) {
     if (!isSameChatHost(value.host, this.config.host))
-      fail('Incompatible', 'Chat host/store does not match this host.');
+      throw new ChatStoreMismatchError({ mismatch: 'other-host' });
     if (value.actorId !== this.config.actorId)
-      fail('Unauthorized', 'This personal chat belongs to another actor.');
+      throw new ChatAccessError({ refusal: 'other-actor' });
   }
   async metadata(target: ChatTarget) {
     this.session(target);
@@ -272,7 +268,7 @@ export class Host {
       getSettings(meta),
     );
   }
-  own<A>(effect: Effect.Effect<A, ApplicationError>) {
+  own<A>(effect: Effect.Effect<A, ChatError>) {
     return Effect.uninterruptibleMask((restore) =>
       Effect.gen({ self: this }, function* () {
         const fiber = yield* FiberSet.run(this.work, effect);
@@ -282,7 +278,7 @@ export class Host {
       }),
     );
   }
-  admission<A>(conversationId: string, effect: Effect.Effect<A, ApplicationError>) {
+  admission<A>(conversationId: string, effect: Effect.Effect<A, ChatError>) {
     return Effect.acquireUseRelease(
       Effect.sync(() => {
         let gate = this.admissions.get(conversationId);
@@ -310,18 +306,13 @@ export class Host {
     data: ChatInput<K>,
     handle: (
       data: ChatInput<K>,
-    ) => Promise<ChatOutput<K>> | Effect.Effect<ChatOutput<K>, ApplicationError>,
-  ): Effect.Effect<ChatOutput<K>, ApplicationError> {
+    ) => Promise<ChatOutput<K>> | Effect.Effect<ChatOutput<K>, ChatError>,
+  ): Effect.Effect<ChatOutput<K>, ChatError> {
     const mutation = isChatMutation(operation);
     return Effect.gen({ self: this }, function* () {
       if (this.closed) return yield* Effect.fail(safeError(null));
       if (mutation && !this.admissionsOpen)
-        return yield* Effect.fail(
-          new ApplicationError({
-            code: 'Unavailable',
-            message: 'Local chat is preparing to quit.',
-          }),
-        );
+        return yield* Effect.fail(new ChatUnavailableError({ reason: 'quitting' }));
       const preflight =
         operation === 'sendChat'
           ? Effect.uninterruptible(
@@ -354,7 +345,7 @@ export class Host {
       );
     });
   }
-  read<A>(handle: (signal: AbortSignal) => Promise<A>): Effect.Effect<A, ApplicationError> {
+  read<A>(handle: (signal: AbortSignal) => Promise<A>): Effect.Effect<A, ChatError> {
     return Effect.acquireUseRelease(
       Effect.sync(() => {
         const controller = new AbortController();
@@ -408,7 +399,7 @@ export class Host {
   }
   async getHost(d: ChatInput<'getChatHost'>): Promise<ChatOutput<'getChatHost'>> {
     if (!isSameChatHost(d.host, this.config.host))
-      fail('Incompatible', 'Chat host/store does not match this host.');
+      throw new ChatStoreMismatchError({ mismatch: 'other-host' });
     decodeStoreOwner(await this.harness.snapshot(Store, 'identity', context));
     return { host: { ...this.config.host }, actorId: this.config.actorId, mode: 'local' };
   }
@@ -431,8 +422,7 @@ export class Host {
     );
     if (existing) {
       decodeStoredRequest(existing, d.session.actorId, d.requestId);
-      if (existing.binding !== binding)
-        fail('InvalidInput', 'Request ID is already bound to different chat input.');
+      if (existing.binding !== binding) throw new RequestReusedError();
       if (existing.conversationId)
         return {
           requestId: d.requestId,
@@ -445,21 +435,20 @@ export class Host {
     let settings: ChatSettings, ownFolder: string | undefined;
     const requested = d.settings;
     if (requested.cwd !== undefined) {
-      const cwd = await realpath(requested.cwd).catch(() =>
-        fail('InvalidInput', 'Choose an existing local working folder.'),
-      );
+      const cwd = await realpath(requested.cwd).catch(() => {
+        throw new InvalidChatRequestError({ problem: 'folder-missing' });
+      });
       if (cwd !== requested.cwd || !(await stat(cwd)).isDirectory())
-        fail('InvalidInput', 'Choose a canonical local working folder.');
+        throw new InvalidChatRequestError({ problem: 'folder-not-canonical' });
     } else if (!this.config.chatFolders)
-      fail('InvalidInput', 'Choose a local working folder for this chat.');
-    const model =
-      this.config.models.getModel(requested.model.provider, requested.model.modelId) ??
-      fail('InvalidInput', 'Choose an installed model from the local catalog.');
+      throw new InvalidChatRequestError({ problem: 'folder-required' });
+    const model = this.config.models.getModel(requested.model.provider, requested.model.modelId);
+    if (!model) throw new InvalidChatRequestError({ problem: 'model' });
     if (
       requested.reasoningEffort &&
       !getSupportedThinkingLevels(model).includes(requested.reasoningEffort)
     )
-      fail('InvalidInput', 'Choose a reasoning effort supported by this model.');
+      throw new InvalidChatRequestError({ problem: 'reasoning-effort' });
     await this.config.approveCreation?.(requested);
     if (requested.cwd !== undefined) settings = { ...requested, cwd: requested.cwd };
     else {
@@ -467,7 +456,7 @@ export class Host {
       settings = { ...requested, cwd: ownFolder, ownFolder: true };
     }
     let conversationId: string,
-      definiteRejection: ApplicationError | undefined,
+      definiteRejection: ChatError | undefined,
       reused = false;
     try {
       conversationId = await this.harness.commit(async (tx) => {
@@ -475,14 +464,11 @@ export class Host {
         try {
           decodeStoredRequest(request, d.session.actorId, d.requestId);
         } catch (error) {
-          definiteRejection = normalizeApplicationError(error);
+          definiteRejection = safeError(error);
           throw definiteRejection;
         }
         if (request.binding !== binding) {
-          definiteRejection = new ApplicationError({
-            code: 'InvalidInput',
-            message: 'Request ID is already bound to different chat input.',
-          });
+          definiteRejection = new RequestReusedError();
           throw definiteRejection;
         }
         if (request.conversationId) {
@@ -510,7 +496,7 @@ export class Host {
         if (ownFolder) await rmdir(ownFolder).catch(() => {});
         throw error;
       }
-      throw unknownOutcome();
+      throw new UncertainError({ operation: 'Creating the chat' });
     }
     // A racing original or retry made this chat first, in a folder of its own: this one is unused.
     if (reused && ownFolder) await rmdir(ownFolder).catch(() => {});
@@ -523,7 +509,7 @@ export class Host {
         ),
       };
     } catch {
-      throw unknownOutcome();
+      throw new UncertainError({ operation: 'Creating the chat' });
     }
   }
   async send(d: ChatInput<'sendChat'>): Promise<ChatSendReceipt> {
@@ -532,8 +518,7 @@ export class Host {
     await this.harness.commit(async (tx) => {
       const request = await tx.doc(Request, requestKey, binding);
       decodeStoredRequest(request, d.target.actorId, d.requestId);
-      if (request.binding !== binding)
-        fail('InvalidInput', 'Request ID is already bound to different chat input.');
+      if (request.binding !== binding) throw new RequestReusedError();
       const meta = await tx.doc(Metadata, cid(d.target.conversationId), 'metadata', {
         identity: this.identity,
         title: '',
@@ -546,7 +531,7 @@ export class Host {
           meta.pending < 0 ||
           meta.pending === Number.MAX_SAFE_INTEGER
         )
-          fail('Persistence', 'Stored pending-intent metadata is invalid.');
+          throw new ChatStoreError({ problem: 'pending-intent' });
         meta.pending++;
         request.pending = true;
         // Sending to a settled chat takes it up again; a retry of the same Send does not.
@@ -557,7 +542,7 @@ export class Host {
     const existing = await this.lookup(d.target, d.requestId);
     if (existing?.admission === 'admitted') return existing;
     const conversation = await this.harness.conversation(cid(d.target.conversationId), context);
-    if (!conversation) return fail('InvalidInput', 'Unknown conversation.');
+    if (!conversation) throw new InvalidChatRequestError({ problem: 'unknown-conversation' });
     await conversation.submit(
       { type: 'input', requestId: requestKey, content: d.text, whenBusy: 'reject' },
       context,
@@ -603,8 +588,7 @@ export class Host {
   }
   /** Lists a chat without a project under the project its folder became; the folder stays put. */
   async markFolderAsProject(target: ChatTarget): Promise<void> {
-    if (this.closed || !this.admissionsOpen)
-      fail('Unavailable', 'Local chat is preparing to quit.');
+    if (this.closed || !this.admissionsOpen) throw new ChatUnavailableError({ reason: 'quitting' });
     // Counted as active work, so Quit waits for it.
     this.mutations++;
     try {
@@ -623,17 +607,16 @@ export class Host {
     decodeStoredRequest(old, target.actorId, requestId);
     const value = decodeStoredBinding(old.binding);
     if (value.operation !== 'sendChat' || !isSameChatTarget(value.target, target))
-      return fail('InvalidInput', 'Request ID is bound to another operation or target.');
+      throw new RequestReusedError();
     if (old.conversationId !== target.conversationId)
-      fail('Persistence', 'Stored request conversation is invalid.');
+      throw new ChatStoreError({ problem: 'request-conversation' });
     const submissionId = await this.harness.commit(async (tx) => {
       const found = await tx.submissionByRequest(cid(target.conversationId), requestKey);
       const request = await tx.doc(Request, requestKey, old.binding);
       decodeStoredRequest(request, target.actorId, requestId);
       if (request.submissionId && (!found || String(found.id) !== request.submissionId))
-        fail('Persistence', 'Stored admission identity is invalid.');
-      if (found && found.type !== 'input')
-        fail('Persistence', 'Stored admission has an incompatible type.');
+        throw new ChatStoreError({ problem: 'admission-identity' });
+      if (found && found.type !== 'input') throw new ChatStoreError({ problem: 'admission-type' });
       if (found && !request.submissionId) {
         request.submissionId = String(found.id);
         const meta = await tx.doc(Metadata, cid(target.conversationId), 'metadata', {
@@ -644,7 +627,7 @@ export class Host {
         decodeStoredMetadata(meta);
         if (request.pending) {
           if (!Number.isSafeInteger(meta.pending) || meta.pending < 1)
-            fail('Persistence', 'Stored pending-intent metadata is invalid.');
+            throw new ChatStoreError({ problem: 'pending-intent' });
           meta.pending--;
           request.pending = false;
         }
@@ -663,11 +646,10 @@ export class Host {
     const meta = await this.metadata(target);
     signal?.throwIfAborted();
     const owner = decodeStoreOwner(await this.harness.snapshot(Store, 'identity', context));
-    if (owner.identity !== this.identity)
-      fail('Unauthorized', 'Chat store authority changed. Preserve this store.');
+    if (owner.identity !== this.identity) throw new ChatAccessError({ refusal: 'store-authority' });
     if (cache && cache.boundary === undefined) {
       if (!(await this.harness.snapshot(LiveDoc, cid(target.conversationId), context)))
-        fail('Persistence', 'Pi live state is unavailable. Reopen this conversation.');
+        throw new ChatStoreError({ problem: 'live-state' });
     }
     return projectSnapshot(this.harness, {
       identity: this.identity,
@@ -700,7 +682,7 @@ export class Host {
     } while (scan);
     return this.mutations > 0;
   }
-  stop(d: ChatInput<'stopChat'>): Effect.Effect<ChatOutput<'stopChat'>, ApplicationError> {
+  stop(d: ChatInput<'stopChat'>): Effect.Effect<ChatOutput<'stopChat'>, ChatError> {
     return Effect.gen({ self: this }, function* () {
       const captured = yield* Effect.tryPromise({
         try: async () => {
@@ -710,13 +692,12 @@ export class Host {
           await this.harness.commit(async (tx) => {
             const request = await tx.doc(Request, requestKey, binding);
             decodeStoredRequest(request, d.stop.target.actorId, d.requestId);
-            if (request.binding !== binding)
-              fail('InvalidInput', 'Request ID is already bound to different chat input.');
+            if (request.binding !== binding) throw new RequestReusedError();
           }, context);
           const submission = await this.harness.submission(sid(d.stop.submissionId), context),
             record = await submission?.status(context);
           if (!record || record.conversationId !== cid(d.stop.target.conversationId))
-            fail('InvalidInput', 'Stop submission does not belong to this conversation.');
+            throw new InvalidChatRequestError({ problem: 'stop-submission' });
           if (d.stop.taskId === null) {
             const result = await this.harness.abortSubmission(
               sid(d.stop.submissionId),
@@ -733,7 +714,7 @@ export class Host {
             ),
             task = await this.harness.getTask(tid(d.stop.taskId), context);
           if (!task || task.conversationId !== cid(d.stop.target.conversationId))
-            fail('InvalidInput', 'Stop task does not belong to this conversation.');
+            throw new InvalidChatRequestError({ problem: 'stop-task' });
           if (task!.state.status === 'terminal') return 'terminal';
           if (
             live?.run?.taskId !== tid(d.stop.taskId) ||
@@ -807,10 +788,10 @@ export class Host {
                 try: () => {
                   this.session(target);
                   if (this.closed || this.observers >= 64)
-                    fail('Unavailable', 'Chat observation is unavailable.');
+                    throw new ChatUnavailableError({ reason: 'observers' });
                   this.observers++;
                 },
-                catch: normalizeApplicationError,
+                catch: (error) => safeError(error),
               }),
               () =>
                 Effect.sync(() => {
@@ -838,7 +819,7 @@ export class Host {
             yield* Effect.acquireRelease(
               Effect.try({
                 try: () => this.harness.subscribeCommits(invalidate),
-                catch: normalizeApplicationError,
+                catch: (error) => safeError(error),
               }),
               (off) => releaseResource(off),
             );
@@ -849,7 +830,7 @@ export class Host {
                     ended = true;
                     refresh();
                   }),
-                catch: normalizeApplicationError,
+                catch: (error) => safeError(error),
               }),
               (off) => releaseResource(off),
             );
@@ -860,7 +841,7 @@ export class Host {
                     invalidateStatus();
                     refresh();
                   }),
-                catch: normalizeApplicationError,
+                catch: (error) => safeError(error),
               }),
               (off) => releaseResource(off),
             );
@@ -891,7 +872,7 @@ export class Host {
                 active && version === revision ? Option.some(snapshot) : Option.none(),
               ),
               Effect.catch((error) =>
-                error instanceof NestedSourceRetired && version !== revision
+                isNestedSourceEnded(error) && version !== revision
                   ? Effect.succeed(Option.none())
                   : Effect.fail(error),
               ),

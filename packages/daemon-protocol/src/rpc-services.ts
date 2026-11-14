@@ -25,9 +25,14 @@ import {
   type LocalHostHandlers,
   type ProviderSetupHandlers,
 } from '@moonbase/contracts/services';
-import { ApplicationError } from '@moonbase/contracts/workspace';
-import { fail } from '@moonbase/contracts/errors';
-import { DaemonRpcLink, DaemonRpcLinkLive } from './rpc-link.ts';
+import type { ChatError } from '@moonbase/contracts/chat-errors';
+import type { FolderError } from '@moonbase/contracts/folder-errors';
+import { IncompatibleHostError } from '@moonbase/contracts/host-errors';
+import {
+  ProviderSetupUnavailableError,
+  type ProviderSetupError,
+} from '@moonbase/contracts/provider-errors';
+import { DaemonRpcLink, DaemonRpcLinkLive, type RemoteError } from './rpc-link.ts';
 
 /** A daemon's chat over its RPC link: every procedure, each reply checked against its request. */
 export const RemoteChatLive: Layer.Layer<ChatService, never, DaemonRpcLink> = Layer.effect(
@@ -37,11 +42,10 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, DaemonRpcLink> = La
     const call =
       <K extends ChatCommand>(operation: K) =>
       (input: ChatInput<K>) =>
-        link.call<ChatOutput<K>>(
+        link.call<ChatOutput<K>, ChatError>(
           operation,
           { host: link.host, input },
           {
-            kind: 'chat',
             mutation: isChatMutation(operation),
             // A chat a client makes chooses its own folder and model, which only a daemon offers.
             capability:
@@ -52,7 +56,7 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, DaemonRpcLink> = La
                 operation === 'getChatHost' &&
                 !health.capabilities.includes(chatHostCapabilities.local)
               )
-                fail('Incompatible', 'This host does not run the Moonbase daemon. Update it.');
+                throw new IncompatibleHostError({ reason: 'not-daemon' });
               checkChatOutput(operation, output, input);
             },
           },
@@ -69,13 +73,12 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, DaemonRpcLink> = La
       watch: ({ target }) => {
         let last: ChatOutput<'getChat'> | undefined;
         return link
-          .watch(
+          .watch<'chat', ChatError>(
             'watchChat',
             'chat',
             { host: link.host, target },
             {
               capability: chatHostCapabilities.chat,
-              kindOfErrors: 'chat',
               check: (value) => void checkChatOutput('getChat', value, { target }),
             },
           )
@@ -91,13 +94,12 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, DaemonRpcLink> = La
       },
       watchChatList: ({ session }) =>
         link
-          .watch(
+          .watch<'chatList', ChatError>(
             'watchChatList',
             'chatList',
             { host: link.host, session },
             {
               capability: chatHostCapabilities.chat,
-              kindOfErrors: 'chat',
               // Every row, on the first page or past it, stays within the watched host and actor.
               check: ({ list, changed }) => {
                 checkChatOutput('listChats', list, { session });
@@ -124,23 +126,22 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, DaemonRpcLink> = La
  * Sends one daemon operation: refused unless the daemon's signed health advertises its capability,
  * and its reply checked to echo any request ID it carried.
  */
-const sendDaemonCommand = <K extends LocalHostCommand | HostProviderCommand>(
+const sendDaemonCommand = <K extends LocalHostCommand | HostProviderCommand, E extends RemoteError>(
   link: DaemonRpcLink['Service'],
   operation: K,
   input: DaemonInput<K>,
   check?: (output: DaemonOutput<K>) => void,
 ) =>
-  link.call<DaemonOutput<K>>(
+  link.call<DaemonOutput<K>, E>(
     operation,
     { host: link.host, input },
     {
-      kind: 'daemon',
       mutation: isDaemonMutation(operation),
       capability: daemonCommandCapabilities[operation],
       check: (output) => {
         const requestId = (input as { requestId?: string }).requestId;
         if (requestId !== undefined && (output as { requestId?: string }).requestId !== requestId)
-          fail('Unavailable', 'Daemon request identity changed.');
+          throw new IncompatibleHostError({ reason: 'invalid-reply' });
         check?.(output);
       },
     },
@@ -155,7 +156,8 @@ export const RemoteLocalHostLive: Layer.Layer<LocalHostService, never, DaemonRpc
       return Object.fromEntries(
         (Object.keys(localHostInputSchemas) as LocalHostCommand[]).map((operation) => [
           operation,
-          (input: DaemonInput<typeof operation>) => sendDaemonCommand(link, operation, input),
+          (input: DaemonInput<typeof operation>) =>
+            sendDaemonCommand<typeof operation, FolderError | ChatError>(link, operation, input),
         ]),
       ) as unknown as LocalHostHandlers;
     }),
@@ -205,23 +207,22 @@ export const RemoteProviderSetupLive = (
           : state;
       const checkUrl = (flowId: string) => (output: DaemonOutput<'openProviderUrl'>) => {
         if (readProviderSignInUrl(output.url) !== output.url || output.state.flow?.id !== flowId)
-          fail('Incompatible', 'Provider sign-in link is invalid.');
+          throw new IncompatibleHostError({ reason: 'invalid-reply' });
       };
       const openUrl = (url: string) =>
         Effect.tryPromise({
           try: () => config.openUrl(url),
-          catch: () =>
-            new ApplicationError({
-              code: 'Unavailable',
-              message: 'The provider sign-in page could not be opened.',
-            }),
+          catch: (error) =>
+            error instanceof ProviderSetupUnavailableError
+              ? error
+              : new ProviderSetupUnavailableError({ reason: 'browser' }),
         });
       const forOwner = (ownerId: string): ProviderSetupHandlers => {
         const send = <K extends ProviderCommand & HostProviderCommand>(
           operation: K,
           input: ProviderInput<K>,
         ) =>
-          sendDaemonCommand(
+          sendDaemonCommand<K, ProviderSetupError>(
             link,
             operation,
             {
@@ -255,17 +256,21 @@ export const RemoteProviderSetupLive = (
       return {
         forOwner,
         releaseOwner: (ownerId) =>
-          sendDaemonCommand(link, 'releaseProviderOwner', { host, ownerId }),
+          sendDaemonCommand<'releaseProviderOwner', ProviderSetupError>(
+            link,
+            'releaseProviderOwner',
+            {
+              host,
+              ownerId,
+            },
+          ),
         watch: (ownerId) =>
           link
-            .watch(
+            .watch<'providerSetup', ProviderSetupError>(
               'watchProviderSetup',
               'providerSetup',
               { host, ownerId },
-              {
-                capability: daemonCommandCapabilities.getProviders,
-                kindOfErrors: 'daemon',
-              },
+              { capability: daemonCommandCapabilities.getProviders },
             )
             .pipe(
               Stream.filter((update) => !('reconnecting' in update)),
@@ -273,7 +278,12 @@ export const RemoteProviderSetupLive = (
             ),
         getProviderUrl: (ownerId, flowId) =>
           Effect.map(
-            sendDaemonCommand(link, 'openProviderUrl', { host, ownerId, flowId }, checkUrl(flowId)),
+            sendDaemonCommand<'openProviderUrl', ProviderSetupError>(
+              link,
+              'openProviderUrl',
+              { host, ownerId, flowId },
+              checkUrl(flowId),
+            ),
             (output) => output.url,
           ),
       };

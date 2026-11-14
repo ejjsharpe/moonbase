@@ -13,9 +13,27 @@ import {
 } from 'effect';
 import { RpcClient, RpcSerialization } from 'effect/rpc';
 import * as Socket from 'effect/socket/Socket';
-import { ChatRpcs } from '@moonbase/contracts/chat-rpc';
-import { LocalHostRpcs, ProviderSetupRpcs } from '@moonbase/contracts/daemon-rpc';
-import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
+import { ChatRpcs, chatRpcErrors } from '@moonbase/contracts/chat-rpc';
+import {
+  LocalHostRpcs,
+  ProviderSetupRpcs,
+  localHostRpcErrors,
+  providerSetupRpcErrors,
+} from '@moonbase/contracts/daemon-rpc';
+import { ConnectionError, HostVerificationError } from '@moonbase/contracts/connection-errors';
+import { InvalidChatRequestError } from '@moonbase/contracts/chat-errors';
+import {
+  ApplicationError,
+  CancelledError,
+  UnauthorizedError,
+  UncertainError,
+} from '@moonbase/contracts/errors';
+import {
+  HostUnavailableError,
+  IncompatibleHostError,
+  type DaemonLinkError,
+} from '@moonbase/contracts/host-errors';
+import { CredentialKeyError } from '@moonbase/contracts/provider-errors';
 import {
   chatHostCapabilities,
   type ChatHostHealth,
@@ -31,7 +49,6 @@ import {
   type SocketSubscriptionValue,
 } from '@moonbase/contracts/socket';
 import { decodeSocketSubscriptionValue } from '@moonbase/contracts/socket-schema';
-import { ApplicationError } from '@moonbase/contracts/workspace';
 import { requestUpgradeNonce } from './health.ts';
 import * as P from './protocol.ts';
 import { upgradeProtocols } from './upgrade-proof.ts';
@@ -51,43 +68,67 @@ type Generation = {
   alive: boolean;
 };
 
-const unavailable = (message = 'The daemon connection closed.') =>
-  new ApplicationError({ code: 'Unavailable', message });
-const lostReply = (mutation: boolean) =>
-  new ApplicationError({
-    code: mutation ? 'Uncertain' : 'Unavailable',
-    message: mutation
-      ? 'Chat reply was lost. Query the original request; do not invent another Send.'
-      : 'Chat reply was lost. Retry the read through the selected authority.',
-  });
-const generationChanged = (mutation: boolean) =>
-  new ApplicationError({
-    code: mutation ? 'Uncertain' : 'Unavailable',
-    message: mutation
-      ? 'Connection changed after a chat mutation was sent. Preserve its original request and reconcile through its authority.'
-      : 'Connection generation changed; query through the selected authority again.',
-  });
-const notServed = () =>
-  new ApplicationError({
-    code: 'Incompatible',
-    message: 'This host does not serve that operation.',
-  });
+/** The errors a daemon's procedures declare: the only failures a client takes from it. */
+const remoteErrors = [
+  ...new Set([...chatRpcErrors, ...localHostRpcErrors, ...providerSetupRpcErrors]),
+];
+/** What a service over the link fails with: a daemon's errors as presented, or the link's own. */
+export type RemoteError = InstanceType<(typeof remoteErrors)[number]>;
+const isOneOf = (errors: readonly (abstract new (...args: never) => unknown)[], error: unknown) => {
+  try {
+    return errors.some((member) => error instanceof member);
+  } catch {
+    // A value whose prototype can't be read is no error of ours.
+    return false;
+  }
+};
+const linkErrors = [
+  ...remoteErrors,
+  ConnectionError,
+  HostVerificationError,
+  CancelledError,
+  ApplicationError,
+];
+/** Whether a failure is the daemon's (as presented) or the link's own, rather than unknown. */
+const isLinkError = (error: unknown): error is DaemonLinkError => isOneOf(linkErrors, error);
+
+const unavailable = (reason: HostUnavailableError['reason'] = 'closed') =>
+  new HostUnavailableError({ reason });
+/** A request whose reply never came back: a mutation may have applied. */
+const lostReply = (mutation: boolean, operation: string) =>
+  mutation ? new UncertainError({ operation }) : unavailable('reply-lost');
+/** A request whose reply came on a generation that has since changed: a mutation may have applied. */
+const generationChanged = (mutation: boolean, operation: string) =>
+  mutation ? new UncertainError({ operation }) : unavailable('generation-changed');
+const notServed = () => new IncompatibleHostError({ reason: 'not-served' });
 /** Whether a failure came from the transport rather than the daemon. */
 const isTransport = (error: unknown) =>
   typeof error === 'object' &&
   error !== null &&
   (error as { _tag?: string })._tag === 'RpcClientError';
+/** A reply or update the client refused: its own refusal, else the daemon's reply was invalid. */
+const refusedReply = (error: unknown, reason: 'invalid-reply' | 'invalid-update') =>
+  error instanceof IncompatibleHostError || error instanceof InvalidChatRequestError
+    ? error
+    : new IncompatibleHostError({ reason });
 
 /**
- * A daemon's own error as the client shows it (D11): its code, with the client's fixed text
- * (for a daemon operation, the text of the reason it names), never the host's.
+ * A daemon's own error as the client shows it (D11): its tag and literal reason, decoded into the
+ * client's own classes, so its message is the client's fixed text and it carries no cause. Free
+ * text a host could fill (the operation an outcome names) is the client's own, and detail it
+ * could add (a target, a command status) is dropped.
  */
-export function presentRemoteError(error: unknown, kind: 'chat' | 'daemon', operation?: string) {
-  return new ApplicationError(
-    kind === 'daemon'
-      ? (({ code, message }) => ({ code, message }))(P.publicDaemonError(error))
-      : P.publicError(error, operation),
-  );
+export function presentRemoteError(error: RemoteError, operation: string): RemoteError {
+  switch (error._tag) {
+    case 'UncertainError':
+      return new UncertainError({ operation });
+    case 'UnauthorizedError':
+      return new UnauthorizedError({ operation });
+    case 'CredentialKeyError':
+      return new CredentialKeyError({ problem: error.problem });
+    default:
+      return error;
+  }
 }
 
 /**
@@ -136,33 +177,34 @@ export class DaemonRpcLink extends Context.Service<
   DaemonRpcLink,
   {
     readonly host: ChatHostTarget;
-    /** Sends one request; `check` refuses a reply against the daemon's signed health. */
-    call<A>(
+    /**
+     * Sends one request; `check` refuses a reply against the daemon's signed health. It fails with
+     * `E`, the errors its procedure declares, or the link's own.
+     */
+    call<A, E extends RemoteError>(
       operation: string,
       payload: object,
       options: {
-        kind: 'chat' | 'daemon';
         mutation: boolean;
         capability: string;
         check?: (output: A, health: ChatHostHealth) => void;
       },
-    ): Effect.Effect<A, ApplicationError>;
+    ): Effect.Effect<A, E | DaemonLinkError>;
     /**
      * Follows a watch: its updates applied to the value they describe, each value decoded and
      * checked. When its connection drops it subscribes again within a budget of
      * `streamLimits.reconnectMs` per outage and starts from a fresh value; it fails when the daemon
      * ends it, the connection generation changes or the budget runs out.
      */
-    watch<K extends SocketSubscriptionKind>(
+    watch<K extends SocketSubscriptionKind, E extends RemoteError>(
       operation: string,
       kind: K,
       payload: object,
       options: {
         capability: string;
         check?: (value: SocketSubscriptionValue<K>) => void;
-        kindOfErrors: 'chat' | 'daemon';
       },
-    ): Stream.Stream<WatchUpdate<SocketSubscriptionValue<K>>, ApplicationError>;
+    ): Stream.Stream<WatchUpdate<SocketSubscriptionValue<K>>, E | DaemonLinkError>;
   }
 >()('moonbase/DaemonRpcLink') {}
 
@@ -172,9 +214,7 @@ export const DaemonRpcLinkLive = (config: { host: ChatHostTarget }) =>
     Effect.gen(function* () {
       const connections = yield* ConnectionService;
       const host = config.host;
-      const lookUpEndpoint = connections
-        .endpoint({ host })
-        .pipe(Effect.mapError(toConnectionApplicationError));
+      const lookUpEndpoint = connections.endpoint({ host });
       const lock = yield* Semaphore.make(1);
       const clock = yield* DaemonLinkClock;
       const sleep = (ms: number) =>
@@ -191,7 +231,7 @@ export const DaemonRpcLinkLive = (config: { host: ChatHostTarget }) =>
       const open = (endpoint: VerifiedChatEndpoint) =>
         Effect.gen(function* () {
           const scope = yield* Scope.make();
-          const opened = Deferred.makeUnsafe<ChatHostHealth, ApplicationError>();
+          const opened = Deferred.makeUnsafe<ChatHostHealth, DaemonLinkError>();
           const generation = {
             connectionId: endpoint.connectionId,
             scope,
@@ -200,12 +240,7 @@ export const DaemonRpcLinkLive = (config: { host: ChatHostTarget }) =>
           const acquire = Effect.gen(function* () {
             const { health, upgradeNonce } = yield* requestUpgradeNonce(endpoint);
             if (!health.capabilities.includes(chatHostCapabilities.rpc))
-              return yield* Effect.fail(
-                new ApplicationError({
-                  code: 'Incompatible',
-                  message: 'This host does not run the Moonbase daemon. Update it.',
-                }),
-              );
+              return yield* Effect.fail(new IncompatibleHostError({ reason: 'not-daemon' }));
             const url = new URL(rpcPath, endpoint.origin.replace(/^http:/, 'ws:'));
             // The connection closes with the scope that acquired it.
             const ws = yield* Effect.acquireRelease(
@@ -223,11 +258,7 @@ export const DaemonRpcLinkLive = (config: { host: ChatHostTarget }) =>
             });
             ws.addEventListener(
               'close',
-              () =>
-                Deferred.doneUnsafe(
-                  opened,
-                  Exit.fail(unavailable('The daemon refused the connection.')),
-                ),
+              () => Deferred.doneUnsafe(opened, Exit.fail(unavailable('refused'))),
               { once: true },
             );
             return boundInbound(ws);
@@ -236,11 +267,7 @@ export const DaemonRpcLinkLive = (config: { host: ChatHostTarget }) =>
               Effect.sync(() =>
                 Deferred.doneUnsafe(
                   opened,
-                  Exit.fail(
-                    ApplicationError.is(error)
-                      ? error
-                      : toConnectionApplicationError(error as never),
-                  ),
+                  Exit.fail(isLinkError(error) ? error : unavailable('unreachable')),
                 ),
               ),
             ),
@@ -274,7 +301,7 @@ export const DaemonRpcLinkLive = (config: { host: ChatHostTarget }) =>
           const health = yield* Deferred.await(opened).pipe(
             Effect.timeoutOrElse({
               duration: socketLimits.connectMs,
-              orElse: () => Effect.fail(unavailable('The daemon could not be reached.')),
+              orElse: () => Effect.fail(unavailable('unreachable')),
             }),
             Effect.tapError(() => Scope.close(scope, Exit.void)),
           );
@@ -300,16 +327,15 @@ export const DaemonRpcLinkLive = (config: { host: ChatHostTarget }) =>
 
       return {
         host,
-        call: <A>(
+        call: <A, E extends RemoteError>(
           operation: string,
           payload: object,
           options: {
-            kind: 'chat' | 'daemon';
             mutation: boolean;
             capability: string;
             check?: (output: A, health: ChatHostHealth) => void;
           },
-        ): Effect.Effect<A, ApplicationError> =>
+        ): Effect.Effect<A, E | DaemonLinkError> =>
           Effect.gen(function* () {
             const endpoint = yield* lookUpEndpoint;
             const generation = yield* connect(endpoint);
@@ -321,59 +347,50 @@ export const DaemonRpcLinkLive = (config: { host: ChatHostTarget }) =>
                 (payload: object) => Effect.Effect<unknown, unknown>
               >
             )[operation]!;
+            const late = lostReply(options.mutation, operation);
             const exit = yield* Effect.exit(
               procedure(payload).pipe(
                 Effect.timeoutOrElse({
                   duration: P.requestDeadlineMs,
-                  orElse: () => Effect.fail(lostReply(options.mutation)),
+                  orElse: () => Effect.fail(late),
                 }),
               ),
             );
             if (Exit.isFailure(exit)) {
               if (Cause.hasInterruptsOnly(exit.cause)) return yield* Effect.interrupt;
               const error = Cause.squash(exit.cause);
-              if (
-                ApplicationError.is(error) &&
-                error.message === lostReply(options.mutation).message
-              )
-                return yield* Effect.fail(error);
-              if (isTransport(error) || !ApplicationError.is(error)) {
-                return yield* Effect.fail(lostReply(options.mutation));
-              }
+              if (error === late) return yield* Effect.fail(late);
+              // Only an error the daemon's procedures declare is its answer; anything else lost it.
+              if (isTransport(error) || !isOneOf(remoteErrors, error))
+                return yield* Effect.fail(lostReply(options.mutation, operation));
             }
             // A reply belongs to the generation it was sent on; one that changed since is stale.
             if (!(yield* isCurrent(endpoint)))
-              return yield* Effect.fail(generationChanged(options.mutation));
+              return yield* Effect.fail(generationChanged(options.mutation, operation));
             if (Exit.isFailure(exit))
               return yield* Effect.fail(
-                presentRemoteError(Cause.squash(exit.cause), options.kind, operation),
+                presentRemoteError(Cause.squash(exit.cause) as RemoteError, operation) as E,
               );
             const output = exit.value as A;
             yield* Effect.try({
               try: () => options.check?.(output, generation.health),
-              catch: (error) => {
-                if (options.mutation) return lostReply(true);
-                return ApplicationError.is(error)
-                  ? error
-                  : new ApplicationError({
-                      code: 'Incompatible',
-                      message: 'The daemon sent an invalid reply.',
-                    });
-              },
+              catch: (error) =>
+                options.mutation
+                  ? lostReply(true, operation)
+                  : (refusedReply(error, 'invalid-reply') as E | IncompatibleHostError),
             });
             return output;
           }),
-        watch: <K extends SocketSubscriptionKind>(
+        watch: <K extends SocketSubscriptionKind, E extends RemoteError>(
           operation: string,
           kind: K,
           payload: object,
           options: {
             capability: string;
             check?: (value: SocketSubscriptionValue<K>) => void;
-            kindOfErrors: 'chat' | 'daemon';
           },
         ) =>
-          Stream.callback<WatchUpdate<SocketSubscriptionValue<K>>, ApplicationError>(
+          Stream.callback<WatchUpdate<SocketSubscriptionValue<K>>, E | DaemonLinkError>(
             (queue) =>
               Effect.gen(function* () {
                 const first = yield* lookUpEndpoint;
@@ -385,7 +402,10 @@ export const DaemonRpcLinkLive = (config: { host: ChatHostTarget }) =>
                         same
                           ? Effect.void
                           : Effect.asVoid(
-                              Queue.failCause(queue, Cause.fail(generationChanged(false))),
+                              Queue.failCause(
+                                queue,
+                                Cause.fail(generationChanged(false, operation)),
+                              ),
                             ),
                       ),
                     ),
@@ -402,7 +422,7 @@ export const DaemonRpcLinkLive = (config: { host: ChatHostTarget }) =>
                     Effect.gen(function* () {
                       const endpoint = yield* lookUpEndpoint;
                       if (endpoint.connectionId !== first.connectionId)
-                        return yield* Effect.fail(generationChanged(false));
+                        return yield* Effect.fail(generationChanged(false, operation));
                       const generation = yield* connect(endpoint);
                       if (!generation.health.capabilities.includes(options.capability))
                         return yield* Effect.fail(notServed());
@@ -415,9 +435,9 @@ export const DaemonRpcLinkLive = (config: { host: ChatHostTarget }) =>
                       let state: SocketSubscriptionValue<K> | undefined;
                       const updates = procedure(payload).pipe(
                         Stream.mapError((error) =>
-                          isTransport(error)
+                          isTransport(error) || !isOneOf(remoteErrors, error)
                             ? error
-                            : presentRemoteError(error, options.kindOfErrors, operation),
+                            : presentRemoteError(error as RemoteError, operation),
                         ),
                       );
                       yield* Stream.runForEach(updates, (raw) =>
@@ -429,10 +449,7 @@ export const DaemonRpcLinkLive = (config: { host: ChatHostTarget }) =>
                             let value: SocketSubscriptionValue<K>;
                             if (update.kind === 'snapshot') value = update.value;
                             else if (state === undefined)
-                              throw new ApplicationError({
-                                code: 'Incompatible',
-                                message: 'A watch delta arrived before its first value.',
-                              });
+                              throw new IncompatibleHostError({ reason: 'invalid-update' });
                             else value = applySocketDelta(kind, state, update.delta);
                             value = decodeSocketSubscriptionValue(kind, value);
                             options.check?.(value);
@@ -443,23 +460,18 @@ export const DaemonRpcLinkLive = (config: { host: ChatHostTarget }) =>
                             delivered = true;
                           },
                           catch: (error) =>
-                            ApplicationError.is(error)
-                              ? error
-                              : new ApplicationError({
-                                  code: 'Incompatible',
-                                  message: 'The daemon sent an invalid update.',
-                                }),
+                            refusedReply(error, 'invalid-update') as E | IncompatibleHostError,
                         }),
                       );
                       // A watch the daemon ended by itself is unavailable.
-                      return yield* Effect.fail(unavailable('The watch ended.'));
+                      return yield* Effect.fail(unavailable('watch-ended'));
                     }),
                   );
                   if (Exit.isSuccess(ended)) return;
                   if (Cause.hasInterruptsOnly(ended.cause)) return yield* ended;
                   const error = Cause.squash(ended.cause);
                   if (!isTransport(error))
-                    return yield* Effect.fail(ApplicationError.is(error) ? error : unavailable());
+                    return yield* Effect.fail(isLinkError(error) ? error : unavailable());
                   if (firstAt !== undefined && clock.now() - firstAt >= P.streamLimits.renewMs)
                     failures = 0;
                   if (failures >= P.streamLimits.reconnectMs.length)
@@ -475,7 +487,7 @@ export const DaemonRpcLinkLive = (config: { host: ChatHostTarget }) =>
                         Queue.failCause(
                           queue,
                           Cause.fail(
-                            ((error) => (ApplicationError.is(error) ? error : unavailable()))(
+                            ((error) => (isLinkError(error) ? error : unavailable()))(
                               Cause.squash(cause),
                             ),
                           ),

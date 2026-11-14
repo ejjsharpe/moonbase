@@ -185,13 +185,14 @@ test('a connection runs a bounded number of requests at once, and a handler’s 
     (count) => count === rpcLimits.requests,
   );
   await assert.rejects(runtime.runPromise(chat.getChatHistory({ target, cursor: 'c' })), {
-    code: 'Unavailable',
+    _tag: 'HostUnavailableError',
+    reason: 'busy',
   });
   gate.resolve();
   await Promise.all(reads);
   await assert.rejects(runtime.runPromise(chat.findChatFiles({ target, query: 'a' })), (error) => {
     assert(!JSON.stringify(error).includes('private defect detail'));
-    return (error as { code?: string }).code === 'Unavailable';
+    return (error as { reason?: string }).reason === 'failed';
   });
   // A watch still runs on the same connection.
   const first = await runtime.runPromise(Stream.runHead(chat.watch({ target })));

@@ -2,7 +2,7 @@ import { Layer } from 'effect';
 import { RemoteDaemonLive, RemoteWorkspaceHostLive } from '@moonbase/daemon-protocol/remote';
 import type { ChatHostTarget } from '@moonbase/contracts/host';
 import type { ConnectionService } from '@moonbase/contracts/services';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { ProviderSetupUnavailableError } from '@moonbase/contracts/provider-errors';
 import { readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
 
 /**
@@ -25,10 +25,7 @@ export const DaemonServicesLive = <E, R>(options: {
       host: options.host,
       openUrl: async (url) => {
         if (readProviderSignInUrl(url) !== url)
-          throw new ApplicationError({
-            code: 'Unavailable',
-            message: 'The provider sign-in link is invalid.',
-          });
+          throw new ProviderSetupUnavailableError({ reason: 'invalid-link' });
         await options.openUrl(url);
       },
       sameMachine: options.sameMachine,

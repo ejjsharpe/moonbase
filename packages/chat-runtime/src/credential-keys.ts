@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { link, open, stat, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { CredentialKeyError } from '@moonbase/contracts/provider-errors';
 import { isPrivateTo } from '@moonbase/contracts/files';
 
 /** Holds the 256-bit key that encrypts provider credentials. */
@@ -18,8 +18,7 @@ export type CredentialKeySource = {
 
 const keyBytes = 32;
 const encodedKey = /^[A-Za-z0-9+/]{43}=$/;
-const unavailable = (message: string) => new ApplicationError({ code: 'Unavailable', message });
-const keyFileGuidance = 'Configure a private credential key file for this host instead.';
+const unavailable = (problem: CredentialKeyError['problem']) => new CredentialKeyError({ problem });
 
 function decodeKey(text: string): Uint8Array | undefined {
   return encodedKey.test(text) ? new Uint8Array(Buffer.from(text, 'base64')) : undefined;
@@ -30,8 +29,7 @@ function encodeKey(key: Uint8Array) {
 
 /** A key held only in this process, for tests. */
 export function createMemoryKeySource(initial?: Uint8Array): CredentialKeySource {
-  if (initial && initial.byteLength !== keyBytes)
-    throw unavailable('A credential key is 32 bytes.');
+  if (initial && initial.byteLength !== keyBytes) throw unavailable('key-size');
   let key = initial && new Uint8Array(initial);
   return {
     available: async () => true,
@@ -46,22 +44,13 @@ export function createMemoryKeySource(initial?: Uint8Array): CredentialKeySource
  * by the user with mode 0600 or stricter, not a symlink, in a directory nobody else can write to.
  */
 export function createKeyFileSource(path: string): CredentialKeySource {
-  const notPrivate = () =>
-    unavailable(
-      'The credential key file must be a regular file owned by you with mode 0600, not a symlink, in a folder only you can change.',
-    );
-  const notKey = () =>
-    unavailable(
-      'The credential key file is not a Moonbase key. Restore the original key file, or remove it and sign in to your providers again.',
-    );
+  const notPrivate = () => unavailable('file-not-private');
+  const notKey = () => unavailable('file-not-key');
   // The uid checks need another owner, which only root can arrange, so tests cover modes and
   // symlinks; a root-owned folder such as a system directory is accepted.
   const checkFolder = async () => {
     const info = await stat(dirname(path)).catch(() => undefined);
-    if (!info?.isDirectory())
-      throw unavailable(
-        "The credential key file's folder doesn't exist. Create it, private to you, or choose another path.",
-      );
+    if (!info?.isDirectory()) throw unavailable('file-folder-missing');
     if ((info.uid !== process.getuid?.() && info.uid !== 0) || info.mode & 0o022)
       throw notPrivate();
   };
@@ -74,7 +63,7 @@ export function createKeyFileSource(path: string): CredentialKeySource {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
       if ((error as NodeJS.ErrnoException).code === 'ELOOP') throw notPrivate();
-      throw unavailable('The credential key file could not be read.');
+      throw unavailable('file-unreadable');
     }
     try {
       const info = await file.stat();
@@ -107,13 +96,13 @@ export function createKeyFileSource(path: string): CredentialKeySource {
           if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
         });
       } catch (error) {
-        if (ApplicationError.is(error)) throw error;
-        throw unavailable('The credential key file could not be created.');
+        if (error instanceof CredentialKeyError) throw error;
+        throw unavailable('file-not-created');
       } finally {
         await unlink(temporary).catch(() => {});
       }
       const stored = await load();
-      if (!stored) throw unavailable('The credential key file could not be created.');
+      if (!stored) throw unavailable('file-not-created');
       return stored;
     },
   };
@@ -146,25 +135,21 @@ const isQuotable = (value: string) =>
  */
 export function createKeychainKeySource(options: KeychainKeySourceOptions): CredentialKeySource {
   const { storeId, keychain, spawn = spawnProcess as SpawnSecurity, timeoutMs = 120_000 } = options;
-  if (!/^[A-Za-z0-9._:-]{1,256}$/.test(storeId))
-    throw unavailable('The credential store id is invalid.');
+  if (!/^[A-Za-z0-9._:-]{1,256}$/.test(storeId)) throw unavailable('store-id');
   if (keychain !== undefined && (!isAbsolute(keychain) || !isQuotable(keychain)))
-    throw unavailable(
-      'The keychain path must be absolute and contain no quotes or control characters.',
-    );
+    throw unavailable('keychain-path');
   const suffix = keychain === undefined ? '' : ` "${keychain}"`;
   const item = `-s "${keychainService}" -a "${storeId}"`;
   // `security -i` reads lines of under 4096 bytes; the add command, with a key, is the longest.
   if (Buffer.byteLength(`add-generic-password ${item} -w "${'A'.repeat(44)}"${suffix}`) >= 4096)
-    throw unavailable('The keychain path is too long.');
+    throw unavailable('keychain-path-length');
   const failed = (status: number | null) =>
     status === 36
-      ? unavailable(
-          "The macOS keychain is locked and can't be unlocked without a desktop session, so provider credentials can't be read or saved. Unlock it, or configure a private credential key file for this host instead.",
-        )
-      : unavailable(
-          `The macOS keychain couldn't read or save the credential key (security ${status === null ? 'stopped' : `exited with status ${status}`}). ${keyFileGuidance}`,
-        );
+      ? unavailable('keychain-locked')
+      : new CredentialKeyError({
+          problem: 'keychain-failed',
+          ...(status === null ? {} : { status }),
+        });
   const run = (line: string) =>
     new Promise<{ status: number | null; output: string }>((resolve, reject) => {
       if (Buffer.byteLength(line) >= 4096) return reject(failed(null));
@@ -210,8 +195,7 @@ export function createKeychainKeySource(options: KeychainKeySourceOptions): Cred
       () => false,
     ));
   const requireAvailable = async () => {
-    if (!(await available()))
-      throw unavailable(`The macOS keychain isn't available on this system. ${keyFileGuidance}`);
+    if (!(await available())) throw unavailable('keychain-missing');
   };
   const load = async () => {
     await requireAvailable();
@@ -219,10 +203,7 @@ export function createKeychainKeySource(options: KeychainKeySourceOptions): Cred
     if (status === 44) return undefined;
     if (status !== 0) throw failed(status);
     const key = decodeKey(output.replace(/\n$/, ''));
-    if (!key)
-      throw unavailable(
-        'The keychain item for the credential key is not a Moonbase key. Restore the original item, or delete it in Keychain Access and sign in to your providers again.',
-      );
+    if (!key) throw unavailable('keychain-not-key');
     return key;
   };
   return {

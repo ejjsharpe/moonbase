@@ -1,8 +1,12 @@
 import { constants } from 'node:fs';
 import { lstat, open, readdir, realpath, rename, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { ApplicationError } from '@moonbase/contracts/errors';
-import { daemonErrorReasons, type FolderApprovals } from '@moonbase/contracts/daemon';
+import type { FolderApprovals } from '@moonbase/contracts/daemon';
+import {
+  FolderMissingError,
+  FolderRefusedError,
+  InvalidRootsError,
+} from '@moonbase/contracts/folder-errors';
 import { maximumHostFolders } from '@moonbase/contracts/daemon-schema';
 import { isPrivateTo } from '@moonbase/contracts/files';
 
@@ -68,14 +72,14 @@ export function createFolderApprovals(file: string): FolderApprovals {
   };
   return {
     has,
-    refusal: 'folder-not-approved',
+    refusal: 'not-approved',
     /**
      * Approves a folder the native picker or main returned. `recent: false` approves it without
      * offering it again, as for a chat's new worktree.
      */
     async approve(path: string, { recent = true }: { recent?: boolean } = {}) {
       const { cwd, info } = await identity(path);
-      if (!info.isDirectory()) throw new ApplicationError(daemonErrorReasons['folder-missing']);
+      if (!info.isDirectory()) throw new FolderMissingError();
       const map = await load();
       map.set(cwd, {
         path: cwd,
@@ -153,10 +157,7 @@ export async function createRootFolders(
     roots.map(async (root) => {
       const info = await lstat(root).catch(() => null);
       if (!info?.isDirectory() || (await realpath(root).catch(() => '')) !== root)
-        throw new ApplicationError({
-          code: 'InvalidInput',
-          message: 'Each approved root must be an existing folder named by its real path.',
-        });
+        throw new InvalidRootsError({ problem: 'not-real-folder' });
       return { root, dev: info.dev, ino: info.ino };
     }),
   );
@@ -168,10 +169,7 @@ export async function createRootFolders(
       held.some((path) => isInside(folded(root), path) || isInside(path, folded(root))),
     )
   )
-    throw new ApplicationError({
-      code: 'InvalidInput',
-      message: 'An approved root must not hold the daemon’s data or credential key.',
-    });
+    throw new InvalidRootsError({ problem: 'holds-reserved' });
   /** Whether a root is still the directory it was at startup. */
   const unchanged = async ({ root, dev, ino }: (typeof identities)[number]) => {
     const info = await lstat(root).catch(() => null);
@@ -186,13 +184,12 @@ export async function createRootFolders(
   };
   return {
     has,
-    refusal: 'folder-outside-roots',
+    refusal: 'outside-roots',
     async approve(path) {
       const real = await realpath(path).catch(() => {
-        throw new ApplicationError(daemonErrorReasons['folder-missing']);
+        throw new FolderMissingError();
       });
-      if (!(await has(real)))
-        throw new ApplicationError(daemonErrorReasons['folder-outside-roots']);
+      if (!(await has(real))) throw new FolderRefusedError({ refusal: 'outside-roots' });
       return real;
     },
     async touch() {},

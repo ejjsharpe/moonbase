@@ -47,7 +47,7 @@ export function makeConnectionClient(
   };
 }
 export function makeChatClient(
-  runtime: ManagedRuntime.ManagedRuntime<ChatService, ApplicationError>,
+  runtime: ManagedRuntime.ManagedRuntime<ChatService, unknown>,
 ): ChatClient {
   return {
     command: (operation, input, options) =>
@@ -60,7 +60,7 @@ export function makeChatClient(
 }
 
 export function makeProviderSetupClient(
-  runtime: ManagedRuntime.ManagedRuntime<ProviderSetupService, ApplicationError>,
+  runtime: ManagedRuntime.ManagedRuntime<ProviderSetupService, unknown>,
   ownerId: string,
 ): ProviderSetupClient {
   return {

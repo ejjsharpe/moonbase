@@ -1,7 +1,8 @@
 import * as Schema from 'effect/Schema';
 import { voidResult } from './schema.ts';
 import { Rpc, RpcGroup } from 'effect/rpc';
-import { ApplicationError } from './errors.ts';
+import { chatErrors } from './chat-errors.ts';
+import { hostErrors } from './host-errors.ts';
 import { ChatHostTargetSchema } from './host-schema.ts';
 import {
   ChatSessionSchema,
@@ -13,8 +14,12 @@ import {
 import { ChatDeltaSchema, ChatListDeltaSchema, ChatListStateSchema } from './socket-schema.ts';
 import { RpcAdmission } from './rpc-admission.ts';
 
-/** What every chat procedure fails with on the wire. */
-export const ChatRpcErrorSchema = ApplicationError;
+/**
+ * What every chat procedure fails with on the wire: the chat service's errors and the host's
+ * (another host's request, a refused admission, an operation it does not serve).
+ */
+export const chatRpcErrors = [...new Set([...chatErrors, ...hostErrors])];
+export const ChatRpcErrorSchema = Schema.Union(chatRpcErrors);
 /** One request: the host it is for, named at the top level, and the operation's input. */
 const request = <S extends Schema.Top>(input: S) => ({ host: ChatHostTargetSchema, input });
 /** A reply's schema on the wire: no reply is `Schema.Void`, which encodes as JSON. */

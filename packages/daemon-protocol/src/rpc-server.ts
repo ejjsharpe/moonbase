@@ -4,28 +4,26 @@ import { ChatRpcs } from '@moonbase/contracts/chat-rpc';
 import { LocalHostRpcs, ProviderSetupRpcs } from '@moonbase/contracts/daemon-rpc';
 import { RpcAdmission } from '@moonbase/contracts/rpc-admission';
 import { rpcLimits } from '@moonbase/contracts/rpc-upgrade';
-import { ApplicationError } from '@moonbase/contracts/workspace';
+import { HostUnavailableError } from '@moonbase/contracts/host-errors';
 import { makeChatHandlers, makeDaemonHandlers, type RpcServices } from './rpc-handlers.ts';
 import { makeRpcConnections, rpcSocketServerLayer } from './rpc-connections.ts';
 
 export type RpcServerOptions = {
   /**
    * Admits one request, returning what ends it once it settles (a mutation's outlives its
-   * connection), or throws to refuse it.
+   * connection), or throws a `HostUnavailableError` to refuse it.
    */
   admit(): () => void;
   /** How long an RPC connection may send nothing; `rpcLimits.idleMs` unless a test shortens it. */
   idleMs?: number;
 };
-const busy = () =>
-  new ApplicationError({ code: 'Unavailable', message: 'Too many requests are in flight; retry.' });
-const failed = () =>
-  new ApplicationError({ code: 'Unavailable', message: 'Chat host is unavailable.' });
+const busy = () => new HostUnavailableError({ reason: 'busy' });
+const failed = () => new HostUnavailableError({ reason: 'failed' });
 
 /**
  * The middleware every procedure runs under: the daemon admits the request (refused once it is
  * stopping), a connection keeps at most `rpcLimits.requests` requests and `rpcLimits.watches`
- * watches running, and a handler's defect is answered `Unavailable` with no diagnostics.
+ * watches running, and a handler's defect is answered as a failed host with no diagnostics.
  */
 function makeAdmission(options: RpcServerOptions) {
   const running = new Map<number, { requests: number; watches: number }>();
@@ -38,7 +36,7 @@ function makeAdmission(options: RpcServerOptions) {
       try {
         release = options.admit();
       } catch (error) {
-        return Effect.fail(ApplicationError.is(error) ? error : failed());
+        return Effect.fail(error instanceof HostUnavailableError ? error : failed());
       }
       counts[kind]++;
       running.set(client.id, counts);
