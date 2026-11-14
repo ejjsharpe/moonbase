@@ -1,15 +1,16 @@
 // Shared IPC controls for controlled hosts; provider/tool behavior stays in each behaviour module.
-import type { ChatClient } from '@moonbase/contracts/chat';
+import { Effect, Stream } from 'effect';
+import type { ChatServiceShape } from '@moonbase/contracts/services';
 
 type ControlMessage = { type?: string; id?: string; operation?: string };
 
 /**
- * Wraps the host's chat client to count, record and hold its requests, and answers the test's
+ * Wraps the host's chat service to count, record and hold its requests, and answers the test's
  * stats, hold and release messages over IPC. `ended` settles once the test asks it to shut down
  * or goes away.
  */
 export function hostControl(
-  client: ChatClient,
+  service: ChatServiceShape,
   stats: () => Record<string, unknown>,
   release?: () => void,
 ) {
@@ -22,40 +23,41 @@ export function hostControl(
   let watches = 0,
     publications = 0,
     activeWatches = 0;
-  const bound: ChatClient = {
-    watchChatList: client.watchChatList,
-    command: async (...args) => {
-      commands.push(args[0]);
-      const result = await client.command(...args);
-      if (['createChat', 'sendChat', 'stopChat'].includes(args[0]))
-        mutations.push({
-          operation: args[0],
-          input: structuredClone(args[1]),
-          result: structuredClone(result),
-        });
-      if (args[0] === replyOperation) {
-        heldReplies.push(args[0]);
-        await replyGate;
-      }
-      return result;
-    },
-    watch: (input, receive, onError) => {
-      watches++;
-      activeWatches++;
-      const close = client.watch(
-        input,
-        (value) => {
-          publications++;
-          receive(value);
-        },
-        onError,
-      );
-      return async () => {
-        await close();
-        activeWatches--;
-      };
-    },
-  };
+  const bound = { ...service } as ChatServiceShape;
+  for (const operation of Object.keys(service) as (keyof ChatServiceShape)[]) {
+    if (operation === 'watch' || operation === 'watchChatList') continue;
+    const run = service[operation] as unknown as (
+      input: unknown,
+    ) => Effect.Effect<unknown, unknown>;
+    (bound as unknown as Record<string, unknown>)[operation] = (input: unknown) =>
+      Effect.gen(function* () {
+        commands.push(operation);
+        const result = yield* run(input);
+        if (['createChat', 'sendChat', 'stopChat'].includes(operation))
+          mutations.push({
+            operation,
+            input: structuredClone(input),
+            result: structuredClone(result),
+          });
+        if (operation === replyOperation) {
+          heldReplies.push(operation);
+          const gate = replyGate;
+          yield* Effect.promise(() => gate);
+        }
+        return result;
+      });
+  }
+  bound.watch = (input) =>
+    Stream.unwrap(
+      Effect.sync(() => {
+        watches++;
+        activeWatches++;
+        return service.watch(input).pipe(
+          Stream.tap(() => Effect.sync(() => void publications++)),
+          Stream.ensuring(Effect.sync(() => void activeWatches--)),
+        );
+      }),
+    );
   let end!: () => void;
   const ended = new Promise<void>((r) => (end = r));
   const control = (message: ControlMessage) => {

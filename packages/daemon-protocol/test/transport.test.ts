@@ -1,6 +1,6 @@
 import type { ConversationId, Harness as HarnessType } from '@earendil-works/pi-durable';
 import type { ChatInput, ChatStopTarget } from '@moonbase/contracts/chat';
-import { daemonErrorReasons, type DaemonClient } from '@moonbase/contracts/daemon';
+import { daemonErrorReasons } from '@moonbase/contracts/daemon';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
@@ -13,26 +13,27 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient, makeProviderSetupClient } from '@moonbase/application/runtime/clients';
 import {
+  ChatService,
   ConnectionService,
   LocalHostService,
   ProviderSetupService,
+  type ChatServiceShape,
   type VerifiedChatEndpoint,
 } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import type { ChatClient } from '@moonbase/contracts/chat';
-import { chatHostCapabilities } from '@moonbase/contracts/host';
 import { LocalHostLive, LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { createFolderApprovals } from '../src/folders.ts';
 import { ProviderSetupLive, localProviderIds } from '@moonbase/chat-runtime/providers';
-import { RemoteChatLive, RemoteLocalHostLive, RemoteProviderSetupLive } from '../src/remote.ts';
-import { makeDaemonClient, serveChat } from '../src/server.ts';
-import { connectDaemonSocket } from '../src/socket-client.ts';
+import { DaemonRpcLinkLive, RemoteChatLive, RemoteDaemonLive } from '../src/remote.ts';
+import { localDaemonCapabilities, serveChat } from '../src/server.ts';
+import { hooked, hookedProviders, refusingDaemon } from './served-services.ts';
+import { chatProtocolVersion } from '@moonbase/contracts/host';
 
 const host = { hostId: 'transport-host', storeId: 'transport-store' },
   session = { host, actorId: 'personal' },
   health = {
     ...host,
-    protocol: 2 as const,
+    protocol: chatProtocolVersion as typeof chatProtocolVersion,
     version: '0.1.0' as const,
     capabilities: ['chat-v0', 'daemon-local-v1'],
   };
@@ -56,33 +57,24 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     }),
   );
   const settings = { cwd: dir, model: { provider: faux.provider.id, modelId: faux.getModel().id } };
-  // Chat is the subject here; the host serves no other daemon operation.
-  const daemon: DaemonClient = {
-    command: async () => {
-      throw new ApplicationError({ code: 'Unavailable', message: 'Not served here.' });
-    },
-  };
   const client = makeChatClient(runtime),
     calls: string[] = [];
   let intercept: ((operation: string, signal?: AbortSignal) => Promise<void>) | undefined,
     afterDispatch: ((operation: string) => Promise<void>) | undefined;
-  const bound: ChatClient = {
-    command: async (operation, input, options) => {
-      calls.push(operation);
-      await intercept?.(operation, options?.signal);
-      const value = await client.command(operation, input, options);
-      await afterDispatch?.(operation);
-      return value;
-    },
-    watch: client.watch,
-    watchChatList: client.watchChatList,
-  };
+  // Chat is the subject here; the host refuses every other daemon operation.
+  const bound = hooked(await runtime.runPromise(ChatService), {
+    calls,
+    before: (operation, signal) => intercept?.(operation, signal) ?? Promise.resolve(),
+    after: (operation) => afterDispatch?.(operation) ?? Promise.resolve(),
+  });
+  const serve = () =>
+    runtime.runPromise(
+      serveChat({ host, token, port: 0 }, { chat: bound, daemon: refusingDaemon() }).pipe(
+        Effect.provideService(Scope.Scope, scope),
+      ),
+    );
   let scope = Effect.runSync(Scope.make());
-  let server = await runtime.runPromise(
-    serveChat({ host, token, port: 0 }, bound, daemon, [chatHostCapabilities.local]).pipe(
-      Effect.provideService(Scope.Scope, scope),
-    ),
-  );
+  let server = await serve();
   let endpoint: VerifiedChatEndpoint = {
     origin: server.origin,
     token,
@@ -105,7 +97,9 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
           : unavailable(),
       ),
   });
-  const remoteRuntime = ManagedRuntime.make(RemoteChatLive.pipe(Layer.provide(connections))),
+  const remoteRuntime = ManagedRuntime.make(
+      RemoteChatLive.pipe(Layer.provide(DaemonRpcLinkLive({ host })), Layer.provide(connections)),
+    ),
     remote = makeChatClient(remoteRuntime);
   t.after(async () => {
     await remoteRuntime.dispose();
@@ -146,11 +140,7 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     async restartServer() {
       await runtime.runPromise(Scope.close(scope, Exit.void));
       scope = Effect.runSync(Scope.make());
-      server = await runtime.runPromise(
-        serveChat({ host, token, port: 0 }, bound, daemon, [chatHostCapabilities.local]).pipe(
-          Effect.provideService(Scope.Scope, scope),
-        ),
-      );
+      server = await serve();
       endpoint = { ...endpoint, origin: server.origin, connectionId: 'two' };
     },
   };
@@ -168,18 +158,15 @@ const waitForModelCalls = async (f: { faux: { state: { callCount: number } } }, 
 test('a host refuses to serve when its public configuration repeats its private key', async () => {
   const token = nonce(),
     scope = Effect.runSync(Scope.make());
-  const client: ChatClient = {
-    command: async (operation) => {
-      if (operation !== 'getChatHost') throw Error('Unexpected ' + operation);
-      return { host, actorId: token, mode: 'local' } as never;
-    },
-    watch: () => async () => {},
-    watchChatList: () => async () => {},
-  };
+  const chat = {
+    getChatHost: () => Effect.succeed({ host, actorId: token, mode: 'local' as const }),
+  } as unknown as ChatServiceShape;
   try {
     await assert.rejects(
       Effect.runPromise(
-        serveChat({ host, token, port: 0 }, client).pipe(Effect.provideService(Scope.Scope, scope)),
+        serveChat({ host, token, port: 0 }, { chat }).pipe(
+          Effect.provideService(Scope.Scope, scope),
+        ),
       ),
       (error: unknown) =>
         ApplicationError.is(error) &&
@@ -219,35 +206,21 @@ test('production remote/server route shared commands and immutable retries witho
   await assert.rejects(f.remote.command('getChat', { target }), { code: 'Unavailable' });
   assert.equal(f.calls.length, count);
 });
-test('signed malformed-reply errors consistently report Incompatible without rejected values', async (t) => {
+test('a handler failure reaches the client as a fixed failure that carries none of its text', async (t) => {
   const f = await setup(t);
-  const { conversation } = await f.client.command('createChat', {
-    session,
-    requestId: 'malformed-reply',
-    title: 'Saved chat',
-    settings: f.settings,
-  });
-  const command = f.client.command.bind(f.client);
-  let reply: unknown;
-  t.mock.method(f.client, 'command', async (...args: Parameters<ChatClient['command']>) =>
-    args[0] === 'listChats' ? (reply as never) : command(...args),
-  );
   const secret = 'synthetic-private-value-not-for-errors';
-  for (const changed of [
-    { title: 1 },
-    { target: { ...conversation.target, actorId: secret + ' invalid' } },
-    { cwd: { secret } },
-    { createdAt: 'invalid date' },
-  ] as const) {
-    reply = { conversations: [{ ...conversation, ...changed }], nextCursor: null };
-    await assert.rejects(f.remote.command('listChats', { session }), (error: unknown) => {
-      assert(error instanceof ApplicationError);
-      assert.equal(error.code, 'Incompatible');
-      assert(!String(error).includes(secret));
-      assert(!JSON.stringify(error).includes(secret));
-      return true;
-    });
-  }
+  f.intercept = async (operation) => {
+    if (operation === 'listChats') throw new Error(secret);
+  };
+  await assert.rejects(f.remote.command('listChats', { session }), (error: unknown) => {
+    assert(ApplicationError.is(error));
+    assert.equal(error.code, 'Unavailable');
+    assert(!JSON.stringify(error).includes(secret));
+    return true;
+  });
+  f.intercept = undefined;
+  // The defect ended only its request: the connection still serves.
+  assert.deepEqual((await f.remote.command('listChats', { session })).conversations, []);
 });
 test('remote drops successful and error responses from a stale connection generation', async (t) => {
   const f = await setup(t);
@@ -741,30 +714,40 @@ async function setupLocal(t: { after: (fn: () => Promise<void>) => void }) {
       ProviderSetupLive({ models, deviceId: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa' }),
     ),
   );
-  const client = makeChatClient(runtime),
-    daemonClient = makeDaemonClient(runtime),
-    dispatched: string[] = [];
+  const dispatched: string[] = [];
   let afterDispatch: ((operation: string) => Promise<void>) | undefined;
-  const daemon: DaemonClient = {
-    command: async (operation, input, options) => {
-      dispatched.push(operation);
-      const value = await daemonClient.command(operation, input, options);
-      await afterDispatch?.(operation);
-      return value;
-    },
+  const hooks = {
+    calls: dispatched,
+    after: (operation: string) => afterDispatch?.(operation) ?? Promise.resolve(),
   };
+  const served = await runtime.runPromise(
+    Effect.all({ chat: ChatService, localHost: LocalHostService, providers: ProviderSetupService }),
+  );
   const scope = Effect.runSync(Scope.make());
   const server = await runtime.runPromise(
-    serveChat({ host: localHost, token, port: 0 }, client, daemon).pipe(
-      Effect.provideService(Scope.Scope, scope),
-    ),
+    serveChat(
+      { host: localHost, token, port: 0 },
+      {
+        chat: served.chat,
+        daemon: {
+          localHost: hooked(served.localHost, hooks),
+          providers: hookedProviders(served.providers, hooks),
+          capabilities: localDaemonCapabilities,
+        },
+      },
+    ).pipe(Effect.provideService(Scope.Scope, scope)),
   );
   let endpoint: VerifiedChatEndpoint = {
     origin: server.origin,
     token,
     expected: localHost,
     connectionId: 'local-one',
-    health: { ...localHost, protocol: 2, version: '0.1.0', capabilities: daemonCapabilities },
+    health: {
+      ...localHost,
+      protocol: chatProtocolVersion,
+      version: '0.1.0',
+      capabilities: daemonCapabilities,
+    },
   };
   const unavailable = () =>
     Effect.fail(new ApplicationError({ code: 'Unavailable', message: 'Disconnected' }));
@@ -777,17 +760,13 @@ async function setupLocal(t: { after: (fn: () => Promise<void>) => void }) {
   });
   const opened: string[] = [];
   const remoteRuntime = ManagedRuntime.make(
-    Layer.mergeAll(
-      RemoteChatLive,
-      RemoteLocalHostLive,
-      RemoteProviderSetupLive({
-        host: localHost,
-        sameMachine: true,
-        openUrl: async (url) => {
-          opened.push(url);
-        },
-      }),
-    ).pipe(Layer.provide(connections)),
+    RemoteDaemonLive({
+      host: localHost,
+      sameMachine: true,
+      openUrl: async (url) => {
+        opened.push(url);
+      },
+    }).pipe(Layer.provide(connections)),
   );
   t.after(async () => {
     await remoteRuntime.dispose();
@@ -985,14 +964,8 @@ test('a folder approval is re-checked by identity on use; a replaced folder need
 test('a refused daemon mutation may be sent again; one that may have applied is never rerun', async (t) => {
   const f = await setupLocal(t);
   const folder = join(f.dir, 'later');
-  const socket = await connectDaemonSocket({
-    origin: f.origin,
-    token: f.token,
-    expected: localHost,
-  });
-  t.after(() => socket.close());
   const approve = (requestId: string) =>
-    socket.request('approveFolder', { host: localHost, requestId, path: folder }).then(
+    f.host(f.folders.approveFolder({ host: localHost, requestId, path: folder })).then(
       (value) => ({ value }),
       (error: ApplicationError) => ({ code: error.code }),
     );
@@ -1109,17 +1082,10 @@ test('a client refuses a chat host that does not advertise local mode, and its l
     await runtime.dispose();
     await rm(dir, { recursive: true, force: true });
   });
-  const client = makeChatClient(runtime),
-    calls: string[] = [];
-  const counted: ChatClient = {
-    ...client,
-    command: (operation, input, options) => {
-      calls.push(operation);
-      return client.command(operation, input, options);
-    },
-  };
+  const calls: string[] = [];
+  const counted = hooked(await runtime.runPromise(ChatService), { calls });
   const server = await runtime.runPromise(
-    serveChat({ host: localHost, token: f.token, port: 0 }, counted).pipe(
+    serveChat({ host: localHost, token: f.token, port: 0 }, { chat: counted }).pipe(
       Effect.provideService(Scope.Scope, scope),
     ),
   );
@@ -1128,14 +1094,15 @@ test('a client refuses a chat host that does not advertise local mode, and its l
     token: f.token,
     expected: localHost,
     connectionId: 'local-only',
-    health: { ...localHost, protocol: 2, version: '0.1.0', capabilities: ['chat-v0'] },
+    health: {
+      ...localHost,
+      protocol: chatProtocolVersion,
+      version: '0.1.0',
+      capabilities: ['chat-v0'],
+    },
   };
   const unadvertised = ManagedRuntime.make(
-    Layer.mergeAll(
-      RemoteChatLive,
-      RemoteLocalHostLive,
-      RemoteProviderSetupLive({ host: localHost, sameMachine: false, openUrl: async () => {} }),
-    ).pipe(
+    RemoteDaemonLive({ host: localHost, sameMachine: false, openUrl: async () => {} }).pipe(
       Layer.provide(
         Layer.succeed(ConnectionService, {
           getConnection: () => Effect.die('unused'),

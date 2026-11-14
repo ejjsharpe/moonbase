@@ -1,9 +1,4 @@
 import { Context, Layer, Scope, type ManagedRuntime } from 'effect';
-import {
-  RemoteChatLive,
-  RemoteLocalHostLive,
-  RemoteProviderSetupLive,
-} from '@moonbase/daemon-protocol/remote';
 import { SshLive } from '@moonbase/ssh';
 import { checkHostHealth } from '@moonbase/daemon-protocol/health';
 import {
@@ -12,8 +7,8 @@ import {
   LocalHostService,
   ProviderSetupService,
 } from '@moonbase/contracts/services';
-import { ApplicationError } from '@moonbase/contracts/errors';
-import { readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
+import type { ApplicationError } from '@moonbase/contracts/errors';
+import { DaemonServicesLive } from '../daemon/daemon-services.ts';
 import { bindChatClient, bindConnectionClient } from '@moonbase/application/runtime/clients';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import type { ChatConfiguration } from './config.ts';
@@ -33,25 +28,15 @@ export async function acquireRemoteChat(
   const services = await runApplicationEffect(
     runtime,
     Layer.buildWithScope(
-      Layer.mergeAll(
-        RemoteChatLive,
-        RemoteLocalHostLive,
-        RemoteProviderSetupLive({
-          host: configuration.context.host,
-          // The host checked the link and the client did again; main opens only such a link.
-          openUrl: async (url) => {
-            if (readProviderSignInUrl(url) !== url)
-              throw new ApplicationError({
-                code: 'Unavailable',
-                message: 'The provider sign-in link is invalid.',
-              });
-            await openUrl(url);
-          },
-          // The browser is on this Mac, not the host, so ChatGPT's callback can't reach the host:
-          // the user pastes the final redirect URL.
-          sameMachine: false,
-        }),
-      ).pipe(Layer.provideMerge(SshLive(configuration.ssh, { verify: checkHostHealth }))),
+      DaemonServicesLive({
+        host: configuration.context.host,
+        connection: SshLive(configuration.ssh, { verify: checkHostHealth }),
+        openUrl,
+        // The browser is on this Mac, not the host, so ChatGPT's callback can't reach the host:
+        // the user pastes the final redirect URL.
+        sameMachine: false,
+        workspace: false,
+      }),
       Scope.forkUnsafe(runtime.scope, 'parallel'),
     ),
   );

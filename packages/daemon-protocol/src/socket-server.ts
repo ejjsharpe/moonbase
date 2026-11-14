@@ -1,8 +1,4 @@
 import { getJsonKey } from '@moonbase/contracts/common';
-import type { ChatClient } from '@moonbase/contracts/chat';
-import { isChatCommand } from '@moonbase/contracts/chat-schema';
-import type { DaemonClient } from '@moonbase/contracts/daemon';
-import { daemonCommandCapabilities } from '@moonbase/contracts/daemon-schema';
 import {
   chatHostCapabilities,
   chatProtocolVersion,
@@ -25,7 +21,7 @@ import {
 } from '@moonbase/contracts/socket-schema';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import * as P from './protocol.ts';
-import { isCancellableChatRead, isSameChatHost } from '@moonbase/contracts/chat-validation';
+import { isSameChatHost } from '@moonbase/contracts/chat-validation';
 import { fail } from '@moonbase/contracts/errors';
 import {
   chunkPayload,
@@ -41,11 +37,10 @@ import {
   type SocketKeys,
 } from './socket-protocol.ts';
 import { projectSocketDelta } from './socket-deltas.ts';
-import { followChanges } from '@moonbase/effect/changes';
 import type { BunServer, BunServeOptions, BunWebSocket } from './bun-server.ts';
 
 /** What Bun keeps with each upgraded connection. */
-export type SocketData = { session?: Session };
+export type SocketData = { kind: 'legacy'; session?: Session };
 /** Close codes the daemon sends: going away on shutdown, policy violation for any refusal. */
 const closeCodes = { goingAway: 1001, policy: 1008 };
 /** Before its hello, a connection may send only a message this small. */
@@ -67,9 +62,6 @@ export type SocketServerContext = {
   token: string;
   host: ChatHostTarget;
   health: ChatHostHealth;
-  client: ChatClient;
-  /** A daemon's operations; without them, provider setup subscriptions are refused. */
-  daemon?: DaemonClient;
   /** The file host; without it, workspace subscriptions are refused. */
   workspace?: WorkspaceHostClient;
   sources: SocketSources;
@@ -226,7 +218,12 @@ export function createSocketServer(context: SocketServerContext) {
     )
       return refuse(400);
     if (sessions.size >= maximumConnections) return refuse(503);
-    if (!server.upgrade(request, { data: {}, headers: { 'Cache-Control': 'no-store' } }))
+    if (
+      !server.upgrade(request, {
+        data: { kind: 'legacy' },
+        headers: { 'Cache-Control': 'no-store' },
+      })
+    )
       return refuse(400);
     return undefined;
   }
@@ -308,10 +305,7 @@ type Registry = {
  * Whether a request's signal stops it, so a cancel ends it at once: workspace and cancellable chat
  * reads. Mutations and other reads run to completion and are answered.
  */
-const isCancellable = (operation: string) =>
-  isHostCommand(operation)
-    ? !isHostMutation(operation)
-    : isChatCommand(operation) && isCancellableChatRead(operation);
+const isCancellable = (operation: string) => isHostCommand(operation) && !isHostMutation(operation);
 /** A running request: what cancels it, and the chunked input it holds of `chunkedBytes`. */
 type Running = { controller: AbortController; cancellable: boolean; charged: number };
 /** An encoded workspace reply waiting to be written, and its next chunk. */
@@ -683,54 +677,17 @@ class Session {
       void this.pump();
     };
     try {
-      if (feed.kind === 'chat') {
-        feed.close = this.context.client.watch(
-          { target: feed.target as SocketSubscriptionTarget<'chat'> },
-          receive,
-          end,
-        );
-        return;
-      }
-      if (feed.kind === 'chatList') {
-        feed.close = this.context.client.watchChatList(
-          { session: feed.target as SocketSubscriptionTarget<'chatList'> },
-          ({ list, changed, dropped }) => receive({ list, changed, dropped }),
-          end,
-        );
-        return;
-      }
-      if (feed.kind === 'workspace') {
-        const workspace = this.context.workspace;
-        if (
-          !workspace ||
-          !this.context.health.capabilities.includes(chatHostCapabilities.workspace)
-        )
-          return fail('Incompatible', 'This host does not serve the workspace.');
-        feed.close = workspace.watch(
-          feed.target as SocketSubscriptionTarget<'workspace'>,
-          receive,
-          end,
-        );
-        return;
-      }
-      const daemon = this.context.daemon,
-        subscribe = this.context.sources.subscribeProviderSetup;
-      // Only what health advertises is served, as for daemon requests.
-      if (
-        !daemon ||
-        !subscribe ||
-        !this.context.health.capabilities.includes(daemonCommandCapabilities.getProviders)
-      )
-        return fail('Incompatible', 'This host does not serve provider setup.');
-      // A provider read follows each change, one at a time; changes during a read start one more.
-      const target = feed.target as SocketSubscriptionTarget<'providerSetup'>;
-      const stop = followChanges(
-        subscribe,
-        () => daemon.command('getProviders', { host: target.host, ownerId: target.ownerId }),
-        ({ state }) => receive(state),
+      // Chat, chat list and provider setup watches are served over RPC.
+      if (feed.kind !== 'workspace')
+        return fail('Incompatible', 'This host serves that watch over RPC.');
+      const workspace = this.context.workspace;
+      if (!workspace || !this.context.health.capabilities.includes(chatHostCapabilities.workspace))
+        return fail('Incompatible', 'This host does not serve the workspace.');
+      feed.close = workspace.watch(
+        feed.target as SocketSubscriptionTarget<'workspace'>,
+        receive,
         end,
       );
-      feed.close = async () => stop();
     } catch (error) {
       end(error);
     }

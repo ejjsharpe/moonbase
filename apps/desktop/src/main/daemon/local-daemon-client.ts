@@ -1,12 +1,6 @@
 import { normalizeApplicationError } from '@moonbase/effect';
 import { Context, Effect, Exit, Layer, Scope, type ManagedRuntime } from 'effect';
 import {
-  RemoteChatLive,
-  RemoteLocalHostLive,
-  RemoteProviderSetupLive,
-  RemoteWorkspaceHostLive,
-} from '@moonbase/daemon-protocol/remote';
-import {
   ChatService,
   ConnectionService,
   LocalHostService,
@@ -15,7 +9,7 @@ import {
 } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
-import { readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
+import { DaemonServicesLive } from './daemon-services.ts';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import {
   daemonRetryAfterMs,
@@ -46,26 +40,13 @@ export async function acquireDaemonChat(
     const services = await runApplicationEffect(
       runtime,
       Layer.buildWithScope(
-        Layer.mergeAll(
-          RemoteChatLive,
-          RemoteLocalHostLive,
-          // The daemon's file host, on the same socket as chat.
-          RemoteWorkspaceHostLive({ host: session.host }),
-          RemoteProviderSetupLive({
-            host: session.host,
-            // The daemon checked the link and the client did again; main opens only such a link.
-            openUrl: async (url) => {
-              if (readProviderSignInUrl(url) !== url)
-                throw new ApplicationError({
-                  code: 'Unavailable',
-                  message: 'The provider sign-in link is invalid.',
-                });
-              await options.openUrl(url);
-            },
-            // The daemon runs on this Mac, so a provider's loopback sign-in callback reaches it.
-            sameMachine: true,
-          }),
-        ).pipe(Layer.provideMerge(LocalDaemonConnectionLive(daemon))),
+        DaemonServicesLive({
+          host: session.host,
+          connection: LocalDaemonConnectionLive(daemon),
+          openUrl: options.openUrl,
+          sameMachine: true,
+          workspace: true,
+        }),
         scope,
       ),
     );

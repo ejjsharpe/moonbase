@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { MutableModels } from '@earendil-works/pi-ai/models';
-import type { ChatClient } from '@moonbase/contracts/chat';
+import type { ChatServiceShape } from '@moonbase/contracts/services';
 import type { LocalPiRuntimeConfiguration } from '@moonbase/chat-runtime';
 import { createKeyFileSource } from '@moonbase/chat-runtime/credentials';
 import { runDaemon } from '../../apps/daemon/src/daemon.ts';
@@ -47,11 +47,11 @@ try {
       },
       ...(behaviour.registry ? { registry: behaviour.registry } : {}),
     }),
-    wrapChat: (client: ChatClient) => {
-      control = hostControl(client, behaviour.stats, behaviour.release);
+    wrapChat: (chat: ChatServiceShape) => {
+      control = hostControl(chat, behaviour.stats, behaviour.release);
       // The test's shutdown, or its process going away, stops the daemon cleanly.
       void control.ended.then(() => controller.abort());
-      return control.bound as ChatClient;
+      return control.bound;
     },
   });
 } catch {

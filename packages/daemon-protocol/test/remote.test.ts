@@ -2,39 +2,32 @@ import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
 import { Effect, Exit, Layer, ManagedRuntime, Queue, Scope, Stream } from 'effect';
 import { TestClock } from 'effect/testing';
-import type { ChatClient, ChatListUpdate, ChatSnapshot } from '@moonbase/contracts/chat';
+import type { ChatListUpdate, ChatSnapshot } from '@moonbase/contracts/chat';
 import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import {
   ConnectionService,
   WorkspaceHostService,
+  type ChatServiceShape,
   type VerifiedChatEndpoint,
 } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { toWireError, type WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
-import type { DaemonClient } from '@moonbase/contracts/daemon';
-import { chatHostCapabilities } from '@moonbase/contracts/host';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import type { WorkspaceHostClient } from '@moonbase/contracts/workspace-host';
 import {
   DaemonLinkClock,
+  DaemonRpcLinkLive,
   RemoteChatLive,
   RemoteLocalHostLive,
   RemoteWorkspaceHostLive,
 } from '../src/remote.ts';
 import { serveChat } from '../src/server.ts';
+import { refusingDaemon } from './served-services.ts';
 import * as P from '../src/protocol.ts';
 import { socketLimits } from '@moonbase/contracts/socket';
 import { fixture as runtimeFixture, manualClock, session, until } from './runtime-fixture.ts';
+import { chatProtocolVersion } from '@moonbase/contracts/host';
 
-// The daemon serves chat; these cases need none of its other operations.
-const unserved: DaemonClient = {
-  command: async () => {
-    throw new ApplicationError({
-      code: 'Unavailable',
-      message: 'Not served here.',
-    });
-  },
-};
 /** A daemon over a local-mode runtime that can stop and start again on its port. */
 async function daemon(t: TestContext, workspace?: WorkspaceHostClient) {
   const f = await runtimeFixture(t);
@@ -45,25 +38,26 @@ async function daemon(t: TestContext, workspace?: WorkspaceHostClient) {
     scope: Scope.Closeable | undefined,
     port = 0;
   // Counts list commands, so a test sees that watches never poll.
-  const client: ChatClient = {
-    ...f.client,
-    command: (operation, input, options) => {
-      if (operation === 'listChats') listed.push(operation);
-      return f.client.command(operation, input, options);
-    },
-    watchChatList: (input, receive, onError) => {
-      listWatches++;
-      return f.client.watchChatList(input, receive, onError);
-    },
+  const served = await f.chat();
+  const chat: ChatServiceShape = {
+    ...served,
+    listChats: (input) =>
+      Effect.suspend(() => {
+        listed.push('listChats');
+        return served.listChats(input);
+      }),
+    watchChatList: (input) =>
+      Stream.suspend(() => {
+        listWatches++;
+        return served.watchChatList(input);
+      }),
   };
   const start = async () => {
     scope = Effect.runSync(Scope.make());
     const server = await Effect.runPromise(
       serveChat(
         { host: session.host, token, port },
-        client,
-        unserved,
-        [chatHostCapabilities.local],
+        { chat, daemon: refusingDaemon() },
         {
           ...(workspace ? { workspace } : {}),
           sources: {
@@ -104,7 +98,7 @@ async function daemon(t: TestContext, workspace?: WorkspaceHostClient) {
       connectionId: 'one',
       health: {
         ...session.host,
-        protocol: 2,
+        protocol: chatProtocolVersion,
         version: '0.1.0',
         capabilities: [],
       },
@@ -154,8 +148,9 @@ function remote(
   });
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
-      RemoteChatLive,
-      RemoteLocalHostLive,
+      Layer.mergeAll(RemoteChatLive, RemoteLocalHostLive).pipe(
+        Layer.provide(DaemonRpcLinkLive({ host: session.host })),
+      ),
       ...(withWorkspace ? [RemoteWorkspaceHostLive({ host: session.host })] : []),
       ...(testClock ? [TestClock.layer()] : []),
     ).pipe(
@@ -189,7 +184,7 @@ function record<A>() {
   };
 }
 
-test('one client shares one socket and one list watch, and chats another client creates or changes, past the first page too, reach its list without listing', async (t) => {
+test('one client shares one connection, and chats another client creates or changes, past the first page too, reach its list without listing', async (t) => {
   const d = await daemon(t);
   const a = remote(t, d),
     b = remote(t, d);
@@ -225,10 +220,8 @@ test('one client shares one socket and one list watch, and chats another client 
   );
   await until(async () => chat.values.length, Boolean);
   assert.equal(chat.values[0]!.observationStatus, 'connected');
-  // A request, a chat watch and a list watch from one client share its one socket, and its two
-  // windows' list watches share one subscription.
-  assert.equal(d.connections, 2);
-  assert.equal(d.listWatches, 1);
+  // Each window's list watch is its own (watches are not coalesced, D10).
+  assert.equal(d.listWatches, 2);
   // Once a full page of newer chats pushes it past the first page, settling it still reaches
   // the other client's list and the settling client's own.
   const own = record<ChatListUpdate>();

@@ -21,17 +21,21 @@ import {
 } from '@moonbase/daemon-protocol/folders';
 import type { DaemonSettings } from './daemon-settings.ts';
 import { createLocalModels } from '@moonbase/chat-runtime/local-models';
-import { ProviderSetupChanges, ProviderSetupLive } from '@moonbase/chat-runtime/providers';
+import { ProviderSetupLive } from '@moonbase/chat-runtime/providers';
 import {
   hostDaemonCapabilities,
   localDaemonCapabilities,
-  makeDaemonClient,
   makeWorkspaceClient,
   serveChat,
 } from '@moonbase/daemon-protocol/server';
 import type { ClaudeCodeSubscription } from '@moonbase/chat-runtime/claude-code';
-import { makeChatClient } from '@moonbase/application/runtime/clients';
-import type { ChatClient, ChatCreationSettings, ChatSession } from '@moonbase/contracts/chat';
+import type { ChatCreationSettings, ChatSession } from '@moonbase/contracts/chat';
+import {
+  ChatService,
+  LocalHostService,
+  ProviderSetupService,
+  type ChatServiceShape,
+} from '@moonbase/contracts/services';
 import type { FolderApprovals } from '@moonbase/contracts/daemon';
 import { chatHostVersion, chatProtocolVersion } from '@moonbase/contracts/host';
 import { ApplicationError } from '@moonbase/contracts/errors';
@@ -90,8 +94,8 @@ export type DaemonOptions = {
   workspaceCloseMs?: number;
   /** Identifies this daemon's code in `endpoint.json`, so a client can tell an outdated one. */
   build?: string;
-  /** Wraps the chat client the daemon serves; test entries count and hold requests with it. */
-  wrapChat?(client: ChatClient): ChatClient;
+  /** Wraps the chat service the daemon serves; test entries count and hold requests with it. */
+  wrapChat?(chat: ChatServiceShape): ChatServiceShape;
 };
 export type DaemonExit = 'stopped' | 'idle';
 
@@ -209,10 +213,15 @@ const serveDaemon = (options: DaemonOptions, directory: string, log: DaemonLog) 
       ),
       (runtime) => attempt(() => runtime.dispose()).pipe(Effect.orDie),
     );
-    const { control, providerChanges } = yield* attempt(() =>
+    const { control, chat, localHost, providerSetup } = yield* attempt(() =>
       runtime.runPromise(
         Effect.gen(function* () {
-          return { control: yield* LocalPiControl, providerChanges: yield* ProviderSetupChanges };
+          return {
+            control: yield* LocalPiControl,
+            chat: yield* ChatService,
+            localHost: yield* LocalHostService,
+            providerSetup: yield* ProviderSetupService,
+          };
         }),
       ),
     );
@@ -225,7 +234,7 @@ const serveDaemon = (options: DaemonOptions, directory: string, log: DaemonLog) 
           approvedFolders,
           settings.mode === 'host'
             ? undefined
-            : createChatFolders(makeChatClient(runtime), makeDaemonClient(runtime)),
+            : createChatFolders(chat, localHost, (effect) => runtime.runPromise(effect)),
         ),
       ),
       (opened) =>
@@ -261,17 +270,18 @@ const serveDaemon = (options: DaemonOptions, directory: string, log: DaemonLog) 
     if (stop.reason) return stop.reason;
     const server = yield* serveChat(
       { host: session.host, token, port: settings.mode === 'host' ? settings.port : 0 },
-      (options.wrapChat ?? ((client: ChatClient) => client))(makeChatClient(runtime)),
-      makeDaemonClient(runtime),
-      settings.mode === 'host' ? hostDaemonCapabilities : localDaemonCapabilities,
       {
-        // The WebSocket pushes provider setup changes beside chat and chat list watches. A
-        // connected client keeps a local daemon running, and so do its watches, which close
-        // with it.
-        sources: {
-          subscribeProviderSetup: (listener) => providerChanges.subscribe(listener),
-          ...(idle ? { trackConnection: () => countUse(idle) } : {}),
+        chat: options.wrapChat?.(chat) ?? chat,
+        daemon: {
+          localHost,
+          providers: providerSetup,
+          capabilities: settings.mode === 'host' ? hostDaemonCapabilities : localDaemonCapabilities,
         },
+      },
+      {
+        // A workspace connection keeps a local daemon running; an RPC request or watch counts
+        // as use while it runs, through `admit`.
+        sources: idle ? { trackConnection: () => countUse(idle) } : {},
         // Once stopping, new requests are refused; a local daemon counts each request as use
         // until it is answered.
         admit: () => {

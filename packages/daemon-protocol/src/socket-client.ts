@@ -1,17 +1,5 @@
-import {
-  chatReplyErrorCodes,
-  decodeChatInput,
-  isChatCommand,
-} from '@moonbase/contracts/chat-schema';
-import type { ChatCommand, ChatInput, ChatOutput } from '@moonbase/contracts/chat';
-import type { DaemonCommand, DaemonInput, DaemonOutput } from '@moonbase/contracts/daemon';
-import {
-  daemonCommandCapabilities,
-  decodeDaemonInput,
-  decodeDaemonOutput,
-  isDaemonCommand,
-  isDaemonMutation,
-} from '@moonbase/contracts/daemon-schema';
+import { chatReplyErrorCodes } from '@moonbase/contracts/chat-schema';
+import { isDaemonCommand } from '@moonbase/contracts/daemon-schema';
 import { chatHostCapabilities, type ChatHostHealth } from '@moonbase/contracts/host';
 import type { HostCommand, HostInput, HostOutput } from '@moonbase/contracts/workspace-host';
 import {
@@ -45,7 +33,6 @@ import {
   toConnectionApplicationError,
 } from '@moonbase/contracts/connection-errors';
 import * as P from './protocol.ts';
-import { checkChatOutput, isChatMutation } from '@moonbase/contracts/chat-validation';
 import { readObject } from '@moonbase/contracts/common';
 import { fail } from '@moonbase/contracts/errors';
 import {
@@ -58,21 +45,10 @@ import {
   type SocketKeys,
 } from './socket-protocol.ts';
 
-export type SocketOperation = ChatCommand | DaemonCommand | HostCommand;
-export type SocketInput<K extends SocketOperation> = K extends ChatCommand
-  ? ChatInput<K>
-  : K extends DaemonCommand
-    ? DaemonInput<K>
-    : K extends HostCommand
-      ? HostInput<K>
-      : never;
-export type SocketOutput<K extends SocketOperation> = K extends ChatCommand
-  ? ChatOutput<K>
-  : K extends DaemonCommand
-    ? DaemonOutput<K>
-    : K extends HostCommand
-      ? HostOutput<K>
-      : never;
+/** What the socket carries: the workspace file host's operations. Chat and daemon go over RPC. */
+export type SocketOperation = HostCommand;
+export type SocketInput<K extends SocketOperation> = HostInput<K>;
+export type SocketOutput<K extends SocketOperation> = HostOutput<K>;
 /** Where a subscription stood: given to a new connection's `subscribe`, it resumes from there. */
 export type SocketSubscriptionState<K extends SocketSubscriptionKind> = {
   subscriptionId: string;
@@ -316,17 +292,6 @@ export function connectDaemonSocket(
       update = 'delta';
     }
     const decoded = decodeSocketSubscriptionValue(subscription.kind, value);
-    if (subscription.kind === 'chat')
-      checkChatOutput('getChat', decoded, {
-        target: subscription.target as SocketSubscriptionTarget<'chat'>,
-      });
-    if (subscription.kind === 'chatList') {
-      // Every row, on the first page or past it, stays within the watched host and actor.
-      const { list, changed } = decoded as SocketSubscriptionValue<'chatList'>,
-        session = subscription.target as SocketSubscriptionTarget<'chatList'>;
-      checkChatOutput('listChats', list, { session });
-      checkChatOutput('listChats', { conversations: changed, nextCursor: null }, { session });
-    }
     subscription.state = {
       subscriptionId: message.subscriptionId,
       sequence,
@@ -402,53 +367,22 @@ export function connectDaemonSocket(
           reject(error);
         };
         if (reason) return refuse(reason);
-        let decoded: unknown, mutation: boolean, capability: string, body: Buffer;
+        let decoded: unknown, mutation: boolean, body: Buffer;
         try {
-          if (isHostCommand(operation)) {
-            decoded = decodeHostInput(operation, input);
-            mutation = isHostMutation(operation);
-            capability = chatHostCapabilities.workspace;
-          } else if (isDaemonCommand(operation)) {
-            decoded = decodeDaemonInput(operation, input);
-            mutation = isDaemonMutation(operation);
-            capability = daemonCommandCapabilities[operation];
-          } else {
-            if (!isChatCommand(operation)) fail('InvalidInput', 'Unknown chat operation.');
-            const command = operation;
-            decoded = decodeChatInput(command, input);
-            mutation = isChatMutation(command);
-            capability =
-              command === 'createChat' ? chatHostCapabilities.local : chatHostCapabilities.chat;
-          }
-          if (!health!.capabilities.includes(capability as never))
+          if (!isHostCommand(operation)) fail('InvalidInput', 'Unknown workspace operation.');
+          decoded = decodeHostInput(operation, input);
+          mutation = isHostMutation(operation);
+          if (!health!.capabilities.includes(chatHostCapabilities.workspace))
             fail('Incompatible', 'The daemon does not offer this feature.');
           body = Buffer.from(JSON.stringify({ operation, input: decoded }));
-          if (
-            body.length >
-            (isHostCommand(operation)
-              ? socketLimits.workspaceRequestBytes
-              : P.maximumChatRequestBytes)
-          )
+          if (body.length > socketLimits.workspaceRequestBytes)
             fail('InvalidInput', 'Request input exceeds its transport limit.');
           if (signal?.aborted) fail('Cancelled', 'The request was cancelled.');
         } catch (error) {
           return refuse(error);
         }
         const id = String(nextId++);
-        const check = (value: unknown) => {
-          if (isHostCommand(operation)) return decodeHostOutput(operation, value);
-          if (isDaemonCommand(operation)) {
-            const output = decodeDaemonOutput(operation, value);
-            const requestId = (decoded as { requestId?: string }).requestId;
-            if (
-              requestId !== undefined &&
-              (output as { requestId?: string }).requestId !== requestId
-            )
-              fail('Incompatible', 'Daemon request identity changed.');
-            return output;
-          }
-          return checkChatOutput(operation as ChatCommand, value, decoded as never);
-        };
+        const check = (value: unknown) => decodeHostOutput(operation, value);
         // A cancelled read fails at once but stays pending until the daemon answers it, so
         // `settled` still says when its place on the daemon is free.
         let cancelled = false;

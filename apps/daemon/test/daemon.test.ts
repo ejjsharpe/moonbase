@@ -14,6 +14,7 @@ import {
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ChatTarget } from '@moonbase/contracts/chat';
+import { chatProtocolVersion } from '@moonbase/contracts/host';
 import { decodeDaemonSettings } from '../src/daemon-settings.ts';
 import {
   bounded,
@@ -84,7 +85,7 @@ test('a daemon makes a private data directory, prints ready, writes endpoint.jso
       port: ready.port,
       pid: first.child.pid,
       version: '0.1.0',
-      protocol: 2,
+      protocol: chatProtocolVersion,
       build: 'development',
     });
     const identity = await readJson(join(directory, 'identity.json'));
@@ -135,10 +136,10 @@ test('chat commands work through the authenticated WebSocket, and logs keep no t
       session = { host: identity.host, actorId: identity.actorId };
     const client = createFauxClient(port, token, identity.host);
 
-    // Wrong token: the daemon closes the connection at its hello, before any command runs.
+    // Wrong token: signed health refuses it, so it never upgrades and no command runs.
     await assert.rejects(
       createFauxClient(port, 'x'.repeat(43), identity.host).command('listChats', { session }),
-      { code: 'Unavailable' },
+      { code: 'Unauthorized' },
     );
     const created = await client.command('createChat', {
       session,
@@ -236,7 +237,7 @@ test('a daemon killed during a run resumes the run on its next start', async () 
       port: ready.port,
       pid: second.child.pid,
       version: '0.1.0',
-      protocol: 2,
+      protocol: chatProtocolVersion,
       build: 'development',
     });
     client = createFauxClient(ready.port, token, identity.host);

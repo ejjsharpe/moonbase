@@ -33,6 +33,7 @@ const capabilities = [
   'daemon-local-v1',
   'providers-v1',
   'folders-v1',
+  'rpc-v1',
   'socket-v1',
   'workspace-v1',
 ];

@@ -32,9 +32,17 @@ function signature(
   phase: 'request' | 'response',
   nonce: string,
   health?: ChatHostHealth,
+  upgradeNonce?: string,
 ) {
   const fields = health
-    ? [health.protocol, health.hostId, health.storeId, health.version, health.capabilities]
+    ? [
+        health.protocol,
+        health.hostId,
+        health.storeId,
+        health.version,
+        health.capabilities,
+        ...(upgradeNonce === undefined ? [] : [upgradeNonce]),
+      ]
     : [];
   return createHmac('sha256', token)
     .update(JSON.stringify([healthDomain, phase, nonce, ...fields]))
@@ -48,12 +56,17 @@ function matchesProof(value: unknown, expected: string) {
   );
 }
 
-/** Server-side health handler: authenticate the client and prove the configured host identity. */
+/**
+ * Server-side health handler: authenticate the client and prove the configured host identity.
+ * `upgradeNonce`, which `issue` mints only once the client is authenticated, is signed into the
+ * reply for the client's next RPC upgrade.
+ */
 export function createHostHealthReply(input: {
   token: string;
   nonce: string | undefined;
   authorization: string | undefined;
   health: ChatHostHealth;
+  issue?: () => string;
 }): HostHealthReply {
   configuredToken(input.token);
   const requestProof = input.authorization?.match(/^Moonbase-HMAC-SHA256 ([a-f0-9]{64})$/)?.[1];
@@ -62,10 +75,12 @@ export function createHostHealthReply(input: {
     !matchesProof(requestProof, signature(input.token, 'request', input.nonce))
   )
     return refuse('request-rejected');
+  const upgradeNonce = input.issue?.();
   return {
     ...input.health,
     nonce: input.nonce,
-    proof: signature(input.token, 'response', input.nonce, input.health),
+    ...(upgradeNonce === undefined ? {} : { upgradeNonce }),
+    proof: signature(input.token, 'response', input.nonce, input.health, upgradeNonce),
   };
 }
 
@@ -113,6 +128,24 @@ export function validateHostHealth(value: unknown, expected: ChatHostTarget): Ch
 export const checkHostHealth = (
   endpoint: ChatHostEndpoint,
 ): Effect.Effect<ChatHostHealth, HostVerificationError> =>
+  Effect.map(readSignedHealth(endpoint), ({ health }) => health);
+
+/**
+ * Checks health and returns the single-use nonce it signed for an RPC upgrade; a host that
+ * signed none serves no RPC.
+ */
+export const requestUpgradeNonce = (
+  endpoint: ChatHostEndpoint,
+): Effect.Effect<{ health: ChatHostHealth; upgradeNonce: string }, HostVerificationError> =>
+  Effect.flatMap(readSignedHealth(endpoint), ({ health, upgradeNonce }) =>
+    upgradeNonce === undefined
+      ? Effect.fail(new HostVerificationError({ reason: 'invalid' }))
+      : Effect.succeed({ health, upgradeNonce }),
+  );
+
+const readSignedHealth = (
+  endpoint: ChatHostEndpoint,
+): Effect.Effect<{ health: ChatHostHealth; upgradeNonce?: string }, HostVerificationError> =>
   Effect.flatMap(
     Effect.try({
       try: () => {
@@ -183,13 +216,19 @@ export const checkHostHealth = (
                     return refuse('malformed');
                   }
                   const health = validateHostHealth(value, endpoint.expected),
-                    reply = value as Record<string, unknown>;
+                    reply = value as Record<string, unknown>,
+                    upgradeNonce = reply.upgradeNonce;
+                  if (upgradeNonce !== undefined && !nonceValid(upgradeNonce))
+                    return refuse('invalid');
                   if (
                     reply.nonce !== nonce ||
-                    !matchesProof(reply.proof, signature(endpoint.token, 'response', nonce, health))
+                    !matchesProof(
+                      reply.proof,
+                      signature(endpoint.token, 'response', nonce, health, upgradeNonce),
+                    )
                   )
                     return refuse('unproved');
-                  return health;
+                  return upgradeNonce === undefined ? { health } : { health, upgradeNonce };
                 },
                 catch: (error) =>
                   error instanceof HostVerificationError

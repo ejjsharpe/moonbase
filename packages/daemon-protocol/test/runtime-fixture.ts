@@ -7,6 +7,7 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { type Registry } from '@earendil-works/pi-durable';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
+import { ChatService } from '@moonbase/contracts/services';
 import type { SocketClock } from '../src/socket-protocol.ts';
 
 export const session = {
@@ -80,6 +81,8 @@ export async function fixture(
     faux,
     config,
     settings,
+    /** The runtime's chat service, as a daemon serves it. */
+    chat: () => runtime.runPromise(ChatService),
     get client() {
       return makeChatClient(runtime);
     },

@@ -4,23 +4,27 @@ import { once } from 'node:events';
 import { mkdtemp, readFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type Effect, Layer, ManagedRuntime } from 'effect';
+import { Cause, Effect, Fiber, Layer, ManagedRuntime, Stream } from 'effect';
 import type { ChatCommand, ChatInput, ChatOutput, ChatTarget } from '@moonbase/contracts/chat';
 import type { ApplicationError } from '@moonbase/contracts/errors';
-import type { LocalHostService, ProviderSetupService } from '@moonbase/contracts/services';
+import {
+  ChatService,
+  LocalHostService as LocalHostServiceTag,
+  type LocalHostService,
+  type ProviderSetupService,
+} from '@moonbase/contracts/services';
 import {
   makeChatClient,
   makeConnectionClient,
   makeProviderSetupClient,
 } from '@moonbase/application/runtime/clients';
-import {
-  RemoteChatLive,
-  RemoteLocalHostLive,
-  RemoteProviderSetupLive,
-} from '@moonbase/daemon-protocol/remote';
+import { EndpointConnectionLive, RemoteDaemonLive } from '@moonbase/daemon-protocol/remote';
 import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
-import { connectDaemonSocket } from '@moonbase/daemon-protocol/socket';
 import type { ChatHostTarget } from '@moonbase/contracts/host';
+import {
+  HostVerificationError,
+  toConnectionApplicationError,
+} from '@moonbase/contracts/connection-errors';
 import { runDaemon, type DaemonExit } from '../src/daemon.ts';
 import type { IdleClock } from '../src/idle.ts';
 import { createFauxProviders } from './faux-provider.ts';
@@ -129,37 +133,82 @@ export function startDaemon(
 }
 
 /**
- * A faux client of the daemon's WebSocket. Each command runs on a connection of its own, and each
- * watch holds one until it closes, so neither keeps the daemon in use afterwards.
+ * A faux client of the daemon's RPC. Each command runs on a connection of its own, and each watch
+ * holds one until it closes, so neither keeps the daemon in use afterwards.
  */
+/** Runs `effect` on a faux client's runtime; a failed health check is the legacy error. */
+const runPromise = async <A, R>(
+  runtime: ManagedRuntime.ManagedRuntime<R, unknown>,
+  effect: Effect.Effect<A, ApplicationError, R>,
+) => {
+  try {
+    return await runtime.runPromise(effect);
+  } catch (error) {
+    throw error instanceof HostVerificationError ? toConnectionApplicationError(error) : error;
+  }
+};
 export function createFauxClient(port: number, token: string, host: ChatHostTarget) {
   const origin = `http://127.0.0.1:${port}`;
-  const connect = () => connectDaemonSocket({ origin, token, expected: host });
+  const open = () =>
+    ManagedRuntime.make(
+      RemoteDaemonLive({ host, sameMachine: true, openUrl: async () => {} }).pipe(
+        Layer.provideMerge(EndpointConnectionLive({ origin, token, expected: host })),
+      ),
+    );
   async function command<K extends ChatCommand>(
     operation: K,
     input: ChatInput<K>,
   ): Promise<ChatOutput<K>> {
-    const socket = await connect();
+    const runtime = open();
     try {
-      return (await socket.request(operation, input as never)) as ChatOutput<K>;
+      return await runPromise(
+        runtime,
+        Effect.flatMap(ChatService, (chat) =>
+          (
+            chat[operation] as (
+              input: ChatInput<K>,
+            ) => Effect.Effect<ChatOutput<K>, ApplicationError>
+          )(input),
+        ),
+      );
     } finally {
-      await socket.close();
+      await runtime.dispose();
+    }
+  }
+  /** A daemon operation on a connection of its own. */
+  async function daemon<A>(
+    run: (host: LocalHostService['Service']) => Effect.Effect<A, ApplicationError>,
+  ): Promise<A> {
+    const runtime = open();
+    try {
+      return await runtime.runPromise(Effect.flatMap(LocalHostServiceTag, run));
+    } finally {
+      await runtime.dispose();
     }
   }
   /** Opens a watch and resolves once its first update arrives; `close` ends it. */
   async function watch(target: ChatTarget) {
-    const socket = await connect(),
+    const runtime = open(),
       first = Promise.withResolvers<void>();
-    socket.subscribe('chat', target, { receive: () => first.resolve(), onError: first.reject });
+    const fiber = runtime.runFork(
+      Effect.flatMap(ChatService, (chat) =>
+        Stream.runForEach(chat.watch({ target }), () => Effect.sync(() => first.resolve())),
+      ).pipe(Effect.tapCause((cause) => Effect.sync(() => first.reject(Cause.squash(cause))))),
+    );
     try {
       await first.promise;
     } catch (error) {
-      await socket.close();
+      await runtime.dispose();
       throw error;
     }
-    return { close: () => socket.close() };
+    return {
+      close: async () => {
+        await runtime.runPromise(Fiber.interrupt(fiber));
+        await runtime.dispose();
+      },
+    };
   }
-  return { origin, command, watch };
+  return { origin, command, daemon, watch };
 }
 
 /** Sends a health probe signed with `token`, as a client checks the host before connecting. */
@@ -280,17 +329,13 @@ export function connectClients(
 ) {
   const opened: string[] = [];
   const runtime = ManagedRuntime.make(
-    Layer.mergeAll(
-      RemoteChatLive,
-      RemoteLocalHostLive,
-      RemoteProviderSetupLive({
-        host,
-        sameMachine,
-        openUrl: async (url) => {
-          opened.push(url);
-        },
-      }),
-    ).pipe(Layer.provideMerge(LoopbackConnectionLive({ directory }))),
+    RemoteDaemonLive({
+      host,
+      sameMachine,
+      openUrl: async (url) => {
+        opened.push(url);
+      },
+    }).pipe(Layer.provideMerge(LoopbackConnectionLive({ directory }))),
   );
   return {
     runtime,

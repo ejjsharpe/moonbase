@@ -28,6 +28,7 @@ import {
 import { decodeApplicationErrorDTO } from '@moonbase/contracts/error-schema';
 import { UncertainError } from '@moonbase/contracts/errors';
 import { decodeChatHostHealth } from '@moonbase/contracts/host-schema';
+import { chatProtocolVersion } from '@moonbase/contracts/host';
 
 const checkout = {
   hostId: 'host',
@@ -315,7 +316,12 @@ test('a recovery state names only its own checkouts, once each, with exact relat
   );
 });
 const host = { hostId: 'host', storeId: 'store' };
-const health = { ...host, protocol: 2, version: '0.1.0', capabilities: ['', 'chat-v0', 'chat-v0'] };
+const health = {
+  ...host,
+  protocol: chatProtocolVersion,
+  version: '0.1.0',
+  capabilities: ['', 'chat-v0', 'chat-v0'],
+};
 const profile = {
   id: 'profile',
   label: 'Personal host',

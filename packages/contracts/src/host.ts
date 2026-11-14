@@ -1,7 +1,7 @@
 import type { ChatHostTargetSchema, ChatHostHealthSchema } from './host-schema.ts';
 
 /** Browser-safe identities; credentials and forwarded endpoints remain privileged. */
-export const chatProtocolVersion = 2;
+export const chatProtocolVersion = 3;
 export const chatHostVersion = '0.1.0';
 /** A host token: 16 to 4096 printable ASCII characters. */
 export const hostTokenPattern = /^[\x21-\x7e]{16,4096}$/;
@@ -19,9 +19,15 @@ export const chatHostCapabilities = {
   folders: 'folders-v1',
   roots: 'roots-v1',
   socket: 'socket-v1',
+  rpc: 'rpc-v1',
   workspace: 'workspace-v1',
 } as const;
 export type ChatHostCapability = (typeof chatHostCapabilities)[keyof typeof chatHostCapabilities];
 export type ChatHostTarget = typeof ChatHostTargetSchema.Type;
 export type ChatHostHealth = typeof ChatHostHealthSchema.Type;
-export type HostHealthReply = ChatHostHealth & { nonce: string; proof: string };
+/** Signed health; a host that serves RPC also signs a single-use nonce for the next upgrade. */
+export type HostHealthReply = ChatHostHealth & {
+  nonce: string;
+  upgradeNonce?: string;
+  proof: string;
+};

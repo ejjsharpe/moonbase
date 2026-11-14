@@ -10,11 +10,7 @@ import {
   makeConnectionClient,
   makeProviderSetupClient,
 } from '@moonbase/application/runtime/clients';
-import {
-  RemoteChatLive,
-  RemoteLocalHostLive,
-  RemoteProviderSetupLive,
-} from '@moonbase/daemon-protocol/remote';
+import { RemoteDaemonLive } from '@moonbase/daemon-protocol/remote';
 import { LocalHostService } from '@moonbase/contracts/services';
 import { SshLive } from '@moonbase/ssh';
 import { checkHostHealth } from '@moonbase/daemon-protocol/health';
@@ -209,15 +205,11 @@ export async function controlledHostFixture(behaviour: URL, hold = false) {
     const configuredProfile = profile(expected);
     // The clients a remote desktop composes: chat, folders and provider setup over one forward.
     const runtime = ManagedRuntime.make(
-      Layer.mergeAll(
-        RemoteChatLive,
-        RemoteLocalHostLive,
-        RemoteProviderSetupLive({
-          host: expected,
-          sameMachine: false,
-          openUrl: async () => {},
-        }),
-      ).pipe(
+      RemoteDaemonLive({
+        host: expected,
+        sameMachine: false,
+        openUrl: async () => {},
+      }).pipe(
         Layer.provideMerge(
           SshLive(
             { profile: configuredProfile, token, sshExecutable: executable },

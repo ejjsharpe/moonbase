@@ -17,6 +17,7 @@ import type { LogRecord } from '../src/log.ts';
 import {
   bounded,
   createControlledClock,
+  createFauxClient,
   findFreePort,
   readJson,
   temporaryRoot,
@@ -294,24 +295,26 @@ test('a local daemon lets chats use its checkouts and worktrees, makes chat work
     const identity = await readJson(join(daemon.directory, 'identity.json'));
     const host = identity.host,
       session = { host, actorId: identity.actorId };
-    const socket = await connectDaemonSocket({
-      origin: `http://127.0.0.1:${await portOf(daemon.directory)}`,
-      token: (await readFile(join(daemon.directory, 'token'), 'utf8')).trim(),
-      expected: host,
-    });
+    const client = createFauxClient(
+      await portOf(daemon.directory),
+      (await readFile(join(daemon.directory, 'token'), 'utf8')).trim(),
+      host,
+    );
     const model = { provider: fauxProviderId, modelId: fauxModelId };
     const approved = (path: string) =>
-      socket.request('checkApprovedFolder', { host, path }).then(
-        () => true,
-        () => false,
-      );
+      client
+        .daemon((folders) => folders.checkApprovedFolder({ host, path }))
+        .then(
+          () => true,
+          () => false,
+        );
     try {
       assert.equal(await approved(repo), false);
       const checkout = await run(daemon.host.openCheckout({ root: repo }));
       // The editor's checkout needs no grant from the picker.
       assert.equal(await approved(repo), true);
       assert.equal(await approved(stray), false);
-      await socket.request('createChat', {
+      await client.command('createChat', {
         session,
         requestId: 'in-checkout',
         title: 'In the checkout',
@@ -327,7 +330,7 @@ test('a local daemon lets chats use its checkouts and worktrees, makes chat work
       const made = await run(daemon.host.createChatWorktree(request));
       assert.equal(made.root, join(root, 'repo-worktrees', 'chat-a'));
       assert.equal(await approved(made.root), true);
-      await socket.request('createChat', {
+      await client.command('createChat', {
         session,
         requestId: 'in-worktree',
         title: 'In the worktree',
@@ -335,7 +338,7 @@ test('a local daemon lets chats use its checkouts and worktrees, makes chat work
       });
 
       // A chat's own folder opens where it is; a chat in a project is not one the daemon made.
-      const own = await socket.request('createChat', {
+      const own = await client.command('createChat', {
         session,
         requestId: 'own',
         title: 'Own folder',
@@ -343,7 +346,7 @@ test('a local daemon lets chats use its checkouts and worktrees, makes chat work
       });
       const turn = (requestId: string, target: typeof own.conversation.target) =>
         daemon.host.turnChatIntoProject({ installationId: 'test', requestId, target });
-      const inProject = await socket.request('createChat', {
+      const inProject = await client.command('createChat', {
         session,
         requestId: 'project-chat',
         title: 'In a project',
@@ -352,7 +355,7 @@ test('a local daemon lets chats use its checkouts and worktrees, makes chat work
       assert.equal(await refusal(turn('refused', inProject.conversation.target)), 'Unauthorized');
       const turned = await run(turn('turn', own.conversation.target));
       assert.equal(turned.root, own.conversation.cwd);
-      const { conversation } = await socket.request('getChat', { target: own.conversation.target });
+      const { conversation } = await client.command('getChat', { target: own.conversation.target });
       assert.equal(conversation.ownFolder, undefined);
 
       // A checkout replaced after it was approved grants chats nothing, nor do its worktrees.
@@ -360,7 +363,7 @@ test('a local daemon lets chats use its checkouts and worktrees, makes chat work
       await mkdir(repo);
       assert.equal(await approved(repo), false);
       await assert.rejects(
-        socket.request('createChat', {
+        client.command('createChat', {
           session,
           requestId: 'replaced',
           title: 'Replaced',
@@ -370,7 +373,6 @@ test('a local daemon lets chats use its checkouts and worktrees, makes chat work
       );
       assert.equal(await refusal(daemon.host.verifyCheckout({ checkout })), 'Unauthorized');
     } finally {
-      socket.close();
       await daemon.stop();
     }
   });

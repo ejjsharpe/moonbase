@@ -14,12 +14,7 @@ import {
   makeProviderSetupClient,
 } from '@moonbase/application/runtime/clients';
 import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
-import {
-  RemoteChatLive,
-  RemoteLocalHostLive,
-  RemoteProviderSetupLive,
-  RemoteWorkspaceHostLive,
-} from '@moonbase/daemon-protocol/remote';
+import { RemoteDaemonLive, RemoteWorkspaceHostLive } from '@moonbase/daemon-protocol/remote';
 import { findDaemonCommand } from '../src/main/daemon/daemon-command.ts';
 import {
   bounded,
@@ -135,15 +130,11 @@ test('the packaged daemon serves a chat from temporary data, and its Claude Code
     const session = { host: identity.host, actorId: identity.actorId };
     assert.deepEqual(ready.host, identity.host);
     const clients = ManagedRuntime.make(
-      Layer.mergeAll(
-        RemoteChatLive,
-        RemoteLocalHostLive,
-        RemoteProviderSetupLive({
-          host: ready.host,
-          sameMachine: true,
-          openUrl: async () => {},
-        }),
-      ).pipe(Layer.provideMerge(LoopbackConnectionLive({ directory }))),
+      RemoteDaemonLive({
+        host: ready.host,
+        sameMachine: true,
+        openUrl: async () => {},
+      }).pipe(Layer.provideMerge(LoopbackConnectionLive({ directory }))),
     );
     runtime = clients as ManagedRuntime.ManagedRuntime<unknown, unknown>;
     const connected = await makeConnectionClient(clients).command('connect', {
