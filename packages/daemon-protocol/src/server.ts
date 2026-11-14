@@ -158,7 +158,7 @@ export const serveChat = (
             daemonRequests.delete(key);
           }
           // A refused request may be sent again. A failure that may have applied part of it
-          // (any other code, an unknown error, or a bad reply) is kept, so a repeat never reruns it.
+          // (any other code or an unknown error) is kept, so a repeat never reruns it.
           outcome.catch(() => {
             if (refused && daemonRequests.get(key)?.outcome === outcome) daemonRequests.delete(key);
           });
