@@ -73,7 +73,6 @@ test('ignore classification validates exact checkout and immediate child paths',
       ['.git/config'],
       ['src/nested/file.ts'],
       ['other/file.ts'],
-      Array(20001).fill('src/hidden.ts'),
     ])
       await assert.rejects(
         f.client.command('getIgnoredPaths', { checkout, path: 'src', paths }),

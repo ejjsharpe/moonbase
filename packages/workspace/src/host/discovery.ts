@@ -79,10 +79,6 @@ export class WorkspaceDiscovery {
             return false;
           }
         });
-    ensure(
-      this.ripgrep === undefined || isAbsolute(this.ripgrep),
-      'Ripgrep executable must be absolute.',
-    );
   }
   async getBranch(directory: Directory, signal?: AbortSignal) {
     try {
@@ -208,7 +204,6 @@ export class WorkspaceDiscovery {
   }
   async readComparison(input: CommandInput<'readComparison'>, signal: AbortSignal) {
     path(input.target.path);
-    ensure(['staged', 'unstaged', 'untracked'].includes(input.area), 'Invalid comparison area.');
     requireGit(input.target.checkout);
     const directory = await this.directory(input.target.checkout),
       p = input.target.path;
@@ -274,24 +269,9 @@ export class WorkspaceDiscovery {
     }
   }
   async lookupFiles(input: CommandInput<'lookupFiles'>, signal: AbortSignal) {
-    ensure(
-      typeof input.query === 'string' &&
-        input.query.length <= 256 &&
-        !input.query.includes('\0') &&
-        (input.limit === undefined ||
-          (Number.isInteger(input.limit) && input.limit > 0 && input.limit <= 100)),
-      'Invalid lookup query/limit.',
-    );
     const directory = await this.directory(input.checkout),
       limit = input.limit ?? 100;
     const supplied = input.history ?? [];
-    ensure(
-      Array.isArray(supplied) &&
-        supplied.length <= 1000 &&
-        supplied.reduce((n, p) => n + (typeof p === 'string' ? p.length : 1000000), 0) <=
-          256 * 1024,
-      'Lookup history exceeds its limit.',
-    );
     supplied.forEach((p) => path(p));
     const excluded = (p: string) => excludedNames.includes(p) || p.endsWith('.code-search');
     let cells = 0,
@@ -407,13 +387,6 @@ export class WorkspaceDiscovery {
     input: CommandInput<'searchText'>,
     signal: AbortSignal,
   ): Promise<CommandOutput<'searchText'>> {
-    ensure(
-      typeof input.query === 'string' &&
-        input.query.length > 0 &&
-        input.query.length <= 256 &&
-        !/[\0\n\r]/.test(input.query),
-      'Invalid search query.',
-    );
     const directory = await this.directory(input.checkout);
     this.policy(input.checkout);
     const args = [

@@ -1,6 +1,5 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { Cause, Deferred, Effect, Exit, Scope, type Fiber, type FiberSet } from 'effect';
-import { decodeHostInput, decodeHostOutput } from '@moonbase/contracts/workspace-host-schema';
 import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
 import { type WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
@@ -27,34 +26,15 @@ import {
   type HostSaveRecord,
   type ChatFolders,
   type RootPredicate,
-  type WorkspaceConfiguration,
+  type HostConfiguration,
 } from '../schema.ts';
 import { WorkspaceDiscovery } from './discovery.ts';
 import { WorkspaceObservations } from './observations.ts';
-import {
-  createGitGate,
-  Directory,
-  identity,
-  makeRunner,
-  O_NOFOLLOW_ANY,
-  systemGit,
-} from '../filesystem.ts';
+import { createGitGate, Directory, identity, makeRunner, O_NOFOLLOW_ANY } from '../filesystem.ts';
 import type { NativeImport } from './native-import.ts';
 import { NativeReferences } from './native-references.ts';
 import { WorkspaceWorktrees } from './worktrees.ts';
-import {
-  canonical,
-  checkout,
-  ensure,
-  errorText,
-  folded,
-  hash,
-  identifier,
-  overlaps,
-  path,
-  same,
-  textDocument,
-} from '../validation.ts';
+import { canonical, ensure, errorText, folded, hash, overlaps, path, same } from '../validation.ts';
 import { fail } from '@moonbase/contracts/errors';
 
 const dayMs = 24 * 60 * 60 * 1000;
@@ -137,7 +117,7 @@ export class FileHost implements AdmissionOwner {
   readonly discovery: WorkspaceDiscovery;
   readonly worktrees: WorkspaceWorktrees;
   closed = false;
-  readonly config: WorkspaceConfiguration;
+  readonly config: HostConfiguration;
   get operations() {
     return this.ownership.operations;
   }
@@ -148,7 +128,7 @@ export class FileHost implements AdmissionOwner {
   readonly gitReady: () => Promise<void>;
   private readonly git: string;
   constructor(
-    config: WorkspaceConfiguration,
+    config: HostConfiguration,
     ownership: WorkspaceOwnership,
     now = Date.now,
     allowRoot?: RootPredicate,
@@ -157,17 +137,12 @@ export class FileHost implements AdmissionOwner {
     this.config = config;
     this.allowRoot = allowRoot;
     this.chats = chats;
-    this.git = config.gitExecutable ?? systemGit;
+    this.git = config.gitExecutable;
     this.gitReady = createGitGate(this.git);
     this.ownership = ownership;
     ensureQualifiedRuntime();
-    identifier(config.hostId);
     const helper =
       config.filesystemHelper ?? fileURLToPath(new URL('../../dist/filesystem', import.meta.url));
-    ensure(
-      isAbsolute(helper) && isAbsolute(this.git),
-      'Filesystem/Git executables must be absolute.',
-    );
     this.discovery = new WorkspaceDiscovery(
       (target) => this.directory(target),
       (target) => this.policy(target),
@@ -227,7 +202,6 @@ export class FileHost implements AdmissionOwner {
     );
     const call =
       <K extends HostCommand>(
-        operation: K,
         fn: (input: HostInput<K>, signal: AbortSignal) => Promise<HostOutput<K>>,
         persistence = false,
         lease?: (input: HostInput<K>) => { checkoutId: string; paths: string[] },
@@ -235,71 +209,52 @@ export class FileHost implements AdmissionOwner {
         abandoned?: (output: HostOutput<K>, input: HostInput<K>) => void,
       ) =>
       (input: HostInput<K>) =>
-        Effect.flatMap(
-          Effect.try({
-            try: () => decodeHostInput(operation, input),
-            catch: normalizeApplicationError,
-          }),
-          (captured) =>
-            this.effect(
-              async (signal) => decodeHostOutput(operation, await fn(captured, signal)),
-              persistence,
-              lease?.(captured),
-              abandoned && ((output) => abandoned(output, captured)),
-            ),
+        this.effect(
+          (signal) => fn(input, signal),
+          persistence,
+          lease?.(input),
+          abandoned && ((output) => abandoned(output, input)),
         );
     this.service = {
-      openCheckout: call<'openCheckout'>('openCheckout', (input, signal) =>
-        this.open(input.root, signal),
-      ),
-      verifyCheckout: call<'verifyCheckout'>('verifyCheckout', async (input) => {
+      openCheckout: call<'openCheckout'>((input, signal) => this.open(input.root, signal)),
+      verifyCheckout: call<'verifyCheckout'>(async (input) => {
         await this.directory(input.checkout);
       }),
-      readFile: call<'readFile'>('readFile', async (target, signal) =>
+      readFile: call<'readFile'>(async (target, signal) =>
         (await this.directory(target.checkout)).read(target.path, signal),
       ),
       saveFile: call<'saveFile'>(
-        'saveFile',
         (input, signal) => this.save(input, signal),
         false,
         (input) => ({ checkoutId: input.target.checkout.checkoutId, paths: [input.target.path] }),
       ),
-      listDirectory: call<'listDirectory'>('listDirectory', (input, signal) =>
+      listDirectory: call<'listDirectory'>((input, signal) =>
         this.discovery.listDirectory(input, signal),
       ),
-      getIgnoredPaths: call<'getIgnoredPaths'>('getIgnoredPaths', (input, signal) =>
+      getIgnoredPaths: call<'getIgnoredPaths'>((input, signal) =>
         this.discovery.getIgnoredPaths(input, signal),
       ),
-      gitStatus: call<'gitStatus'>('gitStatus', (input, signal) =>
+      gitStatus: call<'gitStatus'>((input, signal) =>
         this.discovery.getStatus(input.checkout, signal),
       ),
-      listWorktrees: call<'listWorktrees'>('listWorktrees', (input, signal) =>
+      listWorktrees: call<'listWorktrees'>((input, signal) =>
         this.worktrees.listWorktrees(input.checkout, signal),
       ),
-      createWorktree: call<'createWorktree'>('createWorktree', (input, signal) =>
-        this.createWorktree(input, signal),
-      ),
+      createWorktree: call<'createWorktree'>((input, signal) => this.createWorktree(input, signal)),
       initializeRepository: call<'initializeRepository'>(
-        'initializeRepository',
         (input, signal) => this.initializeRepositoryOnce(input, signal),
         false,
         // Waits for, and holds off, every save and file operation in the checkout.
         (input) => ({ checkoutId: input.checkout.checkoutId, paths: [''] }),
       ),
-      readComparison: call<'readComparison'>('readComparison', (input, signal) =>
+      readComparison: call<'readComparison'>((input, signal) =>
         this.discovery.readComparison(input, signal),
       ),
-      lookupFiles: call<'lookupFiles'>('lookupFiles', (input, signal) =>
+      lookupFiles: call<'lookupFiles'>((input, signal) =>
         this.discovery.lookupFiles(input, signal),
       ),
-      searchText: call<'searchText'>('searchText', (input, signal) =>
-        this.discovery.searchText(input, signal),
-      ),
-      inspectEntries: call<'inspectEntries'>('inspectEntries', async (input, signal) => {
-        ensure(
-          Array.isArray(input.paths) && input.paths.length > 0 && input.paths.length <= 256,
-          'Inspect between 1 and 256 entries.',
-        );
+      searchText: call<'searchText'>((input, signal) => this.discovery.searchText(input, signal)),
+      inspectEntries: call<'inspectEntries'>(async (input, signal) => {
         const directory = await this.directory(input.checkout);
         return Promise.all(
           input.paths.map(async (p) => {
@@ -312,47 +267,34 @@ export class FileHost implements AdmissionOwner {
         );
       }),
       mutate: call<'mutate'>(
-        'mutate',
         (input, signal) => this.mutate(input, signal),
         false,
         (input) => ({ checkoutId: input.checkout.checkoutId, paths: this.footprint(input) }),
       ),
       operationStatus: call<'operationStatus'>(
-        'operationStatus',
         async (input) => this.journal.operationStatus(input),
         true,
       ),
       acknowledgeOperation: call<'acknowledgeOperation'>(
-        'acknowledgeOperation',
         async (input) => this.journal.acknowledgeOperation(input),
         true,
       ),
-      saveStatus: call<'saveStatus'>(
-        'saveStatus',
-        async (input) => this.journal.saveStatus(input),
-        true,
-      ),
+      saveStatus: call<'saveStatus'>(async (input) => this.journal.saveStatus(input), true),
       acknowledgeSave: call<'acknowledgeSave'>(
-        'acknowledgeSave',
         async (input) => this.journal.acknowledgeSave(input),
         true,
       ),
-      listOperations: call<'listOperations'>(
-        'listOperations',
-        async (input) => {
-          this.approval(input.checkout);
-          return this.journal.listOperations(input.checkout, input.after);
-        },
-        true,
-      ),
-      createChatWorktree: call<'createChatWorktree'>('createChatWorktree', (input, signal) =>
+      listOperations: call<'listOperations'>(async (input) => {
+        this.approval(input.checkout);
+        return this.journal.listOperations(input.checkout, input.after);
+      }, true),
+      createChatWorktree: call<'createChatWorktree'>((input, signal) =>
         this.createChatWorktree(input, signal),
       ),
-      turnChatIntoProject: call<'turnChatIntoProject'>('turnChatIntoProject', (input, signal) =>
+      turnChatIntoProject: call<'turnChatIntoProject'>((input, signal) =>
         this.turnChatIntoProject(input, signal),
       ),
       captureImports: call<'captureImports'>(
-        'captureImports',
         async (input, signal) => {
           this.requireNativeImports();
           return { references: await this.references.capture(input, signal) };
@@ -361,7 +303,7 @@ export class FileHost implements AdmissionOwner {
         undefined,
         (output, input) => this.references.release({ ...input, references: output.references }),
       ),
-      releaseImports: call<'releaseImports'>('releaseImports', async (input) => {
+      releaseImports: call<'releaseImports'>(async (input) => {
         this.requireNativeImports();
         this.references.release(input);
       }),
@@ -512,7 +454,6 @@ export class FileHost implements AdmissionOwner {
       ensure(!holdsOrIsInside(real, reserved), 'This location is reserved by the workspace host.');
   }
   approval(target: CheckoutTarget) {
-    checkout(target);
     if (target.hostId !== this.config.hostId)
       fail('Unauthorized', 'Remote targets are not local filesystem authority.');
     const stored = this.store.get<Approval>('approvals', target.checkoutId);
@@ -918,8 +859,7 @@ export class FileHost implements AdmissionOwner {
   async save(input: HostInput<'saveFile'>, signal: AbortSignal): Promise<HostSaveResult> {
     path(input.target.path);
     this.approval(input.target.checkout);
-    const proposed = textDocument(input.text);
-    ensure(/^[a-f0-9]{64}$/.test(input.expectedVersion), 'Invalid expected content version.');
+    const proposed = { text: input.text, version: hash(input.text) };
     const kept = this.journal.saveInput(input, proposed.version);
     const id = this.journal.saveId(input),
       previous = this.journal.getSave(id);

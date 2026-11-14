@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
 import type { Directory } from '../filesystem.ts';
 import { NativeImport } from './native-import.ts';
-import { checkout, ensure, identifier, same } from '../validation.ts';
+import { ensure, same } from '../validation.ts';
 import { fail } from '@moonbase/contracts/errors';
 
 type NativeReference = {
@@ -80,17 +80,6 @@ export class NativeReferences {
     if (failures.length) fail('Unavailable', failures.join('; '));
   }
   release(input: { checkout: CheckoutTarget; clientId: string; references: string[] }) {
-    identifier(input.clientId);
-    checkout(input.checkout);
-    ensure(
-      Array.isArray(input.references) &&
-        input.references.length <= 128 &&
-        new Set(input.references).size === input.references.length &&
-        input.references.every(
-          (token) => typeof token === 'string' && token.length > 0 && token.length <= 160,
-        ),
-      'Invalid native release references.',
-    );
     const known = input.references.filter((token) => this.unclaimed.has(token));
     for (const token of known) {
       const entry = this.unclaimed.get(token)!;
@@ -116,13 +105,9 @@ export class NativeReferences {
     input: { checkout: CheckoutTarget; clientId: string; paths: string[] },
     signal: AbortSignal,
   ) {
-    identifier(input.clientId);
     const directory = await this.directory(input.checkout);
     ensure(
-      Array.isArray(input.paths) &&
-        input.paths.length > 0 &&
-        input.paths.length <= 128 &&
-        this.unclaimed.size + this.activeNative + this.capturing + input.paths.length <= 256,
+      this.unclaimed.size + this.activeNative + this.capturing + input.paths.length <= 256,
       'Native import selection limit reached.',
     );
     const references: string[] = [];

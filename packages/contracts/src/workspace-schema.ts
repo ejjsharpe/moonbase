@@ -2,6 +2,7 @@ import * as Schema from 'effect/Schema';
 import { ApplicationError, maximumFileBytes } from './workspace.ts';
 import type { CommandInput, CommandOutput, WorkspaceCommand } from './workspace.ts';
 import { array, optional, struct, voidResult } from './schema.ts';
+import { areJsonValuesEqual, getJsonKey } from './common.ts';
 import {
   CheckoutTargetSchema,
   FileTargetSchema,
@@ -59,16 +60,39 @@ const positions = struct({
   'untracked:original': optional(EditorPositionSchema),
   'conflict:original': optional(EditorPositionSchema),
 });
+/**
+ * Whether `value` is an exact checkout-relative path: no leading `/`, backslash or NUL, and no
+ * empty, `.`, `..` or `.git` segment. `''` (the checkout itself) is one only when `folder` is set.
+ */
+export const isCheckoutPath = (value: string, folder = false) =>
+  value.length <= 4096 &&
+  (folder || value !== '') &&
+  !value.startsWith('/') &&
+  !/[\\\0]/.test(value) &&
+  (value === '' ||
+    !value.split('/').some((p) => !p || p === '.' || p === '..' || p.toLowerCase() === '.git'));
+const checkoutPath = Schema.String.check(Schema.makeFilter((value) => isCheckoutPath(value)));
+const checkoutFolder = Schema.String.check(
+  Schema.makeFilter((value) => isCheckoutPath(value, true)),
+);
+const isUnique = (values: readonly unknown[]) =>
+  new Set(values.map(getJsonKey)).size === values.length;
+/** A checkout in recovery: its root is an absolute path. */
+const recoveryCheckout = CheckoutTargetSchema.check(
+  Schema.makeFilter((target) => target.root.startsWith('/')),
+);
+/** A file in recovery: an exact checkout-relative path. */
+const recoveryTarget = struct({ checkout: recoveryCheckout, path: checkoutPath });
 export const CheckoutViewSchema = struct({
-  openFiles: array(path).check(Schema.isMaxLength(1000)),
-  active: path,
-  preview: Schema.NullOr(path),
-  fileViews: Schema.Record(Schema.String, Schema.mutableKey(FileViewSchema)),
-  positions: Schema.Record(Schema.String, Schema.mutableKey(positions)),
+  openFiles: array(checkoutPath).check(Schema.isMaxLength(1000)),
+  active: checkoutFolder,
+  preview: Schema.NullOr(checkoutPath),
+  fileViews: Schema.Record(checkoutPath, Schema.mutableKey(FileViewSchema)),
+  positions: Schema.Record(checkoutPath, Schema.mutableKey(positions)),
   tree: struct({
-    expanded: array(path),
-    selected: array(path),
-    focus: path,
+    expanded: array(checkoutFolder),
+    selected: array(checkoutFolder),
+    focus: checkoutFolder,
     scroll: coordinate,
     /** Whether the tree leaves out entries Git has classified as ignored (Hide Ignored Files). */
     hideIgnoredFiles: optional(Schema.Boolean),
@@ -78,28 +102,58 @@ export const CheckoutViewSchema = struct({
      */
     hideIgnored: optional(Schema.Boolean),
   }),
-});
+}).check(
+  Schema.makeFilter(
+    (view) =>
+      isUnique(view.openFiles) &&
+      (view.active === '' || view.openFiles.includes(view.active)) &&
+      (view.preview === null || view.openFiles.includes(view.preview)),
+  ),
+);
 export const RecoveryDraftSchema = struct({
-  target: FileTargetSchema,
+  target: recoveryTarget,
   text,
   disk: FileDocumentSchema,
 });
+/** The most JSON bytes a recovery state may take. */
+export const maximumRecoveryBytes = 32 * 1024 * 1024;
 export const EditorRecoverySchema = struct({
   version: Schema.Literal(1),
   clientId: WorkspaceIdentifierSchema,
-  checkouts: array(CheckoutTargetSchema).check(Schema.isMaxLength(128)),
+  checkouts: array(recoveryCheckout).check(Schema.isMaxLength(128)),
   openCheckoutIds: array(nonempty).check(Schema.isMaxLength(128)),
   selectedCheckoutId: Schema.NullOr(nonempty),
   views: Schema.Record(Schema.String, Schema.mutableKey(CheckoutViewSchema)),
   drafts: array(RecoveryDraftSchema).check(Schema.isMaxLength(512)),
-  recentFiles: array(FileTargetSchema).check(Schema.isMaxLength(1000)),
+  recentFiles: array(recoveryTarget).check(Schema.isMaxLength(1000)),
   sidebarWidth: Schema.Finite.check(Schema.isBetween({ minimum: 100, maximum: 2000 })),
   /**
    * Whether each checkout's files tree reveals the file made active (Follow Active File); absent
    * in recovery saved before the setting existed, which reads as on.
    */
   followActiveFile: optional(Schema.Boolean),
-});
+}).check(
+  // Checkouts are listed once each, and everything else names one of them as it is listed.
+  Schema.makeFilter((state) => {
+    const checkouts = new Map(state.checkouts.map((c) => [c.checkoutId, c]));
+    const listed = (target: { checkout: { checkoutId: string } }) =>
+      areJsonValuesEqual(checkouts.get(target.checkout.checkoutId), target.checkout);
+    return (
+      checkouts.size === state.checkouts.length &&
+      isUnique(state.openCheckoutIds) &&
+      state.openCheckoutIds.every((id) => checkouts.has(id)) &&
+      (state.selectedCheckoutId === null ||
+        state.openCheckoutIds.includes(state.selectedCheckoutId)) &&
+      Object.keys(state.views).every((id) => checkouts.has(id)) &&
+      state.drafts.every((draft) => listed(draft.target)) &&
+      isUnique(state.drafts.map((draft) => draft.target)) &&
+      state.recentFiles.every(listed)
+    );
+  }),
+  Schema.makeFilter(
+    (state) => new TextEncoder().encode(JSON.stringify(state)).length <= maximumRecoveryBytes,
+  ),
+);
 export const RecoveryChangeSchema = struct({
   clientId: WorkspaceIdentifierSchema,
   previousRevision: natural,
@@ -316,7 +370,7 @@ export const workspaceInputSchemas = {
     requestId: WorkspaceIdentifierSchema,
     expectedRevision: natural,
     state: EditorRecoverySchema,
-  }),
+  }).check(Schema.makeFilter((input) => input.state.clientId === input.clientId)),
   getRecoveryPublication: struct({
     clientId: WorkspaceIdentifierSchema,
     requestId: WorkspaceIdentifierSchema,

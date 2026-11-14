@@ -2,8 +2,7 @@ import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
 import { Cause, Effect, Exit, Scope, type FiberSet } from 'effect';
-import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
-import { decodeWorkspaceInput, decodeWorkspaceOutput } from '@moonbase/contracts/workspace-schema';
+import { releaseResource } from '@moonbase/effect';
 import type {
   WorkspaceHostServiceShape,
   WorkspaceServiceShape,
@@ -20,17 +19,7 @@ import { admit, releaseAll, type AdmissionOwner } from '../admission.ts';
 import { ClientStore } from './client-store.ts';
 import type { OperationRecord, SaveRecord } from './client-schema.ts';
 import { WorkspaceRecovery, type HostPorts, type Recoveries } from './recovery.ts';
-import {
-  canonical,
-  ensure,
-  errorText,
-  folded,
-  hash,
-  identifier,
-  key,
-  path,
-  textDocument,
-} from '../validation.ts';
+import { canonical, ensure, errorText, folded, hash, key, path } from '../validation.ts';
 import { fail } from '@moonbase/contracts/errors';
 
 export type ClientOwnership = {
@@ -96,98 +85,71 @@ export class ClientWorkspace implements AdmissionOwner {
     this.recovery = new WorkspaceRecovery(this.store, ports, installationId, config.hostWaitMs);
     const call =
       <K extends WorkspaceCommand>(
-        operation: K,
         fn: (input: CommandInput<K>, signal: AbortSignal) => Promise<CommandOutput<K>>,
         persistence = false,
       ) =>
       (input: CommandInput<K>) =>
-        Effect.flatMap(
-          Effect.try({
-            try: () => decodeWorkspaceInput(operation, input),
-            catch: normalizeApplicationError,
-          }),
-          (captured) =>
-            this.effect(
-              async (signal) => decodeWorkspaceOutput(operation, await fn(captured, signal)),
-              persistence,
-            ),
-        );
+        this.effect((signal) => fn(input, signal), persistence);
     this.service = {
-      openCheckout: call<'openCheckout'>('openCheckout', (input, signal) =>
-        run(host.openCheckout(input), signal),
-      ),
-      readFile: call<'readFile'>('readFile', (input, signal) => run(host.readFile(input), signal)),
-      listDirectory: call<'listDirectory'>('listDirectory', (input, signal) =>
+      openCheckout: call<'openCheckout'>((input, signal) => run(host.openCheckout(input), signal)),
+      readFile: call<'readFile'>((input, signal) => run(host.readFile(input), signal)),
+      listDirectory: call<'listDirectory'>((input, signal) =>
         run(host.listDirectory(input), signal),
       ),
-      getIgnoredPaths: call<'getIgnoredPaths'>('getIgnoredPaths', (input, signal) =>
+      getIgnoredPaths: call<'getIgnoredPaths'>((input, signal) =>
         run(host.getIgnoredPaths(input), signal),
       ),
-      gitStatus: call<'gitStatus'>('gitStatus', (input, signal) =>
-        run(host.gitStatus(input), signal),
-      ),
-      listWorktrees: call<'listWorktrees'>('listWorktrees', (input, signal) =>
+      gitStatus: call<'gitStatus'>((input, signal) => run(host.gitStatus(input), signal)),
+      listWorktrees: call<'listWorktrees'>((input, signal) =>
         run(host.listWorktrees(input), signal),
       ),
-      readComparison: call<'readComparison'>('readComparison', (input, signal) =>
+      readComparison: call<'readComparison'>((input, signal) =>
         run(host.readComparison(input), signal),
       ),
-      lookupFiles: call<'lookupFiles'>('lookupFiles', (input, signal) =>
-        run(host.lookupFiles(input), signal),
-      ),
-      searchText: call<'searchText'>('searchText', (input, signal) =>
-        run(host.searchText(input), signal),
-      ),
-      inspectEntries: call<'inspectEntries'>('inspectEntries', (input, signal) =>
+      lookupFiles: call<'lookupFiles'>((input, signal) => run(host.lookupFiles(input), signal)),
+      searchText: call<'searchText'>((input, signal) => run(host.searchText(input), signal)),
+      inspectEntries: call<'inspectEntries'>((input, signal) =>
         run(host.inspectEntries(input), signal),
       ),
-      createWorktree: call<'createWorktree'>('createWorktree', (input, signal) =>
+      createWorktree: call<'createWorktree'>((input, signal) =>
         this.withRequestId('createWorktree', input, (requestId) =>
           run(host.createWorktree({ installationId, requestId, ...input }), signal),
         ),
       ),
-      initializeRepository: call<'initializeRepository'>('initializeRepository', (input, signal) =>
+      initializeRepository: call<'initializeRepository'>((input, signal) =>
         this.initializeRepository(input.checkout, signal, host),
       ),
-      saveFile: call<'saveFile'>('saveFile', (input, signal) => this.saveFile(input, signal, host)),
-      mutate: call<'mutate'>('mutate', (input, signal) => this.mutate(input, signal, host)),
+      saveFile: call<'saveFile'>((input, signal) => this.saveFile(input, signal, host)),
+      mutate: call<'mutate'>((input, signal) => this.mutate(input, signal, host)),
       operationStatus: call<'operationStatus'>(
-        'operationStatus',
         (input, signal) => this.recovery.getOperationStatus(input, signal),
         true,
       ),
-      acknowledgeOperation: call<'acknowledgeOperation'>(
-        'acknowledgeOperation',
-        async (input) => {
-          if (!this.recovery.acknowledgeOperation(input)) return;
-          try {
-            await run(
-              host.acknowledgeOperation({
-                installationId,
-                clientId: input.operationClientId,
-                id: input.id,
-              }),
-              settled(),
-            );
-            this.recovery.markOperationAcknowledged(key(input.operationClientId, input.id));
-          } catch {
-            /* The host keeps the entry; the next load acknowledges it again. */
-          }
-        },
-        true,
-      ),
+      acknowledgeOperation: call<'acknowledgeOperation'>(async (input) => {
+        if (!this.recovery.acknowledgeOperation(input)) return;
+        try {
+          await run(
+            host.acknowledgeOperation({
+              installationId,
+              clientId: input.operationClientId,
+              id: input.id,
+            }),
+            settled(),
+          );
+          this.recovery.markOperationAcknowledged(key(input.operationClientId, input.id));
+        } catch {
+          /* The host keeps the entry; the next load acknowledges it again. */
+        }
+      }, true),
       loadRecovery: call<'loadRecovery'>(
-        'loadRecovery',
         (input, signal) => this.recovery.loadRecovery(input.clientId, signal),
         true,
       ),
       getRecoveryPublication: call<'getRecoveryPublication'>(
-        'getRecoveryPublication',
         async (input) => this.recovery.getRecoveryPublication(input),
         true,
       ),
       persistRecovery: call<'persistRecovery'>(
-        'persistRecovery',
         (input, signal) => this.recovery.persistRecovery(input, signal),
         true,
       ),
@@ -265,14 +227,8 @@ export class ClientWorkspace implements AdmissionOwner {
     signal: AbortSignal,
     host: WorkspaceHostServiceShape,
   ) {
-    identifier(input.clientId);
-    identifier(input.requestId);
     path(input.target.path);
-    const proposed = textDocument(input.text);
-    ensure(
-      typeof input.expectedVersion === 'string' && /^[a-f0-9]{64}$/.test(input.expectedVersion),
-      'Invalid expected content version.',
-    );
+    const proposed = { text: input.text, version: hash(input.text) };
     const publication = this.recovery.getPublication(input.clientId);
     const id = key(input.clientId, input.requestId),
       previous = this.recovery.getSaveRecord(id);
@@ -352,8 +308,6 @@ export class ClientWorkspace implements AdmissionOwner {
     signal: AbortSignal,
     host: WorkspaceHostServiceShape,
   ) {
-    identifier(input.clientId);
-    identifier(input.id);
     const id = key(input.clientId, input.id),
       previous = this.recovery.getOperation(id);
     if (previous) return this.replayOperation(id, input, previous, signal);
