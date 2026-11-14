@@ -32,7 +32,7 @@ import {
 import { ApplicationError, fail } from '@moonbase/contracts/errors';
 import { cid, eid } from './documents.ts';
 import { checkCursor, previewText } from './text.ts';
-import * as S from './private-schema.ts';
+import * as S from './schema.ts';
 
 /** Long reads yield to other work after this many parts. */
 const partsPerTurn = 32;

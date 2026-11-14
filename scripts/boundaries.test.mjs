@@ -159,7 +159,7 @@ assert.deepEqual(
     'packages/ssh/src/host-health.ts':
       "import '@moonbase/contracts'; import '@moonbase/effect'; import 'node:crypto';",
     'packages/contracts/src/index.ts': '',
-    'packages/effect/src/index.ts': "import '@moonbase/contracts';",
+    'packages/effect/src/application-error.ts': "import '@moonbase/contracts';",
   }),
   [],
 );
@@ -182,7 +182,7 @@ assert(
 assert(
   check({
     'packages/contracts/src/index.ts': "import '@moonbase/effect';",
-    'packages/effect/src/index.ts': '',
+    'packages/effect/src/application-error.ts': '',
   }).some((error) => error.includes('contracts depends on executable')),
 );
 console.log(

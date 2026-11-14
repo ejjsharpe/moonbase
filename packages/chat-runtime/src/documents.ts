@@ -11,7 +11,7 @@ import type { ChatCreationSettings, ChatTarget } from '@moonbase/contracts/chat'
 /** A chat's saved folder and model; `ownFolder` marks a folder made for a chat without a project. */
 export type ChatSettings = ChatCreationSettings & { cwd: string; ownFolder?: true };
 import { fail } from '@moonbase/contracts/errors';
-import * as S from './private-schema.ts';
+import * as S from './schema.ts';
 
 export const Request = defineDocFamily({
   kind: 'moonbase.chat.request',

@@ -3,7 +3,7 @@ import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
 import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
 import { controls } from '@moonbase/ui/controls';
-import { parseRecordedPatch, type PatchLine } from './recorded-patch.ts';
+import { parseRecordedPatch, type PatchLine } from './recorded-patch-model.ts';
 import { getFindSourceProps } from './part-find.tsx';
 
 /** Characters of unparsed source shown per page. */

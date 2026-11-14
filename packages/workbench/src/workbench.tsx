@@ -10,7 +10,7 @@ import {
 import { FilesTree, type FollowedFiles, type TreeCreateRequest } from './files-tree/files-tree.tsx';
 import { findCreateFolder } from './files-tree/files-tree-rows.ts';
 import { gitStatusMarks } from './files-tree/files-tree-status.ts';
-import { Mutation, type Action } from './mutation.tsx';
+import { Mutation, type Action } from './mutation-dialog.tsx';
 import { useMutationRunner } from './mutation-runner.tsx';
 import { useMoveUndo } from './files-tree/move-undo.ts';
 import { useFileClipboard } from './files-tree/file-clipboard.ts';

@@ -2,7 +2,7 @@ import type { LiveEntry } from '@moonbase/application/chat';
 import type { ChatEntry, ChatTranscript, ChatTranscriptPart } from '@moonbase/contracts/chat';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import { structuredSourceLimits } from './source-limits.ts';
-import { parseRecordedPatch } from './recorded-patch.ts';
+import { parseRecordedPatch } from './recorded-patch-model.ts';
 
 export function isActivityPart(part: ChatTranscriptPart) {
   return (

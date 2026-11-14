@@ -1,4 +1,4 @@
-import * as S from './private-schema.ts';
+import * as S from './schema.ts';
 
 /**
  * A daemon's optional `daemon.json`: a local-mode daemon (the default) with the source of its

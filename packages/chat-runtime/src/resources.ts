@@ -11,7 +11,7 @@ import { Host, safeError } from './commands.ts';
 import { Store, readOwnedMetadata, getSettings } from './documents.ts';
 import type { RuntimeConfiguration, RetainedWork } from './runtime-types.ts';
 import { fail } from '@moonbase/contracts/errors';
-import * as S from './private-schema.ts';
+import * as S from './schema.ts';
 
 // Abort requests and terminal cleanup failures remain observable after a caller's deadline.
 function retainedWork(kind: 'abort' | 'waiter'): Effect.Effect<RetainedWork, never, Scope.Scope> {

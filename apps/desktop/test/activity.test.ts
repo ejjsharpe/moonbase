@@ -23,7 +23,7 @@ import {
 import {
   parseRecordedPatch,
   type PatchLine,
-} from '../src/renderer/chat/transcript/recorded-patch.ts';
+} from '../src/renderer/chat/transcript/recorded-patch-model.ts';
 import { getTranscriptParts } from '../src/renderer/chat/transcript/transcript-parts.ts';
 const part = (
   id: string,

@@ -5,7 +5,7 @@ import type {
   ChatTranscriptSelection,
   ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
-import type { TranscriptView } from './view-memory.ts';
+import type { TranscriptView } from './transcript-view-memory.ts';
 import type { TranscriptRow } from './transcript-rows.ts';
 import { countTranscriptBytes, type TranscriptChunk } from './transcript-read.ts';
 import { watchRetry } from '../../watch-retry.ts';

@@ -28,7 +28,7 @@ import {
   maximumChatMentions,
 } from '@moonbase/contracts/chat';
 import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
-import { makeProviderSetupController, type ProviderSetupController } from './providers.ts';
+import { makeProviderSetupController, type ProviderSetupController } from './provider-setup.ts';
 import type { ProviderSetupClient } from '@moonbase/contracts/providers';
 import {
   decodeSaved,
@@ -45,7 +45,7 @@ import {
   transcriptLimits,
   type TranscriptState,
 } from './transcript/transcript-state.ts';
-import { TranscriptViewMemory, type TranscriptView } from './transcript/view-memory.ts';
+import { TranscriptViewMemory, type TranscriptView } from './transcript/transcript-view-memory.ts';
 import { ChatFileSearch } from './file-search.ts';
 
 export interface DraftStorage {

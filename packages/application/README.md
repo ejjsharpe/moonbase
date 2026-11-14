@@ -23,7 +23,6 @@ A concept that needs only pure functions has only `x.ts`. Tests mirror `src/` un
 | `editor` | Headless editor model and controller |
 | `testing/faux-workspace` | In-memory workspace capability for tests and demos |
 | `testing/faux-chat` | Controlled chat and connection capabilities for tests and the headless example |
-| `runtime/handlers` | Shared command dispatch and subscriptions |
 | `runtime/clients` | Editor, chat and connection clients bound to an existing runtime |
 | `runtime/effect-client` | Invocation and observation helpers bound to a supplied runtime |
 

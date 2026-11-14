@@ -17,7 +17,7 @@ import type {
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { areJsonValuesEqual, getJsonKey } from '@moonbase/contracts/common';
 import { sameTarget } from '../saved.ts';
-import type { TranscriptViewMemory, TranscriptView } from './view-memory.ts';
+import type { TranscriptViewMemory, TranscriptView } from './transcript-view-memory.ts';
 import {
   checkTranscriptReply,
   countTranscriptBytes,

@@ -62,7 +62,7 @@ import {
 } from '@moonbase/contracts/chat-validation';
 import { fail } from '@moonbase/contracts/errors';
 import { makeChatFolder } from './chat-folders.ts';
-import * as S from './private-schema.ts';
+import * as S from './schema.ts';
 
 const unknownOutcome = () =>
   new ApplicationError({
