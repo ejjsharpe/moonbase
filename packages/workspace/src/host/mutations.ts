@@ -104,15 +104,18 @@ export const mutate = (input: HostInput<'mutate'>) =>
         destination,
       })),
     };
-    // The last point a cancelled operation stops: nothing may yield from inspecting the native
-    // references to claiming them, or two operations could both claim one.
+    // The last point a cancelled operation stops. Inspecting the native references, reserving
+    // the operation and claiming them are one synchronous step, so no other operation can
+    // claim them in between.
     yield* cancellationPoint;
-    const claims = yield* attempt(() =>
-      references.inspectReferences(tokens, input.checkout, input.clientId),
-    );
-    const occupied = yield* attempt(() => journal.reserveOperation(id, record));
+    const { claims, occupied } = yield* attempt(() => {
+      const claims = references.inspectReferences(tokens, input.checkout, input.clientId);
+      const occupied = journal.reserveOperation(id, record);
+      if (!occupied) references.claimReferences(claims);
+      return { claims, occupied };
+    });
     if (occupied) return yield* attempt(() => journal.replayOperation(id, input, occupied));
-    yield* references.claimReferences(claims);
+    yield* references.holdClaimedReferences(claims);
     /** Records a durable write that failed and returns the outcome held in memory. */
     const retained = (error: unknown) => {
       record.result.message =

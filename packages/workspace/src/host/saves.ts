@@ -48,9 +48,13 @@ export const saveFile = (input: HostInput<'saveFile'>) =>
       return occupied ? yield* attempt(() => journal.replaySave(id, kept, occupied)) : result;
     }
     const record: HostSaveRecord = { input: kept };
-    const occupied = yield* attempt(() => journal.reserveSave(id, record));
+    // Reserved and marked running in one step, so a status query never sees it as interrupted.
+    const occupied = yield* attempt(() => {
+      const occupied = journal.reserveSave(id, record);
+      if (!occupied) journal.startSave(id);
+      return occupied;
+    });
     if (occupied) return yield* attempt(() => journal.replaySave(id, kept, occupied));
-    journal.startSave(id);
     return yield* Effect.gen(function* () {
       const temporary = join(dirname(input.target.path), '.moonbase-save-' + randomUUID());
       const stagingIdentity = (yield* directory.io(

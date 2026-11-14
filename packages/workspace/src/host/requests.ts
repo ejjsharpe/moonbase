@@ -12,6 +12,7 @@ import {
   WorkspaceUnsupportedError,
 } from '@moonbase/contracts/workspace-host-errors';
 import { join } from 'node:path';
+import { CancelledError } from '@moonbase/contracts/errors';
 import { asHostFailure, attempt, type HostFailure } from '../attempt.ts';
 import type { HostRequestRecord } from '../schema.ts';
 import { same } from '../validation.ts';
@@ -58,16 +59,27 @@ const once = <K extends RequestOperation>(
         return yield* new WorkspaceConflictError({ conflict: 'request-payload' });
       return (yield* Effect.interruptible(Deferred.await(first.outcome))) as HostOutput<K>;
     }
-    const record = yield* attempt(() => journal.reserveRequest(id, input));
+    // Reserved and registered as running in one step, so a duplicate waits for it instead of
+    // finding a reservation nothing runs and reporting it interrupted.
+    const outcome = Deferred.makeUnsafe<CheckoutTarget, HostFailure>();
+    const record = yield* attempt(() => {
+      const record = journal.reserveRequest(id, input);
+      if (!record) requests.set(id, { input, outcome });
+      return record;
+    });
     if (record)
       return (yield* attempt(() =>
         journal.replayRequest(record, operation, input),
       )) as HostOutput<K>;
-    const outcome = Deferred.makeUnsafe<CheckoutTarget, HostFailure>();
-    requests.set(id, { input, outcome });
     const exit = yield* Effect.exit(settleRequest(journal, id, input, work));
     requests.delete(id);
-    Deferred.doneUnsafe(outcome, exit);
+    // A duplicate whose first request was cancelled learns that, not that the host closed.
+    Deferred.doneUnsafe(
+      outcome,
+      Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
+        ? Exit.fail(new CancelledError({ operation }))
+        : exit,
+    );
     return yield* exit;
   });
 
