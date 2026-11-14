@@ -18,7 +18,6 @@ import {
   type LocalHostCommand,
   type LocalHostInput,
 } from '@moonbase/contracts/daemon';
-import { decodeLocalHostInput } from '@moonbase/contracts/daemon-schema';
 import {
   ChatService,
   LocalHostService,
@@ -28,7 +27,6 @@ import {
 import { type Host, safeError } from './commands.ts';
 import { readOnChange } from '@moonbase/effect/changes';
 import { checkChatFolder } from './chat-folders.ts';
-import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { isSameChatHost } from '@moonbase/contracts/chat-validation';
 import { fail } from '@moonbase/contracts/errors';
 import { openHost } from './resources.ts';
@@ -65,18 +63,11 @@ function makeChatService(host: Host): ChatServiceShape {
     settleChat: (d) => host.run('settleChat', d, (input) => host.settle(input)),
     findChatFiles: (d) => host.run('findChatFiles', d, (input) => host.findFiles(input)),
     watch: ({ target }) => host.watch(target),
-    watchChatList: (d) =>
+    watchChatList: ({ session }) =>
       Stream.unwrap(
         Effect.map(
-          Effect.try({
-            try: () => {
-              const input = decodeChatInput('listChats', d);
-              host.session(input.session);
-              return input;
-            },
-            catch: normalizeApplicationError,
-          }),
-          (input) => watchChatListState(host, input.session),
+          Effect.try({ try: () => host.session(session), catch: normalizeApplicationError }),
+          () => watchChatListState(host, session),
         ),
       ),
   };
@@ -148,7 +139,7 @@ export const LocalPiRuntimeLive = (
         registry.install(CodingTools);
         registry.install(ClaudeCodeWorkingDirectory);
       }
-      const host = yield* openHost({ ...config, registry, mode: 'local' });
+      const host = yield* openHost({ ...config, registry });
       return Context.make(ChatService, makeChatService(host)).pipe(
         Context.add(LocalPiControl, {
           setAdmissionsOpen: (open) => {
@@ -192,11 +183,10 @@ export const LocalHostLive = (
           operation: K,
           run: (input: LocalHostInput<K>) => Effect.Effect<A, ApplicationError>,
         ) =>
-        (unknown: LocalHostInput<K>) =>
+        (input: LocalHostInput<K>) =>
           Effect.flatMap(
             Effect.try({
               try: () => {
-                const input = decodeLocalHostInput(operation, unknown);
                 const shape = input as { host?: ChatHostTarget; target?: { host: ChatHostTarget } };
                 if (!isSameChatHost(shape.host ?? shape.target!.host, config.host))
                   fail('Unauthorized', 'Local host request names another host.');

@@ -57,11 +57,10 @@ export function createHostHealthReply(input: {
     !matchesProof(requestProof, signature(input.token, 'request', input.nonce))
   )
     return fail('Unauthorized', 'Chat host rejected health authentication.');
-  const health = validateHostHealth(input.health, input.health);
   return {
-    ...health,
+    ...input.health,
     nonce: input.nonce,
-    proof: signature(input.token, 'response', input.nonce, health),
+    proof: signature(input.token, 'response', input.nonce, input.health),
   };
 }
 

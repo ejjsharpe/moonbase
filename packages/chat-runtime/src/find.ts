@@ -15,7 +15,7 @@ import {
   scanAdjacentEntry,
   sealCursor,
 } from './transcript.ts';
-import { maximumFindPathChars, maximumFindPathDepth, type TranscriptCursor } from './schema.ts';
+import { maximumFindPathChars, maximumFindPathDepth, type TranscriptCursor } from './cursors.ts';
 import { checkChatReplySize } from '@moonbase/contracts/chat-validation';
 import { fail } from '@moonbase/contracts/errors';
 
