@@ -100,7 +100,6 @@
       },
       "devDependencies": {
         "@moonbase/config": "workspace:*",
-        "@moonbase/ssh": "workspace:*",
       },
     },
     "packages/chat-runtime": {

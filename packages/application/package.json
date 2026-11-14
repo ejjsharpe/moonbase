@@ -23,24 +23,14 @@
     "lru-cache": "11.5.3"
   },
   "devDependencies": {
-    "@moonbase/config": "workspace:*",
-    "@moonbase/ssh": "workspace:*"
+    "@moonbase/config": "workspace:*"
   },
   "nx": {
     "targets": {
       "test": {
         "inputs": [
           "default",
-          "^default",
-          "{workspaceRoot}/test/chat/**/*",
-          {
-            "input": "default",
-            "projects": [
-              "@moonbase/chat-runtime",
-              "@moonbase/daemon-protocol",
-              "@moonbase/ssh"
-            ]
-          }
+          "^default"
         ]
       }
     }
