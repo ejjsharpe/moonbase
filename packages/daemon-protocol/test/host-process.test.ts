@@ -268,7 +268,6 @@ test('compiled remote entry runs on Electron Node24 against the separate product
       'health.ts',
       'socket-client.ts',
       'socket-protocol.ts',
-      'link-clock.ts',
       'rpc-link.ts',
       'rpc-services.ts',
       'upgrade-proof.ts',

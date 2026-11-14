@@ -1,5 +1,6 @@
 import {
   Cause,
+  Clock,
   Context,
   Deferred,
   Effect,
@@ -52,7 +53,6 @@ import { decodeSocketSubscriptionValue } from '@moonbase/contracts/socket-schema
 import { requestUpgradeNonce } from './health.ts';
 import * as P from './protocol.ts';
 import { upgradeProtocols } from './upgrade-proof.ts';
-import { DaemonLinkClock } from './link-clock.ts';
 
 /** Every procedure a daemon may serve over RPC. */
 export const DaemonRpcs = ChatRpcs.merge(LocalHostRpcs, ProviderSetupRpcs);
@@ -216,12 +216,6 @@ export const DaemonRpcLinkLive = (config: { host: ChatHostTarget }) =>
       const host = config.host;
       const lookUpEndpoint = connections.endpoint({ host });
       const lock = yield* Semaphore.make(1);
-      const clock = yield* DaemonLinkClock;
-      const sleep = (ms: number) =>
-        Effect.callback<void>((resume) => {
-          const handle = clock.setTimeout(() => resume(Effect.void), ms);
-          return Effect.sync(() => clock.clearTimeout(handle));
-        });
       let current: Generation | undefined;
       yield* Effect.addFinalizer(() =>
         Effect.suspend(() => (current ? Scope.close(current.scope, Exit.void) : Effect.void)),
@@ -412,6 +406,8 @@ export const DaemonRpcLinkLive = (config: { host: ChatHostTarget }) =>
                     Effect.ignore,
                   ),
                 );
+                // Backoff and the healthy period that renews it run on the fiber's Clock.
+                const clock = yield* Clock.Clock;
                 let delivered = false,
                   failures = 0;
                 for (;;) {
@@ -454,7 +450,7 @@ export const DaemonRpcLinkLive = (config: { host: ChatHostTarget }) =>
                             value = decodeSocketSubscriptionValue(kind, value);
                             options.check?.(value);
                             state = value;
-                            firstAt ??= clock.now();
+                            firstAt ??= clock.currentTimeMillisUnsafe();
                             Queue.offerUnsafe(queue, { value, reset: resetting });
                             resetting = false;
                             delivered = true;
@@ -472,12 +468,15 @@ export const DaemonRpcLinkLive = (config: { host: ChatHostTarget }) =>
                   const error = Cause.squash(ended.cause);
                   if (!isTransport(error))
                     return yield* Effect.fail(isLinkError(error) ? error : unavailable());
-                  if (firstAt !== undefined && clock.now() - firstAt >= P.streamLimits.renewMs)
+                  if (
+                    firstAt !== undefined &&
+                    clock.currentTimeMillisUnsafe() - firstAt >= P.streamLimits.renewMs
+                  )
                     failures = 0;
                   if (failures >= P.streamLimits.reconnectMs.length)
                     return yield* Effect.fail(unavailable());
                   if (delivered) Queue.offerUnsafe(queue, { reconnecting: true });
-                  yield* sleep(P.streamLimits.reconnectMs[failures++]!);
+                  yield* Effect.sleep(P.streamLimits.reconnectMs[failures++]!);
                 }
               }).pipe(
                 Effect.catchCause((cause) =>

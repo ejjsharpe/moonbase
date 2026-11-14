@@ -66,8 +66,6 @@ export type ChatSocketConfiguration = {
    * requests as use with it and refuses them once it is stopping.
    */
   admit?(): () => void;
-  /** How long an RPC connection may send nothing; for tests. */
-  rpcIdleMs?: number;
 };
 /** A local-mode daemon's features beyond chat: local-mode chat and control, providers, folders. */
 export const localDaemonCapabilities: readonly ChatHostCapability[] = [
@@ -140,10 +138,7 @@ export const serveChat = (
             }
           : {}),
       },
-      {
-        admit,
-        ...(socket?.rpcIdleMs === undefined ? {} : { idleMs: socket.rpcIdleMs }),
-      },
+      { admit },
     );
     /**
      * Runs one workspace operation for this host's checkouts. The host journals each mutation by

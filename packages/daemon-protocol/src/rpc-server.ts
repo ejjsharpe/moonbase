@@ -14,8 +14,6 @@ export type RpcServerOptions = {
    * connection), or throws a `HostUnavailableError` to refuse it.
    */
   admit(): () => void;
-  /** How long an RPC connection may send nothing; `rpcLimits.idleMs` unless a test shortens it. */
-  idleMs?: number;
 };
 const busy = () => new HostUnavailableError({ reason: 'busy' });
 const failed = () => new HostUnavailableError({ reason: 'failed' });
@@ -60,7 +58,7 @@ function makeAdmission(options: RpcServerOptions) {
  */
 export const serveRpc = (services: RpcServices, options: RpcServerOptions) =>
   Effect.gen(function* () {
-    const connections = yield* makeRpcConnections(options);
+    const connections = yield* makeRpcConnections();
     const protocol = RpcServer.layerProtocolSocketServer.pipe(
       Layer.provide([rpcSocketServerLayer(connections), RpcSerialization.layerJson]),
     );
