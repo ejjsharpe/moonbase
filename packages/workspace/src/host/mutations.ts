@@ -69,7 +69,7 @@ export const mutate = (input: HostInput<'mutate'>) =>
     });
     const id = journal.operationId(input),
       previous = yield* attempt(() => journal.getOperation(id));
-    if (previous) return yield* attempt(() => journal.replayOperation(id, input, previous));
+    if (previous) return yield* journal.replayOperation(id, input, previous);
     yield* journal.assertSettled(
       input.checkout,
       getOperationFootprint(references)(input),
@@ -111,7 +111,7 @@ export const mutate = (input: HostInput<'mutate'>) =>
       references.inspectReferences(tokens, input.checkout, input.clientId),
     );
     const occupied = yield* attempt(() => journal.reserveOperation(id, record));
-    if (occupied) return yield* attempt(() => journal.replayOperation(id, input, occupied));
+    if (occupied) return yield* journal.replayOperation(id, input, occupied);
     yield* references.claimReferences(claims);
     /** Records a durable write that failed and returns the outcome held in memory. */
     const retained = (error: unknown) => {
@@ -246,7 +246,7 @@ export const mutate = (input: HostInput<'mutate'>) =>
         staging.filter(Boolean).join(', ') +
         '. Drafts and journal retained; no automatic retry.';
     else delete record.result.message;
-    const finalized = yield* Effect.exit(attempt(() => journal.finalizeOperation(id, record)));
+    const finalized = yield* Effect.exit(journal.finalizeOperation(id, record));
     if (Exit.isFailure(finalized)) return retained(Cause.squash(finalized.cause));
     return record.result as HostOperationResult;
   });

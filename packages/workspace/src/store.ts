@@ -1,4 +1,6 @@
+import { Effect, Exit } from 'effect';
 import { O_NOFOLLOW_ANY } from './filesystem.ts';
+import { attempt, type WorkspaceFailure } from './attempt.ts';
 import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
 import { chmodSync, constants, closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
@@ -122,22 +124,20 @@ export class Store {
   delete(bucket: string, key: string) {
     this.statement('DELETE FROM records WHERE bucket=? AND key=?').run(bucket, key);
   }
-  /** Runs `fn` in one write transaction; a throw rolls everything back. */
-  transaction<T>(fn: () => T): T {
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      const value = fn();
-      this.db.exec('COMMIT');
-      return value;
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
+  /** Runs `effect` in one write transaction: it commits when `effect` succeeds, else rolls back. */
+  transaction<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E | WorkspaceFailure, R> {
+    return Effect.acquireUseRelease(
+      attempt(() => this.db.exec('BEGIN IMMEDIATE')),
+      () => Effect.tap(effect, () => attempt(() => this.db.exec('COMMIT'))),
+      (_, exit) => (Exit.isSuccess(exit) ? Effect.void : Effect.sync(() => this.rollback())),
+    );
   }
-  private closed = false;
+  /** Rolls back what is open; nothing is open when `COMMIT` itself failed and SQLite undid it. */
+  private rollback() {
+    if (this.db.isTransaction) this.db.exec('ROLLBACK');
+  }
+  /** Closes the database; its owner's scope does this once. */
   close() {
-    if (this.closed) return;
-    this.closed = true;
     this.db.close();
   }
 }

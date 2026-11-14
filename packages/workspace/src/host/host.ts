@@ -215,16 +215,9 @@ const makeFileHost = Effect.gen(function* () {
       }),
     operationStatus: (input) => run(journal.operationStatus(input), { persistence: true }),
     acknowledgeOperation: (input) =>
-      run(
-        attempt(() => journal.acknowledgeOperation(input)),
-        { persistence: true },
-      ),
+      run(journal.acknowledgeOperation(input), { persistence: true }),
     saveStatus: (input) => run(journal.saveStatus(input), { persistence: true }),
-    acknowledgeSave: (input) =>
-      run(
-        attempt(() => journal.acknowledgeSave(input)),
-        { persistence: true },
-      ),
+    acknowledgeSave: (input) => run(journal.acknowledgeSave(input), { persistence: true }),
     listOperations: (input) =>
       run(
         attempt(() => {
