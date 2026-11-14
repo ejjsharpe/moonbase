@@ -15,6 +15,7 @@ import {
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import { reconcile } from '../src/client/reconcile.ts';
+import { fromLegacyRecovery, toLegacyRecovery } from '../src/client/legacy-recovery.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { fixture, isError, quote, waitFor } from './recovery-fixture.ts';
 import { captureNative, releaseNative } from './workspace-fixture.ts';
@@ -736,8 +737,9 @@ test('saved recovery naming a foreign checkout, an escaping path or a wrong base
         isError('InvalidInput'),
       );
     // A host's move to a path outside the checkout moves nothing in the recovery.
-    const moved = structuredClone(escapingPosition);
-    moved.views[checkout.checkoutId]!.positions = { 'file.txt': {} };
+    const legacy = structuredClone(escapingPosition);
+    legacy.views[checkout.checkoutId]!.positions = { 'file.txt': {} };
+    const moved = fromLegacyRecovery(legacy, null);
     reconcile(moved, [
       {
         input: { kind: 'move', checkout },
@@ -746,8 +748,9 @@ test('saved recovery naming a foreign checkout, an escaping path or a wrong base
         },
       } as never,
     ]);
-    assert.deepEqual(moved.drafts, state.drafts);
-    assert.deepEqual(Object.keys(moved.views[checkout.checkoutId]!.positions), ['file.txt']);
+    const after = toLegacyRecovery(moved);
+    assert.deepEqual(after.drafts, state.drafts);
+    assert.deepEqual(Object.keys(after.views[checkout.checkoutId]!.positions), ['file.txt']);
     await client.command('persistRecovery', {
       clientId: 'alice',
       requestId: 'initial-domain',

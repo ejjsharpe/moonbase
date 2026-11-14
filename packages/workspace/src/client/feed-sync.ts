@@ -1,9 +1,10 @@
 import { Effect, Exit } from 'effect';
-import type { CheckoutTarget, EditorRecovery } from '@moonbase/contracts/workspace';
+import type { CheckoutTarget } from '@moonbase/contracts/workspace';
+import type { RecoveryState } from '@moonbase/contracts/recovery';
 import type { OperationFeed, OperationFeedEntry } from '@moonbase/contracts/workspace-host';
 import { attempt } from '../attempt.ts';
 import { canonical, errorText, key } from '../validation.ts';
-import type { FeedCursor, OperationRecord, SaveRecord } from './client-schema.ts';
+import type { FeedCursor, FeedGap, OperationRecord, SaveRecord } from './client-schema.ts';
 import type { StoredRecovery } from './client-store.ts';
 import { applyOperations, recordPublicationFailure } from './operation-recovery.ts';
 import { feedKey, type RecoveryContext } from './recovery-context.ts';
@@ -207,9 +208,9 @@ function readFeedRecords(context: RecoveryContext, entries: OperationFeedEntry[]
 }
 
 /** A gap's mark stays while any local recovery still holds a draft in its checkout. */
-export function getFeedGapErrors(context: RecoveryContext, state: EditorRecovery) {
+export function getFeedGapErrors(context: RecoveryContext, state: RecoveryState) {
   const { store } = context;
-  const gaps = store.all<{ hostId: string; checkoutId: string }>('feed-gaps');
+  const gaps = store.all<FeedGap>('feed-gaps');
   if (!gaps.length) return [];
   const errors: string[] = [];
   const { readable, unreadable } = store.readRecoveries();
@@ -219,15 +220,26 @@ export function getFeedGapErrors(context: RecoveryContext, state: EditorRecovery
     const held =
       unreadable.length > 0 ||
       readable.some((r) =>
-        r.state.drafts.some((d) => d.target.checkout.checkoutId === gap.checkoutId),
+        r.state.buffers.some((b) => b.draft && b.target.checkout.checkoutId === gap.checkoutId),
       );
     if (!held) store.delete('feed-gaps', key(gap.hostId, gap.checkoutId));
-    else if (state.drafts.some((d) => d.target.checkout.checkoutId === gap.checkoutId))
+    else {
+      const drafted = state.buffers.filter(
+        (b) => b.draft && b.target.checkout.checkoutId === gap.checkoutId,
+      );
+      if (!drafted.length) continue;
+      const stranded = (gap.stranded ?? []).filter((p) => drafted.some((b) => b.target.path === p));
       errors.push(
         'Operation history for ' +
           gap.checkoutId +
-          ' is incomplete: drafts stay at their last known paths and need attention.',
+          ' is incomplete: drafts stay at their last known paths and need attention.' +
+          (stranded.length
+            ? ' These drafts stayed behind when their file moved onto another draft: ' +
+              stranded.join(', ') +
+              '.'
+            : ''),
       );
+    }
   }
   return errors;
 }

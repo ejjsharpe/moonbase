@@ -1,121 +1,18 @@
 import assert from 'node:assert/strict';
 import { toWireError } from '@moonbase/contracts/workspace-host-errors';
-import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { Effect, ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { WorkspaceHostService, type WorkspaceHostServiceShape } from '@moonbase/contracts/services';
+import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
-import { readInstallationId, WorkspaceHostLive, WorkspaceRecoveryLive } from '../src/index.ts';
+import { readInstallationId, WorkspaceRecoveryLive } from '../src/index.ts';
 import { draft } from './workspace-fixture.ts';
+import { dropReply, dropRequest, harness, lost, openCheckout } from './split-fixture.ts';
 import { isError } from './recovery-fixture.ts';
-
-/** One file host and any number of client stores over it, as a daemon and its clients are. */
-function harness() {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-split-'))),
-    root = join(base, 'repo');
-  mkdirSync(root);
-  execFileSync('/usr/bin/git', ['init', '-q', '-b', 'main', root]);
-  const git = (...args: string[]) =>
-    execFileSync('/usr/bin/git', [
-      '-C',
-      root,
-      '-c',
-      'user.name=Test',
-      '-c',
-      'user.email=test@example.invalid',
-      ...args,
-    ]).toString();
-  const runtimes: { dispose(): Promise<void> }[] = [];
-  let clock = 1_000;
-  const startHost = async (retention = 60_000, name = 'host', hostId = 'split-host') => {
-    const runtime = ManagedRuntime.make(
-      WorkspaceHostLive(
-        {
-          dataDirectory: join(base, name),
-          hostId,
-          journalRetentionMs: retention,
-        },
-        () => clock,
-      ),
-    );
-    runtimes.push(runtime);
-    return { runtime, host: await runtime.runPromise(WorkspaceHostService) };
-  };
-  /** A client store whose host calls may be wrapped to lose a request or its reply. */
-  const startClient = (
-    name: string,
-    host: WorkspaceHostServiceShape,
-    lose?: (host: WorkspaceHostServiceShape) => WorkspaceHostServiceShape,
-    hostWaitMs?: number,
-  ) => {
-    const runtime = ManagedRuntime.make(
-      WorkspaceRecoveryLive(
-        {
-          dataDirectory: join(base, name),
-          installationId: name,
-          hostWaitMs,
-        },
-        lose ? lose(host) : host,
-      ),
-    );
-    runtimes.push(runtime);
-    return { runtime, client: makeEditorClient(runtime) };
-  };
-  return {
-    base,
-    root,
-    git,
-    startHost,
-    startClient,
-    advance: (ms: number) => (clock += ms),
-    async close() {
-      for (const runtime of runtimes.reverse()) await runtime.dispose().catch(() => {});
-      rmSync(base, { recursive: true, force: true });
-    },
-  };
-}
-const lost = new ApplicationError({
-  code: 'Unavailable',
-  message: 'The host did not answer.',
-});
-const dropRequest =
-  <K extends 'saveFile' | 'mutate'>(operation: K) =>
-  (host: WorkspaceHostServiceShape): WorkspaceHostServiceShape => ({
-    ...host,
-    [operation]: () => Effect.fail(lost),
-  });
-/** The host commits, then the link goes down: the reply and every status query are lost. */
-const dropReply =
-  <K extends 'saveFile' | 'mutate' | 'createWorktree'>(
-    operation: K,
-    failure: ApplicationError = lost,
-  ) =>
-  (host: WorkspaceHostServiceShape): WorkspaceHostServiceShape => ({
-    ...host,
-    [operation]: (input: never) =>
-      Effect.flatMap(
-        (host[operation] as (input: never) => Effect.Effect<unknown, ApplicationError>)(input),
-        () => Effect.fail(failure),
-      ),
-    saveStatus: () => Effect.fail(lost),
-    operationStatus: () => Effect.fail(lost),
-  });
-const openCheckout = (host: WorkspaceHostServiceShape, root: string) =>
-  Effect.runPromise(host.openCheckout({ root }));
 
 test('a save whose reply is lost resolves through saveStatus, and one that never arrived returns as a draft over its baseline, even once another client moved that draft', async () => {
   const h = harness();

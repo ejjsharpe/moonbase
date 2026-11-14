@@ -1,3 +1,4 @@
+import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { Effect } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import type {
@@ -8,8 +9,8 @@ import type {
 import { UnresolvedWorkError } from '@moonbase/contracts/workspace-host-errors';
 import { attempt, type WorkspaceFailure } from '../attempt.ts';
 import { getOperationPaths } from '../operation-paths.ts';
-import { canonical, key, overlaps } from '../validation.ts';
-import type { FeedCursor, OperationRecord, StoredSave } from './client-schema.ts';
+import { canonical, key, overlaps, same } from '../validation.ts';
+import type { FeedCursor, FeedGap, OperationRecord, StoredSave } from './client-schema.ts';
 import { openOperations, pendingSaves, type ClientStore } from './client-store.ts';
 
 /** The file host as the client's recovery asks it, with the installation already bound. */
@@ -155,6 +156,18 @@ export class RecoveryContext {
           !r.acknowledgedBy.includes(r.input.clientId)),
     );
   }
+  /**
+   * Whether an uncertain operation may still own a draft at `target` (one of its sources holds
+   * it), so the draft cannot be dropped until the operation is resolved.
+   */
+  isDraftHeld(target: { checkout: CheckoutTarget; path: string }) {
+    return this.getOpenOperations().some(
+      (r) =>
+        r.result.outcome === 'uncertain' &&
+        same(target.checkout, r.input.checkout) &&
+        r.input.sources.some((s) => isPathAtOrInside(target.path, s.target.path)),
+    );
+  }
   /** Refuses to start over work whose outcome this client has not settled. */
   assertSettled(target: CheckoutTarget, paths: string[], clientId: string) {
     return attempt(
@@ -168,11 +181,17 @@ export class RecoveryContext {
       ),
     );
   }
-  /** Marks a checkout's history incomplete: its drafts may be at paths a missed move left behind. */
-  markGap(target: CheckoutTarget) {
+  /**
+   * Marks a checkout's history incomplete: its drafts may be at paths a missed move left behind.
+   * `stranded` names drafts known to have stayed behind when their file moved.
+   */
+  markGap(target: CheckoutTarget, stranded: string[] = []) {
+    const known = this.store.get<FeedGap>('feed-gaps', feedKey(target))?.stranded ?? [];
+    const paths = [...new Set([...known, ...stranded])];
     this.store.put('feed-gaps', feedKey(target), {
       hostId: target.hostId,
       checkoutId: target.checkoutId,
+      ...(paths.length ? { stranded: paths } : {}),
     });
   }
   getFeedCursor(target: CheckoutTarget) {

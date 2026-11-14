@@ -26,7 +26,8 @@ const coordinate = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
 /** Whether a string has no lone surrogates (`String.prototype.isWellFormed`, ES2024). */
 export const isWellFormed = (value: string) =>
   (value as string & { isWellFormed(): boolean }).isWellFormed();
-const text = Schema.String.check(
+/** A file's text as recovery and saves carry it: well-formed, no NUL, within the file bound. */
+export const FileTextSchema = Schema.String.check(
   Schema.makeFilter(
     (value) =>
       !value.includes('\0') &&
@@ -34,6 +35,7 @@ const text = Schema.String.check(
       new TextEncoder().encode(value).length <= maximumFileBytes,
   ),
 );
+const text = FileTextSchema;
 export const FileDocumentSchema = struct({ text, version: Schema.String });
 export const FileViewSchema = Schema.Literals([
   'file',
@@ -48,7 +50,8 @@ export const EditorPositionSchema = struct({
   top: coordinate,
   left: coordinate,
 });
-const positions = struct({
+/** An editor's remembered positions in one file, per view (and its original side). */
+export const FilePositionsSchema = struct({
   file: optional(EditorPositionSchema),
   staged: optional(EditorPositionSchema),
   unstaged: optional(EditorPositionSchema),
@@ -71,37 +74,45 @@ export const isCheckoutPath = (value: string, folder = false) =>
   !/[\\\0]/.test(value) &&
   (value === '' ||
     !value.split('/').some((p) => !p || p === '.' || p === '..' || p.toLowerCase() === '.git'));
-const checkoutPath = Schema.String.check(Schema.makeFilter((value) => isCheckoutPath(value)));
-const checkoutFolder = Schema.String.check(
+export const CheckoutPathSchema = Schema.String.check(
+  Schema.makeFilter((value) => isCheckoutPath(value)),
+);
+const checkoutPath = CheckoutPathSchema;
+export const CheckoutFolderSchema = Schema.String.check(
   Schema.makeFilter((value) => isCheckoutPath(value, true)),
 );
-const isUnique = (values: readonly unknown[]) =>
+const checkoutFolder = CheckoutFolderSchema;
+export const isUnique = (values: readonly unknown[]) =>
   new Set(values.map(getJsonKey)).size === values.length;
 /** A checkout in recovery: its root is an absolute path. */
-const recoveryCheckout = CheckoutTargetSchema.check(
+export const RecoveryCheckoutSchema = CheckoutTargetSchema.check(
   Schema.makeFilter((target) => target.root.startsWith('/')),
 );
 /** A file in recovery: an exact checkout-relative path. */
-const recoveryTarget = struct({ checkout: recoveryCheckout, path: checkoutPath });
+const recoveryCheckout = RecoveryCheckoutSchema;
+export const RecoveryTargetSchema = struct({ checkout: recoveryCheckout, path: checkoutPath });
+const recoveryTarget = RecoveryTargetSchema;
+/** A checkout's files tree: folder paths, not buffers. */
+export const CheckoutTreeSchema = struct({
+  expanded: array(checkoutFolder),
+  selected: array(checkoutFolder),
+  focus: checkoutFolder,
+  scroll: coordinate,
+  /** Whether the tree leaves out entries Git has classified as ignored (Hide Ignored Files). */
+  hideIgnoredFiles: optional(Schema.Boolean),
+  /**
+   * Written by a since-removed Hide button whose choice was never applied; still accepted so
+   * views saved by it load, but never honoured, so an old `true` hides nothing.
+   */
+  hideIgnored: optional(Schema.Boolean),
+});
 export const CheckoutViewSchema = struct({
   openFiles: array(checkoutPath).check(Schema.isMaxLength(1000)),
   active: checkoutFolder,
   preview: Schema.NullOr(checkoutPath),
   fileViews: Schema.Record(checkoutPath, Schema.mutableKey(FileViewSchema)),
-  positions: Schema.Record(checkoutPath, Schema.mutableKey(positions)),
-  tree: struct({
-    expanded: array(checkoutFolder),
-    selected: array(checkoutFolder),
-    focus: checkoutFolder,
-    scroll: coordinate,
-    /** Whether the tree leaves out entries Git has classified as ignored (Hide Ignored Files). */
-    hideIgnoredFiles: optional(Schema.Boolean),
-    /**
-     * Written by a since-removed Hide button whose choice was never applied; still accepted so
-     * views saved by it load, but never honoured, so an old `true` hides nothing.
-     */
-    hideIgnored: optional(Schema.Boolean),
-  }),
+  positions: Schema.Record(checkoutPath, Schema.mutableKey(FilePositionsSchema)),
+  tree: CheckoutTreeSchema,
 }).check(
   Schema.makeFilter(
     (view) =>

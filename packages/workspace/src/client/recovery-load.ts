@@ -1,11 +1,12 @@
 import { Cause, Clock, Effect, Exit } from 'effect';
-import { emptyRecovery, type EditorRecovery } from '@moonbase/contracts/workspace';
+import { emptyRecoveryState, type RecoveryState } from '@moonbase/contracts/recovery';
 import { attempt, type WorkspaceFailure } from '../attempt.ts';
 import { invalidStored } from '../store.ts';
 import { SystemFailure } from '../system-failures.ts';
 import { errorText, same } from '../validation.ts';
 import type { SaveRecord, StoredSave } from './client-schema.ts';
 import { pendingSaves } from './client-store.ts';
+import { toLegacyRecovery } from './legacy-recovery.ts';
 import { getFeedGapErrors, followRestoredCheckouts, syncFeed } from './feed-sync.ts';
 import {
   markOperationAcknowledged,
@@ -161,7 +162,7 @@ export const loadRecovery = (context: RecoveryContext, clientId: string, hostWai
       (yield* phase(recoverEvidence(bounded, new Set(before?.state.openCheckoutIds ?? [])))) ??
       new Map<string, string>();
     const stored = yield* attempt(() => store.readRecovery(clientId)),
-      state: EditorRecovery = stored?.state ?? emptyRecovery(clientId);
+      state: RecoveryState = stored?.state ?? emptyRecoveryState(clientId);
     yield* Effect.forEach(
       state.checkouts.filter((c) => state.openCheckoutIds.includes(c.checkoutId)),
       (target) =>
@@ -222,6 +223,12 @@ export const loadRecovery = (context: RecoveryContext, clientId: string, hostWai
             (notes.has(saveKey(record.request)) ? ' ' + notes.get(saveKey(record.request)) : ''),
         );
       errors.push(...getFeedGapErrors(context, state));
-      return { revision: stored?.revision ?? 0, state, errors, operations };
+      // The renderer loads the path-keyed snapshot it publishes, until CL-13.
+      return {
+        revision: stored?.revision ?? 0,
+        state: toLegacyRecovery(state),
+        errors,
+        operations,
+      };
     });
   });

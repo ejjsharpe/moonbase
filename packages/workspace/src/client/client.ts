@@ -42,7 +42,9 @@ import {
   replayOperation,
 } from './operation-recovery.ts';
 import { RecoveryContext, type HostPorts, type Recoveries } from './recovery-context.ts';
+import { makeRecoveryEdits } from './recovery-edits.ts';
 import { loadRecovery } from './recovery-load.ts';
+import { makeRecoveryOutlines } from './recovery-outlines.ts';
 import { persistRecovery } from './recovery-publication.ts';
 import { acknowledgeSaves, getBaseline, publishSaves, replaySave } from './save-recovery.ts';
 
@@ -103,6 +105,8 @@ export const makeClientWorkspace = ({
     });
     /** The same recovery, asking the host questions a cancelled caller cannot stop. */
     const settled = context.withHost(makePorts(host, installationId, false));
+    const outlines = yield* makeRecoveryOutlines(store);
+    const edits = makeRecoveryEdits(context);
     /** Calls under a stored request ID that are in flight, so a concurrent duplicate shares one. */
     const requests = new Map<string, Deferred.Deferred<unknown, WorkspaceFailure>>();
     const run = <A>(work: Effect.Effect<A, WorkspaceFailure>, persistence = false) =>
@@ -266,10 +270,11 @@ export const makeClientWorkspace = ({
         );
       for (const { state } of recoveries.readable)
         if (
-          state.drafts.some(
-            (d) =>
-              d.target.checkout.checkoutId === input.checkout.checkoutId &&
-              conflicts(d.target.path),
+          state.buffers.some(
+            ({ draft, target }) =>
+              draft &&
+              target.checkout.checkoutId === input.checkout.checkoutId &&
+              conflicts(target.path),
           )
         )
           return Effect.fail(new InvalidRecoveryRequestError({ problem: 'destination-drafts' }));
@@ -351,13 +356,15 @@ export const makeClientWorkspace = ({
         }).pipe(Effect.ensuring(Effect.sync(() => context.activeOperations.delete(id))));
       });
 
-    const call =
-      <K extends WorkspaceCommand>(
-        work: (input: CommandInput<K>) => Effect.Effect<CommandOutput<K>, WorkspaceFailure>,
-        persistence = false,
-      ) =>
-      (input: CommandInput<K>) =>
-        run(work(input), persistence);
+    /** Work that may change recoveries: what it committed is published as it ends. */
+    const publishing =
+      <I, A>(work: (input: I) => Effect.Effect<A, WorkspaceFailure>, persistence = false) =>
+      (input: I) =>
+        run(Effect.ensuring(work(input), outlines.refresh), persistence);
+    const call = <K extends WorkspaceCommand>(
+      work: (input: CommandInput<K>) => Effect.Effect<CommandOutput<K>, WorkspaceFailure>,
+      persistence = false,
+    ) => publishing(work, persistence);
     const service: WorkspaceServiceShape = {
       openCheckout: (input) => fromHost(host.openCheckout(input)),
       readFile: (input) => fromHost(host.readFile(input)),
@@ -408,8 +415,13 @@ export const makeClientWorkspace = ({
         true,
       ),
       persistRecovery: call<'persistRecovery'>((input) => persistRecovery(context, input), true),
+      openTab: publishing(edits.openTab, true),
+      closeTab: publishing(edits.closeTab, true),
+      updateDraft: publishing(edits.updateDraft, true),
+      updateLayout: publishing(edits.updateLayout, true),
       watch: (input) =>
         host.watch(input).pipe(Stream.mapError((error) => asWorkspaceError(error, false))),
+      watchRecovery: (input) => outlines.watch(input.clientId),
     };
     return service;
   });

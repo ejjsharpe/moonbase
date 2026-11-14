@@ -87,6 +87,11 @@ function fixture(
     acknowledgeOperation: unavailable,
     persistRecovery: unavailable,
     getRecoveryPublication: unavailable,
+    openTab: unavailable,
+    closeTab: unavailable,
+    updateDraft: unavailable,
+    updateLayout: unavailable,
+    watchRecovery: () => Stream.unwrap(unavailable()),
     watch: () =>
       Stream.unwrap(
         Effect.as(

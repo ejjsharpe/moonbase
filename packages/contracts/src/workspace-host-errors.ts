@@ -220,6 +220,7 @@ const unsupported = {
   'native-imports': 'This host does not accept native imports.',
   'chat-projects': 'This host cannot turn a chat into a project.',
   runtime: 'The workspace file host requires macOS on exactly Bun 1.4.4.',
+  'recovery-edits': 'This workspace does not keep recovery edits.',
 } as const;
 /** This host does not offer the operation, or cannot run where it was started. */
 export class WorkspaceUnsupportedError extends Schema.TaggedError<WorkspaceUnsupportedError>()(
