@@ -9,7 +9,7 @@ import {
 import { attempt } from '../attempt.ts';
 import type { Directory } from '../filesystem.ts';
 import { same } from '../validation.ts';
-import { cancellationPoint } from './cancellation.ts';
+import { cancellationPoint } from '../cancellation.ts';
 import { Checkouts } from './checkouts.ts';
 import { NativeImport } from './native-import.ts';
 

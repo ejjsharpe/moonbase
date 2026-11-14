@@ -9,11 +9,12 @@ import {
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join, resolve } from 'node:path';
 import { attempt } from '../attempt.ts';
+import { getOperationPaths } from '../operation-paths.ts';
 import { SystemFailure } from '../system-failures.ts';
 import type { Directory } from '../filesystem.ts';
 import type { HostOperationRecord } from '../schema.ts';
 import { errorText, folded, path, same } from '../validation.ts';
-import { cancellationPoint, isCancelled } from './cancellation.ts';
+import { cancellationPoint, isCancelled } from '../cancellation.ts';
 import { Checkouts } from './checkouts.ts';
 import { HostJournal } from './host-journal.ts';
 import type { NativeImport } from './native-import.ts';
@@ -35,21 +36,15 @@ const containsSelectedSource = (
       ? source.native.parents.split(',').includes(entry.identity)
       : isPathAtOrInside(source.path, entry.path)));
 
-/** The paths an operation touches: its sources, and where each lands. */
+/** The paths an operation touches; a native import's items are named by their references. */
 export const getOperationFootprint =
-  (references: Pick<References, 'getSourceName'>) => (input: HostInput<'mutate'>) => {
-    const sources = input.sources.map((s) => s.target.path);
-    if (input.destination === undefined) return sources;
-    const names = sources.length
-      ? sources.map((p) => basename(p))
-      : (input.nativeReferences ?? []).map((token) => references.getSourceName(token));
-    return [
-      ...sources,
-      ...(names.length > 1
-        ? names.map((name) => (name ? join(input.destination!, name) : input.destination!))
-        : [input.destination]),
-    ];
-  };
+  (references: Pick<References, 'getSourceName'>) => (input: HostInput<'mutate'>) =>
+    getOperationPaths(
+      input,
+      input.sources.length
+        ? undefined
+        : (input.nativeReferences ?? []).map((token) => references.getSourceName(token)),
+    );
 
 /**
  * Runs a file operation: its selection is checked, durably planned and only then carried out item

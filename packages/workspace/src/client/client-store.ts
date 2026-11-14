@@ -1,17 +1,21 @@
 import { randomUUID } from 'node:crypto';
 import { InvalidRequestError } from '@moonbase/contracts/workspace-host-errors';
 import type { SQLInputValue } from 'node:sqlite';
+import { Effect } from 'effect';
 import {
-  ApplicationError,
   type CommandInput,
   type EditorRecovery,
   type FileDocument,
   type RecoveryPublication,
 } from '@moonbase/contracts/workspace';
-import { normalizeApplicationError } from '@moonbase/effect';
 import { Store } from '../store.ts';
 import { canonical, errorText, hash, key, text, textDocument } from '../validation.ts';
-import { fail } from '@moonbase/contracts/errors';
+import {
+  InvalidRecoveryRequestError,
+  RecoveryConflictError,
+} from '@moonbase/contracts/workspace-errors';
+import { WorkspaceStoreError } from '@moonbase/contracts/workspace-host-errors';
+import { attempt } from '../attempt.ts';
 import {
   type SaveRecord,
   type StoredSave,
@@ -144,10 +148,7 @@ export class ClientStore extends Store {
   ): RecoveryPublication | null {
     const previous = this.recoveryPublication(input.clientId, input.requestId);
     if (previous && previous.digest !== digest)
-      fail(
-        'InvalidInput',
-        'Recovery request ID already belongs to a different immutable publication.',
-      );
+      throw new InvalidRecoveryRequestError({ problem: 'publication-id' });
     if (previous && previous.receipt.previousRevision !== input.expectedRevision)
       throw invalidStored();
     return previous?.receipt ?? null;
@@ -159,35 +160,39 @@ export class ClientStore extends Store {
   writeInternalRecovery(client: string, revision: number, state: EditorRecovery) {
     this.writeRecovery(client, revision + 1, state);
   }
-  persist(input: CommandInput<'persistRecovery'>, digest: string): RecoveryPublication {
-    return this.transaction(() => {
-      const previous = this.replayPublication(input, digest);
-      if (previous) return previous;
-      const { clientId: client, requestId, expectedRevision: expected, state } = input;
-      const revision = this.readRecovery(client)?.revision ?? 0;
-      if (revision !== expected)
-        fail('Conflict', 'Recovery changed in another window. Reload before publishing.');
-      const receipt = {
-        clientId: client,
-        requestId,
-        previousRevision: revision,
-        revision: revision + 1,
-      };
-      this.writeRecovery(client, revision + 1, state);
-      this.put('publications', client, revision + 1);
-      this.put('recovery-publications', hash(canonical([client, requestId])), { digest, receipt });
-      return receipt;
-    });
+  persist(input: CommandInput<'persistRecovery'>, digest: string) {
+    return this.transaction(
+      attempt((): RecoveryPublication => {
+        const previous = this.replayPublication(input, digest);
+        if (previous) return previous;
+        const { clientId: client, requestId, expectedRevision: expected, state } = input;
+        const revision = this.readRecovery(client)?.revision ?? 0;
+        if (revision !== expected)
+          throw new RecoveryConflictError({ conflict: 'recovery-changed' });
+        const receipt = {
+          clientId: client,
+          requestId,
+          previousRevision: revision,
+          revision: revision + 1,
+        };
+        this.writeRecovery(client, revision + 1, state);
+        this.put('publications', client, revision + 1);
+        this.put('recovery-publications', hash(canonical([client, requestId])), {
+          digest,
+          receipt,
+        });
+        return receipt;
+      }),
+    );
   }
   /**
    * Reserves a save's ID with its record and, in the same transaction, its text and the baseline's
    * when the recovery does not hold it, each written once; returns what already holds the ID.
    * Later changes rewrite only the small record.
    */
-  reserveSave(id: string, record: SaveRecord): SaveRecord | null {
-    let reserved: boolean;
-    try {
-      reserved = this.transaction(() => {
+  reserveSave(id: string, record: SaveRecord) {
+    return this.transaction(
+      attempt(() => {
         const inserted = this.statement(
           'INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO NOTHING',
         ).run('saves', id, JSON.stringify(toStoredSave(record)));
@@ -196,16 +201,15 @@ export class ClientStore extends Store {
         write.run(id, 'text', record.input.text);
         if (record.baseline.text !== undefined) write.run(id, 'baseline', record.baseline.text);
         return true;
-      });
-    } catch (error) {
-      throw new ApplicationError({
-        code: 'Persistence',
-        message:
-          'Workspace request reservation failed; no mutation admitted. ' +
-          normalizeApplicationError(error).message,
-      });
-    }
-    return reserved ? null : this.readSave(id);
+      }),
+    ).pipe(
+      Effect.mapError(
+        (error) => new WorkspaceStoreError({ failure: 'reservation', detail: errorText(error) }),
+      ),
+      Effect.flatMap((reserved) =>
+        reserved ? Effect.succeed(null) : attempt(() => this.readSave(id)),
+      ),
+    );
   }
   /** A save's record with its text, and its baseline's while the save keeps it. */
   readSave(id: string): SaveRecord | null {
@@ -267,9 +271,11 @@ export class ClientStore extends Store {
     );
   }
   deleteSave(id: string) {
-    this.transaction(() => {
-      this.delete('saves', id);
-      this.write('DELETE FROM save_texts WHERE id=?', [id]);
-    });
+    return this.transaction(
+      attempt(() => {
+        this.delete('saves', id);
+        this.write('DELETE FROM save_texts WHERE id=?', [id]);
+      }),
+    );
   }
 }

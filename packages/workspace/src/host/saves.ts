@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { attempt } from '../attempt.ts';
 import type { HostSaveRecord } from '../schema.ts';
 import { errorText, hash, path } from '../validation.ts';
-import { cancellationPoint } from './cancellation.ts';
+import { cancellationPoint } from '../cancellation.ts';
 import { Checkouts } from './checkouts.ts';
 import { HostJournal } from './host-journal.ts';
 import { getOperationFootprint } from './mutations.ts';
