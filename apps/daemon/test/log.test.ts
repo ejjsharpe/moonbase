@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { lstat, mkdir, readFile, readdir, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { openDaemonLog, type LogRecord } from '../src/log.ts';
-import { temporaryRoot } from './fixture.ts';
+import { temporaryRoot } from './daemon-fixture.ts';
 
 test('the daemon log rotates within its bound and keeps only its own fields', async () => {
   const root = await temporaryRoot();

@@ -10,7 +10,7 @@ import {
   type CheckoutTarget,
   type EditorRecovery,
 } from '@moonbase/contracts/workspace';
-import { WorkspaceLive } from './workspace-live.ts';
+import { WorkspaceLive } from './workspace-live-fixture.ts';
 
 export function fixture() {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-workspace-'))),

@@ -709,7 +709,7 @@ for (const mode of ['local', 'remote'] as const)
   test(`stored image ${mode} record is served over moonbase:// under production CSP; viewer keyboard, close and actual zoom`, async () => {
     const host =
       mode === 'remote'
-        ? await controlledHostFixture(new URL('../fixtures/stored-image-faux.mjs', import.meta.url))
+        ? await controlledHostFixture(new URL('../fixtures/faux-stored-image.mjs', import.meta.url))
         : undefined;
     const directory =
       host?.directory ?? (await realpath(await mkdtemp(join(tmpdir(), 'moonbase-image-native-'))));

@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { createMoonbaseApplication } from '@moonbase/application';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ProviderSetupClient, ProviderState } from '@moonbase/contracts/providers';
-import { chatCapabilities } from './chat-capabilities.ts';
+import { chatCapabilities } from './chat-capabilities-fixture.ts';
 
 const status: ProviderState = { providers: [], flow: null };
 const running: ProviderState = {

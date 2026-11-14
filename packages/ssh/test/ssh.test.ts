@@ -108,7 +108,7 @@ async function fixture(mode = 'normal', healthMode = 'valid', options: SshOption
       '\nprocess.env.MOONBASE_SSH_TEST_CONTROL=' +
       JSON.stringify(control) +
       ';\n' +
-      readFileSync(fileURLToPath(new URL('./fake-ssh.mjs', import.meta.url)), 'utf8'),
+      readFileSync(fileURLToPath(new URL('./faux-ssh.mjs', import.meta.url)), 'utf8'),
   );
   chmodSync(executable, 0o700);
   const setMode = (value: string, diagnostic?: string, sshConfig?: string) =>

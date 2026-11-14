@@ -18,4 +18,4 @@ export function editorCapabilities() {
   return { memory, runtime, client: makeEditorClient(runtime) };
 }
 
-export { chatCapabilities } from './chat-capabilities.ts';
+export { chatCapabilities } from './chat-capabilities-fixture.ts';

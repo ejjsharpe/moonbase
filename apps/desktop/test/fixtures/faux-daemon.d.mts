@@ -1,6 +1,6 @@
 import type { DaemonCommand } from '../../src/main/daemon/daemon-command.ts';
 
-/** The faux daemon's `faux.json`, as `apps/daemon/test/faux.ts` reads it. */
+/** The faux daemon's `faux.json`, as `apps/daemon/test/faux-provider.ts` reads it. */
 export type FauxScript = {
   steps?: (
     | { reply: string; thinking?: string }

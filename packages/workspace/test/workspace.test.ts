@@ -670,7 +670,7 @@ test('native assets in packaged resource paths run with restricted PATH and no p
       process.execPath,
       [
         '--experimental-strip-types',
-        fileURLToPath(new URL('./packaged-assets.fixture.ts', import.meta.url)),
+        fileURLToPath(new URL('./packaged-assets-process.ts', import.meta.url)),
         f.root,
         f.dataDirectory,
         filesystem,

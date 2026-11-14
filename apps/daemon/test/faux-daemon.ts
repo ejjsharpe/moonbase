@@ -6,7 +6,7 @@ import { readDirectoryArgument } from '../src/data-directory.ts';
 import { describeFailure } from '../src/failure.ts';
 import { onShutdownSignal } from '../src/signals.ts';
 import { findFilesystemHelper } from '../src/workspace.ts';
-import { createFauxProviders, readFauxScript } from './faux.ts';
+import { createFauxProviders, readFauxScript } from './faux-provider.ts';
 
 /**
  * With `MOONBASE_TEST_HOLD_READ` naming a folder, the first helper `read` of a file ending in

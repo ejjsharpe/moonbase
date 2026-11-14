@@ -24,8 +24,8 @@ import {
   temporaryRoot,
   until,
   type DaemonProcess,
-} from './fixture.ts';
-import { fauxModelId, fauxProviderId, type FauxScript } from './faux.ts';
+} from './daemon-fixture.ts';
+import { fauxModelId, fauxProviderId, type FauxScript } from './faux-provider.ts';
 
 const model = { provider: fauxProviderId, modelId: fauxModelId };
 const mode = async (path: string) => (await lstat(path)).mode & 0o777;

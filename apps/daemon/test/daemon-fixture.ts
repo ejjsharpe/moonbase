@@ -23,7 +23,7 @@ import { connectDaemonSocket } from '@moonbase/daemon-protocol/socket';
 import type { ChatHostTarget } from '@moonbase/contracts/host';
 import { runDaemon, type DaemonExit } from '../src/daemon.ts';
 import type { IdleClock } from '../src/idle.ts';
-import { createFauxProviders } from './faux.ts';
+import { createFauxProviders } from './faux-provider.ts';
 
 export const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function until<T>(read: () => Promise<T>, ready: (value: T) => boolean, ms = 10000) {

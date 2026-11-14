@@ -21,7 +21,7 @@ for (const mode of ['local', 'remote'] as const)
   test(`${mode} retained real images are served by main from exact record ownership and independently padded authenticated chunks`, async () => {
     const host =
       mode === 'remote'
-        ? await controlledHostFixture(new URL('./fixtures/stored-image-faux.mjs', import.meta.url))
+        ? await controlledHostFixture(new URL('./fixtures/faux-stored-image.mjs', import.meta.url))
         : undefined;
     const directory =
       host?.directory ?? (await realpath(await mkdtemp(join(tmpdir(), 'moonbase-images-'))));

@@ -11,7 +11,7 @@ import { ApplicationError, emptyRecovery, type CommandInput } from '@moonbase/co
 import { WorkspaceService } from '@moonbase/contracts/services';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { openOperations, pendingSaves } from '../src/client/client-store.ts';
-import { WorkspaceLive } from './workspace-live.ts';
+import { WorkspaceLive } from './workspace-live-fixture.ts';
 const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
 const isError = (code: ApplicationError['code']) => (e: unknown) =>
   ApplicationError.is(e) && e.code === code;

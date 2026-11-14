@@ -50,7 +50,7 @@ function start(path: string) {
     process.execPath,
     [
       '--import',
-      new URL('./no-provider.mjs', import.meta.url).pathname,
+      new URL('./no-network.mjs', import.meta.url).pathname,
       '--experimental-strip-types',
       new URL('./faux-host.mjs', import.meta.url).pathname,
       path,

@@ -5,7 +5,7 @@ import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { runDaemon, type DaemonExit } from '../src/daemon.ts';
 import { createIdleMonitor } from '../src/idle.ts';
-import { createFauxProviders } from './faux.ts';
+import { createFauxProviders } from './faux-provider.ts';
 import {
   bounded,
   createControlledClock,
@@ -15,8 +15,8 @@ import {
   startInProcess,
   temporaryRoot,
   until,
-} from './fixture.ts';
-import { fauxModelId, fauxProviderId } from './faux.ts';
+} from './daemon-fixture.ts';
+import { fauxModelId, fauxProviderId } from './faux-provider.ts';
 
 const minute = 60_000;
 
