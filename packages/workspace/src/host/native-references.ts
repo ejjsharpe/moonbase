@@ -69,16 +69,19 @@ export class References {
     });
   }
   /**
-   * Claims references for the operation running in the current scope, which then owns their
-   * descriptors. Call it right after durable reservation, with no yield since inspection.
+   * Claims inspected references: no other operation can use them after this. Call it in the
+   * same synchronous step as their inspection and the operation's durable reservation.
    */
-  claimReferences(claims: NativeClaim[]): Effect.Effect<void, never, Scope.Scope> {
+  claimReferences(claims: NativeClaim[]) {
+    for (const { token, ref } of claims) {
+      this.unclaimed.delete(token);
+      Deferred.doneUnsafe(ref.claimed, Effect.void);
+    }
+    this.activeNative += claims.length;
+  }
+  /** Hands claimed references' descriptors to the operation running in the current scope. */
+  holdClaimedReferences(claims: NativeClaim[]): Effect.Effect<void, never, Scope.Scope> {
     return Effect.gen({ self: this }, function* () {
-      for (const { token, ref } of claims) {
-        this.unclaimed.delete(token);
-        Deferred.doneUnsafe(ref.claimed, Effect.void);
-      }
-      this.activeNative += claims.length;
       for (const { ref } of claims)
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {

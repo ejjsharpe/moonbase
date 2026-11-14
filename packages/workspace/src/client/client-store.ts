@@ -161,48 +161,45 @@ export class ClientStore extends Store {
     this.writeRecovery(client, revision + 1, state);
   }
   persist(input: CommandInput<'persistRecovery'>, digest: string) {
-    return this.transaction(
-      attempt((): RecoveryPublication => {
-        const previous = this.replayPublication(input, digest);
-        if (previous) return previous;
-        const { clientId: client, requestId, expectedRevision: expected, state } = input;
-        const revision = this.readRecovery(client)?.revision ?? 0;
-        if (revision !== expected)
-          throw new RecoveryConflictError({ conflict: 'recovery-changed' });
-        const receipt = {
-          clientId: client,
-          requestId,
-          previousRevision: revision,
-          revision: revision + 1,
-        };
-        this.writeRecovery(client, revision + 1, state);
-        this.put('publications', client, revision + 1);
-        this.put('recovery-publications', hash(canonical([client, requestId])), {
-          digest,
-          receipt,
-        });
-        return receipt;
-      }),
-    );
+    return this.transaction((): RecoveryPublication => {
+      const previous = this.replayPublication(input, digest);
+      if (previous) return previous;
+      const { clientId: client, requestId, expectedRevision: expected, state } = input;
+      const revision = this.readRecovery(client)?.revision ?? 0;
+      if (revision !== expected) throw new RecoveryConflictError({ conflict: 'recovery-changed' });
+      const receipt = {
+        clientId: client,
+        requestId,
+        previousRevision: revision,
+        revision: revision + 1,
+      };
+      this.writeRecovery(client, revision + 1, state);
+      this.put('publications', client, revision + 1);
+      this.put('recovery-publications', hash(canonical([client, requestId])), {
+        digest,
+        receipt,
+      });
+      return receipt;
+    });
   }
   /**
    * Reserves a save's ID with its record and, in the same transaction, its text and the baseline's
    * when the recovery does not hold it, each written once; returns what already holds the ID.
    * Later changes rewrite only the small record.
+   * `reserved` runs in the same synchronous step once this call takes the ID.
    */
-  reserveSave(id: string, record: SaveRecord) {
-    return this.transaction(
-      attempt(() => {
-        const inserted = this.statement(
-          'INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO NOTHING',
-        ).run('saves', id, JSON.stringify(toStoredSave(record)));
-        if (Number(inserted.changes) === 0) return false;
-        const write = this.statement('INSERT OR REPLACE INTO save_texts VALUES(?,?,?)');
-        write.run(id, 'text', record.input.text);
-        if (record.baseline.text !== undefined) write.run(id, 'baseline', record.baseline.text);
-        return true;
-      }),
-    ).pipe(
+  reserveSave(id: string, record: SaveRecord, reserved: () => void) {
+    return this.transaction(() => {
+      const inserted = this.statement(
+        'INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO NOTHING',
+      ).run('saves', id, JSON.stringify(toStoredSave(record)));
+      if (Number(inserted.changes) === 0) return false;
+      const write = this.statement('INSERT OR REPLACE INTO save_texts VALUES(?,?,?)');
+      write.run(id, 'text', record.input.text);
+      if (record.baseline.text !== undefined) write.run(id, 'baseline', record.baseline.text);
+      reserved();
+      return true;
+    }).pipe(
       Effect.mapError(
         (error) => new WorkspaceStoreError({ failure: 'reservation', detail: errorText(error) }),
       ),
@@ -271,11 +268,9 @@ export class ClientStore extends Store {
     );
   }
   deleteSave(id: string) {
-    return this.transaction(
-      attempt(() => {
-        this.delete('saves', id);
-        this.write('DELETE FROM save_texts WHERE id=?', [id]);
-      }),
-    );
+    return this.transaction(() => {
+      this.delete('saves', id);
+      this.write('DELETE FROM save_texts WHERE id=?', [id]);
+    });
   }
 }

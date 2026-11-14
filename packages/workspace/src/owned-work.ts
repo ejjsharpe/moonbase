@@ -4,6 +4,7 @@ import {
   WorkspaceUnavailableError,
 } from '@moonbase/contracts/workspace-host-errors';
 import { isWorkspaceError, type WorkspaceError } from '@moonbase/contracts/workspace-errors';
+import { CancelledError } from '@moonbase/contracts/errors';
 import type { WorkspaceFailure } from './attempt.ts';
 import { SystemFailure } from './system-failures.ts';
 
@@ -83,3 +84,15 @@ export const runOwned = <A, E>(
       return yield* Effect.failCause(exit.cause);
     }),
   );
+
+/**
+ * A shared call's outcome as a duplicate waiting on it sees it: a first call its caller
+ * cancelled is `Cancelled` for the duplicate too, not an interruption of the duplicate.
+ */
+export const asSharedOutcome = <A, E>(
+  exit: Exit.Exit<A, E>,
+  operation: string,
+): Exit.Exit<A, E | CancelledError> =>
+  Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
+    ? Exit.fail(new CancelledError({ operation }))
+    : exit;

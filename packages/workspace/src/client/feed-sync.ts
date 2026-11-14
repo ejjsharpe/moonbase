@@ -109,12 +109,10 @@ const syncCheckoutFeed = (context: RecoveryContext, target: CheckoutTarget) =>
     // What came before the present is unknowable: drafts there are reported until resolved.
     const restart = Effect.gen(function* () {
       const feed = yield* context.host.listOperations({ checkout: target, after: null });
-      yield* store.transaction(
-        attempt(() => {
-          context.markGap(target);
-          store.put('feed-cursors', id, { sequence: feed.through, epoch: feed.epoch });
-        }),
-      );
+      yield* store.transaction(() => {
+        context.markGap(target);
+        store.put('feed-cursors', id, { sequence: feed.through, epoch: feed.epoch });
+      });
     });
     let cursor = yield* attempt(() => store.get<FeedCursor>('feed-cursors', id));
     // A checkout that entered a recovery without being followed (such as by a restored save).
@@ -151,21 +149,17 @@ const applyFeedPage = (
       store.put('feed-cursors', feedKey(target), { sequence: feed.through, epoch: feed.epoch });
     };
     yield* store
-      .transaction(
-        attempt(() => {
-          if (records.length) applyOperations(context, structuredClone(records));
-          advance();
-        }),
-      )
+      .transaction(() => {
+        if (records.length) applyOperations(context, structuredClone(records));
+        advance();
+      })
       .pipe(
         Effect.catch((error) =>
-          store.transaction(
-            attempt(() => {
-              for (const { id, record } of records)
-                recordPublicationFailure(context, id, record, error);
-              advance();
-            }),
-          ),
+          store.transaction(() => {
+            for (const { id, record } of records)
+              recordPublicationFailure(context, id, record, error);
+            advance();
+          }),
         ),
       );
   });

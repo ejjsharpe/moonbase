@@ -159,112 +159,110 @@ export const publishSaves = (
     return Effect.fail(new InvalidRecoveryRequestError({ problem: 'save-group' }));
   const { store } = context;
   return store
-    .transaction(
-      attempt(() => {
-        if (restore) {
-          const group = new Map(
-            store
-              .readSaves(unresolvedSaves + " AND json_extract(body, '$.request.clientId') = ?", [
-                clientId,
-              ])
-              .map((r) => [saveKey(r.input), r]),
-          );
-          for (const record of records) group.set(saveKey(record.input), record);
-          if ([...group.keys()].some((id) => context.activeSaves.has(id)))
-            throw new RecoveryPublicationError({ pending: 'save-running' });
-          records = [...group.values()];
-        }
-        const stored = store.readRecovery(clientId),
-          revision = stored?.revision ?? 0,
-          publication = store.publication(clientId),
-          state = stored?.state ?? emptyRecovery(clientId);
-        let changed = false;
-        // Baselines this publication replaces in drafts, which a save may still have begun from.
-        const replaced: FileDocument[] = [];
-        const updates = records.map((record) => {
-          const id = saveKey(record.input),
-            committed = store.get<StoredSave>('saves', id);
-          if (!committed || !same(committed.request, toStoredSave(record).request))
-            throw new RecoveryConflictError({ conflict: 'save-identity' });
-          // The stored record says how far the save got; its text is the one it was reserved with.
-          const base = fromStoredSave(committed, record.input.text, record.baseline.text);
-          if (base.state === 'settled' || base.state === 'done')
-            return { id, record, committed, updated: base, changed: false };
-          const result: SaveResult | undefined =
-            record.result?.kind === 'saved'
-              ? {
-                  kind: 'saved',
-                  disk: record.result.disk,
-                  recoveryChanges: record.result.recoveryChanges,
-                }
-              : record.result;
-          const restores =
-            restore &&
-            base.state === 'sent' &&
-            result?.kind !== 'saved' &&
-            base.recoveryPublication === publication;
-          let drafted = false;
-          if (restores) {
-            const disk = findBaseline(state, record.input.target, base.baseline);
-            if (!disk) throw new RecoveryPublicationError({ pending: 'baseline-missing' });
-            if (!state.checkouts.some((c) => same(c, record.input.target.checkout))) {
-              state.checkouts.push(record.input.target.checkout);
-              drafted = true;
-            }
-            const existing = state.drafts.find((d) => same(d.target, record.input.target));
-            if (!existing) {
-              state.drafts.push({ target: record.input.target, text: record.input.text, disk });
-              drafted = true;
-            } else if (
-              existing.text !== record.input.text ||
-              existing.disk.version !== disk.version
-            ) {
-              existing.text = record.input.text;
-              if (existing.disk.version !== disk.version) replaced.push(existing.disk);
-              existing.disk = disk;
-              drafted = true;
-            }
-          }
-          if (result?.kind === 'saved')
-            for (const draft of state.drafts)
-              if (
-                same(draft.target, record.input.target) &&
-                draft.disk.version !== result.disk.version
-              ) {
-                replaced.push(draft.disk);
-                draft.disk = result.disk;
-                drafted = true;
+    .transaction(() => {
+      if (restore) {
+        const group = new Map(
+          store
+            .readSaves(unresolvedSaves + " AND json_extract(body, '$.request.clientId') = ?", [
+              clientId,
+            ])
+            .map((r) => [saveKey(r.input), r]),
+        );
+        for (const record of records) group.set(saveKey(record.input), record);
+        if ([...group.keys()].some((id) => context.activeSaves.has(id)))
+          throw new RecoveryPublicationError({ pending: 'save-running' });
+        records = [...group.values()];
+      }
+      const stored = store.readRecovery(clientId),
+        revision = stored?.revision ?? 0,
+        publication = store.publication(clientId),
+        state = stored?.state ?? emptyRecovery(clientId);
+      let changed = false;
+      // Baselines this publication replaces in drafts, which a save may still have begun from.
+      const replaced: FileDocument[] = [];
+      const updates = records.map((record) => {
+        const id = saveKey(record.input),
+          committed = store.get<StoredSave>('saves', id);
+        if (!committed || !same(committed.request, toStoredSave(record).request))
+          throw new RecoveryConflictError({ conflict: 'save-identity' });
+        // The stored record says how far the save got; its text is the one it was reserved with.
+        const base = fromStoredSave(committed, record.input.text, record.baseline.text);
+        if (base.state === 'settled' || base.state === 'done')
+          return { id, record, committed, updated: base, changed: false };
+        const result: SaveResult | undefined =
+          record.result?.kind === 'saved'
+            ? {
+                kind: 'saved',
+                disk: record.result.disk,
+                recoveryChanges: record.result.recoveryChanges,
               }
-          changed ||= drafted;
-          let next: SaveRecord['state'] = restores ? 'restored' : base.state;
-          if (result) next = 'settled';
-          else if (notStarted.has(id)) next = 'done';
-          const updated: SaveRecord = {
-            ...base,
-            state: next,
-            ...(result ? { result } : {}),
-            ...(record.message === undefined ? {} : { message: record.message }),
-          };
-          return { id, record, committed, updated, changed: drafted };
-        });
-        if (changed) store.writeInternalRecovery(clientId, revision, state);
-        const settling = updates.filter((u) => u.updated.state !== 'sent').map((u) => u.id);
-        for (const disk of replaced) store.keepBaseline(clientId, disk, settling);
-        for (const entry of updates) {
-          if (changed && entry.changed && entry.updated.result?.kind === 'saved')
-            entry.updated.result = {
-              ...entry.updated.result,
-              recoveryChanges: [
-                ...entry.updated.result.recoveryChanges,
-                { clientId, previousRevision: revision, revision: revision + 1 },
-              ],
-            };
-          if (!same(entry.committed, toStoredSave(entry.updated)))
-            store.writeSave(entry.id, entry.updated);
+            : record.result;
+        const restores =
+          restore &&
+          base.state === 'sent' &&
+          result?.kind !== 'saved' &&
+          base.recoveryPublication === publication;
+        let drafted = false;
+        if (restores) {
+          const disk = findBaseline(state, record.input.target, base.baseline);
+          if (!disk) throw new RecoveryPublicationError({ pending: 'baseline-missing' });
+          if (!state.checkouts.some((c) => same(c, record.input.target.checkout))) {
+            state.checkouts.push(record.input.target.checkout);
+            drafted = true;
+          }
+          const existing = state.drafts.find((d) => same(d.target, record.input.target));
+          if (!existing) {
+            state.drafts.push({ target: record.input.target, text: record.input.text, disk });
+            drafted = true;
+          } else if (
+            existing.text !== record.input.text ||
+            existing.disk.version !== disk.version
+          ) {
+            existing.text = record.input.text;
+            if (existing.disk.version !== disk.version) replaced.push(existing.disk);
+            existing.disk = disk;
+            drafted = true;
+          }
         }
-        return updates;
-      }),
-    )
+        if (result?.kind === 'saved')
+          for (const draft of state.drafts)
+            if (
+              same(draft.target, record.input.target) &&
+              draft.disk.version !== result.disk.version
+            ) {
+              replaced.push(draft.disk);
+              draft.disk = result.disk;
+              drafted = true;
+            }
+        changed ||= drafted;
+        let next: SaveRecord['state'] = restores ? 'restored' : base.state;
+        if (result) next = 'settled';
+        else if (notStarted.has(id)) next = 'done';
+        const updated: SaveRecord = {
+          ...base,
+          state: next,
+          ...(result ? { result } : {}),
+          ...(record.message === undefined ? {} : { message: record.message }),
+        };
+        return { id, record, committed, updated, changed: drafted };
+      });
+      if (changed) store.writeInternalRecovery(clientId, revision, state);
+      const settling = updates.filter((u) => u.updated.state !== 'sent').map((u) => u.id);
+      for (const disk of replaced) store.keepBaseline(clientId, disk, settling);
+      for (const entry of updates) {
+        if (changed && entry.changed && entry.updated.result?.kind === 'saved')
+          entry.updated.result = {
+            ...entry.updated.result,
+            recoveryChanges: [
+              ...entry.updated.result.recoveryChanges,
+              { clientId, previousRevision: revision, revision: revision + 1 },
+            ],
+          };
+        if (!same(entry.committed, toStoredSave(entry.updated)))
+          store.writeSave(entry.id, entry.updated);
+      }
+      return updates;
+    })
     .pipe(
       // Only a committed publication changes the records the caller holds.
       Effect.map((updates) => {

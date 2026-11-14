@@ -342,30 +342,28 @@ export class Journal {
         fed: [...fed, ...fresh.map(canonical)],
       };
       return this.store
-        .transaction(
-          attempt(() => {
-            if (fresh.length) {
-              const sequence = (this.store.get<number>('counters', 'feed') ?? 0) + 1;
-              this.store.put('counters', 'feed', sequence);
-              const entry: OperationFeedEntry = {
-                sequence,
-                installationId: record.input.installationId,
-                clientId: record.input.clientId,
-                id: record.input.id,
-                checkout: record.input.checkout,
-                kind: record.input.kind,
-                items: fresh,
-              };
-              this.store.write('INSERT INTO feed VALUES(?,?,?,?)', [
-                record.input.checkout.checkoutId,
-                sequence,
-                id,
-                JSON.stringify(entry),
-              ]);
-            }
-            this.update('operations', id, outcome === 'uncertain', updated);
-          }),
-        )
+        .transaction(() => {
+          if (fresh.length) {
+            const sequence = (this.store.get<number>('counters', 'feed') ?? 0) + 1;
+            this.store.put('counters', 'feed', sequence);
+            const entry: OperationFeedEntry = {
+              sequence,
+              installationId: record.input.installationId,
+              clientId: record.input.clientId,
+              id: record.input.id,
+              checkout: record.input.checkout,
+              kind: record.input.kind,
+              items: fresh,
+            };
+            this.store.write('INSERT INTO feed VALUES(?,?,?,?)', [
+              record.input.checkout.checkoutId,
+              sequence,
+              id,
+              JSON.stringify(entry),
+            ]);
+          }
+          this.update('operations', id, outcome === 'uncertain', updated);
+        })
         .pipe(
           Effect.map(() => {
             Object.assign(record, updated);
@@ -535,30 +533,28 @@ export class Journal {
     return Effect.suspend(() => {
       this.compactedAt = this.now();
       const cutoff = this.compactedAt - this.retentionMs;
-      return this.store.transaction(
-        attempt(() => {
-          // Discarding one checkout's entries only raises that checkout's floor.
-          const floors = this.store
-            .statement(
-              "SELECT feed.checkout AS checkout, MAX(feed.sequence) AS sequence FROM feed JOIN journal ON journal.kind='operations' AND journal.id=feed.operation WHERE journal.retained_at <= ? GROUP BY feed.checkout",
-            )
-            .all(cutoff);
-          this.store
-            .statement(
-              "DELETE FROM feed WHERE operation IN (SELECT id FROM journal WHERE kind='operations' AND retained_at <= ?)",
-            )
-            .run(cutoff);
-          this.store.statement('DELETE FROM journal WHERE retained_at <= ?').run(cutoff);
-          for (const { checkout, sequence } of floors) {
-            const floor = floorKey(checkout as string);
-            this.store.put(
-              'counters',
-              floor,
-              Math.max(Number(sequence), this.store.get<number>('counters', floor) ?? 0),
-            );
-          }
-        }),
-      );
+      return this.store.transaction(() => {
+        // Discarding one checkout's entries only raises that checkout's floor.
+        const floors = this.store
+          .statement(
+            "SELECT feed.checkout AS checkout, MAX(feed.sequence) AS sequence FROM feed JOIN journal ON journal.kind='operations' AND journal.id=feed.operation WHERE journal.retained_at <= ? GROUP BY feed.checkout",
+          )
+          .all(cutoff);
+        this.store
+          .statement(
+            "DELETE FROM feed WHERE operation IN (SELECT id FROM journal WHERE kind='operations' AND retained_at <= ?)",
+          )
+          .run(cutoff);
+        this.store.statement('DELETE FROM journal WHERE retained_at <= ?').run(cutoff);
+        for (const { checkout, sequence } of floors) {
+          const floor = floorKey(checkout as string);
+          this.store.put(
+            'counters',
+            floor,
+            Math.max(Number(sequence), this.store.get<number>('counters', floor) ?? 0),
+          );
+        }
+      });
     }).pipe(
       // Retention is best effort; entries stay until the next attempt.
       Effect.ignore,

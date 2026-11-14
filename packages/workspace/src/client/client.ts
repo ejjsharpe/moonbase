@@ -1,6 +1,5 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { randomUUID } from 'node:crypto';
-import { basename, join } from 'node:path';
 import { Cause, Deferred, Effect, Exit, FiberSet, Option, Stream } from 'effect';
 import type {
   WorkspaceHostServiceShape,
@@ -30,7 +29,7 @@ import {
 import { attempt, type WorkspaceFailure } from '../attempt.ts';
 import { cancellationPoint } from '../cancellation.ts';
 import { getOperationPaths } from '../operation-paths.ts';
-import { asWorkspaceError, runOwned, withWorkspaceErrors } from '../owned-work.ts';
+import { asSharedOutcome, asWorkspaceError, runOwned, withWorkspaceErrors } from '../owned-work.ts';
 import { canonical, errorText, folded, hash, key, path, same } from '../validation.ts';
 import type { OperationRecord, SaveRecord } from './client-schema.ts';
 import type { ClientStore } from './client-store.ts';
@@ -147,7 +146,8 @@ export const makeClientWorkspace = ({
           }),
         );
         requests.delete(name);
-        Deferred.doneUnsafe(outcome, exit);
+        // A duplicate whose first call was cancelled learns that, not that the client closed.
+        Deferred.doneUnsafe(outcome, asSharedOutcome(exit, operation));
         return yield* exit;
       });
 
@@ -183,9 +183,13 @@ export const makeClientWorkspace = ({
           baseline,
           recoveryPublication: publication,
         };
-        const occupied = yield* store.reserveSave(id, record);
+        // Reserved and marked running in one step, so a load never asks the host about it.
+        const occupied = yield* store
+          .reserveSave(id, record, () =>
+            context.activeSaves.set(id, input.target.checkout.checkoutId),
+          )
+          .pipe(Effect.onError(() => Effect.sync(() => context.activeSaves.delete(id))));
         if (occupied) return yield* replaySave(context, id, input, occupied);
-        context.activeSaves.set(id, input.target.checkout.checkoutId);
         return yield* Effect.gen(function* () {
           const sent = yield* Effect.exit(
             Effect.interruptible(host.saveFile({ installationId, ...input })).pipe(
@@ -248,10 +252,7 @@ export const makeClientWorkspace = ({
       const sources = input.sources.map((s) => s.target.path);
       // Imports name no source paths, so the destination itself stands in for each item's target.
       // A multi-item native import is checked at folder granularity (opaque tokens, no basenames).
-      const destinations =
-        sources.length > 1
-          ? sources.map((p) => join(input.destination!, basename(p)))
-          : [input.destination];
+      const destinations = getOperationPaths(input).slice(sources.length);
       const conflicts = (draftPath: string) =>
         destinations.some(
           (destination, i) =>
@@ -321,9 +322,13 @@ export const makeClientWorkspace = ({
           },
         };
         yield* cancellationPoint;
-        const occupied = yield* attempt(() => store.reserve('operations', id, record));
+        // Reserved and marked running in one step, so a load never asks the host about it.
+        const occupied = yield* attempt(() => {
+          const occupied = store.reserve('operations', id, record);
+          if (!occupied) context.activeOperations.set(id, input.checkout.checkoutId);
+          return occupied;
+        });
         if (occupied) return yield* replayOwnOperation(id, input, occupied);
-        context.activeOperations.set(id, input.checkout.checkoutId);
         return yield* Effect.gen(function* () {
           const sent = yield* Effect.exit(
             Effect.interruptible(host.mutate({ installationId, ...input })),

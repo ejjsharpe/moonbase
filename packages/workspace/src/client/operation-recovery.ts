@@ -157,14 +157,16 @@ export const markOperationAcknowledged = (context: RecoveryContext, id: string) 
  * is acknowledged.
  */
 export const publishOperation = (context: RecoveryContext, id: string, record: OperationRecord) =>
-  context.store.transaction(attempt(() => applyOperations(context, [{ id, record }]))).pipe(
-    Effect.map(([merged]) => {
-      delete record.publicationError;
-      Object.assign(record, merged.updated);
-    }),
-    Effect.catch((error) => attempt(() => recordPublicationFailure(context, id, record, error))),
-    Effect.ignore,
-  );
+  context.store
+    .transaction(() => applyOperations(context, [{ id, record }]))
+    .pipe(
+      Effect.map(([merged]) => {
+        delete record.publicationError;
+        Object.assign(record, merged.updated);
+      }),
+      Effect.catch((error) => attempt(() => recordPublicationFailure(context, id, record, error))),
+      Effect.ignore,
+    );
 
 /** Keeps a record's failed publication, to be retried at the next load or repeat. */
 export function recordPublicationFailure(
