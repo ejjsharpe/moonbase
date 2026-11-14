@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Effect } from 'effect';
-import { WorkspaceNative } from '../src/index.ts';
+
 import { fixture, isError, quote } from './recovery-fixture.ts';
+import { captureNative } from './workspace-fixture.ts';
 
 /**
  * A checkout with `dest/` holding `existing`, Finder files `dropped` outside it captured as native
@@ -22,13 +22,11 @@ async function setup(existing: string, dropped: string[]) {
   for (const name of dropped) writeFileSync(join(f.base, 'finder', name), 'dropped ' + name);
   const checkout = await client.command('openCheckout', { root: f.root });
   const nativeReferences = await runtime.runPromise(
-    Effect.flatMap(WorkspaceNative, (native) =>
-      native.capture({
-        checkout,
-        clientId: 'alice',
-        paths: dropped.map((name) => join(f.base, 'finder', name)),
-      }),
-    ),
+    captureNative({
+      checkout,
+      clientId: 'alice',
+      paths: dropped.map((name) => join(f.base, 'finder', name)),
+    }),
   );
   return {
     f,

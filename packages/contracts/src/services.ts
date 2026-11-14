@@ -9,6 +9,7 @@ import {
   type CheckoutTarget,
 } from './workspace.ts';
 import type { HostCommand, HostInput, HostOutput } from './workspace-host.ts';
+import type { WorkspaceHostError } from './workspace-host-errors.ts';
 import type {
   ConnectionCommand,
   ConnectionInput,
@@ -38,13 +39,13 @@ export type WorkspaceServiceShape = WorkspaceHandlers & {
   }): Stream.Stream<WorkspaceEvent, ApplicationError>;
 };
 export type WorkspaceHostHandlers = {
-  [K in HostCommand]: (input: HostInput<K>) => Effect.Effect<HostOutput<K>, ApplicationError>;
+  [K in HostCommand]: (input: HostInput<K>) => Effect.Effect<HostOutput<K>, WorkspaceHostError>;
 };
 export type WorkspaceHostServiceShape = WorkspaceHostHandlers & {
   watch(input: {
     checkout: CheckoutTarget;
     paths: string[];
-  }): Stream.Stream<WorkspaceEvent, ApplicationError>;
+  }): Stream.Stream<WorkspaceEvent, WorkspaceHostError>;
 };
 /** A checkout's files and Git, with the save and operation journals; it holds no client recovery. */
 export class WorkspaceHostService extends Context.Service<

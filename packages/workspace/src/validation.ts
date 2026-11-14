@@ -1,6 +1,9 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
-import { fail } from '@moonbase/contracts/errors';
 import { normalizeApplicationError } from '@moonbase/effect';
+import {
+  InvalidWorkspaceRequestError,
+  isWorkspaceHostError,
+} from '@moonbase/contracts/workspace-host-errors';
 import { isCheckoutPath, isWellFormed } from '@moonbase/contracts/workspace-schema';
 import { createHash } from 'node:crypto';
 import {
@@ -15,7 +18,7 @@ export const ensure: (condition: unknown, message: string) => asserts condition 
   condition,
   message,
 ) => {
-  if (!condition) fail('InvalidInput', message);
+  if (!condition) throw new InvalidWorkspaceRequestError({ reason: message });
 };
 /** Refuses a path that is not exactly checkout-relative (see `isCheckoutPath`). */
 export function path(value: unknown, directory = false): asserts value is string {
@@ -38,7 +41,7 @@ export function document(bytes: Buffer): FileDocument {
   try {
     decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch {
-    return fail('InvalidInput', 'Text unavailable: invalid UTF-8.');
+    throw new InvalidWorkspaceRequestError({ reason: 'Text unavailable: invalid UTF-8.' });
   }
   return { text: decoded, version: hash(bytes) };
 }
@@ -74,7 +77,9 @@ export const isOriginalResult = (
   kind: WorkspaceOperation['kind'],
   item: OperationResult['items'][number],
 ) => kind === 'trash' || item.destination !== undefined;
-export const errorText = (error: unknown) => normalizeApplicationError(error).message;
+/** The text an error may show: a workspace error's own, and a fixed one for anything else. */
+export const errorText = (error: unknown) =>
+  isWorkspaceHostError(error) ? error.message : normalizeApplicationError(error).message;
 export const folded = (p: string) => p.normalize('NFC').toLowerCase();
 /** Whether any path of `a` is, contains or is contained by a path of `b`; '' is the whole checkout. */
 export const overlaps = (a: string[], b: string[]) =>

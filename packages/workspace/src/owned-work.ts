@@ -2,6 +2,7 @@ import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
 import { Cause, Effect, Exit, Fiber, FiberSet } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { fail } from '@moonbase/contracts/errors';
+import { isWorkspaceHostError, toWireError } from '@moonbase/contracts/workspace-host-errors';
 
 /** Runs every release in order, even after one fails, then fails with all their failures. */
 export const releaseAll = (releases: readonly Effect.Effect<void>[]): Effect.Effect<void> =>
@@ -12,20 +13,20 @@ export const releaseAll = (releases: readonly Effect.Effect<void>[]): Effect.Eff
       : Effect.void;
   });
 
-/** What admission needs of its owner: whether it still accepts work, and where work is tracked. */
-export type AdmissionOwner = {
+/** What owned work needs of its owner: whether it still accepts work, and where work is tracked. */
+export type WorkOwner = {
   readonly closed: boolean;
   readonly signals: Set<AbortController>;
   readonly operations: FiberSet.FiberSet<unknown, ApplicationError>;
 };
 
 /**
- * Runs `fn` as owned work: it is refused once the owner is closed, aborted when its caller is
- * interrupted or the owner closes, and settles before the owner releases its resources.
+ * Runs `fn` as the owner's work: it is refused once the owner is closed, aborted when its caller
+ * is interrupted or the owner closes, and settles before the owner releases its resources.
  * `surround` wraps the work, for a lease; `abandoned` receives a result nobody will take.
  */
-export function admit<A>(
-  owner: AdmissionOwner,
+export function runOwned<A>(
+  owner: WorkOwner,
   fn: (signal: AbortSignal) => Promise<A>,
   persistence = false,
   surround?: (
@@ -53,7 +54,7 @@ export function admit<A>(
         },
         catch: (error) =>
           normalizeApplicationError(
-            error,
+            isWorkspaceHostError(error) ? toWireError(error) : error,
             new ApplicationError({
               code: persistence ? 'Persistence' : 'Unavailable',
               message: 'Application effect failed',

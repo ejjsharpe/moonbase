@@ -1,10 +1,14 @@
-import { type Cause, Deferred, Effect, Exit } from 'effect';
+import { Deferred, Effect } from 'effect';
 import { execFile, spawn } from 'node:child_process';
 import fs, { constants, fstatSync, openSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import type { FileDocument } from '@moonbase/contracts/workspace';
 import { document, ensure, path } from './validation.ts';
-import { fail } from '@moonbase/contracts/errors';
+import {
+  WorkspaceAccessDeniedError,
+  WorkspaceUnavailableError,
+} from '@moonbase/contracts/workspace-host-errors';
+import { attempt } from './attempt.ts';
 /** macOS `O_NOFOLLOW_ANY`: refuse a symlink anywhere in the path, not only the last component. */
 export const O_NOFOLLOW_ANY = 0x20000000;
 const flags = constants.O_RDONLY | constants.O_DIRECTORY | O_NOFOLLOW_ANY;
@@ -20,12 +24,11 @@ export type Run = (
     fd: number;
     input?: string;
     extra?: number[];
-    signal?: AbortSignal;
     onLine?: LineReader;
     /** Overrides for the helper's environment; `undefined` removes a variable. */
     env?: Record<string, string | undefined>;
   },
-) => Promise<Buffer>;
+) => Effect.Effect<Buffer, unknown>;
 /** Untranslated Git output, for commands whose text is read back. */
 const gitLocale = { LC_ALL: 'C', LANGUAGE: undefined };
 const helperEnvironment = (overrides: Record<string, string | undefined> = {}) => {
@@ -77,175 +80,155 @@ const awaitGroupExit = (group: number, stoppedAt: number) =>
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
   });
-export function makeRunner(
-  helper: string,
-  runEffect: <A>(effect: Effect.Effect<A, unknown>) => Promise<A>,
-  reportCleanup: (cause: Cause.Cause<never>) => void,
-): Run {
-  return (args, { fd, input, extra = [], signal, onLine, env }) =>
-    runEffect(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const state = yield* Effect.acquireRelease(
-            Effect.sync(() => {
-              if (signal?.aborted) throw Error('Cancelled');
-              const completion = Deferred.makeUnsafe<Buffer, unknown>();
-              // Its own process group, so stopping reaches Git's children (checkout, hooks,
-              // filters) as Ctrl-C would, and Git can remove what it half-created.
-              const child = spawn(helper, args, {
-                stdio: ['pipe', 'pipe', 'pipe', fd, ...extra],
-                env: helperEnvironment(env),
-                detached: true,
-              });
-              const state = {
-                child,
-                completion,
-                settled: false,
-                capped: false,
-                // The reader asked for no more output: a clean early end, not a failure.
-                finished: false,
-                stoppedAt: undefined as number | undefined,
-                escalation: undefined as NodeJS.Timeout | undefined,
-                stop: () => {
-                  if (state.stoppedAt !== undefined) return;
-                  state.stoppedAt = Date.now();
-                  signalGroup(child.pid, 'SIGTERM');
-                  state.escalation = setTimeout(() => signalGroup(child.pid, 'SIGKILL'), stopGrace);
-                },
-              };
-              const chunks: Buffer[] = [];
-              let length = 0,
-                errors = '',
-                spawnError: unknown;
-              const deliver = (line: Buffer) => {
-                try {
-                  if (onLine!(line) !== 'stop') return false;
-                  state.finished = true;
-                } catch (error) {
-                  spawnError ??= error;
-                }
-                state.stop();
-                return true;
-              };
-              const take = (chunk: Buffer) => {
-                if (state.finished || state.capped) return;
-                if (length + chunk.length > outputLimit) {
-                  state.capped = true;
-                  return state.stop();
-                }
-                chunks.push(chunk);
-                length += chunk.length;
-              };
-              const read = (chunk: Buffer) => {
+/**
+ * Runs the filesystem helper. Interrupting a run (where its caller lets it be interrupted) stops
+ * the helper's process group (SIGTERM, then SIGKILL after `stopGrace`) and waits for it to exit
+ * before the run ends, so its descriptors and the checkout stay owned until then.
+ */
+export function makeRunner(helper: string): Run {
+  return (args, { fd, input, extra = [], onLine, env }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const state = yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            const completion = Deferred.makeUnsafe<Buffer, unknown>();
+            // Its own process group, so stopping reaches Git's children (checkout, hooks,
+            // filters) as Ctrl-C would, and Git can remove what it half-created.
+            const child = spawn(helper, args, {
+              stdio: ['pipe', 'pipe', 'pipe', fd, ...extra],
+              env: helperEnvironment(env),
+              detached: true,
+            });
+            const state = {
+              child,
+              completion,
+              settled: false,
+              capped: false,
+              // The reader asked for no more output: a clean early end, not a failure.
+              finished: false,
+              stoppedAt: undefined as number | undefined,
+              escalation: undefined as NodeJS.Timeout | undefined,
+              stop: () => {
                 if (state.stoppedAt !== undefined) return;
-                let start = 0;
-                for (let end = chunk.indexOf(10); end >= 0; end = chunk.indexOf(10, start)) {
-                  const piece = chunk.subarray(start, end);
-                  const line = chunks.length ? Buffer.concat([...chunks, piece]) : piece;
-                  chunks.length = length = 0;
-                  start = end + 1;
-                  if (deliver(line)) return;
-                }
-                if (start < chunk.length) take(chunk.subarray(start));
-              };
-              child.stdout!.on('data', onLine ? read : take);
-              child.stderr!.on('data', (chunk: Buffer) => {
-                errors = (errors + chunk.toString()).slice(0, 4096);
-              });
-              child.stdin!.on('error', () => {});
-              child.once('error', (error) => {
-                spawnError = error;
-              });
-              // A process the helper started outside its group (a hook's daemon, say) can hold
-              // stdout open long after the helper exits, so the run settles once the helper exits
-              // and its last output has had a moment to arrive, not when every holder of the pipes
-              // has let go.
-              let draining: NodeJS.Timeout | undefined;
-              const settle = (code: number | null, killed: NodeJS.Signals | null) => {
-                if (state.settled) return;
-                state.settled = true;
-                clearTimeout(draining);
-                child.stdout!.destroy();
-                child.stderr!.destroy();
-                // A final line without a newline.
-                if (onLine && code === 0 && length && !state.finished && !state.capped)
-                  deliver(Buffer.concat(chunks));
-                const output = onLine ? Buffer.alloc(0) : Buffer.concat(chunks, length);
-                if (
-                  (code === 0 || state.finished) &&
-                  !state.capped &&
-                  !signal?.aborted &&
-                  !spawnError
-                )
-                  Deferred.doneUnsafe(completion, Effect.succeed(output));
-                else {
-                  let message = 'Filesystem helper unavailable.';
-                  if (state.capped)
-                    message = 'Filesystem output/time limit reached; refine request.';
-                  else if (signal?.aborted) message = 'Cancelled';
-                  Deferred.doneUnsafe(
-                    completion,
-                    Effect.fail(
-                      spawnError ??
-                        Object.assign(Error(errors || message), {
+                state.stoppedAt = Date.now();
+                signalGroup(child.pid, 'SIGTERM');
+                state.escalation = setTimeout(() => signalGroup(child.pid, 'SIGKILL'), stopGrace);
+              },
+            };
+            const chunks: Buffer[] = [];
+            let length = 0,
+              errors = '',
+              spawnError: unknown;
+            const deliver = (line: Buffer) => {
+              try {
+                if (onLine!(line) !== 'stop') return false;
+                state.finished = true;
+              } catch (error) {
+                spawnError ??= error;
+              }
+              state.stop();
+              return true;
+            };
+            const take = (chunk: Buffer) => {
+              if (state.finished || state.capped) return;
+              if (length + chunk.length > outputLimit) {
+                state.capped = true;
+                return state.stop();
+              }
+              chunks.push(chunk);
+              length += chunk.length;
+            };
+            const read = (chunk: Buffer) => {
+              if (state.stoppedAt !== undefined) return;
+              let start = 0;
+              for (let end = chunk.indexOf(10); end >= 0; end = chunk.indexOf(10, start)) {
+                const piece = chunk.subarray(start, end);
+                const line = chunks.length ? Buffer.concat([...chunks, piece]) : piece;
+                chunks.length = length = 0;
+                start = end + 1;
+                if (deliver(line)) return;
+              }
+              if (start < chunk.length) take(chunk.subarray(start));
+            };
+            child.stdout!.on('data', onLine ? read : take);
+            child.stderr!.on('data', (chunk: Buffer) => {
+              errors = (errors + chunk.toString()).slice(0, 4096);
+            });
+            child.stdin!.on('error', () => {});
+            child.once('error', (error) => {
+              spawnError = error;
+            });
+            // A process the helper started outside its group (a hook's daemon, say) can hold
+            // stdout open long after the helper exits, so the run settles once the helper exits
+            // and its last output has had a moment to arrive, not when every holder of the pipes
+            // has let go.
+            let draining: NodeJS.Timeout | undefined;
+            const settle = (code: number | null, killed: NodeJS.Signals | null) => {
+              if (state.settled) return;
+              state.settled = true;
+              clearTimeout(draining);
+              child.stdout!.destroy();
+              child.stderr!.destroy();
+              // A final line without a newline.
+              if (onLine && code === 0 && length && !state.finished && !state.capped)
+                deliver(Buffer.concat(chunks));
+              const output = onLine ? Buffer.alloc(0) : Buffer.concat(chunks, length);
+              if ((code === 0 || state.finished) && !state.capped && !spawnError)
+                Deferred.doneUnsafe(completion, Effect.succeed(output));
+              else
+                Deferred.doneUnsafe(
+                  completion,
+                  Effect.fail(
+                    spawnError ??
+                      Object.assign(
+                        Error(
+                          errors ||
+                            (state.capped
+                              ? 'Filesystem output/time limit reached; refine request.'
+                              : 'Filesystem helper unavailable.'),
+                        ),
+                        {
                           status: code,
                           stderr: errors,
-                          uncertain: !!killed || state.capped || signal?.aborted,
+                          uncertain: !!killed || state.capped,
                           output,
-                        }),
-                    ),
-                  );
-                }
-              };
-              child.once('exit', (code, killed) => {
-                draining = setTimeout(() => settle(code, killed), outputDrainMs);
-              });
-              child.once('close', settle);
-              signal?.addEventListener('abort', state.stop, { once: true });
-              if (signal?.aborted) state.stop();
-              child.stdin!.end(input);
-              return state;
-            }),
-            (state) =>
-              Effect.gen(function* () {
-                const stopped = yield* Effect.exit(
-                  Effect.sync(() => {
-                    if (!state.settled) state.stop();
-                  }),
+                        },
+                      ),
+                  ),
                 );
-                // Child error/abort is not exit: descriptors remain owned until the helper exits.
-                yield* Effect.exit(Deferred.await(state.completion));
-                if (state.stoppedAt !== undefined && state.child.pid !== undefined)
-                  yield* awaitGroupExit(state.child.pid, state.stoppedAt);
-                clearTimeout(state.escalation);
-                yield* Effect.sync(() => {
-                  signal?.removeEventListener('abort', state.stop);
-                  state.child.removeAllListeners();
-                  state.child.stdin?.removeAllListeners();
-                  state.child.stdout?.removeAllListeners();
-                  state.child.stderr?.removeAllListeners();
-                });
-                if (Exit.isFailure(stopped)) return yield* Effect.failCause(stopped.cause);
-              }).pipe(
-                Effect.onExit((exit) =>
-                  Effect.sync(() => {
-                    if (Exit.isFailure(exit)) reportCleanup(exit.cause);
-                  }),
-                ),
-              ),
-          );
-          yield* Effect.sleep('30 seconds').pipe(
-            Effect.andThen(
-              Effect.sync(() => {
-                state.capped = true;
-                state.stop();
-              }),
-            ),
-            Effect.forkScoped,
-          );
-          return yield* Deferred.await(state.completion);
-        }),
-      ),
+            };
+            child.once('exit', (code, killed) => {
+              draining = setTimeout(() => settle(code, killed), outputDrainMs);
+            });
+            child.once('close', settle);
+            child.stdin!.end(input);
+            return state;
+          }),
+          (state) =>
+            Effect.gen(function* () {
+              if (!state.settled) state.stop();
+              // Child error or interruption is not exit: descriptors stay owned until it exits.
+              yield* Effect.exit(Deferred.await(state.completion));
+              if (state.stoppedAt !== undefined && state.child.pid !== undefined)
+                yield* awaitGroupExit(state.child.pid, state.stoppedAt);
+              clearTimeout(state.escalation);
+              state.child.removeAllListeners();
+              state.child.stdin?.removeAllListeners();
+              state.child.stdout?.removeAllListeners();
+              state.child.stderr?.removeAllListeners();
+            }),
+        );
+        yield* Effect.sleep('30 seconds').pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              state.capped = true;
+              state.stop();
+            }),
+          ),
+          Effect.forkScoped,
+        );
+        return yield* Deferred.await(state.completion);
+      }),
     );
 }
 export const systemGit = '/usr/bin/git';
@@ -268,7 +251,7 @@ export function createGitGate(
   let found = gitExecutable !== systemGit,
     probing: Promise<boolean> | undefined,
     missingAt: number | undefined;
-  return async () => {
+  const check = async () => {
     if (found) return;
     if (missingAt === undefined || now() - missingAt >= retryMs) {
       probing ??= probe().finally(() => (probing = undefined));
@@ -276,8 +259,12 @@ export function createGitGate(
       else missingAt = now();
     }
     if (!found)
-      fail('Unavailable', 'Git is unavailable. Install the Xcode command-line tools on this Mac.');
+      throw new WorkspaceUnavailableError({
+        reason: 'Git is unavailable. Install the Xcode command-line tools on this Mac.',
+      });
   };
+  return (): Effect.Effect<void, unknown> =>
+    Effect.tryPromise({ try: check, catch: (error) => error });
 }
 export class Directory {
   readonly fd: number;
@@ -285,13 +272,13 @@ export class Directory {
   readonly expected: string;
   readonly run: Run;
   readonly gitExecutable: string;
-  readonly gitReady: () => Promise<void>;
+  readonly gitReady: () => Effect.Effect<void, unknown>;
   constructor(
     root: string,
     expected: string,
     run: Run,
     gitExecutable: string,
-    gitReady: () => Promise<void> = async () => {},
+    gitReady: () => Effect.Effect<void, unknown> = () => Effect.void,
   ) {
     this.gitReady = gitReady;
     this.root = root;
@@ -317,58 +304,68 @@ export class Directory {
       throw error;
     }
   }
-  private closed = false;
+  /** Closes the root descriptor; the registry that opened the directory calls it once. */
   close() {
-    if (this.closed) return;
-    this.closed = true;
     fs.closeSync(this.fd);
   }
   check() {
     const fd = openSync(this.root, flags);
     try {
       if (identity(fstatSync(fd)) !== this.expected)
-        fail('Unauthorized', 'Checkout directory replaced. Reopen its original directory.');
+        throw new WorkspaceAccessDeniedError({
+          reason: 'Checkout directory replaced. Reopen its original directory.',
+        });
     } finally {
       fs.closeSync(fd);
     }
   }
-  io(args: string[], input?: string, signal?: AbortSignal, extra?: number[]) {
-    this.check();
-    return this.run(args, { fd: this.fd, input, signal, extra });
+  io(args: string[], input?: string, extra?: number[]) {
+    return Effect.andThen(
+      attempt(() => this.check()),
+      this.run(args, { fd: this.fd, input, extra }),
+    );
   }
   /** Runs like `io` but hands stdout to `onLine` line by line instead of buffering it. */
-  async lines(args: string[], onLine: LineReader, signal?: AbortSignal) {
-    this.check();
-    await this.run(args, { fd: this.fd, signal, onLine });
+  lines(args: string[], onLine: LineReader) {
+    return Effect.andThen(
+      attempt(() => this.check()),
+      Effect.asVoid(this.run(args, { fd: this.fd, onLine })),
+    );
   }
   /**
    * Runs Git in the checkout. `untranslated` runs it in the C locale, for output read back; other
    * commands keep the user's locale, which hooks and filters they run inherit.
    */
-  async git(args: string[], input?: string, signal?: AbortSignal, { untranslated = false } = {}) {
-    this.check();
-    await this.gitReady();
-    return this.run(
-      [
-        'git',
-        this.gitExecutable,
-        '--literal-pathspecs',
-        '-c',
-        'core.fsmonitor=false',
-        '-c',
-        'core.excludesFile=/dev/null',
-        '--work-tree=.',
-        ...args,
-      ],
-      { fd: this.fd, input, signal, ...(untranslated ? { env: gitLocale } : {}) },
+  git(args: string[], input?: string, { untranslated = false } = {}) {
+    return attempt(() => this.check()).pipe(
+      Effect.andThen(this.gitReady()),
+      Effect.andThen(
+        this.run(
+          [
+            'git',
+            this.gitExecutable,
+            '--literal-pathspecs',
+            '-c',
+            'core.fsmonitor=false',
+            '-c',
+            'core.excludesFile=/dev/null',
+            '--work-tree=.',
+            ...args,
+          ],
+          { fd: this.fd, input, ...(untranslated ? { env: gitLocale } : {}) },
+        ),
+      ),
     );
   }
   /** Makes the root a new repository; `git` above names a work tree, which needs one already. */
-  async initializeGit(signal?: AbortSignal) {
-    await this.gitReady();
-    return this.io(['git', this.gitExecutable, 'init', '--quiet'], undefined, signal);
+  initializeGit() {
+    return Effect.andThen(this.gitReady(), this.io(['git', this.gitExecutable, 'init', '--quiet']));
   }
-  async entry(p: string, signal?: AbortSignal, spellings?: Map<string, Set<string>>) {
+  /** The object at `p`, refused unless `p` is its exact spelling with no link on the way. */
+  entry(p: string, spellings?: Map<string, Set<string>>) {
+    return attempt(() => this.entryNow(p, spellings));
+  }
+  private entryNow(p: string, spellings?: Map<string, Set<string>>) {
     path(p, true);
     this.check();
     if (p) {
@@ -399,17 +396,21 @@ export class Directory {
       fs.closeSync(fd);
     }
   }
-
-  async read(p: string, signal?: AbortSignal): Promise<FileDocument> {
-    path(p);
-    await this.entry(p, signal);
-    return document(await this.io(['read', p], undefined, signal));
+  read(p: string): Effect.Effect<FileDocument, unknown> {
+    return attempt(() => path(p)).pipe(
+      Effect.andThen(this.entry(p)),
+      Effect.andThen(this.io(['read', p])),
+      Effect.flatMap((bytes) => attempt(() => document(bytes))),
+    );
   }
-  async destination(p: string) {
-    path(p);
-    const parent = dirname(p);
-    const item = await this.entry(parent === '.' ? '' : parent);
-    ensure(item.directory, 'Destination parent must be a directory.');
-    return item.identity;
+  /** The identity of `p`'s parent folder, which a new object at `p` goes in. */
+  destination(p: string) {
+    return attempt(() => {
+      path(p);
+      const parent = dirname(p);
+      const item = this.entryNow(parent === '.' ? '' : parent);
+      ensure(item.directory, 'Destination parent must be a directory.');
+      return item.identity;
+    });
   }
 }

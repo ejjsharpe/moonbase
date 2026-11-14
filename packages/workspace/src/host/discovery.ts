@@ -1,11 +1,16 @@
-import { normalizeApplicationError } from '@moonbase/effect';
+import { Context, Effect, Layer } from 'effect';
 import { accessSync, constants } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import type { CheckoutTarget, CommandInput, CommandOutput } from '@moonbase/contracts/workspace';
-import type { Directory } from '../filesystem.ts';
+import {
+  InvalidWorkspaceRequestError,
+  WorkspaceUnavailableError,
+} from '@moonbase/contracts/workspace-host-errors';
+import { attempt } from '../attempt.ts';
 import { matchPath, compareMatches } from '@moonbase/contracts/lookup';
-import { document, ensure, path, requireGit } from '../validation.ts';
-import { fail } from '@moonbase/contracts/errors';
+import { document, ensure, errorText, path, requireGit } from '../validation.ts';
+import { Checkouts, readBranch } from './checkouts.ts';
+import { HostSettings } from './host-settings.ts';
 import { parseGitStatus } from './git-status.ts';
 
 /** Names discovery and text search never descend into, matching the native lookup preflight. */
@@ -52,481 +57,527 @@ export function regexFailure(stderr: string) {
   return reason || first.replace(/:$/, '') || undefined;
 }
 
-export class WorkspaceDiscovery {
-  private readonly directory: (target: CheckoutTarget) => Promise<Directory>;
-  private readonly policy: (target: CheckoutTarget) => void;
+/** A helper failure as the runner reports it. */
+const helperFailure = (error: unknown) =>
+  error as { status?: number; stderr?: string; uncertain?: boolean; output?: Buffer };
+
+/** The first standalone ripgrep on `PATH`, when none is configured. */
+const findRipgrep = () =>
+  (process.env.PATH ?? '')
+    .split(':')
+    .map((p) => join(p, 'rg'))
+    .find((p) => {
+      try {
+        accessSync(p, constants.X_OK);
+        return isAbsolute(p);
+      } catch {
+        return false;
+      }
+    });
+
+/**
+ * Reads a checkout without changing it: directory listings, Git ignore classification, status
+ * and comparisons, ranked file lookup and text search.
+ */
+export class Discovery {
+  private readonly checkouts: Checkouts['Service'];
   private readonly gitExecutable: string;
   private readonly ripgrep: string | undefined;
-  constructor(
-    directory: (target: CheckoutTarget) => Promise<Directory>,
-    policy: (target: CheckoutTarget) => void,
-    gitExecutable: string,
-    ripgrepExecutable: string | undefined,
-  ) {
-    this.directory = directory;
-    this.policy = policy;
-    this.gitExecutable = gitExecutable;
-    this.ripgrep =
-      ripgrepExecutable ??
-      (process.env.PATH ?? '')
-        .split(':')
-        .map((p) => join(p, 'rg'))
-        .find((p) => {
-          try {
-            accessSync(p, constants.X_OK);
-            return isAbsolute(p);
-          } catch {
-            return false;
-          }
-        });
+  constructor({
+    checkouts,
+    ripgrepExecutable,
+  }: {
+    checkouts: Checkouts['Service'];
+    ripgrepExecutable: string | undefined;
+  }) {
+    this.checkouts = checkouts;
+    this.gitExecutable = checkouts.git;
+    this.ripgrep = ripgrepExecutable ?? findRipgrep();
   }
-  async getBranch(directory: Directory, signal?: AbortSignal) {
-    try {
-      return (await directory.git(['symbolic-ref', '--short', 'HEAD'], undefined, signal))
+  listDirectory(input: CommandInput<'listDirectory'>) {
+    return Effect.gen({ self: this }, function* () {
+      yield* attempt(() => {
+        path(input.path, true);
+        ensure(
+          input.includeIgnoredStatus !== false || !input.hideIgnored,
+          'Ignore filtering requires ignore classification.',
+        );
+      });
+      const directory = yield* this.checkouts.directory(input.checkout);
+      yield* directory.entry(input.path);
+      const entries = (yield* directory.io(['list', input.path || '.']))
         .toString()
-        .trim();
-    } catch {
-      return (
-        (await directory.git(['rev-parse', '--short', 'HEAD'], undefined, signal))
-          .toString()
-          .trim() + ' (detached)'
-      );
-    }
-  }
-  async listDirectory(input: CommandInput<'listDirectory'>, signal: AbortSignal) {
-    path(input.path, true);
-    ensure(
-      input.includeIgnoredStatus !== false || !input.hideIgnored,
-      'Ignore filtering requires ignore classification.',
-    );
-    const directory = await this.directory(input.checkout);
-    await directory.entry(input.path, signal);
-    const entries = (await directory.io(['list', input.path || '.'], undefined, signal))
-      .toString()
-      .split('\0')
-      .filter(Boolean)
-      .slice(0, 20000)
-      .map((row) => ({
-        path: input.path ? input.path + '/' + row.slice(1) : row.slice(1),
-        directory: row[0] === 'd',
-      }));
-    if (input.includeIgnoredStatus === false)
+        .split('\0')
+        .filter(Boolean)
+        .slice(0, 20000)
+        .map((row) => ({
+          path: input.path ? input.path + '/' + row.slice(1) : row.slice(1),
+          directory: row[0] === 'd',
+        }));
+      if (input.includeIgnoredStatus === false)
+        return {
+          entries: entries.sort(
+            (a, b) => Number(b.directory) - Number(a.directory) || a.path.localeCompare(b.path),
+          ),
+          partial: entries.length === 20000,
+        };
+      const ignored = yield* this.getIgnoredPaths({
+        checkout: input.checkout,
+        path: input.path,
+        paths: entries.map((entry) => entry.path),
+      });
+      const ignoredPaths = new Set(ignored.paths);
       return {
-        entries: entries.sort(
-          (a, b) => Number(b.directory) - Number(a.directory) || a.path.localeCompare(b.path),
-        ),
-        partial: entries.length === 20000,
+        entries: entries
+          .map((entry) => ({ ...entry, ignored: ignoredPaths.has(entry.path) }))
+          .filter((entry) => !input.hideIgnored || !entry.ignored)
+          .sort(
+            (a, b) => Number(b.directory) - Number(a.directory) || a.path.localeCompare(b.path),
+          ),
+        partial: entries.length === 20000 || !!ignored.error,
+        error: ignored.error,
       };
-    const ignored = await this.getIgnoredPaths(
-      { checkout: input.checkout, path: input.path, paths: entries.map((entry) => entry.path) },
-      signal,
-    );
-    const ignoredPaths = new Set(ignored.paths);
-    return {
-      entries: entries
-        .map((entry) => ({ ...entry, ignored: ignoredPaths.has(entry.path) }))
-        .filter((entry) => !input.hideIgnored || !entry.ignored)
-        .sort((a, b) => Number(b.directory) - Number(a.directory) || a.path.localeCompare(b.path)),
-      partial: entries.length === 20000 || !!ignored.error,
-      error: ignored.error,
-    };
+    });
   }
-  async getIgnoredPaths(
+  getIgnoredPaths(
     input: CommandInput<'getIgnoredPaths'>,
-    signal: AbortSignal,
-  ): Promise<CommandOutput<'getIgnoredPaths'>> {
-    path(input.path, true);
-    input.paths.forEach((item) => {
-      path(item);
-      ensure(
-        dirname(item) === (input.path || '.'),
-        'Ignore paths must be immediate directory children.',
+  ): Effect.Effect<CommandOutput<'getIgnoredPaths'>, unknown> {
+    return Effect.gen({ self: this }, function* () {
+      yield* attempt(() => {
+        path(input.path, true);
+        input.paths.forEach((item) => {
+          path(item);
+          ensure(
+            dirname(item) === (input.path || '.'),
+            'Ignore paths must be immediate directory children.',
+          );
+        });
+      });
+      const directory = yield* this.checkouts.directory(input.checkout);
+      yield* directory.entry(input.path);
+      // A plain folder has no Git ignore policy, so nothing in it is ignored.
+      if (input.checkout.vcs === 'none') return { paths: [] };
+      return yield* Effect.gen({ self: this }, function* () {
+        yield* this.checkouts.policy(input.checkout);
+        yield* directory.gitReady();
+        const output = yield* directory
+          .io(
+            [
+              'check-ignore',
+              input.path || '.',
+              this.gitExecutable,
+              '-c',
+              'core.excludesFile=/dev/null',
+              'check-ignore',
+              '-z',
+              '--stdin',
+            ],
+            input.paths.join('\0') + (input.paths.length ? '\0' : ''),
+          )
+          .pipe(
+            Effect.catch((error) =>
+              helperFailure(error).status === 1 && !helperFailure(error).stderr
+                ? Effect.succeed(Buffer.alloc(0))
+                : Effect.fail(error),
+            ),
+          );
+        return { paths: output.toString().split('\0').filter(Boolean) };
+      }).pipe(
+        Effect.catch((failure) =>
+          Effect.succeed({
+            paths: [],
+            error: 'Git ignore policy unavailable; all entries shown. ' + errorText(failure),
+          }),
+        ),
       );
     });
-    const directory = await this.directory(input.checkout);
-    await directory.entry(input.path, signal);
-    // A plain folder has no Git ignore policy, so nothing in it is ignored.
-    if (input.checkout.vcs === 'none') return { paths: [] };
-    let error: string | undefined;
-    try {
-      this.policy(input.checkout);
-      await directory.gitReady();
-      const output = await directory
-        .io(
-          [
-            'check-ignore',
-            input.path || '.',
-            this.gitExecutable,
-            '-c',
-            'core.excludesFile=/dev/null',
-            'check-ignore',
-            '-z',
-            '--stdin',
-          ],
-          input.paths.join('\0') + (input.paths.length ? '\0' : ''),
-          signal,
-        )
-        .catch((error) => {
-          if (error.status === 1 && !error.stderr) return Buffer.alloc(0);
-          throw error;
-        });
-      return { paths: output.toString().split('\0').filter(Boolean) };
-    } catch (failure) {
-      error =
-        'Git ignore policy unavailable; all entries shown. ' +
-        normalizeApplicationError(failure).message;
-    }
-    return { paths: [], error };
   }
   /** A plain folder's status is empty, so a caller that polls it keeps working. */
-  async getStatus(target: CheckoutTarget, signal: AbortSignal) {
-    const directory = await this.directory(target);
-    if (target.vcs === 'none') return { branch: '', changes: [] };
-    try {
-      const changes = parseGitStatus(
-        (
-          await directory.git(
-            ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--no-renames'],
-            undefined,
-            signal,
-          )
-        ).toString(),
-      );
-      for (const change of changes) path(change.path);
-      return { branch: await this.getBranch(directory, signal), changes };
-    } catch (error) {
-      return {
-        branch: target.branch,
-        changes: [],
-        error: 'Git status unavailable. ' + normalizeApplicationError(error).message,
-      };
-    }
-  }
-  async readComparison(input: CommandInput<'readComparison'>, signal: AbortSignal) {
-    path(input.target.path);
-    requireGit(input.target.checkout);
-    const directory = await this.directory(input.target.checkout),
-      p = input.target.path;
-    let working = null;
-    try {
-      working = await directory.read(p, signal);
-    } catch (error) {
-      if (
-        (error as NodeJS.ErrnoException).code !== 'ENOENT' &&
-        !(error as { stderr?: string }).stderr?.includes('No such file')
-      )
-        throw error;
-    }
-    try {
-      let original = '';
-      if (input.area === 'staged') {
-        const exists = await directory
-          .git(['rev-parse', '--verify', '--quiet', 'HEAD'], undefined, signal)
-          .then(() => true)
-          .catch((error) => {
-            if (error.status === 1) return false;
-            throw error;
-          });
-        const entries = exists
-          ? (await directory.git(['ls-tree', '-z', 'HEAD', '--', p], undefined, signal)).toString()
-          : '';
-        if (entries)
-          original = document(
-            await directory.git(
-              ['cat-file', 'blob', entries.split(' ')[2].split('\t')[0]],
-              undefined,
-              signal,
-            ),
-          ).text;
-      } else if (input.area === 'unstaged') {
-        const entries = (
-          await directory.git(['ls-files', '--stage', '-z', '--', p], undefined, signal)
-        ).toString();
-        if (entries) {
-          const rows = entries.split('\0').filter(Boolean);
-          const stage = rows.find((row) => row.split(' ')[2]?.startsWith('0\t'));
-          if (!stage)
-            fail(
-              'Unavailable',
-              'Index contains unresolved merge stages; no single index baseline is available.',
-            );
-          original = document(
-            await directory.git(['cat-file', 'blob', stage!.split(' ')[1]], undefined, signal),
-          ).text;
-        }
-      }
-      let title = 'Untracked file';
-      if (input.area === 'staged') title = 'HEAD ↔ working buffer';
-      else if (input.area === 'unstaged') title = 'Index ↔ working buffer';
-      return { original, working, title };
-    } catch (error) {
-      return {
-        original: '',
-        working,
-        title: input.area,
-        error: 'Git comparison unavailable. ' + normalizeApplicationError(error).message,
-      };
-    }
-  }
-  async lookupFiles(input: CommandInput<'lookupFiles'>, signal: AbortSignal) {
-    const directory = await this.directory(input.checkout),
-      limit = input.limit ?? 100;
-    const supplied = input.history ?? [];
-    supplied.forEach((p) => path(p));
-    const excluded = (p: string) => excludedNames.includes(p) || p.endsWith('.code-search');
-    let cells = 0,
-      partial = false;
-    const rank = (paths: string[], history: boolean) => {
-      const matches = [];
-      for (const p of new Set(paths)) {
-        if (history ? excluded(basename(p)) : p.split('/').some(excluded)) continue;
-        cells += p.length * Math.max(input.query.length, 1);
-        if (cells > 16 * 1024 * 1024) {
-          partial = true;
-          break;
-        }
-        const match = matchPath(p, input.query);
-        if (match) matches.push(match);
-      }
-      matches.sort(compareMatches);
-      if (matches.length > limit) partial = true;
-      return matches.slice(0, limit);
-    };
-    const history = rank(supplied, true);
-    if (!input.query.trim()) return { matches: [], history, partial };
-    try {
-      this.policy(input.checkout);
-      const args = ['--files', '--null', '--threads', '1', ...ripgrepPolicy];
-      let enumerationError: string | undefined;
-      const bytes = await directory
-        .io(['lookup', this.requireRipgrep(), ...args, '.'], undefined, signal)
-        .catch((error) => {
-          const output = (error as { output?: Buffer }).output;
-          if (output?.length && output.lastIndexOf(0) >= 0) {
-            partial = true;
-            enumerationError = normalizeApplicationError(error).message;
-            return output.subarray(0, output.lastIndexOf(0) + 1);
-          }
-          if (error.status === 1 && !error.stderr) return Buffer.alloc(0);
-          throw error;
+  getStatus(target: CheckoutTarget) {
+    return Effect.gen({ self: this }, function* () {
+      const directory = yield* this.checkouts.directory(target);
+      if (target.vcs === 'none') return { branch: '', changes: [] };
+      return yield* Effect.gen(function* () {
+        const output = yield* directory.git([
+          'status',
+          '--porcelain=v1',
+          '-z',
+          '--untracked-files=all',
+          '--no-renames',
+        ]);
+        const changes = yield* attempt(() => {
+          const changes = parseGitStatus(output.toString());
+          for (const change of changes) path(change.path);
+          return changes;
         });
-      const candidates = [
-        ...new Set(
-          bytes
-            .toString()
-            .split('\0')
-            .filter(Boolean)
-            .map((p) => p.replace(/^\.\//, '')),
+        return { branch: yield* readBranch(directory), changes };
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.succeed({
+            branch: target.branch,
+            changes: [],
+            error: 'Git status unavailable. ' + errorText(error),
+          }),
         ),
-      ];
-      if (candidates.length > 20000) partial = true;
-      const eligible: string[] = [],
-        spellings = new Map<string, Set<string>>();
-      for (const p of candidates.slice(0, 20000)) {
-        if (signal.aborted) fail('Cancelled', 'Lookup cancelled.');
-        path(p);
-        try {
-          if (!(await directory.entry(p, signal, spellings)).directory) eligible.push(p);
-        } catch {
-          partial = true;
+      );
+    });
+  }
+  readComparison(input: CommandInput<'readComparison'>) {
+    return Effect.gen({ self: this }, function* () {
+      yield* attempt(() => {
+        path(input.target.path);
+        requireGit(input.target.checkout);
+      });
+      const directory = yield* this.checkouts.directory(input.target.checkout),
+        p = input.target.path;
+      const working = yield* directory
+        .read(p)
+        .pipe(
+          Effect.catch((error) =>
+            (error as NodeJS.ErrnoException).code !== 'ENOENT' &&
+            !helperFailure(error).stderr?.includes('No such file')
+              ? Effect.fail(error)
+              : Effect.succeed(null),
+          ),
+        );
+      return yield* Effect.gen(function* () {
+        let original = '';
+        if (input.area === 'staged') {
+          const exists = yield* directory.git(['rev-parse', '--verify', '--quiet', 'HEAD']).pipe(
+            Effect.as(true),
+            Effect.catch((error) =>
+              helperFailure(error).status === 1 ? Effect.succeed(false) : Effect.fail(error),
+            ),
+          );
+          const entries = exists
+            ? (yield* directory.git(['ls-tree', '-z', 'HEAD', '--', p])).toString()
+            : '';
+          if (entries) {
+            const blob = yield* directory.git([
+              'cat-file',
+              'blob',
+              entries.split(' ')[2].split('\t')[0],
+            ]);
+            original = (yield* attempt(() => document(blob))).text;
+          }
+        } else if (input.area === 'unstaged') {
+          const entries = (yield* directory.git(['ls-files', '--stage', '-z', '--', p])).toString();
+          if (entries) {
+            const rows = entries.split('\0').filter(Boolean);
+            const stage = rows.find((row) => row.split(' ')[2]?.startsWith('0\t'));
+            if (!stage)
+              return yield* new WorkspaceUnavailableError({
+                reason:
+                  'Index contains unresolved merge stages; no single index baseline is available.',
+              });
+            const blob = yield* directory.git(['cat-file', 'blob', stage.split(' ')[1]]);
+            original = (yield* attempt(() => document(blob))).text;
+          }
         }
-        if (eligible.length % 32 === 0) await new Promise<void>((done) => setImmediate(done));
-      }
-      // Exact entered paths have a scoped no-follow exception to discovery ignore/exclusions.
-      try {
-        path(input.query);
+        let title = 'Untracked file';
+        if (input.area === 'staged') title = 'HEAD ↔ working buffer';
+        else if (input.area === 'unstaged') title = 'Index ↔ working buffer';
+        return { original, working, title };
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.succeed({
+            original: '',
+            working,
+            title: input.area,
+            error: 'Git comparison unavailable. ' + errorText(error),
+          }),
+        ),
+      );
+    });
+  }
+  lookupFiles(input: CommandInput<'lookupFiles'>) {
+    return Effect.gen({ self: this }, function* () {
+      const directory = yield* this.checkouts.directory(input.checkout),
+        limit = input.limit ?? 100;
+      const supplied = input.history ?? [];
+      yield* attempt(() => supplied.forEach((p) => path(p)));
+      const excluded = (p: string) => excludedNames.includes(p) || p.endsWith('.code-search');
+      let cells = 0,
+        partial = false;
+      const rank = (paths: string[], history: boolean) => {
+        const matches = [];
+        for (const p of new Set(paths)) {
+          if (history ? excluded(basename(p)) : p.split('/').some(excluded)) continue;
+          cells += p.length * Math.max(input.query.length, 1);
+          if (cells > 16 * 1024 * 1024) {
+            partial = true;
+            break;
+          }
+          const match = matchPath(p, input.query);
+          if (match) matches.push(match);
+        }
+        matches.sort(compareMatches);
+        if (matches.length > limit) partial = true;
+        return matches.slice(0, limit);
+      };
+      const history = rank(supplied, true);
+      if (!input.query.trim()) return { matches: [], history, partial };
+      return yield* Effect.gen({ self: this }, function* () {
+        yield* this.checkouts.policy(input.checkout);
+        const args = ['--files', '--null', '--threads', '1', ...ripgrepPolicy];
+        let enumerationError: string | undefined;
+        const ripgrep = yield* this.requireRipgrep();
+        const bytes = yield* directory.io(['lookup', ripgrep, ...args, '.']).pipe(
+          Effect.catch((error) => {
+            const output = helperFailure(error).output;
+            if (output?.length && output.lastIndexOf(0) >= 0) {
+              partial = true;
+              enumerationError = errorText(error);
+              return Effect.succeed(output.subarray(0, output.lastIndexOf(0) + 1));
+            }
+            if (helperFailure(error).status === 1 && !helperFailure(error).stderr)
+              return Effect.succeed(Buffer.alloc(0));
+            return Effect.fail(error);
+          }),
+        );
+        const candidates = [
+          ...new Set(
+            bytes
+              .toString()
+              .split('\0')
+              .filter(Boolean)
+              .map((p) => p.replace(/^\.\//, '')),
+          ),
+        ];
+        if (candidates.length > 20000) partial = true;
+        const eligible: string[] = [],
+          spellings = new Map<string, Set<string>>();
+        for (const [index, p] of candidates.slice(0, 20000).entries()) {
+          // Lets other work run, and a cancelled lookup stop, between batches.
+          if (index % 32 === 0) yield* Effect.interruptible(Effect.yieldNow);
+          yield* attempt(() => path(p));
+          const entry = yield* Effect.exit(directory.entry(p, spellings));
+          if (entry._tag === 'Failure') partial = true;
+          else if (!entry.value.directory) eligible.push(p);
+        }
+        // Exact entered paths have a scoped no-follow exception to discovery ignore/exclusions.
+        const exactEntry = yield* Effect.exit(
+          Effect.andThen(
+            attempt(() => path(input.query)),
+            directory.entry(input.query),
+          ),
+        );
         if (
-          !(await directory.entry(input.query, signal)).directory &&
+          exactEntry._tag === 'Success' &&
+          !exactEntry.value.directory &&
           !eligible.includes(input.query)
         )
           eligible.unshift(input.query);
-      } catch {
-        /* Ordinary fuzzy queries need not be exact paths. */
-      }
-      const recent = new Set(history.map((match) => match.path));
-      const exact = eligible[0] === input.query ? matchPath(input.query, input.query) : null;
-      const matches = rank(
-        eligible.filter((p) => !recent.has(p)),
-        false,
-      );
-      if (exact && !recent.has(exact.path) && !matches.some((m) => m.path === exact.path)) {
-        matches.unshift(exact);
-        if (matches.length > limit) {
-          matches.pop();
-          partial = true;
+        const recent = new Set(history.map((match) => match.path));
+        const exact = eligible[0] === input.query ? matchPath(input.query, input.query) : null;
+        const matches = rank(
+          eligible.filter((p) => !recent.has(p)),
+          false,
+        );
+        if (exact && !recent.has(exact.path) && !matches.some((m) => m.path === exact.path)) {
+          matches.unshift(exact);
+          if (matches.length > limit) {
+            matches.pop();
+            partial = true;
+          }
         }
-      }
-      return {
-        matches,
-        history,
-        partial,
-        ...(partial
-          ? { error: enumerationError ?? 'Discovery or ranking capped; refine query.' }
-          : {}),
-      };
-    } catch (error) {
-      return {
-        matches: [],
-        history,
-        partial: true,
-        error:
-          'Discovery or ignore policy unavailable. ' + normalizeApplicationError(error).message,
-      };
-    }
+        return {
+          matches,
+          history,
+          partial,
+          ...(partial
+            ? { error: enumerationError ?? 'Discovery or ranking capped; refine query.' }
+            : {}),
+        };
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.succeed({
+            matches: [],
+            history,
+            partial: true,
+            error: 'Discovery or ignore policy unavailable. ' + errorText(error),
+          }),
+        ),
+      );
+    });
   }
   private requireRipgrep() {
-    if (!this.ripgrep)
-      fail(
-        'Unavailable',
-        'Standalone ripgrep is unavailable. Supply the packaged ripgrepExecutable asset.',
-      );
-    return this.ripgrep!;
+    return this.ripgrep
+      ? Effect.succeed(this.ripgrep)
+      : Effect.fail(
+          new WorkspaceUnavailableError({
+            reason:
+              'Standalone ripgrep is unavailable. Supply the packaged ripgrepExecutable asset.',
+          }),
+        );
   }
   /** Searches file contents with ripgrep, honouring ignore files like `lookupFiles`. */
-  async searchText(
+  searchText(
     input: CommandInput<'searchText'>,
-    signal: AbortSignal,
-  ): Promise<CommandOutput<'searchText'>> {
-    const directory = await this.directory(input.checkout);
-    this.policy(input.checkout);
-    const args = [
-      '--json',
-      // Sorted (and so single-threaded) output keeps a capped result the same on every run.
-      '--sort',
-      'path',
-      '--max-filesize',
-      '2M',
-      // One past the cap, so a file that reaches it is reported as partial.
-      '--max-count',
-      String(searchLimits.perFile + 1),
-      '--context',
-      String(searchLimits.context),
-      ...ripgrepPolicy,
-      input.matchCase ? '--case-sensitive' : '--ignore-case',
-      ...(input.regex ? [] : ['--fixed-strings']),
-      ...(input.wholeWord ? ['--word-regexp'] : []),
-      '--regexp',
-      input.query,
-      '--',
-      '.',
-    ];
-    let partial = false,
-      error: string | undefined,
-      received = false,
-      // The file whose match passed the total cap: its trailing context still arrives.
-      overflow: string | undefined;
-    const clip = (line: string) => line.replace(/\r?\n$/, '').slice(0, searchLimits.line);
-    const files = new Map<
-      string,
-      {
-        lines: Map<number, string>;
-        matches: { line: number; text: string; ranges: { start: number; end: number }[] }[];
-      }
-    >();
-    let total = 0;
-    // Parsed as ripgrep writes, so a broad query stops it once the result is full.
-    const accept = (row: Buffer): 'stop' | void => {
-      received = true;
-      if (!row.length) return;
-      let event: RipgrepEvent;
-      try {
-        event = JSON.parse(row.toString());
-      } catch {
-        partial = true;
-        return;
-      }
-      if (event.type === 'end' && overflow !== undefined) return 'stop';
-      if (event.type !== 'match' && event.type !== 'context') return;
-      const { data } = event;
-      // Paths or lines that are not UTF-8 arrive as bytes; they cannot be shown faithfully.
-      if (data.path.text === undefined || data.lines.text === undefined || !data.line_number)
-        return;
-      const p = data.path.text.replace(/^\.\//, '');
-      try {
-        path(p);
-      } catch {
-        return;
-      }
-      let file = files.get(p);
-      if (!file) {
-        // Output is sorted by path, so every later file is past the cap too.
-        if (files.size >= searchLimits.files || overflow !== undefined) {
+  ): Effect.Effect<CommandOutput<'searchText'>, unknown> {
+    return Effect.gen({ self: this }, function* () {
+      const directory = yield* this.checkouts.directory(input.checkout);
+      yield* this.checkouts.policy(input.checkout);
+      const args = [
+        '--json',
+        // Sorted (and so single-threaded) output keeps a capped result the same on every run.
+        '--sort',
+        'path',
+        '--max-filesize',
+        '2M',
+        // One past the cap, so a file that reaches it is reported as partial.
+        '--max-count',
+        String(searchLimits.perFile + 1),
+        '--context',
+        String(searchLimits.context),
+        ...ripgrepPolicy,
+        input.matchCase ? '--case-sensitive' : '--ignore-case',
+        ...(input.regex ? [] : ['--fixed-strings']),
+        ...(input.wholeWord ? ['--word-regexp'] : []),
+        '--regexp',
+        input.query,
+        '--',
+        '.',
+      ];
+      let partial = false,
+        error: string | undefined,
+        received = false,
+        // The file whose match passed the total cap: its trailing context still arrives.
+        overflow: string | undefined;
+      const clip = (line: string) => line.replace(/\r?\n$/, '').slice(0, searchLimits.line);
+      const files = new Map<
+        string,
+        {
+          lines: Map<number, string>;
+          matches: { line: number; text: string; ranges: { start: number; end: number }[] }[];
+        }
+      >();
+      let total = 0;
+      // Parsed as ripgrep writes, so a broad query stops it once the result is full.
+      const accept = (row: Buffer): 'stop' | void => {
+        received = true;
+        if (!row.length) return;
+        let event: RipgrepEvent;
+        try {
+          event = JSON.parse(row.toString());
+        } catch {
           partial = true;
-          return 'stop';
+          return;
         }
-        file = { lines: new Map(), matches: [] };
-        files.set(p, file);
-      }
-      const text = clip(data.lines.text);
-      file.lines.set(data.line_number, text);
-      if (event.type === 'context') return;
-      if (total >= searchLimits.total) {
-        partial = true;
-        overflow ??= p;
-        return;
-      }
-      // `--max-count` still reports matching lines inside the trailing context, so cap here too.
-      if (file.matches.length >= searchLimits.perFile) {
-        partial = true;
-        return;
-      }
-      total++;
-      // ripgrep reports byte offsets; the renderer highlights UTF-16 offsets.
-      const raw = Buffer.from(data.lines.text);
-      const offset = (bytes: number) =>
-        Math.min(raw.subarray(0, bytes).toString().length, text.length);
-      file.matches.push({
-        line: data.line_number,
-        text,
-        ranges: (data.submatches ?? [])
-          .slice(0, searchLimits.ranges)
-          .map((range) => ({ start: offset(range.start), end: offset(range.end) }))
-          .filter((range) => range.end > range.start),
-      });
-    };
-    await directory
-      .lines(['lookup', this.requireRipgrep(), ...args], accept, signal)
-      .catch((failure) => {
-        // Exit 1 is "no matches".
-        if (failure.status === 1 && !failure.stderr) return;
-        if (signal.aborted) throw failure;
-        const stderr = String(failure.stderr ?? '').trim();
-        if (!received) {
-          // A bad pattern fails before any file is searched, so it leaves no JSON behind.
-          const reason = failure.status === 2 ? regexFailure(stderr) : undefined;
-          if (reason) fail('InvalidInput', 'Invalid regular expression: ' + reason);
-          throw failure;
+        if (event.type === 'end' && overflow !== undefined) return 'stop';
+        if (event.type !== 'match' && event.type !== 'context') return;
+        const { data } = event;
+        // Paths or lines that are not UTF-8 arrive as bytes; they cannot be shown faithfully.
+        if (data.path.text === undefined || data.lines.text === undefined || !data.line_number)
+          return;
+        const p = data.path.text.replace(/^\.\//, '');
+        try {
+          path(p);
+        } catch {
+          return;
         }
-        // Exit 2 after searching means some files could not be read; the rest are complete.
-        if (failure.status === 2)
-          error = 'Some files could not be searched. ' + stderr.split('\n')[0];
-        else {
+        let file = files.get(p);
+        if (!file) {
+          // Output is sorted by path, so every later file is past the cap too.
+          if (files.size >= searchLimits.files || overflow !== undefined) {
+            partial = true;
+            return 'stop';
+          }
+          file = { lines: new Map(), matches: [] };
+          files.set(p, file);
+        }
+        const text = clip(data.lines.text);
+        file.lines.set(data.line_number, text);
+        if (event.type === 'context') return;
+        if (total >= searchLimits.total) {
           partial = true;
-          error = failure.uncertain
-            ? 'Search stopped at its time or output limit; refine the query to see every match.'
-            : 'Search ended early. ' + (stderr.split('\n')[0] || 'ripgrep failed.');
+          overflow ??= p;
+          return;
         }
-      });
-    const nearby = (lines: Map<number, string>, line: number, step: 1 | -1) => {
-      const found: string[] = [];
-      for (let n = line + step; Math.abs(n - line) <= searchLimits.context; n += step) {
-        const text = lines.get(n);
-        if (text === undefined) break;
-        found.push(text);
-      }
-      return step < 0 ? found.reverse() : found;
-    };
-    const results = [...files]
-      .filter(([, file]) => file.matches.length)
-      .map(([p, file]) => ({
-        path: p,
-        matches: file.matches.map((match) => ({
-          ...match,
-          before: nearby(file.lines, match.line, -1),
-          after: nearby(file.lines, match.line, 1),
-        })),
-      }))
-      .sort((a, b) => a.path.localeCompare(b.path));
-    return { files: results, partial, ...(error ? { error } : {}) };
+        // `--max-count` still reports matching lines inside the trailing context, so cap here too.
+        if (file.matches.length >= searchLimits.perFile) {
+          partial = true;
+          return;
+        }
+        total++;
+        // ripgrep reports byte offsets; the renderer highlights UTF-16 offsets.
+        const raw = Buffer.from(data.lines.text);
+        const offset = (bytes: number) =>
+          Math.min(raw.subarray(0, bytes).toString().length, text.length);
+        file.matches.push({
+          line: data.line_number,
+          text,
+          ranges: (data.submatches ?? [])
+            .slice(0, searchLimits.ranges)
+            .map((range) => ({ start: offset(range.start), end: offset(range.end) }))
+            .filter((range) => range.end > range.start),
+        });
+      };
+      const ripgrep = yield* this.requireRipgrep();
+      yield* directory.lines(['lookup', ripgrep, ...args], accept).pipe(
+        Effect.catch((cause) => {
+          const failure = helperFailure(cause);
+          // Exit 1 is "no matches".
+          if (failure.status === 1 && !failure.stderr) return Effect.void;
+          const stderr = String(failure.stderr ?? '').trim();
+          if (!received) {
+            // A bad pattern fails before any file is searched, so it leaves no JSON behind.
+            const reason = failure.status === 2 ? regexFailure(stderr) : undefined;
+            return Effect.fail(
+              reason
+                ? new InvalidWorkspaceRequestError({
+                    reason: 'Invalid regular expression: ' + reason,
+                  })
+                : cause,
+            );
+          }
+          // Exit 2 after searching means some files could not be read; the rest are complete.
+          if (failure.status === 2)
+            error = 'Some files could not be searched. ' + stderr.split('\n')[0];
+          else {
+            partial = true;
+            error = failure.uncertain
+              ? 'Search stopped at its time or output limit; refine the query to see every match.'
+              : 'Search ended early. ' + (stderr.split('\n')[0] || 'ripgrep failed.');
+          }
+          return Effect.void;
+        }),
+      );
+      const nearby = (lines: Map<number, string>, line: number, step: 1 | -1) => {
+        const found: string[] = [];
+        for (let n = line + step; Math.abs(n - line) <= searchLimits.context; n += step) {
+          const text = lines.get(n);
+          if (text === undefined) break;
+          found.push(text);
+        }
+        return step < 0 ? found.reverse() : found;
+      };
+      const results = [...files]
+        .filter(([, file]) => file.matches.length)
+        .map(([p, file]) => ({
+          path: p,
+          matches: file.matches.map((match) => ({
+            ...match,
+            before: nearby(file.lines, match.line, -1),
+            after: nearby(file.lines, match.line, 1),
+          })),
+        }))
+        .sort((a, b) => a.path.localeCompare(b.path));
+      return { files: results, partial, ...(error ? { error } : {}) };
+    });
   }
+}
+
+/** The host's read-only views of a checkout. */
+export class WorkspaceDiscovery extends Context.Service<WorkspaceDiscovery, Discovery>()(
+  'moonbase/workspace/Discovery',
+) {
+  static readonly layer = Layer.effect(
+    WorkspaceDiscovery,
+    Effect.gen(function* () {
+      const { config } = yield* HostSettings;
+      const checkouts = yield* Checkouts;
+      return new Discovery({ checkouts, ripgrepExecutable: config.ripgrepExecutable });
+    }),
+  );
 }

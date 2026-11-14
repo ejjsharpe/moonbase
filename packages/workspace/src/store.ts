@@ -3,14 +3,13 @@ import { normalizeApplicationError } from '@moonbase/effect';
 import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
 import { chmodSync, constants, closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
-import { ApplicationError } from '@moonbase/contracts/workspace';
+import { WorkspaceStoreError } from '@moonbase/contracts/workspace-host-errors';
 import { ensure } from './validation.ts';
 
 export type Decoders = Record<string, (value: unknown) => unknown>;
 export const invalidStored = () =>
-  new ApplicationError({
-    code: 'Persistence',
-    message: 'Invalid workspace saved data. Original data retained; publication blocked.',
+  new WorkspaceStoreError({
+    reason: 'Invalid workspace saved data. Original data retained; publication blocked.',
   });
 
 /**
@@ -110,9 +109,8 @@ export class Store {
     try {
       return this.statement(sql).run(...parameters);
     } catch (error) {
-      throw new ApplicationError({
-        code: 'Persistence',
-        message:
+      throw new WorkspaceStoreError({
+        reason:
           'Workspace journal publication failed; retain drafts and retry. ' +
           normalizeApplicationError(error).message,
       });
@@ -125,9 +123,8 @@ export class Store {
       ).run(bucket, key, JSON.stringify(value));
       return Number(result.changes) === 0 ? this.get<T>(bucket, key) : null;
     } catch (error) {
-      throw new ApplicationError({
-        code: 'Persistence',
-        message:
+      throw new WorkspaceStoreError({
+        reason:
           'Workspace request reservation failed; no mutation admitted. ' +
           normalizeApplicationError(error).message,
       });

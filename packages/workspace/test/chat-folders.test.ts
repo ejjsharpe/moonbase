@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { toWireError, type WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
@@ -82,9 +83,9 @@ function setup(
     },
   };
 }
-const run = <A>(effect: Effect.Effect<A, ApplicationError>) => Effect.runPromise(effect);
-const code = async <A>(effect: Effect.Effect<A, ApplicationError>) =>
-  (await Effect.runPromise(Effect.flip(effect))).code;
+const run = <A>(effect: Effect.Effect<A, WorkspaceHostError>) => Effect.runPromise(effect);
+const code = async <A>(effect: Effect.Effect<A, WorkspaceHostError>) =>
+  toWireError(await Effect.runPromise(Effect.flip(effect))).code;
 const request = (requestId: string, root: string, branch: string) => ({
   installationId: 'alice',
   requestId,

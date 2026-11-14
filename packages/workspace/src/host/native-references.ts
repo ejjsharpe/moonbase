@@ -1,44 +1,60 @@
-import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
-import { Cause, Deferred, Effect, Exit, type Fiber } from 'effect';
+import { Cause, Context, Deferred, Effect, Exit, FiberSet, Layer, Scope } from 'effect';
 import { randomUUID } from 'node:crypto';
-import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
+import type { CheckoutTarget } from '@moonbase/contracts/workspace';
+import {
+  WorkspaceAccessDeniedError,
+  WorkspaceUnavailableError,
+} from '@moonbase/contracts/workspace-host-errors';
+import { attempt } from '../attempt.ts';
 import type { Directory } from '../filesystem.ts';
-import { NativeImport } from './native-import.ts';
 import { ensure, same } from '../validation.ts';
-import { fail } from '@moonbase/contracts/errors';
+import { cancellationPoint } from './cancellation.ts';
+import { Checkouts } from './checkouts.ts';
+import { NativeImport } from './native-import.ts';
 
 type NativeReference = {
   source: NativeImport;
   clientId: string;
   checkout: CheckoutTarget;
   claimed: Deferred.Deferred<void>;
+  /** Owns the source's descriptor while the reference is unclaimed. */
+  scope: Scope.Closeable;
 };
 type NativeClaim = { token: string; ref: NativeReference };
 
-export class NativeReferences {
+/** Fails a release that went wrong as the fixed, safe text a client sees. */
+const asReleaseFailure = (message: string) =>
+  Effect.catchCause((cause: Cause.Cause<unknown>) =>
+    Cause.hasInterruptsOnly(cause)
+      ? Effect.failCause(cause)
+      : Effect.fail(new WorkspaceUnavailableError({ reason: message })),
+  );
+
+/**
+ * Native files a picker or drop named, held as single-use references for five minutes, bound to
+ * the client and checkout that captured them. An unclaimed reference owns its source's
+ * descriptor in a scope of its own; a claimed one hands it to the operation that claimed it.
+ */
+export class References {
   private readonly unclaimed = new Map<string, NativeReference>();
   private activeNative = 0;
   private capturing = 0;
-  private readonly directory: (target: CheckoutTarget) => Promise<Directory>;
-  private readonly approveCheckout: (target: CheckoutTarget) => void;
-  private readonly validateProtectedPath: (path: string) => void;
-  private readonly startExpiry: (effect: Effect.Effect<void>) => Fiber.Fiber<void>;
-  private readonly isClosed: () => boolean;
-  private readonly reportCleanup: (cause: Cause.Cause<never>) => void;
-  constructor(
-    directory: (target: CheckoutTarget) => Promise<Directory>,
-    approveCheckout: (target: CheckoutTarget) => void,
-    validateProtectedPath: (path: string) => void,
-    startExpiry: (effect: Effect.Effect<void>) => Fiber.Fiber<void>,
-    isClosed: () => boolean,
-    reportCleanup: (cause: Cause.Cause<never>) => void,
-  ) {
-    this.directory = directory;
-    this.approveCheckout = approveCheckout;
-    this.validateProtectedPath = validateProtectedPath;
-    this.startExpiry = startExpiry;
-    this.isClosed = isClosed;
-    this.reportCleanup = reportCleanup;
+  private readonly checkouts: Checkouts['Service'];
+  /** Where unclaimed references live; a failed release is reported when it closes. */
+  private readonly scope: Scope.Scope;
+  private readonly expiries: FiberSet.FiberSet<void, never>;
+  constructor({
+    checkouts,
+    scope,
+    expiries,
+  }: {
+    checkouts: Checkouts['Service'];
+    scope: Scope.Scope;
+    expiries: FiberSet.FiberSet<void, never>;
+  }) {
+    this.checkouts = checkouts;
+    this.scope = scope;
+    this.expiries = expiries;
   }
   getSourceName(token: string) {
     return this.unclaimed.get(token)?.source.source ?? '';
@@ -47,138 +63,150 @@ export class NativeReferences {
     return tokens.map((token) => {
       const ref = this.unclaimed.get(token);
       if (!ref || ref.clientId !== clientId || !same(ref.checkout, checkout))
-        fail(
-          'Unauthorized',
-          'Native reference expired, used or belongs to another client/checkout.',
-        );
-      ref!.source.validate();
-      return { token, ref: ref! };
+        throw new WorkspaceAccessDeniedError({
+          reason: 'Native reference expired, used or belongs to another client/checkout.',
+        });
+      ref.source.validate();
+      return { token, ref };
     });
   }
-  // Call synchronously after durable reservation, with no yield since inspection.
-  claimReferences(claims: NativeClaim[]) {
-    for (const { token, ref } of claims) {
-      this.unclaimed.delete(token);
-      Deferred.doneUnsafe(ref.claimed, Effect.void);
-    }
-    this.activeNative += claims.length;
-  }
-  releaseClaimedReferences(claims: NativeClaim[]) {
-    this.activeNative -= claims.length;
-    const failures: string[] = [];
-    for (const { ref } of claims) {
-      try {
-        ref.source.close();
-      } catch {
-        failures.push('Claimed native reference cleanup failed.');
+  /**
+   * Claims references for the operation running in the current scope, which then owns their
+   * descriptors. Call it right after durable reservation, with no yield since inspection.
+   */
+  claimReferences(claims: NativeClaim[]): Effect.Effect<void, never, Scope.Scope> {
+    return Effect.gen({ self: this }, function* () {
+      for (const { token, ref } of claims) {
+        this.unclaimed.delete(token);
+        Deferred.doneUnsafe(ref.claimed, Effect.void);
       }
-    }
-    if (failures.length)
-      this.reportCleanup(
-        Cause.die(new ApplicationError({ code: 'Unavailable', message: failures.join('; ') })),
-      );
-    if (failures.length) fail('Unavailable', failures.join('; '));
+      this.activeNative += claims.length;
+      for (const { ref } of claims)
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            this.activeNative--;
+            ref.source.close();
+          }),
+        );
+    });
   }
+  /** Releases references the client no longer needs; unknown ones are already gone. */
   release(input: { checkout: CheckoutTarget; clientId: string; references: string[] }) {
-    const known = input.references.filter((token) => this.unclaimed.has(token));
-    for (const token of known) {
-      const entry = this.unclaimed.get(token)!;
-      if (entry.clientId !== input.clientId || !same(entry.checkout, input.checkout))
-        fail('Unauthorized', 'Native reference belongs to another client/checkout.');
-    }
-    if (known.length) this.approveCheckout(input.checkout);
-    const failures: string[] = [];
-    for (const token of known) {
-      try {
-        this.releaseUnclaimed(token);
-      } catch {
-        failures.push('Native reference cleanup failed.');
-      }
-    }
-    if (failures.length) {
-      const error = new ApplicationError({ code: 'Unavailable', message: failures.join('; ') });
-      this.reportCleanup(Cause.die(error));
-      throw error;
-    }
-  }
-  async capture(
-    input: { checkout: CheckoutTarget; clientId: string; paths: string[] },
-    signal: AbortSignal,
-  ) {
-    const directory = await this.directory(input.checkout);
-    ensure(
-      this.unclaimed.size + this.activeNative + this.capturing + input.paths.length <= 256,
-      'Native import selection limit reached.',
-    );
-    const references: string[] = [];
-    this.capturing += input.paths.length;
-    try {
-      for (const p of input.paths) {
-        const source = new NativeImport(p, (p) => this.validateProtectedPath(p));
-        try {
-          await directory.io(['import-check', source.path, source.parents], undefined, signal, [
-            source.fd,
-          ]);
-          const token = randomUUID();
-          const claimed = Deferred.makeUnsafe<void>();
-          this.unclaimed.set(token, {
-            source,
-            clientId: input.clientId,
-            checkout: input.checkout,
-            claimed,
+    return Effect.gen({ self: this }, function* () {
+      const known = input.references.filter((token) => this.unclaimed.has(token));
+      for (const token of known) {
+        const entry = this.unclaimed.get(token)!;
+        if (entry.clientId !== input.clientId || !same(entry.checkout, input.checkout))
+          return yield* new WorkspaceAccessDeniedError({
+            reason: 'Native reference belongs to another client/checkout.',
           });
-          references.push(token);
-          this.startExpiry(
-            Effect.raceFirst(Effect.sleep('5 minutes'), Deferred.await(claimed)).pipe(
-              Effect.ensuring(
-                releaseResource(() => this.releaseUnclaimed(token)).pipe(
-                  Effect.onExit((exit) =>
-                    Effect.sync(() => {
-                      if (Exit.isFailure(exit)) this.reportCleanup(exit.cause);
-                    }),
-                  ),
-                ),
-              ),
-            ),
-          );
-        } catch (error) {
-          try {
-            source.close();
-          } catch {
-            this.reportCleanup(
-              Cause.die(
-                new ApplicationError({
-                  code: 'Unavailable',
-                  message: 'Native capture cleanup failed.',
-                }),
-              ),
-            );
-          }
-          throw error;
-        }
       }
-      if (signal.aborted || this.isClosed())
-        fail('Cancelled', 'Native capture cancelled before handoff.');
-      return references;
-    } catch (error) {
-      for (const token of references) {
-        try {
-          this.releaseUnclaimed(token);
-        } catch (error) {
-          this.reportCleanup(Cause.die(normalizeApplicationError(error)));
-        }
-      }
-      throw error;
-    } finally {
-      this.capturing -= input.paths.length;
-    }
+      if (known.length) yield* attempt(() => this.checkouts.approval(input.checkout));
+      // Every reference is released, whichever fail.
+      yield* Effect.scoped(
+        Effect.forEach(known, (token) => Effect.addFinalizer(() => this.releaseUnclaimed(token)), {
+          discard: true,
+        }),
+      ).pipe(asReleaseFailure('Native reference cleanup failed.'));
+    });
   }
+  capture(input: { checkout: CheckoutTarget; clientId: string; paths: string[] }) {
+    return Effect.gen({ self: this }, function* () {
+      const directory = yield* this.checkouts.directory(input.checkout);
+      yield* attempt(() =>
+        ensure(
+          this.unclaimed.size + this.activeNative + this.capturing + input.paths.length <= 256,
+          'Native import selection limit reached.',
+        ),
+      );
+      const references: string[] = [];
+      this.capturing += input.paths.length;
+      return yield* Effect.gen({ self: this }, function* () {
+        for (const p of input.paths) references.push(yield* this.captureOne(p, input, directory));
+        // A capture cancelled before it hands its references over keeps none of them.
+        yield* cancellationPoint;
+        return references;
+      }).pipe(
+        Effect.onExit((exit) =>
+          Exit.isSuccess(exit)
+            ? Effect.void
+            : Effect.forEach(references, (token) => this.releaseUnclaimed(token), {
+                discard: true,
+              }).pipe(Effect.catchCause((cause) => this.report(cause))),
+        ),
+        Effect.ensuring(Effect.sync(() => (this.capturing -= input.paths.length))),
+      );
+    });
+  }
+  private captureOne(
+    p: string,
+    input: { checkout: CheckoutTarget; clientId: string },
+    directory: Directory,
+  ) {
+    return Effect.gen({ self: this }, function* () {
+      const source = yield* attempt(
+        () => new NativeImport(p, (path) => this.checkouts.refuseReserved(path)),
+      );
+      const scope = yield* Scope.fork(this.scope);
+      const token = randomUUID();
+      const claimed = Deferred.makeUnsafe<void>();
+      const entry: NativeReference = {
+        source,
+        clientId: input.clientId,
+        checkout: input.checkout,
+        claimed,
+        scope,
+      };
+      yield* Scope.addFinalizer(
+        scope,
+        Effect.sync(() => {
+          // A claimed reference's descriptor belongs to the operation that claimed it.
+          if (this.unclaimed.get(token) === entry) this.unclaimed.delete(token);
+          else if (Deferred.isDoneUnsafe(claimed)) return;
+          Deferred.doneUnsafe(claimed, Effect.void);
+          source.close();
+        }),
+      );
+      yield* Effect.interruptible(
+        directory.io(['import-check', source.path, source.parents], undefined, [source.fd]),
+      ).pipe(Effect.onError(() => Scope.close(scope, Exit.void)));
+      this.unclaimed.set(token, entry);
+      yield* FiberSet.run(
+        this.expiries,
+        Effect.raceFirst(Effect.sleep('5 minutes'), Deferred.await(claimed)).pipe(
+          Effect.ensuring(
+            Scope.close(scope, Exit.void).pipe(Effect.catchCause((cause) => this.report(cause))),
+          ),
+        ),
+      );
+      return token;
+    });
+  }
+  /** Closes an unclaimed reference's descriptor; a claimed one's is its operation's to close. */
   private releaseUnclaimed(token: string) {
-    const entry = this.unclaimed.get(token);
-    if (entry) {
-      this.unclaimed.delete(token);
-      Deferred.doneUnsafe(entry.claimed, Effect.void);
-      entry.source.close();
-    }
+    return Effect.suspend(() => {
+      const entry = this.unclaimed.get(token);
+      if (!entry) return Effect.void;
+      return Scope.close(entry.scope, Exit.void);
+    });
   }
+  /** Keeps a release that failed outside any request, to fail the host's close with it. */
+  private report(cause: Cause.Cause<unknown>) {
+    return Scope.addFinalizer(this.scope, Effect.failCause(cause).pipe(Effect.orDie));
+  }
+}
+
+/** The host's native import references. */
+export class NativeReferences extends Context.Service<NativeReferences, References>()(
+  'moonbase/workspace/NativeReferences',
+) {
+  static readonly layer = Layer.effect(
+    NativeReferences,
+    Effect.gen(function* () {
+      const checkouts = yield* Checkouts;
+      const scope = yield* Effect.scope;
+      const expiries = yield* FiberSet.make<void, never>();
+      return new References({ checkouts, scope, expiries });
+    }),
+  );
 }

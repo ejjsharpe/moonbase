@@ -1,13 +1,14 @@
 import { Context, Effect, FiberSet, Layer, Scope } from 'effect';
 import { WorkspaceHostService, WorkspaceService } from '@moonbase/contracts/services';
 import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
-import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
+import { ApplicationError } from '@moonbase/contracts/workspace';
 import { normalizeApplicationError } from '@moonbase/effect';
 import { ClientWorkspace } from './client/client.ts';
 import { ClientStore } from './client/client-store.ts';
 import { decodeClientConfiguration } from './client/client-schema.ts';
-import { FileHost } from './host/host.ts';
-import { decodeConfiguration, type WorkspaceHostConfiguration } from './schema.ts';
+import { FileHost, makeFileHostLayer } from './host/host.ts';
+import type { WorkspaceHostConfiguration } from './schema.ts';
+import { toWireError } from '@moonbase/contracts/workspace-host-errors';
 
 export type {
   ChatFolders,
@@ -33,75 +34,19 @@ export type WorkspaceRecoveryConfiguration = {
  * only; the shared application composition root supplies the runtime. `now` is the journal clock.
  */
 export function WorkspaceHostLive(configuration: WorkspaceHostConfiguration, now?: () => number) {
-  const resources = Layer.effect(
-    HostResources,
-    Effect.acquireRelease(
-      Effect.gen(function* () {
-        const config = yield* Effect.try({
-          try: () => decodeConfiguration(configuration),
-          catch: normalizeApplicationError,
-        });
-        const { allowRoot, chats } = configuration;
-        const parent = yield* Effect.scope;
-        const operationScope = yield* Scope.fork(parent, 'parallel');
-        const helperScope = yield* Scope.fork(parent, 'parallel');
-        const referenceScope = yield* Scope.fork(parent, 'parallel');
-        const observationScope = yield* Scope.fork(parent, 'parallel');
-        const operations = yield* FiberSet.make<unknown, ApplicationError>().pipe(
-          Scope.provide(operationScope),
-        );
-        const helpers = yield* FiberSet.make<unknown, unknown>().pipe(Scope.provide(helperScope));
-        const references = yield* FiberSet.make<void, never>().pipe(Scope.provide(referenceScope));
-        const runHelper = yield* FiberSet.runtimePromise(helpers)();
-        const startExpiry = yield* FiberSet.runtime(references)();
-        return yield* Effect.try({
-          try: () =>
-            new FileHost(
-              config,
-              {
-                operations,
-                operationScope,
-                helperScope,
-                referenceScope,
-                observationScope,
-                runHelper,
-                startExpiry,
-              },
-              now,
-              allowRoot,
-              chats,
-            ),
-          catch: (error) =>
-            normalizeApplicationError(
-              error,
-              new ApplicationError({ code: 'Persistence', message: 'Application effect failed' }),
-            ),
-        });
-      }),
-      (host) => host.close(),
-    ),
-  );
   return Layer.mergeAll(
     Layer.effect(
       WorkspaceHostService,
-      Effect.map(HostResources, (host) => host.service),
-    ),
-    Layer.effect(
-      WorkspaceNative,
-      Effect.map(HostResources, (host) => ({
-        capture: (input: { checkout: CheckoutTarget; clientId: string; paths: string[] }) =>
-          Effect.map(host.service.captureImports(input), (captured) => captured.references),
-        release: (input: { checkout: CheckoutTarget; clientId: string; references: string[] }) =>
-          host.service.releaseImports(input),
-      })),
+      Effect.map(FileHost, (host) => host.service),
     ),
     Layer.effect(
       WorkspaceFolders,
-      Effect.map(HostResources, (host) => ({
-        has: (path: string) => host.effect(() => host.hasFolder(path)),
+      // The daemon reads its refusals as wire errors, until CL-07.
+      Effect.map(FileHost, (host) => ({
+        has: (path: string) => host.hasFolder(path).pipe(Effect.mapError(toWireError)),
       })),
     ),
-  ).pipe(Layer.provide(resources));
+  ).pipe(Layer.provide(makeFileHostLayer(configuration, now)));
 }
 
 /**
@@ -159,7 +104,7 @@ export function WorkspaceRecoveryLive(
 /**
  * The file host and one client recovery store in one process, as Electron main composes them: the
  * host journals and the client recovery share `dataDirectory`, in separate files. Provides
- * `WorkspaceService`, `WorkspaceHostService` and `WorkspaceNative`.
+ * `WorkspaceService` and `WorkspaceHostService`.
  */
 export function WorkspaceLocalLive(
   configuration: WorkspaceHostConfiguration & { installationId: string },
@@ -182,23 +127,3 @@ export class WorkspaceFolders extends Context.Service<
   WorkspaceFolders,
   { has(path: string): Effect.Effect<boolean, ApplicationError> }
 >()('moonbase/WorkspaceFolders') {}
-
-/** Main/native adapter only: approved picker/drop paths become short-lived, single-use tokens. */
-export class WorkspaceNative extends Context.Service<
-  WorkspaceNative,
-  {
-    capture(input: {
-      checkout: CheckoutTarget;
-      clientId: string;
-      paths: string[];
-    }): Effect.Effect<string[], ApplicationError>;
-    release(input: {
-      checkout: CheckoutTarget;
-      clientId: string;
-      references: string[];
-    }): Effect.Effect<void, ApplicationError>;
-  }
->()('moonbase/WorkspaceNative') {}
-class HostResources extends Context.Service<HostResources, FileHost>()(
-  'moonbase/WorkspaceHostResources',
-) {}

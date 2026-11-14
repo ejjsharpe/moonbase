@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { isWorkspaceHostError, toWireError } from '@moonbase/contracts/workspace-host-errors';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
@@ -115,6 +116,12 @@ const dropReply =
 const openCheckout = (host: WorkspaceHostServiceShape, root: string) =>
   Effect.runPromise(host.openCheckout({ root }));
 
+/** Whether `error` is, or a host error sent as, the wire error with `code`. */
+const hasCode = (error: unknown, code: ApplicationError['code']) => {
+  const wire = isWorkspaceHostError(error) ? toWireError(error) : error;
+  return ApplicationError.is(wire) && wire.code === code;
+};
+
 test('a save whose reply is lost resolves through saveStatus, and one that never arrived returns as a draft over its baseline, even once another client moved that draft', async () => {
   const h = harness();
   try {
@@ -206,7 +213,7 @@ test('a save whose reply is lost resolves through saveStatus, and one that never
         }),
       ),
     );
-    assert.equal(late.code, 'Conflict');
+    assert.equal(toWireError(late).code, 'Conflict');
     assert(!existsSync(join(h.root, 'file.txt')));
   } finally {
     await h.close();
@@ -329,9 +336,8 @@ test('a move whose reply is lost before publication resolves through operationSt
     await assert.rejects(alice.client.command('mutate', unsent));
     await alice.runtime.dispose();
     alice = h.startClient('alice', host);
-    await assert.rejects(
-      alice.client.command('mutate', unsent),
-      (error: unknown) => ApplicationError.is(error) && error.code === 'Conflict',
+    await assert.rejects(alice.client.command('mutate', unsent), (error: unknown) =>
+      hasCode(error, 'Conflict'),
     );
     assert(!existsSync(join(h.root, 'unsent.txt')));
     assert.equal(
@@ -594,9 +600,8 @@ test('journal entries leave after acknowledgement and the window; a feed gap kee
     // `null` for an ID the host never saw is a promise: a mutation with it that arrives later
     // never runs, as the client has already discarded its intent.
     assert.equal(await status('overtaken'), null);
-    await assert.rejects(
-      move('overtaken', 'back.txt', 'overtaken.txt'),
-      (error: unknown) => ApplicationError.is(error) && error.code === 'Conflict',
+    await assert.rejects(move('overtaken', 'back.txt', 'overtaken.txt'), (error: unknown) =>
+      hasCode(error, 'Conflict'),
     );
     assert(existsSync(join(h.root, 'back.txt')));
     // Within the window an acknowledged entry is still replayable.
@@ -641,7 +646,7 @@ test('createWorktree and initializeRepository replay their first outcome for one
     // A second branch name proves the first request was not run again.
     await assert.rejects(
       Effect.runPromise(host.createWorktree({ ...request, branch: 'feature/two' })),
-      (error: unknown) => ApplicationError.is(error) && error.code === 'Conflict',
+      (error: unknown) => hasCode(error, 'Conflict'),
     );
     assert.equal(
       h.git('for-each-ref', '--format=%(refname:short)', 'refs/heads/feature').trim(),
@@ -663,7 +668,7 @@ test('createWorktree and initializeRepository replay their first outcome for one
       branch: 'feature/three',
       location: join(h.base, 'three'),
     };
-    const refusal = (error: unknown) => ApplicationError.is(error) && error.code === 'InvalidInput';
+    const refusal = (error: unknown) => hasCode(error, 'InvalidInput');
     await assert.rejects(Effect.runPromise(host.createWorktree(refused)), refusal);
     h.git('branch', 'later', 'main');
     await assert.rejects(Effect.runPromise(host.createWorktree(refused)), refusal);
@@ -688,8 +693,7 @@ test('createWorktree and initializeRepository replay their first outcome for one
       location: join(h.base, 'five'),
     };
     await assert.rejects(Effect.runPromise(host.createWorktree(flaky)), (error: unknown) => {
-      assert.ok(ApplicationError.is(error));
-      assert.equal(error.code, 'Unavailable');
+      assert.ok(hasCode(error, 'Unavailable'));
       return true;
     });
     rmSync(hook);
@@ -708,13 +712,12 @@ test('createWorktree and initializeRepository replay their first outcome for one
       branch: 'feature/six',
       location: join(h.base, 'six'),
     };
-    const uncertain = (error: unknown) => ApplicationError.is(error) && error.code === 'Uncertain';
+    const uncertain = (error: unknown) => hasCode(error, 'Uncertain');
     await assert.rejects(Effect.runPromise(host.createWorktree(stuck)), uncertain);
     rmSync(hook);
     await assert.rejects(Effect.runPromise(host.createWorktree(stuck)), (error: unknown) => {
-      assert.ok(ApplicationError.is(error));
-      assert.equal(error.code, 'Uncertain');
-      assert.match(error.message, /interrupted/);
+      assert.ok(hasCode(error, 'Uncertain'));
+      assert.match((error as Error).message, /interrupted/);
       return true;
     });
   } finally {
@@ -741,9 +744,8 @@ test('a worktree whose reply was lost is asked for again under its first request
       message: 'The reply was lost.',
     });
     let alice = h.startClient('alice', host, dropReply('createWorktree', uncertain));
-    await assert.rejects(
-      alice.client.command('createWorktree', input),
-      (error: unknown) => ApplicationError.is(error) && error.code === 'Uncertain',
+    await assert.rejects(alice.client.command('createWorktree', input), (error: unknown) =>
+      hasCode(error, 'Uncertain'),
     );
     // The client restarts: the same call is the same request, which replays the worktree.
     await alice.runtime.dispose();
@@ -751,9 +753,8 @@ test('a worktree whose reply was lost is asked for again under its first request
     const created = await alice.client.command('createWorktree', input);
     assert.equal(created.root, join(h.base, 'feature'));
     // An answer (here a refusal of the same branch) ends the intent, so a repeat is a new request.
-    await assert.rejects(
-      alice.client.command('createWorktree', input),
-      (error: unknown) => ApplicationError.is(error) && error.code === 'Conflict',
+    await assert.rejects(alice.client.command('createWorktree', input), (error: unknown) =>
+      hasCode(error, 'Conflict'),
     );
     // A repeat that is Uncertain again (the host reports the first request interrupted) ends the
     // ID once reported, so the call after is a new request; concurrent duplicates share one.
@@ -768,8 +769,7 @@ test('a worktree whose reply was lost is asked for again under its first request
       },
     }));
     const second = { ...input, branch: 'feature/two', location: join(h.base, 'two') };
-    const isUncertain = (error: unknown) =>
-      ApplicationError.is(error) && error.code === 'Uncertain';
+    const isUncertain = (error: unknown) => hasCode(error, 'Uncertain');
     await assert.rejects(alice.client.command('createWorktree', second), isUncertain);
     await Promise.all(
       [1, 2].map(() => assert.rejects(alice.client.command('createWorktree', second), isUncertain)),
