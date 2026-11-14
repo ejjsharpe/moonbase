@@ -336,6 +336,8 @@ test('an outdated daemon whose process ID now runs something else is never signa
 
 test('a start that finds the lock held adopts only a daemon of this directory and protocol', async (t) => {
   const { directory, command } = await profile(t);
+  // Three starts follow; the first daemon must outlive them all, so it may not idle out meanwhile.
+  await writeFauxScript(directory, { idleMs: 60_000, pollMs: 500 });
   await createLocalDaemon({ directory, command }).ensure();
   const running = (await readDaemonPid(directory))!;
   const file = join(directory, 'endpoint.json'),
