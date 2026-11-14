@@ -6,7 +6,7 @@ import {
 } from '@moonbase/contracts/chat';
 import type { ChatController } from '@moonbase/application/chat';
 import { rebaseMentions } from './mention-text.ts';
-import { chatWorktreeBranch } from './worktree.ts';
+import { chatWorktreeBranch } from '../worktree.ts';
 
 /** A new chat's folder choices in one view of it: Agents, or a project's dock. */
 export type ChatComposerPlace = {

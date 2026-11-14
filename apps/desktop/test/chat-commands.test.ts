@@ -8,7 +8,7 @@ import {
   removeCommandLine,
   resolveCommandLine,
   type ChatCommandContext,
-} from '../src/renderer/chat/commands.ts';
+} from '../src/renderer/chat/composer/commands.ts';
 
 const makeContext = (overrides: Partial<ChatCommandContext> = {}) => {
   const ran: string[] = [];

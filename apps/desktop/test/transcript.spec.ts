@@ -11,7 +11,7 @@ import {
   waitForRowOrder,
   openActivity,
 } from './transcript-list.ts';
-import type * as readingPins from '../src/renderer/chat/reading-pin.ts';
+import type * as readingPins from '../src/renderer/chat/transcript/reading-pin.ts';
 
 type ReadingPins = typeof readingPins;
 const imagePng = (

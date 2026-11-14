@@ -11,7 +11,7 @@ import {
   canHighlight,
   getExternalLink,
   getSyntaxTone,
-} from '../src/renderer/chat/markdown-model.ts';
+} from '../src/renderer/chat/transcript/markdown-model.ts';
 test('parser block selection excludes indented literals and preserves meaningful code indentation', () => {
   for (const literal of ['same\n      ```\n', 'unclosed\n']) {
     const source = `- item\n\n      \`\`\`js\n      ${literal}\n  \`\`\`js\r\n  same\r\n  \`\`\`\r\n`;

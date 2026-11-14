@@ -11,7 +11,7 @@ import { chatLiveTextBytes } from '@moonbase/contracts/chat';
 import type { TranscriptNative } from '../src/ipc/chat-wire.ts';
 import type { chatCapabilities } from './chat.ts';
 import { parseTranscriptMarkdown } from '../src/main/chat/transcript-source.ts';
-import { markdownWork } from '../src/renderer/chat/markdown-model.ts';
+import { markdownWork } from '../src/renderer/chat/transcript/markdown-model.ts';
 export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabilities>) {
   const sources = new Map<
     string,

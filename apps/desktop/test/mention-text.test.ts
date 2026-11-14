@@ -7,7 +7,7 @@ import {
   insertMention,
   rebaseMentions,
   removeMentionBefore,
-} from '../src/renderer/chat/mention-text.ts';
+} from '../src/renderer/chat/composer/mention-text.ts';
 import { isChatMentionPath } from '@moonbase/contracts/chat';
 
 test('an @ at a word start opens a query; an email or a finished mention does not', () => {

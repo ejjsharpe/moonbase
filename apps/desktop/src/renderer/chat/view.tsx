@@ -18,22 +18,22 @@ import {
 } from '@moonbase/application/chat';
 import { formatChatAge } from './age.ts';
 import { activateChatFind, FindBar, handleChatFindKeyDown } from './find.tsx';
-import { Transcript } from './transcript.tsx';
+import { Transcript } from './transcript/transcript.tsx';
 import type { TranscriptNative } from '../../ipc/chat-wire.ts';
 import { Choice } from './choice.tsx';
 import { ModelPicker } from './model-picker.tsx';
 import { FolderPicker, type ChatFolderProject } from './folder-picker.tsx';
-import { appendMentions } from './mention-text.ts';
-import { getChatComposer, type ChatComposerPlace } from './composer.ts';
+import { appendMentions } from './composer/mention-text.ts';
+import { getChatComposer, type ChatComposerPlace } from './composer/composer.ts';
 import { Icon } from '@moonbase/ui/icons';
-import { MessageInput } from './message-input.tsx';
+import { MessageInput } from './composer/message-input.tsx';
 import {
   listChatCommands,
   removeCommandLine,
   resolveCommandLine,
   type ChatCommand,
   type ChatCommandOption,
-} from './commands.ts';
+} from './composer/commands.ts';
 import { getChatPlace } from './folder.ts';
 import { folderName } from '../folder-menu.tsx';
 import { projectInitials, projectTiles } from '@moonbase/ui/projects';

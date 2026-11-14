@@ -1,7 +1,7 @@
 import { LRUCache } from 'lru-cache';
 import type { Root } from 'mdast';
 import { EXIT, visit } from 'unist-util-visit';
-import { parseTranscriptMarkdown } from '../../main/chat/transcript-source.ts';
+import { parseTranscriptMarkdown } from '../../../main/chat/transcript-source.ts';
 import { fitsStructuredSource } from './source-limits.ts';
 /** `signature` changes whenever the block's rendering can: its source text or its offset. */
 export type MarkdownBlock = { key: string; tree: Root; signature: string };

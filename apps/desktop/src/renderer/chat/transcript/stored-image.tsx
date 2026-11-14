@@ -21,7 +21,7 @@ import {
   maximumTranscriptImageBytes,
   type TranscriptImage,
   type TranscriptNative,
-} from '../../ipc/chat-wire.ts';
+} from '../../../ipc/chat-wire.ts';
 
 type ImageRequest = { source: ChatTranscriptSource; part: ChatTranscriptPart; key: string };
 type Viewer = ImageRequest & { trigger: HTMLElement };
