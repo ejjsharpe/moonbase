@@ -65,6 +65,8 @@ export const makeRecoveryEdits = (context: RecoveryContext) => {
       Effect.gen(function* () {
         const added = yield* admitCheckouts(clientId, [target.checkout]);
         yield* commit(clientId, (state) => {
+          // An ID opened again names a buffer the client has, not one a move replaced.
+          store.delete('replaced-buffers', key(clientId, bufferId));
           const open = state.buffers.find((b) => b.id === bufferId);
           // Already open: it stays where it is now, however the caller named it.
           if (open) {

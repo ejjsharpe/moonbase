@@ -228,6 +228,7 @@ export function applyOperations(
       // A late edit to a buffer that gave way is told so, not that it never existed.
       for (const bufferId of replaced)
         store.put('replaced-buffers', key(client, bufferId), { clientId: client, bufferId });
+      if (replaced.length) pruneReplacedBuffers(context, client);
       if (JSON.stringify(state) !== body) {
         store.writeInternalRecovery(client, revision, state);
         const change = { clientId: client, previousRevision: revision, revision: revision + 1 };
@@ -242,6 +243,20 @@ export function applyOperations(
     context.putOperation(m.id, m.updated);
   }
   return merged;
+}
+
+/** The most replaced buffers kept per client: the latest are the ones a late edit can name. */
+const maximumReplacedBuffers = 64;
+/** Keeps a client's most recent replaced buffers. Synchronous: the caller's transaction. */
+function pruneReplacedBuffers(context: RecoveryContext, client: string) {
+  const { store } = context;
+  const rows = store.all<{ clientId: string; bufferId: string }>(
+    'replaced-buffers',
+    "json_extract(body, '$.clientId') = ?",
+    [client],
+  );
+  for (const row of rows.slice(0, Math.max(0, rows.length - maximumReplacedBuffers)))
+    store.delete('replaced-buffers', key(client, row.bufferId));
 }
 
 function mergeOperation(
