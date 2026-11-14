@@ -667,7 +667,7 @@ test('disconnect and root disposal during startup release the pending generation
 });
 
 test('a stalled forwarded health response is read again until the startup deadline, then releases the reader, child and port', async () => {
-  const f = await fixture('normal', 'stall', { startupMs: 800 });
+  const f = await fixture('normal', 'stall', { startupMs: 2000 });
   try {
     await assert.rejects(
       f.client.command('connect', { profileId: 'configured' }),
