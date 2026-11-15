@@ -5,12 +5,14 @@ import { Effect, Fiber, Layer, ManagedRuntime, Stream } from 'effect';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
 import { ChatService } from '@moonbase/contracts/services';
 import {
+  rpcLimits,
   workspaceRpcLimits,
   workspaceRpcPath,
   workspaceRpcProtocol,
 } from '@moonbase/contracts/rpc-upgrade';
 import type { WorkspaceEvent } from '@moonbase/contracts/workspace';
 import {
+  BranchTakenError,
   CheckoutAccessError,
   GitStatusFormatError,
   IncompleteCleanupError,
@@ -262,6 +264,7 @@ test('a host’s errors reach the client with their codes and the client’s own
     new InterruptedRequestError({ operation: secret }),
     new UncertainError({ operation: secret, target: { ...fileTarget, path: secret } }),
     new CheckoutAccessError({ refusal: 'not-approved' }),
+    new BranchTakenError({ branch: secret, inside: true }),
     new Error(secret),
   ];
   const files = controlledWorkspace();
@@ -289,8 +292,25 @@ test('a host’s errors reach the client with their codes and the client’s own
     'Uncertain',
     'Uncertain',
     'Unauthorized',
+    'Conflict',
     'Unavailable',
   ]);
+  // A branch `createWorktree` found taken is named as the client asked for it.
+  files.handlers.createWorktree = async () => {
+    throw new BranchTakenError({ branch: secret, inside: false });
+  };
+  const taken = await failure(
+    run,
+    workspace.createWorktree({
+      installationId: identity.installationId,
+      requestId: 'w',
+      checkout: { ...checkout, vcs: 'git', branch: 'main', worktree: 'main' },
+      branch: 'feature',
+      base: 'main',
+      location: '/work-b',
+    }),
+  );
+  assert(taken.message.includes('feature') && !taken.message.includes(secret));
 });
 
 const operation = {
@@ -355,12 +375,13 @@ test('a mutation whose connection drops or whose reply is late is Uncertain, is 
   assert.equal(files.calls.filter((call) => call === 'mutate').length, 2);
 });
 
-test('a request past the input a connection may hold in flight is refused before it runs, a mutation as never sent, and the connection carries on', async (t) => {
+test('a request past the input a connection may hold in flight is refused before it runs, a mutation as never sent, while status calls and watches still run', async (t) => {
   const files = controlledWorkspace(),
     held = Promise.withResolvers<never>();
   t.after(() => held.reject(Error('done')));
   files.handlers.getIgnoredPaths = () => held.promise;
   files.handlers.readFile = async () => ({ text: 'ok', version: 'v1' });
+  files.handlers.saveStatus = async () => ({ kind: 'not-started' });
   const daemon = await serveWorkspace(t, files.service);
   const { workspace, run } = await remoteWorkspace(t, daemon);
   // Two requests of nearly a request's bound each hold their input while the host runs them.
@@ -377,6 +398,12 @@ test('a request past the input a connection may hold in flight is refused before
     reason: 'busy',
   });
   assert.deepEqual(files.calls, ['getIgnoredPaths', 'getIgnoredPaths']);
+  // The bound is for plain requests' input: a status call and a watch still have their places.
+  assert.deepEqual(await run(workspace.saveStatus({ ...identity, requestId: 'save-1' })), {
+    kind: 'not-started',
+  });
+  const watched = await run(Stream.runHead(workspace.watch({ checkout, paths: [''] })));
+  assert.equal(watched._tag, 'Some');
   assert.equal((await run(workspace.readFile(fileTarget))).text, 'ok');
 });
 
@@ -494,12 +521,15 @@ test('a watch follows changes, is bounded per connection, ends retryably when th
   assert(ended.every((code) => code === 'Unavailable'));
 });
 
-test('a large workspace reply its client is slow to read never delays chat updates', async (t) => {
-  const files = controlledWorkspace(),
-    paths = Array.from({ length: 3800 }, () => 'p'.repeat(4000));
-  files.handlers.getIgnoredPaths = async () => ({ paths });
-  const daemon = await serveWorkspace(t, files.service);
-  // A workspace client that requests a reply of about 15 MiB and then reads none of it.
+/**
+ * A workspace connection on a bare TCP socket that sends `requests` for `getIgnoredPaths` and then
+ * reads nothing until the test resumes it.
+ */
+async function slowReader(
+  t: { after(run: () => unknown): void },
+  daemon: Awaited<ReturnType<typeof serveWorkspace>>,
+  requests: number,
+) {
   const { upgradeNonce } = await Effect.runPromise(requestUpgradeNonce(daemon.endpoint));
   const [protocol, proof] = upgradeProtocols(
     daemon.token,
@@ -510,8 +540,10 @@ test('a large workspace reply its client is slow to read never delays chat updat
   const tcp = connect(daemon.port, '127.0.0.1');
   t.after(() => tcp.destroy());
   await new Promise((resolve, reject) => tcp.once('connect', resolve).once('error', reject));
-  let received = 0;
-  tcp.on('data', (bytes: Buffer) => void (received += bytes.length));
+  const state = { received: 0, closed: false };
+  tcp.on('data', (bytes: Buffer) => void (state.received += bytes.length));
+  tcp.on('close', () => void (state.closed = true));
+  tcp.on('error', () => void (state.closed = true));
   tcp.write(
     [
       `GET ${workspaceRpcPath} HTTP/1.1`,
@@ -525,17 +557,40 @@ test('a large workspace reply its client is slow to read never delays chat updat
       '',
     ].join('\r\n'),
   );
-  await until(async () => received, Boolean);
+  await until(async () => state.received, Boolean);
   tcp.pause();
-  const request = {
-    _tag: 'Request',
-    id: '1',
-    tag: 'getIgnoredPaths',
-    payload: { host, input: { checkout, path: '', paths: [] } },
-    headers: [],
+  for (let id = 1; id <= requests; id++) {
+    const request = {
+      _tag: 'Request',
+      id: String(id),
+      tag: 'getIgnoredPaths',
+      payload: { host, input: { checkout, path: '', paths: [] } },
+      headers: [],
+    };
+    tcp.write(encodeWebSocketFrame(1, Buffer.from(JSON.stringify(request)), true));
+  }
+  return {
+    state,
+    resume: () => tcp.resume(),
+    /** Sends an RPC ping, which counts as activity; it fails once the daemon has closed. */
+    ping: () =>
+      tcp.write(encodeWebSocketFrame(1, Buffer.from(JSON.stringify({ _tag: 'Ping' })), true)),
   };
-  tcp.write(encodeWebSocketFrame(1, Buffer.from(JSON.stringify(request)), true));
-  await until(async () => files.calls.length, Boolean);
+}
+/** About the bytes of one `getIgnoredPaths` reply these tests make. */
+const reply = 15_000_000;
+
+test('large workspace replies a client is slow to read never delay chat updates, are all written once it reads, and one that never reads is dropped', async (t) => {
+  const files = controlledWorkspace(),
+    paths = Array.from({ length: 3800 }, () => 'p'.repeat(4000));
+  files.handlers.getIgnoredPaths = async () => ({ paths });
+  const daemon = await serveWorkspace(t, files.service);
+  // Two replies of about 15 MiB each wait to be written to a client that reads none of them.
+  const slow = await slowReader(t, daemon, 2);
+  await until(
+    async () => files.calls.length,
+    (count) => count === 2,
+  );
 
   // Meanwhile a chat streams over the RPC socket.
   const chat = ManagedRuntime.make(
@@ -560,12 +615,25 @@ test('a large workspace reply its client is slow to read never delays chat updat
       (text) => text === 'streamed '.repeat(index).slice(-64),
     );
   }
-  // The workspace reply is still waiting for its reader, which gets all of it once it reads.
-  const reply = 15_000_000;
-  assert(received < reply);
-  tcp.resume();
+  // Once the client reads, both replies arrive whole: neither write lost its wake-up.
+  assert(slow.state.received < reply);
+  slow.resume();
   await until(
-    async () => received,
-    (bytes) => bytes > reply,
+    async () => slow.state.received,
+    (bytes) => bytes > 2 * reply,
   );
+  assert(!slow.state.closed);
+
+  // A client that drains nothing of a reply for `drainMs` is disconnected, although it pings
+  // within the idle bound.
+  const stuck = await slowReader(t, daemon, 1);
+  await until(
+    async () => files.calls.length,
+    (count) => count === 3,
+  );
+  await until(async () => {
+    stuck.ping();
+    await daemon.advance(rpcLimits.drainMs / 4);
+    return stuck.state.closed;
+  }, Boolean);
 });

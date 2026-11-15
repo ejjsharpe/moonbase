@@ -31,8 +31,14 @@ export const rpcLimits = {
   inboundBytes: 1024 * 1024,
   /** A connection that sends nothing for this long is closed; clients ping every 5 s. */
   idleMs: 30_000,
-  /** Bytes a connection's socket may buffer before the daemon waits to write more. */
+  /**
+   * Bytes a connection's socket may buffer before the daemon waits to write more; a client that
+   * drains none of it for `drainMs` is disconnected.
+   */
   outboundBytes: 1024 * 1024,
+  drainMs: 20_000,
+  /** Replies waiting to be written past which a connection reads no further requests. */
+  queuedBytes: 16 * 1024 * 1024,
   /**
    * The client's bound on connecting: signed health, TCP, an SSH forward's channel and the
    * upgrade.
@@ -59,9 +65,19 @@ export const workspaceRpcLimits = {
    * `HostUnavailableError` (`busy`) before it runs.
    */
   inFlightBytes: 32 * 1024 * 1024,
+  /** Replies waiting to be written past which a connection reads no further requests. */
+  queuedBytes: 64 * 1024 * 1024,
   /**
-   * How long a client waits for any message before it drops the connection: long enough for a
-   * reply of `payloadBytes` over a slow SSH forward, since a large reply delays the pong behind it.
+   * The slowest link the workspace socket keeps working over. A message counts only once it has
+   * all arrived, so a reply of `payloadBytes` delays every pong behind it; below this rate one
+   * drops the connection (and makes the mutations in flight on it `Uncertain`).
    */
-  pingTimeoutMs: 30_000,
+  minimumBytesPerSecond: 128 * 1024,
 } as const;
+/**
+ * How long a workspace client waits for any message before it drops the connection: the idle
+ * bound, plus the time a reply of `payloadBytes` takes at `minimumBytesPerSecond` (158 s).
+ */
+export const workspacePingTimeoutMs =
+  rpcLimits.idleMs +
+  (workspaceRpcLimits.payloadBytes / workspaceRpcLimits.minimumBytesPerSecond) * 1000;

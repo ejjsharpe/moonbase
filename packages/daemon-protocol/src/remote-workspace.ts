@@ -3,6 +3,7 @@ import { CancelledError, UnauthorizedError, UncertainError } from '@moonbase/con
 import { chatHostCapabilities, type ChatHostTarget } from '@moonbase/contracts/host';
 import { IncompatibleHostError } from '@moonbase/contracts/host-errors';
 import {
+  workspacePingTimeoutMs,
   workspaceRpcLimits,
   workspaceRpcPath,
   workspaceRpcProtocol,
@@ -19,6 +20,7 @@ import type {
   WorkspaceWatchValue,
 } from '@moonbase/contracts/workspace-host';
 import {
+  BranchTakenError,
   GitStatusFormatError,
   IncompleteCleanupError,
   InterruptedRequestError,
@@ -59,10 +61,26 @@ const recordedRefusals = {
 /**
  * A file host's error as the client shows it (D11): decoded into the client's own classes, with
  * every field a host could fill with text (Git's output, paths, a pattern's reason, a refusal's
- * text) dropped or replaced by the client's own, so its message is the client's.
+ * text) dropped or replaced by the client's own, so its message is the client's. A branch
+ * `createWorktree` found taken is named as the client asked for it, from its `input`; a chat
+ * worktree's derives its own, so it names none.
  */
-export function presentWorkspaceError(error: WorkspaceHostError, operation: string) {
+export function presentWorkspaceError(
+  error: WorkspaceHostError,
+  operation: string,
+  input?: unknown,
+) {
   switch (error._tag) {
+    case 'BranchTakenError': {
+      const branch =
+        operation === 'createWorktree'
+          ? (input as { branch?: unknown } | undefined)?.branch
+          : undefined;
+      return new BranchTakenError({
+        inside: error.inside,
+        ...(typeof branch === 'string' ? { branch } : {}),
+      });
+    }
     case 'UncertainError':
       return new UncertainError({ operation });
     case 'UnauthorizedError':
@@ -141,10 +159,14 @@ export const RemoteWorkspaceHostLive = (config: {
         protocol: workspaceRpcProtocol,
         capability: chatHostCapabilities.workspace,
         inboundBytes: workspaceRpcLimits.messageBytes,
-        pingTimeoutMs: workspaceRpcLimits.pingTimeoutMs,
+        pingTimeoutMs: workspacePingTimeoutMs,
         errors: remoteErrors,
-        present: (error, operation) =>
-          presentWorkspaceError(error as WorkspaceHostError, operation),
+        present: (error, operation, payload) =>
+          presentWorkspaceError(
+            error as WorkspaceHostError,
+            operation,
+            (payload as { input?: unknown }).input,
+          ),
       });
       const places = yield* Semaphore.make(workspaceRpcLimits.requests);
       const statusPlaces = yield* Semaphore.make(workspaceRpcLimits.statusRequests);

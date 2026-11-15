@@ -235,15 +235,18 @@ export const serveChat = (
         !isUpgradeProof(token, expected, offered.nonce, offered.proof, socket.protocol)
       )
         return refuse(401);
-      if (socket.connections.count >= socket.cap) return refuse(503);
-      if (
-        !bun.upgrade(request, {
+      // Reserved now and taken when it opens, so upgrades accepted together stay under the cap.
+      if (!socket.connections.reserve(socket.cap)) return refuse(503);
+      let upgraded = false;
+      try {
+        upgraded = bun.upgrade(request, {
           data: { kind: socket.kind },
           headers: { 'Cache-Control': 'no-store' },
-        })
-      )
-        return refuse(400);
-      return undefined;
+        });
+      } finally {
+        if (!upgraded) socket.connections.unreserve();
+      }
+      return upgraded ? undefined : refuse(400);
     };
     const connectionsOf = (ws: BunWebSocket<RpcSocketData>) =>
       ws.data.kind === 'workspace' ? workspace : rpc;

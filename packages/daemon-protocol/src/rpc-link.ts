@@ -60,8 +60,11 @@ export type RpcLinkConfiguration<Rpcs extends Rpc.Any> = {
   pingTimeoutMs?: number;
   /** The errors the group's procedures declare: the only failures the client takes from it. */
   errors: readonly ErrorClass[];
-  /** A declared error as the client shows it (D11): its own text, none of the host's. */
-  present(error: unknown, operation: string): unknown;
+  /**
+   * A declared error as the client shows it (D11): its own text, none of the host's; `payload`
+   * is what the client sent, from which it may rebuild a field.
+   */
+  present(error: unknown, operation: string, payload: object): unknown;
 };
 export type CallOptions<A> = {
   mutation: boolean;
@@ -365,7 +368,9 @@ export const makeRpcLink = <Rpcs extends Rpc.Any>(config: RpcLinkConfiguration<R
         if (!(yield* isCurrent(endpoint)))
           return yield* Effect.fail(generationChanged(options.mutation, operation));
         if (Exit.isFailure(exit))
-          return yield* Effect.fail(config.present(Cause.squash(exit.cause), operation) as E);
+          return yield* Effect.fail(
+            config.present(Cause.squash(exit.cause), operation, payload) as E,
+          );
         const output = exit.value as A;
         yield* Effect.try({
           try: () => options.check?.(output, generation.health),
@@ -429,7 +434,7 @@ export const makeRpcLink = <Rpcs extends Rpc.Any>(config: RpcLinkConfiguration<R
                     Stream.mapError((error) =>
                       isTransport(error) || !isOneOf(config.errors, error)
                         ? error
-                        : config.present(error, operation),
+                        : config.present(error, operation, payload),
                     ),
                   );
                   yield* Stream.runForEach(updates, (update) =>

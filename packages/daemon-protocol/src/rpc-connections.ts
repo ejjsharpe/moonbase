@@ -1,4 +1,4 @@
-import { Cause, Effect, FiberSet, Layer, Queue } from 'effect';
+import { Cause, Effect, FiberSet, Latch, Layer, Queue, Semaphore } from 'effect';
 import * as Socket from 'effect/socket/Socket';
 import * as SocketServer from 'effect/socket/SocketServer';
 import * as NetAddress from 'effect/net/NetAddress';
@@ -23,6 +23,8 @@ const sizeOf = (message: string | Uint8Array) =>
 export type RpcConnectionOptions = {
   /** The largest message a connection may send; a larger one closes it. */
   messageBytes: number;
+  /** Reply bytes waiting to be written past which the connection reads no further requests. */
+  queuedBytes: number;
   /** Called once a connection opens; what it returns, once that closes. */
   track?(): () => void;
 };
@@ -30,9 +32,11 @@ export type RpcConnectionOptions = {
 /**
  * The daemon's authenticated connections to one socket, as the `SocketServer` an RPC server runs
  * on. Bun upgrades a connection only once its proof checked out; each one then becomes an Effect
- * `Socket` whose writes wait while Bun buffers more than `rpcLimits.outboundBytes`, which closes on
- * a message past `messageBytes`, and after `rpcLimits.idleMs` on the Clock without one (clients
- * ping every 5 s).
+ * `Socket` that writes one message at a time and waits while Bun buffers more than
+ * `rpcLimits.outboundBytes` (closing the connection when the client drains nothing for
+ * `rpcLimits.drainMs`, cut without a close frame), that reads no requests while `queuedBytes` of replies wait to be written,
+ * and that closes on a message past `messageBytes` and after `rpcLimits.idleMs` on the Clock
+ * without one (clients ping every 5 s).
  */
 export const makeRpcConnections = (options: RpcConnectionOptions) =>
   Effect.gen(function* () {
@@ -47,37 +51,80 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
         const inbound = yield* Queue.unbounded<string | Uint8Array, Socket.SocketError>();
         // Holds a mark while a message arrived since the idle wait last took one.
         const activity = yield* Queue.sliding<void>(1);
-        let waiting: (() => void) | undefined;
+        // Writes go one at a time, so at most one waits for a drain: its wake-up is this.
+        let waiting: (() => void) | undefined,
+          closed = false,
+          queued = 0;
+        const wake = () => {
+          const resume = waiting;
+          waiting = undefined;
+          resume?.();
+        };
         ws.data.connection = {
           receive(message) {
             Queue.offerUnsafe(activity, undefined);
             Queue.offerUnsafe(inbound, message);
           },
-          drained() {
-            const resume = waiting;
-            waiting = undefined;
-            resume?.();
-          },
+          drained: wake,
           closed(code) {
+            closed = true;
             Queue.failCauseUnsafe(
               inbound,
               Cause.fail(new Socket.SocketError({ reason: new Socket.SocketCloseError({ code }) })),
             );
-            waiting?.();
+            wake();
           },
         };
-        const backpressure = Effect.callback<void>((resume) => {
-          if (ws.getBufferedAmount() <= rpcLimits.outboundBytes) return resume(Effect.void);
-          waiting = () => resume(Effect.void);
+        const writes = yield* Semaphore.make(1);
+        // Open while the replies waiting to be written hold less than `queuedBytes`; while it is
+        // closed the connection reads no further requests.
+        const reading = yield* Latch.make(true);
+        /**
+         * Waits while Bun buffers more than `outboundBytes`. A client that drains nothing for
+         * `drainMs` is disconnected, which ends every wait on it.
+         */
+        // Checked and registered in one step, so a drain between the two is never missed.
+        const drained = Effect.callback<boolean>((resume) => {
+          if (closed || ws.getBufferedAmount() <= rpcLimits.outboundBytes)
+            return resume(Effect.succeed(true));
+          waiting = () => resume(Effect.succeed(false));
         });
-        const send = (chunk: Uint8Array | string) =>
-          Effect.andThen(
-            Effect.sync(() => {
-              if (typeof chunk === 'string') ws.sendBinary(new TextEncoder().encode(chunk));
-              else ws.sendBinary(chunk);
+        const backpressure: Effect.Effect<void> = drained.pipe(
+          Effect.timeoutOrElse({
+            duration: rpcLimits.drainMs,
+            // Cut at once: a close frame would wait behind what the client never read.
+            orElse: () => Effect.sync(() => (ws.terminate(), true)),
+          }),
+          Effect.flatMap((done) => (done ? Effect.void : backpressure)),
+        );
+        const send = (chunk: Uint8Array | string) => {
+          const bytes = typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.byteLength;
+          // Counted and released in one uninterruptible step around the interruptible write.
+          return Effect.uninterruptibleMask((restore) =>
+            Effect.suspend(() => {
+              queued += bytes;
+              if (queued >= options.queuedBytes) reading.closeUnsafe();
+              return restore(
+                writes.withPermits(1)(
+                  Effect.andThen(
+                    Effect.sync(() => {
+                      if (typeof chunk === 'string') ws.sendBinary(new TextEncoder().encode(chunk));
+                      else ws.sendBinary(chunk);
+                    }),
+                    backpressure,
+                  ),
+                ),
+              ).pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    queued -= bytes;
+                    if (queued < options.queuedBytes) reading.openUnsafe();
+                  }),
+                ),
+              );
             }),
-            backpressure,
           );
+        };
         const writer: Socket.Writer = {
           write: (chunk) =>
             Socket.isCloseEvent(chunk) ? Effect.sync(() => ws.close(chunk.code)) : send(chunk),
@@ -85,7 +132,10 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
         };
         const socket = Socket.make({
           reader: Effect.succeed({
-            pull: Effect.map(Queue.takeAll(inbound), (messages) => messages as never),
+            pull: Effect.andThen(
+              reading.await,
+              Effect.map(Queue.takeAll(inbound), (messages) => messages as never),
+            ),
             upgrade: () => Effect.fail(Socket.SocketUpgradeError.unsupported as never),
           }),
           writer: Effect.succeed(writer),
@@ -137,13 +187,25 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
       }),
     );
 
+    /** Upgrades accepted whose connection has not opened yet; each holds a place under the cap. */
+    let pending = 0;
     return {
       server,
-      get count() {
-        return sockets.size;
+      /**
+       * Holds a place for one upgrade if the open and pending connections leave one under `cap`,
+       * in the same synchronous step as the check: `open` takes it, `unreserve` gives it back.
+       */
+      reserve(cap: number) {
+        if (sockets.size + pending >= cap) return false;
+        pending++;
+        return true;
+      },
+      unreserve() {
+        pending--;
       },
       /** Bun's handlers for these connections; a failure cuts the connection, never reaches Bun. */
       open(ws: BunWebSocket<RpcSocketData>) {
+        if (pending > 0) pending--;
         sockets.add(ws);
         if (options.track) untrack.set(ws, options.track());
         run(connect(ws));

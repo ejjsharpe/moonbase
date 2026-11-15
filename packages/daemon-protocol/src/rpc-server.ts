@@ -65,48 +65,50 @@ const kindOf = (limits: AdmissionLimits, rpc: { _tag: string; successSchema: unk
 /**
  * The middleware every procedure runs under: the daemon admits the request (refused once it is
  * stopping), a connection keeps at most `limits` running, and a handler's defect is answered as
- * a failed host with no diagnostics. A request past a limit is refused `busy` before it runs. Each
- * check and the count it reserves happen in one synchronous step.
+ * a failed host with no diagnostics. A request past a limit is refused `busy` before it runs. The
+ * input bound counts only plain requests, so status calls and watches always have their places.
+ * Each check and the count it reserves happen in one synchronous, uninterruptible step with the
+ * release that undoes it.
  */
 function makeAdmission(options: RpcServerOptions, limits: AdmissionLimits) {
   type Counts = { requests: number; watches: number; status: number; bytes: number };
   const running = new Map<number, Counts>();
   return RpcAdmission.of((effect, { client, rpc, payload }) =>
-    Effect.suspend(() => {
-      const kind = kindOf(limits, rpc);
-      const counts = running.get(client.id) ?? { requests: 0, watches: 0, status: 0, bytes: 0 };
-      const limit = {
-        requests: limits.requests,
-        watches: limits.watches,
-        status: limits.status?.requests ?? 0,
-      }[kind];
-      const bytes = limits.inFlightBytes === undefined ? 0 : estimateBytes(payload);
-      if (
-        counts[kind] >= limit ||
-        (limits.inFlightBytes !== undefined && counts.bytes + bytes > limits.inFlightBytes)
-      )
-        return Effect.fail(busy());
-      let release: () => void;
-      try {
-        release = options.admit();
-      } catch (error) {
-        return Effect.fail(error instanceof HostUnavailableError ? error : failed());
-      }
-      counts[kind]++;
-      counts.bytes += bytes;
-      running.set(client.id, counts);
-      return effect.pipe(
-        Effect.catchDefect(() => Effect.fail(failed())),
-        Effect.ensuring(
-          Effect.sync(() => {
-            counts[kind]--;
-            counts.bytes -= bytes;
-            if (!counts.requests && !counts.watches && !counts.status) running.delete(client.id);
-            release();
-          }),
-        ),
-      );
-    }),
+    Effect.uninterruptibleMask((restore) =>
+      Effect.suspend(() => {
+        const kind = kindOf(limits, rpc);
+        const counts = running.get(client.id) ?? { requests: 0, watches: 0, status: 0, bytes: 0 };
+        const limit = {
+          requests: limits.requests,
+          watches: limits.watches,
+          status: limits.status?.requests ?? 0,
+        }[kind];
+        const bytes =
+          kind === 'requests' && limits.inFlightBytes !== undefined ? estimateBytes(payload) : 0;
+        if (counts[kind] >= limit || (bytes > 0 && counts.bytes + bytes > limits.inFlightBytes!))
+          return Effect.fail(busy());
+        let release: () => void;
+        try {
+          release = options.admit();
+        } catch (error) {
+          return Effect.fail(error instanceof HostUnavailableError ? error : failed());
+        }
+        counts[kind]++;
+        counts.bytes += bytes;
+        running.set(client.id, counts);
+        return restore(effect).pipe(
+          Effect.catchDefect(() => Effect.fail(failed())),
+          Effect.ensuring(
+            Effect.sync(() => {
+              counts[kind]--;
+              counts.bytes -= bytes;
+              if (!counts.requests && !counts.watches && !counts.status) running.delete(client.id);
+              release();
+            }),
+          ),
+        );
+      }),
+    ),
   );
 }
 
@@ -128,6 +130,7 @@ export const serveRpc = (services: RpcServices, options: RpcServerOptions) =>
   Effect.gen(function* () {
     const { connections, protocol } = yield* socketProtocol({
       messageBytes: rpcLimits.messageBytes,
+      queuedBytes: rpcLimits.queuedBytes,
     });
     const shared = [
       protocol,
@@ -169,6 +172,7 @@ export const serveWorkspaceRpc = (
   Effect.gen(function* () {
     const { connections, protocol } = yield* socketProtocol({
       messageBytes: workspaceRpcLimits.messageBytes,
+      queuedBytes: workspaceRpcLimits.queuedBytes,
       ...(options.track ? { track: options.track } : {}),
     });
     const admission = makeAdmission(options, {

@@ -16,8 +16,7 @@ import {
 import { chatProtocolVersion } from '@moonbase/contracts/host';
 import { RemoteWorkspaceHostLive } from '../src/remote-workspace.ts';
 import { serveChat } from '../src/server.ts';
-import * as P from '../src/protocol.ts';
-import { controlledChat, host } from './controlled-chat-fixture.ts';
+import { controlledChat, host, nonce } from './controlled-chat-fixture.ts';
 import { refusingDaemon } from './served-services.ts';
 
 export const checkout = {
@@ -96,18 +95,22 @@ export function controlledWorkspace() {
   };
 }
 
-/** A daemon serving `workspace` (none when absent) and a controlled chat, which can stop and start again on its port. */
+/**
+ * A daemon serving `workspace` (none when absent) and a controlled chat, which can stop and start
+ * again on its port; its time is a `TestClock` the test moves with `advance`.
+ */
 export async function serveWorkspace(
   t: { after(run: () => unknown): void },
   workspace?: WorkspaceHostServiceShape,
 ) {
-  const token = P.nonce(),
-    chat = controlledChat();
+  const token = nonce(),
+    chat = controlledChat(),
+    runtime = ManagedRuntime.make(TestClock.layer());
   let scope: Scope.Closeable | undefined,
     port = 0;
   const start = async () => {
     scope = Effect.runSync(Scope.make());
-    const server = await Effect.runPromise(
+    const server = await runtime.runPromise(
       serveChat(
         { host, token, port },
         { chat: chat.client, daemon: refusingDaemon() },
@@ -123,11 +126,13 @@ export async function serveWorkspace(
   };
   await start();
   t.after(stop);
+  t.after(() => runtime.dispose());
   return {
     token,
     chat,
     start,
     stop,
+    advance: (ms: number) => runtime.runPromise(TestClock.adjust(ms)),
     get port() {
       return port;
     },
@@ -146,7 +151,7 @@ export async function remoteWorkspace(
   daemon: { endpoint: { origin: string; token: string; expected: typeof host } },
   testClock = false,
 ) {
-  let connectionId = P.nonce();
+  let connectionId = nonce();
   const changes = new Set<() => void>();
   const endpoint = (): VerifiedChatEndpoint => ({
     ...daemon.endpoint,
@@ -185,7 +190,7 @@ export async function remoteWorkspace(
     advance: (ms: number) => runtime.runPromise(TestClock.adjust(ms)),
     /** Replaces the connection generation and announces it, as a reconnect through SSH does. */
     replace() {
-      connectionId = P.nonce();
+      connectionId = nonce();
       for (const publish of changes) publish();
     },
   };

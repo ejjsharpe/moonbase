@@ -21,8 +21,7 @@ import { serveChat } from '../src/server.ts';
 import { checkHostHealth, healthDomain, requestUpgradeNonce } from '../src/health.ts';
 import { upgradeProtocols } from '../src/upgrade-proof.ts';
 import { DaemonRpcLinkLive, EndpointConnectionLive, RemoteChatLive } from '../src/remote.ts';
-import * as P from '../src/protocol.ts';
-import { controlledChat, host, target } from './controlled-chat-fixture.ts';
+import { controlledChat, host, nonce as randomNonce, target } from './controlled-chat-fixture.ts';
 import { refusingDaemon } from './served-services.ts';
 import { until } from './runtime-fixture.ts';
 
@@ -31,7 +30,7 @@ import { until } from './runtime-fixture.ts';
  * is a `TestClock` the test moves with `advance`.
  */
 async function serve(t: TestContext, chat: ChatServiceShape, files = true) {
-  const token = P.nonce(),
+  const token = randomNonce(),
     runtime = ManagedRuntime.make(TestClock.layer()),
     scope = Effect.runSync(Scope.make());
   const workspace = {} as WorkspaceHostServiceShape;
@@ -139,7 +138,7 @@ test('each socket admits an upgrade only with a fresh proof of this host’s key
     const [, otherProof] = await proofFor(other.protocol);
     for (const [name, request, status] of [
       ['a replayed nonce', { headers: offered(proof) }, 401],
-      ['the wrong key', { headers: offered(await proofFor(socket.protocol, P.nonce())) }, 401],
+      ['the wrong key', { headers: offered(await proofFor(socket.protocol, randomNonce())) }, 401],
       [
         'another host',
         { headers: offered(await proofFor(socket.protocol, token, { ...host, storeId: 'other' })) },
@@ -147,7 +146,7 @@ test('each socket admits an upgrade only with a fresh proof of this host’s key
       ],
       [
         'a nonce health never issued',
-        { headers: offered(upgradeProtocols(token, P.nonce(), host, socket.protocol)) },
+        { headers: offered(upgradeProtocols(token, randomNonce(), host, socket.protocol)) },
         401,
       ],
       // A proof binds the protocol it was made for: one for the other socket opens only that one.
@@ -200,6 +199,22 @@ test('each socket admits an upgrade only with a fresh proof of this host’s key
       async () => upgradeStatus(port, socket, { headers: offered(await proofFor()) }),
       (status) => status.startsWith('HTTP/1.1 101'),
     );
+  }
+  // Upgrades that arrive together hold their places as they are accepted, so no more than the cap
+  // open even before any of them has.
+  for (const socket of sockets) {
+    const proofs = [];
+    for (let index = 0; index < socket.cap + 8; index++)
+      proofs.push(upgradeProtocols(token, await nonce(), host, socket.protocol));
+    const attempts = await Promise.allSettled(
+      proofs.map((proof) => openSocket(port, socket, proof)),
+    );
+    const opened = attempts.flatMap((attempt) =>
+      attempt.status === 'fulfilled' ? [attempt.value] : [],
+    );
+    opened.forEach(({ ws }) => ws.close());
+    assert.equal(opened.length, socket.cap, socket.name);
+    await Promise.all(opened.map(({ closed }) => closed));
   }
   // A daemon that composes no file host serves no workspace socket.
   const bare = await serve(t, controlledChat().client, false);
@@ -260,7 +275,7 @@ test('after the upgrade a message past its socket’s bound or a silent client e
 test('unauthenticated health probes are refused before they reach the chat service', async (t) => {
   const { client, calls } = controlledChat();
   const { endpoint, token } = await serve(t, client);
-  const probe = P.nonce(),
+  const probe = randomNonce(),
     before = calls.length;
   const proof = (key: string) =>
     'Moonbase-HMAC-SHA256 ' +
@@ -271,7 +286,7 @@ test('unauthenticated health probes are refused before they reach the chat servi
     {},
     { 'X-Moonbase-Nonce': probe },
     { 'X-Moonbase-Nonce': probe, Authorization: 'Moonbase-HMAC-SHA256 ' + '0'.repeat(64) },
-    { 'X-Moonbase-Nonce': probe, Authorization: proof(P.nonce()) },
+    { 'X-Moonbase-Nonce': probe, Authorization: proof(randomNonce()) },
   ] as Record<string, string>[]) {
     const response = await fetch(`${endpoint.origin}/v1/health`, { headers });
     assert.equal(response.status, 401);

@@ -15,13 +15,14 @@ import { DaemonRpcLinkLive, RemoteChatLive, RemoteLocalHostLive } from '../src/r
 import { serveChat } from '../src/server.ts';
 import { refusingDaemon } from './served-services.ts';
 import * as P from '../src/protocol.ts';
+import { nonce } from './controlled-chat-fixture.ts';
 import { fixture as runtimeFixture, session, until } from './runtime-fixture.ts';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
 
 /** A daemon over a local-mode runtime that can stop and start again on its port. */
 async function daemon(t: TestContext) {
   const f = await runtimeFixture(t);
-  const token = P.nonce(),
+  const token = nonce(),
     listed: string[] = [];
   let listWatches = 0,
     scope: Scope.Closeable | undefined,
@@ -132,7 +133,7 @@ function remote(t: TestContext, d: Awaited<ReturnType<typeof daemon>>, testClock
     advance: (ms: number) => runtime.runPromise(TestClock.adjust(ms)),
     /** Replaces the connection generation and announces it. */
     replace() {
-      endpoint = { ...endpoint, connectionId: P.nonce() };
+      endpoint = { ...endpoint, connectionId: nonce() };
       for (const publish of changes) publish();
     },
   };

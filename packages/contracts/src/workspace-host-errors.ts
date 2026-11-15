@@ -181,10 +181,14 @@ export class WorkspaceConflictError extends Schema.TaggedError<WorkspaceConflict
 }
 /** A branch name that is taken: as a branch, or by branches inside it. */
 export class BranchTakenError extends Schema.TaggedError<BranchTakenError>()('BranchTakenError', {
-  branch: Schema.String,
+  branch: Schema.optional(Schema.String),
   inside: Schema.Boolean,
 }) {
   override get message() {
+    if (this.branch === undefined)
+      return this.inside
+        ? 'Branches inside that branch name already exist.'
+        : 'That branch already exists.';
     return this.inside
       ? `Branches inside ${this.branch}/ already exist.`
       : `Branch ${this.branch} already exists.`;
