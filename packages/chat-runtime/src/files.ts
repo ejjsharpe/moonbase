@@ -5,8 +5,7 @@ import { matchPath, compareMatches } from '@moonbase/contracts/lookup';
 
 /** The most files one listing ranks; a larger folder is searched partially. */
 export const chatFileCandidateLimit = 20000;
-const listingMs = 10_000,
-  listingBytes = 32 * 1024 * 1024,
+const listingBytes = 32 * 1024 * 1024,
   freshMs = 5_000,
   retainedFolders = 4,
   rankingCells = 16 * 1024 * 1024;
@@ -37,8 +36,9 @@ export type ChatFileListingRun = (
 ) => Promise<Buffer>;
 type ListingFailure = { code?: unknown; killed?: boolean; stdout?: Buffer };
 
-/** How long a stopped listing's process group has to exit after SIGTERM before SIGKILL. */
-const stopGraceMs = 2_000;
+/** How long a listing may run, and how long a stopped one's process group has to exit after SIGTERM before SIGKILL. */
+export type ChatFileListingTiming = { listingMs: number; stopGraceMs: number };
+const defaultTiming: ChatFileListingTiming = { listingMs: 10_000, stopGraceMs: 2_000 };
 const isGroupAlive = (group: number) => {
   try {
     process.kill(-group, 0);
@@ -55,69 +55,71 @@ const signalGroup = (group: number, signal: NodeJS.Signals) => {
   }
 };
 /** Waits for every process in a stopped group to exit; its SIGKILL comes from `stop`'s timer. */
-async function awaitGroupExit(group: number, stoppedAt: number) {
+async function awaitGroupExit(group: number, stoppedAt: number, stopGraceMs: number) {
   while (isGroupAlive(group) && Date.now() - stoppedAt < stopGraceMs * 2)
     await new Promise((resolve) => setTimeout(resolve, 10));
 }
 
 // Its own process group, so a listing stopped by its budget takes any children with it. The
 // negative-PID kill is needed: a spawn signal or timeout reaches only the group leader.
-const runListing: ChatFileListingRun = (executable, args, cwd, signal) =>
-  new Promise((resolve, reject) => {
-    if (signal.aborted) return reject(Error('The file index is closed'));
-    const child = spawn(executable, args, {
-      cwd,
-      detached: true,
-      stdio: ['ignore', 'pipe', 'ignore'],
+const makeRunListing =
+  ({ listingMs, stopGraceMs }: ChatFileListingTiming): ChatFileListingRun =>
+  (executable, args, cwd, signal) =>
+    new Promise((resolve, reject) => {
+      if (signal.aborted) return reject(Error('The file index is closed'));
+      const child = spawn(executable, args, {
+        cwd,
+        detached: true,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const chunks: Buffer[] = [];
+      let length = 0,
+        settled = false,
+        stoppedAt: number | undefined,
+        escalation: NodeJS.Timeout | undefined,
+        failure: Record<string, unknown> | undefined;
+      const settle = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(budget);
+        clearTimeout(escalation);
+        signal.removeEventListener('abort', stopOnClose);
+        const stdout = Buffer.concat(chunks);
+        if (error) reject(Object.assign(error, { stdout }));
+        else resolve(stdout);
+      };
+      const stop = (reason: Record<string, unknown>) => {
+        if (stoppedAt !== undefined || child.pid === undefined) return;
+        failure = reason;
+        stoppedAt = Date.now();
+        signalGroup(child.pid, 'SIGTERM');
+        // Armed here, not on exit: a group that ignores SIGTERM may never exit or close its output.
+        escalation = setTimeout(() => signalGroup(child.pid!, 'SIGKILL'), stopGraceMs);
+      };
+      const budget = setTimeout(() => stop({ killed: true }), listingMs);
+      const stopOnClose = () => stop({ closed: true });
+      signal.addEventListener('abort', stopOnClose, { once: true });
+      child.stdout!.on('data', (chunk: Buffer) => {
+        if (stoppedAt !== undefined) return;
+        if (length + chunk.length > listingBytes) {
+          chunks.push(chunk.subarray(0, listingBytes - length));
+          length = listingBytes;
+          return stop({ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' });
+        }
+        chunks.push(chunk);
+        length += chunk.length;
+      });
+      child.once('error', (error) => {
+        if (child.pid !== undefined) signalGroup(child.pid, 'SIGKILL');
+        settle(error);
+      });
+      child.once('close', async (code, exitSignal) => {
+        if (stoppedAt !== undefined) await awaitGroupExit(child.pid!, stoppedAt, stopGraceMs);
+        if (failure) return settle(Object.assign(Error('The file listing was stopped'), failure));
+        if (code === 0) return settle();
+        settle(Object.assign(Error(`${executable} exited with ${code ?? exitSignal}`), { code }));
+      });
     });
-    const chunks: Buffer[] = [];
-    let length = 0,
-      settled = false,
-      stoppedAt: number | undefined,
-      escalation: NodeJS.Timeout | undefined,
-      failure: Record<string, unknown> | undefined;
-    const settle = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(budget);
-      clearTimeout(escalation);
-      signal.removeEventListener('abort', stopOnClose);
-      const stdout = Buffer.concat(chunks);
-      if (error) reject(Object.assign(error, { stdout }));
-      else resolve(stdout);
-    };
-    const stop = (reason: Record<string, unknown>) => {
-      if (stoppedAt !== undefined || child.pid === undefined) return;
-      failure = reason;
-      stoppedAt = Date.now();
-      signalGroup(child.pid, 'SIGTERM');
-      // Armed here, not on exit: a group that ignores SIGTERM may never exit or close its output.
-      escalation = setTimeout(() => signalGroup(child.pid!, 'SIGKILL'), stopGraceMs);
-    };
-    const budget = setTimeout(() => stop({ killed: true }), listingMs);
-    const stopOnClose = () => stop({ closed: true });
-    signal.addEventListener('abort', stopOnClose, { once: true });
-    child.stdout!.on('data', (chunk: Buffer) => {
-      if (stoppedAt !== undefined) return;
-      if (length + chunk.length > listingBytes) {
-        chunks.push(chunk.subarray(0, listingBytes - length));
-        length = listingBytes;
-        return stop({ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' });
-      }
-      chunks.push(chunk);
-      length += chunk.length;
-    });
-    child.once('error', (error) => {
-      if (child.pid !== undefined) signalGroup(child.pid, 'SIGKILL');
-      settle(error);
-    });
-    child.once('close', async (code, exitSignal) => {
-      if (stoppedAt !== undefined) await awaitGroupExit(child.pid!, stoppedAt);
-      if (failure) return settle(Object.assign(Error('The file listing was stopped'), failure));
-      if (code === 0) return settle();
-      settle(Object.assign(Error(`${executable} exited with ${code ?? exitSignal}`), { code }));
-    });
-  });
 /**
  * Whether Git can run without side effects. On macOS without the Xcode command-line tools,
  * `/usr/bin/git` is a stub that offers to install them; `xcode-select -p` only asks.
@@ -165,6 +167,8 @@ export class ChatFileIndex {
       ripgrepExecutable?: string;
       gitExecutable?: string;
       run?: ChatFileListingRun;
+      /** Overrides the listing time budget and stop grace; tests shorten them. */
+      timing?: Partial<ChatFileListingTiming>;
       /** Whether Git may run; on macOS, whether the command-line tools are installed. */
       canRunGit?: () => Promise<boolean>;
       now?: () => number;
@@ -172,7 +176,7 @@ export class ChatFileIndex {
   ) {
     this.ripgrep = options.ripgrepExecutable ?? 'rg';
     this.git = options.gitExecutable ?? 'git';
-    this.run = options.run ?? runListing;
+    this.run = options.run ?? makeRunListing({ ...defaultTiming, ...options.timing });
     this.canRunGit = options.canRunGit ?? checkGit;
     this.now = options.now ?? Date.now;
   }

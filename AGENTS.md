@@ -53,6 +53,12 @@ Atoms hold no domain logic, so a headless test or a non-React client can use the
 - Tests use temporary directories, stores and repositories, faux providers and injected platform capabilities. Never read or write the real OS clipboard in tests; inject callbacks.
 - PR checks run the unit suites and the root integration suites. Browser and Electron Playwright suites run nightly (`nightly` workflow, also runnable by hand); run the ones you touch locally.
 
+## Verifying
+
+- While iterating, run the one test file you changed (`bun test <file> -t "<name>"`, or `node --experimental-strip-types --test <file>`), not the package suite.
+- Before you push, run `bun run check:changed`: foundation check, format and lint on changed files, and typecheck and tests for affected packages and their dependents. CI runs the full suites.
+- Don't run `bun run test`, the root integration suites or the Playwright projects unless asked. Run only the Playwright project for the surface you touched.
+
 ## Safety
 
 - Never lose a user's unsaved work, and never delete or overwrite real user data or state outside temporary test locations.

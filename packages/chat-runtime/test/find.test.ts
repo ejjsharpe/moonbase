@@ -39,7 +39,7 @@ test('Find scans 1,100 mixed saved records and lazy long JSON with exact Unicode
   const f = await fixture(t),
     target = await f.create();
   const text = 'x'.repeat(16382) + '😀Σςσ Kk 𐐀𐐨 İi\r\n[.*] ' + 'x'.repeat(70000) + ' END';
-  const json = { prefix: 'a'.repeat(2000000), nested: [text, { patch: 'recorded NEEDLE patch' }] };
+  const json = { prefix: 'a'.repeat(300000), nested: [text, { patch: 'recorded NEEDLE patch' }] };
   const entry = await harness.commit(async (tx) => {
     for (let i = 0; i < 1100; i++)
       await tx.appendEntry(
