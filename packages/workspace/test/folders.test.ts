@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { randomUUID } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -300,20 +299,13 @@ test('initializeRepository waits for the folder’s file operations to settle', 
       text: 'created',
     });
     assert.equal(created.outcome, 'completed');
-    // Completed, but alice has not yet published and acknowledged it.
+    // Completed, but alice has not yet acknowledged it.
     await assert.rejects(
       f.client.command('initializeRepository', { checkout }),
       (error: unknown) =>
         rejects('InvalidInput')(error) && /file operation/.test((error as Error).message),
     );
     assert(!existsSync(join(root, '.git')));
-    const current = await f.client.command('loadRecovery', { clientId: 'alice' });
-    await f.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: current.revision,
-      state: current.state,
-    });
     await f.client.command('acknowledgeOperation', {
       clientId: 'alice',
       operationClientId: 'alice',

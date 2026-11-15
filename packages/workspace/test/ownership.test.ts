@@ -7,17 +7,13 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
-import {
-  ApplicationError,
-  emptyRecovery,
-  type EditorRecovery,
-} from '@moonbase/contracts/workspace';
+import { ApplicationError } from '@moonbase/contracts/workspace';
+import type { RecoveryState } from '@moonbase/contracts/recovery';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import { reconcile } from '../src/client/reconcile.ts';
-import { fromLegacyRecovery, toLegacyRecovery } from '../src/client/legacy-recovery.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
-import { fixture, isError, quote, waitFor } from './recovery-fixture.ts';
+import { fixture, isError, quote, seed, waitFor } from './recovery-fixture.ts';
 import { captureNative, releaseNative } from './workspace-fixture.ts';
 import { settledDescriptorCount } from './descriptor-count.ts';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
@@ -232,30 +228,21 @@ test('cancelled queued Save releases its lease without admission and successors 
   }
 });
 
-test('strict saved recovery blocks load and later direct publication without changing original bytes', async () => {
+test('strict saved recovery blocks load and later edits without changing original bytes', async () => {
   const f = fixture(),
     { runtime, client } = f.start();
   try {
     const checkout = await client.command('openCheckout', { root: f.root }),
       target = { checkout, path: 'file.txt' },
       disk = await client.command('readFile', target);
-    const state = {
-      ...emptyRecovery('alice'),
-      checkouts: [checkout],
-      openCheckoutIds: [checkout.checkoutId],
-      drafts: [{ target, text: 'saved draft', disk }],
-    };
-    await client.command('persistRecovery', {
-      clientId: 'alice',
-      requestId: 'initial',
-      expectedRevision: 0,
-      state,
-    });
+    await seed(client, 'alice', [{ target, text: 'saved draft', disk, bufferId: 'b1' }]);
     const db = new DatabaseSync(join(f.base, 'state/moonbase-workspace-v1.sqlite'));
     try {
+      const row = db.prepare('SELECT body FROM recovery WHERE client=?').get('alice');
+      const state = JSON.parse(row!.body as string) as RecoveryState;
       const original = JSON.stringify({
         ...state,
-        drafts: [{ ...state.drafts[0], futureNote: 'retained evidence' }],
+        buffers: [{ ...state.buffers[0], futureNote: 'retained evidence' }],
       });
       db.prepare('UPDATE recovery SET body=? WHERE client=?').run(original, 'alice');
       const before = db.prepare('SELECT revision,body FROM recovery WHERE client=?').get('alice');
@@ -266,11 +253,11 @@ test('strict saved recovery blocks load and later direct publication without cha
       };
       await assert.rejects(client.command('loadRecovery', { clientId: 'alice' }), safe);
       await assert.rejects(
-        client.command('persistRecovery', {
+        client.command('updateDraft', {
           clientId: 'alice',
-          requestId: 'overwrite',
-          expectedRevision: 1,
-          state,
+          bufferId: 'b1',
+          text: 'overwrite',
+          disk,
         }),
         safe,
       );
@@ -680,113 +667,103 @@ test('public workspace IO normalizes unknown helper failures without rebranding 
   }
 });
 
-test('saved recovery naming a foreign checkout, an escaping path or a wrong baseline blocks later publication without replacing the row', async () => {
+test('saved recovery naming a foreign checkout, an escaping path or a wrong baseline blocks later edits without replacing the row', async () => {
   const f = fixture(),
     { runtime, client } = f.start();
   try {
     const checkout = await client.command('openCheckout', { root: f.root }),
       target = { checkout, path: 'file.txt' },
-      disk = await client.command('readFile', target);
-    const state = {
-      ...emptyRecovery('alice'),
-      checkouts: [checkout],
-      openCheckoutIds: [checkout.checkoutId],
-      drafts: [{ target, text: 'retained draft', disk }],
-    };
-    const wrongBaseline = {
-      ...state,
-      drafts: [{ ...state.drafts[0], disk: { ...disk, version: 'f'.repeat(64) } }],
-    };
-    const escapingPosition: EditorRecovery = {
-      ...state,
-      views: {
-        [checkout.checkoutId]: {
-          openFiles: [],
-          active: '',
-          preview: null,
-          fileViews: {},
-          tree: { expanded: [], selected: [], focus: '', scroll: 0 },
-          positions: { '../escape.txt': { file: { line: 1, column: 1, top: 0, left: 0 } } },
-        },
-      },
-    };
-    // A recovery the store could not read back is never written.
-    for (const [index, unreadable] of [wrongBaseline, escapingPosition].entries())
-      await assert.rejects(
-        client.command('persistRecovery', {
-          clientId: 'alice',
-          requestId: 'unreadable-' + index,
-          expectedRevision: 0,
-          state: unreadable,
-        }),
-        isError('InvalidInput'),
-      );
-    // A host's move to a path outside the checkout moves nothing in the recovery.
-    const legacy = structuredClone(escapingPosition);
-    legacy.views[checkout.checkoutId]!.positions = { 'file.txt': {} };
-    const moved = fromLegacyRecovery(legacy, null);
-    reconcile(moved, [
-      {
-        input: { kind: 'move', checkout },
-        result: {
-          items: [{ source: 'file.txt', destination: '../escape.txt', outcome: 'completed' }],
-        },
-      } as never,
-    ]);
-    const after = toLegacyRecovery(moved);
-    assert.deepEqual(after.drafts, state.drafts);
-    assert.deepEqual(Object.keys(after.views[checkout.checkoutId]!.positions), ['file.txt']);
-    await client.command('persistRecovery', {
-      clientId: 'alice',
-      requestId: 'initial-domain',
-      expectedRevision: 0,
-      state,
-    });
-    const invalid = [
-      {
-        ...state,
-        drafts: [
-          {
-            ...state.drafts[0],
-            target: { ...target, checkout: { ...checkout, checkoutId: 'foreign-checkout' } },
-          },
-        ],
-      },
-      { ...state, drafts: [{ ...state.drafts[0], target: { ...target, path: '../escape' } }] },
-      wrongBaseline,
-    ];
+      disk = await client.command('readFile', target),
+      bufferId = 'b1';
+    await seed(client, 'alice', [{ target, text: 'retained draft', disk, bufferId }]);
     const database = new DatabaseSync(join(f.base, 'state/moonbase-workspace-v1.sqlite'));
+    const row = () =>
+      database.prepare('SELECT revision,body FROM recovery WHERE client=?').get('alice');
     try {
-      for (const [index, prior] of invalid.entries()) {
-        const body = JSON.stringify(prior);
-        database.prepare('UPDATE recovery SET body=? WHERE client=?').run(body, 'alice');
-        const before = database
-          .prepare('SELECT revision,body FROM recovery WHERE client=?')
-          .get('alice');
+      const seeded = row();
+      const state = JSON.parse(seeded!.body as string) as RecoveryState;
+      const layout = (({ version: _v, clientId: _c, buffers: _b, ...rest }: RecoveryState) => rest)(
+        state,
+      );
+      // An edit the store could not read back is refused, and the row stays as it was.
+      for (const unreadable of [
+        client.command('updateDraft', {
+          clientId: 'alice',
+          bufferId,
+          text: 'wrong baseline',
+          disk: { ...disk, version: 'f'.repeat(64) },
+        }),
+        client.command('openTab', {
+          clientId: 'alice',
+          bufferId: 'escaping',
+          target: { ...target, path: '../escape' },
+        }),
+        client.command('updateLayout', {
+          clientId: 'alice',
+          layout: {
+            ...layout,
+            views: {
+              [checkout.checkoutId]: {
+                ...layout.views[checkout.checkoutId]!,
+                remembered: {
+                  '../escape.txt': { positions: { file: { line: 1, column: 1, top: 0, left: 0 } } },
+                },
+              },
+            },
+          },
+        }),
+      ])
+        await assert.rejects(unreadable, isError('InvalidInput'));
+      assert.deepEqual(row(), seeded);
+      // A host's move to a path outside the checkout moves nothing in the recovery.
+      const moved = structuredClone(state);
+      moved.views[checkout.checkoutId]!.positions = { [bufferId]: {} };
+      reconcile(moved, [
+        {
+          input: { kind: 'move', checkout },
+          result: {
+            items: [{ source: 'file.txt', destination: '../escape.txt', outcome: 'completed' }],
+          },
+        } as never,
+      ]);
+      assert.deepEqual(moved.buffers, state.buffers);
+      assert.deepEqual(Object.keys(moved.views[checkout.checkoutId]!.positions), [bufferId]);
+      const [buffer] = state.buffers;
+      const invalid: RecoveryState[] = [
+        {
+          ...state,
+          buffers: [
+            {
+              ...buffer!,
+              target: { ...target, checkout: { ...checkout, checkoutId: 'foreign-checkout' } },
+            },
+          ],
+        },
+        { ...state, buffers: [{ ...buffer!, target: { ...target, path: '../escape' } }] },
+        {
+          ...state,
+          buffers: [
+            {
+              ...buffer!,
+              draft: { ...buffer!.draft!, disk: { ...disk, version: 'f'.repeat(64) } },
+            },
+          ],
+        },
+      ];
+      for (const prior of invalid) {
+        database
+          .prepare('UPDATE recovery SET body=? WHERE client=?')
+          .run(JSON.stringify(prior), 'alice');
+        const before = row();
         await assert.rejects(
           client.command('loadRecovery', { clientId: 'alice' }),
           isError('Persistence'),
         );
         await assert.rejects(
-          client.command('persistRecovery', {
-            clientId: 'alice',
-            requestId: 'replace-domain-' + index,
-            expectedRevision: 1,
-            state,
-          }),
+          client.command('updateDraft', { clientId: 'alice', bufferId, text: 'replace', disk }),
           isError('Persistence'),
         );
-        assert.deepEqual(
-          database.prepare('SELECT revision,body FROM recovery WHERE client=?').get('alice'),
-          before,
-        );
-        assert.equal(
-          await client.command('getRecoveryPublication', {
-            clientId: 'alice',
-            requestId: 'replace-domain-' + index,
-          }),
-          null,
-        );
+        assert.deepEqual(row(), before);
       }
       assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'original');
     } finally {

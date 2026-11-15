@@ -1,13 +1,45 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Effect } from 'effect';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
-import { emptyRecovery, type EditorRecovery } from '@moonbase/contracts/workspace';
-import { binary, quote, fixture, isError, state, waitFor } from './recovery-fixture.ts';
-test('concurrent lost-move reconciliation retains the original revision receipt and acknowledgement bounds', async () => {
+import type { RecoveryChange } from '@moonbase/contracts/workspace';
+import type { RecoveryState } from '@moonbase/contracts/recovery';
+import {
+  binary,
+  bufferIdOf,
+  draftsOf,
+  quote,
+  fixture,
+  isError,
+  seed,
+  waitFor,
+  type SeedDraft,
+} from './recovery-fixture.ts';
+
+type Client = ReturnType<ReturnType<typeof fixture>['start']>['client'];
+const load = (client: Client) => client.command('loadRecovery', { clientId: 'alice' });
+/** Types new text into each of alice's seeded drafts: the window's word, newer than any save. */
+const retype = async (client: Client, drafts: SeedDraft[], text: (draft: SeedDraft) => string) => {
+  for (const draft of drafts)
+    await client.command('updateDraft', {
+      clientId: 'alice',
+      bufferId: bufferIdOf(draft.target),
+      text: text(draft),
+      disk: draft.disk,
+    });
+};
+/** Asserts that `changes` is one publication of alice's recovery. */
+const assertOnePublication = (changes: readonly RecoveryChange[] | false | undefined) => {
+  assert(changes && changes.length === 1, 'expected one recovery publication');
+  assert.equal(changes[0].clientId, 'alice');
+  assert.equal(changes[0].revision, changes[0].previousRevision + 1);
+};
+/** The layout part of a recovery, for an `updateLayout`. */
+const layoutOf = ({ version: _v, clientId: _c, buffers: _b, ...layout }: RecoveryState) => layout;
+
+test('concurrent lost-move reconciliation publishes once and acknowledgement keeps its receipt', async () => {
   const f = fixture(),
     count = join(f.base, 'effects');
   const helper = f.wrapper(
@@ -17,12 +49,9 @@ test('concurrent lost-move reconciliation retains the original revision receipt 
   try {
     const checkout = await current.client.command('openCheckout', { root: f.root }),
       disk = await current.client.command('readFile', { checkout, path: 'file.txt' });
-    await current.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: 0,
-      state: state(checkout, disk),
-    });
+    await seed(current.client, 'alice', [
+      { target: { checkout, path: 'file.txt' }, text: 'older draft', disk },
+    ]);
     const sources = await current.client.command('inspectEntries', {
       checkout,
       paths: ['file.txt'],
@@ -50,16 +79,7 @@ test('concurrent lost-move reconciliation retains the original revision receipt 
       clientId: 'alice',
       id: 'lost',
     });
-    assert.deepEqual(receipt?.recoveryChanges, [
-      { clientId: 'alice', previousRevision: 1, revision: 2 },
-    ]);
-    const loaded = await current.client.command('loadRecovery', { clientId: 'alice' });
-    await current.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: 2,
-      state: loaded.state,
-    });
+    assertOnePublication(receipt?.recoveryChanges);
     await current.client.command('acknowledgeOperation', {
       clientId: 'alice',
       operationClientId: 'alice',
@@ -86,21 +106,16 @@ test('copy recovery overflow retains a valid snapshot and pending evidence acros
     mkdirSync(join(f.root, 'folder'));
     const checkout = await current.client.command('openCheckout', { root: f.root }),
       disk = await current.client.command('readFile', { checkout, path: 'file.txt' });
-    const snapshot = {
-      ...emptyRecovery('alice'),
-      checkouts: [checkout],
-      drafts: Array.from({ length: 257 }, (_, i) => ({
+    await seed(
+      current.client,
+      'alice',
+      Array.from({ length: 257 }, (_, i) => ({
         target: { checkout, path: 'folder/' + i },
         text: 'dirty-' + i,
         disk,
       })),
-    };
-    await current.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: 0,
-      state: snapshot,
-    });
+    );
+    const snapshot = (await load(current.client)).state;
     const sources = await current.client.command('inspectEntries', { checkout, paths: ['folder'] });
     const operation = {
       id: 'overflow',
@@ -112,8 +127,7 @@ test('copy recovery overflow retains a valid snapshot and pending evidence acros
     };
     const result = await current.client.command('mutate', operation);
     assert.equal(result.items[0].outcome, 'completed');
-    const retained = await current.client.command('loadRecovery', { clientId: 'alice' });
-    assert.equal(retained.revision, 1);
+    const retained = await load(current.client);
     assert.deepEqual(retained.state, snapshot);
     assert(retained.errors.some((e) => /recovery|publication/i.test(e)));
     assert.equal(retained.operations.length, 1);
@@ -147,12 +161,8 @@ for (const competing of [false, true])
       const checkout = await current.client.command('openCheckout', { root: f.root }),
         target = { checkout, path: 'file.txt' },
         disk = await current.client.command('readFile', target);
-      await current.client.command('persistRecovery', {
-        requestId: randomUUID(),
-        clientId: 'alice',
-        expectedRevision: 0,
-        state: state(checkout, disk),
-      });
+      const seeded = [{ target, text: 'older draft', disk }];
+      await seed(current.client, 'alice', seeded);
       writeFileSync(join(f.root, 'file.txt'), 'captured admission bytes');
       const admittedBaseline = await current.client.command('readFile', target);
       await assert.rejects(
@@ -165,22 +175,13 @@ for (const competing of [false, true])
         }),
         isError('Uncertain'),
       );
-      if (competing)
-        await current.client.command('persistRecovery', {
-          requestId: randomUUID(),
-          clientId: 'alice',
-          expectedRevision: 1,
-          state: state(checkout, disk, 'later competing text'),
-        });
+      if (competing) await retype(current.client, seeded, () => 'later competing text');
       writeFileSync(join(f.root, 'file.txt'), 'external bytes');
       await current.runtime.dispose();
       current = f.start();
-      const restored = await current.client.command('loadRecovery', { clientId: 'alice' });
-      assert.equal(
-        restored.state.drafts[0].text,
-        competing ? 'later competing text' : 'newest admitted text',
-      );
-      assert.deepEqual(restored.state.drafts[0].disk, competing ? disk : admittedBaseline);
+      const [restored] = draftsOf((await load(current.client)).state);
+      assert.equal(restored?.text, competing ? 'later competing text' : 'newest admitted text');
+      assert.deepEqual(restored?.disk, competing ? disk : admittedBaseline);
       assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'external bytes');
     } finally {
       await current.runtime.dispose();
@@ -200,26 +201,33 @@ for (const kind of ['move', 'copy'] as const)
     try {
       const checkout = await current.client.command('openCheckout', { root: f.root }),
         disk = await current.client.command('readFile', { checkout, path: 'file.txt' });
-      const snapshot: EditorRecovery = {
-        ...state(checkout, disk),
+      const target = { checkout, path: 'file.txt' },
+        bufferId = bufferIdOf(target);
+      const layout = {
+        checkouts: [checkout],
         openCheckoutIds: [],
-        recentFiles: [{ checkout, path: 'file.txt' }],
-        views: {
-          [checkout.checkoutId]: {
-            openFiles: ['file.txt'],
-            active: 'file.txt',
-            preview: null,
-            fileViews: { 'file.txt': 'file' },
-            positions: {},
-            tree: { expanded: [], selected: [], focus: '', scroll: 0, hideIgnoredFiles: false },
+        selectedCheckoutId: null,
+        recentFiles: [target],
+        sidebarWidth: 270,
+        views: {},
+      };
+      await seed(current.client, 'alice', [{ target, text: 'older draft', disk }], layout);
+      await current.client.command('updateLayout', {
+        clientId: 'alice',
+        layout: {
+          ...layout,
+          views: {
+            [checkout.checkoutId]: {
+              tabs: [bufferId],
+              active: bufferId,
+              preview: null,
+              fileViews: { [bufferId]: 'file' },
+              positions: {},
+              remembered: {},
+              tree: { expanded: [], selected: [], focus: '', scroll: 0, hideIgnoredFiles: false },
+            },
           },
         },
-      };
-      await current.client.command('persistRecovery', {
-        requestId: randomUUID(),
-        clientId: 'alice',
-        expectedRevision: 0,
-        state: snapshot,
       });
       const sources = await current.client.command('inspectEntries', {
         checkout,
@@ -238,34 +246,32 @@ for (const kind of ['move', 'copy'] as const)
       renameSync(f.root, f.root + '-unavailable');
       writeFileSync(marker, 'closed');
       current = f.start(helper);
-      const loaded = await current.client.command('loadRecovery', { clientId: 'alice' });
+      const loaded = await load(current.client);
       assert(!existsSync(count));
       assert.deepEqual(loaded.errors, []);
       assert.deepEqual(loaded.state.checkouts, [checkout]);
       assert.deepEqual(loaded.state.openCheckoutIds, []);
+      const active = loaded.state.views[checkout.checkoutId]?.active;
       assert.equal(
-        loaded.state.views[checkout.checkoutId].active,
+        loaded.state.buffers.find((b) => b.id === active)?.target.path,
         kind === 'move' ? 'moved.txt' : 'file.txt',
       );
       assert.equal(loaded.state.recentFiles[0].path, kind === 'move' ? 'moved.txt' : 'file.txt');
-      assert(loaded.state.drafts.some((d) => d.target.path === 'moved.txt'));
-      for (const d of loaded.state.drafts) assert.deepEqual(d.disk, disk);
+      const drafts = draftsOf(loaded.state);
+      assert(drafts.some((d) => d.target.path === 'moved.txt'));
+      for (const d of drafts) assert.deepEqual(d.disk, disk);
+      const stored = layoutOf(loaded.state);
       for (const invalid of [
-        { ...loaded.state, openCheckoutIds: [checkout.checkoutId, checkout.checkoutId] },
-        { ...loaded.state, openCheckoutIds: ['unknown'] },
-        { ...loaded.state, selectedCheckoutId: checkout.checkoutId },
+        { ...stored, openCheckoutIds: [checkout.checkoutId, checkout.checkoutId] },
+        { ...stored, openCheckoutIds: ['unknown'] },
+        { ...stored, selectedCheckoutId: checkout.checkoutId },
         {
-          ...loaded.state,
-          views: { 'composite checkout key': loaded.state.views[checkout.checkoutId] },
+          ...stored,
+          views: { 'composite checkout key': stored.views[checkout.checkoutId]! },
         },
       ])
         await assert.rejects(
-          current.client.command('persistRecovery', {
-            requestId: randomUUID(),
-            clientId: 'alice',
-            expectedRevision: loaded.revision,
-            state: invalid,
-          }),
+          current.client.command('updateLayout', { clientId: 'alice', layout: invalid }),
           isError('InvalidInput'),
         );
     } finally {
@@ -295,18 +301,7 @@ for (const competing of [false, true])
           };
         }),
       );
-      const snapshot = {
-        ...emptyRecovery('alice'),
-        checkouts: [checkout],
-        openCheckoutIds: [checkout.checkoutId],
-        drafts,
-      };
-      await current.client.command('persistRecovery', {
-        requestId: randomUUID(),
-        clientId: 'alice',
-        expectedRevision: 0,
-        state: snapshot,
-      });
+      await seed(current.client, 'alice', drafts);
       for (const { target, disk } of drafts)
         await assert.rejects(
           current.client.command('saveFile', {
@@ -318,37 +313,20 @@ for (const competing of [false, true])
           }),
           isError('Uncertain'),
         );
-      if (competing)
-        await current.client.command('persistRecovery', {
-          requestId: randomUUID(),
-          clientId: 'alice',
-          expectedRevision: 1,
-          state: {
-            ...snapshot,
-            drafts: drafts.map((d) => ({ ...d, text: 'later ' + d.target.path })),
-          },
-        });
+      if (competing) await retype(current.client, drafts, (d) => 'later ' + d.target.path);
       if (!competing)
         for (const { target } of drafts)
           writeFileSync(join(f.root, target.path), 'external ' + target.path);
       for (let restart = 0; restart < 2; restart++) {
         await current.runtime.dispose();
         current = f.start();
-        const loads = await Promise.all([
-          current.client.command('loadRecovery', { clientId: 'alice' }),
-          current.client.command('loadRecovery', { clientId: 'alice' }),
-        ]);
-        for (const loaded of loads) {
-          assert.equal(loaded.revision, 2);
-          assert.deepEqual(
-            loaded.state.drafts.map((d) => d.text),
-            ['a.txt', 'b.txt'].map((p) => (competing ? 'later ' : 'admitted ') + p),
-          );
-          assert.deepEqual(
-            loaded.state.drafts.map((d) => d.disk),
-            drafts.map((d) => d.disk),
-          );
-        }
+        const loads = await Promise.all([load(current.client), load(current.client)]);
+        // Both loads see the whole group restored, never one save of it.
+        assert.deepEqual(loads[0].state, loads[1].state);
+        assert.deepEqual(
+          draftsOf(loads[0].state),
+          drafts.map((d) => ({ ...d, text: (competing ? 'later ' : 'admitted ') + d.target.path })),
+        );
       }
       assert.equal(readFileSync(count, 'utf8'), 'stage\nstage\n');
       for (const p of ['a.txt', 'b.txt'])
@@ -373,22 +351,16 @@ test('interrupted Save group capacity overflow retains the entire prior valid sn
     for (const p of ['a.txt', 'b.txt']) writeFileSync(join(f.root, p), 'original');
     const checkout = await current.client.command('openCheckout', { root: f.root }),
       disk = await current.client.command('readFile', { checkout, path: 'a.txt' });
-    const snapshot = {
-      ...emptyRecovery('alice'),
-      checkouts: [checkout],
-      openCheckoutIds: [checkout.checkoutId],
-      drafts: Array.from({ length: 511 }, (_, i) => ({
+    await seed(
+      current.client,
+      'alice',
+      Array.from({ length: 511 }, (_, i) => ({
         target: { checkout, path: 'old/' + i },
         text: 'old ' + i,
         disk,
       })),
-    };
-    await current.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: 0,
-      state: snapshot,
-    });
+    );
+    const snapshot = (await load(current.client)).state;
     for (const path of ['a.txt', 'b.txt'])
       await assert.rejects(
         current.client.command('saveFile', {
@@ -404,8 +376,7 @@ test('interrupted Save group capacity overflow retains the entire prior valid sn
     for (let restart = 0; restart < 2; restart++) {
       await current.runtime.dispose();
       current = f.start();
-      const loaded = await current.client.command('loadRecovery', { clientId: 'alice' });
-      assert.equal(loaded.revision, 1);
+      const loaded = await load(current.client);
       assert.deepEqual(loaded.state, snapshot);
       for (const path of ['a.txt', 'b.txt']) assert(loaded.errors.some((e) => e.includes(path)));
     }
@@ -429,22 +400,12 @@ test('a client publication during grouped disk inspection stays authoritative', 
     for (const path of ['a.txt', 'b.txt']) writeFileSync(join(f.root, path), 'original');
     const checkout = await current.client.command('openCheckout', { root: f.root }),
       disk = await current.client.command('readFile', { checkout, path: 'a.txt' });
-    const snapshot = {
-      ...emptyRecovery('alice'),
-      checkouts: [checkout],
-      openCheckoutIds: [checkout.checkoutId],
-      drafts: ['a.txt', 'b.txt'].map((path) => ({
-        target: { checkout, path },
-        disk,
-        text: 'old ' + path,
-      })),
-    };
-    await current.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: 0,
-      state: snapshot,
-    });
+    const drafts = ['a.txt', 'b.txt'].map((path) => ({
+      target: { checkout, path },
+      disk,
+      text: 'old ' + path,
+    }));
+    await seed(current.client, 'alice', drafts);
     for (const path of ['a.txt', 'b.txt'])
       await assert.rejects(
         current.client.command('saveFile', {
@@ -460,21 +421,14 @@ test('a client publication during grouped disk inspection stays authoritative', 
     current = f.start(paused);
     const loading = current.client.command('loadRecovery', { clientId: 'alice' });
     await waitFor(ready);
-    const later = {
-      ...snapshot,
-      drafts: snapshot.drafts.map((d) => ({ ...d, text: 'later ' + d.target.path })),
-    };
-    await current.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: 1,
-      state: later,
-    });
+    await retype(current.client, drafts, (d) => 'later ' + d.target.path);
     writeFileSync(release, 'continue');
     const loaded = await loading;
-    assert.equal(loaded.revision, 2);
-    assert.deepEqual(loaded.state, later);
-    // The host finds both files unchanged, and the later publication is the client's newer word.
+    assert.deepEqual(
+      draftsOf(loaded.state),
+      drafts.map((d) => ({ ...d, text: 'later ' + d.target.path })),
+    );
+    // The host finds both files unchanged, and the later edits are the client's newer word.
     assert.deepEqual(loaded.errors, []);
   } finally {
     writeFileSync(release, 'continue');
@@ -497,12 +451,7 @@ test('grouped Save publisher preserves visible persistence failure and clears pe
     const checkout = await client.command('openCheckout', { root: f.root }),
       target = { checkout, path: 'file.txt' },
       disk = await client.command('readFile', target);
-    await client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: 0,
-      state: state(checkout, disk, 'saved text'),
-    });
+    await seed(client, 'alice', [{ target, text: 'saved text', disk }]);
     const input = {
       clientId: 'alice',
       requestId: 'publication',
@@ -527,9 +476,7 @@ test('grouped Save publisher preserves visible persistence failure and clears pe
     const result = await client.command('saveFile', input);
     assert.equal(result.kind, 'saved');
     assert(result.kind === 'saved' && !result.persistencePending);
-    assert.deepEqual(result.kind === 'saved' && result.recoveryChanges, [
-      { clientId: 'alice', previousRevision: 1, revision: 2 },
-    ]);
+    assertOnePublication(result.kind === 'saved' && result.recoveryChanges);
     assert.deepEqual(await client.command('saveFile', input), result);
     assert.equal(readFileSync(count, 'utf8'), 'replace\n');
   } finally {
@@ -550,22 +497,16 @@ test('retries cannot split an overflowing interrupted Save restoration group', a
     for (const path of ['a.txt', 'b.txt']) writeFileSync(join(f.root, path), 'original');
     const checkout = await current.client.command('openCheckout', { root: f.root }),
       disk = await current.client.command('readFile', { checkout, path: 'a.txt' });
-    const snapshot = {
-      ...emptyRecovery('alice'),
-      checkouts: [checkout],
-      openCheckoutIds: [checkout.checkoutId],
-      drafts: Array.from({ length: 511 }, (_, i) => ({
+    await seed(
+      current.client,
+      'alice',
+      Array.from({ length: 511 }, (_, i) => ({
         target: { checkout, path: 'old/' + i },
         text: 'old ' + i,
         disk,
       })),
-    };
-    await current.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: 0,
-      state: snapshot,
-    });
+    );
+    const snapshot = (await load(current.client)).state;
     const inputs = ['a.txt', 'b.txt'].map((path) => ({
       clientId: 'alice',
       requestId: path,
@@ -578,8 +519,7 @@ test('retries cannot split an overflowing interrupted Save restoration group', a
     for (let restart = 0; restart < 2; restart++) {
       await current.runtime.dispose();
       current = f.start();
-      const before = await current.client.command('loadRecovery', { clientId: 'alice' });
-      assert.equal(before.revision, 1);
+      const before = await load(current.client);
       assert.deepEqual(before.state, snapshot);
       const retries = await Promise.allSettled(
         inputs.map((input) => current.client.command('saveFile', input)),
@@ -588,8 +528,7 @@ test('retries cannot split an overflowing interrupted Save restoration group', a
         retries.every((r) => r.status === 'rejected' && isError('Persistence')(r.reason)),
         'Every retry must preserve the complete rejected group and report its persistence failure.',
       );
-      const after = await current.client.command('loadRecovery', { clientId: 'alice' });
-      assert.equal(after.revision, 1);
+      const after = await load(current.client);
       assert.deepEqual(after.state, snapshot);
       assert.equal(after.errors.length, 2);
     }
@@ -602,7 +541,7 @@ test('retries cannot split an overflowing interrupted Save restoration group', a
 
 for (const sibling of ['save', 'move'] as const)
   for (const competing of [false, true])
-    test(`unrelated ${sibling} ${competing ? 'does not weaken a later client publication fence' : 'preserves pending interrupted text across internal revisions'}`, async () => {
+    test(`unrelated ${sibling} ${competing ? 'keeps a later edit over the interrupted save' : 'preserves pending interrupted text across internal revisions'}`, async () => {
       const f = fixture(),
         count = join(f.base, 'effects');
       const helper = f.wrapper(
@@ -622,18 +561,7 @@ for (const sibling of ['save', 'move'] as const)
             };
           }),
         );
-        const snapshot = {
-          ...emptyRecovery('alice'),
-          checkouts: [checkout],
-          openCheckoutIds: [checkout.checkoutId],
-          drafts,
-        };
-        await current.client.command('persistRecovery', {
-          requestId: randomUUID(),
-          clientId: 'alice',
-          expectedRevision: 0,
-          state: snapshot,
-        });
+        await seed(current.client, 'alice', drafts);
         await assert.rejects(
           current.client.command('saveFile', {
             clientId: 'alice',
@@ -654,9 +582,7 @@ for (const sibling of ['save', 'move'] as const)
             text: 'saved b',
           });
           assert.equal(result.kind, 'saved');
-          assert.deepEqual(result.kind === 'saved' && result.recoveryChanges, [
-            { clientId: 'alice', previousRevision: 1, revision: 2 },
-          ]);
+          assertOnePublication(result.kind === 'saved' && result.recoveryChanges);
         } else {
           const sources = await current.client.command('inspectEntries', {
             checkout,
@@ -671,50 +597,26 @@ for (const sibling of ['save', 'move'] as const)
             destination: 'moved-b.txt',
           });
           assert.equal(result.outcome, 'completed');
-          assert.deepEqual(result.recoveryChanges, [
-            { clientId: 'alice', previousRevision: 1, revision: 2 },
-          ]);
+          assertOnePublication(result.recoveryChanges);
         }
-        if (competing)
-          await current.client.command('persistRecovery', {
-            requestId: randomUUID(),
-            clientId: 'alice',
-            expectedRevision: 2,
-            state: {
-              ...snapshot,
-              drafts: drafts.map((d) => ({ ...d, text: 'later ' + d.target.path })),
-            },
-          });
+        if (competing) await retype(current.client, drafts, (d) => 'later ' + d.target.path);
         for (let restart = 0; restart < 2; restart++) {
           await current.runtime.dispose();
           current = f.start();
-          const loaded = await current.client.command('loadRecovery', { clientId: 'alice' });
-          assert.equal(loaded.revision, 3);
+          const loaded = draftsOf((await load(current.client)).state);
           assert.equal(
-            loaded.state.drafts.find((d) => d.target.path === 'a.txt')?.text,
+            loaded.find((d) => d.target.path === 'a.txt')?.text,
             competing ? 'later a.txt' : 'admitted a',
           );
-          assert.deepEqual(
-            loaded.state.drafts.find((d) => d.target.path === 'a.txt')?.disk,
-            drafts[0].disk,
-          );
+          assert.deepEqual(loaded.find((d) => d.target.path === 'a.txt')?.disk, drafts[0].disk);
           if (!competing) {
-            const b = loaded.state.drafts.find(
+            const b = loaded.find(
               (d) => d.target.path === (sibling === 'move' ? 'moved-b.txt' : 'b.txt'),
             );
             assert(b);
             assert.equal(b.text, 'old b.txt');
             assert.equal(b.disk.text, sibling === 'save' ? 'saved b' : 'original');
           }
-          await assert.rejects(
-            current.client.command('persistRecovery', {
-              requestId: randomUUID(),
-              clientId: 'alice',
-              expectedRevision: 1,
-              state: snapshot,
-            }),
-            isError('Conflict'),
-          );
         }
         assert.equal(
           readFileSync(count, 'utf8'),
@@ -727,7 +629,7 @@ for (const sibling of ['save', 'move'] as const)
       }
     });
 
-test('a genuine client publication during Save preflight fences later interrupted admission', async () => {
+test('an edit during Save preflight wins over the interrupted save it began before', async () => {
   const f = fixture(),
     pause = join(f.base, 'pause'),
     ready = join(f.base, 'ready'),
@@ -740,12 +642,8 @@ test('a genuine client publication during Save preflight fences later interrupte
     const checkout = await current.client.command('openCheckout', { root: f.root }),
       target = { checkout, path: 'file.txt' },
       disk = await current.client.command('readFile', target);
-    await current.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: 0,
-      state: state(checkout, disk),
-    });
+    const seeded = [{ target, text: 'older draft', disk }];
+    await seed(current.client, 'alice', seeded);
     writeFileSync(pause, 'pause');
     const saving = current.client.command('saveFile', {
       clientId: 'alice',
@@ -755,22 +653,15 @@ test('a genuine client publication during Save preflight fences later interrupte
       text: 'admitted before publication',
     });
     await waitFor(ready);
-    const later = state(checkout, disk, 'newer client publication');
-    await current.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: 1,
-      state: later,
-    });
+    await retype(current.client, seeded, () => 'newer client edit');
     writeFileSync(release, 'continue');
     await assert.rejects(saving, isError('Uncertain'));
     writeFileSync(join(f.root, 'file.txt'), 'external');
     await current.runtime.dispose();
     current = f.start();
-    const loaded = await current.client.command('loadRecovery', { clientId: 'alice' });
-    assert.equal(loaded.revision, 2);
-    assert.deepEqual(loaded.state, later);
-    // The host settles the save as a conflict, and the later publication is the client's word.
+    const loaded = await load(current.client);
+    assert.deepEqual(draftsOf(loaded.state), [{ target, text: 'newer client edit', disk }]);
+    // The host settles the save as a conflict, and the later edit is the client's word.
     assert.deepEqual(loaded.errors, []);
   } finally {
     writeFileSync(release, 'continue');
@@ -790,12 +681,7 @@ test('unresolved same-target text blocks newer Save and Move effects', async () 
     const checkout = await client.command('openCheckout', { root: f.root }),
       target = { checkout, path: 'file.txt' },
       disk = await client.command('readFile', target);
-    await client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: 0,
-      state: state(checkout, disk),
-    });
+    await seed(client, 'alice', [{ target, text: 'older draft', disk }]);
     await assert.rejects(
       client.command('saveFile', {
         clientId: 'alice',
@@ -829,10 +715,7 @@ test('unresolved same-target text blocks newer Save and Move effects', async () 
       isError('Uncertain'),
     );
     assert.equal(readFileSync(count, 'utf8'), 'interrupted\n');
-    assert.equal(
-      (await client.command('loadRecovery', { clientId: 'alice' })).state.drafts[0].text,
-      'pending text',
-    );
+    assert.equal(draftsOf((await load(client)).state)[0]?.text, 'pending text');
   } finally {
     await runtime.dispose();
     f.cleanup();
@@ -898,19 +781,10 @@ for (const sibling of ['save', 'move'] as const)
       const checkout = await current.client.command('openCheckout', { root: f.root }),
         target = { checkout, path: 'file.txt' },
         disk = await current.client.command('readFile', target);
-      const snapshot = {
-        ...state(checkout, disk),
-        drafts: [
-          ...state(checkout, disk).drafts,
-          { target: { checkout, path: 'b.txt' }, disk, text: 'dirty b' },
-        ],
-      };
-      await current.client.command('persistRecovery', {
-        requestId: randomUUID(),
-        clientId: 'alice',
-        expectedRevision: 0,
-        state: snapshot,
-      });
+      await seed(current.client, 'alice', [
+        { target, text: 'older draft', disk },
+        { target: { checkout, path: 'b.txt' }, disk, text: 'dirty b' },
+      ]);
       await assert.rejects(
         current.client.command('saveFile', {
           clientId: 'alice',
@@ -959,18 +833,12 @@ for (const sibling of ['save', 'move'] as const)
         sibling === 'save'
           ? await current.client.command('saveFile', saveInput)
           : await current.client.command('mutate', moveInput);
-      assert.deepEqual('recoveryChanges' in retried && retried.recoveryChanges, [
-        { clientId: 'alice', previousRevision: 1, revision: 2 },
-      ]);
+      assertOnePublication('recoveryChanges' in retried && retried.recoveryChanges);
       for (let restart = 0; restart < 2; restart++) {
         await current.runtime.dispose();
         current = f.start();
-        const loaded = await current.client.command('loadRecovery', { clientId: 'alice' });
-        assert.equal(loaded.revision, 3);
-        assert.equal(
-          loaded.state.drafts.find((d) => d.target.path === 'file.txt')?.text,
-          'pending a',
-        );
+        const loaded = draftsOf((await load(current.client)).state);
+        assert.equal(loaded.find((d) => d.target.path === 'file.txt')?.text, 'pending a');
         const replay =
           sibling === 'save'
             ? await current.client.command('saveFile', saveInput)
@@ -1000,19 +868,11 @@ test('complete restoration retries wait for an active sibling admission without 
     const checkout = await client.command('openCheckout', { root: f.root }),
       target = { checkout, path: 'file.txt' },
       disk = await client.command('readFile', target);
-    const snapshot = {
-      ...state(checkout, disk),
-      drafts: [
-        ...state(checkout, disk).drafts,
-        { target: { checkout, path: 'b.txt' }, disk, text: 'dirty b' },
-      ],
-    };
-    await client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: 0,
-      state: snapshot,
-    });
+    await seed(client, 'alice', [
+      { target, text: 'older draft', disk },
+      { target: { checkout, path: 'b.txt' }, disk, text: 'dirty b' },
+    ]);
+    const snapshot = (await load(client)).state;
     const input = {
       clientId: 'alice',
       requestId: 'a',
@@ -1024,7 +884,8 @@ test('complete restoration retries wait for an active sibling admission without 
     const lock = new DatabaseSync(join(f.base, 'state/moonbase-workspace-v1.sqlite'));
     try {
       lock.exec('BEGIN IMMEDIATE');
-      assert.equal((await client.command('loadRecovery', { clientId: 'alice' })).revision, 1);
+      // A load while the store is locked still reads the recovery as it was.
+      assert.deepEqual((await load(client)).state, snapshot);
     } finally {
       lock.exec('ROLLBACK');
       lock.close();
@@ -1038,15 +899,16 @@ test('complete restoration retries wait for an active sibling admission without 
     });
     await waitFor(ready);
     await assert.rejects(client.command('saveFile', input), isError('Persistence'));
-    const during = await client.command('loadRecovery', { clientId: 'alice' });
-    assert.equal(during.revision, 1);
+    const during = await load(client);
     assert.deepEqual(during.state, snapshot);
     writeFileSync(release, 'continue');
     assert.equal((await saving).kind, 'saved');
     assert.equal((await client.command('saveFile', input)).kind, 'conflict');
-    const after = await client.command('loadRecovery', { clientId: 'alice' });
-    assert.equal(after.revision, 3);
-    assert.equal(after.state.drafts[0].text, 'pending a');
+    const after = await load(client);
+    assert.equal(
+      draftsOf(after.state).find((d) => d.target.path === 'file.txt')?.text,
+      'pending a',
+    );
     assert.equal(readFileSync(count, 'utf8'), 'file.txt\nb.txt\n');
   } finally {
     writeFileSync(release, 'continue');
@@ -1056,7 +918,7 @@ test('complete restoration retries wait for an active sibling admission without 
 });
 
 for (const lost of ['stage', 'replace'] as const)
-  test(`current public producer cannot restore over a publication made during Save preflight; lost ${lost}`, async () => {
+  test(`current public producer cannot restore over an edit made during Save preflight; lost ${lost}`, async () => {
     const f = fixture(),
       enabled = join(f.base, 'enabled'),
       ready = join(f.base, 'ready'),
@@ -1072,19 +934,11 @@ if [ "$1" = replace ]; then printf 'replace\\n' >> ${quote(count)}; if [ "$2" = 
       const checkout = await current.client.command('openCheckout', { root: f.root }),
         target = { checkout, path: 'file.txt' },
         disk = await current.client.command('readFile', target);
-      const snapshot = {
-        ...state(checkout, disk),
-        drafts: [
-          ...state(checkout, disk).drafts,
-          { target: { checkout, path: 'b.txt' }, disk, text: 'older b' },
-        ],
-      };
-      await current.client.command('persistRecovery', {
-        requestId: randomUUID(),
-        clientId: 'alice',
-        expectedRevision: 0,
-        state: snapshot,
-      });
+      const seeded = [
+        { target, text: 'older draft', disk },
+        { target: { checkout, path: 'b.txt' }, disk, text: 'older b' },
+      ];
+      await seed(current.client, 'alice', seeded);
       writeFileSync(enabled, 'pause');
       const input = {
         clientId: 'alice',
@@ -1095,16 +949,7 @@ if [ "$1" = replace ]; then printf 'replace\\n' >> ${quote(count)}; if [ "$2" = 
       };
       const saving = current.client.command('saveFile', input);
       await waitFor(ready);
-      const later = {
-        ...snapshot,
-        drafts: snapshot.drafts.map((d) => ({ ...d, text: 'later explicit ' + d.target.path })),
-      };
-      await current.client.command('persistRecovery', {
-        requestId: randomUUID(),
-        clientId: 'alice',
-        expectedRevision: 1,
-        state: later,
-      });
+      await retype(current.client, seeded, (d) => 'later explicit ' + d.target.path);
       writeFileSync(release, 'continue');
       await assert.rejects(saving, isError('Uncertain'));
       if (lost === 'stage') writeFileSync(join(f.root, 'file.txt'), 'external');
@@ -1117,39 +962,25 @@ if [ "$1" = replace ]; then printf 'replace\\n' >> ${quote(count)}; if [ "$2" = 
         text: 'saved b',
       });
       assert.equal(saved.kind, 'saved');
-      assert.deepEqual(saved.kind === 'saved' && saved.recoveryChanges, [
-        { clientId: 'alice', previousRevision: 2, revision: 3 },
-      ]);
+      assertOnePublication(saved.kind === 'saved' && saved.recoveryChanges);
       assert(saved.kind === 'saved');
-      const expected = {
-        ...later,
-        drafts: later.drafts.map((d) => {
-          if (d.target.path === 'b.txt') return { ...d, disk: saved.disk };
-          if (lost === 'replace') return { ...d, disk: actual };
-          return d;
-        }),
-      };
+      // b's save moved its baseline; a lost replace left file.txt's text on disk.
+      const fileDisk = lost === 'replace' ? actual : disk;
+      const expected = seeded.map((d) => ({
+        ...d,
+        text: 'later explicit ' + d.target.path,
+        disk: d.target.path === 'b.txt' ? saved.disk : fileDisk,
+      }));
       for (let restart = 0; restart < 2; restart++) {
         await current.runtime.dispose();
         current = f.start();
-        const loaded = await current.client.command('loadRecovery', { clientId: 'alice' });
-        assert.equal(loaded.revision, lost === 'replace' ? 4 : 3);
-        assert.deepEqual(loaded.state, expected);
+        assert.deepEqual(draftsOf((await load(current.client)).state), expected);
         // The host settled the interrupted save from the disk: its text never landed.
         const replay = await current.client.command('saveFile', input);
         assert.equal(replay.kind, lost === 'stage' ? 'conflict' : 'saved');
         assert.deepEqual(replay.disk, actual);
         await assert.rejects(
           current.client.command('saveFile', { ...input, text: 'changed payload' }),
-          isError('Conflict'),
-        );
-        await assert.rejects(
-          current.client.command('persistRecovery', {
-            requestId: randomUUID(),
-            clientId: 'alice',
-            expectedRevision: 2,
-            state: expected,
-          }),
           isError('Conflict'),
         );
       }

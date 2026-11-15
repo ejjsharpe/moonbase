@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
@@ -16,9 +15,8 @@ import { join } from 'node:path';
 import { Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { emptyRecovery } from '@moonbase/contracts/workspace';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
-import { quote, fixture, isError, waitFor } from './recovery-fixture.ts';
+import { quote, fixture, isError, seed, waitFor } from './recovery-fixture.ts';
 import { captureNative, releaseNative } from './workspace-fixture.ts';
 
 for (const kind of ['move', 'copy'] as const)
@@ -392,18 +390,8 @@ for (const kind of ['move', 'copy'] as const)
       const checkout = await client.command('openCheckout', { root: f.root }),
         target = { checkout, path: 'folder/child.txt' },
         disk = await client.command('readFile', target);
-      const snapshot = {
-        ...emptyRecovery('alice'),
-        checkouts: [checkout],
-        openCheckoutIds: [checkout.checkoutId],
-        drafts: [{ target, disk, text: 'dirty child' }],
-      };
-      await client.command('persistRecovery', {
-        requestId: randomUUID(),
-        clientId: 'alice',
-        expectedRevision: 0,
-        state: snapshot,
-      });
+      await seed(client, 'alice', [{ target, disk, text: 'dirty child' }]);
+      const snapshot = (await client.command('loadRecovery', { clientId: 'alice' })).state;
       const sources = await client.command('inspectEntries', {
           checkout,
           paths: ['folder/child.txt'],
@@ -445,17 +433,7 @@ test('a native import onto a path holding a draft is refused', async () => {
     const checkout = await client.command('openCheckout', { root: f.root }),
       target = { checkout, path: 'child.txt' },
       disk = await client.command('readFile', target);
-    await client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: 0,
-      state: {
-        ...emptyRecovery('alice'),
-        checkouts: [checkout],
-        openCheckoutIds: [checkout.checkoutId],
-        drafts: [{ target, disk, text: 'dirty child' }],
-      },
-    });
+    await seed(client, 'alice', [{ target, disk, text: 'dirty child' }]);
     // An import names no source path, so its destination alone must be free of drafts.
     const external = join(f.base, 'external.txt');
     writeFileSync(external, 'native bytes');

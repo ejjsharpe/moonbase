@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { toWireError } from '@moonbase/contracts/workspace-host-errors';
-import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -10,9 +9,21 @@ import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
 import { readInstallationId, WorkspaceRecoveryLive } from '../src/index.ts';
-import { draft } from './workspace-fixture.ts';
 import { dropReply, dropRequest, harness, lost, openCheckout } from './split-fixture.ts';
-import { isError } from './recovery-fixture.ts';
+import { draftsOf, isError, seed, type SeedDraft } from './recovery-fixture.ts';
+
+/** A draft of `path` for `seed`, as a buffer named for the path. */
+const drafted = (
+  checkout: CheckoutTarget,
+  path: string,
+  text: string,
+  disk: SeedDraft['disk'],
+) => ({
+  target: { checkout, path },
+  text,
+  disk,
+  bufferId: path,
+});
 
 test('a save whose reply is lost resolves through saveStatus, and one that never arrived returns as a draft over its baseline, even once another client moved that draft', async () => {
   const h = harness();
@@ -35,12 +46,7 @@ test('a save whose reply is lost resolves through saveStatus, and one that never
       message: 'Malformed.',
     });
     let alice = h.startClient('alice', host, dropReply('saveFile', malformed));
-    await alice.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'window',
-      expectedRevision: 0,
-      state: draft('window', checkout, 'committed text', disk),
-    });
+    await seed(alice.client, 'window', [drafted(checkout, 'file.txt', 'committed text', disk)]);
     await assert.rejects(
       alice.client.command('saveFile', save('lost-reply', 'committed text', disk.version)),
     );
@@ -50,7 +56,7 @@ test('a save whose reply is lost resolves through saveStatus, and one that never
     const resolved = await alice.client.command('loadRecovery', {
       clientId: 'window',
     });
-    assert.equal(resolved.state.drafts[0].disk.text, 'committed text');
+    assert.equal(draftsOf(resolved.state)[0]!.disk.text, 'committed text');
     assert.deepEqual(resolved.errors, []);
     assert.equal(
       (
@@ -70,7 +76,7 @@ test('a save whose reply is lost resolves through saveStatus, and one that never
     await assert.rejects(
       alice.client.command(
         'saveFile',
-        save('never-arrived', 'unsent text', resolved.state.drafts[0].disk.version),
+        save('never-arrived', 'unsent text', draftsOf(resolved.state)[0]!.disk.version),
       ),
     );
     await alice.runtime.dispose();
@@ -90,7 +96,9 @@ test('a save whose reply is lost resolves through saveStatus, and one that never
       clientId: 'window',
     });
     assert.deepEqual(
-      restored.state.drafts.map((d) => [d.target.path, d.text, d.disk.text]).sort(),
+      draftsOf(restored.state)
+        .map((d) => [d.target.path, d.text, d.disk.text])
+        .sort(),
       [
         ['file.txt', 'unsent text', 'committed text'],
         ['moved.txt', 'committed text', 'committed text'],
@@ -101,7 +109,7 @@ test('a save whose reply is lost resolves through saveStatus, and one that never
       Effect.flip(
         host.saveFile({
           installationId: 'alice',
-          ...save('never-arrived', 'unsent text', resolved.state.drafts[0].disk.version),
+          ...save('never-arrived', 'unsent text', draftsOf(resolved.state)[0]!.disk.version),
         }),
       ),
     );
@@ -142,12 +150,7 @@ test('a save whose baseline another save of the file replaced in the recovery st
           : inner.saveFile(input),
       saveStatus: () => Effect.fail(lost),
     }));
-    await alice.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'window',
-      expectedRevision: 0,
-      state: draft('window', checkout, 'first text', disk),
-    });
+    await seed(alice.client, 'window', [drafted(checkout, 'file.txt', 'first text', disk)]);
     const second = alice.client.command('saveFile', save('second', 'second text'));
     await arrived;
     assert.equal(
@@ -161,7 +164,7 @@ test('a save whose baseline another save of the file replaced in the recovery st
     const loaded = await alice.client.command('loadRecovery', { clientId: 'window' });
     // The host refused the second save as a conflict: its text comes back over its own baseline.
     assert.deepEqual(
-      loaded.state.drafts.map((d) => [d.text, d.disk.text]),
+      draftsOf(loaded.state).map((d) => [d.text, d.disk.text]),
       [['second text', 'original']],
     );
     assert.equal(readFileSync(join(h.root, 'file.txt'), 'utf8'), 'first text');
@@ -178,12 +181,7 @@ test('a move whose reply is lost before publication resolves through operationSt
     const checkout = await openCheckout(host, h.root),
       disk = await Effect.runPromise(host.readFile({ checkout, path: 'file.txt' }));
     let alice = h.startClient('alice', host, dropReply('mutate'));
-    await alice.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'window',
-      expectedRevision: 0,
-      state: draft('window', checkout, 'dirty', disk),
-    });
+    await seed(alice.client, 'window', [drafted(checkout, 'file.txt', 'dirty', disk)]);
     const sources = await alice.client.command('inspectEntries', {
       checkout,
       paths: ['file.txt'],
@@ -208,8 +206,8 @@ test('a move whose reply is lost before publication resolves through operationSt
     const loaded = await alice.client.command('loadRecovery', {
       clientId: 'window',
     });
-    assert.equal(loaded.state.drafts[0].target.path, 'moved.txt');
-    assert.equal(loaded.state.drafts[0].text, 'dirty');
+    assert.equal(draftsOf(loaded.state)[0]?.target.path, 'moved.txt');
+    assert.equal(draftsOf(loaded.state)[0]?.text, 'dirty');
     // A move left without any answer, which never reached the host: a repeat finds it never ran
     // (its ID is now retired there), drops the intent and is refused, never sent again.
     writeFileSync(join(h.root, 'other.txt'), 'other');
@@ -254,32 +252,13 @@ test("one client's move re-paths another client's draft on its next load, even i
     const read = (path: string) => Effect.runPromise(host.readFile({ checkout, path }));
     const alice = h.startClient('alice', host),
       bob = h.startClient('bob', host);
-    const persist = (
-      client: typeof alice.client,
-      clientId: string,
-      state: ReturnType<typeof draft>,
-    ) =>
-      client.command('persistRecovery', {
-        requestId: randomUUID(),
-        clientId,
-        expectedRevision: 0,
-        state,
-      });
-    await persist(alice.client, 'a', draft('a', checkout, 'alice', await read('moves.txt')));
-    const moving = {
-      target: { checkout, path: 'moves.txt' },
-      text: 'bob moves',
-      disk: await read('moves.txt'),
-    };
-    const trashing = {
-      target: { checkout, path: 'trashed.txt' },
-      text: 'bob stays',
-      disk: await read('trashed.txt'),
-    };
-    await persist(bob.client, 'b', {
-      ...draft('b', checkout, '', moving.disk),
-      drafts: [moving, trashing],
-    });
+    await seed(alice.client, 'a', [
+      drafted(checkout, 'moves.txt', 'alice', await read('moves.txt')),
+    ]);
+    await seed(bob.client, 'b', [
+      drafted(checkout, 'moves.txt', 'bob moves', await read('moves.txt')),
+      drafted(checkout, 'trashed.txt', 'bob stays', await read('trashed.txt')),
+    ]);
     // Bob has not loaded since adding the checkout: its feed is followed from when it was added.
     const run = async (id: string, kind: 'move' | 'trash', path: string, destination?: string) =>
       alice.client.command('mutate', {
@@ -297,17 +276,22 @@ test("one client's move re-paths another client's draft on its next load, even i
     const trash = await run('trash', 'trash', 'trashed.txt');
     trashed = trash.items[0].message!.replace('macOS Trash: ', '');
     const loaded = await bob.client.command('loadRecovery', { clientId: 'b' });
-    assert.deepEqual(loaded.state.drafts.map((d) => [d.target.path, d.text]).sort(), [
-      ['renamed.txt', 'bob moves'],
-      ['trashed.txt', 'bob stays'],
-    ]);
+    assert.deepEqual(
+      draftsOf(loaded.state)
+        .map((d) => [d.target.path, d.text])
+        .sort(),
+      [
+        ['renamed.txt', 'bob moves'],
+        ['trashed.txt', 'bob stays'],
+      ],
+    );
     assert.deepEqual(
       loaded.operations.map((o) => o.clientId),
       ['a', 'a'],
     );
     // Applied once: a later load finds nothing new to reconcile.
     const again = await bob.client.command('loadRecovery', { clientId: 'b' });
-    assert.equal(again.revision, loaded.revision);
+    assert.deepEqual(again.state, loaded.state);
   } finally {
     if (trashed.includes('/.Trash/') && existsSync(trashed)) rmSync(trashed);
     await h.close();
@@ -336,14 +320,8 @@ test('a checkout the host refuses does not stop the feed for the others', async 
               )
             : inner.listOperations(input),
       }));
-    await bob.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'b',
-      expectedRevision: 0,
-      state: {
-        ...draft('b', checkout, 'bob', disk),
-        checkouts: [checkout, stale],
-      },
+    await seed(bob.client, 'b', [drafted(checkout, 'file.txt', 'bob', disk)], {
+      checkouts: [checkout, stale],
     });
     await bob.client.command('loadRecovery', { clientId: 'b' });
     await alice.client.command('mutate', {
@@ -358,7 +336,7 @@ test('a checkout the host refuses does not stop the feed for the others', async 
       destination: 'renamed.txt',
     });
     const loaded = await bob.client.command('loadRecovery', { clientId: 'b' });
-    assert.equal(loaded.state.drafts[0].target.path, 'renamed.txt');
+    assert.equal(draftsOf(loaded.state)[0]?.target.path, 'renamed.txt');
     assert(loaded.errors.length > 0);
   } finally {
     await h.close();
@@ -385,21 +363,17 @@ test("a checkout's failed listing is retried later, and a move onto a drafted pa
       }));
     const a = await read('a.txt'),
       c = await read('c.txt');
-    await bob.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'b',
-      expectedRevision: 0,
-      state: {
-        ...draft('b', checkout, '', a),
-        checkouts: [checkout, other],
-        drafts: [
-          { target: { checkout, path: 'a.txt' }, text: 'bob a', disk: a },
-          // A draft of a file not on disk (yet): a move may land there.
-          { target: { checkout, path: 'b.txt' }, text: 'bob b', disk: a },
-          { target: { checkout, path: 'c.txt' }, text: 'bob c', disk: c },
-        ],
-      },
-    });
+    await seed(
+      bob.client,
+      'b',
+      [
+        drafted(checkout, 'a.txt', 'bob a', a),
+        // A draft of a file not on disk (yet): a move may land there.
+        drafted(checkout, 'b.txt', 'bob b', a),
+        drafted(checkout, 'c.txt', 'bob c', c),
+      ],
+      { checkouts: [checkout, other] },
+    );
     const move = async (id: string, path: string, destination: string) =>
       alice.client.command('mutate', {
         id,
@@ -411,8 +385,10 @@ test("a checkout's failed listing is retried later, and a move onto a drafted pa
       });
     await move('onto-draft', 'a.txt', 'b.txt');
     await move('later', 'c.txt', 'd.txt');
-    const paths = (state: { drafts: { target: { path: string }; text: string }[] }) =>
-      state.drafts.map((d) => [d.target.path, d.text]).sort();
+    const paths = (state: Parameters<typeof draftsOf>[0]) =>
+      draftsOf(state)
+        .map((d) => [d.target.path, d.text])
+        .sort();
     // The checkout's listing fails while the other's succeeds: nothing is skipped or marked.
     failing = true;
     const failed = await bob.client.command('loadRecovery', { clientId: 'b' });
@@ -466,12 +442,7 @@ test('journal entries leave after acknowledgement and the window; a feed gap kee
     const status = (id: string) =>
       Effect.runPromise(host.operationStatus({ installationId: 'alice', clientId: 'a', id }));
     let bob = h.startClient('bob', host);
-    await bob.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'b',
-      expectedRevision: 0,
-      state: draft('b', checkout, 'bob draft', disk),
-    });
+    await seed(bob.client, 'b', [drafted(checkout, 'file.txt', 'bob draft', disk)]);
     await bob.client.command('loadRecovery', { clientId: 'b' });
     await move('first', 'file.txt', 'moved.txt');
     await acknowledge('first');
@@ -507,8 +478,8 @@ test('journal entries leave after acknowledgement and the window; a feed gap kee
     assert.equal((await status('unacknowledged'))?.outcome, 'completed');
     bob = h.startClient('bob', host);
     const loaded = await bob.client.command('loadRecovery', { clientId: 'b' });
-    assert.equal(loaded.state.drafts[0].target.path, 'file.txt');
-    assert.equal(loaded.state.drafts[0].text, 'bob draft');
+    assert.equal(draftsOf(loaded.state)[0]?.target.path, 'file.txt');
+    assert.equal(draftsOf(loaded.state)[0]?.text, 'bob draft');
     assert(loaded.errors.length > 0);
   } finally {
     await h.close();
@@ -688,12 +659,7 @@ test('loading recovery stops waiting on a host that does not answer and still re
         Object.keys(host).map((name) => [name, () => Effect.never]),
       ) as unknown as WorkspaceHostServiceShape;
     const saved = h.startClient('alice', host, dropRequest('saveFile'));
-    await saved.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'window',
-      expectedRevision: 0,
-      state: draft('window', checkout, 'unsaved edit', disk),
-    });
+    await seed(saved.client, 'window', [drafted(checkout, 'file.txt', 'unsaved edit', disk)]);
     await assert.rejects(
       saved.client.command('saveFile', {
         target: { checkout, path: 'file.txt' },
@@ -715,7 +681,7 @@ test('loading recovery stops waiting on a host that does not answer and still re
       clientId: 'window',
     });
     // The silent host leaves the local work to do: the unsettled save becomes a draft.
-    assert.equal(load.state.drafts[0].text, 'unsettled text');
+    assert.equal(draftsOf(load.state)[0]?.text, 'unsettled text');
     assert(load.errors.some((error) => error.includes('broken')));
     assert(load.errors.length > 1);
     // The unreadable row neither stalls a Trash (its feed publication skips it) nor lets a move

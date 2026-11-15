@@ -15,10 +15,11 @@ import { fileURLToPath } from 'node:url';
 import { ManagedRuntime } from 'effect';
 import {
   ApplicationError,
-  emptyRecovery,
   type CheckoutTarget,
-  type EditorRecovery,
+  type EditorClient,
+  type FileDocument,
 } from '@moonbase/contracts/workspace';
+import type { RecoveryLayout, RecoveryState } from '@moonbase/contracts/recovery';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { isWorkspaceHostError, toWireError } from '@moonbase/contracts/workspace-host-errors';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
@@ -56,18 +57,46 @@ export const isError = (code: ApplicationError['code']) => (value: unknown) => {
   const wire = isWorkspaceHostError(value) ? toWireError(value) : value;
   return ApplicationError.is(wire) && wire.code === code;
 };
-export function state(
-  checkout: CheckoutTarget,
-  disk: { text: string; version: string },
-  text = 'older draft',
-): EditorRecovery {
-  return {
-    ...emptyRecovery('alice'),
-    checkouts: [checkout],
-    openCheckoutIds: [checkout.checkoutId],
-    drafts: [{ target: { checkout, path: 'file.txt' }, disk, text }],
-  };
+type Target = { checkout: CheckoutTarget; path: string };
+export type SeedDraft = { target: Target; text: string; disk: FileDocument; bufferId?: string };
+/** A buffer's ID as `seed` opens it. */
+export const bufferIdOf = (target: Target) =>
+  (target.checkout.checkoutId + '.' + target.path).replaceAll(/[^\w.-]/g, '_');
+/**
+ * Seeds a client's recovery through its edits, as an editor does: the drafts' checkouts open in
+ * the layout (the first selected, and `layout` over that), then each draft open as a buffer with
+ * its text over its disk.
+ */
+export async function seed(
+  client: Pick<EditorClient, 'command'>,
+  clientId: string,
+  drafts: SeedDraft[],
+  layout: Partial<RecoveryLayout> = {},
+) {
+  const checkouts = [
+    ...new Map(drafts.map((d) => [d.target.checkout.checkoutId, d.target.checkout])).values(),
+  ];
+  await client.command('updateLayout', {
+    clientId,
+    layout: {
+      checkouts,
+      openCheckoutIds: checkouts.map((c) => c.checkoutId),
+      selectedCheckoutId: checkouts[0]?.checkoutId ?? null,
+      views: {},
+      recentFiles: [],
+      sidebarWidth: 270,
+      followActiveFile: true,
+      ...layout,
+    },
+  });
+  for (const { target, text, disk, bufferId = bufferIdOf(target) } of drafts) {
+    await client.command('openTab', { clientId, bufferId, target });
+    await client.command('updateDraft', { clientId, bufferId, text, disk });
+  }
 }
+/** A recovery's drafts as where they are, their text and the file text they were edited over. */
+export const draftsOf = (state: RecoveryState) =>
+  state.buffers.flatMap((b) => (b.draft ? [{ target: b.target, ...b.draft }] : []));
 export async function waitFor(path: string) {
   const deadline = Date.now() + 3000;
   while (!existsSync(path)) {

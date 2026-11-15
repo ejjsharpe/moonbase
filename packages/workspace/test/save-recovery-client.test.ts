@@ -1,14 +1,14 @@
-import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { writeFileSync, readFileSync, chmodSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { emptyRecovery } from '@moonbase/contracts/workspace';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
+import { fixture, rejects } from './workspace-fixture.ts';
+import { draftsOf, seed } from './recovery-fixture.ts';
 
-import { fixture, rejects, draft } from './workspace-fixture.ts';
+const bufferId = 'file';
 test('public client saves, rejects changed retries and preserves original dirty conflict baselines across restart', async () => {
   const f = fixture();
   try {
@@ -16,12 +16,7 @@ test('public client saves, rejects changed retries and preserves original dirty 
     const checkout = await f.client.command('openCheckout', { root: f.root }),
       target = { checkout, path: 'file.txt' };
     const disk = await f.client.command('readFile', target);
-    await f.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: 0,
-      state: draft('alice', checkout, 'dirty text', disk),
-    });
+    await seed(f.client, 'alice', [{ target, text: 'dirty text', disk, bufferId }]);
     writeFileSync(join(f.root, 'file.txt'), 'external');
     const input = {
       target,
@@ -33,7 +28,7 @@ test('public client saves, rejects changed retries and preserves original dirty 
     const conflict = await f.client.command('saveFile', input);
     assert.equal(conflict.kind, 'conflict');
     assert.equal(
-      (await f.client.command('loadRecovery', { clientId: 'alice' })).state.drafts[0].disk.text,
+      draftsOf((await f.client.command('loadRecovery', { clientId: 'alice' })).state)[0]?.disk.text,
       'original',
     );
     await assert.rejects(
@@ -55,9 +50,11 @@ test('public client saves, rejects changed retries and preserves original dirty 
     await f.runtime.dispose();
     const restarted = f.start();
     try {
-      const state = await restarted.client.command('loadRecovery', { clientId: 'alice' });
-      assert.equal(state.state.drafts[0].text, 'dirty text');
-      assert.equal(state.state.drafts[0].disk.text, 'dirty text');
+      const [restored] = draftsOf(
+        (await restarted.client.command('loadRecovery', { clientId: 'alice' })).state,
+      );
+      assert.equal(restored?.text, 'dirty text');
+      assert.equal(restored?.disk.text, 'dirty text');
       assert.equal((await restarted.client.command('readFile', target)).text, 'dirty text');
       assert.deepEqual(await restarted.client.command('saveFile', input), conflict);
     } finally {
@@ -68,44 +65,33 @@ test('public client saves, rejects changed retries and preserves original dirty 
   }
 });
 
-test('independent clients and compare-and-swap recovery do not overwrite one another; invalid baselines fail', async () => {
+test("independent clients' recoveries do not overwrite one another; an invalid baseline fails", async () => {
   const f = fixture();
   try {
     writeFileSync(join(f.root, 'file.txt'), 'disk');
     const checkout = await f.client.command('openCheckout', { root: f.root }),
-      disk = await f.client.command('readFile', { checkout, path: 'file.txt' });
-    await f.client.command('persistRecovery', {
-      requestId: randomUUID(),
+      target = { checkout, path: 'file.txt' },
+      disk = await f.client.command('readFile', target);
+    await seed(f.client, 'alice', [{ target, text: 'alice edit', disk, bufferId }]);
+    await seed(f.client, 'bob', [{ target, text: 'bob edit', disk, bufferId }]);
+    await f.client.command('closeTab', {
       clientId: 'alice',
-      expectedRevision: 0,
-      state: draft('alice', checkout, 'alice edit', disk),
+      bufferId,
+      discard: true,
     });
-    await f.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'bob',
-      expectedRevision: 0,
-      state: draft('bob', checkout, 'bob edit', disk),
-    });
-    await assert.rejects(
-      f.client.command('persistRecovery', {
-        requestId: randomUUID(),
-        clientId: 'alice',
-        expectedRevision: 0,
-        state: emptyRecovery('alice'),
-      }),
-      rejects('Conflict'),
+    assert.deepEqual(
+      draftsOf((await f.client.command('loadRecovery', { clientId: 'bob' })).state).map(
+        (d) => d.text,
+      ),
+      ['bob edit'],
     );
-    assert.equal(
-      (await f.client.command('loadRecovery', { clientId: 'bob' })).state.drafts[0].text,
-      'bob edit',
-    );
-    const bad = draft('alice', checkout, 'safe', { ...disk, version: 'wrong' });
+    await f.client.command('openTab', { clientId: 'alice', bufferId: 'b', target });
     await assert.rejects(
-      f.client.command('persistRecovery', {
-        requestId: randomUUID(),
+      f.client.command('updateDraft', {
         clientId: 'alice',
-        expectedRevision: 1,
-        state: bad,
+        bufferId: 'b',
+        text: 'safe',
+        disk: { ...disk, version: 'wrong' },
       }),
       rejects('InvalidInput'),
     );
@@ -114,7 +100,7 @@ test('independent clients and compare-and-swap recovery do not overwrite one ano
   }
 });
 
-test('one client Save never rebases another client dirty baseline, including restart and newer-revision stale publication', async () => {
+test('one client Save never rebases another client dirty baseline, including restart', async () => {
   const f = fixture();
   try {
     writeFileSync(join(f.root, 'file.txt'), 'original');
@@ -122,12 +108,7 @@ test('one client Save never rebases another client dirty baseline, including res
       target = { checkout, path: 'file.txt' },
       disk = await f.client.command('readFile', target);
     for (const clientId of ['alice', 'bob'])
-      await f.client.command('persistRecovery', {
-        requestId: randomUUID(),
-        clientId,
-        expectedRevision: 0,
-        state: draft(clientId, checkout, 'same dirty text', disk),
-      });
+      await seed(f.client, clientId, [{ target, text: 'same dirty text', disk, bufferId }]);
     await f.client.command('saveFile', {
       target,
       clientId: 'alice',
@@ -136,37 +117,27 @@ test('one client Save never rebases another client dirty baseline, including res
       expectedVersion: disk.version,
     });
     const bob = await f.client.command('loadRecovery', { clientId: 'bob' });
-    assert.deepEqual(bob.state.drafts[0].disk, disk);
-    assert.equal(bob.revision, 1);
-    const newer = structuredClone(bob.state);
-    newer.drafts[0].text = 'newer bob edit';
-    await f.client.command('persistRecovery', {
-      requestId: randomUUID(),
+    assert.deepEqual(draftsOf(bob.state)[0]?.disk, disk);
+    await f.client.command('updateDraft', {
       clientId: 'bob',
-      expectedRevision: 1,
-      state: newer,
+      bufferId,
+      text: 'newer bob edit',
+      disk,
     });
-    await assert.rejects(
-      f.client.command('persistRecovery', {
-        requestId: randomUUID(),
-        clientId: 'bob',
-        expectedRevision: 1,
-        state: bob.state,
-      }),
-      rejects('Conflict'),
-    );
     await f.runtime.dispose();
     const restarted = f.start();
     try {
-      const restored = await restarted.client.command('loadRecovery', { clientId: 'bob' });
-      assert.equal(restored.state.drafts[0].text, 'newer bob edit');
-      assert.deepEqual(restored.state.drafts[0].disk, disk);
+      const [restored] = draftsOf(
+        (await restarted.client.command('loadRecovery', { clientId: 'bob' })).state,
+      );
+      assert.equal(restored?.text, 'newer bob edit');
+      assert.deepEqual(restored?.disk, disk);
       const result = await restarted.client.command('saveFile', {
         target,
         clientId: 'bob',
         requestId: 'bob-save',
         text: 'newer bob edit',
-        expectedVersion: restored.state.drafts[0].disk.version,
+        expectedVersion: disk.version,
       });
       assert.equal(result.kind, 'conflict');
       assert.equal(result.disk.text, 'same dirty text');
@@ -180,7 +151,7 @@ test('one client Save never rebases another client dirty baseline, including res
 });
 
 for (const kind of ['save', 'move'] as const)
-  test(`own ${kind} receipt exposes a competing same-client publication gap and retry does not write again`, async () => {
+  test(`own ${kind} keeps a same-client edit made while it ran, and a retry does not write again`, async () => {
     const { fileURLToPath } = await import('node:url');
     const f = fixture(),
       helper = join(f.base, 'pause-effect'),
@@ -207,14 +178,8 @@ for (const kind of ['save', 'move'] as const)
       writeFileSync(join(f.root, 'file.txt'), 'original');
       const checkout = await client.command('openCheckout', { root: f.root }),
         target = { checkout, path: 'file.txt' };
-      const disk = await client.command('readFile', target),
-        initial = draft('alice', checkout, 'captured local edit', disk);
-      await client.command('persistRecovery', {
-        requestId: randomUUID(),
-        clientId: 'alice',
-        expectedRevision: 0,
-        state: initial,
-      });
+      const disk = await client.command('readFile', target);
+      await seed(client, 'alice', [{ target, text: 'captured local edit', disk, bufferId }]);
       const sources = await client.command('inspectEntries', { checkout, paths: ['file.txt'] });
       const operation = {
           id: 'gap',
@@ -238,40 +203,25 @@ for (const kind of ['save', 'move'] as const)
         assert(Date.now() < deadline);
         await new Promise((r) => setTimeout(r, 10));
       }
-      const competing = structuredClone(initial);
-      competing.drafts[0].text = 'newer competing client edit';
-      await client.command('persistRecovery', {
-        requestId: randomUUID(),
+      await client.command('updateDraft', {
         clientId: 'alice',
-        expectedRevision: 1,
-        state: competing,
+        bufferId,
+        text: 'newer competing client edit',
+        disk,
       });
       writeFileSync(release, 'resume');
       const result = await pending;
-      assert('recoveryChanges' in result);
-      assert.deepEqual(result.recoveryChanges, [
-        { clientId: 'alice', previousRevision: 2, revision: 3 },
-      ]);
-      // A controller still at revision 1 cannot advance along the receipt beginning at 2.
-      assert.notEqual(result.recoveryChanges[0].previousRevision, 1);
-      await assert.rejects(
-        client.command('persistRecovery', {
-          requestId: randomUUID(),
-          clientId: 'alice',
-          expectedRevision: 1,
-          state: initial,
-        }),
-        rejects('Conflict'),
-      );
       const retained = await client.command('loadRecovery', { clientId: 'alice' });
-      assert.equal(retained.revision, 3);
-      assert.equal(retained.state.drafts[0].text, 'newer competing client edit');
+      assert.deepEqual(
+        draftsOf(retained.state).map((d) => d.text),
+        ['newer competing client edit'],
+      );
       const again =
         kind === 'save'
           ? await client.command('saveFile', save)
           : await client.command('mutate', operation);
       assert.deepEqual(again, result);
-      assert.equal((await client.command('loadRecovery', { clientId: 'alice' })).revision, 3);
+      assert.deepEqual(await client.command('loadRecovery', { clientId: 'alice' }), retained);
       assert.equal(readFileSync(count, 'utf8'), 'called\n');
     } finally {
       writeFileSync(release, 'resume');
@@ -361,15 +311,14 @@ test('restart recovers the admitted Save text even when no earlier draft publica
     const restarted = f.start();
     try {
       const restored = await restarted.client.command('loadRecovery', { clientId: 'alice' });
-      assert.equal(restored.state.drafts[0].text, 'admitted unsaved text');
-      assert.deepEqual(restored.state.drafts[0].disk, disk);
+      assert.equal(draftsOf(restored.state)[0]?.text, 'admitted unsaved text');
+      assert.deepEqual(draftsOf(restored.state)[0]?.disk, disk);
       assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'original');
       // A repeat asks the host, which finds the file as it was: the save settles as a conflict
       // with the restored text kept, in this session rather than after another load.
       assert.equal((await restarted.client.command('saveFile', save)).kind, 'conflict');
       const settled = await restarted.client.command('loadRecovery', { clientId: 'alice' });
-      assert.equal(settled.revision, restored.revision);
-      assert.equal(settled.state.drafts[0].text, 'admitted unsaved text');
+      assert.deepEqual(settled.state, restored.state);
       assert.deepEqual(settled.errors, []);
     } finally {
       await restarted.runtime.dispose();

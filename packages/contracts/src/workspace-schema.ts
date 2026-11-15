@@ -1,8 +1,8 @@
 import * as Schema from 'effect/Schema';
 import { ApplicationError, maximumFileBytes } from './workspace.ts';
-import type { CommandInput, CommandOutput, WorkspaceCommand } from './workspace.ts';
+import type { CommandInput, CommandOutput } from './workspace.ts';
 import { array, optional, struct, voidResult } from './schema.ts';
-import { areJsonValuesEqual, getJsonKey } from './common.ts';
+import { getJsonKey } from './common.ts';
 import {
   CheckoutTargetSchema,
   FileTargetSchema,
@@ -89,9 +89,10 @@ export const RecoveryCheckoutSchema = CheckoutTargetSchema.check(
   Schema.makeFilter((target) => target.root.startsWith('/')),
 );
 /** A file in recovery: an exact checkout-relative path. */
-const recoveryCheckout = RecoveryCheckoutSchema;
-export const RecoveryTargetSchema = struct({ checkout: recoveryCheckout, path: checkoutPath });
-const recoveryTarget = RecoveryTargetSchema;
+export const RecoveryTargetSchema = struct({
+  checkout: RecoveryCheckoutSchema,
+  path: checkoutPath,
+});
 /** A checkout's files tree: folder paths, not buffers. */
 export const CheckoutTreeSchema = struct({
   expanded: array(checkoutFolder),
@@ -106,73 +107,12 @@ export const CheckoutTreeSchema = struct({
    */
   hideIgnored: optional(Schema.Boolean),
 });
-export const CheckoutViewSchema = struct({
-  openFiles: array(checkoutPath).check(Schema.isMaxLength(1000)),
-  active: checkoutFolder,
-  preview: Schema.NullOr(checkoutPath),
-  fileViews: Schema.Record(checkoutPath, Schema.mutableKey(FileViewSchema)),
-  positions: Schema.Record(checkoutPath, Schema.mutableKey(FilePositionsSchema)),
-  tree: CheckoutTreeSchema,
-}).check(
-  Schema.makeFilter(
-    (view) =>
-      isUnique(view.openFiles) &&
-      (view.active === '' || view.openFiles.includes(view.active)) &&
-      (view.preview === null || view.openFiles.includes(view.preview)),
-  ),
-);
-export const RecoveryDraftSchema = struct({
-  target: recoveryTarget,
-  text,
-  disk: FileDocumentSchema,
-});
 /** The most JSON bytes a recovery state may take. */
 export const maximumRecoveryBytes = 32 * 1024 * 1024;
-export const EditorRecoverySchema = struct({
-  version: Schema.Literal(1),
-  clientId: WorkspaceIdentifierSchema,
-  checkouts: array(recoveryCheckout).check(Schema.isMaxLength(128)),
-  openCheckoutIds: array(nonempty).check(Schema.isMaxLength(128)),
-  selectedCheckoutId: Schema.NullOr(nonempty),
-  views: Schema.Record(Schema.String, Schema.mutableKey(CheckoutViewSchema)),
-  drafts: array(RecoveryDraftSchema).check(Schema.isMaxLength(512)),
-  recentFiles: array(recoveryTarget).check(Schema.isMaxLength(1000)),
-  sidebarWidth: Schema.Finite.check(Schema.isBetween({ minimum: 100, maximum: 2000 })),
-  /**
-   * Whether each checkout's files tree reveals the file made active (Follow Active File); absent
-   * in recovery saved before the setting existed, which reads as on.
-   */
-  followActiveFile: optional(Schema.Boolean),
-}).check(
-  // Checkouts are listed once each, and everything else names one of them as it is listed.
-  Schema.makeFilter((state) => {
-    const checkouts = new Map(state.checkouts.map((c) => [c.checkoutId, c]));
-    const listed = (target: { checkout: { checkoutId: string } }) =>
-      areJsonValuesEqual(checkouts.get(target.checkout.checkoutId), target.checkout);
-    return (
-      checkouts.size === state.checkouts.length &&
-      isUnique(state.openCheckoutIds) &&
-      state.openCheckoutIds.every((id) => checkouts.has(id)) &&
-      (state.selectedCheckoutId === null ||
-        state.openCheckoutIds.includes(state.selectedCheckoutId)) &&
-      Object.keys(state.views).every((id) => checkouts.has(id)) &&
-      state.drafts.every((draft) => listed(draft.target)) &&
-      isUnique(state.drafts.map((draft) => draft.target)) &&
-      state.recentFiles.every(listed)
-    );
-  }),
-  Schema.makeFilter(
-    (state) => new TextEncoder().encode(JSON.stringify(state)).length <= maximumRecoveryBytes,
-  ),
-);
 export const RecoveryChangeSchema = struct({
   clientId: WorkspaceIdentifierSchema,
   previousRevision: natural,
   revision: natural,
-});
-export const RecoveryPublicationSchema = struct({
-  ...RecoveryChangeSchema.fields,
-  requestId: WorkspaceIdentifierSchema,
 });
 export const EntryReferenceSchema = struct({
   target: FileTargetSchema,
@@ -216,12 +156,6 @@ export const OperationResultSchema = struct({
   outcome,
   items: array(OperationItemSchema),
   message: optional(Schema.String),
-});
-export const RecoveryLoadSchema = struct({
-  revision: natural,
-  state: EditorRecoverySchema,
-  errors: array(Schema.String),
-  operations: array(OperationResultSchema),
 });
 export const SaveResultSchema = Schema.Union([
   struct({
@@ -375,17 +309,6 @@ export const workspaceInputSchemas = {
     operationClientId: WorkspaceIdentifierSchema,
     id: WorkspaceIdentifierSchema,
   }),
-  loadRecovery: struct({ clientId: WorkspaceIdentifierSchema }),
-  persistRecovery: struct({
-    clientId: WorkspaceIdentifierSchema,
-    requestId: WorkspaceIdentifierSchema,
-    expectedRevision: natural,
-    state: EditorRecoverySchema,
-  }).check(Schema.makeFilter((input) => input.state.clientId === input.clientId)),
-  getRecoveryPublication: struct({
-    clientId: WorkspaceIdentifierSchema,
-    requestId: WorkspaceIdentifierSchema,
-  }),
 };
 export const workspaceOutputSchemas = {
   openCheckout: CheckoutTargetSchema,
@@ -413,9 +336,6 @@ export const workspaceOutputSchemas = {
   mutate: OperationResultSchema,
   operationStatus: Schema.NullOr(OperationResultSchema),
   acknowledgeOperation: voidResult,
-  loadRecovery: RecoveryLoadSchema,
-  persistRecovery: RecoveryPublicationSchema,
-  getRecoveryPublication: Schema.NullOr(RecoveryPublicationSchema),
 } satisfies Record<keyof typeof workspaceInputSchemas, Schema.Constraint>;
 const inputs = Object.fromEntries(
   Object.entries(workspaceInputSchemas).map(([name, schema]) => [
@@ -429,6 +349,8 @@ const outputs = Object.fromEntries(
     Schema.decodeUnknownSync(schema, { reportInput: false }),
   ]),
 );
+/** A workspace file command (the recovery store's are in `recovery-schema`). */
+type WorkspaceCommand = keyof typeof workspaceInputSchemas;
 export const isWorkspaceCommand = (value: unknown): value is WorkspaceCommand =>
   typeof value === 'string' && Object.hasOwn(workspaceInputSchemas, value);
 export function decodeWorkspaceInput<K extends WorkspaceCommand>(
@@ -448,10 +370,6 @@ export function decodeWorkspaceOutput<K extends WorkspaceCommand>(
 ): CommandOutput<K> {
   try {
     if (!isWorkspaceCommand(operation)) throw Error();
-    if (operation === 'loadRecovery') {
-      if (!value || typeof value !== 'object') throw Error();
-      decodeEditorRecovery((value as { state?: unknown }).state);
-    }
     return outputs[operation](value) as CommandOutput<K>;
   } catch {
     throw new ApplicationError({ code: 'Incompatible', message: 'Invalid workspace reply.' });
@@ -459,10 +377,6 @@ export function decodeWorkspaceOutput<K extends WorkspaceCommand>(
 }
 const event = Schema.decodeUnknownSync(WorkspaceEventSchema, { reportInput: false });
 const watch = Schema.decodeUnknownSync(WorkspaceWatchInputSchema, {
-  onExcessProperty: 'error',
-  reportInput: false,
-});
-const recovery = Schema.decodeUnknownSync(EditorRecoverySchema, {
   onExcessProperty: 'error',
   reportInput: false,
 });
@@ -478,12 +392,5 @@ export function decodeWorkspaceWatchInput(value: unknown): typeof WorkspaceWatch
     return watch(value);
   } catch {
     throw new ApplicationError({ code: 'InvalidInput', message: 'Invalid workspace watch input.' });
-  }
-}
-export function decodeEditorRecovery(value: unknown): typeof EditorRecoverySchema.Type {
-  try {
-    return recovery(value);
-  } catch {
-    throw new ApplicationError({ code: 'Incompatible', message: 'Invalid saved editor recovery.' });
   }
 }

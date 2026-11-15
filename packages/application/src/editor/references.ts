@@ -1,12 +1,7 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
-import type {
-  CheckoutTarget,
-  CheckoutView,
-  EditorRecovery,
-  FileTarget,
-  FileView,
-} from '@moonbase/contracts/workspace';
+import type { CheckoutTarget, FileTarget, FileView } from '@moonbase/contracts/workspace';
 import { readOwn } from './record.ts';
+import type { CheckoutView, EditorRecovery } from './recovery-layout.ts';
 
 export const checkoutKey = (target: CheckoutTarget) =>
   JSON.stringify([
@@ -20,7 +15,10 @@ export const checkoutKey = (target: CheckoutTarget) =>
 export const fileKey = (target: FileTarget) =>
   JSON.stringify([checkoutKey(target.checkout), target.path]);
 
-/** Remap only view memory and recents; callers own buffers, drafts and validation. */
+/**
+ * Moves what the editor remembers by path for a move: recent files, the files tree, and the view
+ * and positions of files without a tab. Tabs follow their buffers in the recovery store.
+ */
 export function moveRecoveryReferences(
   state: EditorRecovery,
   checkout: CheckoutTarget,
@@ -31,20 +29,16 @@ export function moveRecoveryReferences(
   const move = (path: string) => (affected(path) ? destination + path.slice(source.length) : path);
   const selected = readOwn(state.views, checkout.checkoutId);
   if (selected) {
-    selected.openFiles = [...new Set(selected.openFiles.map(move))];
-    selected.active = move(selected.active);
-    if (selected.preview) selected.preview = move(selected.preview);
-    // Stationary destination metadata wins collisions, matching existing recovery behavior.
-    const movedViews = Object.entries(selected.fileViews).sort(
-      ([a], [b]) => Number(affected(b)) - Number(affected(a)),
-    );
-    const movedPositions = Object.entries(selected.positions).sort(
-      ([a], [b]) => Number(affected(b)) - Number(affected(a)),
-    );
-    selected.fileViews = Object.fromEntries(movedViews.map(([path, mode]) => [move(path), mode]));
-    selected.positions = Object.fromEntries(
-      movedPositions.map(([path, positions]) => [move(path), positions]),
-    );
+    const closed = (path: string) => affected(path) && !selected.openFiles.includes(path);
+    const remap = <A>(memory: Record<string, A>) =>
+      // Stationary destination metadata wins collisions, matching existing recovery behavior.
+      Object.fromEntries(
+        Object.entries(memory)
+          .sort(([a], [b]) => Number(closed(b)) - Number(closed(a)))
+          .map(([path, value]) => [closed(path) ? move(path) : path, value]),
+      );
+    selected.fileViews = remap(selected.fileViews);
+    selected.positions = remap(selected.positions);
     selected.tree.expanded = [...new Set(selected.tree.expanded.map(move))];
     selected.tree.selected = [...new Set(selected.tree.selected.map(move))];
     selected.tree.focus = move(selected.tree.focus);

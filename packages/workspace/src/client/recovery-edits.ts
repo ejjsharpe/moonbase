@@ -193,6 +193,18 @@ export const makeRecoveryEdits = (context: RecoveryContext) => {
           }
           Object.assign(state, structuredClone(layout), { checkouts });
           if (layout.followActiveFile === undefined) delete state.followActiveFile;
+          // A layout written before the client heard of a move may name a buffer that gave way
+          // since, or one of another checkout: the view names only its own checkout's buffers.
+          for (const [checkoutId, view] of Object.entries(state.views)) {
+            const owned = (id: string | null) =>
+              id !== null &&
+              state.buffers.some((b) => b.id === id && b.target.checkout.checkoutId === checkoutId);
+            view.tabs = view.tabs.filter(owned);
+            if (!owned(view.active)) view.active = null;
+            if (!owned(view.preview)) view.preview = null;
+            for (const memory of [view.fileViews, view.positions])
+              for (const id of Object.keys(memory)) if (!owned(id)) delete memory[id];
+          }
         });
       }),
     );

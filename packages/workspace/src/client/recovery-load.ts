@@ -6,7 +6,6 @@ import { SystemFailure } from '../system-failures.ts';
 import { errorText, same } from '../validation.ts';
 import type { SaveRecord, StoredSave } from './client-schema.ts';
 import { pendingSaves } from './client-store.ts';
-import { toLegacyRecovery } from './legacy-recovery.ts';
 import { getFeedGapErrors, followRestoredCheckouts, syncFeed } from './feed-sync.ts';
 import {
   markOperationAcknowledged,
@@ -223,12 +222,6 @@ export const loadRecovery = (context: RecoveryContext, clientId: string, hostWai
             (notes.has(saveKey(record.request)) ? ' ' + notes.get(saveKey(record.request)) : ''),
         );
       errors.push(...getFeedGapErrors(context, state));
-      // The renderer loads the path-keyed snapshot it publishes, until CL-13.
-      return {
-        revision: stored?.revision ?? 0,
-        state: toLegacyRecovery(state),
-        errors,
-        operations,
-      };
+      return { state, errors, operations };
     });
   });

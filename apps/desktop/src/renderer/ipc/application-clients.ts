@@ -26,14 +26,16 @@ import { DesktopIpc } from './desktop-ipc.ts';
 
 export type DesktopRuntime = ManagedRuntime.ManagedRuntime<DesktopIpc, never>;
 type Client = DesktopIpc['Service'];
-/** Commands that change state: one whose connection closes may have run, so it is `Uncertain`. */
+/**
+ * Commands that change state: one whose connection closes may have run, so it is `Uncertain`.
+ * Recovery edits are not among them: each sets a state, so sending one again is safe.
+ */
 const mutations = new Set<string>([
   'saveFile',
   'mutate',
   'createWorktree',
   'initializeRepository',
   'acknowledgeOperation',
-  'persistRecovery',
   'startProviderLogin',
   'answerProviderPrompt',
   'cancelProviderLogin',
@@ -181,12 +183,13 @@ function makeCaller(runtime: DesktopRuntime, refused: string) {
   };
 }
 
-/** The editor's workspace commands and watch. */
+/** The editor's workspace and recovery commands and watches. */
 export function makeEditorClient(runtime: DesktopRuntime): EditorClient {
   const { call, watch } = makeCaller(runtime, 'Invalid workspace input.');
   return {
     command: (operation, input, options) => call(operation, input as never, options) as never,
     watch: (input, receive, onError) => watch('watchWorkspace', input, receive, onError),
+    watchRecovery: (input, receive, onError) => watch('watchRecovery', input, receive, onError),
   };
 }
 

@@ -1,4 +1,4 @@
-/** Browser-safe types of the client recovery store's buffer-keyed format and its edits. */
+/** Browser-safe types of the client recovery store's buffer-keyed format and its commands. */
 import type * as Contracts from './recovery-schema.ts';
 
 export type RecoveryBuffer = typeof Contracts.RecoveryBufferSchema.Type;
@@ -8,14 +8,17 @@ export type RememberedFile = typeof Contracts.RememberedFileSchema.Type;
 export type RecoveryLayout = typeof Contracts.RecoveryLayoutSchema.Type;
 export type RecoveryState = typeof Contracts.RecoveryStateSchema.Type;
 export type RecoveryOutline = typeof Contracts.RecoveryOutlineSchema.Type;
-export type RecoveryEdits = {
-  [K in keyof typeof Contracts.recoveryEditInputSchemas]: {
-    input: (typeof Contracts.recoveryEditInputSchemas)[K]['Type'];
-    output: (typeof Contracts.recoveryEditOutputSchemas)[K]['Type'];
+export type RecoveryLoad = typeof Contracts.RecoveryLoadSchema.Type;
+export type RecoveryCommands = {
+  [K in keyof typeof Contracts.recoveryInputSchemas]: {
+    input: (typeof Contracts.recoveryInputSchemas)[K]['Type'];
+    output: (typeof Contracts.recoveryOutputSchemas)[K]['Type'];
   };
 };
-export type RecoveryEdit = keyof RecoveryEdits;
-export type RecoveryEditInput<K extends RecoveryEdit> = RecoveryEdits[K]['input'];
+export type RecoveryCommand = keyof RecoveryCommands;
+/** The edits among the recovery commands. */
+export type RecoveryEdit = Exclude<RecoveryCommand, 'loadRecovery'>;
+export type RecoveryEditInput<K extends RecoveryCommand> = RecoveryCommands[K]['input'];
 
 export const emptyBufferView = (): BufferView => ({
   tabs: [],

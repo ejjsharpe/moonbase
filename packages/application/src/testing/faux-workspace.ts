@@ -1,11 +1,10 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
-import { decodeEditorRecovery } from '@moonbase/contracts/workspace-schema';
 import { readOwn } from '../editor/record.ts';
-import { Effect, Queue, Stream } from 'effect';
-import { snapshotWorkspaceLayer, type SnapshotWorkspace } from './faux-workspace-layer.ts';
+import { Effect, Layer, Queue, Stream } from 'effect';
+import { WorkspaceService, type WorkspaceServiceShape } from '@moonbase/contracts/services';
+import { fauxRecovery } from './faux-recovery.ts';
 import {
   ApplicationError,
-  emptyRecovery,
   maximumFileBytes,
   type CheckoutTarget,
   type FileDocument,
@@ -13,15 +12,12 @@ import {
   type GitCheckoutTarget,
   type GitChange,
   type WorkspaceCommand,
-  type EditorRecovery,
   type OperationResult,
   type SaveResult,
   type WorkspaceEvent,
   type LookupMatch,
-  type RecoveryChange,
-  type RecoveryPublication,
 } from '@moonbase/contracts/workspace';
-import { checkoutKey, fileKey, moveRecoveryReferences } from '../editor/references.ts';
+import { checkoutKey } from '../editor/references.ts';
 
 type Seed = {
   checkout: CheckoutTarget;
@@ -98,15 +94,11 @@ function match(path: string, query: string): LookupMatch | undefined {
 export function fauxWorkspace(seeds: Seed[]) {
   let version = 0;
   const files = new Map<string, Map<string, Entry>>();
-  const recoveries = new Map<
-    string,
-    { revision: number; state: EditorRecovery; publishedRevision: number }
-  >();
-  const publications = new Map<string, { payload: string; receipt: RecoveryPublication }>();
   const saves = new Map<string, { payload: string; result: SaveResult }>();
+  /** Each operation, with the clients whose recovery it touched and those that acknowledged it. */
   const operations = new Map<
     string,
-    { payload: string; result: OperationResult; bounds: Map<string, number>; acks: Set<string> }
+    { payload: string; result: OperationResult; owners: Set<string>; acks: Set<string> }
   >();
   const watchers = new Set<{ checkout: CheckoutTarget; notify: (event: WorkspaceEvent) => void }>();
   const faults = new Map<WorkspaceCommand, { error: ApplicationError; after: boolean }>();
@@ -116,7 +108,10 @@ export function fauxWorkspace(seeds: Seed[]) {
     active: 0,
     mutations: 0,
     saves: 0,
-    publications: 0,
+    /** Recovery edits applied. */
+    get edits() {
+      return recovery.stats.edits;
+    },
   };
   const document = (text: string): FileDocument => {
     if (new TextEncoder().encode(text).length > maximumFileBytes || text.includes('\0'))
@@ -143,148 +138,7 @@ export function fauxWorkspace(seeds: Seed[]) {
       if (checkoutKey(watcher.checkout) === checkoutKey(checkout))
         watcher.notify({ checkout, paths });
   };
-  function validateRecovery(state: EditorRecovery) {
-    try {
-      decodeEditorRecovery(state);
-    } catch {
-      fail('Invalid recovery state.');
-    }
-    const known = new Map(state.checkouts.map((checkout) => [checkout.checkoutId, checkout]));
-    if (known.size !== state.checkouts.length) fail('Duplicate known checkout ID.');
-    for (const checkout of state.checkouts) exact(checkout);
-    if (
-      new Set(state.openCheckoutIds).size !== state.openCheckoutIds.length ||
-      state.openCheckoutIds.some((id) => !known.has(id))
-    )
-      fail('Open checkout IDs must be a unique subset of known targets.');
-    if (
-      state.selectedCheckoutId !== null &&
-      !state.openCheckoutIds.includes(state.selectedCheckoutId)
-    )
-      fail('Selected checkout must be open.');
-    for (const [id, view] of Object.entries(state.views)) {
-      if (!known.has(id)) fail('View key must be a known checkoutId.');
-      for (const path of [
-        ...view.openFiles,
-        ...Object.keys(view.fileViews),
-        ...Object.keys(view.positions),
-        ...view.tree.expanded,
-        ...view.tree.selected,
-      ])
-        pathCheck(path);
-      if (
-        (view.active && !view.openFiles.includes(view.active)) ||
-        (view.preview !== null && !view.openFiles.includes(view.preview))
-      )
-        fail('Active/preview file must belong to its retained checkout view.');
-      pathCheck(view.tree.focus, true);
-    }
-    for (const target of [...state.drafts.map((draft) => draft.target), ...state.recentFiles]) {
-      if (
-        !known.has(target.checkout.checkoutId) ||
-        checkoutKey(known.get(target.checkout.checkoutId)!) !== checkoutKey(target.checkout)
-      )
-        fail('Recovery file target must match its known exact checkout.');
-      pathCheck(target.path);
-    }
-    if (new Set(state.drafts.map((draft) => fileKey(draft.target))).size !== state.drafts.length)
-      fail('Duplicate recovery draft.');
-    for (const draft of state.drafts)
-      if (new TextEncoder().encode(draft.text).length > maximumFileBytes) fail('Draft too large.');
-  }
-  function revise(clientId: string, transform: (state: EditorRecovery) => void): RecoveryChange[] {
-    const previous = recoveries.get(clientId);
-    if (!previous) return [];
-    const state = structuredClone(previous.state);
-    transform(state);
-    validateRecovery(state);
-    if (JSON.stringify(state) === JSON.stringify(previous.state)) return [];
-    const revision = previous.revision + 1;
-    recoveries.set(clientId, { ...previous, revision, state });
-    return [{ clientId, previousRevision: previous.revision, revision }];
-  }
-  function remapCollides(state: EditorRecovery, result: OperationResult) {
-    if (result.kind !== 'move') return false;
-    const targets = state.drafts.map((draft) => {
-      let target = draft.target;
-      if (checkoutKey(target.checkout) === checkoutKey(result.checkout))
-        for (const item of result.items)
-          if (
-            item.outcome === 'completed' &&
-            item.destination &&
-            isPathAtOrInside(target.path, item.source)
-          )
-            target = { ...target, path: item.destination + target.path.slice(item.source.length) };
-      return fileKey(target);
-    });
-    return new Set(targets).size !== targets.length;
-  }
-  function operationRecovery(result: OperationResult, proposed: Map<string, Entry>) {
-    const bounds = new Map<string, number>();
-    const updates = new Map<
-      string,
-      { revision: number; state: EditorRecovery; publishedRevision: number }
-    >();
-    for (const [clientId, stored] of recoveries) {
-      if (
-        clientId !== result.clientId &&
-        !stored.state.checkouts.some(
-          (checkout) => checkoutKey(checkout) === checkoutKey(result.checkout),
-        )
-      )
-        continue;
-      const state = structuredClone(stored.state);
-      if (remapCollides(state, result)) {
-        result.message =
-          'Recovery remap collision. Original drafts retained; resolve them before acknowledging.';
-        bounds.set(clientId, stored.revision);
-        continue;
-      }
-      for (const item of result.items.filter((item) => item.outcome === 'completed')) {
-        const move = (path: string) =>
-          item.destination && isPathAtOrInside(path, item.source)
-            ? item.destination + path.slice(item.source.length)
-            : path;
-        if (result.kind === 'move') {
-          state.drafts = state.drafts.map((draft) =>
-            checkoutKey(draft.target.checkout) === checkoutKey(result.checkout)
-              ? { ...draft, target: { ...draft.target, path: move(draft.target.path) } }
-              : draft,
-          );
-          if (item.destination)
-            moveRecoveryReferences(state, result.checkout, item.source, item.destination);
-        }
-        if (result.kind === 'copy' && item.destination)
-          // oxlint-disable-next-line no-useless-spread -- Copies append drafts; visit only the original snapshot.
-          for (const draft of [...state.drafts]) {
-            if (
-              checkoutKey(draft.target.checkout) !== checkoutKey(result.checkout) ||
-              !isPathAtOrInside(draft.target.path, item.source)
-            )
-              continue;
-            const target = { checkout: result.checkout, path: move(draft.target.path) };
-            if (!state.drafts.some((existing) => fileKey(existing.target) === fileKey(target))) {
-              const disk =
-                proposed.get(target.path) ?? fail('Copied file unavailable.', 'Unavailable');
-              state.drafts.push({
-                target,
-                disk: { text: disk.text, version: disk.version },
-                text: draft.text,
-              });
-            }
-          }
-      }
-      validateRecovery(state);
-      const revision =
-        stored.revision + Number(JSON.stringify(state) !== JSON.stringify(stored.state));
-      if (revision !== stored.revision) {
-        updates.set(clientId, { ...stored, revision, state });
-        result.recoveryChanges.push({ clientId, previousRevision: stored.revision, revision });
-      }
-      bounds.set(clientId, revision);
-    }
-    return { bounds, updates };
-  }
+  const recovery = fauxRecovery({ exact, fail });
   const addSeed = (seed: Seed) => {
     const map = new Map<string, Entry>();
     files.set(checkoutKey(seed.checkout), map);
@@ -323,7 +177,7 @@ export function fauxWorkspace(seeds: Seed[]) {
           ? error
           : new ApplicationError({ code: 'Unavailable', message: String(error) }),
     });
-  const service: SnapshotWorkspace = {
+  const service: WorkspaceServiceShape = {
     openCheckout: ({ root }) =>
       call(
         'openCheckout',
@@ -355,19 +209,7 @@ export function fauxWorkspace(seeds: Seed[]) {
             directory: false,
           });
           stats.saves++;
-          result.recoveryChanges = revise(input.clientId, (state) => {
-            state.drafts = state.drafts.flatMap((draft) => {
-              if (fileKey(draft.target) !== fileKey(input.target)) {
-                return [draft];
-              } else {
-                if (draft.text === input.text) {
-                  return [];
-                } else {
-                  return [{ ...draft, disk: result.disk }];
-                }
-              }
-            });
-          });
+          recovery.applySave(input.clientId, input.target, result.disk);
           notify(input.target.checkout, [input.target.path]);
         }
         return result;
@@ -718,10 +560,18 @@ export function fauxWorkspace(seeds: Seed[]) {
               outcome: 'completed',
             });
           }
-        const recovery = operationRecovery(result, map);
         files.set(checkoutKey(operation.checkout), map);
-        for (const [clientId, state] of recovery.updates) recoveries.set(clientId, state);
-        operations.set(key, { payload, result, bounds: recovery.bounds, acks: new Set() });
+        const owners = new Set([
+          operation.clientId,
+          ...recovery.clients().filter((client) => recovery.names(client, operation.checkout)),
+        ]);
+        recovery.applyOperation(result, (path) => {
+          const entry = map.get(path);
+          return entry && !entry.directory
+            ? { text: entry.text, version: entry.version }
+            : undefined;
+        });
+        operations.set(key, { payload, result, owners, acks: new Set() });
         stats.mutations++;
         notify(
           operation.checkout,
@@ -734,88 +584,22 @@ export function fauxWorkspace(seeds: Seed[]) {
     acknowledgeOperation: ({ clientId, operationClientId, id }) =>
       call('acknowledgeOperation', () => {
         const entry = operations.get(JSON.stringify([operationClientId, id]));
-        if (!entry) fail('Unknown operation.');
-        if (entry!.acks.has(clientId)) return;
-        const state = recoveries.get(clientId)?.state;
-        if (state && remapCollides(state, entry!.result))
-          fail('Resolve the retained recovery collision before acknowledging.', 'Conflict');
-        if (
-          !entry!.bounds.has(clientId) ||
-          (recoveries.get(clientId)?.publishedRevision ?? 0) <= entry!.bounds.get(clientId)!
-        )
-          fail('Publish reconciled recovery before acknowledging.', 'Conflict');
-        entry!.acks.add(clientId);
+        if (!entry) return fail('Unknown operation.');
+        entry.acks.add(clientId);
       }),
     loadRecovery: ({ clientId }) =>
-      call('loadRecovery', () => {
-        const { revision, state } = recoveries.get(clientId) ?? {
-          revision: 0,
-          state: emptyRecovery(clientId),
-        };
-        return {
-          revision,
-          state,
-          errors: [],
-          operations: [...operations.values()]
-            .filter((item) => item.bounds.has(clientId) && !item.acks.has(clientId))
-            .map((item) => item.result),
-        };
-      }),
-    persistRecovery: (input) =>
-      call('persistRecovery', () => {
-        const { clientId, requestId, expectedRevision, state } = input;
-        if (
-          typeof clientId !== 'string' ||
-          !clientId.trim() ||
-          typeof requestId !== 'string' ||
-          !requestId.trim() ||
-          !Number.isSafeInteger(expectedRevision) ||
-          expectedRevision < 0 ||
-          !state ||
-          state.clientId !== clientId ||
-          state.version !== 1
-        )
-          fail('Invalid recovery publication identity.');
-        validateRecovery(state);
-        const payload = JSON.stringify(input, (_key, value) =>
-          value && typeof value === 'object' && !Array.isArray(value)
-            ? Object.fromEntries(
-                Object.keys(value)
-                  .sort()
-                  .map((key) => [key, value[key]]),
-              )
-            : value,
-        );
-        const key = JSON.stringify([clientId, requestId]),
-          previous = publications.get(key);
-        if (previous)
-          return previous.payload === payload
-            ? previous.receipt
-            : fail('Recovery request ID reused with changed input.');
-        if ((recoveries.get(clientId)?.revision ?? 0) !== expectedRevision)
-          fail('Recovery revision changed.', 'Conflict');
-        const revision = expectedRevision + 1,
-          receipt = { clientId, requestId, previousRevision: expectedRevision, revision };
-        recoveries.set(clientId, {
-          revision,
-          state: structuredClone(state),
-          publishedRevision: revision,
-        });
-        publications.set(key, { payload, receipt });
-        stats.publications++;
-        return receipt;
-      }),
-    getRecoveryPublication: ({ clientId, requestId }) =>
-      call('getRecoveryPublication', () => {
-        if (
-          typeof clientId !== 'string' ||
-          !clientId.trim() ||
-          typeof requestId !== 'string' ||
-          !requestId.trim()
-        )
-          fail('Invalid recovery publication identity.');
-        return publications.get(JSON.stringify([clientId, requestId]))?.receipt ?? null;
-      }),
+      call('loadRecovery', () => ({
+        state: recovery.load(clientId),
+        errors: [],
+        operations: [...operations.values()]
+          .filter((item) => item.owners.has(clientId) && !item.acks.has(clientId))
+          .map((item) => item.result),
+      })),
+    openTab: (input) => call('openTab', () => recovery.openTab(input)),
+    closeTab: (input) => call('closeTab', () => recovery.closeTab(input)),
+    updateDraft: (input) => call('updateDraft', () => recovery.updateDraft(input)),
+    updateLayout: (input) => call('updateLayout', () => recovery.updateLayout(input)),
+    watchRecovery: ({ clientId }) => recovery.watch(clientId),
     watch: ({ checkout }) =>
       Stream.unwrap(
         Effect.gen(function* () {
@@ -847,7 +631,7 @@ export function fauxWorkspace(seeds: Seed[]) {
       ),
   };
   return {
-    layer: snapshotWorkspaceLayer(service),
+    layer: Layer.succeed(WorkspaceService, service),
     stats,
     externalWrite(target: FileTarget, text: string) {
       read(target);

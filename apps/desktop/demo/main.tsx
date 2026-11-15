@@ -252,10 +252,7 @@ function Demo() {
         <Button
           {...stylex.props(controls.button)}
           onClick={() =>
-            memory.failNext(
-              'persistRecovery',
-              'Demo recovery publication failed. Close was vetoed.',
-            )
+            memory.failNext('closeTab', 'Demo recovery edit failed. Close was vetoed.')
           }>
           Fail next recovery
         </Button>

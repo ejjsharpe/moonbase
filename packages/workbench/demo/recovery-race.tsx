@@ -71,8 +71,8 @@ if (dirtyArea) seed.edit({ checkout: alpha, path: 'a.ts' }, 'restored dirty A');
 if (!missingArea) await seed.open({ checkout: alpha, path: 'b.ts' });
 await seed.flush();
 await seed.dispose();
-let loseFinal = false,
-  failStatus = false;
+const edits = new Set(['openTab', 'closeTab', 'updateDraft', 'updateLayout']);
+let loseFinal = false;
 let hold = false,
   waiting = false,
   release!: () => void;
@@ -94,7 +94,7 @@ const application = await createMoonbaseApplication({
         client: {
           ...client,
           async command(name, input, options) {
-            if (name === 'persistRecovery' && holdCopyPreflight) {
+            if (edits.has(name) && holdCopyPreflight) {
               holdCopyPreflight = false;
               const receipt = await client.command(name, input, options);
               copyPhase = 'preflight';
@@ -112,30 +112,17 @@ const application = await createMoonbaseApplication({
               await copyRead;
               return disk;
             }
-            if (hold && name === 'persistRecovery') {
+            if (hold && edits.has(name)) {
               waiting = true;
               await wait;
             }
-            if (
-              loseFinal &&
-              name === 'persistRecovery' &&
-              !(input as CommandInput<'persistRecovery'>).state.views.alpha.openFiles.includes(
-                'b.ts',
-              )
-            ) {
+            // The close commits in the store, and its reply is lost.
+            if (loseFinal && name === 'closeTab') {
               loseFinal = false;
-              failStatus = true;
               await client.command(name, input, options);
               throw new ApplicationError({
                 code: 'Unavailable',
                 message: 'Controlled lost final close response',
-              });
-            }
-            if (failStatus && name === 'getRecoveryPublication') {
-              failStatus = false;
-              throw new ApplicationError({
-                code: 'Unavailable',
-                message: 'Controlled status outage',
               });
             }
             return client.command(name, input, options);

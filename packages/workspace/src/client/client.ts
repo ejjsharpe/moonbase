@@ -45,7 +45,6 @@ import { RecoveryContext, type HostPorts, type Recoveries } from './recovery-con
 import { makeRecoveryEdits } from './recovery-edits.ts';
 import { loadRecovery } from './recovery-load.ts';
 import { makeRecoveryOutlines } from './recovery-outlines.ts';
-import { persistRecovery } from './recovery-publication.ts';
 import { acknowledgeSaves, getBaseline, publishSaves, replaySave } from './save-recovery.ts';
 
 /**
@@ -407,14 +406,6 @@ export const makeClientWorkspace = ({
         (input) => loadRecovery(context, input.clientId, hostWaitMs),
         true,
       ),
-      getRecoveryPublication: call<'getRecoveryPublication'>(
-        (input) =>
-          attempt(
-            () => store.recoveryPublication(input.clientId, input.requestId)?.receipt ?? null,
-          ),
-        true,
-      ),
-      persistRecovery: call<'persistRecovery'>((input) => persistRecovery(context, input), true),
       openTab: publishing(edits.openTab, true),
       closeTab: publishing(edits.closeTab, true),
       updateDraft: publishing(edits.updateDraft, true),
