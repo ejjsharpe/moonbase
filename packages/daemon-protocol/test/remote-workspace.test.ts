@@ -575,6 +575,8 @@ async function slowReader(
     /** Sends an RPC ping, which counts as activity; it fails once the daemon has closed. */
     ping: () =>
       tcp.write(encodeWebSocketFrame(1, Buffer.from(JSON.stringify({ _tag: 'Ping' })), true)),
+    /** Sends a message of `bytes`, which the daemon reads only as far as its framing. */
+    send: (bytes: number) => tcp.write(encodeWebSocketFrame(1, Buffer.alloc(bytes, 0x20), true)),
   };
 }
 /** About the bytes of one `getIgnoredPaths` reply these tests make. */
@@ -635,5 +637,18 @@ test('large workspace replies a client is slow to read never delay chat updates,
     stuck.ping();
     await daemon.advance(rpcLimits.drainMs / 4);
     return stuck.state.closed;
+  }, Boolean);
+
+  // While replies past `queuedBytes` wait for it, the daemon reads no requests; a client that
+  // keeps sending meanwhile is closed rather than held in memory.
+  const flooding = await slowReader(t, daemon, 6);
+  await until(
+    async () => files.calls.length,
+    (count) => count === 9,
+  );
+  for (let index = 0; index < 3; index++) flooding.send(workspaceRpcLimits.messageBytes - 1024);
+  await until(async () => {
+    flooding.ping();
+    return flooding.state.closed;
   }, Boolean);
 });
