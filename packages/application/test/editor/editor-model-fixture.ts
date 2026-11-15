@@ -73,6 +73,7 @@ type ExpectedEditorController = {
   subscribe: (listener: () => void) => () => void;
   getSnapshot: () => EditorSnapshot;
   report: (error: unknown) => void;
+  reportMessage: (message: string) => void;
   clearErrors(): void;
   load(): Promise<void>;
   openCheckout(root: string): Promise<CheckoutTarget>;

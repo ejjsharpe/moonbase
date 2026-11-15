@@ -419,7 +419,7 @@ export function FilesTree({
     };
     const invalid = (message: string) => {
       if (enter) return message;
-      controller.report(message);
+      controller.reportMessage(message);
       return end();
     };
     // Names are taken as typed, spaces included, but one of only spaces is no name.
@@ -757,7 +757,7 @@ export function FilesTree({
       colliding = findCollidingName(names);
     // The workspace would refuse them after the replace prompt; say why before asking anything.
     if (colliding) {
-      controller.report(
+      controller.reportMessage(
         `More than one dropped item is named “${colliding}”. Drop them into different folders.`,
       );
       return;
@@ -783,20 +783,22 @@ export function FilesTree({
       !recovery.openCheckoutIds.includes(captured.checkoutId) ||
       !recovery.checkouts.some((target) => checkoutKey(target) === checkoutIdentity)
     ) {
-      controller.report('Open the exact import checkout before importing files.');
+      controller.reportMessage('Open the exact import checkout before importing files.');
       return;
     }
     if (latest.current.edit) {
-      controller.report('Finish naming the entry before importing files.');
+      controller.reportMessage('Finish naming the entry before importing files.');
       return;
     }
     if (latest.current.dialogOpen) {
-      controller.report('Finish the current editor dialog or preservation before importing files.');
+      controller.reportMessage(
+        'Finish the current editor dialog or preservation before importing files.',
+      );
       return;
     }
     // Each reference stands for its file, so the files' names are where they land.
     if (references.length !== names.length) {
-      controller.report('Only files and folders can be imported.');
+      controller.reportMessage('Only files and folders can be imported.');
       return;
     }
     const result = await runMutation(
@@ -948,7 +950,7 @@ export function FilesTree({
           const paths = selectDraggedPaths(row.path, tree.selected);
           if (paths.length > maxDraggedEntries) {
             event.preventDefault();
-            controller.report(`Drag at most ${maxDraggedEntries} items at a time.`);
+            controller.reportMessage(`Drag at most ${maxDraggedEntries} items at a time.`);
             return;
           }
           if (edit || dialogOpen || !canRequestMutation({ checkout, kind: 'move', paths })) {
@@ -1035,7 +1037,7 @@ export function FilesTree({
               problem = findFileDropProblem();
             leaveDrag();
             if (!files.length) return;
-            if (problem) controller.report(problem);
+            if (problem) controller.reportMessage(problem);
             else void importDropped(files, folder).catch(controller.report);
             return;
           }

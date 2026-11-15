@@ -146,7 +146,7 @@ export function useFileClipboard({
     const entries = paths.length ? selectDraggedPaths(paths[0], paths) : [];
     if (!entries.length) return;
     if (entries.length > maxDraggedEntries) {
-      controller.report(`Cut or copy at most ${maxDraggedEntries} items at a time.`);
+      controller.reportMessage(`Cut or copy at most ${maxDraggedEntries} items at a time.`);
       return;
     }
     update({ checkout: { ...checkout }, paths: entries, mode });
@@ -187,13 +187,13 @@ export function useFileClipboard({
     const current = latest.current;
     if (!current || pasting.current) return [];
     if (checkoutKey(current.checkout) !== checkoutKey(checkout)) {
-      controller.report(
+      controller.reportMessage(
         'Can’t paste into another checkout. Cut or copy items from this checkout’s files first.',
       );
       return [];
     }
     if (!canRequestMutation({ checkout, kind: kindOf(current), paths: current.paths })) {
-      controller.report(unavailable);
+      controller.reportMessage(unavailable);
       return [];
     }
     pasting.current = true;
@@ -204,7 +204,7 @@ export function useFileClipboard({
       ]);
       // Entries that may still be there stay on the clipboard to paste once they list again.
       if (unlisted !== undefined) {
-        controller.report(
+        controller.reportMessage(
           `Can’t paste yet: ${unlisted || 'the checkout’s root'} couldn’t be listed. Try again.`,
         );
         return [];
@@ -217,7 +217,7 @@ export function useFileClipboard({
         else missing.push(path);
       }
       if (missing.length) {
-        controller.report(
+        controller.reportMessage(
           missing.length === 1
             ? `Can’t paste: ${missing[0]} no longer exists.`
             : `Can’t paste: ${missing.length} of the items no longer exist.`,
@@ -227,11 +227,11 @@ export function useFileClipboard({
       }
       const entries = listings.get(into);
       if (!entries) {
-        controller.report(`Can’t paste: ${into || 'the checkout’s root'} no longer exists.`);
+        controller.reportMessage(`Can’t paste: ${into || 'the checkout’s root'} no longer exists.`);
         return [];
       }
       const plan = planPaste(current.mode, sources, into, entries);
-      if (plan.kind === 'refused') controller.report(plan.message);
+      if (plan.kind === 'refused') controller.reportMessage(plan.message);
       if (plan.kind === 'refused' || plan.kind === 'none') return [];
       const options = finalFocus ? { finalFocus } : {};
       const landed: string[] = [];

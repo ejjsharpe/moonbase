@@ -155,14 +155,14 @@ export function useMoveUndo(
       ];
       const { listings, unlisted } = await listFolders(controller, checkout, folders);
       if (unlisted !== undefined) {
-        controller.report(
+        controller.reportMessage(
           `Can’t undo the move yet: ${unlisted || 'the checkout’s root'} couldn’t be listed. Try again.`,
         );
         return false;
       }
       const problem = findUndoProblem(current.moves, (folder) => listings.get(folder));
       if (problem) {
-        controller.report(problem);
+        controller.reportMessage(problem);
         settle(key, current);
         return false;
       }

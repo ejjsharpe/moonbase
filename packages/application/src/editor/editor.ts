@@ -346,6 +346,12 @@ class EditorModelState {
     this.errors = [...this.errors.slice(-19), normalizeApplicationError(error).message];
     this.emit();
   };
+  /** Shows copy the client wrote itself, such as a refusal, beside the editor's errors. */
+  reportMessage = (message: string) => {
+    if (this.closing) return;
+    this.errors = [...this.errors.slice(-19), message];
+    this.emit();
+  };
   clearErrors() {
     this.errors = [];
     this.emit();
@@ -2113,7 +2119,10 @@ export interface EditorController {
   readonly instanceId: `${string}-${string}-${string}-${string}-${string}`;
   subscribe: (listener: () => void) => () => void;
   getSnapshot: () => EditorSnapshot;
+  /** Shows an error's application message; anything else becomes a generic one. */
   report: (error: unknown) => void;
+  /** Shows copy the client wrote itself, such as a refusal, as it is. */
+  reportMessage: (message: string) => void;
   clearErrors(): void;
   load(): Promise<void>;
   openCheckout(root: string): Promise<CheckoutTarget>;

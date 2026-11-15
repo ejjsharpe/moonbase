@@ -57,7 +57,7 @@ export function useMutationRunner(
   ) => {
     const fail = (message: string) => {
       if (inlineError) inlineError(message);
-      else controller.report(message);
+      else controller.reportMessage(message);
     };
     if (runningRef.current || !admits(action)) {
       const error =
