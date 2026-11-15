@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChatState } from '@moonbase/application/chat';
-import type { TranscriptNative } from '../../../ipc/chat-wire.ts';
+import type { TranscriptCopy, TranscriptImage } from '../../../ipc/chat-rpcs.ts';
+
+/** What a transcript asks of main for one chat target: Copy, opening a link, an image's URL. */
+export type TranscriptNative = {
+  copy(input: TranscriptCopy, signal?: AbortSignal): Promise<void>;
+  openLink(url: string, signal?: AbortSignal): Promise<void>;
+  imageUrl(input: TranscriptImage, signal?: AbortSignal): Promise<string>;
+};
 
 export type NativeActionKind = 'copy' | 'open';
 /** `success` clears itself; `error` stays until replaced. Neither ever reports another's outcome. */

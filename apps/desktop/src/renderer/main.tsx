@@ -5,20 +5,18 @@ import { createMoonbaseApplication, type MoonbaseApplication } from '@moonbase/a
 import { DesktopShell, type DesktopShellHandle } from './shell/desktop-shell.tsx';
 import { WorkbenchStartupFailure } from './shell/startup-failure.tsx';
 import { configureMonacoWorkers } from '@moonbase/workbench/workers';
+import { ManagedRuntime } from 'effect';
+import { normalizeApplicationError } from '@moonbase/effect';
+import type { ApplicationError } from '@moonbase/contracts/errors';
+import type { DesktopBridge } from '../ipc/desktop-bridge.ts';
+import { editorClientId } from '../ipc/editor-rpcs.ts';
+import { boundApplicationError } from '../ipc/ipc-errors.ts';
+import { DesktopIpcLive } from './ipc/desktop-ipc.ts';
 import {
-  browserClients,
-  browserTranscriptActions,
-  unwrap as unwrapChat,
-  type ChatBridge,
-} from '../ipc/chat-wire.ts';
-import {
-  bridgeClient,
-  unwrap,
-  errorDTO,
-  failure,
-  type ErrorDTO,
-  type DesktopBridge,
-} from '../ipc/wire.ts';
+  makeChatTargetClients,
+  makeEditorClient,
+  makeShellClients,
+} from './ipc/application-clients.ts';
 import * as stylex from '@stylexjs/stylex';
 import { workbench } from '@moonbase/ui/workbench';
 import '@moonbase/ui/reset.css';
@@ -27,54 +25,75 @@ import '@moonbase/ui/fonts.css';
 declare global {
   interface Window {
     moonbase: DesktopBridge;
-    moonbaseChat: ChatBridge;
   }
 }
 document.body.className = stylex.props(workbench.document).className ?? '';
-const bridge = window.moonbase,
-  root = createRoot(document.getElementById('root')!);
-const transcriptActions = new Map<string, ReturnType<typeof browserTranscriptActions>>();
-function getTranscriptActions(backend: string) {
-  if (!transcriptActions.has(backend))
-    transcriptActions.set(backend, browserTranscriptActions(window.moonbaseChat, backend));
-  return transcriptActions.get(backend)!;
+const root = createRoot(document.getElementById('root')!);
+// The renderer's one runtime: every request to main runs here, over this document's IPC port.
+const runtime = ManagedRuntime.make(DesktopIpcLive(window.moonbase));
+const shell = makeShellClients(runtime, window.moonbase);
+const targetClients = new Map<string, ReturnType<typeof makeChatTargetClients>>();
+/** Captured per target once, so a selected target change cannot reroute a pending action. */
+function getTargetClients(target: 'local' | 'remote') {
+  let clients = targetClients.get(target);
+  if (!clients) targetClients.set(target, (clients = makeChatTargetClients(runtime, target)));
+  return clients;
 }
+/** Runs main's window actions through `on` for as long as the document lives, each once. */
+function useWindowActions(
+  on: (action: 'quit' | 'dispose' | 'cleanup-error', id: string, error?: ApplicationError) => void,
+  dependency: unknown,
+) {
+  useEffect(() => {
+    const close = shell.watchWindowActions((action) =>
+      action.action === 'cleanup-error'
+        ? on(action.action, '', action.error)
+        : on(action.action, action.id),
+    );
+    return () => void close().catch(() => {});
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- one watch per dependency
+  }, [dependency]);
+}
+/**
+ * Answers main's Quit request, as a message: main may close the window before replying. A lost
+ * answer is sent again while main can't be reached, and whenever main asks again.
+ */
+const answerQuit = (id: string, consent: boolean, cleanupError?: ApplicationError) =>
+  void shell
+    .answerQuit(id, consent, cleanupError && boundApplicationError(cleanupError))
+    .catch(() => {});
 function Desktop({ application }: { application: MoonbaseApplication }) {
   const handle = useRef<DesktopShellHandle>(null),
     [closing, setClosing] = useState(false),
     [releasing, setReleasing] = useState(false);
-  useEffect(() => {
-    async function prepareQuit(id: string) {
-      try {
-        const consent = await handle.current!.prepareQuit();
-        if (consent) flushSync(() => setClosing(true));
-        bridge.quitResult(id, consent);
-      } catch (error) {
-        application.editors[0]!.report(error);
-        bridge.quitResult(id, false);
-      }
+  async function prepareQuit(id: string) {
+    try {
+      const consent = await handle.current!.prepareQuit();
+      if (consent) flushSync(() => setClosing(true));
+      answerQuit(id, consent);
+    } catch (error) {
+      application.editors[0]!.report(error);
+      answerQuit(id, false);
     }
-    const off = bridge.actions((action, id, error) => {
-      if (action === 'cleanup-error') application.reportCleanup(failure(error));
-      if (action === 'quit') void prepareQuit(id);
-      if (action === 'dispose') {
-        flushSync(() => {
-          setClosing(true);
-          setReleasing(true);
-        });
-        const acknowledge = (error?: ErrorDTO) => {
-          root.unmount();
-          bridge.quitResult(id, true, error);
-        };
-        void application.dispose().then(
-          () => acknowledge(),
-          (error) => acknowledge(errorDTO(error)),
-        );
-      }
-    });
-    bridge.ready();
-    return off;
-  }, [application]);
+  }
+  useWindowActions((action, id, error) => {
+    if (action === 'cleanup-error' && error) application.reportCleanup(error);
+    if (action === 'quit') void prepareQuit(id);
+    if (action === 'dispose') {
+      flushSync(() => {
+        setClosing(true);
+        setReleasing(true);
+      });
+      const acknowledge = (error?: ApplicationError) => {
+        root.unmount();
+        answerQuit(id, true, error);
+      };
+      void application.dispose().then(
+        () => acknowledge(),
+        (error) => acknowledge(normalizeApplicationError(error)),
+      );
+    }
+  }, application);
   if (releasing)
     return (
       <main>
@@ -86,80 +105,57 @@ function Desktop({ application }: { application: MoonbaseApplication }) {
       ref={handle}
       application={application}
       closing={closing}
-      transcriptNative={getTranscriptActions}
-      chooseChatFolder={() => window.moonbaseChat.chooseFolder!()}
-      recentChatFolders={(targetId) => window.moonbaseChat.recentFolders!(targetId)}
-      createChatWorktree={async (root, branch, requestId) =>
-        unwrapChat(await window.moonbaseChat.createWorktree!(root, branch, requestId)) as string
-      }
-      turnChatIntoProject={(conversationId) => window.moonbaseChat.turnIntoProject!(conversationId)}
+      transcriptNative={(target) => getTargetClients(target as 'local' | 'remote').transcript}
+      chooseChatFolder={shell.chooseChatFolder}
+      recentChatFolders={(target) => shell.listChatFolders(target as 'local' | 'remote')}
+      createChatWorktree={shell.createChatWorktree}
+      turnChatIntoProject={shell.turnChatIntoProject}
       selectCheckout={async () =>
-        application.getSnapshot().phase === 'live'
-          ? (unwrap(await bridge.call('choose-checkout', null, crypto.randomUUID())) as
-              | string
-              | null)
-          : null
+        application.getSnapshot().phase === 'live' ? shell.chooseCheckout() : null
       }
       selectClipboardImports={async (checkout) =>
-        application.getSnapshot().phase === 'live'
-          ? (unwrap(await bridge.call('clipboard-imports', { checkout }, crypto.randomUUID())) as
-              | string[]
-              | null)
-          : []
+        application.getSnapshot().phase === 'live' ? shell.pasteImports(checkout) : []
       }
-      copyPaths={async (checkout, paths, relative) => {
-        unwrap(await bridge.call('copy-paths', { checkout, paths, relative }, crypto.randomUUID()));
-      }}
-      revealPath={async (checkout, path) => {
-        unwrap(await bridge.call('reveal', { checkout, path }, crypto.randomUUID()));
-      }}
+      copyPaths={shell.copyPaths}
+      revealPath={shell.revealPath}
       selectDroppedImports={async (checkout, files) =>
-        application.getSnapshot().phase === 'live' ? unwrap(await bridge.drop(checkout, files)) : []
+        application.getSnapshot().phase === 'live'
+          ? ((await shell.dropImports(checkout, files)) ?? [])
+          : []
       }
     />
   );
 }
-function StartupFailure({ error }: { error: ErrorDTO }) {
-  useEffect(() => {
-    const off = bridge.actions((action, id) => {
-      if (action === 'quit') bridge.quitResult(id, true);
-      if (action === 'dispose') {
-        root.unmount();
-        bridge.quitResult(id, true, error);
-      }
-    });
-    bridge.ready();
-    return off;
-  }, [error]);
+function StartupFailure({ error }: { error: ApplicationError }) {
+  useWindowActions((action, id) => {
+    if (action === 'quit') answerQuit(id, true);
+    if (action === 'dispose') {
+      root.unmount();
+      answerQuit(id, true, error);
+    }
+  }, error);
   return <WorkbenchStartupFailure message={error.message} />;
 }
 
 const chatStorageKeys = { local: 'moonbase.chat.local.v1', remote: 'moonbase.chat.remote.v2' };
 try {
   configureMonacoWorkers();
-  const targets = await window.moonbaseChat.targets!();
+  const targets = await shell.chatTargets();
   const application = await createMoonbaseApplication({
-    editors: [{ client: bridgeClient(bridge), clientId: bridge.clientId }],
+    editors: [{ client: makeEditorClient(runtime), clientId: editorClientId }],
     defaultChatTargetId: 'local',
     chatTargets: targets.map((target) => ({
       id: target.id,
       label: target.label,
       acquire: async () => {
-        const clients = browserClients(window.moonbaseChat, target.id);
+        const clients = getTargetClients(target.id);
         // Every target is a daemon whose chats choose their folder and model; a remote host is
         // reached through a connection the user connects.
         return {
           chat: clients.chat,
           providers: clients.providers,
           ...(target.mode === 'remote' ? { connection: clients.connection } : {}),
-          context: await window.moonbaseChat.context(target.id).catch((error: unknown) => {
-            // An error crosses the context bridge as a plain Error that keeps only its message,
-            // which main already made safe to show (why local chat is Unavailable, say).
-            throw failure({
-              code: 'Unavailable',
-              message: String((error as Error | undefined)?.message ?? '').slice(0, 512),
-            });
-          }),
+          context: await clients.context(),
           // Drafts saved for a fixed-settings remote host (`moonbase.chat.v1`) are left alone:
           // their pending chats name no folder or model, so a daemon host can't take them.
           storage: {
@@ -177,10 +173,11 @@ try {
     }
   });
   window.addEventListener('unload', () => {
-    void application.dispose().catch((error) => console.error(errorDTO(error).message));
+    void application
+      .dispose()
+      .catch((error) => console.error(normalizeApplicationError(error).message));
   });
   root.render(<Desktop application={application} />);
 } catch (error) {
-  const dto = errorDTO(error);
-  root.render(<StartupFailure error={{ ...dto, message: dto.message.slice(0, 512) }} />);
+  root.render(<StartupFailure error={boundApplicationError(normalizeApplicationError(error))} />);
 }

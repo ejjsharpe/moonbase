@@ -10,8 +10,10 @@ import {
   checkFilenameMaps,
   checkTabMenu,
   explorerAction,
+  recoveryState,
 } from '../fixtures/editor-fixture.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
+import { callMain, callMainScript, editorClientId } from '../fixtures/window-ipc-fixture.ts';
 import { test, expect, _electron as electron } from '@playwright/test';
 import type { ElectronApplication, Page } from '@playwright/test';
 import {
@@ -39,14 +41,10 @@ declare global {
   }
   var desktopTest: {
     startupFailure: string | null;
-    chatCalls: { kind: string; id: string }[];
-    cancelIds: string[];
-    chatCancelIds: string[];
-    calls: {
-      id: string;
-      method: string;
-      input: { operation?: string; input?: Record<string, unknown> };
-    }[];
+    /** Every request main received. */
+    calls: { tag: string; payload: Record<string, unknown>; seq: number }[];
+    active: Map<number, { tag: string; payload: Record<string, unknown>; seq: number }>;
+    interrupted: number[];
     results: {
       operation?: string;
       reply: { ok: boolean; value?: { items: { message?: string }[] } };
@@ -57,11 +55,6 @@ declare global {
     restoreOn: string | null;
     held: string | null;
     release(): void;
-    cancels: number;
-    holdChatCancel: boolean;
-    chatCancelHeld: boolean;
-    failChatCancel: boolean;
-    releaseChatCancel(): void;
   };
 }
 test.beforeEach(async () => {
@@ -346,11 +339,11 @@ test('actual sandboxed custom-scheme editor reads, edits and saves through SQLit
     .click();
   await expect((await openSettings(page)).getByText('Local ready', { exact: true })).toBeVisible();
   await closeSettings(page);
-  expect(
-    await page.evaluate(() =>
-      window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
-    ),
-  ).toMatchObject({ ok: false, error: { code: 'Unauthorized' } });
+  // Without a remote host there is no connection to ask about.
+  expect(await callMain(page, 'getConnection', { input: {} })).toEqual({
+    ok: false,
+    error: { _tag: 'IpcAuthorityError', refusal: 'chat-target' },
+  });
   await open();
   await edit('export const saved = 42;');
   await saveFile(page);
@@ -370,27 +363,9 @@ test('actual sandboxed custom-scheme editor reads, edits and saves through SQLit
 
 async function checkoutTarget() {
   await expect.poll(async () => (await recovery()).state.checkouts.length).toBeGreaterThan(0);
-  return page.evaluate(async () => {
-    const r = await window.moonbase.call(
-      'command',
-      { operation: 'loadRecovery', input: { clientId: window.moonbase.clientId } },
-      crypto.randomUUID(),
-    );
-    if (!r.ok) throw Error(r.error.message);
-    return (r.value as RecoveryLoad).state.checkouts[0];
-  });
+  return (await recovery()).state.checkouts[0]!;
 }
-async function recovery() {
-  return page.evaluate(async () => {
-    const r = await window.moonbase.call(
-      'command',
-      { operation: 'loadRecovery', input: { clientId: window.moonbase.clientId } },
-      crypto.randomUUID(),
-    );
-    if (!r.ok) throw Error(r.error.message);
-    return r.value as RecoveryLoad;
-  });
-}
+const recovery = (): Promise<RecoveryLoad> => recoveryState(page);
 async function quit() {
   await app.evaluate(({ app }) => {
     app.quit();
@@ -507,8 +482,8 @@ test('window close hides mounted Monaco; Quit Cancel preserves undo, then Save q
   expect(readFileSync(join(checkout, 'b.ts'), 'utf8')).toBe('second draft after cancel');
   const report = JSON.parse(readFileSync(join(base, 'quit-report.json'), 'utf8'));
   expect(report.resources.filter((name: string) => /FSWatcher/.test(name))).toEqual([]);
-  expect(report.cancelListeners).toBe(0);
-  expect(report.chatCancelListeners).toBe(0);
+  // Quit ends every request the document had running.
+  expect(report.active).toBe(0);
   const db = new DatabaseSync(join(base, 'user-data/workspace-v1/moonbase-workspace-v1.sqlite'));
   db.exec('BEGIN IMMEDIATE; ROLLBACK');
   db.close();
@@ -593,57 +568,49 @@ test('lost real Save reply retries original identity without replacing the nativ
     .poll(async () => (await recovery()).state.drafts[0]?.text)
     .toBe('newer after lost reply');
   const saves = await app.evaluate(() =>
-    globalThis.desktopTest.calls.filter((call) => call.input?.operation === 'saveFile'),
+    globalThis.desktopTest.calls.filter((call) => call.tag === 'saveFile'),
   );
   expect(saves).toHaveLength(2);
-  expect(saves[0].input.input).toEqual(saves[1].input.input);
+  expect(saves[0]!.payload).toEqual(saves[1]!.payload);
   expect(readFileSync(join(checkout, 'a.ts'), 'utf8')).toBe('captured Save');
   expect(statSync(join(checkout, 'a.ts')).ino).toBe(savedInode);
 });
 
 test('actual IPC rejects unapproved roots, foreign callers/targets, unknown inputs and navigation', async () => {
-  const denied = await page.evaluate(
-    async (root) =>
-      window.moonbase.call(
-        'command',
-        { operation: 'openCheckout', input: { root } },
-        crypto.randomUUID(),
-      ),
-    checkout,
-  );
-  expect(denied.ok).toBe(false);
-  if (!denied.ok) expect(denied.error.code).toBe('Unauthorized');
+  expect(await callMain(page, 'openCheckout', { root: checkout })).toEqual({
+    ok: false,
+    error: { _tag: 'IpcAuthorityError', refusal: 'root' },
+  });
   await open();
   const target = await checkoutTarget();
-  for (const input of [
-    { operation: '__proto__', input: {} },
-    { operation: 'loadRecovery', input: { clientId: 'foreign' } },
-    { operation: 'readFile', input: { checkout: { ...target, hostId: 'foreign' }, path: 'a.ts' } },
-    { operation: 'readFile', input: { checkout: target, path: '../outside' } },
-    { operation: 'readFile', input: { checkout: target, path: 'a.ts', ignored: true } },
-  ]) {
-    const r = await page.evaluate(
-      (input) => window.moonbase.call('command', input, crypto.randomUUID()),
-      input,
-    );
-    expect(r.ok).toBe(false);
-  }
-  const foreign = await app.evaluate(async ({ BrowserWindow }, preload) => {
-    const other = new BrowserWindow({
-      show: false,
-      webPreferences: { preload, sandbox: true, contextIsolation: true, nodeIntegration: false },
-    });
-    try {
-      await other.loadURL('moonbase://editor/index.html');
-      return await other.webContents.executeJavaScript(
-        'window.moonbase.call("command", {operation:"loadRecovery",input:{clientId:window.moonbase.clientId}}, "foreign-frame")',
-      );
-    } finally {
-      other.destroy();
-    }
-  }, resolve('dist/preload.cjs'));
-  expect(foreign.ok).toBe(false);
-  expect(foreign.error.code).toBe('Unauthorized');
+  for (const [tag, payload] of [
+    ['__proto__', {}],
+    ['loadRecovery', { clientId: 'foreign' }],
+    ['readFile', { checkout: { ...target, hostId: 'foreign' }, path: 'a.ts' }],
+    ['readFile', { checkout: target, path: '../outside' }],
+    ['readFile', { checkout: target, path: 'a.ts', ignored: true }],
+  ] as const)
+    expect((await callMain(page, tag, payload)).ok, tag).toBe(false);
+  // Another window's document, though it is the app's own page, gets no port.
+  const foreign = await app.evaluate(
+    async ({ BrowserWindow }, { preload, script }) => {
+      const other = new BrowserWindow({
+        show: false,
+        webPreferences: { preload, sandbox: true, contextIsolation: true, nodeIntegration: false },
+      });
+      try {
+        await other.loadURL('moonbase://editor/index.html');
+        return await other.webContents.executeJavaScript(script);
+      } finally {
+        other.destroy();
+      }
+    },
+    {
+      preload: resolve('dist/preload.cjs'),
+      script: callMainScript('loadRecovery', { clientId: editorClientId }),
+    },
+  );
+  expect(foreign).toMatchObject({ ok: false, error: { _tag: 'Refused' } });
   const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length);
   await page.evaluate(() => {
     window.open('https://example.invalid/');
@@ -683,15 +650,15 @@ test('actual IPC rejects unapproved roots, foreign callers/targets, unknown inpu
     return violation;
   });
   expect(framePolicy).toBe('frame-src');
-  const wrongDocument = await app.evaluate(async ({ BrowserWindow }) => {
-    const window = BrowserWindow.getAllWindows()[0];
-    await window.loadURL('about:blank');
-    return window.webContents.executeJavaScript(
-      'window.moonbase.call("command", {operation:"loadRecovery", input:{clientId:window.moonbase.clientId}}, "wrong-document")',
-    );
-  });
-  expect(wrongDocument.ok).toBe(false);
-  expect(wrongDocument.error.code).toBe('Unauthorized');
+  const wrongDocument = await app.evaluate(
+    async ({ BrowserWindow }, script) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      await window.loadURL('about:blank');
+      return window.webContents.executeJavaScript(script);
+    },
+    callMainScript('loadRecovery', { clientId: editorClientId }),
+  );
+  expect(wrongDocument).toMatchObject({ ok: false, error: { _tag: 'Refused' } });
 });
 
 test('native picker creates scoped single-use tokens through the actual bridge; fake File paths grant no authority', async () => {
@@ -705,66 +672,37 @@ test('native picker creates scoped single-use tokens through the actual bridge; 
       filePaths: [source],
     })) as typeof dialog.showOpenDialog;
   }, source);
-  const refs = await page.evaluate(async (checkout) => {
-    const result = await window.moonbase.call('choose-imports', { checkout }, crypto.randomUUID());
-    if (!result.ok) throw Error(result.error.message);
-    return result.value as string[];
-  }, approved);
+  const chosen = await callMain(page, 'chooseImports', { checkout: approved });
+  if (!chosen.ok) throw Error(JSON.stringify(chosen.error));
+  const refs = chosen.value as string[];
   expect(refs).toHaveLength(1);
   expect(refs[0]).not.toContain(source);
-  const result = await page.evaluate(
-    async ({ checkout, refs }) =>
-      window.moonbase.call(
-        'command',
-        {
-          operation: 'mutate',
-          input: {
-            id: crypto.randomUUID(),
-            clientId: window.moonbase.clientId,
-            checkout,
-            kind: 'import',
-            sources: [],
-            destination: 'imported.txt',
-            nativeReferences: refs,
-          },
-        },
-        crypto.randomUUID(),
-      ),
-    { checkout: approved, refs },
-  );
-  expect(result.ok).toBe(true);
+  const importAs = (destination: string, nativeReferences: unknown) =>
+    callMain(page, 'mutate', {
+      id: crypto.randomUUID(),
+      clientId: editorClientId,
+      checkout: approved,
+      kind: 'import',
+      sources: [],
+      destination,
+      nativeReferences,
+    });
+  expect((await importAs('imported.txt', refs)).ok).toBe(true);
   expect(readFileSync(join(checkout, 'imported.txt'), 'utf8')).toBe('CONTROLLED NATIVE IMPORT');
-  const reused = await page.evaluate(
-    async ({ checkout, refs }) =>
-      window.moonbase.call(
-        'command',
-        {
-          operation: 'mutate',
-          input: {
-            id: crypto.randomUUID(),
-            clientId: window.moonbase.clientId,
-            checkout,
-            kind: 'import',
-            sources: [],
-            destination: 'reused.txt',
-            nativeReferences: refs,
-          },
-        },
-        crypto.randomUUID(),
-      ),
-    { checkout: approved, refs },
-  );
+  const reused = await importAs('reused.txt', refs);
   expect(reused.ok).toBe(false);
-  if (!reused.ok) expect(reused.error.code).toBe('Unauthorized');
+  expect(reused.error?.code).toBe('Unauthorized');
   expect(existsSync(join(checkout, 'reused.txt'))).toBe(false);
-  const fakeDrop = await page.evaluate(async (checkout) => {
-    try {
-      return await window.moonbase.drop(checkout, [new File(['fake'], 'outside.txt')]);
-    } catch {
-      return { ok: false };
-    }
-  }, approved);
-  expect(fakeDrop.ok).toBe(false);
+  // A dropped file's path comes from the preload's webUtils: a File the page made has none.
+  const pathsOf = (selector?: string) =>
+    page.evaluate((selector) => {
+      const files = selector
+        ? [...document.querySelector<HTMLInputElement>(selector)!.files!]
+        : [new File(['fake'], 'outside.txt')];
+      return files.map((file) => window.moonbase.pathForFile(file)).filter(Boolean);
+    }, selector);
+  expect(await pathsOf()).toEqual([]);
+  expect((await callMain(page, 'dropImports', { checkout: approved, paths: [] })).ok).toBe(false);
   await page.evaluate(() => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -772,36 +710,12 @@ test('native picker creates scoped single-use tokens through the actual bridge; 
     document.body.append(input);
   });
   await page.locator('#native-fixture').setInputFiles(source);
-  const dropped = await page.evaluate(
-    async (checkout) =>
-      window.moonbase.drop(checkout, [
-        ...document.querySelector<HTMLInputElement>('#native-fixture')!.files!,
-      ]),
-    approved,
-  );
+  const dropped = await callMain(page, 'dropImports', {
+    checkout: approved,
+    paths: await pathsOf('#native-fixture'),
+  });
   expect(dropped.ok).toBe(true);
-  if (!dropped.ok) throw Error(dropped.error.message);
-  const copied = await page.evaluate(
-    async ({ checkout, refs }) =>
-      window.moonbase.call(
-        'command',
-        {
-          operation: 'mutate',
-          input: {
-            id: crypto.randomUUID(),
-            clientId: window.moonbase.clientId,
-            checkout,
-            kind: 'import',
-            sources: [],
-            destination: 'dropped.txt',
-            nativeReferences: refs,
-          },
-        },
-        crypto.randomUUID(),
-      ),
-    { checkout: approved, refs: dropped.value },
-  );
-  expect(copied.ok).toBe(true);
+  expect((await importAs('dropped.txt', dropped.value)).ok).toBe(true);
   expect(readFileSync(join(checkout, 'dropped.txt'), 'utf8')).toBe('CONTROLLED NATIVE IMPORT');
 });
 
@@ -820,12 +734,10 @@ test("controlled clipboard fixtures require native consent and capture real file
       throw Error('Clipboard must not be read after Cancel');
     };
   }, source);
-  const refs = await page.evaluate(
-    async (checkout) =>
-      window.moonbase.call('clipboard-imports', { checkout }, crypto.randomUUID()),
-    approved,
-  );
-  expect(refs).toEqual({ ok: true, value: null });
+  expect(await callMain(page, 'pasteImports', { checkout: approved })).toEqual({
+    ok: true,
+    value: null,
+  });
   await app.evaluate(({ clipboard, dialog, ClipboardItem }, source) => {
     dialog.showMessageBox = (async () => ({
       response: 1,
@@ -908,7 +820,7 @@ test('real create, dirty move and copy use native operations; lost move reply re
     .toBe('saved only copied buffer');
   expect(readFileSync(join(checkout, 'renamed.ts'), 'utf8')).toBe('');
   const calls = await app.evaluate(() =>
-    globalThis.desktopTest.calls.filter((call) => call.input?.operation === 'mutate'),
+    globalThis.desktopTest.calls.filter((call) => call.tag === 'mutate'),
   );
   expect(calls).toHaveLength(3);
   expect(existsSync(join(checkout, 'created.ts'))).toBe(false);
@@ -1104,33 +1016,12 @@ test('unknown final Quit publication retains the window and resolves only the ex
   expect(readFileSync(join(checkout, 'a.ts'), 'utf8')).toContain('WORKING');
 });
 
-test('a command cancelled over real IPC keeps typed cancellation and leaves unrelated IO usable', async () => {
+test('a command cancelled over real IPC is interrupted in main and leaves unrelated IO usable', async () => {
   await open();
   const approved = await checkoutTarget();
-  const cancelled = await page.evaluate(async (checkout) => {
-    const id = crypto.randomUUID(),
-      pending = window.moonbase.call(
-        'command',
-        { operation: 'readFile', input: { checkout, path: 'a.ts' } },
-        id,
-      );
-    window.moonbase.cancel('some-other-request');
-    window.moonbase.cancel(id);
-    return pending;
-  }, approved);
-  expect(cancelled.ok).toBe(false);
-  if (!cancelled.ok) expect(cancelled.error.code).toBe('Cancelled');
-  const next = await page.evaluate(
-    async (checkout) =>
-      window.moonbase.call(
-        'command',
-        { operation: 'readFile', input: { checkout, path: 'b.ts' } },
-        crypto.randomUUID(),
-      ),
-    approved,
-  );
-  expect(next.ok).toBe(true);
-  expect(await app.evaluate(() => globalThis.desktopTest.cancels)).toBeGreaterThanOrEqual(2);
+  const cancelled = await callMain(page, 'readFile', { checkout: approved, path: 'a.ts' }, true);
+  expect(cancelled).toMatchObject({ ok: false, error: { _tag: 'Interrupt' } });
+  expect((await callMain(page, 'readFile', { checkout: approved, path: 'b.ts' })).ok).toBe(true);
 });
 
 test('exact checkout tabs preserve independent dirty paths, views and closed metadata through native approval', async () => {
@@ -1271,8 +1162,7 @@ test('unacknowledged real move evidence restores dirty text on process restart w
   expect(statSync(join(checkout, 'moved.ts')).ino).toBe(inode);
   expect(
     await app.evaluate(
-      () =>
-        globalThis.desktopTest.calls.filter((call) => call.input?.operation === 'mutate').length,
+      () => globalThis.desktopTest.calls.filter((call) => call.tag === 'mutate').length,
     ),
   ).toBe(0);
   await expect.poll(async () => (await recovery()).operations.length).toBe(0);
@@ -1303,8 +1193,7 @@ test('replacement consent cannot overwrite another open dirty draft or admit a n
   await name.press('Escape');
   expect(
     await app.evaluate(
-      () =>
-        globalThis.desktopTest.calls.filter((call) => call.input?.operation === 'mutate').length,
+      () => globalThis.desktopTest.calls.filter((call) => call.tag === 'mutate').length,
     ),
   ).toBe(0);
   expect(readFileSync(join(checkout, 'a.ts'), 'utf8')).toContain('WORKING');
@@ -1403,53 +1292,7 @@ test('app R1 filename maps preserve actual Save, positions, sibling drafts and r
   await capture('desktop-filename-maps');
 });
 
-test('app R1 context-isolated command transport preserves own JSON keys', async () => {
-  expect(
-    await page.evaluate(() => {
-      const map = {};
-      Object.defineProperty(map, '__proto__', {
-        value: 'staged',
-        enumerable: true,
-        configurable: true,
-        writable: true,
-      });
-      return Object.keys(structuredClone(map));
-    }),
-  ).toEqual(['__proto__']);
-  const reply = await page.evaluate(() =>
-    window.moonbase.call(
-      'command',
-      {
-        operation: 'unknown',
-        input: JSON.parse(
-          '{"__proto__":{"marker":1},"constructor":2,"fileViews":{"__proto__":"staged"},"positions":{"__proto__":{"staged":{"line":1,"column":3,"top":0,"left":0}}},"state":{"views":{"known":{"fileViews":{"__proto__":"staged"},"positions":{"__proto__":{"staged":{"line":1,"column":3,"top":0,"left":0}}}}}}}',
-        ),
-      },
-      crypto.randomUUID(),
-    ),
-  );
-  expect(reply.ok).toBe(false);
-  const result = await app.evaluate(() => {
-    const input = globalThis.desktopTest.calls.at(-1)!.input.input!;
-    return {
-      own: Object.hasOwn(input, '__proto__'),
-      fileViews: Object.keys(input.fileViews as object),
-      positions: Object.keys(input.positions as object),
-      deep: Object.keys(
-        (input.state as { views: { known: { fileViews: object } } }).views.known.fileViews,
-      ),
-    };
-  });
-  writeFileSync('test-results/own-keys-boundary.json', JSON.stringify(result, null, 2) + '\n');
-  expect(result).toEqual({
-    own: true,
-    fileViews: ['__proto__'],
-    positions: ['__proto__'],
-    deep: ['__proto__'],
-  });
-});
-
-test('app R1 Tab actions first/last selection and Close click work at native size and zoom', async () => {
+test('Tab actions first/last selection and Close click work at native size and zoom', async () => {
   await open('b.ts');
   await open();
   await page.getByRole('tab', { name: 'b.ts', exact: true }).hover();

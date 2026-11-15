@@ -12,11 +12,13 @@ import { fixture, until } from '../../../../test/chat/tool-fixture.ts';
 import { join, resolve } from 'node:path';
 import { mkdir, writeFile, appendFile, readFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import {
+  callMainScript,
+  disconnectHost,
+  editorClientId,
+  getConnection,
+} from '../fixtures/window-ipc-fixture.ts';
 
-declare global {
-  var task08Cancels: string[];
-}
 const packaged = !!process.env.MOONBASE_PACKAGED_TEST;
 const evidence = resolve(process.env.MOONBASE_NATIVE_OUTPUT ?? 'test-results', 'lifecycle');
 for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
@@ -61,27 +63,20 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       p.on('pageerror', (e) => errors.push(e.message));
       for (const pid of await current.evaluate(({ app }) => app.getAppMetrics().map((v) => v.pid)))
         pids.add(pid);
-      await current.evaluate(() => {
-        globalThis.task08Cancels = [];
-        if (globalThis.desktopTest)
-          Object.defineProperty(globalThis, 'task08Cancels', {
-            configurable: true,
-            get: () => [
-              ...globalThis.desktopTest.cancelIds.map((id) => 'moonbase:' + id),
-              ...globalThis.desktopTest.chatCancelIds.map((id) => 'moonbase-chat:' + id),
-            ],
-          });
-      });
+      /** The requests main runs for the document, by procedure (an unpackaged main reports them). */
+      const running = () =>
+        packaged
+          ? Promise.resolve([] as { tag: string; seq: number }[])
+          : current.evaluate(() =>
+              [...globalThis.desktopTest.active.values()].map(({ tag, seq }) => ({ tag, seq })),
+            );
+      const interrupted = () =>
+        packaged
+          ? Promise.resolve([] as number[])
+          : current.evaluate(() => globalThis.desktopTest.interrupted);
       await expect(p.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible();
       await p.evaluate(() => {
-        const ids = { editor: [] as string[], chat: [] as string[] };
-        window.moonbase.events((id) => {
-          if (!ids.editor.includes(id)) ids.editor.push(id);
-        });
-        window.moonbaseChat.events((id) => {
-          if (!ids.chat.includes(id)) ids.chat.push(id);
-        });
-        Object.assign(window, { task08Observed: ids, task08Document: crypto.randomUUID() });
+        Object.assign(window, { task08Document: crypto.randomUUID() });
       });
       await current.evaluate(({ dialog }, root) => {
         dialog.showOpenDialog = (async () => ({
@@ -108,35 +103,24 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       const state = await p.evaluate(() =>
         JSON.parse(localStorage.getItem('moonbase.chat.remote.v2')!),
       );
-      const connection = await p.evaluate(() =>
-        window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
-      );
+      const connection = await getConnection(p);
       expect(connection.ok).toBe(true);
       const oldDocument = await p.evaluate(
         () => (window as unknown as { task08Document: string }).task08Document,
       );
-      await expect
-        .poll(() =>
-          p.evaluate(
-            () =>
-              (window as unknown as { task08Observed: { editor: string[]; chat: string[] } })
-                .task08Observed.editor.length,
-          ),
-        )
-        .toBeGreaterThan(0);
-      const observed = await p.evaluate(
-        () =>
-          (window as unknown as { task08Observed: { editor: string[]; chat: string[] } })
-            .task08Observed,
-      );
-      const previousCancels = await current.evaluate(() => globalThis.task08Cancels);
-      const active = [
-        ...observed.editor.map((id) => 'moonbase:' + id),
-        ...observed.chat.map((id) => 'moonbase-chat:' + id),
-      ].filter((id) => !previousCancels.includes(id));
-      expect(active.filter((v) => v.startsWith('moonbase:'))).not.toHaveLength(0);
-      expect(active.filter((v) => v.startsWith('moonbase-chat:'))).not.toHaveLength(0);
-      const waitId = randomUUID();
+      // The document's editor and chat watches, which run until it goes.
+      const watches = async () => (await running()).filter(({ tag }) => tag.startsWith('watch'));
+      if (!packaged)
+        await expect
+          .poll(async () => (await watches()).some(({ tag }) => tag === 'watchWorkspace'))
+          .toBe(true);
+      const observed = await watches();
+      const active = observed.map(({ seq }) => seq);
+      if (!packaged) {
+        expect(observed.filter(({ tag }) => tag === 'watchWorkspace')).not.toHaveLength(0);
+        expect(observed.filter(({ tag }) => tag !== 'watchWorkspace')).not.toHaveLength(0);
+      }
+      let waitId = -1;
       if (veto) {
         if (mode === 'veto')
           await p.evaluate(() =>
@@ -146,12 +130,10 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       } else {
         await f.holdReply('getChat');
         await p.evaluate(
-          ({ target, id }) => {
-            void window.moonbaseChat.call('chat', 'getChat', { target }, id);
-          },
-          { target: state.selected, id: waitId },
+          `void ${callMainScript('getChat', { backendId: 'remote', input: { target: state.selected } })}`,
         );
         await until(f.stats, (s) => s.heldReplies.includes('getChat'));
+        if (!packaged) waitId = (await running()).findLast(({ tag }) => tag === 'getChat')!.seq;
       }
       if (crash) {
         await mkdir(join(f.directory, 'crash-dumps'));
@@ -175,16 +157,19 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       if (crash) {
         // Playwright retains a crashed Page flag; inspect the recovered real renderer through native APIs.
         await recoverCrashedWorkbench(current);
-        const read = () =>
-          current.evaluate(async ({ BrowserWindow }) =>
-            BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(`(async () => {
+        const readScript = `(async () => {
           const project = [...document.querySelectorAll('[role="tab"]')].find(tab => tab.textContent.endsWith(' · main'));
           if (!project) return null;
           project.click();
           if (!document.querySelector('[aria-label="a.ts editor"]')?.getClientRects().length) return null;
-          const r = await window.moonbase.call("command", { operation: "loadRecovery", input: { clientId: window.moonbase.clientId } }, crypto.randomUUID());
-          return { recovery: r, saved: JSON.parse(localStorage.getItem("moonbase.chat.remote.v2")), connection: await window.moonbaseChat.call("connection", "getConnection", {}, crypto.randomUUID()) };
-        })()`),
+          const r = await ${callMainScript('loadRecovery', { clientId: editorClientId })};
+          return { recovery: r, saved: JSON.parse(localStorage.getItem("moonbase.chat.remote.v2")), connection: await ${callMainScript('getConnection', { input: {} })} };
+        })()`;
+        const read = () =>
+          current.evaluate(
+            async ({ BrowserWindow }, script) =>
+              BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(script),
+            readScript,
           );
         const restored = (await until(read, Boolean)) as {
           recovery: { value: RecoveryLoad };
@@ -207,16 +192,16 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
         let readiness: unknown;
         await until(
           () =>
-            current.evaluate(async ({ BrowserWindow }) =>
-              BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(
-                `(async () => {
-                  const reply = await window.moonbase.call('command', { operation: 'loadRecovery', input: { clientId: window.moonbase.clientId } }, crypto.randomUUID());
+            current.evaluate(
+              async ({ BrowserWindow }, script) =>
+                BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(script),
+              `(async () => {
+                  const reply = await ${callMainScript('loadRecovery', { clientId: editorClientId })};
                   return { reply,
                     alerts: [...document.querySelectorAll('[role="alert"]')].filter(element => element.getClientRects().length && element.textContent.trim()).map(element => element.textContent),
                     statuses: [...document.querySelectorAll('[role="status"]')].map(element => element.textContent)
                   };
                 })()`,
-              ),
             ),
           (value) => {
             readiness = value;
@@ -308,7 +293,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
             mode,
             active,
             waitId: veto ? null : waitId,
-            cancelled: await current.evaluate(() => globalThis.task08Cancels),
+            cancelled: await interrupted(),
           },
           null,
           2,
@@ -318,7 +303,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
         expect(
           await p.evaluate(() => (window as unknown as { task08Document: string }).task08Document),
         ).toBe(oldDocument);
-        const cancelled = await current.evaluate(() => globalThis.task08Cancels);
+        const cancelled = await interrupted();
         // Chat stays attached while Editor shows, so fresh editing keeps its watches too.
         expect(active.some((id) => cancelled.includes(id))).toBe(false);
         if (mode === 'fresh-veto') {
@@ -339,12 +324,10 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
         await expect(p.getByRole('textbox', { name: 'a.ts editor', exact: true })).toBeVisible();
         if (!crash && !packaged)
           await expect
-            .poll(() =>
-              current.evaluate(
-                (_, ids) => ids.every((id) => globalThis.task08Cancels.includes(id)),
-                [...active, 'moonbase-chat:' + waitId],
-              ),
-            )
+            .poll(async () => {
+              const cancelled = await interrupted();
+              return [...active, waitId].every((id) => cancelled.includes(id));
+            })
             .toBe(true);
         await f.releaseReply();
         await views.getByRole('tab', { name: 'Agents', exact: true }).click();
@@ -353,10 +336,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
           'newer chat draft across reload',
         );
         await expect(p.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
-        const after = await p.evaluate(() =>
-          window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
-        );
-        expect(after).toEqual(connection);
+        expect(await getConnection(p)).toEqual(connection);
         await views.getByRole('tab', { name: / · main$/ }).click();
         await expect(
           p.locator('.view-line').filter({ hasText: 'retained local draft at reload' }).first(),
@@ -376,7 +356,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
             mode,
             active,
             waitId: veto ? null : waitId,
-            cancelled: await current.evaluate(() => globalThis.task08Cancels),
+            cancelled: await interrupted(),
             connection,
             stats,
           },
@@ -387,21 +367,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       for (const pid of await current.evaluate(({ app }) => app.getAppMetrics().map((v) => v.pid)))
         pids.add(pid);
       if (veto) {
-        await p.evaluate(async () => {
-          const r = await window.moonbaseChat.call(
-            'connection',
-            'getConnection',
-            {},
-            crypto.randomUUID(),
-          );
-          if (r.ok)
-            await window.moonbaseChat.call(
-              'connection',
-              'disconnect',
-              { connectionId: (r.value as { connectionId: string }).connectionId },
-              crypto.randomUUID(),
-            );
-        });
+        await disconnectHost(p);
         await current.evaluate(({ app }) => app.exit(0));
       } else await current.evaluate(({ app }) => app.quit());
       await until(async () => child!.exitCode !== null || child!.signalCode !== null, Boolean);
@@ -419,24 +385,8 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       } finally {
         try {
           if (app && child?.exitCode === null && child?.signalCode === null) {
-            await app
-              .windows()[0]
-              .evaluate(async () => {
-                const r = await window.moonbaseChat.call(
-                  'connection',
-                  'getConnection',
-                  {},
-                  crypto.randomUUID(),
-                );
-                if (r.ok && (r.value as { connectionId: string | null }).connectionId)
-                  await window.moonbaseChat.call(
-                    'connection',
-                    'disconnect',
-                    { connectionId: (r.value as { connectionId: string }).connectionId },
-                    crypto.randomUUID(),
-                  );
-              })
-              .catch(() => {});
+            const window = app.windows()[0];
+            if (window) await disconnectHost(window).catch(() => {});
             await app.evaluate(({ app }) => app.exit(0));
             await until(
               async () => child!.exitCode !== null || child!.signalCode !== null,

@@ -16,7 +16,7 @@ import { runApplicationEffect } from '@moonbase/application/runtime/effect-clien
 import type { DaemonChat, LocalDaemonClient } from '../daemon/local-daemon-client.ts';
 import type { ChatConfiguration } from './config.ts';
 import { ChatIpcSession } from './session.ts';
-import type { Reply, DesktopChatTarget } from '../../ipc/chat-wire.ts';
+import type { ChatTargetId, DesktopChatTarget } from '../../ipc/chat-rpcs.ts';
 import type { RequestIds } from '../request-ids.ts';
 
 /** A remote host's daemon in host mode, over its SSH connection. */
@@ -32,50 +32,47 @@ export function createChatBackends({
   runtime,
   local,
   remote = null,
-  emit,
   pickFolder,
   installationId,
   adoptCheckout = () => {},
   transcript,
+  reportCleanup,
   requestIds,
 }: {
   runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>;
   /** The local daemon, found or started on demand; local chat is installed once it is reached. */
   local: Pick<LocalDaemonClient, 'get' | 'peek'>;
   remote?: RemoteChat | null;
-  emit(backendId: string, id: string, result: Reply): void;
   pickFolder(): Promise<string | null>;
   /** The identity this profile's workspace store has to the daemon. */
   installationId: string;
   /** Lets the editor open a checkout the daemon made for a chat. */
   adoptCheckout?(checkout: CheckoutTarget): void;
   transcript?: NativeTranscriptActions;
+  /** Reports a cleanup failure no request is left to answer with. */
+  reportCleanup?(error: unknown): void;
   /** Request IDs of chat operations left unknown, kept across reloads and restarts. */
   requestIds: RequestIds;
 }) {
-  const sessions = new Map<string, ChatIpcSession>();
+  const sessions = new Map<ChatTargetId, ChatIpcSession>();
   /** Worktree creations for the current document; replacing the document cancels them. */
   const worktreeCreations = new Set<AbortController>();
   let documentId = randomUUID();
   // Folder and provider setup errors reach the renderer as the legacy error with its code (CL-22).
   const run = <A>(effect: Effect.Effect<A, LocalHostServiceError | ProviderSetupServiceError>) =>
     runApplicationEffect(runtime, effect.pipe(Effect.mapError(toChatApplicationError)));
-  const emitChat = (backendId: string) => (id: string, result: Reply) => {
-    emit(backendId, id, result);
-  };
   const installChatSessions = () => {
     const backend = local.peek();
     if (backend && !sessions.has('local'))
       sessions.set(
         'local',
         new ChatIpcSession(
-          runtime,
           bindChatClient(runtime, backend.chat),
           { mode: 'local' },
           backend.session,
-          emitChat('local'),
           {
             transcript,
+            reportCleanup,
             providers: bindProviderSetupClient(runtime, backend.providers, documentId),
           },
         ),
@@ -86,13 +83,12 @@ export function createChatBackends({
       sessions.set(
         'remote',
         new ChatIpcSession(
-          runtime,
           remote.chat,
           { mode: 'remote', connection: remote.connection },
           remote.configuration.context,
-          emitChat('remote'),
           {
             transcript,
+            reportCleanup,
             providers: bindProviderSetupClient(runtime, remote.providers, documentId),
           },
         ),
@@ -102,7 +98,13 @@ export function createChatBackends({
   const targets: DesktopChatTarget[] = [
     { id: 'local', label: 'Local', mode: 'local' },
     ...(remote
-      ? [{ id: 'remote', label: remote.configuration.ssh.profile.label, mode: 'remote' as const }]
+      ? [
+          {
+            id: 'remote' as const,
+            label: remote.configuration.ssh.profile.label,
+            mode: 'remote' as const,
+          },
+        ]
       : []),
   ];
   /**
@@ -133,7 +135,7 @@ export function createChatBackends({
     const owner = documentId;
     for (const creation of worktreeCreations) creation.abort();
     worktreeCreations.clear();
-    const closing = [...sessions.values()].map((session) => session.dispose());
+    const closing = [...sessions.values()].map((session) => run(session.dispose));
     sessions.clear();
     documentId = randomUUID();
     installChatSessions();
@@ -150,15 +152,16 @@ export function createChatBackends({
 
   return {
     getTargets: () => targets,
-    getSession: (backendId: string) => {
+    getSession: (backendId: ChatTargetId) => {
       // The daemon may have been reached for files before local chat asked for it.
       installChatSessions();
       return sessions.get(backendId);
     },
-    getSessions: (): Pick<ChatIpcSession, 'dispose'>[] => [...sessions.values()],
+    getSessions: () =>
+      [...sessions.values()].map((session) => ({ dispose: () => run(session.dispose) })),
     findTranscriptImage: (token: string) =>
       [...sessions.values()].map((session) => session.findImage(token)).find(Boolean),
-    async getContext(backendId: string) {
+    async getContext(backendId: ChatTargetId) {
       if (backendId === 'local') return (await reachLocal()).session;
       return remote!.configuration.context;
     },
@@ -181,7 +184,7 @@ export function createChatBackends({
      * first; or a remote host's approved roots and their folders, which it offers in place of a
      * picker for its disk.
      */
-    async recentFolders(backendId = 'local') {
+    async recentFolders(backendId: ChatTargetId = 'local') {
       if (backendId === 'remote') {
         if (!remote) return [];
         const { host } = remote.configuration.context;

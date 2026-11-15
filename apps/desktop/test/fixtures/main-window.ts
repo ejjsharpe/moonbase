@@ -1,16 +1,19 @@
 import { EventEmitter } from 'node:events';
 import type { BrowserWindow, IpcMainEvent, IpcMainInvokeEvent } from 'electron';
-import { createTrustedDocumentGuard } from '../../src/main/ipc.ts';
+import { createTrustedDocumentCheck } from '../../src/main/ipc/ipc-connect.ts';
 
 export function createTestWindow() {
   const url = 'moonbase://editor/index.html';
   let destroyed = false;
-  const actions: { channel: string; action: string; id: string; error: unknown }[] = [];
   const calls: string[] = [];
+  /** Ports main posted to the main frame. */
+  const posted: { channel: string; transfer: unknown[] }[] = [];
   const contents = Object.assign(new EventEmitter(), {
-    mainFrame: { url },
-    send(channel: string, action: string, id: string, error: unknown) {
-      actions.push({ channel, action, id, error });
+    mainFrame: {
+      url,
+      postMessage(channel: string, _message: unknown, transfer: unknown[]) {
+        posted.push({ channel, transfer });
+      },
     },
     reload() {
       calls.push('reload');
@@ -36,19 +39,20 @@ export function createTestWindow() {
   const window = nativeWindow as unknown as BrowserWindow;
   const event = { sender: contents, senderFrame: contents.mainFrame } as unknown as IpcMainEvent &
     IpcMainInvokeEvent;
+  /** A frame or sender other than the window's own document. */
   const badEvents = () =>
     [
       { ...event, sender: {} },
-      { ...event, senderFrame: { url } },
+      { ...event, senderFrame: { ...contents.mainFrame } },
       { ...event, senderFrame: null },
     ] as unknown as (typeof event)[];
   return {
     window,
     contents,
-    actions,
+    posted,
     calls,
     event,
     badEvents,
-    requireTrusted: createTrustedDocumentGuard(window, url),
+    isTrusted: createTrustedDocumentCheck(window, url),
   };
 }

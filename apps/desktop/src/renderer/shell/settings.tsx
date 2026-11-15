@@ -10,7 +10,7 @@ import { colors, radius, shadow, space, type } from '@moonbase/ui/tokens.stylex'
 import { workbench } from '@moonbase/ui/workbench';
 import { ProviderSetup } from '../chat/provider-setup.tsx';
 import { Icon } from '@moonbase/ui/icons';
-import { errorDTO } from '../../ipc/wire.ts';
+import { normalizeApplicationError } from '@moonbase/effect';
 
 export type SettingsSection = 'hosts' | 'providers';
 const noSubscription = () => () => {};
@@ -122,7 +122,7 @@ function Hosts({
     setPending(true);
     void application
       .selectChatTarget(id)
-      .catch((error) => setSwitchError(errorDTO(error).message))
+      .catch((error) => setSwitchError(normalizeApplicationError(error).message))
       .finally(() => setPending(false));
   };
   // Buttons stay focusable while disabled, but one that goes, such as Use once its host is in use,
