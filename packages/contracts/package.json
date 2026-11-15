@@ -40,8 +40,9 @@
     "./daemon-schema": "./src/daemon-schema.ts",
     "./folder-errors": "./src/folder-errors.ts",
     "./host-errors": "./src/host-errors.ts",
-    "./socket": "./src/socket.ts",
-    "./socket-schema": "./src/socket-schema.ts"
+    "./watch": "./src/watch.ts",
+    "./watch-schema": "./src/watch-schema.ts",
+    "./workspace-rpc": "./src/workspace-rpc.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

@@ -8,9 +8,9 @@ export const hostTokenPattern = /^[\x21-\x7e]{16,4096}$/;
 /**
  * Features a host advertises in its signed health. `chat` is every host's chat protocol; the
  * others are a daemon's: local-mode chat and its control, provider setup and folders, for a
- * host-mode daemon the approved roots a remote client chooses folders from, the authenticated
- * WebSocket (`socketPath`) and, for a daemon that composes the workspace file host, its operations
- * and subscription over that socket.
+ * host-mode daemon the approved roots a remote client chooses folders from, RPC (`rpcPath`) and,
+ * for a daemon that composes the workspace file host, the workspace's own RPC socket
+ * (`workspaceRpcPath`).
  */
 export const chatHostCapabilities = {
   chat: 'chat-v0',
@@ -18,9 +18,8 @@ export const chatHostCapabilities = {
   providers: 'providers-v1',
   folders: 'folders-v1',
   roots: 'roots-v1',
-  socket: 'socket-v1',
   rpc: 'rpc-v1',
-  workspace: 'workspace-v1',
+  workspace: 'workspace-v2',
 } as const;
 export type ChatHostCapability = (typeof chatHostCapabilities)[keyof typeof chatHostCapabilities];
 export type ChatHostTarget = typeof ChatHostTargetSchema.Type;

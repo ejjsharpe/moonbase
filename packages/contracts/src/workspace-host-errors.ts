@@ -5,11 +5,14 @@ import {
   type CancelledError,
   type UncertainError,
 } from './errors.ts';
+import { getDaemonErrorCode, isDaemonServiceError } from './chat-legacy-errors.ts';
+import type { LocalHostServiceError } from './services.ts';
 
 // What the workspace file host fails with (epic #273 D14). Each error names what happened with a
-// `kind` (and the names it concerns), and builds its message from them. Until the workspace moves
-// to Effect RPC (CL-07), `toWireError` sends each as the `ApplicationError` code and text its
-// clients have always read.
+// `kind` (and the names it concerns), and builds its message from them. A field that holds text
+// the host wrote (Git's output, a path, a pattern's reason) is optional: a client drops it from an
+// error a daemon sent (D11). Until the editor reads tags (CL-14), `toWireError` gives each as the
+// `ApplicationError` code its clients have always read.
 
 const pathProblems = {
   'not-relative': 'Use an exact checkout-relative path without traversal, links or metadata.',
@@ -120,6 +123,9 @@ const requestProblems = {
   'not-a-store': 'This is not a Moonbase workspace store. Existing data retained.',
   'store-host': 'Workspace store belongs to a different host.',
   'store-client': 'Workspace store belongs to a different client.',
+  'invalid-input': 'Invalid workspace input.',
+  'request-too-large': 'The request exceeds its transport limit.',
+  'reply-too-large': 'The reply would exceed its transport limit.',
 } as const;
 /** The request asks for something the host refuses as given. */
 export class InvalidRequestError extends Schema.TaggedError<InvalidRequestError>()(
@@ -132,19 +138,23 @@ export class InvalidRequestError extends Schema.TaggedError<InvalidRequestError>
 }
 /** A worktree base that names no commit. */
 export class InvalidBaseError extends Schema.TaggedError<InvalidBaseError>()('InvalidBaseError', {
-  base: Schema.String,
+  base: Schema.optional(Schema.String),
 }) {
   override get message() {
-    return `Base ${this.base} is not a commit.`;
+    return this.base === undefined
+      ? 'The base is not a commit.'
+      : `Base ${this.base} is not a commit.`;
   }
 }
 /** A search pattern ripgrep cannot compile, with its reason. */
 export class InvalidPatternError extends Schema.TaggedError<InvalidPatternError>()(
   'InvalidPatternError',
-  { reason: Schema.String },
+  { reason: Schema.optional(Schema.String) },
 ) {
   override get message() {
-    return 'Invalid regular expression: ' + this.reason;
+    return this.reason === undefined
+      ? 'Invalid regular expression.'
+      : 'Invalid regular expression: ' + this.reason;
   }
 }
 
@@ -200,19 +210,23 @@ export class WorkspaceUnavailableError extends Schema.TaggedError<WorkspaceUnava
 }
 /** Git refused to make a worktree; `detail` is what it said (its own output, or a fixed text). */
 export class WorktreeGitError extends Schema.TaggedError<WorktreeGitError>()('WorktreeGitError', {
-  detail: Schema.String,
+  detail: Schema.optional(Schema.String),
 }) {
   override get message() {
-    return 'Git could not create the worktree. ' + this.detail;
+    return (
+      'Git could not create the worktree.' + (this.detail === undefined ? '' : ' ' + this.detail)
+    );
   }
 }
 /** Git printed a status record the host cannot read. */
 export class GitStatusFormatError extends Schema.TaggedError<GitStatusFormatError>()(
   'GitStatusFormatError',
-  { record: Schema.String },
+  { record: Schema.optional(Schema.String) },
 ) {
   override get message() {
-    return `Unrecognized Git status record: ${JSON.stringify(this.record)}`;
+    return this.record === undefined
+      ? 'Unrecognized Git status record.'
+      : `Unrecognized Git status record: ${JSON.stringify(this.record)}`;
   }
 }
 
@@ -284,15 +298,17 @@ export class InterruptedRequestError extends Schema.TaggedError<InterruptedReque
 export class IncompleteCleanupError extends Schema.TaggedError<IncompleteCleanupError>()(
   'IncompleteCleanupError',
   {
-    remains: Schema.String,
-    inspect: Schema.String,
+    remains: Schema.optional(Schema.String),
+    inspect: Schema.optional(Schema.String),
     failure: Schema.optional(Schema.String),
   },
 ) {
   override get message() {
+    const remains = this.remains === undefined ? '' : ` (${this.remains})`,
+      inspect = this.inspect ?? 'the worktree location';
     return this.failure === undefined
-      ? `Worktree creation stopped and cleanup is incomplete (${this.remains}). Inspect ${this.inspect}.`
-      : `Worktree creation failed and cleanup is incomplete (${this.remains}). Inspect ${this.inspect}. ${this.failure}`;
+      ? `Worktree creation stopped and cleanup is incomplete${remains}. Inspect ${inspect}.`
+      : `Worktree creation failed and cleanup is incomplete${remains}. Inspect ${inspect}. ${this.failure}`;
   }
 }
 /** A recorded refusal of a request, replayed with its code and text for the same request ID. */
@@ -308,11 +324,8 @@ export class RecordedRefusalError extends Schema.TaggedError<RecordedRefusalErro
   }
 }
 
-/**
- * Every way a file host operation fails. `ApplicationError` stays only while a remote host's
- * replies arrive as wire errors (`RemoteWorkspaceHostLive`); CL-07 removes it.
- */
-export type WorkspaceHostError =
+/** The errors the file host itself raises. */
+type FileHostError =
   | InvalidPathError
   | CheckoutAccessError
   | CheckoutChangedError
@@ -331,13 +344,36 @@ export type WorkspaceHostError =
   | IncompleteCleanupError
   | RecordedRefusalError
   | UncertainError
-  | CancelledError
-  | ApplicationError;
+  | CancelledError;
+/** The classes of the errors the file host itself raises, which its RPC procedures declare. */
+export const fileHostErrors = [
+  InvalidPathError,
+  CheckoutAccessError,
+  CheckoutChangedError,
+  InvalidRequestError,
+  InvalidBaseError,
+  InvalidPatternError,
+  WorkspaceConflictError,
+  BranchTakenError,
+  WorkspaceUnavailableError,
+  WorktreeGitError,
+  GitStatusFormatError,
+  WorkspaceUnsupportedError,
+  WorkspaceStoreError,
+  UnresolvedWorkError,
+  InterruptedRequestError,
+  IncompleteCleanupError,
+  RecordedRefusalError,
+] as const;
+/**
+ * Every way a file host operation fails: the host's own errors and the shared outcomes; the
+ * chat and folder errors of the daemon's chats, which Turn into project passes on; and, for a
+ * host reached over a daemon link, the link's errors. `ApplicationError` stays only for desktop
+ * main's local daemon composition, until it moves off it (CL-25).
+ */
+export type WorkspaceHostError = FileHostError | LocalHostServiceError | ApplicationError;
 
-const codes: Record<
-  Exclude<WorkspaceHostError, ApplicationError | RecordedRefusalError>['_tag'],
-  ApplicationErrorCode
-> = {
+const codes: Record<Exclude<FileHostError, RecordedRefusalError>['_tag'], ApplicationErrorCode> = {
   InvalidPathError: 'InvalidInput',
   CheckoutAccessError: 'Unauthorized',
   CheckoutChangedError: 'InvalidInput',
@@ -358,20 +394,21 @@ const codes: Record<
   CancelledError: 'Cancelled',
 };
 
-/** Whether `value` is one of the file host's errors. */
-export const isWorkspaceHostError = (value: unknown): value is WorkspaceHostError => {
-  if (ApplicationError.is(value)) return true;
+const isFileHostError = (value: unknown): value is FileHostError => {
   const tag = value instanceof Error ? (value as { _tag?: unknown })._tag : undefined;
   return typeof tag === 'string' && (tag === 'RecordedRefusalError' || Object.hasOwn(codes, tag));
 };
+/** Whether `value` is one of the file host's errors. */
+export const isWorkspaceHostError = (value: unknown): value is WorkspaceHostError =>
+  ApplicationError.is(value) || isFileHostError(value) || isDaemonServiceError(value);
 
-/** The wire code a file host error is sent with. */
-export const getWireCode = (error: WorkspaceHostError): ApplicationErrorCode =>
-  ApplicationError.is(error) || error._tag === 'RecordedRefusalError'
-    ? error.code
-    : codes[error._tag];
+/** The legacy code a file host error has always had. */
+export const getWireCode = (error: WorkspaceHostError): ApplicationErrorCode => {
+  if (ApplicationError.is(error) || error._tag === 'RecordedRefusalError') return error.code;
+  return isFileHostError(error) ? codes[error._tag] : getDaemonErrorCode(error);
+};
 
-/** The wire error a file host error is sent as: the code and text clients have always seen. */
+/** The legacy error for a file host error: the code clients have always read, and its message. */
 export function toWireError(error: WorkspaceHostError): ApplicationError {
   if (ApplicationError.is(error)) return error;
   return new ApplicationError({ code: getWireCode(error), message: error.message });

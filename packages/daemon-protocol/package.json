@@ -6,7 +6,6 @@
     "./remote": "./src/remote.ts",
     "./server": "./src/server.ts",
     "./loopback": "./src/loopback.ts",
-    "./socket": "./src/socket-client.ts",
     "./health": "./src/health.ts"
   },
   "scripts": {

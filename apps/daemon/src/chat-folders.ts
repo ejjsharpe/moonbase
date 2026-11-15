@@ -1,6 +1,5 @@
 import type { ChatFolders } from '@moonbase/workspace';
-import { Effect } from 'effect';
-import { toChatApplicationError } from '@moonbase/contracts/chat-legacy-errors';
+import type { Effect } from 'effect';
 import type {
   ChatServiceShape,
   LocalHostHandlers,
@@ -12,16 +11,15 @@ import type {
  * chat's own working folder, which `checkChatFolder` accepts only as a direct child of the chats
  * folder, where the daemon makes folders for chats without a project; any other is refused,
  * whatever a client names. A chat already turned keeps its folder there, so turning it again
- * reopens the same checkout. The workspace reads a refusal as the legacy error with its code, until
- * it moves off `ApplicationError` (CL-07).
+ * reopens the same checkout. A refusal or failure rejects with the chat or folder error as it is,
+ * which the workspace passes on.
  */
 export function createChatFolders(
   chat: ChatServiceShape,
   localHost: LocalHostHandlers,
   runEffect: <A, E>(effect: Effect.Effect<A, E>) => Promise<A>,
 ): ChatFolders {
-  const run = <A>(effect: Effect.Effect<A, LocalHostServiceError>) =>
-    runEffect(effect.pipe(Effect.mapError(toChatApplicationError)));
+  const run = <A>(effect: Effect.Effect<A, LocalHostServiceError>) => runEffect(effect);
   return {
     async findOwnFolder(target) {
       const { conversation } = await run(chat.getChat({ target }));

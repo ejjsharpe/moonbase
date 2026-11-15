@@ -30,7 +30,7 @@ async function until<T>(read: () => T | Promise<T>, done: (value: T) => boolean,
 
 /**
  * Two clients of one daemon, as two Macs or two windows would be: each has its own recovery store
- * and its own connection over the daemon's WebSocket, and neither shares a process with the file
+ * and its own connection over the daemon's workspace socket, and neither shares a process with the file
  * host.
  */
 test("two clients of one daemon share a checkout: a move re-paths the other draft, and a late save by B does not overwrite A's", async (t) => {

@@ -23,7 +23,7 @@ import {
   chatInputSchemas,
   chatOutputSchemas,
 } from './chat-schema.ts';
-import { ChatDeltaSchema, ChatListDeltaSchema, ChatListStateSchema } from './socket-schema.ts';
+import { ChatDeltaSchema, ChatListDeltaSchema, ChatListStateSchema } from './watch-schema.ts';
 import { RpcAdmission } from './rpc-admission.ts';
 
 // What each chat procedure fails with on the wire, besides the host's own errors.

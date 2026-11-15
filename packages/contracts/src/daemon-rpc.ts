@@ -20,7 +20,7 @@ import {
   localHostOutputSchemas,
 } from './daemon-schema.ts';
 import { ProviderStateSchema } from './providers-schema.ts';
-import { ProviderSetupDeltaSchema } from './socket-schema.ts';
+import { ProviderSetupDeltaSchema } from './watch-schema.ts';
 import { RpcAdmission } from './rpc-admission.ts';
 
 // What each daemon procedure fails with on the wire, besides the host's own errors. A mutation

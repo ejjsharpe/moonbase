@@ -8,9 +8,8 @@ import {
 
 // What the client-facing `WorkspaceService` fails with (epic #273 D14): the file host's errors,
 // which it passes on, and the client recovery store's own. Each names what happened and builds
-// its message from its fields. Until the editor reads tags (CL-14) and the workspace moves to
-// Effect RPC (CL-07), `toWireError` sends each as the `ApplicationError` code and text clients
-// have always read.
+// its message from its fields. Until the editor reads tags (CL-14), `toWireError` gives each as
+// the `ApplicationError` code and text clients have always read.
 
 const recoveryConflicts = {
   'operation-identity': 'Operation identity changed before recovery publication.',

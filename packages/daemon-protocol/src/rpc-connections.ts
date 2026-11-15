@@ -3,26 +3,38 @@ import * as Socket from 'effect/socket/Socket';
 import * as SocketServer from 'effect/socket/SocketServer';
 import * as NetAddress from 'effect/net/NetAddress';
 import { rpcLimits } from '@moonbase/contracts/rpc-upgrade';
-import { socketLimits } from '@moonbase/contracts/socket';
 import type { BunWebSocket } from './bun-server.ts';
 
-/** What Bun keeps with an upgraded RPC connection. */
-export type RpcSocketData = { kind: 'rpc'; connection?: RpcConnection };
+/** What Bun keeps with an upgraded connection: which socket it is for, and its Effect side. */
+export type RpcSocketData = { kind: 'rpc' | 'workspace'; connection?: RpcConnection };
 type RpcConnection = {
   receive(message: string | Uint8Array): void;
   drained(): void;
   closed(code: number): void;
 };
-/** Close codes a daemon sends an RPC connection: going away on shutdown, policy for any refusal. */
-const closeCodes = { goingAway: 1001, policy: 1008 };
+/**
+ * Close codes a daemon sends a connection: going away on shutdown, policy for any refusal, too
+ * big for a message past its bound.
+ */
+const closeCodes = { goingAway: 1001, policy: 1008, tooBig: 1009 };
+const sizeOf = (message: string | Uint8Array) =>
+  typeof message === 'string' ? Buffer.byteLength(message) : message.byteLength;
+
+export type RpcConnectionOptions = {
+  /** The largest message a connection may send; a larger one closes it. */
+  messageBytes: number;
+  /** Called once a connection opens; what it returns, once that closes. */
+  track?(): () => void;
+};
 
 /**
- * The daemon's authenticated RPC connections, as the `SocketServer` the RPC server runs on. Bun
- * upgrades a connection only once its proof checked out; each one then becomes an Effect
- * `Socket` whose writes wait while Bun buffers more than `socketLimits.outboundBytes`, and which
- * closes after `rpcLimits.idleMs` on the Clock without a message (clients ping every 5 s).
+ * The daemon's authenticated connections to one socket, as the `SocketServer` an RPC server runs
+ * on. Bun upgrades a connection only once its proof checked out; each one then becomes an Effect
+ * `Socket` whose writes wait while Bun buffers more than `rpcLimits.outboundBytes`, which closes on
+ * a message past `messageBytes`, and after `rpcLimits.idleMs` on the Clock without one (clients
+ * ping every 5 s).
  */
-export const makeRpcConnections = () =>
+export const makeRpcConnections = (options: RpcConnectionOptions) =>
   Effect.gen(function* () {
     const fibers = yield* FiberSet.make<unknown, unknown>();
     let handle: ((socket: Socket.Socket) => Effect.Effect<unknown, unknown, never>) | undefined;
@@ -55,7 +67,7 @@ export const makeRpcConnections = () =>
           },
         };
         const backpressure = Effect.callback<void>((resume) => {
-          if (ws.getBufferedAmount() <= socketLimits.outboundBytes) return resume(Effect.void);
+          if (ws.getBufferedAmount() <= rpcLimits.outboundBytes) return resume(Effect.void);
           waiting = () => resume(Effect.void);
         });
         const send = (chunk: Uint8Array | string) =>
@@ -99,6 +111,12 @@ export const makeRpcConnections = () =>
           }),
         ),
       );
+    // What ends each open connection's tracking, run once when it closes.
+    const untrack = new Map<BunWebSocket<RpcSocketData>, () => void>();
+    const release = (ws: BunWebSocket<RpcSocketData>) => {
+      untrack.get(ws)?.();
+      untrack.delete(ws);
+    };
 
     const server = SocketServer.SocketServer.of({
       address: NetAddress.inetAddressFromIpStringUnsafe('127.0.0.1', 0),
@@ -111,7 +129,10 @@ export const makeRpcConnections = () =>
 
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
-        for (const ws of sockets) ws.close(closeCodes.goingAway);
+        for (const ws of sockets) {
+          ws.close(closeCodes.goingAway);
+          release(ws);
+        }
         sockets.clear();
       }),
     );
@@ -121,12 +142,14 @@ export const makeRpcConnections = () =>
       get count() {
         return sockets.size;
       },
-      /** Bun's handlers for RPC connections; a failure cuts the connection, never reaches Bun. */
+      /** Bun's handlers for these connections; a failure cuts the connection, never reaches Bun. */
       open(ws: BunWebSocket<RpcSocketData>) {
         sockets.add(ws);
+        if (options.track) untrack.set(ws, options.track());
         run(connect(ws));
       },
       message(ws: BunWebSocket<RpcSocketData>, message: string | Uint8Array) {
+        if (sizeOf(message) > options.messageBytes) return ws.close(closeCodes.tooBig);
         ws.data.connection?.receive(message);
       },
       drain(ws: BunWebSocket<RpcSocketData>) {
@@ -134,11 +157,12 @@ export const makeRpcConnections = () =>
       },
       close(ws: BunWebSocket<RpcSocketData>, code: number) {
         sockets.delete(ws);
+        release(ws);
         ws.data.connection?.closed(code);
       },
     };
   });
 export type RpcConnections = Effect.Success<ReturnType<typeof makeRpcConnections>>;
-/** The RPC server's `SocketServer`: the connections Bun upgrades on `/v3/rpc`. */
+/** An RPC server's `SocketServer`: the connections Bun upgrades on its socket's path. */
 export const rpcSocketServerLayer = (connections: RpcConnections) =>
   Layer.succeed(SocketServer.SocketServer, connections.server);

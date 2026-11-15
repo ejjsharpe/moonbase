@@ -3,18 +3,8 @@ import type {
   LocalHostHandlers,
   ChatServiceShape,
   ProviderSetupService,
+  WorkspaceHostServiceShape,
 } from '@moonbase/contracts/services';
-import type {
-  HostCommand,
-  HostInput,
-  WorkspaceHostClient,
-} from '@moonbase/contracts/workspace-host';
-import {
-  decodeHostInput,
-  hostInputCheckout,
-  isHostCommand,
-  isHostMutation,
-} from '@moonbase/contracts/workspace-host-schema';
 import { createHostHealthReply } from './health.ts';
 import { HostVerificationError } from '@moonbase/contracts/connection-errors';
 import { HostKeyExposedError, HostUnavailableError } from '@moonbase/contracts/host-errors';
@@ -26,19 +16,19 @@ import {
   type ChatHostHealth,
   type ChatHostTarget,
 } from '@moonbase/contracts/host';
-import { rpcLimits, rpcPath } from '@moonbase/contracts/rpc-upgrade';
-import * as P from './protocol.ts';
-import { fail, UnauthorizedError } from '@moonbase/contracts/errors';
-import { createSocketServer, type SocketData, type SocketSources } from './socket-server.ts';
+import {
+  rpcLimits,
+  rpcPath,
+  rpcProtocol,
+  workspaceRpcLimits,
+  workspaceRpcPath,
+  workspaceRpcProtocol,
+} from '@moonbase/contracts/rpc-upgrade';
+import { UnauthorizedError } from '@moonbase/contracts/errors';
 import { serveBun, type BunServer, type BunWebSocket } from './bun-server.ts';
-import { systemSocketClock, type SocketClock } from './socket-protocol.ts';
-import { serveRpc } from './rpc-server.ts';
-import type { RpcSocketData } from './rpc-connections.ts';
+import { serveRpc, serveWorkspaceRpc } from './rpc-server.ts';
+import type { RpcConnections, RpcSocketData } from './rpc-connections.ts';
 import { createUpgradeNonces, isUpgradeProof, readUpgradeProtocols } from './upgrade-proof.ts';
-
-export type { SocketSources } from './socket-server.ts';
-export { makeWorkspaceClient } from './workspace-server.ts';
-export type { SocketClock } from './socket-protocol.ts';
 
 export type ChatServerConfiguration = { host: ChatHostTarget; token: string; port: number };
 /** What a daemon serves: chat, and in either mode its folder, control and provider services. */
@@ -52,20 +42,20 @@ export type ChatServerServices = {
   };
 };
 /**
- * How connections are counted and admitted, the legacy socket's clock (for tests) and, for a
- * daemon that composes the workspace file host, that host: the server then advertises
- * `workspace-v1` and serves its operations and the `workspace` subscription on `/v2/socket`.
+ * How requests are admitted and, for a daemon that composes the workspace file host, that host:
+ * the server then advertises `workspace-v2` and serves it on its own socket, `/v3/workspace`.
  */
-export type ChatSocketConfiguration = {
-  sources?: SocketSources;
-  clock?: SocketClock;
-  workspace?: WorkspaceHostClient;
+export type ChatServerOptions = {
+  /** The file host; its methods need nothing from their context. */
+  workspace?: WorkspaceHostServiceShape;
   /**
-   * Admits one request or authenticated health probe, returning what ends it once its answer
-   * settles (a mutation's outlives its connection), or throws to refuse it. A daemon counts
+   * Admits one request, watch or authenticated health probe, returning what ends it once its
+   * answer settles (a mutation's outlives its connection), or throws to refuse it. A daemon counts
    * requests as use with it and refuses them once it is stopping.
    */
   admit?(): () => void;
+  /** Called once a workspace connection opens; what it returns, once that closes. */
+  trackWorkspaceConnection?(): () => void;
 };
 /** A local-mode daemon's features beyond chat: local-mode chat and control, providers, folders. */
 export const localDaemonCapabilities: readonly ChatHostCapability[] = [
@@ -85,24 +75,32 @@ export const hostDaemonCapabilities: readonly ChatHostCapability[] = [
 const plainHeaders = { 'Cache-Control': 'no-store', Connection: 'close' };
 /** HTTP requests the listener answers at once; more are refused `503`. */
 const maximumRequests = 128;
+/** Bun's own bound on a socket's buffered output; connections stop writing far below it. */
+const backpressureLimit = 1024 * 1024 * 1024;
 /** A `Sec-WebSocket-Key` is the base64 of 16 bytes. */
 const isWebSocketKey = (key: string | null) =>
   key !== null && /^[A-Za-z0-9+/]{22}==$/.test(key) && Buffer.from(key, 'base64').length === 16;
-
-type ListenerData = SocketData | RpcSocketData;
+/** The body of a refused health probe: its code and fixed text, nothing of why. */
+const healthRefusal = (refused: boolean) =>
+  JSON.stringify({
+    ok: false,
+    error: refused
+      ? { code: 'Unauthorized', message: 'Chat request is not authorized.' }
+      : { code: 'Unavailable', message: 'Chat host is unavailable.' },
+  });
 
 /**
  * Serves signed health at `/v1/health`, RPC at `/v3/rpc` (chat, and a daemon's folder, control
- * and provider setup procedures) and the workspace's WebSocket at `/v2/socket` on one 127.0.0.1
- * listener. The services are trusted local ones, as is `config`; only wire input is decoded here,
- * and replies are checked by the client that receives them. An RPC upgrade is authenticated
- * before Bun accepts it: its proof binds a nonce signed health issued (usable once, briefly) to
- * the token, this host and the protocol.
+ * and provider setup procedures) and, given a file host, the workspace's own RPC socket at
+ * `/v3/workspace`, on one 127.0.0.1 listener. The services are trusted local ones, as is `config`;
+ * only wire input is decoded here, and replies are checked by the client that receives them. An
+ * upgrade is authenticated before Bun accepts it: its proof binds a nonce signed health issued
+ * (usable once, briefly) to the token, this host and the socket's protocol.
  */
 export const serveChat = (
   config: ChatServerConfiguration,
   services: ChatServerServices,
-  socket?: ChatSocketConfiguration,
+  options: ChatServerOptions = {},
 ) =>
   Effect.gen(function* () {
     const { host: expected, token } = config;
@@ -114,14 +112,13 @@ export const serveChat = (
         chatHostCapabilities.chat,
         ...(services.daemon?.capabilities ?? []),
         chatHostCapabilities.rpc,
-        chatHostCapabilities.socket,
-        ...(socket?.workspace ? [chatHostCapabilities.workspace] : []),
+        ...(options.workspace ? [chatHostCapabilities.workspace] : []),
       ],
     };
     const configuration = yield* services.chat.getChatHost({ host: expected });
     if (JSON.stringify(configuration).includes(token))
       return yield* Effect.fail(new HostKeyExposedError());
-    const admit = socket?.admit ?? (() => () => {});
+    const admit = options.admit ?? (() => () => {});
     const run = yield* FiberSet.makeRuntimePromise<never>();
     const nonces = createUpgradeNonces();
     const rpc = yield* serveRpc(
@@ -140,54 +137,39 @@ export const serveChat = (
       },
       { admit },
     );
-    /**
-     * Runs one workspace operation for this host's checkouts. The host journals each mutation by
-     * its request ID, so a repeat replays the first outcome; `signal` cancels reads only, since a
-     * mutation runs to completion even when its connection closes.
-     */
-    const dispatchWorkspace = async <K extends HostCommand>(
-      operation: K,
-      input: HostInput<K>,
-      signal: AbortSignal,
-    ) => {
-      const workspace = socket?.workspace;
-      if (!workspace || !health.capabilities.includes(chatHostCapabilities.workspace))
-        return fail('Incompatible', 'This host does not serve that operation.');
-      const checkout = hostInputCheckout(input);
-      if (checkout && checkout.hostId !== expected.hostId)
-        fail('Unauthorized', 'Workspace request target differs from this host.');
-      return workspace.command(
-        operation,
-        input,
-        isHostMutation(operation) ? undefined : { signal },
-      );
-    };
-    const sockets = createSocketServer({
-      token,
-      host: expected,
-      health,
-      ...(socket?.workspace ? { workspace: socket.workspace } : {}),
-      sources: socket?.sources ?? {},
-      clock: socket?.clock ?? systemSocketClock,
-      // Chat and daemon operations are served over RPC; this socket carries the workspace's.
-      answer: async (operation, input, signal) => {
-        try {
-          if (!isHostCommand(operation))
-            fail('Incompatible', 'This host serves chat and daemon operations over RPC.');
-          const release = admit();
-          try {
-            return {
-              ok: true,
-              value: await dispatchWorkspace(operation, decodeHostInput(operation, input), signal),
-            };
-          } finally {
-            release();
-          }
-        } catch (error) {
-          return { ok: false, error: P.publicDaemonError(error) };
-        }
+    const workspace = options.workspace
+      ? yield* serveWorkspaceRpc(
+          { host: expected, workspace: options.workspace },
+          {
+            admit,
+            ...(options.trackWorkspaceConnection
+              ? { track: options.trackWorkspaceConnection }
+              : {}),
+          },
+        )
+      : undefined;
+    /** Each socket Bun upgrades: its protocol, how many it holds at most, and its connections. */
+    const sockets: Record<
+      string,
+      { kind: RpcSocketData['kind']; protocol: string; cap: number; connections: RpcConnections }
+    > = {
+      [rpcPath]: {
+        kind: 'rpc',
+        protocol: rpcProtocol,
+        cap: rpcLimits.connections,
+        connections: rpc,
       },
-    });
+      ...(workspace
+        ? {
+            [workspaceRpcPath]: {
+              kind: 'workspace' as const,
+              protocol: workspaceRpcProtocol,
+              cap: workspaceRpcLimits.connections,
+              connections: workspace,
+            },
+          }
+        : {}),
+    };
     let closed = false,
       active = 0;
     /** Signed health: the proof is checked first, so an unauthenticated probe reaches nothing. */
@@ -212,25 +194,23 @@ export const serveChat = (
         const refused =
           (thrown instanceof HostVerificationError && thrown.reason === 'request-rejected') ||
           thrown instanceof UnauthorizedError;
-        return new Response(
-          JSON.stringify({
-            ok: false,
-            error: P.publicFailure(refused ? 'Unauthorized' : 'Unavailable'),
-          }),
-          { status: refused ? 401 : 503, headers },
-        );
+        return new Response(healthRefusal(refused), { status: refused ? 401 : 503, headers });
       }
     };
     /**
-     * Upgrades a request for RPC, or answers the status it is refused with, before Bun accepts
-     * it: a browser's (403), anything but a plain local WebSocket handshake for `/v3/rpc` or one
-     * that doesn't offer the RPC protocol and a proof (400), a proof that is not this host's for
-     * a live nonce (401; the nonce is used up either way) and one past the connection cap (503).
+     * Upgrades a request for one of the sockets, or answers the status it is refused with, before
+     * Bun accepts it: a browser's (403), anything but a plain local WebSocket handshake for a
+     * socket this daemon serves or one that doesn't offer its protocol and a proof (400), a proof
+     * that is not this host's for a live nonce and that protocol (401; the nonce is used up either
+     * way) and one past the socket's connection cap (503).
      */
-    const upgradeRpc = (request: Request, bun: BunServer<ListenerData>) => {
+    const upgrade = (request: Request, bun: BunServer<RpcSocketData>) => {
       const refuse = (status: number) => new Response(null, { status, headers: plainHeaders });
       const headers = request.headers;
+      // A browser page always sends Origin; only privileged local processes may connect.
       if (headers.get('origin') !== null) return refuse(403);
+      // Any port: through an SSH forward, Host names the client's local end of the tunnel. Bun
+      // builds the request's URL from Host, so it is checked before the URL is read.
       if (!/^127\.0\.0\.1:\d+$/.test(headers.get('host') ?? '')) return refuse(400);
       let url: URL;
       try {
@@ -238,36 +218,39 @@ export const serveChat = (
       } catch {
         return refuse(400);
       }
+      const socket = Object.hasOwn(sockets, url.pathname) ? sockets[url.pathname] : undefined;
       if (
+        !socket ||
         request.method !== 'GET' ||
-        url.pathname !== rpcPath ||
         url.search !== '' ||
         headers.get('upgrade')?.toLowerCase() !== 'websocket' ||
         headers.get('sec-websocket-version') !== '13' ||
         !isWebSocketKey(headers.get('sec-websocket-key'))
       )
         return refuse(400);
-      const offered = readUpgradeProtocols(headers.get('sec-websocket-protocol'));
+      const offered = readUpgradeProtocols(headers.get('sec-websocket-protocol'), socket.protocol);
       if (!offered) return refuse(400);
       if (
         !nonces.consume(offered.nonce) ||
-        !isUpgradeProof(token, expected, offered.nonce, offered.proof)
+        !isUpgradeProof(token, expected, offered.nonce, offered.proof, socket.protocol)
       )
         return refuse(401);
-      if (rpc.count >= rpcLimits.connections) return refuse(503);
+      if (socket.connections.count >= socket.cap) return refuse(503);
       if (
-        !bun.upgrade(request, { data: { kind: 'rpc' }, headers: { 'Cache-Control': 'no-store' } })
+        !bun.upgrade(request, {
+          data: { kind: socket.kind },
+          headers: { 'Cache-Control': 'no-store' },
+        })
       )
         return refuse(400);
       return undefined;
     };
-    const isRpc = (ws: BunWebSocket<ListenerData>): ws is BunWebSocket<RpcSocketData> =>
-      ws.data.kind === 'rpc';
-    const legacy = sockets.websocket;
+    const connectionsOf = (ws: BunWebSocket<RpcSocketData>) =>
+      ws.data.kind === 'workspace' ? workspace : rpc;
     const server = yield* Effect.acquireRelease(
       Effect.try({
         try: () =>
-          serveBun<ListenerData>({
+          serveBun<RpcSocketData>({
             hostname: '127.0.0.1',
             port: config.port,
             // An HTTP connection idle this long is closed; health answers well within it.
@@ -278,9 +261,7 @@ export const serveChat = (
               if (closed) return new Response(null, { status: 503, headers: plainHeaders });
               if (request.headers.get('upgrade') !== null) {
                 try {
-                  const path = new URL(request.url).pathname;
-                  if (path === rpcPath) return upgradeRpc(request, bun);
-                  return sockets.upgrade(request, bun as BunServer<SocketData>);
+                  return upgrade(request, bun);
                 } catch {
                   return new Response(null, { status: 400, headers: plainHeaders });
                 }
@@ -294,7 +275,7 @@ export const serveChat = (
                   return await answerHealth(request);
                 return new Response(null, { status: 404, headers: plainHeaders });
               } catch {
-                return new Response(JSON.stringify({ ok: false, error: P.publicError(null) }), {
+                return new Response(healthRefusal(false), {
                   status: 503,
                   headers: { ...plainHeaders, 'Content-Type': 'application/json' },
                 });
@@ -303,18 +284,22 @@ export const serveChat = (
               }
             },
             websocket: {
-              ...legacy,
-              open: (ws) =>
-                isRpc(ws) ? rpc.open(ws) : legacy.open(ws as BunWebSocket<SocketData>),
-              message: (ws, message) =>
-                isRpc(ws)
-                  ? rpc.message(ws, message)
-                  : legacy.message(ws as BunWebSocket<SocketData>, message),
-              ping: (ws) => (isRpc(ws) ? undefined : legacy.ping(ws as BunWebSocket<SocketData>)),
-              drain: (ws) =>
-                isRpc(ws) ? rpc.drain(ws) : legacy.drain(ws as BunWebSocket<SocketData>),
-              close: (ws) =>
-                isRpc(ws) ? rpc.close(ws, 1006) : legacy.close(ws as BunWebSocket<SocketData>),
+              // Bun refuses a larger message from its header; each socket holds its own messages
+              // to a smaller bound, and no message arrives before an upgrade is authenticated.
+              maxPayloadLength: workspace
+                ? workspaceRpcLimits.messageBytes
+                : rpcLimits.messageBytes,
+              // Each socket's own idle limit decides when a connection is quiet.
+              idleTimeout: 0,
+              sendPings: false,
+              backpressureLimit,
+              closeOnBackpressureLimit: false,
+              perMessageDeflate: false,
+              open: (ws) => connectionsOf(ws)?.open(ws),
+              message: (ws, message) => connectionsOf(ws)?.message(ws, message),
+              ping: () => {},
+              drain: (ws) => connectionsOf(ws)?.drain(ws),
+              close: (ws) => connectionsOf(ws)?.close(ws, 1006),
             },
           }),
         catch: () => new HostUnavailableError({ reason: 'listener' }),
@@ -322,7 +307,6 @@ export const serveChat = (
       (server) =>
         Effect.promise(async () => {
           closed = true;
-          await sockets.close();
           await server.stop(true);
         }),
     );

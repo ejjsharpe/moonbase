@@ -5,31 +5,29 @@ import type {
   ChatDelta,
   ChatListDelta,
   ProviderSetupDelta,
-  SocketDelta,
-  SocketSubscriptionKind,
-  SocketSubscriptionValue,
-} from '@moonbase/contracts/socket';
+  WatchDelta,
+  WatchKind,
+  WatchValue,
+} from '@moonbase/contracts/watch';
 
 /**
  * What changed from `previous` to `next`: `null` when nothing did, a delta where one pays, or
  * undefined when only a fresh snapshot describes the change.
  */
-export function projectSocketDelta<K extends SocketSubscriptionKind>(
+export function projectWatchDelta<K extends WatchKind>(
   kind: K,
-  previous: SocketSubscriptionValue<K>,
-  next: SocketSubscriptionValue<K>,
-): SocketDelta<K> | null | undefined {
+  previous: WatchValue<K>,
+  next: WatchValue<K>,
+): WatchDelta<K> | null | undefined {
   if (areJsonValuesEqual(previous, next)) return null;
-  // A workspace value is a few numbers, so it is always sent whole.
-  if (kind === 'workspace') return undefined;
   if (kind === 'chat')
-    return projectChatDelta(previous as ChatSnapshot, next as ChatSnapshot) as SocketDelta<K>;
+    return projectChatDelta(previous as ChatSnapshot, next as ChatSnapshot) as WatchDelta<K>;
   if (kind === 'chatList')
-    return projectChatListDelta(previous as ChatListState, next as ChatListState) as SocketDelta<K>;
+    return projectChatListDelta(previous as ChatListState, next as ChatListState) as WatchDelta<K>;
   return projectProviderSetupDelta(
     previous as ProviderState,
     next as ProviderState,
-  ) as SocketDelta<K>;
+  ) as WatchDelta<K>;
 }
 
 /** Deltas cover the running response only: its preview and its transcript parts as they stream. */

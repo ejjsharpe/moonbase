@@ -117,7 +117,7 @@ for (const inputs of [preloadInputs, rendererInputs]) {
 // runtime, provider setup, credentials, Claude Code or the protocol's server side.
 assert.deepEqual(
   mainInputs.filter((path) =>
-    /@earendil-works|chat-runtime\/src\/|daemon-protocol\/src\/(?!remote|loopback|health|protocol|validation|socket-client|socket-protocol|upgrade-proof|rpc-link|rpc-services|endpoint-connection)[^/]+\.ts$/.test(
+    /@earendil-works|chat-runtime\/src\/|daemon-protocol\/src\/(?!remote|loopback|health|protocol|upgrade-proof|rpc-link|daemon-rpc-link|rpc-services|endpoint-connection)[^/]+\.ts$/.test(
       path,
     ),
   ),

@@ -17,11 +17,11 @@ import type {
   ProviderSetupService,
 } from '@moonbase/contracts/services';
 import {
-  socketLimits,
-  type SocketDelta,
-  type SocketSubscriptionKind,
-  type SocketSubscriptionValue,
-} from '@moonbase/contracts/socket';
+  watchDeltaBytes,
+  type WatchDelta,
+  type WatchKind,
+  type WatchValue,
+} from '@moonbase/contracts/watch';
 import type { ChatCommand } from '@moonbase/contracts/chat';
 import { UnauthorizedError } from '@moonbase/contracts/errors';
 import {
@@ -38,7 +38,7 @@ import {
 } from '@moonbase/contracts/chat-errors';
 import { FolderMissingError, FolderRefusedError } from '@moonbase/contracts/folder-errors';
 import { ProviderSetupRefusedError } from '@moonbase/contracts/provider-errors';
-import { projectSocketDelta } from './socket-deltas.ts';
+import { projectWatchDelta } from './watch-deltas.ts';
 
 /** The services one daemon serves over RPC, and what its health advertises. */
 export type RpcServices = {
@@ -48,9 +48,13 @@ export type RpcServices = {
   daemon?: { localHost: LocalHostHandlers; providers: ProviderSetupService['Service'] };
 };
 
-const notServed = () => new IncompatibleHostError({ reason: 'not-served' });
+export const notServed = () => new IncompatibleHostError({ reason: 'not-served' });
 /** Refuses a request for another host before its handler runs. */
-const forHost = (services: RpcServices, host: ChatHostTarget, operation: string) =>
+export const forHost = (
+  services: { host: ChatHostTarget },
+  host: ChatHostTarget,
+  operation: string,
+) =>
   isSameChatHost(host, services.host)
     ? Effect.void
     : Effect.fail(new UnauthorizedError({ operation }));
@@ -59,7 +63,7 @@ const forHost = (services: RpcServices, host: ChatHostTarget, operation: string)
  * A service's failure as its procedure's error union declares it: an error the union names is
  * sent as it is (its tag and fields, never a cause); anything else is the host's own failure.
  */
-const toWire =
+export const toWire =
   (union: { members: readonly unknown[] }) =>
   (error: unknown): unknown => {
     try {
@@ -74,26 +78,26 @@ const toChatWire = (operation: Parameters<typeof chatErrorSchemaOf>[0]) =>
   toWire(chatErrorSchemaOf(operation));
 
 /** A watch's update: a whole value, or a delta from the last one sent. */
-export type Update<K extends SocketSubscriptionKind> =
-  | { kind: 'snapshot'; value: SocketSubscriptionValue<K> }
-  | { kind: 'delta'; delta: SocketDelta<K> };
+export type Update<K extends WatchKind> =
+  | { kind: 'snapshot'; value: WatchValue<K> }
+  | { kind: 'delta'; delta: WatchDelta<K> };
 /**
  * A watch's values as updates: the first whole, each later one as a delta from the last sent
- * where one pays (at most `socketLimits.deltaBytes`), else whole again. A value equal to the last
- * sent is skipped.
+ * where one pays (at most `watchDeltaBytes`), else whole again. A value equal to the last sent is
+ * skipped.
  */
-export function toUpdates<K extends SocketSubscriptionKind, E>(
+export function toUpdates<K extends WatchKind, E>(
   kind: K,
-  values: Stream.Stream<SocketSubscriptionValue<K>, E>,
+  values: Stream.Stream<WatchValue<K>, E>,
 ) {
   return values.pipe(
     Stream.mapAccum(
-      (): SocketSubscriptionValue<K> | undefined => undefined,
-      (previous, next): readonly [SocketSubscriptionValue<K> | undefined, readonly Update<K>[]] => {
+      (): WatchValue<K> | undefined => undefined,
+      (previous, next): readonly [WatchValue<K> | undefined, readonly Update<K>[]] => {
         if (previous === undefined) return [next, [{ kind: 'snapshot', value: next }]];
-        const delta = projectSocketDelta(kind, previous, next);
+        const delta = projectWatchDelta(kind, previous, next);
         if (delta === null) return [previous, []];
-        if (delta !== undefined && JSON.stringify(delta).length <= socketLimits.deltaBytes)
+        if (delta !== undefined && JSON.stringify(delta).length <= watchDeltaBytes)
           return [next, [{ kind: 'delta', delta }]];
         return [next, [{ kind: 'snapshot', value: next }]];
       },

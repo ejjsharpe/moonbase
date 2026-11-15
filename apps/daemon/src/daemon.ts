@@ -20,7 +20,6 @@ import { ProviderSetupLive } from '@moonbase/chat-runtime/providers';
 import {
   hostDaemonCapabilities,
   localDaemonCapabilities,
-  makeWorkspaceClient,
   serveChat,
 } from '@moonbase/daemon-protocol/server';
 import type { ClaudeCodeSubscription } from '@moonbase/chat-runtime/claude-code';
@@ -276,9 +275,9 @@ const serveDaemon = (options: DaemonOptions, directory: string, log: DaemonLog) 
         },
       },
       {
-        // A workspace connection keeps a local daemon running; an RPC request or watch counts
-        // as use while it runs, through `admit`.
-        sources: idle ? { trackConnection: () => countUse(idle) } : {},
+        // A workspace connection keeps a local daemon running; a request or watch counts as use
+        // while it runs, through `admit`.
+        ...(idle ? { trackWorkspaceConnection: () => countUse(idle) } : {}),
         // Once stopping, new requests are refused; a local daemon counts each request as use
         // until it is answered.
         admit: () => {
@@ -286,7 +285,7 @@ const serveDaemon = (options: DaemonOptions, directory: string, log: DaemonLog) 
           return idle ? countUse(idle) : () => {};
         },
         // Without a host the daemon advertises no workspace.
-        ...(opened.host ? { workspace: makeWorkspaceClient(opened.host) } : {}),
+        ...(opened.host ? { workspace: opened.host } : {}),
       },
     );
     const port = Number(new URL(server.origin).port);
