@@ -540,6 +540,17 @@ test('Go to lists recent files first, highlights matches and opens an exact path
   await explorerAction(first(page), 'Go to File…');
   const dialog = page.getByRole('dialog', { name: 'Go to', exact: true });
   await expect(dialog.getByRole('option').first()).toHaveAccessibleName('welcome.ts');
+  // Enter right after typing opens the new query's top row (welcome.ts), not the row the
+  // previous query's results, still on screen, had on top.
+  await dialog.getByRole('combobox').fill('example');
+  await expect(dialog.getByRole('option').first()).toHaveAccessibleName('src/example.ts');
+  await dialog.getByRole('combobox').fill('e');
+  await dialog.getByRole('combobox').press('Enter');
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press('ControlOrMeta+p');
   await dialog.getByRole('combobox').fill('exmp');
   await expect(dialog.getByRole('option').first()).toHaveAccessibleName('src/example.ts');
   await expect(dialog.locator('[role="option"]').first().locator('mark')).toHaveCount(4);

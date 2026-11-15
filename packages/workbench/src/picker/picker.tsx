@@ -85,6 +85,10 @@ export function Picker({
   // does for a newly typed query. A refresh after a change on disk keeps it where it is.
   const [generation, setGeneration] = useState(0);
   const [highlighted, setHighlighted] = useState<string>();
+  // The row the reader moved to with the keys or pointer; Enter opens it while the results still
+  // hold it. Base UI's own highlight of the top row, which can still belong to the previous
+  // query's results, is not a choice, and a new query or mode forgets it.
+  const chosen = useRef<string>(undefined);
   const lookup = useQueryModel(() => controller.createLookup(), controller.report);
   const search = useQueryModel(() => controller.createTextSearch(), controller.report);
   const files = useSyncExternalStore(
@@ -173,6 +177,7 @@ export function Picker({
     const plain = (text: string) => (text.startsWith('>') ? '' : text);
     setMode(next === 'find' ? 'find' : 'goto');
     setGeneration((value) => value + 1);
+    chosen.current = undefined;
     if (next === 'commands') setQuery('>');
     else if (next === 'goto') setQuery(plain);
     else setQuery((text) => (plain(text) || request.text).slice(0, 256));
@@ -180,6 +185,7 @@ export function Picker({
   function changeOptions(next: TextSearchOptions) {
     setOptions(next);
     setGeneration((value) => value + 1);
+    chosen.current = undefined;
   }
 
   const status = describePickerStatus({
@@ -239,8 +245,14 @@ export function Picker({
               autoHighlight="always"
               keepHighlight
               value={query}
-              onValueChange={(value) => setQuery(value.replace(/[\n\r]/g, ''))}
-              onItemHighlighted={(value: string | undefined) => setHighlighted(value)}>
+              onValueChange={(value) => {
+                chosen.current = undefined;
+                setQuery(value.replace(/[\n\r]/g, ''));
+              }}
+              onItemHighlighted={(value: string | undefined, details) => {
+                setHighlighted(value);
+                if (details.reason !== 'none') chosen.current = value;
+              }}>
               <Tabs.Panel value={mode} tabIndex={-1} {...stylex.props(styles.fill)}>
                 <Autocomplete.InputGroup {...stylex.props(styles.field)}>
                   <span {...stylex.props(styles.icon)}>
@@ -271,8 +283,8 @@ export function Picker({
                       } else if (event.key === 'Enter') {
                         event.preventBaseUIHandler();
                         event.preventDefault();
-                        if (searching) pendingEnter.current = { key: highlighted };
-                        else activate(highlighted);
+                        if (searching) pendingEnter.current = { key: chosen.current };
+                        else activate(chosen.current);
                       } else if (event.key === 'Escape') {
                         // Escape closes the picker, not just the list inside it.
                         event.preventBaseUIHandler();
