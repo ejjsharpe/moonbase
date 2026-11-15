@@ -82,12 +82,14 @@ export function Picker({
     regex: false,
   });
   // A switch of mode or options remounts the combobox, so the highlight starts at the top as it
-  // does for a newly typed query. A refresh after a change on disk keeps it where it is.
+  // does for a newly typed query. A refresh after a change on disk keeps the highlight at the same
+  // position (Base UI tracks it by index), so it lands on whichever row is now there.
   const [generation, setGeneration] = useState(0);
   const [highlighted, setHighlighted] = useState<string>();
-  // The row the reader moved to with the keys or pointer; Enter opens it while the results still
-  // hold it. Base UI's own highlight of the top row, which can still belong to the previous
-  // query's results, is not a choice, and a new query or mode forgets it.
+  // The row the reader moved to with the keys or pointer, which a refresh moves with the
+  // highlight; Enter opens it while the results still hold it. Base UI's own highlight of the top
+  // row, which can still belong to the previous query's results, is not a choice, and a new query,
+  // mode or options forget it.
   const chosen = useRef<string>(undefined);
   const lookup = useQueryModel(() => controller.createLookup(), controller.report);
   const search = useQueryModel(() => controller.createTextSearch(), controller.report);
@@ -251,7 +253,10 @@ export function Picker({
               }}
               onItemHighlighted={(value: string | undefined, details) => {
                 setHighlighted(value);
-                if (details.reason !== 'none') chosen.current = value;
+                // A refresh moves a chosen highlight to the row now at its position; Enter then
+                // opens what is shown.
+                if (details.reason !== 'none' || chosen.current !== undefined)
+                  chosen.current = value;
               }}>
               <Tabs.Panel value={mode} tabIndex={-1} {...stylex.props(styles.fill)}>
                 <Autocomplete.InputGroup {...stylex.props(styles.field)}>

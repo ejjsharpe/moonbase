@@ -642,37 +642,59 @@ test('Tab switches to Find, which previews matches and opens the file at the mat
   await expect(page.getByRole('dialog', { name: 'Go to', exact: true })).toBeVisible();
 });
 
-test('a change on disk refreshes picker results without moving the selected row', async ({
+test('a change on disk keeps the picker highlight at its position, and Enter opens the row shown there', async ({
   page,
 }) => {
   await page.goto('/');
   await first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }).focus();
   await page.keyboard.press('ControlOrMeta+Shift+f');
   const find = page.getByRole('dialog', { name: 'Find in files', exact: true });
-  await find.getByRole('combobox').fill('value');
   const matches = find.getByRole('option');
+  // A new query starts at the top.
+  await find.getByRole('combobox').fill('valu');
+  await expectHighlighted(find, matches.first());
+  await find.getByRole('combobox').fill('value');
   await expect(matches).toHaveCount(2);
   await page.keyboard.press('ArrowDown');
   await expectHighlighted(find, matches.nth(1));
-  // Another writer (an agent, a build) changes the checkout while the picker is open.
+  await expect(matches.nth(1)).toHaveAccessibleName('Line 2: return value * 2;');
+  // Another writer (an agent, a build) changes the checkout while the picker is open, adding a
+  // match in a file listed above the highlighted one.
   await page.evaluate(() =>
     window.demo.memory.externalWrite(
-      { checkout: window.demo.checkout, path: 'src/example.ts' },
-      'export function double(value: number) {\n  return value * 2;\n}\n// value\n',
+      { checkout: window.demo.checkout, path: 'README.md' },
+      'value here\n',
     ),
   );
   await expect(matches).toHaveCount(3);
-  // Let React settle any selection effects the new results trigger.
+  // Let React settle any highlight effects the new results trigger.
   await page.evaluate(
     () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
+  // The highlight stays second, on the row now there, and the preview shows that row.
+  await expect(matches.nth(1)).toHaveAccessibleName(
+    'Line 1: export function double(value: number) {',
   );
   const active = await find.getByRole('combobox').getAttribute('aria-activedescendant');
   expect(
     await matches.evaluateAll((rows, id) => rows.findIndex((row) => row.id === id), active),
   ).toBe(1);
-  // A new query still starts at the top.
-  await find.getByRole('combobox').fill('valu');
-  await expectHighlighted(find, matches.first());
+  await expect(find.getByRole('region', { name: 'Preview', exact: true })).toContainText('line 1');
+  // Enter opens what is shown highlighted: line 1 of src/example.ts.
+  await page.keyboard.press('Enter');
+  await expect(find).toHaveCount(0);
+  await expect(
+    first(page).getByRole('textbox', { name: 'src/example.ts editor', exact: true }),
+  ).toBeFocused();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          window.demo.first.getSnapshot().recovery.views.sample.positions['src/example.ts']?.file
+            ?.line,
+      ),
+    )
+    .toBe(1);
 });
 
 test('Enter opens the highlighted row while changes on disk keep refreshing Go to', async ({
