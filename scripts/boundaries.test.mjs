@@ -135,8 +135,8 @@ assert.deepEqual(
 );
 assert(
   check({
-    'packages/daemon-protocol/src/remote.ts': "import './socket-client.ts';",
-    'packages/daemon-protocol/src/socket-client.ts': "import './protocol.ts';",
+    'packages/daemon-protocol/src/remote.ts': "import './rpc-link.ts';",
+    'packages/daemon-protocol/src/rpc-link.ts': "import './protocol.ts';",
     'packages/daemon-protocol/src/protocol.ts': "import '../examples/remote.ts';",
     'packages/daemon-protocol/examples/remote.ts': "import '@moonbase/application';",
     'packages/application/src/index.ts': '',

@@ -9,8 +9,7 @@ import { createKeyFileSource } from '@moonbase/chat-runtime/credentials';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
 import { makeConnectionClient } from '@moonbase/application/runtime/clients';
 import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
-import { RemoteWorkspaceHostLive } from '@moonbase/daemon-protocol/remote';
-import { connectDaemonSocket } from '@moonbase/daemon-protocol/socket';
+import { EndpointConnectionLive, RemoteWorkspaceHostLive } from '@moonbase/daemon-protocol/remote';
 import { runDaemon, type DaemonExit } from '../src/daemon.ts';
 import { closeWorkspace, findFilesystemHelper } from '../src/workspace.ts';
 import type { LogRecord } from '../src/log.ts';
@@ -172,7 +171,7 @@ test('a daemon advertises the workspace, saves and reads 2 MiB over the wire, an
     try {
       const checkout = await run(daemon.host.openCheckout({ root: project }));
       const disk = await run(daemon.host.readFile({ checkout, path: 'a.txt' }));
-      // Large enough that its request and reply are each many frames.
+      // Large enough to pass the RPC socket's message bound.
       const text = '"quoted"\n'.repeat(Math.floor((2 * 1024 * 1024) / 9));
       const saved = await run(
         daemon.host.saveFile({
@@ -458,16 +457,22 @@ test('a daemon without the filesystem helper composes no workspace and still run
       providers: () => createFauxProviders(directory),
     });
     await bounded(ready.promise);
-    // Without a file host the daemon advertises no workspace and refuses its operations.
+    // Without a file host the daemon advertises no workspace, and its clients send nothing to it.
     const identity = await readJson(join(directory, 'identity.json'));
-    const socket = await connectDaemonSocket({
-      origin: `http://127.0.0.1:${await portOf(directory)}`,
-      token: (await readFile(join(directory, 'token'), 'utf8')).trim(),
-      expected: identity.host,
-    });
-    assert.ok(!socket.health.capabilities.includes('workspace-v1'));
-    await assert.rejects(socket.request('openCheckout', { root }), { code: 'Incompatible' });
-    await socket.close();
+    const clients = ManagedRuntime.make(
+      RemoteWorkspaceHostLive({ host: identity.host }).pipe(
+        Layer.provide(
+          EndpointConnectionLive({
+            origin: `http://127.0.0.1:${await portOf(directory)}`,
+            token: (await readFile(join(directory, 'token'), 'utf8')).trim(),
+            expected: identity.host,
+          }),
+        ),
+      ),
+    );
+    const host = await clients.runPromise(WorkspaceHostService);
+    assert.equal(await refusal(host.openCheckout({ root })), 'Incompatible');
+    await clients.dispose();
     controller.abort();
     assert.equal(await running, 'stopped');
   });

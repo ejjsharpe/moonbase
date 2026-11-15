@@ -11,7 +11,7 @@ import {
   chatInputSchemas,
   chatOutputSchemas,
 } from '@moonbase/contracts/chat-schema';
-import { ChatListStateSchema } from '@moonbase/contracts/socket-schema';
+import { ChatListStateSchema } from '@moonbase/contracts/watch-schema';
 import { ProviderStateSchema, providerInputSchemas } from '@moonbase/contracts/providers-schema';
 import {
   ConnectionSnapshotSchema,

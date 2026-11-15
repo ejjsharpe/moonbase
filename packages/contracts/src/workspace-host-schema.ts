@@ -1,8 +1,8 @@
 import * as Schema from 'effect/Schema';
-import { ApplicationError } from './errors.ts';
+import { InvalidRequestError } from './workspace-host-errors.ts';
 import { ChatTargetSchema, chatReplyErrorCodes } from './chat-schema.ts';
 import { AbsolutePathSchema } from './daemon-schema.ts';
-import type { HostCommand, HostInput, HostOutput } from './workspace-host.ts';
+import type { HostCommand, HostInput } from './workspace-host.ts';
 import { array, optional, struct, voidResult } from './schema.ts';
 import {
   CheckoutTargetSchema,
@@ -194,31 +194,12 @@ const inputs = Object.fromEntries(
     Schema.decodeUnknownSync(schema, { onExcessProperty: 'error', reportInput: false }),
   ]),
 );
-const outputs = Object.fromEntries(
-  Object.entries(hostOutputSchemas).map(([name, schema]) => [
-    name,
-    Schema.decodeUnknownSync(schema, { reportInput: false }),
-  ]),
-);
-export const isHostCommand = (value: unknown): value is HostCommand =>
-  typeof value === 'string' && Object.hasOwn(hostInputSchemas, value);
+/** Decodes an operation's input, as a client does before sending it; refuses an invalid one. */
 export function decodeHostInput<K extends HostCommand>(operation: K, value: unknown): HostInput<K> {
   try {
-    if (!isHostCommand(operation)) throw Error();
-    return inputs[operation](value) as HostInput<K>;
+    return inputs[operation]!(value) as HostInput<K>;
   } catch {
-    throw new ApplicationError({ code: 'InvalidInput', message: 'Invalid workspace input.' });
-  }
-}
-export function decodeHostOutput<K extends HostCommand>(
-  operation: K,
-  value: unknown,
-): HostOutput<K> {
-  try {
-    if (!isHostCommand(operation)) throw Error();
-    return outputs[operation](value) as HostOutput<K>;
-  } catch {
-    throw new ApplicationError({ code: 'Incompatible', message: 'Invalid workspace reply.' });
+    throw new InvalidRequestError({ problem: 'invalid-input' });
   }
 }
 
@@ -256,7 +237,10 @@ export function hostDeadlineMs(operation: HostCommand): number {
     return hostDeadlinesMs.git;
   return isHostMutation(operation) ? hostDeadlinesMs.mutation : hostDeadlinesMs.read;
 }
-/** The checkout (or, for a chat, host) an operation's input names, if any; the server checks it is its own host's. */
+/**
+ * The checkout (or, for a chat, host) an operation's input names, if any: the daemon and its
+ * clients check it is the host's own.
+ */
 export function hostInputCheckout(input: unknown): { hostId: string } | undefined {
   const shape = input as {
     checkout?: { hostId: string };
@@ -265,7 +249,7 @@ export function hostInputCheckout(input: unknown): { hostId: string } | undefine
   return shape.checkout ?? shape.target?.checkout ?? shape.target?.host;
 }
 
-/** A `workspace` subscription follows one checkout. */
+/** A workspace watch follows one checkout. */
 export const WorkspaceWatchTargetSchema = struct({ checkout: CheckoutTargetSchema });
 /**
  * The watch of a checkout: `ready` once files are watched, `revision` rising with every change

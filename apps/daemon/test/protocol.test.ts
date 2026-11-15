@@ -34,8 +34,7 @@ const capabilities = [
   'providers-v1',
   'folders-v1',
   'rpc-v1',
-  'socket-v1',
-  'workspace-v1',
+  'workspace-v2',
 ];
 
 async function withRoot(run: (root: string, started: DaemonProcess[]) => Promise<void>) {

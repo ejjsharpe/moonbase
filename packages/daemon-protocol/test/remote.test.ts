@@ -6,34 +6,25 @@ import type { ChatListUpdate, ChatSnapshot } from '@moonbase/contracts/chat';
 import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import {
   ConnectionService,
-  WorkspaceHostService,
   type ChatServiceShape,
   type VerifiedChatEndpoint,
 } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { toWireError, type WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
-import type { WorkspaceHostClient } from '@moonbase/contracts/workspace-host';
-import {
-  DaemonRpcLinkLive,
-  RemoteChatLive,
-  RemoteLocalHostLive,
-  RemoteWorkspaceHostLive,
-} from '../src/remote.ts';
+import { DaemonRpcLinkLive, RemoteChatLive, RemoteLocalHostLive } from '../src/remote.ts';
 import { serveChat } from '../src/server.ts';
 import { refusingDaemon } from './served-services.ts';
 import * as P from '../src/protocol.ts';
-import { socketLimits } from '@moonbase/contracts/socket';
+import { nonce } from './controlled-chat-fixture.ts';
 import { fixture as runtimeFixture, session, until } from './runtime-fixture.ts';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
 
 /** A daemon over a local-mode runtime that can stop and start again on its port. */
-async function daemon(t: TestContext, workspace?: WorkspaceHostClient) {
+async function daemon(t: TestContext) {
   const f = await runtimeFixture(t);
-  const token = P.nonce(),
+  const token = nonce(),
     listed: string[] = [];
-  let connections = 0,
-    listWatches = 0,
+  let listWatches = 0,
     scope: Scope.Closeable | undefined,
     port = 0;
   // Counts list commands, so a test sees that watches never poll.
@@ -54,19 +45,9 @@ async function daemon(t: TestContext, workspace?: WorkspaceHostClient) {
   const start = async () => {
     scope = Effect.runSync(Scope.make());
     const server = await Effect.runPromise(
-      serveChat(
-        { host: session.host, token, port },
-        { chat, daemon: refusingDaemon() },
-        {
-          ...(workspace ? { workspace } : {}),
-          sources: {
-            trackConnection: () => {
-              connections++;
-              return () => {};
-            },
-          },
-        },
-      ).pipe(Effect.provideService(Scope.Scope, scope)),
+      serveChat({ host: session.host, token, port }, { chat, daemon: refusingDaemon() }).pipe(
+        Effect.provideService(Scope.Scope, scope),
+      ),
     );
     port = Number(new URL(server.origin).port);
   };
@@ -84,9 +65,6 @@ async function daemon(t: TestContext, workspace?: WorkspaceHostClient) {
     listed,
     start,
     stop,
-    get connections() {
-      return connections;
-    },
     get listWatches() {
       return listWatches;
     },
@@ -108,12 +86,7 @@ async function daemon(t: TestContext, workspace?: WorkspaceHostClient) {
  * A remote client of `d`, over a connection whose endpoint the test may replace; its time is a
  * `TestClock` the test moves with `advance` when `testClock` is set.
  */
-function remote(
-  t: TestContext,
-  d: Awaited<ReturnType<typeof daemon>>,
-  withWorkspace = false,
-  testClock = false,
-) {
+function remote(t: TestContext, d: Awaited<ReturnType<typeof daemon>>, testClock = false) {
   let endpoint = d.endpoint();
   const changes = new Set<() => void>();
   const unavailable = () =>
@@ -149,7 +122,6 @@ function remote(
       Layer.mergeAll(RemoteChatLive, RemoteLocalHostLive).pipe(
         Layer.provide(DaemonRpcLinkLive({ host: session.host })),
       ),
-      ...(withWorkspace ? [RemoteWorkspaceHostLive({ host: session.host })] : []),
       ...(testClock ? [TestClock.layer()] : []),
     ).pipe(Layer.provide(connection)),
   );
@@ -159,10 +131,9 @@ function remote(
     /** Moves the deadlines of requests made through this client. */
     run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
     advance: (ms: number) => runtime.runPromise(TestClock.adjust(ms)),
-    workspace: () => runtime.runPromise(WorkspaceHostService),
     /** Replaces the connection generation and announces it. */
     replace() {
-      endpoint = { ...endpoint, connectionId: P.nonce() };
+      endpoint = { ...endpoint, connectionId: nonce() };
       for (const publish of changes) publish();
     },
   };
@@ -248,7 +219,7 @@ test('one client shares one connection, and chats another client creates or chan
 
 test('a dropped daemon shows reconnecting, then resets its watches; healthy traffic renews the budget, and a lost budget or generation fails them', async (t) => {
   const d = await daemon(t);
-  const client = remote(t, d, false, true);
+  const client = remote(t, d, true);
   const target = (
     await client.chat.command('createChat', {
       session,
@@ -304,92 +275,4 @@ test('a dropped daemon shows reconnecting, then resets its watches; healthy traf
   client.replace();
   await until(async () => again.errors.length, Boolean);
   assert.equal(again.errors[0]!.code, 'Unavailable');
-});
-
-test('a workspace call or watch for another host is refused before it is sent, and a checkout of another host is refused when opened', async (t) => {
-  const foreign = {
-    vcs: 'none',
-    hostId: 'other-host',
-    checkoutId: 'checkout-1',
-    projectId: 'project-1',
-    root: '/work',
-  } as const;
-  const calls: string[] = [];
-  const workspace: WorkspaceHostClient = {
-    command: async (operation) => {
-      calls.push(operation);
-      return foreign as never;
-    },
-    watch: () => () => Promise.resolve(),
-  };
-  const d = await daemon(t, workspace);
-  const host = await remote(t, d, true).workspace();
-  const code = async (effect: Effect.Effect<unknown, WorkspaceHostError>) =>
-    toWireError(await Effect.runPromise(Effect.flip(effect))).code;
-  assert.equal(await code(host.readFile({ checkout: foreign, path: 'a.txt' })), 'Unauthorized');
-  assert.equal(
-    await code(Stream.runDrain(host.watch({ checkout: foreign, paths: [''] }))),
-    'Unauthorized',
-  );
-  assert.deepEqual(calls, []);
-  // The daemon answers an open with a checkout of another host.
-  assert.equal(await code(host.openCheckout({ root: '/work' })), 'Incompatible');
-  assert.deepEqual(calls, ['openCheckout']);
-});
-
-test('a mutation past its deadline keeps its place until the daemon replies, status calls keep theirs, a wait for a place ends at its deadline, and closing the connection frees them', async (t) => {
-  const answers: (() => void)[] = [];
-  const workspace: WorkspaceHostClient = {
-    command: (operation) =>
-      operation === 'saveStatus'
-        ? Promise.resolve({ kind: 'not-started' } as never)
-        : new Promise<never>((resolve) => answers.push(() => resolve(undefined as never))),
-    watch: () => () => Promise.resolve(),
-  };
-  const d = await daemon(t, workspace);
-  const client = remote(t, d, true, true);
-  const host = await client.workspace();
-  const limit = socketLimits.workspaceRequests;
-  const ownCheckout = {
-    vcs: 'none',
-    hostId: session.host.hostId,
-    checkoutId: 'checkout-1',
-    projectId: 'project-1',
-    root: '/work',
-  } as const;
-  const identity = { installationId: 'install', clientId: 'client' };
-  const acknowledge = (requestId: string) =>
-    client.run(Effect.flip(host.acknowledgeSave({ ...identity, requestId })));
-  const hung = Array.from({ length: limit }, (_, i) => acknowledge(`hung-${i}`));
-  await until(
-    async () => answers.length,
-    (count) => count === limit,
-  );
-  const read = () =>
-    client.run(Effect.flip(host.readFile({ checkout: ownCheckout, path: 'a.txt' })));
-  const waitingRead = read();
-  // A status call runs although every other place is held.
-  assert.deepEqual(await client.run(host.saveStatus({ ...identity, requestId: 'hung-0' })), {
-    kind: 'not-started',
-  });
-  await client.advance(120_000);
-  assert.deepEqual(
-    (await Promise.all(hung)).map((error) => toWireError(error).code),
-    Array(limit).fill('Uncertain'),
-  );
-  // The place was never obtained, so the read was never sent.
-  assert.equal(toWireError(await waitingRead).code, 'Unavailable');
-  assert.equal(answers.length, limit);
-  // A late reply frees its place.
-  answers.shift()!();
-  const after = acknowledge('after');
-  await until(
-    async () => answers.length,
-    (count) => count === limit,
-  );
-  // Closing the connection frees the rest: the waiting read gets a place and fails at once.
-  const waiting = read();
-  await d.stop();
-  assert.ok(ApplicationError.is(await waiting));
-  await after;
 });

@@ -32,7 +32,7 @@ import {
   ProviderSetupUnavailableError,
   type ProviderSetupError,
 } from '@moonbase/contracts/provider-errors';
-import { DaemonRpcLink, DaemonRpcLinkLive, type RemoteError } from './rpc-link.ts';
+import { DaemonRpcLink, DaemonRpcLinkLive, type RemoteError } from './daemon-rpc-link.ts';
 
 /** A daemon's chat over its RPC link: every procedure, each reply checked against its request. */
 export const RemoteChatLive: Layer.Layer<ChatService, never, DaemonRpcLink> = Layer.effect(

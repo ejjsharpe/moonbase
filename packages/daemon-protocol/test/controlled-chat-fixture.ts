@@ -1,8 +1,11 @@
+import { randomBytes } from 'node:crypto';
 import { Cause, Effect, Queue, Stream } from 'effect';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
 import type { ChatServiceShape } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 
+/** 32 random bytes in canonical base64url: a token, nonce or connection ID. */
+export const nonce = () => randomBytes(32).toString('base64url');
 export const host = { hostId: 'socket-host', storeId: 'socket-store' };
 export const session = { host, actorId: 'owner' };
 export const target = { ...session, conversationId: 'A' };

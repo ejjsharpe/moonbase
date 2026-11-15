@@ -20,7 +20,6 @@ import { ProviderSetupLive } from '@moonbase/chat-runtime/providers';
 import {
   hostDaemonCapabilities,
   localDaemonCapabilities,
-  makeWorkspaceClient,
   serveChat,
 } from '@moonbase/daemon-protocol/server';
 import type { ClaudeCodeSubscription } from '@moonbase/chat-runtime/claude-code';
@@ -93,6 +92,8 @@ export type DaemonOptions = {
   filesystemHelper?: string;
   /** How long shutdown waits for the workspace to close before going on without it; 5 seconds. */
   workspaceCloseMs?: number;
+  /** How long shutdown then waits for the server's mutations still running; 5 seconds. */
+  serverCloseMs?: number;
   /** Identifies this daemon's code in `endpoint.json`, so a client can tell an outdated one. */
   build?: string;
   /** Wraps the chat service the daemon serves; test entries count and hold requests with it. */
@@ -225,6 +226,17 @@ const serveDaemon = (options: DaemonOptions, directory: string, log: DaemonLog) 
     // Stopping refuses new work at once; the server, workspace and runtime then close in order.
     stop.onRequest(() => control.setAdmissionsOpen(false));
 
+    let closingWorkspace: Promise<void> | undefined;
+    /** Closes the workspace once: cancels its helper process groups and waits for them. */
+    function closeOpenedWorkspace(opened: Workspace): Promise<void> {
+      return (closingWorkspace ??= (() => {
+        workspace = noWorkspace;
+        return closeWorkspace(opened.dispose, {
+          deadlineMs: options.workspaceCloseMs ?? 5_000,
+          log,
+        });
+      })());
+    }
     const opened = yield* Effect.acquireRelease(
       attempt(() =>
         openWorkspace(
@@ -234,14 +246,7 @@ const serveDaemon = (options: DaemonOptions, directory: string, log: DaemonLog) 
             : createChatFolders(chat, localHost, (effect) => runtime.runPromise(effect)),
         ),
       ),
-      (opened) =>
-        Effect.promise(() => {
-          workspace = noWorkspace;
-          return closeWorkspace(opened.dispose, {
-            deadlineMs: options.workspaceCloseMs ?? 5_000,
-            log,
-          });
-        }),
+      (opened) => Effect.promise(() => closeOpenedWorkspace(opened)),
     );
     workspace = opened;
 
@@ -276,9 +281,13 @@ const serveDaemon = (options: DaemonOptions, directory: string, log: DaemonLog) 
         },
       },
       {
-        // A workspace connection keeps a local daemon running; an RPC request or watch counts
-        // as use while it runs, through `admit`.
-        sources: idle ? { trackConnection: () => countUse(idle) } : {},
+        // A workspace connection keeps a local daemon running; a request or watch counts as use
+        // while it runs, through `admit`.
+        ...(idle ? { trackWorkspaceConnection: () => countUse(idle) } : {}),
+        // A mutation that outlives the workspace's close (a helper stuck past its kill) does not
+        // hold the stop: the host journalled it, and the next start reports it.
+        closeMs: options.serverCloseMs ?? 5_000,
+        onCloseTimeout: () => log.write({ event: 'server', reason: 'close-timeout' }),
         // Once stopping, new requests are refused; a local daemon counts each request as use
         // until it is answered.
         admit: () => {
@@ -286,9 +295,12 @@ const serveDaemon = (options: DaemonOptions, directory: string, log: DaemonLog) 
           return idle ? countUse(idle) : () => {};
         },
         // Without a host the daemon advertises no workspace.
-        ...(opened.host ? { workspace: makeWorkspaceClient(opened.host) } : {}),
+        ...(opened.host ? { workspace: opened.host } : {}),
       },
     );
+    // Stopping closes the workspace before the server: the server waits for the file host mutations
+    // it runs, which end once their helpers are stopped, not when the helpers finish by themselves.
+    yield* Effect.addFinalizer(() => Effect.promise(() => closeOpenedWorkspace(opened)));
     const port = Number(new URL(server.origin).port);
     if (!stop.reason)
       yield* attempt(() =>

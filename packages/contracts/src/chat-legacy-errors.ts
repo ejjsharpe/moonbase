@@ -7,7 +7,10 @@ import type {
 } from './services.ts';
 
 /** A chat, folder or provider setup service's error, as it reaches a client. */
-type DaemonServiceError = ChatServiceError | LocalHostServiceError | ProviderSetupServiceError;
+export type DaemonServiceError =
+  | ChatServiceError
+  | LocalHostServiceError
+  | ProviderSetupServiceError;
 
 const codes: Record<
   Exclude<DaemonServiceError, ConnectionFailure>['_tag'] | 'CancelledError',
@@ -35,6 +38,23 @@ const codes: Record<
   CancelledError: 'Cancelled',
 };
 
+const isConnectionFailure = (error: { _tag: string }): error is ConnectionFailure =>
+  error._tag === 'ConnectionError' || error._tag === 'HostVerificationError';
+/** Whether `value` is a chat, folder, provider setup or daemon link error. */
+export const isDaemonServiceError = (value: unknown): value is DaemonServiceError => {
+  const tag = value instanceof Error ? (value as { _tag?: unknown })._tag : undefined;
+  return (
+    typeof tag === 'string' &&
+    (Object.hasOwn(codes, tag) || isConnectionFailure(value as { _tag: string }))
+  );
+};
+/** The legacy code a chat, folder, provider setup or daemon link error has always had. */
+export function getDaemonErrorCode(error: DaemonServiceError): ApplicationErrorCode {
+  if (ApplicationError.is(error)) return error.code;
+  if (isConnectionFailure(error)) return toConnectionApplicationError(error).code;
+  return codes[error._tag];
+}
+
 // The shared outcomes name the operation they concern, as the RPC procedure names it; a user
 // sees this fixed text instead.
 const outcomeMessages = {
@@ -51,10 +71,9 @@ const outcomeMessages = {
  */
 export function toChatApplicationError(error: DaemonServiceError): ApplicationError {
   if (ApplicationError.is(error)) return error;
-  if (error._tag === 'ConnectionError' || error._tag === 'HostVerificationError')
-    return toConnectionApplicationError(error);
+  if (isConnectionFailure(error)) return toConnectionApplicationError(error);
   return new ApplicationError({
-    code: codes[error._tag],
+    code: getDaemonErrorCode(error),
     message: outcomeMessages[error._tag as keyof typeof outcomeMessages] ?? error.message,
   });
 }

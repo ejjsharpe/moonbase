@@ -1,28 +1,46 @@
-import { Cause, Effect, FiberSet, Layer, Queue } from 'effect';
+import { Cause, Effect, FiberSet, Layer, Queue, Semaphore } from 'effect';
 import * as Socket from 'effect/socket/Socket';
 import * as SocketServer from 'effect/socket/SocketServer';
 import * as NetAddress from 'effect/net/NetAddress';
 import { rpcLimits } from '@moonbase/contracts/rpc-upgrade';
-import { socketLimits } from '@moonbase/contracts/socket';
 import type { BunWebSocket } from './bun-server.ts';
 
-/** What Bun keeps with an upgraded RPC connection. */
-export type RpcSocketData = { kind: 'rpc'; connection?: RpcConnection };
+/** What Bun keeps with an upgraded connection: which socket it is for, and its Effect side. */
+export type RpcSocketData = { kind: 'rpc' | 'workspace'; connection?: RpcConnection };
 type RpcConnection = {
   receive(message: string | Uint8Array): void;
   drained(): void;
   closed(code: number): void;
 };
-/** Close codes a daemon sends an RPC connection: going away on shutdown, policy for any refusal. */
-const closeCodes = { goingAway: 1001, policy: 1008 };
+/**
+ * Close codes a daemon sends a connection: going away on shutdown, policy for any refusal, too
+ * big for a message past its bound.
+ */
+const closeCodes = { goingAway: 1001, policy: 1008, tooBig: 1009 };
+const sizeOf = (message: string | Uint8Array) =>
+  typeof message === 'string' ? Buffer.byteLength(message) : message.byteLength;
+
+export type RpcConnectionOptions = {
+  /** The largest message a connection may send; a larger one closes it. */
+  messageBytes: number;
+  /** Reply bytes waiting to be written past which the daemon stops reading the connection. */
+  queuedBytes: number;
+  /** Called once a connection opens; what it returns, once that closes. */
+  track?(): () => void;
+};
 
 /**
- * The daemon's authenticated RPC connections, as the `SocketServer` the RPC server runs on. Bun
- * upgrades a connection only once its proof checked out; each one then becomes an Effect
- * `Socket` whose writes wait while Bun buffers more than `socketLimits.outboundBytes`, and which
- * closes after `rpcLimits.idleMs` on the Clock without a message (clients ping every 5 s).
+ * The daemon's authenticated connections to one socket, as the `SocketServer` an RPC server runs
+ * on. Bun upgrades a connection only once its proof checked out; each one then becomes an Effect
+ * `Socket` that writes one message at a time and waits while Bun buffers more than
+ * `rpcLimits.outboundBytes` (closing the connection when the client drains nothing for
+ * `rpcLimits.drainMs`, cut without a close frame), that stops reading from the connection while
+ * `queuedBytes` of replies wait to be written (so what a client sends meanwhile waits in its own
+ * and the kernel's buffers, never the daemon's), and that closes on a message past
+ * `messageBytes` and after `rpcLimits.idleMs` on the Clock without one while it reads (clients
+ * ping every 5 s).
  */
-export const makeRpcConnections = () =>
+export const makeRpcConnections = (options: RpcConnectionOptions) =>
   Effect.gen(function* () {
     const fibers = yield* FiberSet.make<unknown, unknown>();
     let handle: ((socket: Socket.Socket) => Effect.Effect<unknown, unknown, never>) | undefined;
@@ -35,37 +53,85 @@ export const makeRpcConnections = () =>
         const inbound = yield* Queue.unbounded<string | Uint8Array, Socket.SocketError>();
         // Holds a mark while a message arrived since the idle wait last took one.
         const activity = yield* Queue.sliding<void>(1);
-        let waiting: (() => void) | undefined;
+        // Writes go one at a time, so at most one waits for a drain: its wake-up is this.
+        let waiting: (() => void) | undefined,
+          closed = false,
+          queued = 0,
+          // Set while replies past `queuedBytes` wait to be written: Bun reads nothing meanwhile.
+          paused = false;
+        const wake = () => {
+          const resume = waiting;
+          waiting = undefined;
+          resume?.();
+        };
         ws.data.connection = {
           receive(message) {
             Queue.offerUnsafe(activity, undefined);
             Queue.offerUnsafe(inbound, message);
           },
-          drained() {
-            const resume = waiting;
-            waiting = undefined;
-            resume?.();
-          },
+          drained: wake,
           closed(code) {
+            closed = true;
             Queue.failCauseUnsafe(
               inbound,
               Cause.fail(new Socket.SocketError({ reason: new Socket.SocketCloseError({ code }) })),
             );
-            waiting?.();
+            wake();
           },
         };
-        const backpressure = Effect.callback<void>((resume) => {
-          if (ws.getBufferedAmount() <= socketLimits.outboundBytes) return resume(Effect.void);
-          waiting = () => resume(Effect.void);
+        const writes = yield* Semaphore.make(1);
+        /**
+         * Waits while Bun buffers more than `outboundBytes`. A client that drains nothing for
+         * `drainMs` is disconnected, which ends every wait on it.
+         */
+        // Checked and registered in one step, so a drain between the two is never missed.
+        const drained = Effect.callback<boolean>((resume) => {
+          if (closed || ws.getBufferedAmount() <= rpcLimits.outboundBytes)
+            return resume(Effect.succeed(true));
+          waiting = () => resume(Effect.succeed(false));
         });
-        const send = (chunk: Uint8Array | string) =>
-          Effect.andThen(
-            Effect.sync(() => {
-              if (typeof chunk === 'string') ws.sendBinary(new TextEncoder().encode(chunk));
-              else ws.sendBinary(chunk);
+        const backpressure: Effect.Effect<void> = drained.pipe(
+          Effect.timeoutOrElse({
+            duration: rpcLimits.drainMs,
+            // Cut at once: a close frame would wait behind what the client never read.
+            orElse: () => Effect.sync(() => (ws.terminate(), true)),
+          }),
+          Effect.flatMap((done) => (done ? Effect.void : backpressure)),
+        );
+        const send = (chunk: Uint8Array | string) => {
+          const bytes = typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.byteLength;
+          // Counted and released in one uninterruptible step around the interruptible write.
+          return Effect.uninterruptibleMask((restore) =>
+            Effect.suspend(() => {
+              queued += bytes;
+              if (queued >= options.queuedBytes && !paused && !closed) {
+                paused = true;
+                ws.pause();
+              }
+              return restore(
+                writes.withPermits(1)(
+                  Effect.andThen(
+                    Effect.sync(() => {
+                      if (typeof chunk === 'string') ws.sendBinary(new TextEncoder().encode(chunk));
+                      else ws.sendBinary(chunk);
+                    }),
+                    backpressure,
+                  ),
+                ),
+              ).pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    queued -= bytes;
+                    if (queued < options.queuedBytes && paused) {
+                      paused = false;
+                      if (!closed) ws.resume();
+                    }
+                  }),
+                ),
+              );
             }),
-            backpressure,
           );
+        };
         const writer: Socket.Writer = {
           write: (chunk) =>
             Socket.isCloseEvent(chunk) ? Effect.sync(() => ws.close(chunk.code)) : send(chunk),
@@ -78,13 +144,17 @@ export const makeRpcConnections = () =>
           }),
           writer: Effect.succeed(writer),
         });
-        // A connection silent past its idle bound is closed; any message, a ping too, counts.
+        // A connection silent past its idle bound is closed; any message, a ping too, counts. While
+        // the daemon itself reads nothing, the client is not silent; the drain bound applies.
         yield* Effect.forkScoped(
           Effect.forever(
             Queue.take(activity).pipe(
               Effect.timeoutOrElse({
                 duration: rpcLimits.idleMs,
-                orElse: () => Effect.sync(() => ws.close(closeCodes.policy)),
+                orElse: () =>
+                  Effect.sync(() => {
+                    if (!paused) ws.close(closeCodes.policy);
+                  }),
               }),
             ),
           ),
@@ -99,6 +169,12 @@ export const makeRpcConnections = () =>
           }),
         ),
       );
+    // What ends each open connection's tracking, run once when it closes.
+    const untrack = new Map<BunWebSocket<RpcSocketData>, () => void>();
+    const release = (ws: BunWebSocket<RpcSocketData>) => {
+      untrack.get(ws)?.();
+      untrack.delete(ws);
+    };
 
     const server = SocketServer.SocketServer.of({
       address: NetAddress.inetAddressFromIpStringUnsafe('127.0.0.1', 0),
@@ -111,22 +187,39 @@ export const makeRpcConnections = () =>
 
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
-        for (const ws of sockets) ws.close(closeCodes.goingAway);
+        for (const ws of sockets) {
+          ws.close(closeCodes.goingAway);
+          release(ws);
+        }
         sockets.clear();
       }),
     );
 
+    /** Upgrades accepted whose connection has not opened yet; each holds a place under the cap. */
+    let pending = 0;
     return {
       server,
-      get count() {
-        return sockets.size;
+      /**
+       * Holds a place for one upgrade if the open and pending connections leave one under `cap`,
+       * in the same synchronous step as the check: `open` takes it, `unreserve` gives it back.
+       */
+      reserve(cap: number) {
+        if (sockets.size + pending >= cap) return false;
+        pending++;
+        return true;
       },
-      /** Bun's handlers for RPC connections; a failure cuts the connection, never reaches Bun. */
+      unreserve() {
+        pending--;
+      },
+      /** Bun's handlers for these connections; a failure cuts the connection, never reaches Bun. */
       open(ws: BunWebSocket<RpcSocketData>) {
+        if (pending > 0) pending--;
         sockets.add(ws);
+        if (options.track) untrack.set(ws, options.track());
         run(connect(ws));
       },
       message(ws: BunWebSocket<RpcSocketData>, message: string | Uint8Array) {
+        if (sizeOf(message) > options.messageBytes) return ws.close(closeCodes.tooBig);
         ws.data.connection?.receive(message);
       },
       drain(ws: BunWebSocket<RpcSocketData>) {
@@ -134,11 +227,12 @@ export const makeRpcConnections = () =>
       },
       close(ws: BunWebSocket<RpcSocketData>, code: number) {
         sockets.delete(ws);
+        release(ws);
         ws.data.connection?.closed(code);
       },
     };
   });
 export type RpcConnections = Effect.Success<ReturnType<typeof makeRpcConnections>>;
-/** The RPC server's `SocketServer`: the connections Bun upgrades on `/v3/rpc`. */
+/** An RPC server's `SocketServer`: the connections Bun upgrades on its socket's path. */
 export const rpcSocketServerLayer = (connections: RpcConnections) =>
   Layer.succeed(SocketServer.SocketServer, connections.server);
