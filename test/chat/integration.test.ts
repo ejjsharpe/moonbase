@@ -272,106 +272,65 @@ test('a signed health reply for another exact host cannot connect or expose a ch
   assert((await f.stats()).commands.every((name) => name === 'getChatHost'));
 });
 
-for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
-  test(`Disconnect after committed ${operation} preserves uncertainty and original identity across real forwarding teardown`, async (t) => {
-    const f = await fixture(t, true),
-      client = f.root();
-    const connected = await client.connection.command('connect', { profileId: client.profile.id });
-    const create = {
+// Create and Stop share this path; the daemon-protocol transport suite covers each operation.
+test('Disconnect after a committed Send preserves uncertainty and original identity across real forwarding teardown', async (t) => {
+  const f = await fixture(t, true),
+    client = f.root();
+  const connected = await client.connection.command('connect', { profileId: client.profile.id });
+  const target = (
+    await client.chat.command('createChat', {
       session: f.session,
       settings: f.settings,
       requestId: 'captured-create',
       title: 'Captured conversation',
-    };
-    const created =
-      operation === 'createChat' ? undefined : await client.chat.command('createChat', create);
-    const target = created?.conversation.target;
-    const send = {
-      target: target!,
-      requestId: 'captured-send',
-      text: 'Exactly one admitted input',
-    };
-    const stop =
-      operation === 'stopChat'
-        ? await (async () => {
-            await client.chat.command('sendChat', send);
-            return (
-              await until(
-                () => client.chat.command('getChat', { target: target! }),
-                (value) => !!value.run?.stop.taskId,
-              )
-            ).run!.stop;
-          })()
-        : undefined;
-    await f.holdReply(operation);
-    let work;
-    if (operation === 'createChat') work = client.chat.command('createChat', create);
-    else if (operation === 'sendChat') work = client.chat.command('sendChat', send);
-    else work = client.chat.command('stopChat', { stop: stop!, requestId: 'captured-stop' });
-    const outcome = work.then(
-      (value) => ({ value, error: undefined }),
-      (error: unknown) => ({ value: undefined, error }),
-    );
-    await until(f.stats, (value) => value.heldReplies.includes(operation));
-    assert.equal(
-      (await client.connection.command('getConnection', {})).state,
-      'connected',
-      'unrelated commands remain responsive while the mutation reply is held',
-    );
-    await client.connection.command('disconnect', { connectionId: connected.connectionId! });
-    assert.equal((await client.connection.command('getConnection', {})).state, 'disconnected');
-    const result = await outcome;
-    assert.equal(
-      (result.error as ApplicationError)?.code,
-      'Uncertain',
-      'dispatch may have committed; retain the original identity',
-    );
-    assert.equal((await f.stats()).commands.filter((name) => name === operation).length, 1);
-    await f.releaseReply();
-    const next = await client.connection.command('connect', { profileId: client.profile.id });
-    assert.notEqual(next.connectionId, connected.connectionId);
-    if (operation === 'createChat') {
-      const listed = await client.chat.command('listChats', { session: f.session });
-      assert.equal(listed.conversations.length, 1);
-      const retried = await client.chat.command('createChat', create);
-      assert.deepEqual(retried.conversation.target, listed.conversations[0]!.target);
-      assert.equal(
-        (await client.chat.command('listChats', { session: f.session })).conversations.length,
-        1,
-      );
-      assert.equal((await f.stats()).calls, 0);
-    } else {
-      const receipt = await client.chat.command('getChatSend', {
-        target: target!,
-        requestId: send.requestId,
-      });
-      assert.equal(receipt?.admission, 'admitted');
-      if (operation === 'stopChat') {
-        const retried = await client.chat.command('stopChat', {
-          stop: stop!,
-          requestId: 'captured-stop',
-        });
-        assert.deepEqual(retried.stop, stop);
-      }
-      f.release();
-      await until(
-        () => client.chat.command('getChat', { target: target! }),
-        (value) => !value.run,
-      );
-      const snapshot = await client.chat.command('getChat', { target: target! });
-      assert.equal(
-        snapshot.entries.filter((entry) => entry.role === 'user' && entry.text === send.text)
-          .length,
-        1,
-      );
-      assert.equal(
-        (await f.stats()).commands.filter((name) => name === 'sendChat').length,
-        1,
-        'reconnect and receipt lookup never resend',
-      );
-      assert.equal((await f.stats()).calls, 1);
-    }
+    })
+  ).conversation.target;
+  const send = { target, requestId: 'captured-send', text: 'Exactly one admitted input' };
+  await f.holdReply('sendChat');
+  const outcome = client.chat.command('sendChat', send).then(
+    (value) => ({ value, error: undefined }),
+    (error: unknown) => ({ value: undefined, error }),
+  );
+  await until(f.stats, (value) => value.heldReplies.includes('sendChat'));
+  assert.equal(
+    (await client.connection.command('getConnection', {})).state,
+    'connected',
+    'unrelated commands remain responsive while the mutation reply is held',
+  );
+  await client.connection.command('disconnect', { connectionId: connected.connectionId! });
+  assert.equal((await client.connection.command('getConnection', {})).state, 'disconnected');
+  const result = await outcome;
+  assert.equal(
+    (result.error as ApplicationError)?.code,
+    'Uncertain',
+    'dispatch may have committed; retain the original identity',
+  );
+  assert.equal((await f.stats()).commands.filter((name) => name === 'sendChat').length, 1);
+  await f.releaseReply();
+  const next = await client.connection.command('connect', { profileId: client.profile.id });
+  assert.notEqual(next.connectionId, connected.connectionId);
+  const receipt = await client.chat.command('getChatSend', {
+    target,
+    requestId: send.requestId,
   });
+  assert.equal(receipt?.admission, 'admitted');
+  f.release();
+  await until(
+    () => client.chat.command('getChat', { target }),
+    (value) => !value.run,
+  );
+  const snapshot = await client.chat.command('getChat', { target });
+  assert.equal(
+    snapshot.entries.filter((entry) => entry.role === 'user' && entry.text === send.text).length,
+    1,
+  );
+  assert.equal(
+    (await f.stats()).commands.filter((name) => name === 'sendChat').length,
+    1,
+    'reconnect and receipt lookup never resend',
+  );
+  assert.equal((await f.stats()).calls, 1);
+});
 
 test('transcript reads cross the real child/forwarding boundary with identity, lost/tampered/held replies, cancellation and independent Stop', async (t) => {
   const f = await fixture(t, true),

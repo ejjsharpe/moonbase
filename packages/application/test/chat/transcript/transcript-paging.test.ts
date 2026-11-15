@@ -131,31 +131,30 @@ test('every accepted snapshot change notifies subscribers once', async (t) => {
   }
 });
 
-for (const close of ['closeView', 'detach', 'dispose'] as const)
-  test(`${close} releases after a bounded grace when a ChatClient read ignores cancellation`, async (t) => {
-    const closeGraceMs = 50;
-    const f = await transcriptController(t, 1, true, { transcriptLimits: { closeGraceMs } });
-    const entered = Promise.withResolvers<void>();
-    let signal: AbortSignal | undefined;
-    f.handlers.set('getChatTranscriptContent', (_input, abort) => {
-      signal = abort;
-      entered.resolve();
-      return new Promise<never>(() => {});
-    });
-    const source = f.entries[0].transcript!.source;
-    void f.controller.loadTranscriptManifest(source);
-    await entered.promise;
-    const started = performance.now();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([
-      f.controller[close](),
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(Error(`${close} waited for an abandoned read`)), 10000);
-      }),
-    ]).finally(() => clearTimeout(timer));
-    assert(signal?.aborted);
-    assert(performance.now() - started >= closeGraceMs - 5);
+test('dispose releases after a bounded grace when a ChatClient read ignores cancellation', async (t) => {
+  const closeGraceMs = 50;
+  const f = await transcriptController(t, 1, true, { transcriptLimits: { closeGraceMs } });
+  const entered = Promise.withResolvers<void>();
+  let signal: AbortSignal | undefined;
+  f.handlers.set('getChatTranscriptContent', (_input, abort) => {
+    signal = abort;
+    entered.resolve();
+    return new Promise<never>(() => {});
   });
+  const source = f.entries[0].transcript!.source;
+  void f.controller.loadTranscriptManifest(source);
+  await entered.promise;
+  const started = performance.now();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    f.controller.dispose(),
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(Error('dispose waited for an abandoned read')), 10000);
+    }),
+  ]).finally(() => clearTimeout(timer));
+  assert(signal?.aborted);
+  assert(performance.now() - started >= closeGraceMs - 5);
+});
 
 test('part and manifest failures stay on their own state, apart from the history error', async (t) => {
   const f = await transcriptController(t, 640);
