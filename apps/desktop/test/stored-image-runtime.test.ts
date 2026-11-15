@@ -13,7 +13,7 @@ import { controlledHostFixture, until } from '../../../test/chat/controlled-host
 import { createImageRuntime, retainedImage } from './fixtures/stored-image-fixture.ts';
 import { ChatIpcSession } from '../src/main/chat/session.ts';
 import { respondTranscriptImage } from '../src/main/chat/transcript-native.ts';
-import { makeIpcFixture, noChat } from './fixtures/ipc-fixture.ts';
+import { makeIpcFixture, noChat, toImageReader } from './fixtures/ipc-fixture.ts';
 
 const ipcRuntime = ManagedRuntime.make(Layer.empty);
 after(() => ipcRuntime.dispose());
@@ -82,7 +82,7 @@ for (const mode of ['local', 'remote'] as const)
           return reply;
         },
       };
-      const ipc = new ChatIpcSession(ipcRuntime, reader, { mode: 'local' }, session);
+      const ipc = new ChatIpcSession(reader, { mode: 'local' }, session);
       const desktop = await makeIpcFixture({
         chat: {
           backends: {
@@ -103,7 +103,7 @@ for (const mode of ['local', 'remote'] as const)
           .catch((error: { code: string }) => error.code);
         if (!url.startsWith('moonbase:')) return url;
         const response = await respondTranscriptImage(new Request(url), 'csp', (token) =>
-          ipc.findImage(token),
+          toImageReader(ipcRuntime, ipc.findImage(token)),
         );
         return response.ok ? Buffer.from(await response.arrayBuffer()) : response.status;
       };
@@ -132,7 +132,7 @@ for (const mode of ['local', 'remote'] as const)
       assert.deepEqual(await serve(transcript.source, images[1]!), retainedImage.subarray(0, -1));
       assert.equal(await serve(transcript.source, images[2]!), 415);
       await desktop.dispose();
-      await ipc.dispose();
+      await ipcRuntime.runPromise(ipc.dispose);
     } finally {
       if (root && connectionId)
         await root.connection.command('disconnect', { connectionId }).catch(() => {});

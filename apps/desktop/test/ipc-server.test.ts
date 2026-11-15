@@ -121,7 +121,6 @@ test('each kind runs at most its limit of requests and of watches at once, refus
     (['local', 'remote'] as const).map((id) => [
       id,
       new ChatIpcSession(
-        ManagedRuntime.make(Layer.empty),
         {
           command: (_operation, _input, options) =>
             workspace.client.command('readFile', read, options) as never,
@@ -187,7 +186,6 @@ test('each kind runs at most its limit of requests and of watches at once, refus
 test('the chat request size bound admits the largest escaped message', async () => {
   const sent: unknown[] = [];
   const session = new ChatIpcSession(
-    ManagedRuntime.make(Layer.empty),
     {
       command: async (_operation, input) => {
         sent.push(input);

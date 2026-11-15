@@ -1,8 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { Effect, Exit, Fiber, Scope, type ManagedRuntime } from 'effect';
+import { Effect, Exit, Fiber, Scope, Semaphore } from 'effect';
 import { LRUCache } from 'lru-cache';
 import { normalizeApplicationError } from '@moonbase/effect';
-import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatClient, ChatSession } from '@moonbase/contracts/chat';
 import type { ConnectionClient } from '@moonbase/contracts/connection';
@@ -12,7 +11,6 @@ import {
   readTranscriptImage,
   transcriptImagePath,
   type NativeTranscriptActions,
-  type TranscriptImageReader,
 } from './transcript-native.ts';
 
 /** Images mount with a fresh URL, so an unrequested binding can lapse. */
@@ -24,7 +22,11 @@ const maximumQueuedImageReads = 64;
 /** Copies one session runs at once; another is refused as busy. */
 export const maximumTranscriptCopies = 2;
 type ImageBinding = { key: string; image: TranscriptImage };
-type ImageReadWaiter = { resolve(): void; reject(error: ApplicationError): void };
+/** An issued image and its read, which runs in the session's reads. */
+export type SessionImage = {
+  image: TranscriptImage;
+  read: Effect.Effect<Uint8Array<ArrayBuffer>, ApplicationError>;
+};
 const makeImageReadCancelledError = () =>
   new ApplicationError({ code: 'Cancelled', message: 'Image read cancelled.' });
 const makeImageReadsBusyError = () =>
@@ -41,29 +43,27 @@ export class ChatIpcSession {
   readonly context: ChatSession;
   /** Copies running; at most `maximumTranscriptCopies`. */
   copies = 0;
-  private runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>;
   /** Opaque image URL tokens; they expire unless requested, and the session revokes them on close. */
   private images: LRUCache<string, ImageBinding>;
   /** Image identity to its current token, so equal bindings reuse one URL. */
   private imageTokens = new Map<string, string>();
+  /** Reads running at once; the rest wait for a permit. */
+  private imageReadPermits = Semaphore.makeUnsafe(maximumImageReads);
+  /** Reads running or waiting; at most the running limit plus the queue's. */
   private imageReads = 0;
-  private imageReadQueue: ImageReadWaiter[] = [];
-  /** Running image reads; revoking the URLs closes it, which cancels them. */
-  private reads: Scope.Closeable;
+  /** Image reads, running and waiting; revoking the URLs closes it, which cancels them. */
+  private reads = Scope.makeUnsafe('parallel');
   private closed = false;
   constructor(
-    runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>,
     chat: ChatClient,
     backend: ChatIpcBackend,
     context: ChatSession,
     capabilities: ChatIpcCapabilities = {},
   ) {
-    this.runtime = runtime;
     this.chat = chat;
     this.connection = backend.mode === 'remote' ? backend.connection : null;
     this.context = context;
     this.capabilities = capabilities;
-    this.reads = Scope.forkUnsafe(runtime.scope, 'parallel');
     this.images = new LRUCache({
       max: 256,
       ttl: transcriptImageTokenLifetime,
@@ -105,75 +105,53 @@ export class ChatIpcSession {
     this.imageTokens.set(key, token);
     return `moonbase://editor${transcriptImagePath}${token}`;
   }
-  findImage(token: string): TranscriptImageReader | undefined {
+  findImage(token: string): SessionImage | undefined {
     const image = this.images.get(token)?.image;
-    return image && { image, read: (signal) => this.readImage(image, signal) };
+    return image && { image, read: this.readImage(image) };
   }
-  /** Revokes every issued URL, fails queued reads and cancels running ones. */
-  revokeImages() {
+  /** Revokes every issued URL and cancels the reads, running or waiting, that they started. */
+  readonly revokeImages: Effect.Effect<void> = Effect.suspend(() => {
     this.images.clear();
-    const queued = this.imageReadQueue;
-    this.imageReadQueue = [];
-    for (const waiter of queued) waiter.reject(makeImageReadCancelledError());
     const reads = this.reads;
-    this.reads = Scope.forkUnsafe(this.runtime.scope, 'parallel');
-    return runApplicationEffect(this.runtime, Scope.close(reads, Exit.void));
-  }
-  private async acquireImageRead(signal: AbortSignal) {
-    if (this.closed || signal.aborted) throw makeImageReadCancelledError();
-    if (this.imageReads < maximumImageReads) {
-      this.imageReads++;
-      return;
-    }
-    if (this.imageReadQueue.length >= maximumQueuedImageReads) throw makeImageReadsBusyError();
-    const queued = Promise.withResolvers<void>();
-    const waiter: ImageReadWaiter = { resolve: queued.resolve, reject: queued.reject };
-    const abort = () => {
-      this.imageReadQueue = this.imageReadQueue.filter((next) => next !== waiter);
-      queued.reject(makeImageReadCancelledError());
-    };
-    signal.addEventListener('abort', abort, { once: true });
-    this.imageReadQueue.push(waiter);
-    try {
-      await queued.promise;
-    } finally {
-      signal.removeEventListener('abort', abort);
-    }
-  }
-  private releaseImageRead() {
-    const next = this.imageReadQueue.shift();
-    // Hand the slot straight to the next waiter so the count never exceeds the limit.
-    if (next) next.resolve();
-    else this.imageReads--;
-  }
-  private async readImage(image: TranscriptImage, signal: AbortSignal) {
-    await this.acquireImageRead(signal);
-    try {
-      const reads = this.reads;
-      const read = Effect.tryPromise({
-        try: (readSignal) =>
+    if (!this.closed) this.reads = Scope.makeUnsafe('parallel');
+    return Scope.close(reads, Exit.void);
+  });
+  /**
+   * Reads `image` in the session's reads: at most `maximumImageReads` at once, and at most
+   * `maximumQueuedImageReads` more waiting, refusing others as busy.
+   */
+  private readImage(image: TranscriptImage): SessionImage['read'] {
+    const read = this.imageReadPermits.withPermit(
+      Effect.tryPromise({
+        try: (signal) =>
           readTranscriptImage(this.chat, image, {
-            signal: readSignal,
+            signal,
             reportCleanup: (error) => this.capabilities.reportCleanup?.(error),
           }),
         catch: normalizeApplicationError,
-      });
-      return await runApplicationEffect(
-        this.runtime,
-        Effect.gen(function* () {
-          const fiber = yield* Effect.forkIn(read, reads);
-          return yield* Fiber.join(fiber).pipe(Effect.onInterrupt(() => Fiber.interrupt(fiber)));
-        }),
-        { signal },
-      );
-    } finally {
-      this.releaseImageRead();
-    }
+      }),
+    );
+    // Admitted and given its release in one step, so an interruption between them leaks no place.
+    return Effect.uninterruptibleMask((restore) =>
+      Effect.suspend(() => {
+        if (this.closed) return Effect.fail(makeImageReadCancelledError());
+        if (this.imageReads >= maximumImageReads + maximumQueuedImageReads)
+          return Effect.fail(makeImageReadsBusyError());
+        this.imageReads++;
+        const reads = this.reads;
+        return restore(
+          Effect.flatMap(Effect.forkIn(read, reads), (fiber) =>
+            Fiber.join(fiber).pipe(Effect.onInterrupt(() => Fiber.interrupt(fiber))),
+          ),
+        ).pipe(Effect.ensuring(Effect.sync(() => this.imageReads--)));
+      }),
+    );
   }
-  dispose() {
+  /** Revokes the session's URLs and ends its reads for good. */
+  readonly dispose: Effect.Effect<void> = Effect.suspend(() => {
     this.closed = true;
-    return this.revokeImages();
-  }
+    return this.revokeImages;
+  });
 }
 /** What a session's backend is: a local daemon's chat, or a remote host's with its connection. */
 export type ChatIpcBackend = { mode: 'local' } | { mode: 'remote'; connection: ConnectionClient };

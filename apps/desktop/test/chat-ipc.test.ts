@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Layer, ManagedRuntime } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatClient, ChatListUpdate } from '@moonbase/contracts/chat';
 import type { ConnectionClient } from '@moonbase/contracts/connection';
@@ -10,7 +9,6 @@ import { makeIpcFixture, noChat, waitFor } from './fixtures/ipc-fixture.ts';
 
 const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' };
 const target = { ...context, conversationId: 'chat' };
-const runtime = ManagedRuntime.make(Layer.empty);
 const waitForAbort = (signal: AbortSignal | undefined) =>
   new Promise<never>((_resolve, reject) =>
     signal?.addEventListener('abort', () =>
@@ -53,13 +51,12 @@ async function chatFixture(
   };
   const sessions = {
     local: new ChatIpcSession(
-      runtime,
       chat,
       { mode: 'local' },
       context,
       options.providers ? { providers: options.providers } : {},
     ),
-    remote: new ChatIpcSession(runtime, chat, { mode: 'remote', connection }, context),
+    remote: new ChatIpcSession(chat, { mode: 'remote', connection }, context),
   };
   const f = await makeIpcFixture({
     chat: {

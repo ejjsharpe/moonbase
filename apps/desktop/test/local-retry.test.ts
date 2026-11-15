@@ -15,12 +15,7 @@ import { makeIpcFixture, noChat } from './fixtures/ipc-fixture.ts';
 
 /** Local chat over desktop IPC, as the renderer sends it, to `runtime`'s chat. */
 const overIpc = (runtime: ManagedRuntime.ManagedRuntime<never, never>, context: ChatSession) => {
-  const session = new ChatIpcSession(
-    runtime as never,
-    makeChatClient(runtime as never),
-    { mode: 'local' },
-    context,
-  );
+  const session = new ChatIpcSession(makeChatClient(runtime as never), { mode: 'local' }, context);
   return makeIpcFixture({
     chat: {
       backends: {

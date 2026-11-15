@@ -260,7 +260,16 @@ async function main() {
   protocol.handle('moonbase', async (request) => {
     const url = new URL(request.url);
     if (url.pathname.startsWith(transcriptImagePath))
-      return respondTranscriptImage(request, csp, chatBackends.findTranscriptImage);
+      return respondTranscriptImage(request, csp, (token) => {
+        const found = chatBackends.findTranscriptImage(token);
+        // Electron's protocol API is Promise-based; the read runs on main's runtime from here.
+        return (
+          found && {
+            image: found.image,
+            read: (signal) => runApplicationEffect(runtime, found.read, { signal }),
+          }
+        );
+      });
     // Asset cache-busting queries do not grant document/IPC authority.
     const path = resolve(rendererRoot, '.' + decodeURIComponent(url.pathname));
     if (

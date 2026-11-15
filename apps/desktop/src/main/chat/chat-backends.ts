@@ -61,7 +61,6 @@ export function createChatBackends({
       sessions.set(
         'local',
         new ChatIpcSession(
-          runtime,
           bindChatClient(runtime, backend.chat),
           { mode: 'local' },
           backend.session,
@@ -78,7 +77,6 @@ export function createChatBackends({
       sessions.set(
         'remote',
         new ChatIpcSession(
-          runtime,
           remote.chat,
           { mode: 'remote', connection: remote.connection },
           remote.configuration.context,
@@ -131,7 +129,7 @@ export function createChatBackends({
     const owner = documentId;
     for (const creation of worktreeCreations) creation.abort();
     worktreeCreations.clear();
-    const closing = [...sessions.values()].map((session) => session.dispose());
+    const closing = [...sessions.values()].map((session) => run(session.dispose));
     sessions.clear();
     documentId = randomUUID();
     installChatSessions();
@@ -153,7 +151,8 @@ export function createChatBackends({
       installChatSessions();
       return sessions.get(backendId);
     },
-    getSessions: (): Pick<ChatIpcSession, 'dispose'>[] => [...sessions.values()],
+    getSessions: () =>
+      [...sessions.values()].map((session) => ({ dispose: () => run(session.dispose) })),
     findTranscriptImage: (token: string) =>
       [...sessions.values()].map((session) => session.findImage(token)).find(Boolean),
     async getContext(backendId: ChatTargetId) {

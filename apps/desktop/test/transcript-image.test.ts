@@ -8,7 +8,7 @@ import type { ConnectionClient } from '@moonbase/contracts/connection';
 import { ChatIpcSession, transcriptImageTokenLifetime } from '../src/main/chat/session.ts';
 import { respondTranscriptImage } from '../src/main/chat/transcript-native.ts';
 import type { TranscriptImage } from '../src/ipc/chat-rpcs.ts';
-import { makeIpcFixture, noChat } from './fixtures/ipc-fixture.ts';
+import { makeIpcFixture, noChat, toImageReader } from './fixtures/ipc-fixture.ts';
 
 const runtime = ManagedRuntime.make(Layer.empty);
 after(() => runtime.dispose());
@@ -66,7 +66,6 @@ function fixture(
     watch: () => () => Promise.resolve(),
   };
   const session = new ChatIpcSession(
-    runtime,
     chat,
     options.connection ? { mode: 'remote', connection: options.connection } : { mode: 'local' },
     context,
@@ -91,10 +90,11 @@ function fixture(
     });
   const serve = (url: string, signal?: AbortSignal, method = 'GET') =>
     respondTranscriptImage(new Request(url, { signal, method }), csp, (token) =>
-      session.findImage(token),
+      toImageReader(runtime, session.findImage(token)),
     );
   return {
     session,
+    dispose: () => runtime.runPromise(session.dispose),
     issue,
     ipc,
     serve,
@@ -126,7 +126,7 @@ test('an issued token serves validated PNG and JPEG bytes with fixed security he
     assert.equal(response.headers.get('Cache-Control'), 'no-store');
     assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes);
     assert(f.reads > 1, 'multiple independently padded chunks');
-    await f.session.dispose();
+    await f.dispose();
   }
 });
 
@@ -139,7 +139,7 @@ test('unknown, revoked and wrong-host image URLs grant nothing', async () => {
   assert.equal((await f.serve(`${url}?retry`)).status, 403);
   for (const method of ['HEAD', 'POST'])
     assert.equal((await f.serve(url, undefined, method)).status, 405);
-  await f.session.dispose();
+  await f.dispose();
   assert.equal((await f.serve(url)).status, 404);
   assert.equal(await f.issue('image/png'), undefined, 'a disposed session issues nothing');
   assert.equal(f.reads, 0);
@@ -158,7 +158,7 @@ test('an unrequested token expires while each request extends its lifetime', asy
   const replacement = await f.issue('image/png');
   assert.notEqual(replacement, url, 'an expired binding is never revived');
   assert.equal((await f.serve(replacement)).status, 200);
-  await f.session.dispose();
+  await f.dispose();
 });
 
 test('connecting or disconnecting revokes issued tokens', async () => {
@@ -185,7 +185,7 @@ test('connecting or disconnecting revokes issued tokens', async () => {
   }
   assert.deepEqual(operations, ['getConnection', 'disconnect', 'connect']);
   await ipc.dispose();
-  await f.session.dispose();
+  await f.dispose();
 });
 
 test('a token issued while connect is held is revoked once connect settles', async () => {
@@ -209,7 +209,7 @@ test('a token issued while connect is held is revoked once connect settles', asy
   assert.equal((await f.serve(issued)).status, 404);
   assert.equal(f.reads, 0);
   await ipc.dispose();
-  await f.session.dispose();
+  await f.dispose();
 });
 
 test('revocation fails queued reads and cancels in-flight ones', async () => {
@@ -237,7 +237,7 @@ test('revocation fails queued reads and cancels in-flight ones', async () => {
   for (const response of await Promise.all(running)) assert.equal(response.status, 502);
   assert.equal(f.reads, 6);
   await ipc.dispose();
-  await f.session.dispose();
+  await f.dispose();
 });
 
 test('the image read queue is bounded and refuses overflow as busy', async () => {
@@ -258,7 +258,7 @@ test('the image read queue is bounded and refuses overflow as busy', async () =>
   gate.resolve();
   for (const response of await Promise.all([...running, ...queued]))
     assert.equal(response.status, 200);
-  await f.session.dispose();
+  await f.dispose();
 });
 
 test('reads beyond the concurrency limit queue instead of failing', async () => {
@@ -276,7 +276,7 @@ test('reads beyond the concurrency limit queue instead of failing', async () => 
   assert.equal(f.reads, 6, 'two reads wait for a slot');
   gate.resolve();
   for (const response of await responses) assert.equal(response.status, 200);
-  await f.session.dispose();
+  await f.dispose();
 });
 
 test('an aborted queued read leaves without reading and frees no extra slot', async () => {
@@ -299,7 +299,7 @@ test('an aborted queued read leaves without reading and frees no extra slot', as
   assert.equal(f.reads, 6, 'neither queued read started');
   gate.resolve();
   for (const response of await Promise.all([...running, later])) assert.equal(response.status, 200);
-  await f.session.dispose();
+  await f.dispose();
 });
 
 test('disposal fails queued reads and cancels in-flight ones', async () => {
@@ -315,7 +315,7 @@ test('disposal fails queued reads and cancels in-flight ones', async () => {
   while (f.reads < 6) await new Promise((resolve) => setImmediate(resolve));
   const queued = f.serve(urls[6]!);
   await new Promise((resolve) => setImmediate(resolve));
-  const disposing = f.session.dispose();
+  const disposing = f.dispose();
   assert.equal((await queued).status, 502);
   gate.resolve();
   for (const response of await Promise.all(running)) assert.equal(response.status, 502);
@@ -334,7 +334,7 @@ test('the 256-token cap evicts the least recently requested binding', async () =
   await f.issue('image/png', { ...f.selection, partId: 'image-overflow' });
   assert.equal((await f.serve(second)).status, 404);
   assert.equal((await f.serve(first)).status, 200);
-  await f.session.dispose();
+  await f.dispose();
 });
 
 test('issuance rejects SVG/HTML types and foreign authority before any read', async () => {
@@ -358,7 +358,7 @@ test('issuance rejects SVG/HTML types and foreign authority before any read', as
   );
   assert.equal(f.reads, 0);
   await ipc.dispose();
-  await f.session.dispose();
+  await f.dispose();
 });
 
 test('bytes must match the declared raster type; SVG labelled PNG is refused', async () => {
@@ -373,7 +373,7 @@ test('bytes must match the declared raster type; SVG labelled PNG is refused', a
     assert.equal(response.status, 415);
     assert.equal(response.headers.get('Content-Type'), 'text/plain; charset=utf-8');
     assert.equal(response.headers.get('X-Content-Type-Options'), 'nosniff');
-    await f.session.dispose();
+    await f.dispose();
   }
 });
 
@@ -384,7 +384,7 @@ test('sources over 4 MiB are refused without reading', async () => {
   assert.equal(response.status, 413);
   assert.match(await response.text(), /4 MiB/);
   assert.equal(f.reads, 0);
-  await f.session.dispose();
+  await f.dispose();
 });
 
 test('a cancelled request aborts its read, and its token stays valid', async () => {
@@ -402,7 +402,7 @@ test('a cancelled request aborts its read, and its token stays valid', async () 
   assert.equal((await pending).status, 502);
   f.hold(Promise.resolve());
   assert.equal((await f.serve(url)).status, 200, 'the token remains valid for a later request');
-  await f.session.dispose();
+  await f.dispose();
 });
 
 test('disposal cancels an in-flight read and revokes its token', async () => {
@@ -412,7 +412,7 @@ test('disposal cancels an in-flight read and revokes its token', async () => {
   f.hold(gate.promise);
   const pending = f.serve(url);
   while (!f.reads) await new Promise((resolve) => setImmediate(resolve));
-  const released = f.session.dispose();
+  const released = f.dispose();
   gate.resolve();
   assert.equal((await pending).status, 502);
   await released;

@@ -91,7 +91,7 @@ export function makeChatIpcHandlers({ backends, isQuitting, reportCleanup }: Cha
         const command = promise((signal) => connection.command(operation, input, { signal }));
         if (operation === 'getConnection') return command;
         // Image URLs belong to the connection that issued them, including ones issued mid-change.
-        const revoke = Effect.promise(() => session.revokeImages());
+        const revoke = session.revokeImages;
         return Effect.andThen(revoke, command).pipe(Effect.ensuring(revoke));
       });
   return DesktopChatRpcs.of({

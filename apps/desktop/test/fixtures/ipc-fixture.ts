@@ -1,4 +1,5 @@
 import { Effect, Layer, ManagedRuntime, PubSub, Scope } from 'effect';
+import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { EditorClient } from '@moonbase/contracts/workspace';
 import type { MessagePortLike } from '../../src/ipc/port-socket.ts';
@@ -12,6 +13,8 @@ import { EditorApprovals } from '../../src/main/ipc/editor-approvals.ts';
 import type { EditorIpcOptions } from '../../src/main/ipc/editor-ipc.ts';
 import { makeIpcServer } from '../../src/main/ipc/ipc-server.ts';
 import type { NativeActions } from '../../src/main/native-actions.ts';
+import type { SessionImage } from '../../src/main/chat/session.ts';
+import type { TranscriptImageReader } from '../../src/main/chat/transcript-native.ts';
 import {
   makeChatTargetClients,
   makeEditorClient,
@@ -59,6 +62,15 @@ export const noChat: ChatIpcOptions['backends'] = {
   getSession: () => undefined,
 };
 
+/** A session's image as the protocol handler reads it, on `runtime`, as main binds it. */
+export const toImageReader = (
+  runtime: ManagedRuntime.ManagedRuntime<never, never>,
+  found: SessionImage | undefined,
+): TranscriptImageReader | undefined =>
+  found && {
+    image: found.image,
+    read: (signal) => runApplicationEffect(runtime, found.read, { signal }),
+  };
 /** Polls `check` until it holds, failing if it never does. */
 export async function waitFor(check: () => unknown) {
   for (let attempt = 0; attempt < 1000; attempt++) {

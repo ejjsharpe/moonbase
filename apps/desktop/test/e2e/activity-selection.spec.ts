@@ -78,7 +78,7 @@ async function installCopy(page: Page) {
       };
     },
   };
-  const owner = new ChatIpcSession(runtime, client, { mode: 'local' }, context, {
+  const owner = new ChatIpcSession(client, { mode: 'local' }, context, {
     transcript: {
       writeText: async (text) => {
         writes.push(text);
@@ -112,7 +112,7 @@ async function installCopy(page: Page) {
     inputs,
     dispose: async () => {
       await desktop.dispose();
-      await owner.dispose();
+      await runtime.runPromise(owner.dispose);
       await runtime.dispose();
     },
   };

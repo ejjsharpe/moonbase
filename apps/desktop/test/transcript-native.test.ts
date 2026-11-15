@@ -320,7 +320,7 @@ async function fixture(live = false, text = '  **raw**\r\n\t🌔 é\r\n' + 'α'
       };
     },
   };
-  const owner = new ChatIpcSession(runtime, chat, { mode: 'local' }, context, {
+  const owner = new ChatIpcSession(chat, { mode: 'local' }, context, {
     transcript: {
       writeText: async (value) => {
         await controls.write(value);
@@ -341,7 +341,7 @@ async function fixture(live = false, text = '  **raw**\r\n\t🌔 é\r\n' + 'α'
     clients: desktop.target('local'),
     async dispose() {
       await desktop.dispose();
-      await owner.dispose();
+      await runtime.runPromise(owner.dispose);
     },
     source,
     part,
@@ -855,7 +855,7 @@ test('Copy accepts an empty authored text part', async () => {
     },
     watch: () => () => Promise.resolve(),
   };
-  const session = new ChatIpcSession(runtime, chat, { mode: 'local' }, context, {
+  const session = new ChatIpcSession(chat, { mode: 'local' }, context, {
     transcript: {
       writeText: async (text) => {
         writes.push(text);
@@ -867,7 +867,7 @@ test('Copy accepts an empty authored text part', async () => {
   await desktop.target('local').transcript.copy({ source });
   assert.deepEqual(writes, ['']);
   await desktop.dispose();
-  await session.dispose();
+  await runtime.runPromise(session.dispose);
 });
 
 /** An entry with several authored text parts, served in fixed-size chunks. */
@@ -917,7 +917,7 @@ async function partsFixture(texts: string[], chunkBytes = 4) {
     },
     watch: () => () => Promise.resolve(),
   };
-  const owner = new ChatIpcSession(runtime, chat, { mode: 'local' }, context, {
+  const owner = new ChatIpcSession(chat, { mode: 'local' }, context, {
     transcript: {
       writeText: async (text) => {
         writes.push(text);
@@ -935,7 +935,7 @@ async function partsFixture(texts: string[], chunkBytes = 4) {
     copy: (input: object = {}) => desktop.target('local').transcript.copy({ source, ...input }),
     async dispose() {
       await desktop.dispose();
-      await owner.dispose();
+      await runtime.runPromise(owner.dispose);
     },
   };
 }
