@@ -255,17 +255,20 @@ test('Quit, its answer and a cleanup failure survive the actions watch’s conne
     await waitFor(() => readies === 1);
     // The connection ends with the document still alive, as a ping timeout would end it.
     ipc.closeConnections();
-    f.lifecycle.reportCleanup(
-      Promise.reject(new ApplicationError({ code: 'Persistence', message: 'Between watches' })),
-    );
+    // More failures than main holds for its exit code.
+    for (let index = 0; index < 9; index++)
+      f.lifecycle.reportCleanup(
+        Promise.reject(new ApplicationError({ code: 'Persistence', message: `Gap ${index}` })),
+      );
     await new Promise((resolve) => setImmediate(resolve));
     f.lifecycle.requestQuit();
-    await waitFor(() => received.length > 1);
+    await waitFor(() => received.length > 9);
     assert.equal(readies, 2);
     const quit = f.last().id;
+    const failures = Array<WindowAction['action']>(9).fill('cleanup-error');
     assert.deepEqual(
       received.map((action) => action.action),
-      ['cleanup-error', 'quit'],
+      [...failures, 'quit'],
     );
     owner.loseAnswer = true;
     await shell.answerQuit(quit, true);
@@ -276,7 +279,7 @@ test('Quit, its answer and a cleanup failure survive the actions watch’s conne
     assert.equal(readies, 3);
     assert.deepEqual(
       received.map((action) => action.action),
-      ['cleanup-error', 'quit', 'dispose'],
+      [...failures, 'quit', 'dispose'],
     );
   } finally {
     await close().catch(() => {});
