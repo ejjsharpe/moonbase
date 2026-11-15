@@ -240,7 +240,7 @@ test('revocation fails queued reads and cancels in-flight ones', async () => {
   await f.dispose();
 });
 
-test('the image read queue is bounded and refuses overflow as busy', async () => {
+test('six image reads run at once and 64 more queue; one past the queue is refused as busy', async () => {
   const f = fixture(png);
   const urls = await Promise.all(
     Array.from({ length: 6 + 64 + 1 }, (_, index) =>
@@ -261,24 +261,6 @@ test('the image read queue is bounded and refuses overflow as busy', async () =>
   await f.dispose();
 });
 
-test('reads beyond the concurrency limit queue instead of failing', async () => {
-  const f = fixture(png);
-  const urls = await Promise.all(
-    Array.from({ length: 8 }, (_, index) =>
-      f.issue('image/png', { ...f.selection, partId: `image-${index}` }),
-    ),
-  );
-  const gate = Promise.withResolvers<void>();
-  f.hold(gate.promise);
-  const responses = Promise.all(urls.map((url) => f.serve(url)));
-  while (f.reads < 6) await new Promise((resolve) => setImmediate(resolve));
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(f.reads, 6, 'two reads wait for a slot');
-  gate.resolve();
-  for (const response of await responses) assert.equal(response.status, 200);
-  await f.dispose();
-});
-
 test('an aborted queued read leaves without reading and frees no extra slot', async () => {
   const f = fixture(png);
   const urls = await Promise.all(
@@ -295,14 +277,14 @@ test('an aborted queued read leaves without reading and frees no extra slot', as
     later = f.serve(urls[7]!);
   abort.abort();
   assert.equal((await queued).status, 502);
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(f.reads, 6, 'neither queued read started');
   gate.resolve();
   for (const response of await Promise.all([...running, later])) assert.equal(response.status, 200);
   await f.dispose();
 });
 
-test('disposal fails queued reads and cancels in-flight ones', async () => {
+test('disposal fails queued reads, cancels in-flight ones and revokes their tokens', async () => {
   const f = fixture(png);
   const urls = await Promise.all(
     Array.from({ length: 7 }, (_, index) =>
@@ -322,6 +304,7 @@ test('disposal fails queued reads and cancels in-flight ones', async () => {
   await disposing;
   assert.equal(f.reads, 6);
   assert(f.signals.every((signal) => signal.aborted));
+  assert.equal((await f.serve(urls[0]!)).status, 404);
 });
 
 test('the 256-token cap evicts the least recently requested binding', async () => {
@@ -403,19 +386,4 @@ test('a cancelled request aborts its read, and its token stays valid', async () 
   f.hold(Promise.resolve());
   assert.equal((await f.serve(url)).status, 200, 'the token remains valid for a later request');
   await f.dispose();
-});
-
-test('disposal cancels an in-flight read and revokes its token', async () => {
-  const f = fixture(png);
-  const url = await f.issue('image/png');
-  const gate = Promise.withResolvers<void>();
-  f.hold(gate.promise);
-  const pending = f.serve(url);
-  while (!f.reads) await new Promise((resolve) => setImmediate(resolve));
-  const released = f.dispose();
-  gate.resolve();
-  assert.equal((await pending).status, 502);
-  await released;
-  assert.equal(f.signals[0]!.aborted, true);
-  assert.equal((await f.serve(url)).status, 404);
 });

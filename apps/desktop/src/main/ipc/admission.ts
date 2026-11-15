@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Effect, Option, Semaphore } from 'effect';
 import { RpcSchema } from 'effect/rpc';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { DesktopChatRpcs } from '../../ipc/chat-rpcs.ts';
@@ -51,49 +51,54 @@ const failed = () =>
  * them; an editor command and every chat request are held to their input bounds first.
  */
 export function makeIpcAdmission(intercept?: IpcInterception) {
-  const running = new Map<string, number>();
+  /** A permit for each request (or watch) of a kind that may run at once. */
+  const places = new Map<string, Semaphore.Semaphore>();
   return IpcAdmission.of((effect, { rpc, payload }) =>
-    // Counted and given its release in one step, so an interruption between them leaks no place.
-    Effect.uninterruptibleMask((restore) =>
-      Effect.suspend(() => {
-        const tag = rpc._tag;
-        const watch = RpcSchema.isStreamSchema(rpc.successSchema);
-        let kind = 'window',
-          limit: number = ipcLimits.windowRequests;
-        if (EditorRpcs.requests.has(tag)) {
-          kind = 'editor';
-          limit = ipcLimits.editorRequests;
-          const breach =
-            editorCommands.has(tag) || tag === workspaceWatch
-              ? findInputBoundBreach(
-                  payload,
-                  tag === 'getIgnoredPaths' ? ipcLimits.ignoredPathsLength : ipcLimits.arrayLength,
-                )
-              : undefined;
-          if (breach) return Effect.fail(new IpcInputError({ problem: breach }));
-        } else if (DesktopChatRpcs.requests.has(tag)) {
-          kind = `chat:${chatTargetOf(tag, payload)}`;
-          limit = ipcLimits.chatRequests;
-          if (!isWithinChatRequestBytes(payload ?? null))
-            return Effect.fail(new IpcInputError({ problem: 'chat-request' }));
-        }
-        const handle = () =>
-          (intercept ? intercept({ tag, payload }, effect) : effect).pipe(
-            Effect.mapError((error) =>
-              ApplicationError.is(error) ? boundApplicationError(error) : error,
-            ),
-            Effect.catchDefect(() => Effect.fail(failed())),
-          ) as typeof effect;
-        if (unlimited.has(tag)) return restore(handle());
-        const key = `${kind}:${watch ? 'watches' : 'requests'}`;
-        const count = running.get(key) ?? 0;
-        if (count >= limit)
-          return Effect.fail(new IpcBusyError({ limit: watch ? 'watches' : 'requests' }));
-        running.set(key, count + 1);
-        return restore(handle()).pipe(
-          Effect.ensuring(Effect.sync(() => running.set(key, running.get(key)! - 1))),
+    Effect.suspend(() => {
+      const tag = rpc._tag;
+      const watch = RpcSchema.isStreamSchema(rpc.successSchema);
+      let kind = 'window',
+        limit: number = ipcLimits.windowRequests;
+      if (EditorRpcs.requests.has(tag)) {
+        kind = 'editor';
+        limit = ipcLimits.editorRequests;
+        const breach =
+          editorCommands.has(tag) || tag === workspaceWatch
+            ? findInputBoundBreach(
+                payload,
+                tag === 'getIgnoredPaths' ? ipcLimits.ignoredPathsLength : ipcLimits.arrayLength,
+              )
+            : undefined;
+        if (breach) return Effect.fail(new IpcInputError({ problem: breach }));
+      } else if (DesktopChatRpcs.requests.has(tag)) {
+        kind = `chat:${chatTargetOf(tag, payload)}`;
+        limit = ipcLimits.chatRequests;
+        if (!isWithinChatRequestBytes(payload ?? null))
+          return Effect.fail(new IpcInputError({ problem: 'chat-request' }));
+      }
+      const handle = () =>
+        (intercept ? intercept({ tag, payload }, effect) : effect).pipe(
+          Effect.mapError((error) =>
+            ApplicationError.is(error) ? boundApplicationError(error) : error,
+          ),
+          Effect.catchDefect(() => Effect.fail(failed())),
+        ) as typeof effect;
+      if (unlimited.has(tag)) return handle();
+      const key = `${kind}:${watch ? 'watches' : 'requests'}`;
+      let permits = places.get(key);
+      if (!permits) places.set(key, (permits = Semaphore.makeUnsafe(limit)));
+      // A place is taken and given its release in one step, so an interruption leaks none.
+      return permits
+        .withPermitsIfAvailable(1)(handle())
+        .pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () =>
+                Effect.fail(new IpcBusyError({ limit: watch ? 'watches' : 'requests' })),
+              onSome: Effect.succeed,
+            }),
+          ),
         );
-      }),
-    ),
+    }),
   );
 }

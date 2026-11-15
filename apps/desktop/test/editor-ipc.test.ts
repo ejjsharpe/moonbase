@@ -89,6 +89,8 @@ test('a command reaches the workspace only for what main approved for this windo
     assert.equal(await f.shell.chooseCheckout(), '/approved');
     await f.editor.command('openCheckout', { root: '/approved' });
     await refused('openCheckout', { root: '/elsewhere' }, 'root');
+    // A known checkout's root opens again once its picker grant is spent.
+    await f.editor.command('openCheckout', { root: '/approved' });
     // An exact approved checkout only: another host's copy of it is refused.
     await refused(
       'readFile',
@@ -124,11 +126,17 @@ test('a command reaches the workspace only for what main approved for this windo
       id: 'earlier-operation',
     });
     await refused('operationStatus', { clientId: 'earlier-client', id: 'other' }, 'foreign-client');
+    await refused(
+      'acknowledgeOperation',
+      { clientId: 'desktop-primary', operationClientId: 'earlier-client', id: 'other' },
+      'foreign-client',
+    );
     assert.deepEqual(await f.call('operationStatus', { clientId: 'earlier.client', id: 'x' }), {
       ok: false,
       error: { _tag: 'IpcInputError', problem: 'request-id' },
     });
     assert.deepEqual(workspace.dispatched, [
+      'openCheckout',
       'openCheckout',
       'listWorktrees',
       'openCheckout',
