@@ -15,7 +15,6 @@ import { toWireError, type WorkspaceHostError } from '@moonbase/contracts/worksp
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import type { WorkspaceHostClient } from '@moonbase/contracts/workspace-host';
 import {
-  DaemonLinkClock,
   DaemonRpcLinkLive,
   RemoteChatLive,
   RemoteLocalHostLive,
@@ -25,7 +24,7 @@ import { serveChat } from '../src/server.ts';
 import { refusingDaemon } from './served-services.ts';
 import * as P from '../src/protocol.ts';
 import { socketLimits } from '@moonbase/contracts/socket';
-import { fixture as runtimeFixture, manualClock, session, until } from './runtime-fixture.ts';
+import { fixture as runtimeFixture, session, until } from './runtime-fixture.ts';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
 
 /** A daemon over a local-mode runtime that can stop and start again on its port. */
@@ -106,13 +105,12 @@ async function daemon(t: TestContext, workspace?: WorkspaceHostClient) {
   };
 }
 /**
- * A remote client of `d`, over a connection whose endpoint the test may replace; its sockets and
- * reconnect backoff run on `clock` when one is given.
+ * A remote client of `d`, over a connection whose endpoint the test may replace; its time is a
+ * `TestClock` the test moves with `advance` when `testClock` is set.
  */
 function remote(
   t: TestContext,
   d: Awaited<ReturnType<typeof daemon>>,
-  clock?: ReturnType<typeof manualClock>,
   withWorkspace = false,
   testClock = false,
 ) {
@@ -153,11 +151,7 @@ function remote(
       ),
       ...(withWorkspace ? [RemoteWorkspaceHostLive({ host: session.host })] : []),
       ...(testClock ? [TestClock.layer()] : []),
-    ).pipe(
-      Layer.provide(
-        clock ? Layer.merge(connection, Layer.succeed(DaemonLinkClock, clock)) : connection,
-      ),
-    ),
+    ).pipe(Layer.provide(connection)),
   );
   t.after(() => runtime.dispose());
   return {
@@ -253,9 +247,8 @@ test('one client shares one connection, and chats another client creates or chan
 });
 
 test('a dropped daemon shows reconnecting, then resets its watches; healthy traffic renews the budget, and a lost budget or generation fails them', async (t) => {
-  const d = await daemon(t),
-    clock = manualClock();
-  const client = remote(t, d, clock);
+  const d = await daemon(t);
+  const client = remote(t, d, false, true);
   const target = (
     await client.chat.command('createChat', {
       session,
@@ -274,7 +267,7 @@ test('a dropped daemon shows reconnecting, then resets its watches; healthy traf
   /** Moves the clock past the longest backoff until `done`, so each pending reconnect runs. */
   const advanceUntil = <T>(get: () => T, done: (value: T) => boolean) =>
     until(async () => {
-      clock.advance(P.streamLimits.reconnectMs.at(-1)!);
+      await client.advance(P.streamLimits.reconnectMs.at(-1)!);
       return get();
     }, done);
   // More drops than the budget allows, each after a healthy period, keep reconnecting.
@@ -294,7 +287,7 @@ test('a dropped daemon shows reconnecting, then resets its watches; healthy traf
     );
     await advanceUntil(() => list.values.length > lists && list.values.at(-1)!.reset, Boolean);
     // Traffic `renewMs` after the reconnect proves the connection healthy.
-    clock.advance(P.streamLimits.renewMs);
+    await client.advance(P.streamLimits.renewMs);
     await client.chat.command('listChats', { session });
   }
   assert.deepEqual([...chat.errors, ...list.errors], []);
@@ -330,7 +323,7 @@ test('a workspace call or watch for another host is refused before it is sent, a
     watch: () => () => Promise.resolve(),
   };
   const d = await daemon(t, workspace);
-  const host = await remote(t, d, undefined, true).workspace();
+  const host = await remote(t, d, true).workspace();
   const code = async (effect: Effect.Effect<unknown, WorkspaceHostError>) =>
     toWireError(await Effect.runPromise(Effect.flip(effect))).code;
   assert.equal(await code(host.readFile({ checkout: foreign, path: 'a.txt' })), 'Unauthorized');
@@ -354,7 +347,7 @@ test('a mutation past its deadline keeps its place until the daemon replies, sta
     watch: () => () => Promise.resolve(),
   };
   const d = await daemon(t, workspace);
-  const client = remote(t, d, undefined, true, true);
+  const client = remote(t, d, true, true);
   const host = await client.workspace();
   const limit = socketLimits.workspaceRequests;
   const ownCheckout = {

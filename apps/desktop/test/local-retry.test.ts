@@ -3,12 +3,12 @@ import { test } from 'node:test';
 import { mkdtemp, realpath, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ManagedRuntime } from 'effect';
+import { Layer, ManagedRuntime } from 'effect';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
-import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatSession } from '@moonbase/contracts/chat';
+import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { ChatIpcSession } from '../src/main/chat/session.ts';
 import { makeIpcFixture, noChat } from './fixtures/ipc-fixture.ts';
@@ -46,11 +46,10 @@ test('desktop recovers an exact committed Create before renewed folder approval,
     databasePath: join(root, 'chat.sqlite'),
     approveCreation: async () => {
       validations++;
-      if (!approved)
-        throw new ApplicationError({ code: 'Unauthorized', message: 'Choose a working folder.' });
+      if (!approved) throw new FolderRefusedError({ refusal: 'not-approved' });
     },
   };
-  let runtime = ManagedRuntime.make(LocalPiRuntimeLive(config));
+  let runtime = ManagedRuntime.make(Layer.orDie(LocalPiRuntimeLive(config)));
   await makeChatClient(runtime).command('getChatHost', { host: context.host });
   let ipc = await overIpc(runtime as never, context);
   t.after(async () => {
@@ -70,7 +69,7 @@ test('desktop recovers an exact committed Create before renewed folder approval,
   await runtime.dispose();
   await rm(cwd, { recursive: true });
   approved = false;
-  runtime = ManagedRuntime.make(LocalPiRuntimeLive(config));
+  runtime = ManagedRuntime.make(Layer.orDie(LocalPiRuntimeLive(config)));
   await makeChatClient(runtime).command('getChatHost', { host: context.host });
   ipc = await overIpc(runtime as never, context);
   assert.deepEqual(await ipc.target('local').chat.command('createChat', input), committed);

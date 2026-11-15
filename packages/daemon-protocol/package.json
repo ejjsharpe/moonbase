@@ -7,7 +7,6 @@
     "./server": "./src/server.ts",
     "./loopback": "./src/loopback.ts",
     "./socket": "./src/socket-client.ts",
-    "./folders": "./src/folders.ts",
     "./health": "./src/health.ts"
   },
   "scripts": {

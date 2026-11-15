@@ -1,5 +1,5 @@
 import { Effect, Stream } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/workspace';
+import { HostUnavailableError } from '@moonbase/contracts/host-errors';
 import type {
   ChatServiceShape,
   LocalHostHandlers,
@@ -32,7 +32,7 @@ export function hooked<T extends object>(
         if (hooks.after)
           yield* Effect.tryPromise({
             try: () => hooks.after!(operation),
-            catch: (error) => error as ApplicationError,
+            catch: (error) => error,
           });
         return value;
       });
@@ -51,8 +51,7 @@ export const hookedProviders = (
   forOwner: (ownerId) => hooked(providers.forOwner(ownerId), hooks),
 });
 
-const refused = () =>
-  Effect.fail(new ApplicationError({ code: 'Unavailable', message: 'Not served here.' }));
+const refused = () => Effect.fail(new HostUnavailableError({ reason: 'failed' }));
 /**
  * A daemon whose folder and provider operations are all refused: the host still advertises local
  * mode, so a client accepts its chats.
@@ -64,8 +63,7 @@ export function refusingDaemon(): NonNullable<ChatServerServices['daemon']> {
     providers: {
       forOwner: () => new Proxy({}, { get: () => refused }) as never,
       releaseOwner: refused,
-      watch: () =>
-        Stream.fail(new ApplicationError({ code: 'Unavailable', message: 'Not served here.' })),
+      watch: () => Stream.fail(new HostUnavailableError({ reason: 'failed' })),
       getProviderUrl: refused,
     },
     capabilities: [chatHostCapabilities.local],

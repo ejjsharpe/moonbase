@@ -3,7 +3,7 @@ import { ApplicationError } from '@moonbase/contracts/errors';
 import type { CommandOptions, ObservationClose } from '@moonbase/contracts/common';
 import { normalizeApplicationError, toApplicationError } from '@moonbase/effect';
 
-export async function runApplicationEffect<A, R, E extends ApplicationError>(
+export async function runApplicationEffect<A, R, E>(
   runtime: ManagedRuntime.ManagedRuntime<R, E>,
   effect: Effect.Effect<A, ApplicationError, R>,
   options?: CommandOptions,
@@ -21,7 +21,7 @@ export async function runApplicationEffect<A, R, E extends ApplicationError>(
 }
 
 /** Close fences delivery immediately and joins the actual stream finalizers. */
-export function observeApplicationStream<A, R, E extends ApplicationError>(
+export function observeApplicationStream<A, R, E>(
   runtime: ManagedRuntime.ManagedRuntime<R, E>,
   stream: Stream.Stream<A, ApplicationError, R>,
   receive: (event: A) => void,

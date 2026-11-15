@@ -170,11 +170,10 @@ for (const mode of ['local', 'remote'] as const)
     }
     assert.deepEqual([...seen].sort(), [...ids].sort());
     await controller.jumpToEntry('999999999');
+    // A remote host's refusal shows the client's own text for its reason, as a local one does.
     assert.match(
       controller.getSnapshot().transcript.error!,
-      remote
-        ? /Chat request is invalid or differs from its original identity/
-        : /Entry does not belong to this conversation/,
+      /Entry does not belong to this conversation/,
     );
     await assert.rejects(
       chat.command('getChatHistoryAround', {

@@ -17,7 +17,7 @@ import {
 } from './transcript.ts';
 import { maximumFindPathChars, maximumFindPathDepth, type TranscriptCursor } from './cursors.ts';
 import { checkChatReplySize } from '@moonbase/contracts/chat-validation';
-import { fail } from '@moonbase/contracts/errors';
+import { InvalidChatRequestError } from '@moonbase/contracts/chat-errors';
 
 const windowSize = 16 * 1024;
 const sliceBytes = 256 * 1024;
@@ -319,7 +319,7 @@ export async function findTranscript(
           ) + 4096;
         if (envelopeBytes >= maximumChatReplyBytes - 256) {
           if (!matches.length && match.index === 0)
-            fail('InvalidInput', 'Find match exceeds its delivery limit.');
+            throw new InvalidChatRequestError({ problem: 'find-limit' });
           consumed = match.index;
           envelopeFull = true;
           break;

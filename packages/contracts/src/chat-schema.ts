@@ -3,6 +3,7 @@ import { struct, optional } from './schema.ts';
 import { ChatIdentifierSchema, ChatHostTargetSchema } from './host-schema.ts';
 export { ChatIdentifierSchema, ChatHostTargetSchema } from './host-schema.ts';
 import { ApplicationError } from './errors.ts';
+import { IncompatibleHostError } from './host-errors.ts';
 import {
   chatPageSize,
   maximumChatFindQueryBytes,
@@ -457,6 +458,6 @@ export function decodeChatOutput<K extends ChatCommand>(
     if (!isChatCommand(operation)) throw Error('Unknown command');
     return outputs[operation](value) as ChatOutput<K>;
   } catch {
-    throw new ApplicationError({ code: 'Incompatible', message: 'Invalid chat reply.' });
+    throw new IncompatibleHostError({ reason: 'invalid-reply' });
   }
 }

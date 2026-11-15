@@ -1,5 +1,5 @@
 import * as Schema from 'effect/Schema';
-import { fail } from '@moonbase/contracts/errors';
+import { InvalidChatRequestError } from '@moonbase/contracts/chat-errors';
 import { boundedText, naturalNumber, recordId, safeInteger } from './field-schemas.ts';
 
 // Cursors come back from clients, which are untrusted, so each is decoded when it is opened.
@@ -12,7 +12,7 @@ function decode<S extends Schema.ConstraintDecoder<unknown, never>>(
       value,
     );
   } catch {
-    return fail('InvalidInput', 'Invalid chat cursor.');
+    throw new InvalidChatRequestError({ problem: 'cursor' });
   }
 }
 

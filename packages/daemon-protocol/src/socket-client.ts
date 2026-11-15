@@ -102,14 +102,11 @@ export type DaemonSocket = {
 };
 
 /** Rebuilds a daemon failure from its public code alone; its messages are never shown. */
-const publicFailure = (code: (typeof chatReplyErrorCodes)[number], operation?: string) =>
-  new ApplicationError({
-    code,
-    message: P.publicError(new ApplicationError({ code, message: '' }), operation).message,
-  });
+const publicFailure = (code: (typeof chatReplyErrorCodes)[number]) =>
+  new ApplicationError(P.publicFailure(code));
 /**
- * Decodes a signed reply's `error` field; undefined when it carries no public error code. A daemon
- * operation's failure may name a reason, shown with the client's own fixed text.
+ * Decodes a signed reply's `error` field; undefined when it carries no public error code. It is
+ * shown with the client's own fixed text.
  */
 export function decodeErrorEnvelope(
   error: unknown,
@@ -119,8 +116,8 @@ export function decodeErrorEnvelope(
     const record = readObject(error);
     const code = chatReplyErrorCodes.find((value) => value === record.code);
     if (code && (isDaemonCommand(operation) || isHostCommand(operation)))
-      return P.daemonFailure(code, record.reason);
-    return code && publicFailure(code, operation);
+      return P.daemonFailure(code);
+    return code && publicFailure(code);
   } catch {
     return undefined;
   }
@@ -269,7 +266,7 @@ export function connectDaemonSocket(
     if (message.kind === 'error') {
       if (!subscription) return;
       subscriptions.delete(message.subscriptionId);
-      subscription.onError(P.daemonFailure(message.code, undefined), false);
+      subscription.onError(P.daemonFailure(message.code), false);
       return;
     }
     const sequence = message.sequence;

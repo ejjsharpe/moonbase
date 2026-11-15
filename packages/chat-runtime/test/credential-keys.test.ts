@@ -16,7 +16,7 @@ import {
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { CredentialKeyError } from '@moonbase/contracts/provider-errors';
 import {
   createCredentialStore,
   createKeyEncryption,
@@ -37,9 +37,9 @@ async function makeDirectory(t: { after(fn: () => unknown): void }, prefix: stri
   t.after(() => rm(directory, { recursive: true, force: true }));
   return directory;
 }
-function assertHidden(error: unknown, code: string, ...hidden: string[]) {
-  assert(ApplicationError.is(error));
-  assert.equal(error.code, code);
+function assertHidden(error: unknown, tag: string, ...hidden: string[]) {
+  assert(error instanceof Error);
+  assert.equal((error as { _tag?: string })._tag, tag);
   for (const text of hidden) assert(!String(error).includes(text) && !error.stack?.includes(text));
   return true;
 }
@@ -65,7 +65,7 @@ test('credentials round-trip under each key and tampered, truncated, swapped or 
   const reject = async (bytes: Uint8Array, id = 'openai-api-key', reader = store) => {
     await writeFile(join(directory, id + '.encrypted'), bytes, { mode: 0o600 });
     await assert.rejects(reader.read(id), (error) =>
-      assertHidden(error, 'Persistence', secret.key, Buffer.from(key).toString('base64')),
+      assertHidden(error, 'CredentialStoreError', secret.key, Buffer.from(key).toString('base64')),
     );
   };
   for (const index of [1, sealed.length - 1]) {
@@ -107,19 +107,22 @@ test('an unavailable key source fails visibly and leaves stored credentials unto
     available: async () => true,
     load: async () => {
       calls++;
-      throw new ApplicationError({ code: 'Unavailable', message: 'Keychain locked.' });
+      throw new CredentialKeyError({ problem: 'keychain-locked' });
     },
     create: async () => {
       throw Error('must not create');
     },
   };
   const store = createCredentialStore(directory, createKeyEncryption(locked));
-  await assert.rejects(store.read('openai'), { code: 'Unavailable', message: 'Keychain locked.' });
+  await assert.rejects(store.read('openai'), {
+    _tag: 'CredentialKeyError',
+    problem: 'keychain-locked',
+  });
   await assert.rejects(
     store.modify('anthropic', async () => secret),
-    { code: 'Unavailable' },
+    { _tag: 'CredentialKeyError' },
   );
-  await assert.rejects(store.delete('openai'), { code: 'Unavailable' });
+  await assert.rejects(store.delete('openai'), { _tag: 'CredentialKeyError' });
   assert.equal(calls, 3);
   assert.deepEqual(await readFile(join(directory, 'openai.encrypted')), before);
   assert.deepEqual((await readdir(directory)).sort(), ['openai.encrypted']);
@@ -128,7 +131,7 @@ test('an unavailable key source fails visibly and leaves stored credentials unto
     createKeyEncryption({ ...locked, available: async () => false }),
   );
   await assert.rejects(absent.read('openai'), (error) => {
-    assert(ApplicationError.is(error) && error.code === 'Unavailable');
+    assert(error instanceof CredentialKeyError);
     assert.match(error.message, /key file/);
     return true;
   });
@@ -164,7 +167,7 @@ test('signing in again replaces an unreadable credential and signing out removes
       createKeyEncryption(createMemoryKeySource(current)),
     );
     await assert.rejects(store.read('openai-api-key'), (error) => {
-      assertHidden(error, 'Persistence', secret.key);
+      assertHidden(error, 'CredentialStoreError', secret.key);
       assert.match((error as Error).message, /Sign in to that provider again/);
       assert.doesNotMatch((error as Error).message, /keychain/i);
       return true;
@@ -193,11 +196,11 @@ test('signing in again replaces an unreadable credential and signing out removes
     available: async () => true,
     load: async () => {
       lockedCalls.load++;
-      throw new ApplicationError({ code: 'Unavailable', message: 'Keychain locked.' });
+      throw new CredentialKeyError({ problem: 'keychain-locked' });
     },
     create: async () => {
       lockedCalls.create++;
-      throw new ApplicationError({ code: 'Unavailable', message: 'Keychain locked.' });
+      throw new CredentialKeyError({ problem: 'keychain-locked' });
     },
   });
   const lockedStore = createCredentialStore(directory, locked);
@@ -205,9 +208,9 @@ test('signing in again replaces an unreadable credential and signing out removes
     await writeFile(path, bytes, { mode: 0o600 });
     await assert.rejects(
       lockedStore.modify('openai-api-key', async () => replacement),
-      { code: 'Unavailable' },
+      { _tag: 'CredentialKeyError' },
     );
-    await assert.rejects(lockedStore.delete('openai-api-key'), { code: 'Unavailable' });
+    await assert.rejects(lockedStore.delete('openai-api-key'), { _tag: 'CredentialKeyError' });
     assert.deepEqual(await readFile(path), bytes);
   }
   assert.equal(lockedCalls.create, 0);
@@ -217,13 +220,13 @@ test('signing in again replaces an unreadable credential and signing out removes
     createKeyEncryption({
       ...createMemoryKeySource(),
       create: async () => {
-        throw new ApplicationError({ code: 'Unavailable', message: 'Keychain locked.' });
+        throw new CredentialKeyError({ problem: 'keychain-locked' });
       },
     }),
   );
   await assert.rejects(
     unwritable.modify('openai-api-key', async () => replacement),
-    { code: 'Unavailable' },
+    { _tag: 'CredentialKeyError' },
   );
   assert.deepEqual(await readFile(path), truncated);
 
@@ -233,17 +236,17 @@ test('signing in again replaces an unreadable credential and signing out removes
   await assert.rejects(
     keyed.modify('openai-api-key', async () => replacement),
     {
-      code: 'Persistence',
+      _tag: 'CredentialStoreError',
     },
   );
-  await assert.rejects(keyed.delete('openai-api-key'), { code: 'Persistence' });
+  await assert.rejects(keyed.delete('openai-api-key'), { _tag: 'CredentialStoreError' });
   assert.deepEqual(await readFile(path), truncated);
   await chmod(path, 0o600);
   await writeFile(path, Buffer.alloc(128 * 1024 + 1), { mode: 0o600 });
   await assert.rejects(
     keyed.modify('openai-api-key', async () => replacement),
     {
-      code: 'Persistence',
+      _tag: 'CredentialStoreError',
     },
   );
   assert.equal((await stat(path)).size, 128 * 1024 + 1);
@@ -258,7 +261,7 @@ test('signing in again replaces an unreadable credential and signing out removes
   await assert.rejects(
     failing.modify('openai-api-key', async () => replacement),
     {
-      code: 'Persistence',
+      _tag: 'CredentialStoreError',
     },
   );
   await assert.rejects(failing.delete('openai-api-key'));
@@ -278,11 +281,7 @@ test('parallel reads share one key load, parallel first writes one create, and a
       load: async () => {
         calls.load++;
         await new Promise((resolve) => setTimeout(resolve, 10));
-        if (calls.load <= failLoads)
-          throw new ApplicationError({
-            code: 'Unavailable',
-            message: 'Keychain locked.',
-          });
+        if (calls.load <= failLoads) throw new CredentialKeyError({ problem: 'keychain-locked' });
         return inner.load();
       },
       create: async () => {
@@ -310,10 +309,7 @@ test('parallel reads share one key load, parallel first writes one create, and a
   // A locked keychain is asked once per attempt, and unlocking it lets the next attempt succeed.
   const locked = count(createMemoryKeySource(key), 1),
     retrying = createCredentialStore(directory, createKeyEncryption(locked.source));
-  await assert.rejects(retrying.list(), {
-    code: 'Unavailable',
-    message: 'Keychain locked.',
-  });
+  await assert.rejects(retrying.list(), { _tag: 'CredentialKeyError', problem: 'keychain-locked' });
   assert.equal(locked.calls.load, 1);
   assert.equal((await retrying.list()).length, providers.length);
   assert.equal(locked.calls.load, 2);
@@ -323,7 +319,7 @@ test('parallel reads share one key load, parallel first writes one create, and a
   const flaky = count({
     ...createMemoryKeySource(),
     create: async () => {
-      if (failCreate) throw new ApplicationError({ code: 'Unavailable', message: 'No key.' });
+      if (failCreate) throw new CredentialKeyError({ problem: 'keychain-locked' });
       return createMemoryKeySource(key).create();
     },
   });
@@ -333,7 +329,7 @@ test('parallel reads share one key load, parallel first writes one create, and a
   );
   await assert.rejects(
     flakyStore.modify('openai', async () => secret),
-    { message: 'No key.' },
+    CredentialKeyError,
   );
   failCreate = false;
   await flakyStore.modify('openai', async () => secret);
@@ -373,7 +369,7 @@ test('a key file is created privately once, read back by later sources and refus
 
   const refuse = async (target: string, operation: 'load' | 'create' = 'load') =>
     assert.rejects(createKeyFileSource(target)[operation](), (error) =>
-      assertHidden(error, 'Unavailable', manualKey.toString('base64')),
+      assertHidden(error, 'CredentialKeyError', manualKey.toString('base64')),
     );
   await chmod(manual, 0o640);
   await refuse(manual);
@@ -394,7 +390,7 @@ test('a key file is created privately once, read back by later sources and refus
   for (const operation of ['load', 'create'] as const)
     await assert.rejects(
       createKeyFileSource(join(directory, 'missing', 'credential.key'))[operation](),
-      { code: 'Unavailable', message: /folder doesn't exist/ },
+      { _tag: 'CredentialKeyError', problem: 'file-folder-missing' },
     );
   const shared = join(directory, 'shared');
   await mkdir(shared, { mode: 0o700 });
@@ -503,7 +499,12 @@ test(
       const fake = observeSecurity(state),
         source = createKeychainKeySource({ storeId: 'store-1', spawn: fake.spawn });
       await assert.rejects(source[operation](), (error) => {
-        assertHidden(error, 'Unavailable', 'generic-password', 'Moonbase daemon credentials');
+        assertHidden(
+          error,
+          'CredentialKeyError',
+          'generic-password',
+          'Moonbase daemon credentials',
+        );
         assert.match((error as Error).message, pattern);
         return true;
       });
@@ -530,7 +531,7 @@ test(
     await assert.rejects(
       store.modify('openai-api-key', async () => secret),
       {
-        code: 'Unavailable',
+        _tag: 'CredentialKeyError',
       },
     );
     assert.deepEqual(await readdir(directory), []);
@@ -541,7 +542,7 @@ test(
     const noisy = observeSecurity(state, 'cat >/dev/null; head -c 8000 /dev/zero | tr "\\0" a');
     await assert.rejects(
       createKeychainKeySource({ storeId: 'store-1', spawn: noisy.spawn }).load(),
-      { code: 'Unavailable' },
+      { _tag: 'CredentialKeyError' },
     );
     const missing = createKeychainKeySource({
       storeId: 'store-1',
@@ -559,7 +560,9 @@ test(
     assert(Date.now() - started < 10_000);
     assert.equal(hanging.children[0]!.signalCode, 'SIGKILL');
 
-    assert.throws(() => createKeychainKeySource({ storeId: 'bad id' }), { code: 'Unavailable' });
+    assert.throws(() => createKeychainKeySource({ storeId: 'bad id' }), {
+      _tag: 'CredentialKeyError',
+    });
     for (const keychain of [
       'relative.keychain-db',
       '/tmp/a"b.keychain-db',
@@ -571,7 +574,7 @@ test(
       '/' + 'é'.repeat(2000),
     ])
       assert.throws(() => createKeychainKeySource({ storeId: 'store-1', keychain }), {
-        code: 'Unavailable',
+        _tag: 'CredentialKeyError',
       });
   },
 );

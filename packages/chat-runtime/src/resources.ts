@@ -6,19 +6,23 @@ import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
 import { Cause, Effect, Exit, FiberSet, Ref, Scope } from 'effect';
 import { releaseResource } from '@moonbase/effect';
-import { ApplicationError } from '@moonbase/contracts/workspace';
+import {
+  ChatStoreMismatchError,
+  ChatUnavailableError,
+  type ChatError,
+} from '@moonbase/contracts/chat-errors';
+import { IncompatibleHostError } from '@moonbase/contracts/host-errors';
 import { Host, safeError } from './commands.ts';
 import { Store, readOwnedMetadata, getSettings } from './documents.ts';
 import type { LocalPiRuntimeConfiguration, RetainedWork } from './runtime-types.ts';
-import { fail } from '@moonbase/contracts/errors';
 import { decodeStoreOwner } from './stored-records.ts';
 
 // Abort requests and terminal cleanup failures remain observable after a caller's deadline.
 function retainedWork(kind: 'abort' | 'waiter'): Effect.Effect<RetainedWork, never, Scope.Scope> {
   return Effect.gen(function* () {
     const scope = yield* Scope.make();
-    const work = yield* Scope.provide(scope)(FiberSet.make<unknown, ApplicationError>());
-    const failures = yield* Ref.make<Cause.Cause<ApplicationError>>(Cause.empty);
+    const work = yield* Scope.provide(scope)(FiberSet.make<unknown, ChatError>());
+    const failures = yield* Ref.make<Cause.Cause<ChatError>>(Cause.empty);
     yield* Effect.addFinalizer(() =>
       FiberSet.clear(work).pipe(
         Effect.ensuring(Scope.close(scope, Exit.void)),
@@ -40,7 +44,7 @@ function retainedWork(kind: 'abort' | 'waiter'): Effect.Effect<RetainedWork, nev
       ),
     );
     return {
-      run: <A>(effect: Effect.Effect<A, ApplicationError>) => {
+      run: <A>(effect: Effect.Effect<A, ChatError>) => {
         const observed = effect.pipe(
           Effect.onExit((exit) =>
             Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
@@ -66,13 +70,7 @@ function isQualifiedRuntime(versions: NodeJS.ProcessVersions) {
 export function openHost(config: LocalPiRuntimeConfiguration) {
   return Effect.gen(function* () {
     if (!isQualifiedRuntime(process.versions))
-      return yield* Effect.fail(
-        new ApplicationError({
-          code: 'Incompatible',
-          message:
-            'The Pi host requires Node 26.13 or newer, or exactly Bun 1.4.4. The remote client has its own runtime boundary.',
-        }),
-      );
+      return yield* Effect.fail(new IncompatibleHostError({ reason: 'runtime' }));
     const session = { host: config.host, actorId: config.actorId },
       identity = JSON.stringify({ ...session, mode: 'local' });
     const environments = new Map<string, NodeExecutionEnv>();
@@ -99,10 +97,7 @@ export function openHost(config: LocalPiRuntimeConfiguration) {
       });
       const cwd = getSettings(meta).cwd;
       if (target.cwd !== cwd || (await realpath(cwd)) !== cwd || !(await stat(cwd)).isDirectory())
-        fail(
-          'Unavailable',
-          'The saved local working folder is unavailable. Restore it before retrying.',
-        );
+        throw new ChatUnavailableError({ reason: 'saved-folder-missing' });
       let env = environments.get(cwd);
       if (!env) {
         env = new NodeExecutionEnv({ cwd });
@@ -172,17 +167,10 @@ export function openHost(config: LocalPiRuntimeConfiguration) {
         if (existing) decodeStoreOwner(existing);
         await harness.commit(async (tx) => {
           if (!existing && (await tx.scanConversations({}, 1)).items.length)
-            fail(
-              'Incompatible',
-              'This store contains data without Moonbase ownership metadata; no import is authorized.',
-            );
+            throw new ChatStoreMismatchError({ mismatch: 'unowned' });
           const store = await tx.doc(Store, 'identity', identity);
           decodeStoreOwner(store);
-          if (store.identity !== identity)
-            fail(
-              'Incompatible',
-              'Store is already bound to another host, actor, working directory or model.',
-            );
+          if (store.identity !== identity) throw new ChatStoreMismatchError({ mismatch: 'bound' });
         }, context);
       },
       catch: safeError,
@@ -190,7 +178,7 @@ export function openHost(config: LocalPiRuntimeConfiguration) {
     const workScope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
         Scope.close(scope, Exit.void),
       ),
-      work = yield* Scope.provide(workScope)(FiberSet.make<unknown, ApplicationError>()),
+      work = yield* Scope.provide(workScope)(FiberSet.make<unknown, ChatError>()),
       waiters = yield* retainedWork('waiter'),
       observations = yield* Effect.acquireRelease(Scope.make(), (scope) =>
         Scope.close(scope, Exit.void),

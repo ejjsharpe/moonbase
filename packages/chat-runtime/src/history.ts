@@ -24,11 +24,11 @@ import type {
 import { Metadata, cid, eid, getSettings, type ChatSettings } from './documents.ts';
 import { checkCursor, previewText } from './text.ts';
 import { readObject } from '@moonbase/contracts/common';
-import { fail } from '@moonbase/contracts/errors';
+import { InvalidChatRequestError } from '@moonbase/contracts/chat-errors';
 import { decodeHistoryCursor } from './cursors.ts';
 import { decodeStoredMetadata } from './stored-records.ts';
 import {
-  NestedSourceRetired,
+  isNestedSourceEnded,
   captureTranscript,
   getLiveSource,
   hashJson,
@@ -81,7 +81,7 @@ const readCursor = (
       ? undefined
       : (readObject(decoded.scan) as Cursor);
   } catch {
-    return fail('InvalidInput', 'This history cursor belongs to another view or is invalid.');
+    throw new InvalidChatRequestError({ problem: 'history-cursor' });
   }
 };
 const writeCursor = (scan: Cursor | undefined, kind: string, conversationId?: string) =>
@@ -276,7 +276,7 @@ export async function projectSnapshot(
     try {
       return await projectSnapshotOnce(harness, input);
     } catch (error) {
-      if (!(error instanceof NestedSourceRetired) || attempt === 2) throw error;
+      if (!isNestedSourceEnded(error) || attempt === 2) throw error;
     }
   }
 }
@@ -486,7 +486,7 @@ export async function readHistoryAround(
   }
   if (cursor) {
     if (!cursor.direction || !cursor.upper)
-      return fail('InvalidInput', 'Invalid history direction.');
+      throw new InvalidChatRequestError({ problem: 'history-direction' });
     await collect(cursor.direction, cursor.position, rowsPerPage);
   } else {
     await collect('older', Number(input.entryId), rowsPerPage / 2);

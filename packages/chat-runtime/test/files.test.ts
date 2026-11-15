@@ -9,6 +9,7 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { ApplicationError } from '@moonbase/contracts/workspace';
+import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
 import { ChatFileIndex, type ChatFileListingRun } from '../src/files.ts';
 import { LocalPiRuntimeLive } from '../src/index.ts';
 import { fixture, isRunning, session } from './runtime-fixture.ts';
@@ -78,10 +79,10 @@ test('ripgrep lists the same files with its ignore rules', { skip: !ripgrep }, a
 test('search fails clearly when neither ripgrep nor a Git checkout is available', async (t) => {
   const root = await folder(t, false);
   const index = new ChatFileIndex({ ripgrepExecutable: missing });
-  await assert.rejects(
-    index.find(root, ''),
-    (error) => ApplicationError.is(error) && error.code === 'Unavailable',
-  );
+  await assert.rejects(index.find(root, ''), {
+    _tag: 'ChatUnavailableError',
+    reason: 'file-search',
+  });
   // Without the command-line tools, macOS's Git stub would offer to install them: it never runs.
   const runs: string[] = [];
   const withoutGit = new ChatFileIndex({
@@ -91,10 +92,10 @@ test('search fails clearly when neither ripgrep nor a Git checkout is available'
     },
     canRunGit: async () => false,
   });
-  await assert.rejects(
-    withoutGit.find(await folder(t), ''),
-    (error) => ApplicationError.is(error) && error.code === 'Unavailable',
-  );
+  await assert.rejects(withoutGit.find(await folder(t), ''), {
+    _tag: 'ChatUnavailableError',
+    reason: 'file-search',
+  });
   assert.deepEqual(runs, ['rg']);
 });
 
@@ -160,7 +161,7 @@ test('a local chat searches its own folder; a new chat only an approved one', as
       ripgrepExecutable: missing,
       approveFolder: async (cwd) => {
         if (cwd !== approved)
-          throw new ApplicationError({ code: 'Unauthorized', message: 'Not approved.' });
+          throw new FolderRefusedError({ refusal: 'not-approved', use: 'search' });
       },
     }),
   );

@@ -266,7 +266,7 @@ test('a local chat without a project runs in a new, empty folder of its own', as
   // A foreign chat is refused.
   await assert.rejects(
     runtime.runPromise(control.markFolderAsProject({ ...target, actorId: 'someone-else' })),
-    { code: 'Unauthorized' },
+    { _tag: 'ChatAccessError', refusal: 'other-actor' },
   );
 });
 test('a chat without a project is refused while its folders would sit inside a Git checkout', async (t) => {

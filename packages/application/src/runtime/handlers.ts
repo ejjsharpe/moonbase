@@ -14,6 +14,7 @@ import type { ConnectionCommand, ConnectionInput } from '@moonbase/contracts/con
 import { toWireError } from '@moonbase/contracts/workspace-errors';
 import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
 import type { ChatCommand, ChatInput } from '@moonbase/contracts/chat';
+import { toChatApplicationError } from '@moonbase/contracts/chat-legacy-errors';
 
 /** UI, native actions and transport adapters all enter these handlers. */
 export const workspaceCommand = <K extends WorkspaceCommand>(
@@ -49,20 +50,31 @@ export const connectionWatch = () =>
     Stream.mapError(toConnectionApplicationError),
   );
 
+// Chat and provider setup errors become the legacy `ApplicationError` here, with the codes they
+// have always had, until the chat UI reads tags (CL-22).
 export const chatCommand = <K extends ChatCommand>(operation: K, input: ChatInput<K>) =>
   Effect.flatMap(ChatService, (service) => {
     const handlers: ChatHandlers = service;
     return handlers[operation](input);
-  });
+  }).pipe(Effect.mapError(toChatApplicationError));
 export const chatWatch = (input: Parameters<ChatService['Service']['watch']>[0]) =>
-  Stream.unwrap(Effect.map(ChatService, (service) => service.watch(input)));
+  Stream.unwrap(Effect.map(ChatService, (service) => service.watch(input))).pipe(
+    Stream.mapError(toChatApplicationError),
+  );
 export const chatListWatch = (input: Parameters<ChatService['Service']['watchChatList']>[0]) =>
-  Stream.unwrap(Effect.map(ChatService, (service) => service.watchChatList(input)));
+  Stream.unwrap(Effect.map(ChatService, (service) => service.watchChatList(input))).pipe(
+    Stream.mapError(toChatApplicationError),
+  );
 
 export const providerCommand = <K extends ProviderCommand>(
   ownerId: string,
   operation: K,
   input: ProviderInput<K>,
-) => Effect.flatMap(ProviderSetupService, (service) => service.forOwner(ownerId)[operation](input));
+) =>
+  Effect.flatMap(ProviderSetupService, (service) =>
+    service.forOwner(ownerId)[operation](input),
+  ).pipe(Effect.mapError(toChatApplicationError));
 export const providerWatch = (ownerId: string) =>
-  Stream.unwrap(Effect.map(ProviderSetupService, (service) => service.watch(ownerId)));
+  Stream.unwrap(Effect.map(ProviderSetupService, (service) => service.watch(ownerId))).pipe(
+    Stream.mapError(toChatApplicationError),
+  );

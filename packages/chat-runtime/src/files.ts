@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { ApplicationError } from '@moonbase/contracts/workspace';
+import { ChatUnavailableError } from '@moonbase/contracts/chat-errors';
 import { chatFileMatchLimit, isChatMentionPath, type ChatOutput } from '@moonbase/contracts/chat';
 import { matchPath, compareMatches } from '@moonbase/contracts/lookup';
 
@@ -144,11 +144,7 @@ const splitListing = (bytes: Buffer, truncated: boolean) => {
     .map((path) => path.replace(/^\.\//, ''));
 };
 const countSegments = (path: string) => path.split('/').length;
-const makeUnavailableError = () =>
-  new ApplicationError({
-    code: 'Unavailable',
-    message: 'File search needs ripgrep or Git on the chat host, and a readable working folder.',
-  });
+const makeUnavailableError = () => new ChatUnavailableError({ reason: 'file-search' });
 
 /**
  * Lists a working folder's files the way coding agents do: ripgrep's ignore rules when ripgrep is

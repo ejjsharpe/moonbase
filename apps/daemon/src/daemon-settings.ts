@@ -1,5 +1,5 @@
 import * as Schema from 'effect/Schema';
-import { fail } from '@moonbase/contracts/errors';
+import { DaemonFailure } from './failure.ts';
 import { AbsolutePathSchema as absolutePath } from '@moonbase/contracts/daemon-schema';
 
 const port = Schema.Number.check(
@@ -51,6 +51,6 @@ export function decodeDaemonSettings(value: unknown): DaemonSettings {
   try {
     return decode(value);
   } catch {
-    return fail('InvalidInput', 'Invalid daemon settings.');
+    throw new DaemonFailure('InvalidInput', 'The daemon configuration is invalid.');
   }
 }

@@ -1,5 +1,6 @@
 import { areJsonValuesEqual } from './common.ts';
-import { fail } from './errors.ts';
+import { InvalidChatRequestError } from './chat-errors.ts';
+import { IncompatibleHostError } from './host-errors.ts';
 import { decodeChatOutput } from './chat-schema.ts';
 import {
   maximumChatReplyBytes,
@@ -36,9 +37,10 @@ export const isCancellableChatRead = (operation: ChatCommand) =>
   operation === 'findChatFiles';
 export function checkChatReplySize<T>(value: T): T {
   if (new TextEncoder().encode(JSON.stringify(value)).length > maximumChatReplyBytes - 256)
-    fail('InvalidInput', 'Chat reply exceeds its delivery limit.');
+    throw new InvalidChatRequestError({ problem: 'reply-limit' });
   return value;
 }
+const invalidReply = () => new IncompatibleHostError({ reason: 'invalid-reply' });
 /** Decodes a chat reply from the wire and checks it answers the request; schemas grant no remote authority. */
 export function checkChatOutput<K extends ChatCommand>(
   operation: K,
@@ -49,13 +51,13 @@ export function checkChatOutput<K extends ChatCommand>(
   if (operation === 'getChat') {
     const snapshot = result as ChatSnapshot;
     if (snapshot.run && !isSameChatTarget(snapshot.run.stop.target, snapshot.conversation.target))
-      fail('Incompatible', 'Run target differs from its conversation.');
+      throw invalidReply();
   }
   const r = result as Record<string, unknown> | null,
     q = request as Record<string, unknown>;
   const requestedSession = q.session as ChatSession | undefined;
   if (operation === 'findChatFiles') {
-    if (r!.query !== q.query) fail('Incompatible', 'File search identity changed.');
+    if (r!.query !== q.query) throw invalidReply();
   } else if (requestedSession) {
     const summaries =
       operation === 'listChats'
@@ -68,21 +70,21 @@ export function checkChatOutput<K extends ChatCommand>(
           s.target.actorId !== requestedSession.actorId,
       )
     )
-      fail('Incompatible', 'Chat authority changed.');
+      throw invalidReply();
   }
   if (
     operation === 'getChatHost' &&
     !isSameChatHost(r!.host as ChatHostTarget, q.host as ChatHostTarget)
   )
-    fail('Incompatible', 'Chat host changed.');
+    throw invalidReply();
   const validateTranscript = (transcript: ChatTranscript, target: ChatTarget, id?: string) => {
     if (
       !isSameChatTarget(transcript.source.target, target) ||
       (id !== undefined && (transcript.source.kind !== 'entry' || transcript.source.entryId !== id))
     )
-      fail('Incompatible', 'Transcript source changed.');
+      throw invalidReply();
     if (new Set(transcript.parts.map((part) => part.partId)).size !== transcript.parts.length)
-      fail('Incompatible', 'Transcript contains duplicate part identities.');
+      throw invalidReply();
   };
   if (
     operation === 'getChat' ||
@@ -102,7 +104,7 @@ export function checkChatOutput<K extends ChatCommand>(
           source.submissionId !== run.stop.submissionId ||
           source.taskId !== run.stop.taskId
         )
-          fail('Incompatible', 'Live transcript authority changed.');
+          throw invalidReply();
       }
     }
   }
@@ -114,23 +116,22 @@ export function checkChatOutput<K extends ChatCommand>(
       data.cursor !== (input.cursor ?? null) ||
       data.matches.some((match) => !isSameChatTarget(match.source.target, input.target))
     )
-      fail('Incompatible', 'Find read identity changed.');
+      throw invalidReply();
   }
   if (operation === 'getChatHistoryAround') {
-    if (r!.entryId !== q.entryId || r!.cursor !== (q.cursor ?? null))
-      fail('Incompatible', 'History read identity changed.');
+    if (r!.entryId !== q.entryId || r!.cursor !== (q.cursor ?? null)) throw invalidReply();
   }
   if (operation === 'getChatTranscriptContent') {
     const data = result as ChatOutput<'getChatTranscriptContent'>;
     const input = request as ChatInput<'getChatTranscriptContent'>;
     if (!areJsonValuesEqual(data.source, input.source) || data.cursor !== (input.cursor ?? null))
-      fail('Incompatible', 'Content read identity changed.');
+      throw invalidReply();
     if (data.kind === 'manifest') {
-      if (input.selection) fail('Incompatible', 'Content selection was ignored.');
+      if (input.selection) throw invalidReply();
       validateTranscript(data, input.source.target);
     } else {
       if (!input.selection || !areJsonValuesEqual(data.selection, input.selection))
-        fail('Incompatible', 'Content selection changed.');
+        throw invalidReply();
     }
   }
   if (q.target && r) {
@@ -138,12 +139,10 @@ export function checkChatOutput<K extends ChatCommand>(
       operation === 'getChat'
         ? (r.conversation as ChatSummary).target
         : (r.target as ChatTarget | undefined);
-    if (actual && !isSameChatTarget(actual, q.target as ChatTarget))
-      fail('Incompatible', 'Chat target changed.');
+    if (actual && !isSameChatTarget(actual, q.target as ChatTarget)) throw invalidReply();
   }
   if (q.requestId && r?.requestId !== undefined && q.requestId !== r.requestId)
-    fail('Incompatible', 'Chat request identity changed.');
-  if (operation === 'stopChat' && !areJsonValuesEqual(r!.stop, q.stop))
-    fail('Incompatible', 'Stop authority changed.');
+    throw invalidReply();
+  if (operation === 'stopChat' && !areJsonValuesEqual(r!.stop, q.stop)) throw invalidReply();
   return checkChatReplySize(result);
 }

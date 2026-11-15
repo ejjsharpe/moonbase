@@ -11,7 +11,9 @@ import {
   maximumRecentFolders,
 } from '../src/daemon-schema.ts';
 import { readProviderSignInUrl } from '../src/providers-schema.ts';
-import { daemonErrorReasons, findDaemonErrorReason, readDaemonErrorReason } from '../src/daemon.ts';
+import * as Schema from 'effect/Schema';
+import { folderReadErrors } from '../src/daemon-rpc.ts';
+import { FolderRefusedError } from '../src/folder-errors.ts';
 import { decodeConnectionProfile } from '../src/connection-schema.ts';
 import { chatHostCapabilities, chatProtocolVersion } from '../src/host.ts';
 import { decodeChatHostHealth } from '../src/host-schema.ts';
@@ -113,24 +115,19 @@ test('health accepts the current protocol with daemon capabilities and refuses a
   });
 });
 
-test('daemon error reasons pair one code with one fixed message, and are read only for that code', () => {
-  const messages = Object.values(daemonErrorReasons).map(({ message }) => message);
-  assert.equal(new Set(messages).size, messages.length);
-  for (const [reason, error] of Object.entries(daemonErrorReasons)) {
-    assert.equal(findDaemonErrorReason(error), reason);
-    assert.equal(readDaemonErrorReason(reason, error.code), reason);
-    assert.equal(readDaemonErrorReason(reason, 'Conflict'), undefined);
-  }
-  assert.equal(
-    findDaemonErrorReason({ code: 'InvalidInput', message: 'Choose an existing folder' }),
-    undefined,
-  );
-  assert.equal(
-    findDaemonErrorReason({ code: 'Unavailable', message: 'Choose an existing folder.' }),
-    undefined,
-  );
-  for (const value of ['__proto__', 1])
-    assert.equal(readDaemonErrorReason(value, 'InvalidInput'), undefined);
+test('a daemon error crosses the wire as its tag and fields only, and decodes to its own text', () => {
+  const schema = Schema.Union(folderReadErrors);
+  const encode = Schema.encodeSync(schema),
+    decode = Schema.decodeUnknownSync(schema, { onExcessProperty: 'error' });
+  const error = Object.assign(new FolderRefusedError({ refusal: 'not-approved', use: 'search' }), {
+    cause: '/private/path',
+  });
+  const encoded = encode(error);
+  assert.deepEqual(encoded, { _tag: 'FolderRefusedError', refusal: 'not-approved', use: 'search' });
+  assert.equal(decode(encoded).message, error.message);
+  // A host can't name a reason the client doesn't know, nor send its own text.
+  assert.throws(() => decode({ ...encoded, refusal: 'host text' }));
+  assert.throws(() => decode({ ...encoded, message: 'host text' }));
 });
 
 test('a connection profile may leave out its port until a loopback connection has read one', () => {

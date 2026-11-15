@@ -148,7 +148,8 @@ test('a token holder drives a local-mode daemon completely over the loopback con
       });
       // A local daemon has no approved roots to list; its client has a native picker.
       await assert.rejects(clients.run(folders.listHostFolders({ host: session.host })), {
-        code: 'Incompatible',
+        _tag: 'IncompatibleHostError',
+        reason: 'not-served',
       });
       const created = await clients.chat.command('createChat', {
         session,
@@ -204,9 +205,7 @@ test('a token holder drives a local-mode daemon completely over the loopback con
       );
       await assert.rejects(
         clients.run(folders.checkChatFolder({ host: session.host, path: project })),
-        {
-          code: 'Unauthorized',
-        },
+        { _tag: 'FolderRefusedError', refusal: 'not-chat-folder' },
       );
       await clients.run(
         folders.markFolderAsProject({ requestId: 'mark-own', target: own.conversation.target }),

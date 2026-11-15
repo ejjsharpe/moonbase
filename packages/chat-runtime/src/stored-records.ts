@@ -7,7 +7,9 @@ import {
   chatInputSchemas,
   ChatReasoningEffortSchema,
 } from '@moonbase/contracts/chat-schema';
-import { fail } from '@moonbase/contracts/errors';
+import { ChatStoreError } from '@moonbase/contracts/chat-errors';
+
+type StoreProblem = ChatStoreError['problem'];
 import { absolutePath, boundedText, naturalNumber, recordId } from './field-schemas.ts';
 
 // Moonbase's records in the Pi store, decoded each time they are read.
@@ -61,36 +63,35 @@ const metadata = Schema.Struct({
 function decode<S extends Schema.ConstraintDecoder<unknown, never>>(
   schema: S,
   value: unknown,
-  message = 'Stored Moonbase chat data is invalid; preserve this store without rewriting it.',
+  problem: StoreProblem = 'invalid-data',
 ): S['Type'] {
   try {
     return Schema.decodeUnknownSync(schema, { onExcessProperty: 'error', reportInput: false })(
       value,
     );
   } catch {
-    return fail('Persistence', message);
+    throw new ChatStoreError({ problem });
   }
 }
 const decodeJson = <S extends Schema.ConstraintDecoder<unknown, never>>(
   schema: S,
   value: string,
-  message: string,
+  problem: StoreProblem,
 ): S['Type'] => {
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
   } catch {
-    return fail('Persistence', message);
+    throw new ChatStoreError({ problem });
   }
-  return decode(schema, parsed, message);
+  return decode(schema, parsed, problem);
 };
 function checkStoredIdentity(value: string) {
-  decodeJson(identity, value, 'Stored Moonbase chat authority is invalid.');
+  decodeJson(identity, value, 'authority');
 }
 
 /** A stored request's binding: the operation and the full input its request ID is bound to. */
-export const decodeStoredBinding = (value: string) =>
-  decodeJson(binding, value, 'Stored Moonbase request binding is invalid.');
+export const decodeStoredBinding = (value: string) => decodeJson(binding, value, 'binding');
 /** A stored request, checked against its binding and the actor and request ID it is read for. */
 export function decodeStoredRequest(value: unknown, actorId: string, requestId: string) {
   const result = decode(request, value),
@@ -99,14 +100,14 @@ export function decodeStoredRequest(value: unknown, actorId: string, requestId: 
   if (bound.operation === 'createChat') session = bound.session;
   else session = bound.operation === 'sendChat' ? bound.target : bound.stop.target;
   if (bound.operation === 'sendChat' && result.conversationId !== bound.target.conversationId)
-    fail('Persistence', 'Stored Moonbase request conversation is invalid.');
+    throw new ChatStoreError({ problem: 'request-conversation' });
   if (
     (bound.operation !== 'sendChat' && (result.pending || result.submissionId !== null)) ||
     (result.pending && result.submissionId !== null)
   )
-    fail('Persistence', 'Stored Moonbase request state is invalid.');
+    throw new ChatStoreError({ problem: 'request-state' });
   if (session.actorId !== actorId || bound.requestId !== requestId)
-    fail('Persistence', 'Stored Moonbase request authority is invalid.');
+    throw new ChatStoreError({ problem: 'request-authority' });
   return result;
 }
 /** The store's owner record: the identity it is bound to. */

@@ -294,17 +294,20 @@ test("a running response's text parts may carry their whole text within the live
   assert.throws(() => decodeChatOutput('getChat', { ...snapshot, entries: [entry] }));
 });
 
-test('schema failures use safe application errors without rejected values', () => {
+test('schema failures are safe errors without rejected values', () => {
   const secret = 'synthetic-private-value-not-for-errors';
-  for (const [code, decode] of [
-    ['InvalidInput', () => decodeChatInput('sendChat', { ...inputs.sendChat, text: { secret } })],
+  for (const [tag, decode] of [
     [
-      'Incompatible',
+      'ApplicationError',
+      () => decodeChatInput('sendChat', { ...inputs.sendChat, text: { secret } }),
+    ],
+    [
+      'IncompatibleHostError',
       () => decodeChatOutput('getChatHost', { ...outputs.getChatHost, mode: { secret } }),
     ],
   ] as const)
     assert.throws(decode, (error: unknown) => {
-      assert.equal((error as { code: string }).code, code);
+      assert.equal((error as { _tag: string })._tag, tag);
       assert(!String(error).includes(secret));
       assert(!JSON.stringify(error).includes(secret));
       return true;
