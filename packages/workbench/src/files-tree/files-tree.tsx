@@ -7,6 +7,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 're
 import { filesUI } from '@moonbase/ui/files';
 import { overlays } from '@moonbase/ui/overlays';
 import { ContextMenu } from '@base-ui/react/context-menu';
+import { defaultRangeExtractor, useVirtualizer } from '@tanstack/react-virtual';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
   checkoutKey,
@@ -26,11 +27,12 @@ import { handleRowClick, handleTreeKeyDown, type TreeNavigation } from './files-
 import { FilesTreeName, type NameCommit } from './files-tree-name.tsx';
 import { FilesTreeRow } from './files-tree-row.tsx';
 import {
+  addPinnedIndexes,
   findShownPath,
   listVisibleRows,
+  overscan,
   placeholderPath,
   rowHeight,
-  selectMountedIndexes,
   type RowPlaceholder,
   type VisibleRow,
 } from './files-tree-rows.ts';
@@ -239,7 +241,6 @@ export function FilesTree({
   useLayoutEffect(() => {
     anchor.current = null;
   }, [anchorReset]);
-  const [geometry, setGeometry] = useState({ top: tree.scroll, height: 500 });
   const [edit, setEdit] = useState<TreeEdit | null>(null),
     editIds = useRef(0),
     committing = useRef(false),
@@ -581,17 +582,6 @@ export function FilesTree({
     clipboard?.mode === 'cut' && checkoutKey(clipboard.checkout) === checkoutIdentity
       ? clipboard.paths
       : [];
-  useEffect(() => {
-    const element = treeElement.current;
-    if (!element) return;
-    element.scrollTop = tree.scroll;
-    const observer = new ResizeObserver(() =>
-      setGeometry((old) => ({ ...old, height: element.clientHeight })),
-    );
-    observer.observe(element);
-    return () => observer.disconnect();
-    // oxlint-disable-next-line react-hooks/exhaustive-deps -- Restore scroll on checkout changes; ordinary scroll updates must not recreate the observer.
-  }, [checkoutIdentity]);
   const focusIndex = Math.max(
       0,
       rows.findIndex((row) => row.path === tree.focus),
@@ -601,13 +591,25 @@ export function FilesTree({
       treeRows.findIndex((row) => row.path === tree.focus),
     ),
     editIndex = editPath === null ? -1 : rows.findIndex((row) => row.path === editPath);
-  function scrollToRow(index: number) {
+  // Chromium stops a drag whose source row unmounts, so dragged rows stay mounted with the focused
+  // row and the one whose name is typed.
+  const pinnedPaths = editPath === null ? dragged : [editPath, ...dragged];
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => treeElement.current,
+    estimateSize: () => rowHeight,
+    overscan,
+    rangeExtractor: (range) =>
+      addPinnedIndexes(defaultRangeExtractor(range), rows, focusIndex, pinnedPaths),
+  });
+  useLayoutEffect(() => {
     const element = treeElement.current;
-    if (!element || index < 0 || index >= rows.length) return;
-    const top = index * rowHeight;
-    if (top < element.scrollTop) element.scrollTop = top;
-    else if (top + rowHeight > element.scrollTop + element.clientHeight)
-      element.scrollTop = top + rowHeight - element.clientHeight;
+    // The scroll event that follows tells the virtualizer, which reads where the browser clamped.
+    if (element) element.scrollTop = tree.scroll;
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- Restore scroll on checkout changes, not on each scroll.
+  }, [checkoutIdentity]);
+  function scrollToRow(index: number) {
+    if (index >= 0 && index < rows.length) virtualizer.scrollToIndex(index);
   }
   useEffect(() => {
     scrollToRow(focusIndex);
@@ -907,14 +909,6 @@ export function FilesTree({
     cancelCut: onCancelCut,
   };
   const root = state.listings[JSON.stringify([checkoutIdentity, ''])];
-  const mountedIndexes = selectMountedIndexes({
-    rows,
-    top: geometry.top,
-    height: geometry.height,
-    focusIndex,
-    // Chromium stops a drag whose source row unmounts.
-    pinnedPaths: editPath === null ? dragged : [editPath, ...dragged],
-  });
   return (
     <>
       {Object.entries(state.listings)
@@ -1066,14 +1060,13 @@ export function FilesTree({
           if (event.target !== event.currentTarget) return;
           const top = event.currentTarget.scrollTop;
           setMenu((current) => (current?.scroll === top ? current : null));
-          setGeometry((old) => ({ ...old, top }));
           controller.tree(checkout, { scroll: top });
         }}
         onKeyDown={(event) => {
           if (!isNameField(event.target)) handleTreeKeyDown(event, navigation);
         }}>
-        <div {...stylex.props(styles.treeExtent(rows.length * rowHeight))}>
-          {mountedIndexes.map((index) => {
+        <div {...stylex.props(styles.treeExtent(virtualizer.getTotalSize()))}>
+          {virtualizer.getVirtualItems().map(({ index }) => {
             const row = rows[index],
               editing = edit && row.path === editPath ? edit : null;
             let label: string | undefined;
