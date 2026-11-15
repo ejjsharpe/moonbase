@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { Effect, Exit, Fiber, Scope, Semaphore } from 'effect';
+import { Effect, Exit, Fiber, Option, Scope, Semaphore } from 'effect';
 import { LRUCache } from 'lru-cache';
 import { normalizeApplicationError } from '@moonbase/effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
@@ -41,16 +41,16 @@ export class ChatIpcSession {
   readonly connection: ConnectionClient | null;
   readonly capabilities: ChatIpcCapabilities;
   readonly context: ChatSession;
-  /** Copies running; at most `maximumTranscriptCopies`. */
-  copies = 0;
+  /** A permit for each Copy that may run at once; one asked for when none is free is busy. */
+  readonly copyPermits = Semaphore.makeUnsafe(maximumTranscriptCopies);
   /** Opaque image URL tokens; they expire unless requested, and the session revokes them on close. */
   private images: LRUCache<string, ImageBinding>;
   /** Image identity to its current token, so equal bindings reuse one URL. */
   private imageTokens = new Map<string, string>();
   /** Reads running at once; the rest wait for a permit. */
   private imageReadPermits = Semaphore.makeUnsafe(maximumImageReads);
-  /** Reads running or waiting; at most the running limit plus the queue's. */
-  private imageReads = 0;
+  /** A place for each read running or waiting; one asked for when none is free is busy. */
+  private imageReadPlaces = Semaphore.makeUnsafe(maximumImageReads + maximumQueuedImageReads);
   /** Image reads, running and waiting; revoking the URLs closes it, which cancels them. */
   private reads = Scope.makeUnsafe('parallel');
   private closed = false;
@@ -76,7 +76,7 @@ export class ChatIpcSession {
     });
   }
   /** Why `value` may not name what it names: another host and store, or another actor. */
-  authority(value: unknown): 'host' | 'actor' | undefined {
+  checkHostAndActor(value: unknown): 'host' | 'actor' | undefined {
     if (!value || typeof value !== 'object') return undefined;
     const v = value as Record<string, unknown>;
     const host = v.host as { hostId?: unknown; storeId?: unknown } | undefined;
@@ -87,7 +87,7 @@ export class ChatIpcSession {
       return 'host';
     if (v.actorId !== undefined && v.actorId !== this.context.actorId) return 'actor';
     for (const name of ['target', 'session', 'stop', 'source']) {
-      const refusal = this.authority(v[name]);
+      const refusal = this.checkHostAndActor(v[name]);
       if (refusal) return refusal;
     }
     return undefined;
@@ -131,21 +131,25 @@ export class ChatIpcSession {
         catch: normalizeApplicationError,
       }),
     );
-    // Admitted and given its release in one step, so an interruption between them leaks no place.
-    return Effect.uninterruptibleMask((restore) =>
-      Effect.suspend(() => {
-        if (this.closed) return Effect.fail(makeImageReadCancelledError());
-        if (this.imageReads >= maximumImageReads + maximumQueuedImageReads)
-          return Effect.fail(makeImageReadsBusyError());
-        this.imageReads++;
-        const reads = this.reads;
-        return restore(
+    return Effect.suspend(() => {
+      if (this.closed) return Effect.fail(makeImageReadCancelledError());
+      const reads = this.reads;
+      // A place is taken and given its release in one step, so an interruption leaks none.
+      return this.imageReadPlaces
+        .withPermitsIfAvailable(1)(
           Effect.flatMap(Effect.forkIn(read, reads), (fiber) =>
             Fiber.join(fiber).pipe(Effect.onInterrupt(() => Fiber.interrupt(fiber))),
           ),
-        ).pipe(Effect.ensuring(Effect.sync(() => this.imageReads--)));
-      }),
-    );
+        )
+        .pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.fail(makeImageReadsBusyError()),
+              onSome: Effect.succeed,
+            }),
+          ),
+        );
+    });
   }
   /** Revokes the session's URLs and ends its reads for good. */
   readonly dispose: Effect.Effect<void> = Effect.suspend(() => {
