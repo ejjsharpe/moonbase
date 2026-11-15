@@ -151,27 +151,27 @@ const watchStream = <T extends Tag>(tag: T, payload: Payload<T>, refused: string
     refused,
   );
 
+/** A procedure's call, failing as the application reads failures. */
+const callEffect = <T extends Tag>(tag: T, payload: Payload<T>, refused: string) =>
+  applicationFailures(
+    Effect.flatMap(
+      DesktopIpc,
+      (client) =>
+        procedure(client, tag, payload) as Effect.Effect<
+          Effect.Success<Reply<T>>,
+          DesktopIpcError | RpcClientError
+        >,
+    ),
+    tag,
+    payload,
+    refused,
+  );
+
 /** Binds procedures to `runtime`: one call each, failing as the application reads failures. */
 function makeCaller(runtime: DesktopRuntime, refused: string) {
   return {
     call: <T extends Tag>(tag: T, payload: Payload<T>, options?: { signal?: AbortSignal }) =>
-      runApplicationEffect(
-        runtime,
-        applicationFailures(
-          Effect.flatMap(
-            DesktopIpc,
-            (client) =>
-              procedure(client, tag, payload) as Effect.Effect<
-                Effect.Success<Reply<T>>,
-                DesktopIpcError | RpcClientError
-              >,
-          ),
-          tag,
-          payload,
-          refused,
-        ),
-        options,
-      ),
+      runApplicationEffect(runtime, callEffect(tag, payload, refused), options),
     watch: <T extends Tag>(
       tag: T,
       payload: Payload<T>,
@@ -231,10 +231,26 @@ const windowActionsRetry = Schedule.exponential('50 millis').pipe(
   ),
 );
 
+type QuitAnswer = { consent: boolean; cleanupError?: ApplicationError };
+
 /** The shell's native actions and chat folders, and the window's own procedures. */
 export function makeShellClients(runtime: DesktopRuntime, bridge: DesktopBridge) {
   const refused = 'Invalid desktop request.';
   const { call } = makeCaller(runtime, refused);
+  /** Each Quit or disposal request this document took, with its answer once it has one. */
+  const quitAnswers = new Map<string, QuitAnswer | undefined>();
+  /** Sends an answer, again while main can't be reached: the document may already be gone. */
+  const sendQuitAnswer = (id: string, answer: QuitAnswer) =>
+    runApplicationEffect(
+      runtime,
+      callEffect('answerQuit', { id, ...answer }, refused).pipe(
+        Effect.retry({
+          schedule: windowActionsRetry,
+          times: 8,
+          while: (error) => error.code === 'Unavailable',
+        }),
+      ),
+    );
   return {
     chatTargets: () => call('getChatTargets', undefined),
     chooseChatFolder: () => call('chooseChatFolder', undefined),
@@ -254,8 +270,9 @@ export function makeShellClients(runtime: DesktopRuntime, bridge: DesktopBridge)
       call('copyPaths', { checkout, paths, relative }),
     revealPath: (checkout: CheckoutTarget, path: string) => call('revealPath', { checkout, path }),
     /**
-     * Main's requests of this document, for as long as it lives. Watching says the document is
-     * ready, so a watch its connection ends watches again, and main asks again what is pending.
+     * Main's requests of this document, for as long as it lives, each taken once. Watching says
+     * the document is ready, so a watch its connection ends watches again, and main asks again
+     * what is pending: a request already answered gets its answer again, which may have been lost.
      */
     watchWindowActions: (receive: (action: WindowAction) => void) =>
       observeApplicationStream(
@@ -263,10 +280,22 @@ export function makeShellClients(runtime: DesktopRuntime, bridge: DesktopBridge)
         watchStream('watchWindowActions', undefined, refused).pipe(
           Stream.retry(windowActionsRetry),
         ),
-        receive,
+        (action) => {
+          if (action.action === 'cleanup-error') return receive(action);
+          if (!quitAnswers.has(action.id)) {
+            quitAnswers.set(action.id, undefined);
+            return receive(action);
+          }
+          const answer = quitAnswers.get(action.id);
+          if (answer) void sendQuitAnswer(action.id, answer).catch(() => {});
+        },
         () => {},
       ),
-    answerQuit: (id: string, consent: boolean, cleanupError?: ApplicationError) =>
-      call('answerQuit', { id, consent, ...(cleanupError ? { cleanupError } : {}) }),
+    /** Answers a `quit` or `dispose` request; main ignores an answer to any other. */
+    answerQuit: (id: string, consent: boolean, cleanupError?: ApplicationError) => {
+      const answer = { consent, ...(cleanupError ? { cleanupError } : {}) };
+      quitAnswers.set(id, answer);
+      return sendQuitAnswer(id, answer);
+    },
   };
 }

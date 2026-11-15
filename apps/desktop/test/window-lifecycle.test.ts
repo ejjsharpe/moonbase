@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
-import { PubSub } from 'effect';
+import { Effect, PubSub } from 'effect';
 import type { App, Dialog } from 'electron';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { WindowAction } from '../src/ipc/window-rpcs.ts';
@@ -224,8 +224,8 @@ test('a ready document hears of earlier cleanup failures, and a disposal’s own
   assert.equal(f.released.at(-1), 'exit:1');
 });
 
-test('Quit while the actions watch reconnects reaches the document once it watches again', async () => {
-  const owner: { lifecycle?: WindowLifecycle } = {};
+test('Quit and its answer survive the actions watch’s connection ending', async () => {
+  const owner: { lifecycle?: WindowLifecycle; loseAnswer?: boolean } = {};
   let readies = 0;
   const ipc = await makeIpcFixture({
     lifecycle: () => ({
@@ -235,11 +235,21 @@ test('Quit while the actions watch reconnects reaches the document once it watch
       },
       answerQuit: (answer) => owner.lifecycle!.answerQuit(answer),
     }),
+    // Loses the first answer: its connection ends before main reads it.
+    intercept: (request, handler) => {
+      if (request.tag !== 'answerQuit' || !owner.loseAnswer) return handler;
+      owner.loseAnswer = false;
+      return Effect.andThen(
+        Effect.sync(() => ipc.closeConnections()),
+        Effect.never,
+      );
+    },
   });
   const f = fixture((action) => void PubSub.publishUnsafe(ipc.actions, action));
   owner.lifecycle = f.lifecycle;
+  const shell = ipc.shell;
   const received: WindowAction[] = [];
-  const close = ipc.shell.watchWindowActions((action) => void received.push(action));
+  const close = shell.watchWindowActions((action) => void received.push(action));
   try {
     await waitFor(() => readies === 1);
     // The connection ends with the document still alive, as a ping timeout would end it.
@@ -247,7 +257,17 @@ test('Quit while the actions watch reconnects reaches the document once it watch
     f.lifecycle.requestQuit();
     await waitFor(() => received.length > 0);
     assert.equal(readies, 2);
-    assert.deepEqual(received, [{ action: 'quit', id: f.last().id }]);
+    const quit = f.last().id;
+    assert.deepEqual(received, [{ action: 'quit', id: quit }]);
+    owner.loseAnswer = true;
+    await shell.answerQuit(quit, true);
+    // Main asks again on the next watch, and the document answers again without asking the user.
+    await waitFor(() => received.some((action) => action.action === 'dispose'));
+    assert.equal(owner.loseAnswer, false);
+    assert.deepEqual(
+      received.map((action) => action.action),
+      ['quit', 'dispose'],
+    );
   } finally {
     await close().catch(() => {});
     await ipc.dispose();

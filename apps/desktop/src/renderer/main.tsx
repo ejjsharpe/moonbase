@@ -39,27 +39,24 @@ function getTargetClients(target: 'local' | 'remote') {
   if (!clients) targetClients.set(target, (clients = makeChatTargetClients(runtime, target)));
   return clients;
 }
-/** The Quit and disposal requests this document has taken: main asks again on each re-watch. */
-const answeredActions = new Set<string>();
 /** Runs main's window actions through `on` for as long as the document lives, each once. */
 function useWindowActions(
   on: (action: 'quit' | 'dispose' | 'cleanup-error', id: string, error?: ApplicationError) => void,
   dependency: unknown,
 ) {
   useEffect(() => {
-    const close = shell.watchWindowActions((action) => {
-      if (action.action === 'cleanup-error') return on(action.action, '', action.error);
-      if (answeredActions.has(action.id)) return;
-      answeredActions.add(action.id);
-      on(action.action, action.id);
-    });
+    const close = shell.watchWindowActions((action) =>
+      action.action === 'cleanup-error'
+        ? on(action.action, '', action.error)
+        : on(action.action, action.id),
+    );
     return () => void close().catch(() => {});
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- one watch per dependency
   }, [dependency]);
 }
 /**
- * Answers main's Quit request, as a message: main may close the window before replying, and a
- * lost answer leaves main asking again on the next Quit.
+ * Answers main's Quit request, as a message: main may close the window before replying. A lost
+ * answer is sent again while main can't be reached, and whenever main asks again.
  */
 const answerQuit = (id: string, consent: boolean, cleanupError?: ApplicationError) =>
   void shell
