@@ -134,10 +134,15 @@ export async function makeIpcFixture(
       scope,
     ),
   );
+  /** Main's ends of the ports it took. */
+  const mainPorts = new Set<MessagePort>();
   /** A port pair whose main end the server takes, or undefined when it refuses one. */
   const openPort = (): MessagePort | undefined => {
     const { port1, port2 } = new MessageChannel();
-    if (server.connect(toMainPortLike(port1))) return port2;
+    if (server.connect(toMainPortLike(port1))) {
+      mainPorts.add(port1);
+      return port2;
+    }
     port1.close();
     port2.close();
     return undefined;
@@ -226,6 +231,11 @@ export async function makeIpcFixture(
     },
     target: (id: 'local' | 'remote') => makeChatTargetClients(renderer, id),
     connectRaw,
+    /** Closes every connection from main's end, as a refused message does; the document stays. */
+    closeConnections() {
+      for (const port of mainPorts) port.close();
+      mainPorts.clear();
+    },
     /** Releases main's document, as a reload does, and starts the renderer's next one. */
     async releaseDocument() {
       raw?.close();

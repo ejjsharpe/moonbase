@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
+import { PubSub } from 'effect';
 import type { App, Dialog } from 'electron';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { WindowAction } from '../src/ipc/window-rpcs.ts';
-import { installWindowLifecycle } from '../src/main/window-lifecycle.ts';
+import { installWindowLifecycle, type WindowLifecycle } from '../src/main/window-lifecycle.ts';
+import { makeIpcFixture, waitFor } from './fixtures/ipc-fixture.ts';
 import { createTestWindow } from './fixtures/main-window.ts';
 
-function fixture() {
+function fixture(deliver: (action: WindowAction) => void = () => {}) {
   const f = createTestWindow(),
     appEvents = new EventEmitter(),
     actions: WindowAction[] = [];
@@ -26,7 +28,10 @@ function fixture() {
   const lifecycle = installWindowLifecycle({
     app,
     window: f.window,
-    sendAction: (action) => void actions.push(action),
+    sendAction: (action) => {
+      actions.push(action);
+      deliver(action);
+    },
     dialog: {
       showMessageBox: async (_window: unknown, options: { message: string }) => {
         prompts.push(options.message);
@@ -217,4 +222,34 @@ test('a ready document hears of earlier cleanup failures, and a disposal’s own
     cleanupError: new ApplicationError({ code: 'Persistence', message: 'Disposal failed' }),
   });
   assert.equal(f.released.at(-1), 'exit:1');
+});
+
+test('Quit while the actions watch reconnects reaches the document once it watches again', async () => {
+  const owner: { lifecycle?: WindowLifecycle } = {};
+  let readies = 0;
+  const ipc = await makeIpcFixture({
+    lifecycle: () => ({
+      markReady: () => {
+        readies++;
+        owner.lifecycle!.markReady();
+      },
+      answerQuit: (answer) => owner.lifecycle!.answerQuit(answer),
+    }),
+  });
+  const f = fixture((action) => void PubSub.publishUnsafe(ipc.actions, action));
+  owner.lifecycle = f.lifecycle;
+  const received: WindowAction[] = [];
+  const close = ipc.shell.watchWindowActions((action) => void received.push(action));
+  try {
+    await waitFor(() => readies === 1);
+    // The connection ends with the document still alive, as a ping timeout would end it.
+    ipc.closeConnections();
+    f.lifecycle.requestQuit();
+    await waitFor(() => received.length > 0);
+    assert.equal(readies, 2);
+    assert.deepEqual(received, [{ action: 'quit', id: f.last().id }]);
+  } finally {
+    await close().catch(() => {});
+    await ipc.dispose();
+  }
 });

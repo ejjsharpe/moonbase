@@ -1,4 +1,6 @@
-import { Cause, Effect, Stream, type ManagedRuntime } from 'effect';
+import { Cause, Duration, Effect, Predicate, Schedule, Stream, type ManagedRuntime } from 'effect';
+import * as Schema from 'effect/Schema';
+import * as Socket from 'effect/socket/Socket';
 import type { RpcClientError } from 'effect/rpc/RpcClientError';
 import {
   observeApplicationStream,
@@ -12,6 +14,8 @@ import type { ProviderSetupClient } from '@moonbase/contracts/providers';
 import type { CheckoutTarget, EditorClient } from '@moonbase/contracts/workspace';
 import type { DesktopBridge } from '../../ipc/desktop-bridge.ts';
 import type { ChatTargetId } from '../../ipc/chat-rpcs.ts';
+import { DesktopRpcs } from '../../ipc/desktop-rpcs.ts';
+import type { WindowAction } from '../../ipc/window-rpcs.ts';
 import { toLegacyApplicationError, type DesktopIpcError } from '../../ipc/ipc-errors.ts';
 import type { TranscriptNative } from '../chat/transcript/transcript-actions.ts';
 import { DesktopIpc } from './desktop-ipc.ts';
@@ -41,95 +45,148 @@ const mutations = new Set<string>([
 ]);
 const isMutation = (tag: string) => mutations.has(tag) || isChatMutation(tag as ChatCommand);
 
-/** A procedure's failure as the application reads it. */
-function toApplicationError(tag: string, refused: string) {
-  return (cause: Cause.Cause<DesktopIpcError | RpcClientError>) => {
-    const failure = Cause.findErrorOption(cause);
-    if (failure._tag === 'Some') {
-      const error = failure.value;
-      if (error._tag !== 'RpcClientError') return toLegacyApplicationError(error);
-      return isMutation(tag)
-        ? new ApplicationError({
-            code: 'Uncertain',
-            message: 'The connection to Moonbase closed after this was sent. Check its outcome.',
-          })
-        : new ApplicationError({
-            code: 'Unavailable',
-            message: 'The connection to Moonbase closed.',
-          });
-    }
-    // Main answers a request its schemas refused, or a reply they could not encode, as a defect.
-    if (Cause.hasDies(cause) && !Cause.hasInterrupts(cause)) {
-      const defect = String(Cause.squash(cause));
-      return defect.startsWith('Failed to encode response')
-        ? new ApplicationError({ code: 'Incompatible', message: 'Invalid reply from Moonbase.' })
-        : new ApplicationError({ code: 'InvalidInput', message: refused });
-    }
-    return undefined;
-  };
+const closedError = (tag: string) =>
+  isMutation(tag)
+    ? new ApplicationError({
+        code: 'Uncertain',
+        message: 'The connection to Moonbase closed after this was sent. Check its outcome.',
+      })
+    : new ApplicationError({ code: 'Unavailable', message: 'The connection to Moonbase closed.' });
+const isClientError = (value: unknown): value is RpcClientError =>
+  Predicate.isTagged(value, 'RpcClientError');
+/** Whether the renderer's schemas encode `payload` for `tag`: whether it was ever sent. */
+const encodesPayload = (tag: string, payload: unknown) =>
+  Schema.encodeUnknownEffect(
+    Schema.toCodecJson(DesktopRpcs.requests.get(tag)!.payloadSchema as Schema.Top),
+  )(payload).pipe(
+    Effect.as(true),
+    Effect.orElseSucceed(() => false),
+  ) as Effect.Effect<boolean>;
+
+/** A procedure's failure as the application reads it, or none to keep the cause as it is. */
+function toApplicationError(
+  tag: string,
+  payload: unknown,
+  refused: string,
+  cause: Cause.Cause<DesktopIpcError | RpcClientError>,
+): Effect.Effect<ApplicationError | undefined> {
+  const failure = Cause.findErrorOption(cause);
+  if (failure._tag === 'Some') {
+    const error = failure.value;
+    return Effect.succeed(
+      isClientError(error) ? closedError(tag) : toLegacyApplicationError(error),
+    );
+  }
+  if (!Cause.hasDies(cause) || Cause.hasInterrupts(cause)) return Effect.succeed(undefined);
+  const defect = Cause.squash(cause);
+  // A port that closed as a request was written.
+  if (Socket.isSocketError(defect) || isClientError(defect))
+    return Effect.succeed(closedError(tag));
+  const invalid = new ApplicationError({ code: 'InvalidInput', message: refused });
+  const incompatible = new ApplicationError({
+    code: 'Incompatible',
+    message: 'Invalid reply from Moonbase.',
+  });
+  // The renderer's schemas refused its own request, which was never sent, or main's reply.
+  if (Schema.isSchemaError(defect))
+    return Effect.map(encodesPayload(tag, payload), (sent) => (sent ? incompatible : invalid));
+  // Main reports a request its schemas refused, or a reply they could not encode, as text: the
+  // RPC server's own, the one detail of its defect that crosses.
+  return Effect.succeed(
+    typeof defect === 'string' && defect.startsWith('Failed to encode response')
+      ? incompatible
+      : invalid,
+  );
 }
 const applicationFailures = <A, R>(
   effect: Effect.Effect<A, DesktopIpcError | RpcClientError, R>,
   tag: string,
+  payload: unknown,
   refused: string,
 ) =>
   effect.pipe(
-    Effect.catchCause((cause) => {
-      const error = toApplicationError(tag, refused)(cause);
-      return error ? Effect.fail(error) : Effect.failCause(cause as Cause.Cause<never>);
-    }),
+    Effect.catchCause((cause) =>
+      Effect.flatMap(toApplicationError(tag, payload, refused, cause), (error) =>
+        error ? Effect.fail(error) : Effect.failCause(cause as Cause.Cause<never>),
+      ),
+    ),
   );
 const applicationStreamFailures = <A, R>(
   stream: Stream.Stream<A, DesktopIpcError | RpcClientError, R>,
   tag: string,
+  payload: unknown,
   refused: string,
 ) =>
   stream.pipe(
-    Stream.catchCause((cause) => {
-      const error = toApplicationError(tag, refused)(cause);
-      return error ? Stream.fail(error) : Stream.failCause(cause as Cause.Cause<never>);
-    }),
+    Stream.catchCause((cause) =>
+      Stream.unwrap(
+        Effect.map(toApplicationError(tag, payload, refused, cause), (error) =>
+          error ? Stream.fail(error) : Stream.failCause(cause as Cause.Cause<never>),
+        ),
+      ),
+    ),
+  );
+
+type Tag = keyof Client & string;
+type Payload<T extends Tag> = Parameters<Client[T]>[0];
+type Reply<T extends Tag> = ReturnType<Client[T]>;
+type Procedure = (payload: unknown) => never;
+const procedure = <T extends Tag>(client: Client, tag: T, payload: Payload<T>): Reply<T> =>
+  (client as unknown as Record<string, Procedure>)[tag]!(payload);
+/** A procedure's watch, failing as the application reads failures. */
+const watchStream = <T extends Tag>(tag: T, payload: Payload<T>, refused: string) =>
+  applicationStreamFailures(
+    Stream.unwrap(
+      Effect.map(
+        DesktopIpc,
+        (client) =>
+          procedure(client, tag, payload) as Stream.Stream<
+            Stream.Success<Reply<T>>,
+            DesktopIpcError | RpcClientError
+          >,
+      ),
+    ),
+    tag,
+    payload,
+    refused,
   );
 
 /** Binds procedures to `runtime`: one call each, failing as the application reads failures. */
 function makeCaller(runtime: DesktopRuntime, refused: string) {
   return {
-    call: <A>(
-      tag: string,
-      use: (client: Client) => Effect.Effect<A, DesktopIpcError | RpcClientError>,
-      options?: { signal?: AbortSignal },
-    ) =>
+    call: <T extends Tag>(tag: T, payload: Payload<T>, options?: { signal?: AbortSignal }) =>
       runApplicationEffect(
         runtime,
-        applicationFailures(Effect.flatMap(DesktopIpc, use), tag, refused),
+        applicationFailures(
+          Effect.flatMap(
+            DesktopIpc,
+            (client) =>
+              procedure(client, tag, payload) as Effect.Effect<
+                Effect.Success<Reply<T>>,
+                DesktopIpcError | RpcClientError
+              >,
+          ),
+          tag,
+          payload,
+          refused,
+        ),
         options,
       ),
-    watch: <A>(
-      tag: string,
-      use: (client: Client) => Stream.Stream<A, DesktopIpcError | RpcClientError>,
-      receive: (value: A) => void,
+    watch: <T extends Tag>(
+      tag: T,
+      payload: Payload<T>,
+      receive: (value: Stream.Success<Reply<T>>) => void,
       onError: (error: ApplicationError) => void,
-    ) =>
-      observeApplicationStream(
-        runtime,
-        applicationStreamFailures(Stream.unwrap(Effect.map(DesktopIpc, use)), tag, refused),
-        receive,
-        onError,
-      ),
+    ) => observeApplicationStream(runtime, watchStream(tag, payload, refused), receive, onError),
   };
 }
-type Procedure = (payload: unknown) => Effect.Effect<never, DesktopIpcError | RpcClientError>;
-const procedure = (client: Client, tag: string) =>
-  (client as unknown as Record<string, Procedure>)[tag]!;
 
 /** The editor's workspace commands and watch. */
 export function makeEditorClient(runtime: DesktopRuntime): EditorClient {
   const { call, watch } = makeCaller(runtime, 'Invalid workspace input.');
   return {
-    command: (operation, input, options) =>
-      call(operation, (client) => procedure(client, operation)(input), options),
-    watch: (input, receive, onError) =>
-      watch('watchWorkspace', (client) => client.watchWorkspace(input), receive, onError),
+    command: (operation, input, options) => call(operation, input as never, options) as never,
+    watch: (input, receive, onError) => watch('watchWorkspace', input, receive, onError),
   };
 }
 
@@ -138,89 +195,78 @@ export function makeChatTargetClients(runtime: DesktopRuntime, backendId: ChatTa
   const { call, watch } = makeCaller(runtime, 'Invalid chat request.');
   const chat: ChatClient = {
     command: (operation, input, options) =>
-      call(operation, (client) => procedure(client, operation)({ backendId, input }), options),
+      call(operation, { backendId, input } as never, options) as never,
     watch: ({ target }, receive, onError) =>
-      watch('watchChat', (client) => client.watchChat({ backendId, target }), receive, onError),
+      watch('watchChat', { backendId, target }, receive, onError),
     watchChatList: ({ session }, receive, onError) =>
-      watch(
-        'watchChatList',
-        (client) => client.watchChatList({ backendId, session }),
-        receive,
-        onError,
-      ),
+      watch('watchChatList', { backendId, session }, receive, onError),
   };
   const providers: ProviderSetupClient = {
     command: (operation, input, options) =>
-      call(operation, (client) => procedure(client, operation)({ backendId, input }), options),
-    watch: (receive, onError) =>
-      watch('watchProviders', (client) => client.watchProviders({ backendId }), receive, onError),
+      call(operation, { backendId, input } as never, options) as never,
+    watch: (receive, onError) => watch('watchProviders', { backendId }, receive, onError),
   };
   const connection: ConnectionClient = {
-    command: (operation, input, options) =>
-      call(operation, (client) => procedure(client, operation)({ input }), options),
-    watch: (receive, onError) =>
-      watch('watchConnection', (client) => client.watchConnection(), receive, onError),
+    command: (operation, input, options) => call(operation, { input } as never, options) as never,
+    watch: (receive, onError) => watch('watchConnection', undefined, receive, onError),
   };
   const transcript: TranscriptNative = {
-    copy: (copy, signal) =>
-      call('copyTranscript', (client) => client.copyTranscript({ backendId, copy }), { signal }),
-    openLink: (url, signal) =>
-      call('openTranscriptLink', (client) => client.openTranscriptLink({ backendId, url }), {
-        signal,
-      }),
-    imageUrl: (image, signal) =>
-      call(
-        'getTranscriptImageUrl',
-        (client) => client.getTranscriptImageUrl({ backendId, image }),
-        {
-          signal,
-        },
-      ),
+    copy: (copy, signal) => call('copyTranscript', { backendId, copy }, { signal }),
+    openLink: (url, signal) => call('openTranscriptLink', { backendId, url }, { signal }),
+    imageUrl: (image, signal) => call('getTranscriptImageUrl', { backendId, image }, { signal }),
   };
   return {
     chat,
     providers,
     connection,
     transcript,
-    context: () => call('getChatContext', (client) => client.getChatContext({ backendId })),
+    context: () => call('getChatContext', { backendId }),
   };
 }
 
+/** Each re-watch of the window's actions waits longer, up to a few seconds. */
+const windowActionsRetry = Schedule.exponential('50 millis').pipe(
+  Schedule.modifyDelay(({ duration }) =>
+    Effect.succeed(Duration.min(duration, Duration.seconds(5))),
+  ),
+);
+
 /** The shell's native actions and chat folders, and the window's own procedures. */
 export function makeShellClients(runtime: DesktopRuntime, bridge: DesktopBridge) {
-  const { call, watch } = makeCaller(runtime, 'Invalid desktop request.');
+  const refused = 'Invalid desktop request.';
+  const { call } = makeCaller(runtime, refused);
   return {
-    chatTargets: () => call('getChatTargets', (client) => client.getChatTargets()),
-    chooseChatFolder: () => call('chooseChatFolder', (client) => client.chooseChatFolder()),
-    listChatFolders: (backendId: ChatTargetId) =>
-      call('listChatFolders', (client) => client.listChatFolders({ backendId })),
+    chatTargets: () => call('getChatTargets', undefined),
+    chooseChatFolder: () => call('chooseChatFolder', undefined),
+    listChatFolders: (backendId: ChatTargetId) => call('listChatFolders', { backendId }),
     createChatWorktree: (root: string, branch: string, requestId: string) =>
-      call('createChatWorktree', (client) =>
-        client.createChatWorktree({ root, branch, requestId }),
-      ),
+      call('createChatWorktree', { root, branch, requestId }),
     turnChatIntoProject: (conversationId: string) =>
-      call('turnChatIntoProject', (client) => client.turnChatIntoProject({ conversationId })),
-    chooseCheckout: () => call('chooseCheckout', (client) => client.chooseCheckout()),
-    pasteImports: (checkout: CheckoutTarget) =>
-      call('pasteImports', (client) => client.pasteImports({ checkout })),
+      call('turnChatIntoProject', { conversationId }),
+    chooseCheckout: () => call('chooseCheckout', undefined),
+    pasteImports: (checkout: CheckoutTarget) => call('pasteImports', { checkout }),
     /** Imports dropped files; a drop with no file main can read imports nothing. */
     dropImports: async (checkout: CheckoutTarget, files: File[]) => {
       const paths = files.map((file) => bridge.pathForFile(file)).filter(Boolean);
-      return call('dropImports', (client) => client.dropImports({ checkout, paths }));
+      return call('dropImports', { checkout, paths });
     },
     copyPaths: (checkout: CheckoutTarget, paths: string[], relative: boolean) =>
-      call('copyPaths', (client) => client.copyPaths({ checkout, paths, relative })),
-    revealPath: (checkout: CheckoutTarget, path: string) =>
-      call('revealPath', (client) => client.revealPath({ checkout, path })),
-    watchWindowActions: (
-      receive: Parameters<
-        typeof watch<Stream.Success<ReturnType<Client['watchWindowActions']>>>
-      >[2],
-      onError: (error: ApplicationError) => void,
-    ) => watch('watchWindowActions', (client) => client.watchWindowActions(), receive, onError),
-    answerQuit: (id: string, consent: boolean, cleanupError?: ApplicationError) =>
-      call('answerQuit', (client) =>
-        client.answerQuit({ id, consent, ...(cleanupError ? { cleanupError } : {}) }),
+      call('copyPaths', { checkout, paths, relative }),
+    revealPath: (checkout: CheckoutTarget, path: string) => call('revealPath', { checkout, path }),
+    /**
+     * Main's requests of this document, for as long as it lives. Watching says the document is
+     * ready, so a watch its connection ends watches again, and main asks again what is pending.
+     */
+    watchWindowActions: (receive: (action: WindowAction) => void) =>
+      observeApplicationStream(
+        runtime,
+        watchStream('watchWindowActions', undefined, refused).pipe(
+          Stream.retry(windowActionsRetry),
+        ),
+        receive,
+        () => {},
       ),
+    answerQuit: (id: string, consent: boolean, cleanupError?: ApplicationError) =>
+      call('answerQuit', { id, consent, ...(cleanupError ? { cleanupError } : {}) }),
   };
 }

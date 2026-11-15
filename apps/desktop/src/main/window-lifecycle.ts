@@ -111,11 +111,16 @@ export function installWindowLifecycle({
       sendAction({ action: 'quit', id: quit.id });
     }
   }
-  /** The document watches for actions: it is ready for Quit and to hear of cleanup failures. */
+  /**
+   * The document watches for actions: it is ready for Quit and to hear of cleanup failures. A
+   * watch that replaced one whose connection ended may have missed the pending request, so it is
+   * asked again; the document takes each request once.
+   */
   function markReady() {
     rendererReady = true;
     for (const error of backgroundFailures) sendCleanupError(error);
-    if (quitRequested) requestQuit();
+    if (quit) sendAction({ action: quit.stage === 'preserve' ? 'quit' : 'dispose', id: quit.id });
+    else if (quitRequested) requestQuit();
   }
   async function answerQuit(answer: QuitAnswer) {
     const owner = documentId,
