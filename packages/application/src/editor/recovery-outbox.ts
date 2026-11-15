@@ -68,9 +68,7 @@ export class RecoveryOutbox {
   }
   /** Whether every edit made so far has committed. */
   get idle() {
-    return (
-      !this.queue.length && !this.sending && this.failure === undefined && !this.uncertain
-    );
+    return !this.queue.length && !this.sending && this.failure === undefined && !this.uncertain;
   }
   /** Whether the last edit sent failed, so edits wait for the next flush. */
   get failed() {
