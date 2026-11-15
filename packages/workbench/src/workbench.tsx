@@ -1,12 +1,11 @@
+import { Picker, type PickerOpenFile } from './picker/picker.tsx';
+import type { PickerEntry } from './picker/go-to-rows.ts';
 import {
-  Picker,
   pickerCommand,
   pickerMode,
-  type PickerEntry,
   type PickerMode,
-  type PickerOpenFile,
   type PickerRequest,
-} from './picker.tsx';
+} from './picker/picker-shortcuts.ts';
 import { FilesTree, type FollowedFiles, type TreeCreateRequest } from './files-tree/files-tree.tsx';
 import { findCreateFolder } from './files-tree/files-tree-rows.ts';
 import { gitStatusMarks } from './files-tree/files-tree-status.ts';
