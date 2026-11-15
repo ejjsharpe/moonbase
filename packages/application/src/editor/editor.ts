@@ -228,7 +228,10 @@ class EditorModelState {
   constructor(
     scope: Scope.Closeable,
     options: EditorDependencies,
-    debounce: FiberHandle.FiberHandle<void, never>,
+    handles: {
+      debounce: FiberHandle.FiberHandle<void, never>;
+      retry: FiberHandle.FiberHandle<void, never>;
+    },
   ) {
     this.scope = scope;
     this.client = options.client;
@@ -247,7 +250,7 @@ class EditorModelState {
       notify: () => this.emit(),
       report: (error) => this.report(error),
     });
-    this.outbox = new RecoveryOutbox(debounce, {
+    this.outbox = new RecoveryOutbox(handles, {
       clientId: this.clientId,
       execute: (effect) => this.run(effect),
       send: async (kind, input) => {
@@ -2138,11 +2141,10 @@ export const makeEditorModel = (
 ): Effect.Effect<EditorModel, ApplicationError, Scope.Scope> =>
   Effect.gen(function* () {
     const scope = yield* Scope.make();
-    const debounce = yield* FiberHandle.make<void, never>().pipe(
-      Effect.provideService(Scope.Scope, scope),
-    );
+    const handle = FiberHandle.make<void, never>().pipe(Effect.provideService(Scope.Scope, scope));
+    const handles = { debounce: yield* handle, retry: yield* handle };
     const model = yield* Effect.try({
-      try: () => new EditorModelState(scope, dependencies, debounce),
+      try: () => new EditorModelState(scope, dependencies, handles),
       catch: normalizeApplicationError,
     });
     yield* Effect.addFinalizer(() => model.release());

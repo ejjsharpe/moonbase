@@ -1148,7 +1148,7 @@ for (const area of ['staged', 'unstaged'] as const)
     await expect(input).toHaveJSProperty('readOnly', false);
   });
 
-test('a close whose reply is lost is sent again, and the editor ends where the store did', async ({
+test('a close whose reply is lost keeps the draft shown, and the store gets it back', async ({
   page,
 }) => {
   await page.goto('/recovery-race.html');
@@ -1163,18 +1163,22 @@ test('a close whose reply is lost is sent again, and the editor ends where the s
     window.recoveryRace.loseFinalResponse();
   });
   await page.getByRole('textbox', { name: 'b.ts editor', exact: true }).focus();
+  const discard = () =>
+    page
+      .getByRole('dialog', { name: 'Save changes before closing?', exact: true })
+      .getByRole('button', { name: 'Discard', exact: true })
+      .click();
   await page.keyboard.press('Meta+w');
-  await page
-    .getByRole('dialog', { name: 'Save changes before closing?', exact: true })
-    .getByRole('button', { name: 'Discard', exact: true })
-    .click();
-  // The failed edit goes again on its own; once it commits nothing is unconfirmed.
+  await discard();
+  // The store closed b.ts but the reply was lost: the close is abandoned, the editor still shows
+  // the draft, and the edits go again on their own, giving it back to the store.
   await expect
     .poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().recoveryReady))
     .toBe(true);
   await expect(page.getByRole('button', { name: 'Retry keeping edits', exact: true })).toHaveCount(
     0,
   );
+  await expect(page.getByRole('tab', { name: 'b.ts', exact: true })).toHaveCount(1);
   // Ready means every unsaved text the editor shows is kept: none may be shown that is not.
   const kept = await page.evaluate(async () => {
     const { buffers } = window.recoveryRace.editor.getSnapshot(),
@@ -1193,23 +1197,12 @@ test('a close whose reply is lost is sent again, and the editor ends where the s
     };
   });
   expect(kept.shown).toEqual(kept.stored);
-  // The store closed b.ts, discarding its draft as chosen, so the editor's close finishes too.
+  expect(kept.shown).toContainEqual(['alpha', 'b.ts', 'captured pending close draft']);
+  // Closing again, with its reply kept, closes it.
+  await page.getByRole('textbox', { name: 'b.ts editor', exact: true }).focus();
+  await page.keyboard.press('Meta+w');
+  await discard();
   await expect(page.getByRole('tab', { name: 'b.ts', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('textbox', { name: 'a.ts editor', exact: true })).toBeFocused();
-  await page.keyboard.type('after the close finished ');
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          window.recoveryRace.editor
-            .getSnapshot()
-            .buffers.find(
-              (buffer) =>
-                buffer.target.checkout.checkoutId === 'alpha' && buffer.target.path === 'a.ts',
-            )?.text,
-      ),
-    )
-    .toContain('after the close finished');
 });
 
 test('selecting an absent survivor during another close loads it after preservation releases', async ({

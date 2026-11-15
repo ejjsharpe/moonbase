@@ -969,7 +969,7 @@ test('native Trash moves only a captured temporary fixture and leaves its dirty 
     .toBe('retained after native Trash');
 });
 
-test('a lost reply to Quit Discard keeps the window, and the editor ends where the store did', async () => {
+test('a lost reply to Quit Discard keeps the window and the draft, which the store gets back', async () => {
   await open();
   await edit('consented pending discard');
   await expect
@@ -980,19 +980,21 @@ test('a lost reply to Quit Discard keeps the window, and the editor ends where t
   });
   await quit();
   await page.getByRole('button', { name: 'Discard', exact: true }).click();
-  // The discard committed in the store; only its reply was lost, so Quit stopped short.
+  // The discard committed in the store but its reply was lost, so Quit stopped short. The editor
+  // still shows the draft, and the edits go again on their own, giving it back to the store.
   await expect.poll(() => app.evaluate(() => globalThis.desktopTest.fault)).toBeNull();
-  expect(draftsOf((await recovery()).state)).toEqual([]);
-  // The close goes again on its own, and the editor takes in the discard the store made.
   await expect(page.getByRole('button', { name: 'Retry keeping edits', exact: true })).toHaveCount(
     0,
   );
+  await expect
+    .poll(async () => draftsOf((await recovery()).state)[0]?.text)
+    .toBe('consented pending discard');
   expect(
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()),
   ).toBe(true);
-  await expect(page.locator('.view-line').filter({ hasText: 'WORKING' }).first()).toBeVisible();
   const exited = app.waitForEvent('close');
   await quit();
+  await page.getByRole('button', { name: 'Discard', exact: true }).click();
   await exited;
   expect(readFileSync(join(checkout, 'a.ts'), 'utf8')).toContain('WORKING');
 });

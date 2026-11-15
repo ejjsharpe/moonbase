@@ -141,7 +141,7 @@ test("a buffer's newer text replaces its unsent text", async () => {
   }
 });
 
-test('a failed edit keeps recovery failed and unready until a later flush succeeds', async () => {
+test('a failed edit keeps recovery failed and unready until it goes again and commits', async () => {
   const f = await fixture();
   try {
     f.editor.edit(target, 'kept after failure');
@@ -156,6 +156,16 @@ test('a failed edit keeps recovery failed and unready until a later flush succee
     assert.equal(f.editor.getSnapshot().recoveryFailed, false);
     assert.equal(f.editor.getSnapshot().recoveryReady, true);
     assert.equal((await f.stored()).drafts[0].text, 'newer after failure');
+    // Without a change or a flush, a failed edit goes again on its own.
+    f.memory.failNext('updateDraft', 'Store unavailable');
+    f.editor.edit(target, 'kept by the retry');
+    await assert.rejects(f.editor.flush(), /Store unavailable/);
+    for (let turn = 0; !f.editor.getSnapshot().recoveryReady; turn++) {
+      assert(turn < 300, 'the failed edit was not sent again');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(f.editor.getSnapshot().recoveryFailed, false);
+    assert.equal((await f.stored()).drafts[0].text, 'kept by the retry');
   } finally {
     await f.dispose();
   }

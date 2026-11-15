@@ -206,6 +206,8 @@ window.recoveryRace = {
       copyPreflight = new Promise<void>((resolve) => {
         releaseCopyPreflight = resolve;
       });
+      // The copy's own flush has an edit to send, which the hold catches.
+      editor.edit({ checkout: alpha, path: 'a.ts' }, 'source before the copy');
       copying = editor
         .inspect(alpha, ['a.ts'])
         .then((sources) =>

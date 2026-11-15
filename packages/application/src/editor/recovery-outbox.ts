@@ -61,9 +61,19 @@ export class RecoveryOutbox {
   private committedLayout: string | undefined;
   private lock = Semaphore.makeUnsafe(1);
   private debounce: FiberHandle.FiberHandle<void, never>;
+  /** The retry after a failed flush, and how many flushes in a row have failed. */
+  private retry: FiberHandle.FiberHandle<void, never>;
+  private failures = 0;
   private dependencies: OutboxDependencies;
-  constructor(debounce: FiberHandle.FiberHandle<void, never>, dependencies: OutboxDependencies) {
-    this.debounce = debounce;
+  constructor(
+    handles: {
+      debounce: FiberHandle.FiberHandle<void, never>;
+      retry: FiberHandle.FiberHandle<void, never>;
+    },
+    dependencies: OutboxDependencies,
+  ) {
+    this.debounce = handles.debounce;
+    this.retry = handles.retry;
     this.dependencies = dependencies;
   }
   /** Whether every edit made so far has committed. */
@@ -133,13 +143,40 @@ export class RecoveryOutbox {
       ),
     ).catch(report);
   }
-  /** Sends every edit made so far; resolves once each has committed. */
+  /**
+   * Sends every edit made so far; resolves once each has committed. After a failure the edits are
+   * sent again on their own, after 1, 2 and then every 5 seconds, until a flush succeeds.
+   */
   flush(): Promise<void> {
-    return this.dependencies.execute(
-      this.lock.withPermits(1)(
-        Effect.tryPromise({ try: () => this.drain(), catch: normalizeApplicationError }),
+    return this.dependencies
+      .execute(
+        this.lock.withPermits(1)(
+          Effect.tryPromise({ try: () => this.drain(), catch: normalizeApplicationError }),
+        ),
+      )
+      .then(
+        () => {
+          this.failures = 0;
+        },
+        (error: unknown) => {
+          if (!this.idle) this.retryLater();
+          throw error;
+        },
+      );
+  }
+  private retryLater() {
+    const { execute, report } = this.dependencies;
+    const delay = [1000, 2000][this.failures++] ?? 5000;
+    void execute(
+      FiberHandle.run(
+        this.retry,
+        Effect.sleep(delay).pipe(
+          Effect.andThen(Effect.tryPromise({ try: () => this.flush(), catch: (error) => error })),
+          // The flush reported nothing new: each failure was reported when it first happened.
+          Effect.ignore,
+        ),
       ),
-    );
+    ).catch(report);
   }
   private async drain() {
     const { clientId, send, ready, resync, notify } = this.dependencies;
