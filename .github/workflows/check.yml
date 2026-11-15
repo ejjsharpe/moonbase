@@ -63,8 +63,8 @@ jobs:
       # `CI` is set, so the chat-runtime ripgrep test fails rather than skips without it.
       - run: node scripts/prepare-ripgrep.mjs
       - run: echo "MOONBASE_TEST_RIPGREP=$PWD/dist/tools/ripgrep/rg" >> "$GITHUB_ENV"
-      - run: bunx nx run-many -t test --exclude='tag:macos-tests' --parallel=2
-      - run: bunx nx run-many -t test:linux --parallel=2
+      - run: bunx nx run-many -t test --exclude='tag:macos-tests' --parallel=2 --output-style=static
+      - run: bunx nx run-many -t test:linux --parallel=2 --output-style=static
 
   integration-chat:
     name: integration (chat)
@@ -109,7 +109,7 @@ jobs:
       - run: node scripts/prepare-ripgrep.mjs
       - run: echo "MOONBASE_TEST_RIPGREP=$PWD/dist/tools/ripgrep/rg" >> "$GITHUB_ENV"
       # The runner is ephemeral, so the chat-runtime suite may create and delete a temporary keychain.
-      - run: bunx nx run-many -t test:macos --parallel=1
+      - run: bunx nx run-many -t test:macos --parallel=1 --output-style=static
         env:
           MOONBASE_TEST_KEYCHAIN: '1'
       - run: bun run test:editor-integration
