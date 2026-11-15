@@ -35,6 +35,16 @@ async function explorerAction(scope: Locator | Page, name: string) {
   const page = 'goto' in scope ? scope : scope.page();
   await page.getByRole('menuitem', { name, exact: true }).click();
 }
+/** Waits until the picker field's active descendant, what a screen reader hears, is `row`. */
+async function expectHighlighted(dialog: Locator, row: Locator) {
+  const field = dialog.getByRole('combobox');
+  await expect
+    .poll(
+      async () =>
+        (await field.getAttribute('aria-activedescendant')) === (await row.getAttribute('id')),
+    )
+    .toBe(true);
+}
 async function expectSaveEnabled(editor: Page | Locator, enabled: boolean) {
   const page = 'page' in editor ? editor.page() : editor;
   await openTabMenu(editor);
@@ -588,7 +598,7 @@ test('Tab switches to Find, which previews matches and opens the file at the mat
     'return value * 2;',
   );
   await page.keyboard.press('ArrowDown');
-  await expect(matches.nth(1)).toHaveAttribute('aria-selected', 'true');
+  await expectHighlighted(find, matches.nth(1));
   await find.getByRole('button', { name: 'Match case', exact: true }).click();
   await expect(find.getByRole('button', { name: 'Match case', exact: true })).toHaveAttribute(
     'aria-pressed',
@@ -630,7 +640,7 @@ test('a change on disk refreshes picker results without moving the selected row'
   const matches = find.getByRole('option');
   await expect(matches).toHaveCount(2);
   await page.keyboard.press('ArrowDown');
-  await expect(matches.nth(1)).toHaveAttribute('aria-selected', 'true');
+  await expectHighlighted(find, matches.nth(1));
   // Another writer (an agent, a build) changes the checkout while the picker is open.
   await page.evaluate(() =>
     window.demo.memory.externalWrite(
@@ -643,14 +653,13 @@ test('a change on disk refreshes picker results without moving the selected row'
   await page.evaluate(
     () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
   );
+  const active = await find.getByRole('combobox').getAttribute('aria-activedescendant');
   expect(
-    await matches.evaluateAll((rows) =>
-      rows.findIndex((row) => row.getAttribute('aria-selected') === 'true'),
-    ),
+    await matches.evaluateAll((rows, id) => rows.findIndex((row) => row.id === id), active),
   ).toBe(1);
   // A new query still starts at the top.
   await find.getByRole('combobox').fill('valu');
-  await expect(matches.first()).toHaveAttribute('aria-selected', 'true');
+  await expectHighlighted(find, matches.first());
 });
 
 test('Enter opens the highlighted row while changes on disk keep refreshing Go to', async ({
@@ -686,7 +695,7 @@ test('Enter opens the highlighted row while changes on disk keep refreshing Go t
       )
       .toBeGreaterThan(3);
     await page.keyboard.press('ArrowDown');
-    await expect(rows.nth(1)).toHaveAttribute('aria-selected', 'true');
+    await expectHighlighted(goTo, rows.nth(1));
     const highlighted = (await rows.nth(1).getAttribute('aria-label'))!;
     expect(highlighted).not.toBe(await rows.first().getAttribute('aria-label'));
     await page.keyboard.press('Enter');
