@@ -233,16 +233,20 @@ const serveDaemon = (options: DaemonOptions, directory: string, log: DaemonLog) 
             : createChatFolders(chat, localHost, (effect) => runtime.runPromise(effect)),
         ),
       ),
-      (opened) =>
-        Effect.promise(() => {
-          workspace = noWorkspace;
-          return closeWorkspace(opened.dispose, {
-            deadlineMs: options.workspaceCloseMs ?? 5_000,
-            log,
-          });
-        }),
+      (opened) => Effect.promise(() => closeOpenedWorkspace(opened)),
     );
     workspace = opened;
+    let closingWorkspace: Promise<void> | undefined;
+    /** Closes the workspace once: cancels its helper process groups and waits for them. */
+    function closeOpenedWorkspace(opened: Workspace): Promise<void> {
+      return (closingWorkspace ??= (() => {
+        workspace = noWorkspace;
+        return closeWorkspace(opened.dispose, {
+          deadlineMs: options.workspaceCloseMs ?? 5_000,
+          log,
+        });
+      })());
+    }
 
     // A host serves remote clients on its configured port and never idles out.
     const idle =
@@ -288,6 +292,9 @@ const serveDaemon = (options: DaemonOptions, directory: string, log: DaemonLog) 
         ...(opened.host ? { workspace: opened.host } : {}),
       },
     );
+    // Stopping closes the workspace before the server: the server waits for the file host mutations
+    // it runs, which end once their helpers are stopped, not when the helpers finish by themselves.
+    yield* Effect.addFinalizer(() => Effect.promise(() => closeOpenedWorkspace(opened)));
     const port = Number(new URL(server.origin).port);
     if (!stop.reason)
       yield* attempt(() =>
