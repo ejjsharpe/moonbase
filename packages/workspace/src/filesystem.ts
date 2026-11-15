@@ -1,5 +1,5 @@
 import { Deferred, Effect } from 'effect';
-import { execFile, spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs, { constants, fstatSync, openSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import type { FileDocument } from '@moonbase/contracts/workspace';
@@ -231,11 +231,19 @@ export function makeRunner(helper: string): Run {
     );
 }
 export const systemGit = '/usr/bin/git';
-/** Whether the Xcode command-line tools (or Xcode) are selected; asking never opens an installer. */
-const developerToolsInstalled = () =>
-  new Promise<boolean>((resolve) => {
-    execFile('/usr/bin/xcode-select', ['-p'], { timeout: 5000 }, (error) => resolve(!error));
-  });
+/**
+ * Whether the Xcode command-line tools (or Xcode) are selected; asking never opens an installer.
+ * Runs synchronously: under load Bun can miss an asynchronous child's exit, leaving the promise
+ * and its `timeout` kill without a callback forever. It takes a few milliseconds, once per host.
+ */
+const developerToolsInstalled = () => {
+  try {
+    execFileSync('/usr/bin/xcode-select', ['-p'], { stdio: 'ignore', timeout: 5000 });
+    return Promise.resolve(true);
+  } catch {
+    return Promise.resolve(false);
+  }
+};
 /**
  * Guards a Git run. macOS's `/usr/bin/git` is a stub that offers to install the command-line tools
  * when they are missing, which a daemon must never trigger, so a missing install is `Unavailable`

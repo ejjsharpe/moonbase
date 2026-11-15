@@ -9,7 +9,7 @@
   "scripts": {
     "typecheck": "nx run-many -t typecheck",
     "lint": "oxlint . --report-unused-disable-directives",
-    "test": "node --test scripts/*.test.mjs && nx run-many -t test --parallel=4",
+    "test": "node --test scripts/*.test.mjs && nx run-many -t test --parallel=2",
     "build": "nx run-many -t build",
     "check:foundation": "node scripts/check-foundation.mjs",
     "check:changed": "node scripts/check-changed.mjs",
