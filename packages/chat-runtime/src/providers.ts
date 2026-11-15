@@ -8,8 +8,11 @@ type AuthEvent = Parameters<Interaction['notify']>[0];
 import { ProviderSetupService, type ProviderSetupHandlers } from '@moonbase/contracts/services';
 import type { ProviderCommand, ProviderInput, ProviderState } from '@moonbase/contracts/providers';
 import { decodeProviderOutput, readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
-import { ApplicationError } from '@moonbase/contracts/errors';
-import { daemonErrorReasons, type DaemonErrorReason } from '@moonbase/contracts/daemon';
+import {
+  isProviderSetupError,
+  ProviderSetupRefusedError,
+  ProviderSetupUnavailableError,
+} from '@moonbase/contracts/provider-errors';
 import type { ChatReasoningEffort } from '@moonbase/contracts/chat';
 
 // Moonbase defaults for the pinned catalog; explicit user preferences take precedence.
@@ -39,11 +42,13 @@ const names: Partial<Record<string, string>> = {
   google: 'Google Gemini',
   'claude-code': 'Claude subscription',
 };
-/** Refuses with a reason clients can show over the host protocol. */
-function fail(reason: DaemonErrorReason): never {
-  throw new ApplicationError(daemonErrorReasons[reason]);
+/** Refuses the request for `reason`, before it changes anything. */
+function refuse(reason: ProviderSetupRefusedError['reason']): never {
+  throw new ProviderSetupRefusedError({ reason });
 }
-const unavailable = () => new ApplicationError(daemonErrorReasons['provider-setup-unavailable']);
+const unavailable = () => new ProviderSetupUnavailableError({ reason: 'setup' });
+/** A provider setup failure safe to show; any other failure is hidden as unavailable. */
+const safeError = (error: unknown) => (isProviderSetupError(error) ? error : unavailable());
 type Flow = {
   state: NonNullable<ProviderState['flow']>;
   /** When its owner last used provider setup. */
@@ -110,7 +115,7 @@ export const ProviderSetupLive = (
       const released = new Set<string>();
       const now = config.now ?? Date.now;
       const validateProviderUrl = (value: string) =>
-        readProviderSignInUrl(value) ?? fail('unsupported-sign-in-url');
+        readProviderSignInUrl(value) ?? refuse('unsupported-sign-in-url');
       const cancelFlow = async (flow: Flow) => {
         flow.abort.abort();
         flow.answer?.reject(new Error('Cancelled'));
@@ -119,10 +124,10 @@ export const ProviderSetupLive = (
       const cancel = async (owner: string, flowId?: string) => {
         const flow = owners.get(owner);
         if (!flow) {
-          if (flowId) fail('sign-in-inactive');
+          if (flowId) refuse('sign-in-inactive');
           return;
         }
-        if (flowId && flow.state.id !== flowId) fail('sign-in-inactive');
+        if (flowId && flow.state.id !== flowId) refuse('sign-in-inactive');
         await cancelFlow(flow);
       };
       /** Forgets an owner's flow, cancelling it. */
@@ -208,13 +213,13 @@ export const ProviderSetupLive = (
       function getCurrentFlow(owner: string, id: string) {
         const flow = owners.get(owner);
         if (!flow || flow.state.id !== id || flow.state.state !== 'running')
-          return fail('sign-in-inactive');
+          return refuse('sign-in-inactive');
         return flow;
       }
       function getProviderUrl(owner: string, flowId: string) {
-        if (released.has(owner)) fail('owner-released');
+        if (released.has(owner)) refuse('owner-released');
         const flow = getCurrentFlow(owner, flowId);
-        if (!flow.url) fail('no-sign-in-url');
+        if (!flow.url) refuse('no-sign-in-url');
         return validateProviderUrl(flow.url!);
       }
       const invoke = async <K extends ProviderCommand>(
@@ -222,18 +227,19 @@ export const ProviderSetupLive = (
         operation: K,
         value: ProviderInput<K>,
       ): Promise<ProviderState> => {
-        if (released.has(owner)) fail('owner-released');
+        if (released.has(owner)) refuse('owner-released');
         await sweepOwners(owner);
         let startedFlow: Flow | undefined;
         if (operation === 'startProviderLogin') {
           const { providerId } = value as ProviderInput<'startProviderLogin'>;
           if (!localProviderIds.includes(providerId as (typeof localProviderIds)[number]))
-            fail('unknown-provider');
-          if (authKinds[providerId] === 'claude_code') fail('claude-code-sign-in');
+            refuse('unknown-provider');
+          if (authKinds[providerId] === 'claude_code') refuse('claude-code-sign-in');
           const revision = (revisions.get(owner) ?? 0) + 1;
           revisions.set(owner, revision);
           await cancel(owner);
-          if (released.has(owner) || revisions.get(owner) !== revision) fail('sign-in-superseded');
+          if (released.has(owner) || revisions.get(owner) !== revision)
+            refuse('sign-in-superseded');
           // One sign-in per provider at a time: a provider's loopback callback (ChatGPT's
           // 127.0.0.1:1455) serves only one flow, and an abandoned client's flow must not hold it.
           for (;;) {
@@ -246,7 +252,7 @@ export const ProviderSetupLive = (
             if (!contenders.length) break;
             await Promise.all(contenders.map(([, flow]) => cancelFlow(flow)));
             if (released.has(owner) || revisions.get(owner) !== revision)
-              fail('sign-in-superseded');
+              refuse('sign-in-superseded');
           }
           const abort = new AbortController();
           const flow: Flow = {
@@ -367,25 +373,22 @@ export const ProviderSetupLive = (
           const { flowId, promptId, answer } = value as ProviderInput<'answerProviderPrompt'>;
           const flow = getCurrentFlow(owner, flowId),
             pending = flow.answer;
-          if (!pending || pending.id !== promptId) fail('prompt-obsolete');
+          if (!pending || pending.id !== promptId) refuse('prompt-obsolete');
           if (!answer.trim() || (pending.options && !pending.options.includes(answer)))
-            fail('invalid-answer');
+            refuse('invalid-answer');
           pending.resolve(answer);
         } else if (operation === 'cancelProviderLogin') {
           await cancel(owner, (value as ProviderInput<'cancelProviderLogin'>).flowId);
         } else if (operation === 'openProviderUrl') {
           const url = getProviderUrl(owner, (value as ProviderInput<'openProviderUrl'>).flowId);
           if (!config.openUrl)
-            throw new ApplicationError({
-              code: 'Unavailable',
-              message: 'Open provider sign-in links from a Moonbase client.',
-            });
+            throw new ProviderSetupUnavailableError({ reason: 'client-opens-links' });
           await config.openUrl(url);
         } else if (operation === 'logoutProvider') {
           const { providerId } = value as ProviderInput<'logoutProvider'>;
           if (!localProviderIds.includes(providerId as (typeof localProviderIds)[number]))
-            fail('unknown-provider');
-          if (authKinds[providerId] === 'claude_code') fail('claude-code-sign-in');
+            refuse('unknown-provider');
+          if (authKinds[providerId] === 'claude_code') refuse('claude-code-sign-in');
           await cancel(owner);
           await config.models.logout(providerId);
         }
@@ -416,7 +419,7 @@ export const ProviderSetupLive = (
               (input: never) =>
                 Effect.tryPromise({
                   try: () => invoke(owner, operation as ProviderCommand, input),
-                  catch: (error) => (ApplicationError.is(error) ? error : unavailable()),
+                  catch: safeError,
                 }),
             ]),
           ) as ProviderSetupHandlers,
@@ -441,16 +444,17 @@ export const ProviderSetupLive = (
               };
             },
             () => invoke(owner, 'getProviders', {} as never),
+            safeError,
           ),
         getProviderUrl: (owner, flowId) =>
           Effect.tryPromise({
             try: async () => {
-              if (released.has(owner)) fail('owner-released');
+              if (released.has(owner)) refuse('owner-released');
               // Reading the URL is use: the owner keeps its flow as when it polls.
               await sweepOwners(owner);
               return getProviderUrl(owner, flowId);
             },
-            catch: (error) => (ApplicationError.is(error) ? error : unavailable()),
+            catch: safeError,
           }),
       };
       return Context.make(ProviderSetupService, service).pipe(

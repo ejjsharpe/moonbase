@@ -14,11 +14,6 @@ import {
 } from '@moonbase/chat-runtime/credentials';
 import { WorkspaceFolders, WorkspaceHostLive, type ChatFolders } from '@moonbase/workspace';
 import { WorkspaceHostService, type WorkspaceHostServiceShape } from '@moonbase/contracts/services';
-import {
-  createFolderApprovals,
-  createRootFolders,
-  withCheckoutFolders,
-} from '@moonbase/daemon-protocol/folders';
 import type { DaemonSettings } from './daemon-settings.ts';
 import { createLocalModels } from '@moonbase/chat-runtime/local-models';
 import { ProviderSetupLive } from '@moonbase/chat-runtime/providers';
@@ -38,8 +33,9 @@ import {
 } from '@moonbase/contracts/services';
 import type { FolderApprovals } from '@moonbase/contracts/daemon';
 import { chatHostVersion, chatProtocolVersion } from '@moonbase/contracts/host';
-import { ApplicationError } from '@moonbase/contracts/errors';
-import { daemonErrorReasons } from '@moonbase/contracts/daemon';
+import type { ApplicationError } from '@moonbase/contracts/errors';
+import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
+import { HostUnavailableError } from '@moonbase/contracts/host-errors';
 import {
   openPrivateDirectory,
   preparePrivateFile,
@@ -49,12 +45,17 @@ import {
   removeEndpoint,
   writeEndpoint,
 } from './data-directory.ts';
-import { DaemonFailure, describeFailure } from './failure.ts';
+import { describeFailure } from './failure.ts';
 import { createIdleMonitor, systemClock, type IdleClock, type IdleMonitor } from './idle.ts';
 import { acquireDaemonLock } from './lock.ts';
 import { openDaemonLog, type DaemonLog } from './log.ts';
 import { closeWorkspace, createRootPolicy } from './workspace.ts';
 import { createChatFolders } from './chat-folders.ts';
+import {
+  createFolderApprovals,
+  createRootFolders,
+  withCheckoutFolders,
+} from './folder-approvals.ts';
 
 /** What an entry point adds to a daemon in either mode. */
 export type DaemonProviders = {
@@ -191,10 +192,6 @@ const serveDaemon = (options: DaemonOptions, directory: string, log: DaemonLog) 
                 directory,
                 ...(settings.credentialKey?.source === 'file' ? [settings.credentialKey.path] : []),
               ],
-            }).catch((error: unknown) => {
-              throw ApplicationError.is(error)
-                ? new DaemonFailure(error.code, error.message)
-                : error;
             }),
           )
         : createFolderApprovals(join(directory, 'approved-folders.json'));
@@ -285,8 +282,7 @@ const serveDaemon = (options: DaemonOptions, directory: string, log: DaemonLog) 
         // Once stopping, new requests are refused; a local daemon counts each request as use
         // until it is answered.
         admit: () => {
-          if (stop.reason)
-            throw new ApplicationError({ code: 'Unavailable', message: 'The daemon is stopping.' });
+          if (stop.reason) throw new HostUnavailableError({ reason: 'stopping' });
           return idle ? countUse(idle) : () => {};
         },
         // Without a host the daemon advertises no workspace.
@@ -412,15 +408,10 @@ function countUse(idle: IdleMonitor) {
 
 /**
  * Refuses an unsafe key file, or one that holds no key, before the daemon serves. Loading creates
- * nothing; a missing key file is created at the first sign-in.
+ * nothing; a missing key file is created at the first sign-in. Its errors name no path or contents.
  */
 async function checkKeyFile(keySource: CredentialKeySource) {
-  try {
-    await keySource.load();
-  } catch (error) {
-    // The key file's own messages name no path or contents.
-    throw ApplicationError.is(error) ? new DaemonFailure(error.code, error.message) : error;
-  }
+  await keySource.load();
 }
 
 /**
@@ -444,14 +435,13 @@ function composeRuntime(
   const claudeCode = providers.installProviders?.(models);
   const chatFolders = join(directory, 'chats');
   // A folder chats may use, still the same directory, may be searched and chatted in.
-  const requireApprovedFolder = async (path: string, purpose: string) => {
+  const requireApprovedFolder = async (path: string, use: FolderRefusedError['use']) => {
     if (await folders.has(path)) return;
-    if (folders.refusal === 'folder-outside-roots')
-      throw new ApplicationError(daemonErrorReasons['folder-outside-roots']);
-    throw new ApplicationError({
-      code: 'Unauthorized',
-      message: `Approve this working folder before ${purpose}.`,
-    });
+    throw new FolderRefusedError(
+      folders.refusal === 'outside-roots'
+        ? { refusal: 'outside-roots' }
+        : { refusal: 'not-approved', use },
+    );
   };
   const runtime = LocalPiRuntimeLive({
     ...session,
@@ -461,10 +451,10 @@ function composeRuntime(
     ...(providers.registry ? { registry: providers.registry } : {}),
     approveCreation: async (creation: ChatCreationSettings) => {
       if (creation.cwd === undefined) return;
-      await requireApprovedFolder(creation.cwd, 'creating or retrying a local chat');
+      await requireApprovedFolder(creation.cwd, 'chat');
       await folders.touch(creation.cwd);
     },
-    approveFolder: (cwd: string) => requireApprovedFolder(cwd, 'searching its files'),
+    approveFolder: (cwd: string) => requireApprovedFolder(cwd, 'search'),
     ...ripgrep,
   });
   return Layer.mergeAll(

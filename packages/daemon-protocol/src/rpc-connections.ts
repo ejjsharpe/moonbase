@@ -1,4 +1,4 @@
-import { Cause, Effect, FiberSet, Layer, Queue, Schedule } from 'effect';
+import { Cause, Effect, FiberSet, Layer, Queue } from 'effect';
 import * as Socket from 'effect/socket/Socket';
 import * as SocketServer from 'effect/socket/SocketServer';
 import * as NetAddress from 'effect/net/NetAddress';
@@ -20,11 +20,10 @@ const closeCodes = { goingAway: 1001, policy: 1008 };
  * The daemon's authenticated RPC connections, as the `SocketServer` the RPC server runs on. Bun
  * upgrades a connection only once its proof checked out; each one then becomes an Effect
  * `Socket` whose writes wait while Bun buffers more than `socketLimits.outboundBytes`, and which
- * closes after `rpcLimits.idleMs` without a message (clients ping every few seconds).
+ * closes after `rpcLimits.idleMs` on the Clock without a message (clients ping every 5 s).
  */
-export const makeRpcConnections = (options: { idleMs?: number } = {}) =>
+export const makeRpcConnections = () =>
   Effect.gen(function* () {
-    const idleMs = options.idleMs ?? rpcLimits.idleMs;
     const fibers = yield* FiberSet.make<unknown, unknown>();
     let handle: ((socket: Socket.Socket) => Effect.Effect<unknown, unknown, never>) | undefined;
     const sockets = new Set<BunWebSocket<RpcSocketData>>();
@@ -34,11 +33,12 @@ export const makeRpcConnections = (options: { idleMs?: number } = {}) =>
     const connect = (ws: BunWebSocket<RpcSocketData>) =>
       Effect.gen(function* () {
         const inbound = yield* Queue.unbounded<string | Uint8Array, Socket.SocketError>();
+        // Holds a mark while a message arrived since the idle wait last took one.
+        const activity = yield* Queue.sliding<void>(1);
         let waiting: (() => void) | undefined;
-        let lastReceived = Date.now();
         ws.data.connection = {
           receive(message) {
-            lastReceived = Date.now();
+            Queue.offerUnsafe(activity, undefined);
             Queue.offerUnsafe(inbound, message);
           },
           drained() {
@@ -80,11 +80,13 @@ export const makeRpcConnections = (options: { idleMs?: number } = {}) =>
         });
         // A connection silent past its idle bound is closed; any message, a ping too, counts.
         yield* Effect.forkScoped(
-          Effect.repeat(
-            Effect.sync(() => {
-              if (Date.now() - lastReceived >= idleMs) ws.close(closeCodes.policy);
-            }),
-            Schedule.spaced(Math.max(10, Math.min(idleMs, 5_000))),
+          Effect.forever(
+            Queue.take(activity).pipe(
+              Effect.timeoutOrElse({
+                duration: rpcLimits.idleMs,
+                orElse: () => Effect.sync(() => ws.close(closeCodes.policy)),
+              }),
+            ),
           ),
         );
         if (handle) yield* handle(socket);

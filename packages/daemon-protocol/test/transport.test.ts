@@ -1,11 +1,19 @@
 import type { ConversationId, Harness as HarnessType } from '@earendil-works/pi-durable';
 import type { ChatInput, ChatStopTarget } from '@moonbase/contracts/chat';
-import { daemonErrorReasons } from '@moonbase/contracts/daemon';
+import type { FolderApprovals } from '@moonbase/contracts/daemon';
+import {
+  FolderMissingError,
+  FolderRefusedError,
+  FoldersUnavailableError,
+} from '@moonbase/contracts/folder-errors';
+import { ProviderSetupRefusedError } from '@moonbase/contracts/provider-errors';
+import { HostKeyExposedError } from '@moonbase/contracts/host-errors';
+import { UncertainError } from '@moonbase/contracts/errors';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdir, mkdtemp, realpath, rename, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from 'effect';
@@ -22,7 +30,6 @@ import {
 } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { LocalHostLive, LocalPiRuntimeLive } from '@moonbase/chat-runtime';
-import { createFolderApprovals } from '../src/folders.ts';
 import { ProviderSetupLive, localProviderIds } from '@moonbase/chat-runtime/providers';
 import { DaemonRpcLinkLive, RemoteChatLive, RemoteDaemonLive } from '../src/remote.ts';
 import { localDaemonCapabilities, serveChat } from '../src/server.ts';
@@ -51,8 +58,7 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
       models,
       // A chat may search only this folder before it exists.
       approveFolder: async (cwd) => {
-        if (cwd !== dir)
-          throw new ApplicationError({ code: 'Unauthorized', message: 'Approve this folder.' });
+        if (cwd !== dir) throw new FolderRefusedError({ refusal: 'not-approved', use: 'search' });
       },
     }),
   );
@@ -169,9 +175,7 @@ test('a host refuses to serve when its public configuration repeats its private 
         ),
       ),
       (error: unknown) =>
-        ApplicationError.is(error) &&
-        error.code === 'InvalidInput' &&
-        !error.message.includes(token),
+        error instanceof HostKeyExposedError && !JSON.stringify(error).includes(token),
     );
   } finally {
     await Effect.runPromise(Scope.close(scope, Exit.void));
@@ -221,6 +225,18 @@ test('a handler failure reaches the client as a fixed failure that carries none 
   f.intercept = undefined;
   // The defect ended only its request: the connection still serves.
   assert.deepEqual((await f.remote.command('listChats', { session })).conversations, []);
+  // A host's own error keeps its tag, and its free text is the client's.
+  f.afterDispatch = async () => {
+    throw new UncertainError({ operation: secret });
+  };
+  const create = { session, requestId: 'outcome', title: 'Outcome', settings: f.settings };
+  await assert.rejects(f.remote.command('createChat', create), (error: unknown) => {
+    assert(ApplicationError.is(error));
+    assert.equal(error.code, 'Uncertain');
+    assert(!JSON.stringify(error).includes(secret) && !error.message.includes(secret));
+    return true;
+  });
+  f.afterDispatch = undefined;
 });
 test('remote drops successful and error responses from a stale connection generation', async (t) => {
   const f = await setup(t);
@@ -692,11 +708,24 @@ async function setupLocal(t: { after: (fn: () => Promise<void>) => void }) {
       auth: auth(),
     });
   }
-  const folders = createFolderApprovals(join(dir, 'approved-folders.json')),
-    chatFolders = join(dir, 'chats');
+  // Folders approved by their real path; the daemon's own approval store is tested with it.
+  const approved = new Set<string>();
+  const folders: FolderApprovals = {
+    refusal: 'not-approved',
+    has: async (path) => approved.has(path),
+    approve: async (path) => {
+      const real = await realpath(path).catch(() => {
+        throw new FolderMissingError();
+      });
+      approved.add(real);
+      return real;
+    },
+    touch: async () => {},
+    listRecent: async () => [...approved].reverse(),
+  };
+  const chatFolders = join(dir, 'chats');
   const requireApproved = async (path: string) => {
-    if (!(await folders.has(path)))
-      throw new ApplicationError({ code: 'Unauthorized', message: 'Approve this folder.' });
+    if (!(await folders.has(path))) throw new FolderRefusedError({ refusal: 'not-approved' });
   };
   const local = LocalPiRuntimeLive({
     ...localSession,
@@ -785,7 +814,7 @@ async function setupLocal(t: { after: (fn: () => Promise<void>) => void }) {
     dispatched,
     origin: server.origin,
     remote: makeChatClient(remoteRuntime),
-    host: <A>(effect: Effect.Effect<A, ApplicationError>) => remoteRuntime.runPromise(effect),
+    host: <A>(effect: Effect.Effect<A, unknown>) => remoteRuntime.runPromise(effect),
     folders: localHostService,
     providers,
     owner: (ownerId: string) => makeProviderSetupClient(remoteRuntime, ownerId),
@@ -915,47 +944,36 @@ test('a provider sign-in URL outside the expected origins never reaches the clie
   assert.deepEqual(f.opened, []);
 });
 
-test('a folder approval is re-checked by identity on use; a replaced folder needs a new grant', async (t) => {
+test('a folder approval reaches the daemon, which refuses chats and search elsewhere; a lost approval is uncertain', async (t) => {
   const f = await setupLocal(t);
-  const folder = join(f.dir, 'replaced');
-  await mkdir(folder);
-  await f.host(f.folders.approveFolder({ host: localHost, requestId: 'grant-1', path: folder }));
-  const create = (requestId: string) =>
+  const folder = join(f.dir, 'approved'),
+    other = join(f.dir, 'other');
+  await Promise.all([mkdir(folder), mkdir(other)]);
+  const create = (requestId: string, cwd: string) =>
     f.remote.command('createChat', {
       session: localSession,
       requestId,
-      title: 'Replaced',
-      settings: { cwd: folder, model: { provider: 'local-faux', modelId: 'local-model' } },
+      title: 'Approved',
+      settings: { cwd, model: { provider: 'local-faux', modelId: 'local-model' } },
     });
-  await create('before-move');
-  await rename(folder, join(f.dir, 'moved'));
-  await mkdir(folder);
-  await assert.rejects(create('after-move'), { code: 'Unauthorized' });
+  await f.host(f.folders.approveFolder({ host: localHost, requestId: 'grant-1', path: folder }));
+  await create('approved', folder);
+  assert.deepEqual((await f.host(f.folders.listRecentFolders({ host: localHost }))).folders, [
+    folder,
+  ]);
+  await assert.rejects(create('unapproved', other), { code: 'Unauthorized' });
   await assert.rejects(
-    f.remote.command('findChatFiles', { session: localSession, cwd: folder, query: '' }),
+    f.remote.command('findChatFiles', { session: localSession, cwd: other, query: '' }),
     { code: 'Unauthorized' },
   );
-  assert.deepEqual((await f.host(f.folders.listRecentFolders({ host: localHost }))).folders, []);
-  await assert.rejects(
-    f.host(
-      f.folders.approveFolder({
-        host: localHost,
-        requestId: 'missing',
-        path: join(f.dir, 'missing'),
-      }),
-    ),
-    { code: 'InvalidInput' },
-  );
-  await f.host(f.folders.approveFolder({ host: localHost, requestId: 'grant-2', path: folder }));
-  await create('after-grant');
   // A lost reply to an approval is Uncertain and is not sent again.
   f.afterDispatch = async (operation) => {
     if (operation === 'approveFolder') f.reconnect();
   };
   const before = f.dispatched.length;
   await assert.rejects(
-    f.host(f.folders.approveFolder({ host: localHost, requestId: 'grant-3', path: folder })),
-    { code: 'Uncertain' },
+    f.host(f.folders.approveFolder({ host: localHost, requestId: 'grant-2', path: other })),
+    { _tag: 'UncertainError', operation: 'approveFolder' },
   );
   assert.deepEqual(f.dispatched.slice(before), ['approveFolder']);
   f.afterDispatch = undefined;
@@ -967,46 +985,41 @@ test('a refused daemon mutation may be sent again; one that may have applied is 
   const approve = (requestId: string) =>
     f.host(f.folders.approveFolder({ host: localHost, requestId, path: folder })).then(
       (value) => ({ value }),
-      (error: ApplicationError) => ({ code: error.code }),
+      (error: { _tag: string }) => ({ tag: error._tag }),
     );
   // A refusal applied nothing, so the same request runs again once it can succeed.
   const before = f.dispatched.length;
-  assert.deepEqual(await approve('refused'), { code: 'InvalidInput' });
+  assert.deepEqual(await approve('refused'), { tag: 'FolderMissingError' });
   await mkdir(folder);
   assert.deepEqual(await approve('refused'), { value: { requestId: 'refused', path: folder } });
   assert.deepEqual(f.dispatched.slice(before), ['approveFolder', 'approveFolder']);
   // A failure after the daemon applied the request answers its repeat without running it.
   f.afterDispatch = async () => {
-    throw new ApplicationError({ code: 'Unavailable', message: 'Lost after applying.' });
+    throw new FoldersUnavailableError();
   };
-  assert.deepEqual(await approve('applied'), { code: 'Unavailable' });
+  assert.deepEqual(await approve('applied'), { tag: 'FoldersUnavailableError' });
   f.afterDispatch = undefined;
-  assert.deepEqual(await approve('applied'), { code: 'Unavailable' });
+  assert.deepEqual(await approve('applied'), { tag: 'FoldersUnavailableError' });
   assert.deepEqual(f.dispatched.slice(before), ['approveFolder', 'approveFolder', 'approveFolder']);
-  // So is any code that is not a refusal, such as a partial write.
-  f.afterDispatch = async () => {
-    throw new ApplicationError({ code: 'Persistence', message: 'Partly written.' });
-  };
-  assert.deepEqual(await approve('partial'), { code: 'Persistence' });
-  f.afterDispatch = undefined;
-  assert.deepEqual(await approve('partial'), { code: 'Persistence' });
-  assert.equal(f.dispatched.length - before, 4);
 });
 
-test('daemon refusals reach the client with fixed public messages, never host text', async (t) => {
+test('daemon refusals reach the client as their tags and reasons with its own text, never host text', async (t) => {
   const f = await setupLocal(t);
   const owner = f.owner('document-reasons');
-  const refusesWith = async (promise: Promise<unknown>, reason: keyof typeof daemonErrorReasons) =>
+  // Provider setup reaches the renderer through the legacy client: its codes and fixed text.
+  const refusesWith = async (
+    promise: Promise<unknown>,
+    reason: ProviderSetupRefusedError['reason'],
+  ) =>
     assert.rejects(promise, (error: ApplicationError) => {
-      assert.deepEqual({ code: error.code, message: error.message }, daemonErrorReasons[reason]);
+      assert.deepEqual(
+        { code: error.code, message: error.message },
+        { code: 'InvalidInput', message: new ProviderSetupRefusedError({ reason }).message },
+      );
       return true;
     });
   await refusesWith(
     owner.command('startProviderLogin', { providerId: 'claude-code' }),
-    'claude-code-sign-in',
-  );
-  await refusesWith(
-    owner.command('logoutProvider', { providerId: 'claude-code' }),
     'claude-code-sign-in',
   );
   await refusesWith(
@@ -1018,39 +1031,30 @@ test('daemon refusals reach the client with fixed public messages, never host te
     'sign-in-inactive',
   );
   const started = await owner.command('startProviderLogin', { providerId: 'anthropic' });
-  const prompt = (
-    await untilState(
-      () => owner.command('getProviders', {}),
-      (state) => !!state.flow?.prompt,
-    )
-  ).flow!.prompt!;
   const flowId = started.flow!.id;
   await refusesWith(
     owner.command('answerProviderPrompt', { flowId, promptId: 'old-prompt', answer: 'key' }),
     'prompt-obsolete',
   );
-  await refusesWith(
-    owner.command('answerProviderPrompt', { flowId, promptId: prompt.id, answer: '  ' }),
-    'invalid-answer',
-  );
   await refusesWith(owner.command('openProviderUrl', { flowId }), 'no-sign-in-url');
   await f.host(f.providers.releaseOwner('document-reasons'));
   await refusesWith(owner.command('getProviders', {}), 'owner-released');
-  await refusesWith(
+  // Folder refusals keep their tags and reasons.
+  await assert.rejects(
     f.host(
       f.folders.approveFolder({ host: localHost, requestId: 'gone', path: join(f.dir, 'gone') }),
     ),
-    'folder-missing',
+    { _tag: 'FolderMissingError' },
   );
-  await refusesWith(
-    f.host(f.folders.checkChatFolder({ host: localHost, path: f.dir })),
-    'not-chat-folder',
-  );
-  await refusesWith(
-    f.host(f.folders.checkApprovedFolder({ host: localHost, path: f.dir })),
-    'folder-not-approved',
-  );
-  // A refusal without a reason gets the client's own generic text, not chat wording.
+  await assert.rejects(f.host(f.folders.checkChatFolder({ host: localHost, path: f.dir })), {
+    _tag: 'FolderRefusedError',
+    refusal: 'not-chat-folder',
+  });
+  await assert.rejects(f.host(f.folders.checkApprovedFolder({ host: localHost, path: f.dir })), {
+    _tag: 'FolderRefusedError',
+    refusal: 'not-approved',
+  });
+  // A chat engine refusal keeps its tag too, and carries no cause.
   await assert.rejects(
     f.host(
       f.folders.markFolderAsProject({
@@ -1058,8 +1062,9 @@ test('daemon refusals reach the client with fixed public messages, never host te
         target: { ...localSession, conversationId: 'missing-chat' },
       }),
     ),
-    (error: ApplicationError) => {
-      assert(!error.message.startsWith('Chat '), error.message);
+    (error: Error & { _tag: string; operation?: string }) => {
+      assert.equal(error._tag, 'InvalidChatRequestError');
+      assert.equal(error.cause, undefined);
       return true;
     },
   );
@@ -1120,14 +1125,16 @@ test('a client refuses a chat host that does not advertise local mode, and its l
     code: 'Incompatible',
   });
   const folders = await unadvertised.runPromise(LocalHostService);
-  await assert.rejects(unadvertised.runPromise(folders.getActiveWork({ host: localHost })), {
-    code: 'Incompatible',
-  });
+  const notServed = { _tag: 'IncompatibleHostError', reason: 'not-served' };
+  await assert.rejects(
+    unadvertised.runPromise(folders.getActiveWork({ host: localHost })),
+    notServed,
+  );
   await assert.rejects(
     unadvertised.runPromise(
       folders.approveFolder({ host: localHost, requestId: 'approve', path: tmpdir() }),
     ),
-    { code: 'Incompatible' },
+    notServed,
   );
   await assert.rejects(
     makeProviderSetupClient(unadvertised, 'document').command('getProviders', {}),

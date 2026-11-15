@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
+import { toChatApplicationError } from '@moonbase/contracts/chat-legacy-errors';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { createModels } from '@earendil-works/pi-ai/models';
 import {
@@ -305,6 +306,31 @@ test('watch limits, pending unsubscribe/root disposal and arbitrary failing rele
   });
   assert.equal(failures.length, 0);
   mock.restoreAll();
+});
+
+test('a watch Pi cannot subscribe is unavailable, so its client watches again, and names nothing of Pi', async (t) => {
+  const original = Harness.open,
+    canary = 'private-subscribe-canary';
+  mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
+    const harness = await original(...args);
+    harness.subscribeCommits = () => {
+      throw Error(canary);
+    };
+    return harness;
+  });
+  t.after(() => mock.restoreAll());
+  const f = await fixture(t),
+    target = await f.create();
+  const failures: ApplicationError[] = [];
+  const off = f.client.watch(
+    { target },
+    () => {},
+    (error) => failures.push(error),
+  );
+  await until(async () => failures.length, Boolean);
+  assert.equal(failures[0]!.code, 'Unavailable');
+  assert(!failures[0]!.message.includes(canary));
+  await off().catch(() => {});
 });
 
 test('null-task Stop withdraws an actual Pi-queued submission while preserving the unrelated active input', async (t) => {
@@ -822,7 +848,7 @@ test('partial acquisition attempts each transferred resource release once and pr
         Layer.build(
           LocalPiRuntimeLive({ ...session, databasePath: join(directory, 'chat.sqlite'), models }),
         ),
-      ),
+      ).pipe(Effect.mapError(toChatApplicationError)),
     ),
     (error: unknown) => {
       assert(ApplicationError.is(error));
@@ -861,7 +887,7 @@ for (const count of [1, 2])
           cancelled++;
           const message = 'Controlled shutdown waiter cleanup failure ' + id;
           failures.push(message);
-          throw new ApplicationError({ code: 'Persistence', message });
+          throw Error(message);
         } finally {
           waiters--;
         }
@@ -913,13 +939,10 @@ for (const count of [1, 2])
         .catch((error: unknown) => error),
     );
     await waiting;
-    await assert.rejects(f.disposeObserved(), (error: unknown) => {
-      assert(ApplicationError.is(error));
-      assert.equal(failures.length, count);
-      for (const failure of failures) assert(String(error).includes(failure));
-      assert(!String(error).includes(f.config.cwd));
-      return true;
-    });
+    // The failures are kept, hidden as the store's own failure (equal ones combine as one).
+    const errors = await f.disposeObserved();
+    assert.equal(failures.length, count);
+    assert(errors.length > 0 && errors.every((error) => error._tag === 'ChatStoreError'));
     for (const result of await Promise.all(stops)) {
       assert(ApplicationError.is(result));
       assert.equal(result.code, 'Cancelled');
@@ -944,7 +967,7 @@ test('multiple late abort failures remain composed after their Stop responses re
       await gate;
       const message = 'Controlled late abort failure ' + id;
       failures.push(message);
-      throw new ApplicationError({ code: 'Persistence', message });
+      throw Error(message);
     };
     return harness;
   });
@@ -989,9 +1012,6 @@ test('multiple late abort failures remain composed after their Stop responses re
     () => Promise.resolve(failures.length),
     (count) => count === 2,
   );
-  await assert.rejects(f.disposeObserved(), (error: unknown) => {
-    assert(ApplicationError.is(error));
-    for (const failure of failures) assert(error.message.includes(failure), error.message);
-    return true;
-  });
+  const errors = await f.disposeObserved();
+  assert(errors.length > 0 && errors.every((error) => error._tag === 'ChatStoreError'));
 });

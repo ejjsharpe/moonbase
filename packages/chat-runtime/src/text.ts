@@ -1,4 +1,4 @@
-import { fail } from '@moonbase/contracts/errors';
+import { InvalidChatRequestError } from '@moonbase/contracts/chat-errors';
 
 /** Checks an opaque cursor: well-formed, NUL-free text of at most 1 KiB. */
 export function checkCursor(value: unknown): string {
@@ -9,7 +9,7 @@ export function checkCursor(value: unknown): string {
     !value.trim() ||
     Buffer.byteLength(value) > 1024
   )
-    return fail('InvalidInput', 'Chat text is empty, invalid Unicode, or exceeds its limit.');
+    throw new InvalidChatRequestError({ problem: 'text' });
   return value;
 }
 

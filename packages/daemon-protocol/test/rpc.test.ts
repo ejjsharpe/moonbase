@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { connect } from 'node:net';
 import { test, type TestContext } from 'node:test';
 import { Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from 'effect';
+import { TestClock } from 'effect/testing';
 import { rpcLimits, rpcPath, rpcProtocol } from '@moonbase/contracts/rpc-upgrade';
 import { ChatService, type ChatServiceShape } from '@moonbase/contracts/services';
 import { serveChat } from '../src/server.ts';
@@ -13,23 +14,27 @@ import { controlledChat, host, target } from './controlled-chat-fixture.ts';
 import { refusingDaemon } from './served-services.ts';
 import { until } from './runtime-fixture.ts';
 
-async function serve(t: TestContext, chat: ChatServiceShape, rpcIdleMs?: number) {
+/** Serves `chat`; the server's time is a `TestClock` the test moves with `advance`. */
+async function serve(t: TestContext, chat: ChatServiceShape) {
   const token = P.nonce(),
+    runtime = ManagedRuntime.make(TestClock.layer()),
     scope = Effect.runSync(Scope.make());
-  const server = await Effect.runPromise(
-    serveChat(
-      { host, token, port: 0 },
-      { chat, daemon: refusingDaemon() },
-      rpcIdleMs === undefined ? {} : { rpcIdleMs },
-    ).pipe(Effect.provideService(Scope.Scope, scope)),
+  const server = await runtime.runPromise(
+    serveChat({ host, token, port: 0 }, { chat, daemon: refusingDaemon() }).pipe(
+      Effect.provideService(Scope.Scope, scope),
+    ),
   );
-  t.after(() => Effect.runPromise(Scope.close(scope, Exit.void)));
+  t.after(async () => {
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+    await runtime.dispose();
+  });
+  const advance = (ms: number) => runtime.runPromise(TestClock.adjust(ms));
   const endpoint = { origin: server.origin, token, expected: host };
   const port = Number(new URL(server.origin).port);
   /** A fresh upgrade nonce, as a client fetches one from signed health before each connection. */
   const nonce = () =>
     Effect.runPromise(requestUpgradeNonce(endpoint)).then(({ upgradeNonce }) => upgradeNonce);
-  return { token, port, endpoint, nonce };
+  return { token, port, endpoint, nonce, advance };
 }
 /** The status line the daemon answers an RPC upgrade with, from a bare TCP socket. */
 async function upgradeStatus(
@@ -147,12 +152,21 @@ test('an RPC upgrade is admitted only with a fresh proof of this host’s key, b
 
 test('after the upgrade an oversized message or a silent client ends the connection', async (t) => {
   const source = controlledChat();
-  const { token, port, nonce } = await serve(t, source.client, 200);
+  const { token, port, nonce, advance } = await serve(t, source.client);
   const big = await openSocket(port, upgradeProtocols(token, await nonce(), host));
   big.ws.send(new Uint8Array(300 * 1024));
   assert.equal(await big.closed, 1009);
   const silent = await openSocket(port, upgradeProtocols(token, await nonce(), host));
-  assert.equal(await silent.closed, 1008);
+  let code: number | undefined;
+  void silent.closed.then((closed) => (code = closed));
+  // Short of its idle bound the connection stays open; at the bound it closes.
+  await advance(rpcLimits.idleMs - 1);
+  assert.equal(code, undefined);
+  await until(async () => {
+    await advance(rpcLimits.idleMs);
+    return code;
+  }, Boolean);
+  assert.equal(code, 1008);
 });
 
 test('a connection runs a bounded number of requests at once, and a handler’s defect is a fixed Unavailable', async (t) => {
@@ -185,13 +199,14 @@ test('a connection runs a bounded number of requests at once, and a handler’s 
     (count) => count === rpcLimits.requests,
   );
   await assert.rejects(runtime.runPromise(chat.getChatHistory({ target, cursor: 'c' })), {
-    code: 'Unavailable',
+    _tag: 'HostUnavailableError',
+    reason: 'busy',
   });
   gate.resolve();
   await Promise.all(reads);
   await assert.rejects(runtime.runPromise(chat.findChatFiles({ target, query: 'a' })), (error) => {
     assert(!JSON.stringify(error).includes('private defect detail'));
-    return (error as { code?: string }).code === 'Unavailable';
+    return (error as { reason?: string }).reason === 'failed';
   });
   // A watch still runs on the same connection.
   const first = await runtime.runPromise(Stream.runHead(chat.watch({ target })));

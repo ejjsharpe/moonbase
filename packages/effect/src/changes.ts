@@ -1,6 +1,4 @@
 import { Cause, Effect, Queue, Stream } from 'effect';
-import type { ApplicationError } from '@moonbase/contracts/workspace';
-import { normalizeApplicationError } from './application-error.ts';
 
 /**
  * Passes `read()`'s value to `receive` at once, then again after each change `subscribe`
@@ -43,12 +41,16 @@ export function followChanges<A>(
   };
 }
 
-/** `followChanges` as a stream whose consumer, when behind, holds only the latest value. */
-export function readOnChange<A>(
+/**
+ * `followChanges` as a stream whose consumer, when behind, holds only the latest value. A failed
+ * read ends it with `toError` of what it threw.
+ */
+export function readOnChange<A, E>(
   subscribe: (listener: () => void) => () => void,
   read: () => Promise<A>,
-): Stream.Stream<A, ApplicationError> {
-  return Stream.callback<A, ApplicationError>(
+  toError: (error: unknown) => E,
+): Stream.Stream<A, E> {
+  return Stream.callback<A, E>(
     (queue) =>
       Effect.asVoid(
         Effect.acquireRelease(
@@ -57,8 +59,7 @@ export function readOnChange<A>(
               subscribe,
               read,
               (value) => void Queue.offerUnsafe(queue, value),
-              (error) =>
-                void Queue.failCauseUnsafe(queue, Cause.fail(normalizeApplicationError(error))),
+              (error) => void Queue.failCauseUnsafe(queue, Cause.fail(toError(error))),
             ),
           ),
           (stop) => Effect.sync(stop),

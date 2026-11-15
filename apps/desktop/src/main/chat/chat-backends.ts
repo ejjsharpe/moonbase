@@ -4,6 +4,11 @@ import { randomUUID } from 'node:crypto';
 import { Effect, type ManagedRuntime } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { ApplicationError } from '@moonbase/contracts/errors';
+import { toChatApplicationError } from '@moonbase/contracts/chat-legacy-errors';
+import type {
+  LocalHostServiceError,
+  ProviderSetupServiceError,
+} from '@moonbase/contracts/services';
 import type { ChatClient } from '@moonbase/contracts/chat';
 import type { ConnectionClient } from '@moonbase/contracts/connection';
 import { bindChatClient, bindProviderSetupClient } from '@moonbase/application/runtime/clients';
@@ -52,8 +57,9 @@ export function createChatBackends({
   /** Worktree creations for the current document; replacing the document cancels them. */
   const worktreeCreations = new Set<AbortController>();
   let documentId = randomUUID();
-  const run = <A>(effect: Effect.Effect<A, ApplicationError>) =>
-    runApplicationEffect(runtime, effect);
+  // Folder and provider setup errors reach the renderer as the legacy error with its code (CL-22).
+  const run = <A>(effect: Effect.Effect<A, LocalHostServiceError | ProviderSetupServiceError>) =>
+    runApplicationEffect(runtime, effect.pipe(Effect.mapError(toChatApplicationError)));
   const emitChat = (backendId: string) => (id: string, result: Reply) => {
     emit(backendId, id, result);
   };

@@ -1,7 +1,6 @@
 import type { ProviderCommand, ProviderInput, ProviderOutput, ProviderState } from './providers.ts';
 import { Context, type Effect, type Stream } from 'effect';
 import {
-  type ApplicationError,
   type CommandInput,
   type CommandOutput,
   type WorkspaceCommand,
@@ -30,6 +29,10 @@ import type {
   ChatTarget,
 } from './chat.ts';
 import type { LocalHostCommand, LocalHostInput, LocalHostOutput } from './daemon.ts';
+import type { ChatError } from './chat-errors.ts';
+import type { FolderError } from './folder-errors.ts';
+import type { DaemonLinkError } from './host-errors.ts';
+import type { ProviderSetupError } from './provider-errors.ts';
 
 export type WorkspaceHandler<K extends WorkspaceCommand> = (
   input: CommandInput<K>,
@@ -86,13 +89,18 @@ export class ConnectionService extends Context.Service<ConnectionService, Connec
   'moonbase/Connection',
 ) {}
 
+// A service's errors: its own, and over a daemon link the link's too (epic #273 D14).
+export type ChatServiceError = ChatError | DaemonLinkError;
+export type LocalHostServiceError = FolderError | ChatError | DaemonLinkError;
+export type ProviderSetupServiceError = ProviderSetupError | DaemonLinkError;
+
 export type ChatHandlers = {
-  [K in ChatCommand]: (input: ChatInput<K>) => Effect.Effect<ChatOutput<K>, ApplicationError>;
+  [K in ChatCommand]: (input: ChatInput<K>) => Effect.Effect<ChatOutput<K>, ChatServiceError>;
 };
 export type ChatServiceShape = ChatHandlers & {
-  watch(input: { target: ChatTarget }): Stream.Stream<ChatSnapshot, ApplicationError>;
+  watch(input: { target: ChatTarget }): Stream.Stream<ChatSnapshot, ChatServiceError>;
   /** The chat list's first page, then again after each change to it. */
-  watchChatList(input: { session: ChatSession }): Stream.Stream<ChatListUpdate, ApplicationError>;
+  watchChatList(input: { session: ChatSession }): Stream.Stream<ChatListUpdate, ChatServiceError>;
 };
 export class ChatService extends Context.Service<ChatService, ChatServiceShape>()(
   'moonbase/Chat',
@@ -101,28 +109,31 @@ export class ChatService extends Context.Service<ChatService, ChatServiceShape>(
 export type ProviderSetupHandlers = {
   [K in ProviderCommand]: (
     input: ProviderInput<K>,
-  ) => Effect.Effect<ProviderOutput<K>, ApplicationError>;
+  ) => Effect.Effect<ProviderOutput<K>, ProviderSetupServiceError>;
 };
 /** Each privileged owner is a live document; renderer inputs never choose it. */
 export class ProviderSetupService extends Context.Service<
   ProviderSetupService,
   {
     forOwner(ownerId: string): ProviderSetupHandlers;
-    releaseOwner(ownerId: string): Effect.Effect<void, ApplicationError>;
+    releaseOwner(ownerId: string): Effect.Effect<void, ProviderSetupServiceError>;
     /** The owner's setup state, then again after each change to it. */
-    watch(ownerId: string): Stream.Stream<ProviderState, ApplicationError>;
+    watch(ownerId: string): Stream.Stream<ProviderState, ProviderSetupServiceError>;
     /**
      * The validated sign-in URL of the owner's running flow, for a client to open itself. Unlike
      * `openProviderUrl`, it opens nothing.
      */
-    getProviderUrl(ownerId: string, flowId: string): Effect.Effect<string, ApplicationError>;
+    getProviderUrl(
+      ownerId: string,
+      flowId: string,
+    ): Effect.Effect<string, ProviderSetupServiceError>;
   }
 >()('moonbase/ProviderSetup') {}
 
 export type LocalHostHandlers = {
   [K in LocalHostCommand]: (
     input: LocalHostInput<K>,
-  ) => Effect.Effect<LocalHostOutput<K>, ApplicationError>;
+  ) => Effect.Effect<LocalHostOutput<K>, LocalHostServiceError>;
 };
 /** Privileged: a local-mode host's folder approvals and control; only a token holder grants them. */
 export class LocalHostService extends Context.Service<LocalHostService, LocalHostHandlers>()(

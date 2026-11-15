@@ -18,6 +18,11 @@ import {
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import { Type } from 'typebox';
+import {
+  ChatAccessError,
+  ChatStoreError,
+  TranscriptChangedError,
+} from '@moonbase/contracts/chat-errors';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type {
   ChatSnapshot,
@@ -1281,7 +1286,11 @@ test('snapshot retirement recovery preserves ordinary errors and stops after thr
         if (failure === 'unknown') throw Error('private-retirement-read-canary');
         if (failure === 'wrong-index')
           return { ...(await snapshot(...args)), taskId: f.parentTaskId };
-        throw new ApplicationError({ code: failure, message: 'Controlled nested read failure' });
+        throw {
+          Conflict: new TranscriptChangedError({ change: 'view' }),
+          Persistence: new ChatStoreError({ problem: 'nested-call' }),
+          Unauthorized: new ChatAccessError({ refusal: 'other-owner' }),
+        }[failure];
       },
     );
     try {
@@ -1416,7 +1425,7 @@ test('an unsafe queued refresh does not suppress an ordinary nested read Conflic
         }),
       context,
     );
-    throw new ApplicationError({ code: 'Conflict', message: 'Controlled ordinary conflict' });
+    throw new TranscriptChangedError({ change: 'view' });
   });
   const views: ChatSnapshot[] = [],
     errors: ApplicationError[] = [];
@@ -1434,7 +1443,7 @@ test('an unsafe queued refresh does not suppress an ordinary nested read Conflic
   );
   assert.equal(reads, 1);
   assert.equal(errors[0].code, 'Conflict');
-  assert.equal(errors[0].message, 'Controlled ordinary conflict');
+  assert.equal(errors[0].message, new TranscriptChangedError({ change: 'view' }).message);
   assert.deepEqual(views, []);
   await assert.rejects(close(), { code: 'Conflict' });
 });

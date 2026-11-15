@@ -1,7 +1,7 @@
 import type { Registry } from '@earendil-works/pi-durable';
 import type { Models } from '@earendil-works/pi-ai/models';
 import type { Effect, Fiber } from 'effect';
-import type { ApplicationError } from '@moonbase/contracts/workspace';
+import type { ChatError } from '@moonbase/contracts/chat-errors';
 import type { ChatCreationSettings, ChatSession } from '@moonbase/contracts/chat';
 
 export type LocalPiRuntimeConfiguration = ChatSession & {
@@ -17,7 +17,5 @@ export type LocalPiRuntimeConfiguration = ChatSession & {
   ripgrepExecutable?: string;
 };
 export type RetainedWork = {
-  run<A>(
-    effect: Effect.Effect<A, ApplicationError>,
-  ): Effect.Effect<Fiber.Fiber<A, ApplicationError>>;
+  run<A>(effect: Effect.Effect<A, ChatError>): Effect.Effect<Fiber.Fiber<A, ChatError>>;
 };

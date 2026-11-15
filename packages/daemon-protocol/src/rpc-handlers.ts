@@ -22,8 +22,22 @@ import {
   type SocketSubscriptionKind,
   type SocketSubscriptionValue,
 } from '@moonbase/contracts/socket';
-import { ApplicationError } from '@moonbase/contracts/workspace';
 import type { ChatCommand } from '@moonbase/contracts/chat';
+import { UnauthorizedError } from '@moonbase/contracts/errors';
+import {
+  HostUnavailableError,
+  IncompatibleHostError,
+  RequestReusedError,
+} from '@moonbase/contracts/host-errors';
+import { chatErrorSchemaOf } from '@moonbase/contracts/chat-rpc';
+import { daemonErrorSchemas } from '@moonbase/contracts/daemon-rpc';
+import {
+  ChatAccessError,
+  ChatBusyError,
+  InvalidChatRequestError,
+} from '@moonbase/contracts/chat-errors';
+import { FolderMissingError, FolderRefusedError } from '@moonbase/contracts/folder-errors';
+import { ProviderSetupRefusedError } from '@moonbase/contracts/provider-errors';
 import { projectSocketDelta } from './socket-deltas.ts';
 
 /** The services one daemon serves over RPC, and what its health advertises. */
@@ -34,16 +48,30 @@ export type RpcServices = {
   daemon?: { localHost: LocalHostHandlers; providers: ProviderSetupService['Service'] };
 };
 
-const elsewhere = () =>
-  new ApplicationError({ code: 'Unauthorized', message: 'Request target differs from this host.' });
-const notServed = () =>
-  new ApplicationError({
-    code: 'Incompatible',
-    message: 'This host does not serve that operation.',
-  });
+const notServed = () => new IncompatibleHostError({ reason: 'not-served' });
 /** Refuses a request for another host before its handler runs. */
-const forHost = (services: RpcServices, host: ChatHostTarget) =>
-  isSameChatHost(host, services.host) ? Effect.void : Effect.fail(elsewhere());
+const forHost = (services: RpcServices, host: ChatHostTarget, operation: string) =>
+  isSameChatHost(host, services.host)
+    ? Effect.void
+    : Effect.fail(new UnauthorizedError({ operation }));
+
+/**
+ * A service's failure as its procedure's error union declares it: an error the union names is
+ * sent as it is (its tag and fields, never a cause); anything else is the host's own failure.
+ */
+const toWire =
+  (union: { members: readonly unknown[] }) =>
+  (error: unknown): unknown => {
+    try {
+      if (union.members.some((member) => error instanceof (member as abstract new () => unknown)))
+        return error;
+    } catch {
+      // A value whose prototype can't be read is no error of ours.
+    }
+    return new HostUnavailableError({ reason: 'failed' });
+  };
+const toChatWire = (operation: Parameters<typeof chatErrorSchemaOf>[0]) =>
+  toWire(chatErrorSchemaOf(operation));
 
 /** A watch's update: a whole value, or a delta from the last one sent. */
 export type Update<K extends SocketSubscriptionKind> =
@@ -82,11 +110,13 @@ export function makeChatHandlers(services: RpcServices) {
   const { chat } = services;
   const handlers: Record<string, unknown> = {
     watchChat: ({ host, target }: { host: ChatHostTarget; target: never }) =>
-      Stream.unwrap(Effect.as(forHost(services, host), toUpdates('chat', chat.watch({ target })))),
+      Stream.unwrap(
+        Effect.as(forHost(services, host, 'watchChat'), toUpdates('chat', chat.watch({ target }))),
+      ).pipe(Stream.mapError(toChatWire('watchChat'))),
     watchChatList: ({ host, session }: { host: ChatHostTarget; session: never }) =>
       Stream.unwrap(
         Effect.as(
-          forHost(services, host),
+          forHost(services, host, 'watchChatList'),
           toUpdates(
             'chatList',
             chat.watchChatList({ session }).pipe(
@@ -98,16 +128,16 @@ export function makeChatHandlers(services: RpcServices) {
             ),
           ),
         ),
-      ),
+      ).pipe(Stream.mapError(toChatWire('watchChatList'))),
   };
   for (const operation of Object.keys(chatInputSchemas) as ChatCommand[]) {
     handlers[operation] = ({ host, input }: { host: ChatHostTarget; input: never }) => {
       const run = Effect.andThen(
-        forHost(services, host),
+        forHost(services, host, operation),
         Effect.suspend(() =>
-          (chat[operation] as unknown as (input: never) => Effect.Effect<unknown>)(input),
+          (chat[operation] as unknown as (input: never) => Effect.Effect<unknown, unknown>)(input),
         ),
-      );
+      ).pipe(Effect.mapError(toChatWire(operation)));
       return isCancellableChatRead(operation) ? run : Rpc.uninterruptible(run);
     };
   }
@@ -116,8 +146,18 @@ export function makeChatHandlers(services: RpcServices) {
 
 /** Request IDs of recent daemon mutations; a repeat of one returns its outcome instead of rerunning. */
 const rememberedDaemonRequests = 256;
-// Codes a daemon raises only before it applies anything, so a refused request may be sent again.
-const refusalCodes = new Set<string>(['InvalidInput', 'Unauthorized', 'Incompatible', 'Conflict']);
+// Errors a daemon raises only before it applies anything, so a refused request may be sent again.
+const refusals = [
+  FolderRefusedError,
+  FolderMissingError,
+  ProviderSetupRefusedError,
+  InvalidChatRequestError,
+  ChatAccessError,
+  ChatBusyError,
+  IncompatibleHostError,
+  UnauthorizedError,
+  RequestReusedError,
+];
 
 /**
  * Daemon handlers for folder approvals, control and provider setup. Each checks the request's
@@ -135,15 +175,17 @@ export function makeDaemonHandlers(services: RpcServices) {
     operation: DaemonCommand,
     host: ChatHostTarget,
     input: { requestId?: string; ownerId?: string },
-    run: () => Effect.Effect<A, ApplicationError>,
+    service: () => Effect.Effect<A, unknown>,
   ) => {
     const checked = Effect.andThen(
-      forHost(services, host),
+      forHost(services, host, operation),
       services.health.capabilities.includes(daemonCommandCapabilities[operation])
         ? Effect.void
         : Effect.fail(notServed()),
     );
-    if (!isDaemonMutation(operation)) return Effect.andThen(checked, Effect.suspend(run));
+    const run = () =>
+      Effect.suspend(service).pipe(Effect.mapError(toWire(daemonErrorSchemas[operation])));
+    if (!isDaemonMutation(operation)) return Effect.andThen(checked, run());
     return Rpc.uninterruptible(
       Effect.andThen(
         checked,
@@ -153,12 +195,7 @@ export function makeDaemonHandlers(services: RpcServices) {
             prior = remembered.get(key);
           if (prior) {
             if (prior.operation !== operation || !areJsonValuesEqual(prior.input, input))
-              return yield* Effect.fail(
-                new ApplicationError({
-                  code: 'InvalidInput',
-                  message: 'Request ID is bound to another operation or input.',
-                }),
-              );
+              return yield* Effect.fail(new RequestReusedError());
             return (yield* Deferred.await(prior.outcome)) as A;
           }
           const outcome = Deferred.makeUnsafe<unknown, unknown>();
@@ -167,14 +204,13 @@ export function makeDaemonHandlers(services: RpcServices) {
             if (remembered.size <= rememberedDaemonRequests) break;
             remembered.delete(old);
           }
-          const exit = yield* Effect.exit(Effect.suspend(run));
+          const exit = yield* Effect.exit(run());
           if (
             Exit.isFailure(exit) &&
             exit.cause.reasons.every(
               (reason) =>
                 reason._tag === 'Fail' &&
-                ApplicationError.is(reason.error) &&
-                refusalCodes.has(reason.error.code),
+                refusals.some((refusal) => reason.error instanceof refusal),
             ) &&
             remembered.get(key)?.outcome === outcome
           )
@@ -189,9 +225,7 @@ export function makeDaemonHandlers(services: RpcServices) {
   for (const operation of Object.keys(localHostInputSchemas) as (keyof LocalHostHandlers)[])
     local[operation] = ({ host, input }: { host: ChatHostTarget; input: never }) =>
       serve(operation, host, input, () =>
-        (daemon.localHost[operation] as (input: never) => Effect.Effect<unknown, ApplicationError>)(
-          input,
-        ),
+        (daemon.localHost[operation] as (input: never) => Effect.Effect<unknown, unknown>)(input),
       );
   const owner = (ownerId: string) => daemon.providers.forOwner(ownerId);
   type Owned = { host: ChatHostTarget; input: { ownerId: string; requestId: string } };
@@ -252,14 +286,14 @@ export function makeDaemonHandlers(services: RpcServices) {
       Stream.unwrap(
         Effect.as(
           Effect.andThen(
-            forHost(services, host),
+            forHost(services, host, 'watchProviderSetup'),
             services.health.capabilities.includes(daemonCommandCapabilities.getProviders)
               ? Effect.void
               : Effect.fail(notServed()),
           ),
           toUpdates('providerSetup', daemon.providers.watch(ownerId)),
         ),
-      ),
+      ).pipe(Stream.mapError(toWire(daemonErrorSchemas.watchProviderSetup))),
   };
   return { local: local as never, providers: providers as never };
 }

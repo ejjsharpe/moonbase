@@ -10,7 +10,11 @@ import {
 import type { ChatCreationSettings, ChatTarget } from '@moonbase/contracts/chat';
 /** A chat's saved folder and model; `ownFolder` marks a folder made for a chat without a project. */
 export type ChatSettings = ChatCreationSettings & { cwd: string; ownFolder?: true };
-import { fail } from '@moonbase/contracts/errors';
+import {
+  ChatAccessError,
+  ChatStoreError,
+  InvalidChatRequestError,
+} from '@moonbase/contracts/chat-errors';
 import { decodeStoredBinding, decodeStoredMetadata } from './stored-records.ts';
 
 export const Request = defineDocFamily({
@@ -60,7 +64,7 @@ export const Metadata = defineDocFamily({
 export const key = (actorId: string, requestId: string) => JSON.stringify([actorId, requestId]);
 function numeric(value: string): number {
   if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value)))
-    return fail('InvalidInput', 'Invalid Pi record identity.');
+    throw new InvalidChatRequestError({ problem: 'record-identity' });
   return Number(value);
 }
 export const cid = (value: string) => numeric(value) as ConversationId;
@@ -69,17 +73,12 @@ export const sid = (value: string) => numeric(value) as SubmissionId;
 export const tid = (value: string) => numeric(value) as TaskId;
 export async function readOwnedMetadata(harness: Harness, identity: string, target: ChatTarget) {
   const meta = await harness.snapshot(Metadata, cid(target.conversationId), 'metadata', context);
-  if (!meta || meta.identity !== identity)
-    return fail('Unauthorized', 'Conversation does not belong to this configured actor/store.');
+  if (!meta || meta.identity !== identity) throw new ChatAccessError({ refusal: 'other-owner' });
   const saved = decodeStoredMetadata(meta);
-  if (!saved.settings)
-    return fail(
-      'Persistence',
-      'Stored local conversation settings are missing; preserve this store.',
-    );
+  if (!saved.settings) throw new ChatStoreError({ problem: 'settings-missing' });
   return saved;
 }
 export function getSettings(meta: { settings?: ChatSettings }): ChatSettings {
-  if (!meta.settings) return fail('Persistence', 'Stored local conversation settings are missing.');
+  if (!meta.settings) throw new ChatStoreError({ problem: 'settings-missing' });
   return meta.settings;
 }

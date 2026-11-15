@@ -14,7 +14,11 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { Effect, Layer } from 'effect';
 import { LocalHostService } from '@moonbase/contracts/services';
-import { createFolderApprovals, createRootFolders, withCheckoutFolders } from '../src/folders.ts';
+import {
+  createFolderApprovals,
+  createRootFolders,
+  withCheckoutFolders,
+} from '../src/folder-approvals.ts';
 import { LocalHostLive, LocalPiControl } from '@moonbase/chat-runtime';
 
 test('native folder approvals survive a restart and lapse when the folder is replaced', async () => {
@@ -173,7 +177,7 @@ test('a host-mode daemon allows its roots and folders under them, and refuses es
     // Each root must be an existing folder named by its real path; errors name no path.
     for (const roots of [[join(base, 'missing')], [join(root, 'escape')], [join(root, 'file.txt')]])
       await assert.rejects(createRootFolders(roots), (error: Error) => {
-        assert.equal((error as { code?: string }).code, 'InvalidInput');
+        assert.equal((error as { problem?: string }).problem, 'not-real-folder');
         assert(!error.message.includes(base));
         return true;
       });
@@ -187,13 +191,14 @@ test('a host-mode daemon allows its roots and folders under them, and refuses es
       base,
     ])
       await assert.rejects(createRootFolders([root], { reserved: [reserved] }), {
-        code: 'InvalidInput',
+        _tag: 'InvalidRootsError',
+        problem: 'holds-reserved',
       });
 
     const folders = await createRootFolders([root, other], {
       reserved: [join(outside, 'data'), join(outside, 'credential.key')],
     });
-    assert.equal(folders.refusal, 'folder-outside-roots');
+    assert.equal(folders.refusal, 'outside-roots');
     // A host's chats never become projects.
     const host = { hostId: 'roots-host', storeId: 'roots-store' };
     const marked: unknown[] = [];
@@ -220,7 +225,7 @@ test('a host-mode daemon allows its roots and folders under them, and refuses es
           target: { host, actorId: 'owner', conversationId: '1' },
         }),
       ),
-      { code: 'Incompatible' },
+      { _tag: 'IncompatibleHostError', reason: 'host-chat-projects' },
     );
     assert.deepEqual(marked, []);
     for (const allowed of [root, other, join(root, 'alpha'), join(root, 'alpha', 'deep')])
@@ -237,11 +242,10 @@ test('a host-mode daemon allows its roots and folders under them, and refuses es
       assert.equal(await folders.has(refused), false, refused);
     assert.equal(await folders.approve(join(root, 'alpha')), join(root, 'alpha'));
     await assert.rejects(folders.approve(join(root, 'escape')), {
-      code: 'Unauthorized',
+      _tag: 'FolderRefusedError',
+      refusal: 'outside-roots',
     });
-    await assert.rejects(folders.approve(join(root, 'missing')), {
-      code: 'InvalidInput',
-    });
+    await assert.rejects(folders.approve(join(root, 'missing')), { _tag: 'FolderMissingError' });
     assert.deepEqual(await folders.listRecent(), []);
     // Roots first, then each root's folders in order, without hidden folders, files or links.
     assert.deepEqual(await folders.listFolders!(), [

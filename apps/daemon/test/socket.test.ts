@@ -7,7 +7,6 @@ import type { ChatOutput, ChatSnapshot } from '@moonbase/contracts/chat';
 import { chatInputSchemas } from '@moonbase/contracts/chat-schema';
 import { daemonInputSchemas } from '@moonbase/contracts/daemon-schema';
 import type { ProviderState } from '@moonbase/contracts/providers';
-import { ApplicationError } from '@moonbase/contracts/errors';
 import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import type { DaemonCommand, DaemonInput, DaemonOutput } from '@moonbase/contracts/daemon';
 import { daemonCommandCapabilities, isDaemonMutation } from '@moonbase/contracts/daemon-schema';
@@ -34,7 +33,7 @@ test('one RPC connection runs every procedure and holds chat, chat-list and prov
     const host = identity.host,
       session = { host, actorId: identity.actorId };
     const token = (await readFile(join(directory, 'token'), 'utf8')).trim();
-    const failures: ApplicationError[] = [];
+    const failures: { _tag: string }[] = [];
     const runtime = ManagedRuntime.make(
       DaemonRpcLinkLive({ host }).pipe(
         Layer.provide(
@@ -55,17 +54,14 @@ test('one RPC connection runs every procedure and holds chat, chat-list and prov
       runtime.runFork(
         Effect.flatMap(DaemonRpcLink, (link) =>
           Stream.runForEach(
-            link.watch(operation, kind, payload, {
-              capability: chatHostCapabilities.chat,
-              kindOfErrors: kind === 'providerSetup' ? 'daemon' : 'chat',
-            }),
+            link.watch(operation, kind, payload, { capability: chatHostCapabilities.chat }),
             (update) => Effect.sync(() => 'value' in update && receive(update.value as never)),
           ),
-        ).pipe(Effect.catch((error: ApplicationError) => Effect.sync(() => failures.push(error)))),
+        ).pipe(Effect.catch((error) => Effect.sync(() => failures.push(error)))),
       );
     try {
       const ran = new Set<string>();
-      /** One request's reply, or the code it was refused with. */
+      /** One request's reply. */
       const run = async <K extends ChatCommand | DaemonCommand>(
         operation: K,
         input: K extends ChatCommand
@@ -84,7 +80,6 @@ test('one RPC connection runs every procedure and holds chat, chat-list and prov
               operation,
               { host, input },
               {
-                kind: daemon ? 'daemon' : 'chat',
                 mutation: daemon
                   ? isDaemonMutation(operation as DaemonCommand)
                   : isChatMutation(operation as ChatCommand),
@@ -96,10 +91,11 @@ test('one RPC connection runs every procedure and holds chat, chat-list and prov
           ),
         ) as never;
       };
+      /** What a request was refused with: its error's tag. */
       const refusal = (promise: Promise<unknown>) =>
         promise.then(
           () => 'ok',
-          (error: unknown) => (ApplicationError.is(error) ? error.code : 'thrown'),
+          (error: { _tag?: string }) => error._tag ?? 'thrown',
         );
 
       const lists: ChatOutput<'listChats'>[] = [],
@@ -122,7 +118,7 @@ test('one RPC connection runs every procedure and holds chat, chat-list and prov
       );
       assert.deepEqual((await run('listRecentFolders', { host })).folders, [project]);
       await run('checkApprovedFolder', { host, path: project });
-      assert.equal(await refusal(run('listHostFolders', { host })), 'Incompatible');
+      assert.equal(await refusal(run('listHostFolders', { host })), 'IncompatibleHostError');
       assert.deepEqual((await run('getChatHost', { host })).host, host);
       const created = await run('createChat', {
         session,
@@ -160,7 +156,7 @@ test('one RPC connection runs every procedure and holds chat, chat-list and prov
       await run('getChatHistoryAround', { target, entryId: entry.id });
       assert.equal(
         await refusal(run('getChatHistory', { target, cursor: 'stale' })),
-        'InvalidInput',
+        'InvalidChatRequestError',
       );
       assert.equal(snapshot.conversation.title, 'Over the socket');
       assert.equal(
@@ -210,8 +206,8 @@ test('one RPC connection runs every procedure and holds chat, chat-list and prov
       await run('releaseProviderOwner', owner);
       await until(async () => failures.length, Boolean);
       assert.deepEqual(
-        (failures as ApplicationError[]).map((error) => error.code),
-        ['InvalidInput'],
+        (failures as { _tag: string }[]).map((error) => error._tag),
+        ['ProviderSetupRefusedError'],
       );
 
       assert.deepEqual(

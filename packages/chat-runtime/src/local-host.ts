@@ -1,15 +1,21 @@
 import { Effect, Layer } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/workspace';
 import type { ChatHostTarget } from '@moonbase/contracts/host';
+import type { FolderApprovals, LocalHostCommand, LocalHostInput } from '@moonbase/contracts/daemon';
 import {
-  daemonErrorReasons,
-  type FolderApprovals,
-  type LocalHostCommand,
-  type LocalHostInput,
-} from '@moonbase/contracts/daemon';
-import { LocalHostService, type LocalHostHandlers } from '@moonbase/contracts/services';
+  LocalHostService,
+  type LocalHostHandlers,
+  type LocalHostServiceError,
+} from '@moonbase/contracts/services';
 import { isSameChatHost } from '@moonbase/contracts/chat-validation';
-import { fail } from '@moonbase/contracts/errors';
+import { UnauthorizedError } from '@moonbase/contracts/errors';
+import {
+  FolderMissingError,
+  FolderRefusedError,
+  FoldersUnavailableError,
+  isFolderError,
+  type FolderError,
+} from '@moonbase/contracts/folder-errors';
+import { IncompatibleHostError } from '@moonbase/contracts/host-errors';
 import { checkChatFolder } from './chat-folders.ts';
 import { LocalPiControl } from './local-pi-control.ts';
 
@@ -30,28 +36,20 @@ export const LocalHostLive = (
     LocalHostService,
     Effect.gen(function* () {
       const control = yield* LocalPiControl;
-      const failure = (error: unknown) =>
-        ApplicationError.is(error)
-          ? error
-          : new ApplicationError(daemonErrorReasons['folders-unavailable']);
+      const failure = (error: unknown): FolderError =>
+        isFolderError(error) ? error : new FoldersUnavailableError();
       const handle =
         <K extends LocalHostCommand, A>(
           operation: K,
-          run: (input: LocalHostInput<K>) => Effect.Effect<A, ApplicationError>,
+          run: (input: LocalHostInput<K>) => Effect.Effect<A, LocalHostServiceError>,
         ) =>
         (input: LocalHostInput<K>) =>
-          Effect.flatMap(
-            Effect.try({
-              try: () => {
-                const shape = input as { host?: ChatHostTarget; target?: { host: ChatHostTarget } };
-                if (!isSameChatHost(shape.host ?? shape.target!.host, config.host))
-                  fail('Unauthorized', 'Local host request names another host.');
-                return input;
-              },
-              catch: failure,
-            }),
-            run,
-          );
+          Effect.suspend(() => {
+            const shape = input as { host?: ChatHostTarget; target?: { host: ChatHostTarget } };
+            return isSameChatHost(shape.host ?? shape.target!.host, config.host)
+              ? run(input)
+              : Effect.fail(new UnauthorizedError({ operation }));
+          });
       const promise = <A>(run: () => Promise<A>) => Effect.tryPromise({ try: run, catch: failure });
       return {
         approveFolder: handle('approveFolder', ({ requestId, path, recent }) =>
@@ -59,9 +57,7 @@ export const LocalHostLive = (
             const approved = await config.folders
               .approve(path, { recent: recent ?? true })
               .catch((error: unknown) => {
-                throw ApplicationError.is(error)
-                  ? error
-                  : new ApplicationError(daemonErrorReasons['folder-missing']);
+                throw isFolderError(error) ? error : new FolderMissingError();
               });
             return { requestId, path: approved };
           }),
@@ -75,19 +71,15 @@ export const LocalHostLive = (
         checkApprovedFolder: handle('checkApprovedFolder', ({ path }) =>
           promise(async () => {
             if (!(await config.folders.has(path)))
-              throw new ApplicationError(daemonErrorReasons[config.folders.refusal]);
+              throw new FolderRefusedError({ refusal: config.folders.refusal });
           }),
         ),
-        listHostFolders: handle('listHostFolders', () =>
-          promise(async () => {
-            if (!config.folders.listFolders)
-              throw new ApplicationError({
-                code: 'Incompatible',
-                message: 'This host has no approved roots to list.',
-              });
-            return { folders: await config.folders.listFolders() };
-          }),
-        ),
+        listHostFolders: handle('listHostFolders', () => {
+          const { listFolders } = config.folders;
+          return listFolders
+            ? promise(async () => ({ folders: await listFolders() }))
+            : Effect.fail(new IncompatibleHostError({ reason: 'no-roots' }));
+        }),
         getActiveWork: handle('getActiveWork', () =>
           Effect.map(control.hasActiveWork(), (active) => ({ active })),
         ),
@@ -95,12 +87,7 @@ export const LocalHostLive = (
         // become projects.
         markFolderAsProject: handle('markFolderAsProject', ({ requestId, target }) =>
           config.folders.listFolders
-            ? Effect.fail(
-                new ApplicationError({
-                  code: 'Incompatible',
-                  message: 'A host’s chats can’t become projects.',
-                }),
-              )
+            ? Effect.fail(new IncompatibleHostError({ reason: 'host-chat-projects' }))
             : Effect.as(control.markFolderAsProject(target), { requestId }),
         ),
       } satisfies LocalHostHandlers;

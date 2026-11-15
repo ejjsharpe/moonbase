@@ -1,8 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, realpath, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { ApplicationError, fail } from '@moonbase/contracts/errors';
-import { daemonErrorReasons } from '@moonbase/contracts/daemon';
+import { ChatUnavailableError } from '@moonbase/contracts/chat-errors';
+import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
 
 const slugLength = 40;
 
@@ -50,10 +50,7 @@ async function isInsideGitCheckout(folder: string) {
  */
 export async function makeChatFolder(parent: string, title: string) {
   if (await isInsideGitCheckout(parent))
-    fail(
-      'Unavailable',
-      'Chats without a project are unavailable while Moonbase’s data folder is inside a Git checkout. Choose a working folder.',
-    );
+    throw new ChatUnavailableError({ reason: 'own-folder-in-checkout' });
   try {
     await mkdir(parent, { recursive: true, mode: 0o700 });
     // The random suffix makes a taken name a failure to report, not one to retry.
@@ -61,7 +58,7 @@ export async function makeChatFolder(parent: string, title: string) {
     await mkdir(folder, { mode: 0o700 });
     return await realpath(folder);
   } catch {
-    return fail('Unavailable', 'A folder for the new chat could not be made.');
+    throw new ChatUnavailableError({ reason: 'own-folder-failed' });
   }
 }
 
@@ -76,5 +73,5 @@ export async function checkChatFolder(chatFolders: string, path: string) {
   ]);
   const info = folder ? await stat(folder).catch(() => null) : null;
   if (!parent || !folder || folder !== path || dirname(folder) !== parent || !info?.isDirectory())
-    throw new ApplicationError(daemonErrorReasons['not-chat-folder']);
+    throw new FolderRefusedError({ refusal: 'not-chat-folder' });
 }

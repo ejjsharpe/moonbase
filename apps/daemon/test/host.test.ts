@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { chmod, lstat, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { daemonErrorReasons } from '@moonbase/contracts/daemon';
+import { ProviderSetupRefusedError } from '@moonbase/contracts/provider-errors';
 import {
   bounded,
   connectClients,
@@ -145,10 +145,10 @@ test('the real host entry uses its key file and the host’s own Claude Code log
       );
       assert.ok(state.providers.some((p) => p.id === 'openai' && !p.configured));
       // Moonbase never signs Claude Code in or out; the host's own login does.
-      await assert.rejects(
-        owner.command('startProviderLogin', { providerId: 'claude-code' }),
-        daemonErrorReasons['claude-code-sign-in'],
-      );
+      await assert.rejects(owner.command('startProviderLogin', { providerId: 'claude-code' }), {
+        code: 'InvalidInput',
+        message: new ProviderSetupRefusedError({ reason: 'claude-code-sign-in' }).message,
+      });
     } finally {
       await clients.runtime.dispose();
     }

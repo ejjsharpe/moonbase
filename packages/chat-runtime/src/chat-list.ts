@@ -1,5 +1,5 @@
 import type { Stream } from 'effect';
-import type { ApplicationError } from '@moonbase/contracts/workspace';
+import type { ChatError } from '@moonbase/contracts/chat-errors';
 import {
   chatPageSize,
   maximumChatReplyBytes,
@@ -8,7 +8,7 @@ import {
   type ChatSummary,
 } from '@moonbase/contracts/chat';
 import { readOnChange } from '@moonbase/effect/changes';
-import type { Host } from './commands.ts';
+import { watchError, type Host } from './commands.ts';
 
 /**
  * The chat list's first page and the chats past it that changed while watching, read again after
@@ -18,7 +18,7 @@ import type { Host } from './commands.ts';
 export function watchChatListState(
   host: Host,
   session: ChatSession,
-): Stream.Stream<ChatListUpdate, ApplicationError> {
+): Stream.Stream<ChatListUpdate, ChatError> {
   const touched = new Set<string>(),
     // In the order they last changed, least recent first.
     changed = new Map<string, ChatSummary>();
@@ -50,5 +50,6 @@ export function watchChatListState(
       }
       return state();
     },
+    watchError,
   );
 }

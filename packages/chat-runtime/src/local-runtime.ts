@@ -1,8 +1,7 @@
-import { normalizeApplicationError } from '@moonbase/effect';
 import { createRegistry } from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { Context, Effect, Layer, Stream } from 'effect';
-import type { ApplicationError } from '@moonbase/contracts/workspace';
+import type { ChatError } from '@moonbase/contracts/chat-errors';
 import { ChatService, type ChatServiceShape } from '@moonbase/contracts/services';
 import { type Host, safeError } from './commands.ts';
 import { watchChatListState } from './chat-list.ts';
@@ -32,16 +31,15 @@ function makeChatService(host: Host): ChatServiceShape {
     watch: ({ target }) => host.watch(target),
     watchChatList: ({ session }) =>
       Stream.unwrap(
-        Effect.map(
-          Effect.try({ try: () => host.session(session), catch: normalizeApplicationError }),
-          () => watchChatListState(host, session),
+        Effect.map(Effect.try({ try: () => host.session(session), catch: safeError }), () =>
+          watchChatListState(host, session),
         ),
       ),
   };
 }
 export const LocalPiRuntimeLive = (
   config: LocalPiRuntimeConfiguration,
-): Layer.Layer<ChatService | LocalPiControl, ApplicationError> =>
+): Layer.Layer<ChatService | LocalPiControl, ChatError> =>
   Layer.effectContext(
     Effect.gen(function* () {
       const registry = config.registry ?? createRegistry();

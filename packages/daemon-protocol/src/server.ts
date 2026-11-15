@@ -16,10 +16,8 @@ import {
   isHostMutation,
 } from '@moonbase/contracts/workspace-host-schema';
 import { createHostHealthReply } from './health.ts';
-import {
-  HostVerificationError,
-  toConnectionApplicationError,
-} from '@moonbase/contracts/connection-errors';
+import { HostVerificationError } from '@moonbase/contracts/connection-errors';
+import { HostKeyExposedError, HostUnavailableError } from '@moonbase/contracts/host-errors';
 import {
   chatHostCapabilities,
   chatHostVersion,
@@ -29,9 +27,8 @@ import {
   type ChatHostTarget,
 } from '@moonbase/contracts/host';
 import { rpcLimits, rpcPath } from '@moonbase/contracts/rpc-upgrade';
-import { ApplicationError } from '@moonbase/contracts/workspace';
 import * as P from './protocol.ts';
-import { fail } from '@moonbase/contracts/errors';
+import { fail, UnauthorizedError } from '@moonbase/contracts/errors';
 import { createSocketServer, type SocketData, type SocketSources } from './socket-server.ts';
 import { serveBun, type BunServer, type BunWebSocket } from './bun-server.ts';
 import { systemSocketClock, type SocketClock } from './socket-protocol.ts';
@@ -69,8 +66,6 @@ export type ChatSocketConfiguration = {
    * requests as use with it and refuses them once it is stopping.
    */
   admit?(): () => void;
-  /** How long an RPC connection may send nothing; for tests. */
-  rpcIdleMs?: number;
 };
 /** A local-mode daemon's features beyond chat: local-mode chat and control, providers, folders. */
 export const localDaemonCapabilities: readonly ChatHostCapability[] = [
@@ -125,12 +120,7 @@ export const serveChat = (
     };
     const configuration = yield* services.chat.getChatHost({ host: expected });
     if (JSON.stringify(configuration).includes(token))
-      return yield* Effect.fail(
-        new ApplicationError({
-          code: 'InvalidInput',
-          message: 'Keep the private host key separate from public chat identities and settings.',
-        }),
-      );
+      return yield* Effect.fail(new HostKeyExposedError());
     const admit = socket?.admit ?? (() => () => {});
     const run = yield* FiberSet.makeRuntimePromise<never>();
     const nonces = createUpgradeNonces();
@@ -148,10 +138,7 @@ export const serveChat = (
             }
           : {}),
       },
-      {
-        admit,
-        ...(socket?.rpcIdleMs === undefined ? {} : { idleMs: socket.rpcIdleMs }),
-      },
+      { admit },
     );
     /**
      * Runs one workspace operation for this host's checkouts. The host journals each mutation by
@@ -222,12 +209,16 @@ export const serveChat = (
         }
         return new Response(JSON.stringify(value), { status: 200, headers });
       } catch (thrown) {
-        const error =
-          thrown instanceof HostVerificationError ? toConnectionApplicationError(thrown) : thrown;
-        return new Response(JSON.stringify({ ok: false, error: P.publicError(error) }), {
-          status: ApplicationError.is(error) && error.code === 'Unauthorized' ? 401 : 503,
-          headers,
-        });
+        const refused =
+          (thrown instanceof HostVerificationError && thrown.reason === 'request-rejected') ||
+          thrown instanceof UnauthorizedError;
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: P.publicFailure(refused ? 'Unauthorized' : 'Unavailable'),
+          }),
+          { status: refused ? 401 : 503, headers },
+        );
       }
     };
     /**
@@ -326,11 +317,7 @@ export const serveChat = (
                 isRpc(ws) ? rpc.close(ws, 1006) : legacy.close(ws as BunWebSocket<SocketData>),
             },
           }),
-        catch: () =>
-          new ApplicationError({
-            code: 'Unavailable',
-            message: 'Chat host could not acquire its loopback listener or backing service.',
-          }),
+        catch: () => new HostUnavailableError({ reason: 'listener' }),
       }),
       (server) =>
         Effect.promise(async () => {

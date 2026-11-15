@@ -87,8 +87,6 @@ class DaemonLink extends Context.Service<
   }
 >()('moonbase/DaemonLink') {}
 
-export { DaemonLinkClock } from './link-clock.ts';
-import { DaemonLinkClock } from './link-clock.ts';
 const sameEndpoint = (a: VerifiedChatEndpoint, b: VerifiedChatEndpoint) =>
   a.connectionId === b.connectionId &&
   a.origin === b.origin &&
@@ -118,13 +116,7 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
     // A connection failure reaches chat, folder and provider callers as the legacy error.
     const lookUpEndpoint = (host: ChatHostTarget) =>
       connections.endpoint({ host }).pipe(Effect.mapError(toConnectionApplicationError));
-    const clock = yield* DaemonLinkClock;
     const scope = yield* Effect.scope;
-    const sleep = (ms: number) =>
-      Effect.callback<void>((resume) => {
-        const handle = clock.setTimeout(() => resume(Effect.void), ms);
-        return Effect.sync(() => clock.clearTimeout(handle));
-      });
     let current: { endpoint: VerifiedChatEndpoint; socket: Promise<DaemonSocket> } | undefined,
       released = false;
     const closeSocket = (socket: Promise<DaemonSocket>) =>
@@ -152,7 +144,7 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
       if (current) closeSocket(current.socket);
       const link = {
         endpoint,
-        socket: connectDaemonSocket(endpoint, { clock }),
+        socket: connectDaemonSocket(endpoint),
       };
       current = link;
       const forget = () => {
@@ -275,7 +267,7 @@ const DaemonLinkLive: Layer.Layer<DaemonLink, never, ConnectionService> = Layer.
             if (ended.error.code !== 'Unavailable' || failures >= P.streamLimits.reconnectMs.length)
               return yield* Effect.fail(ended.error);
             if (delivered) sink.offer({ reconnecting: true });
-            yield* sleep(P.streamLimits.reconnectMs[failures++]!);
+            yield* Effect.sleep(P.streamLimits.reconnectMs[failures++]!);
           }
         });
         yield* failWith(loop);

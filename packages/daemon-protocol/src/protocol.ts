@@ -4,11 +4,6 @@ import { ApplicationError } from '@moonbase/contracts/workspace';
 export { maximumChatRequestBytes, maximumChatReplyBytes } from '@moonbase/contracts/chat';
 import { chatReplyErrorCodes } from '@moonbase/contracts/chat-schema';
 import type { ChatHostEndpoint } from '@moonbase/contracts/services';
-import {
-  daemonErrorReasons,
-  findDaemonErrorReason,
-  readDaemonErrorReason,
-} from '@moonbase/contracts/daemon';
 import { fail } from '@moonbase/contracts/errors';
 
 /** Bounds one request: the client's wait for its reply and the health listener's request read. */
@@ -44,31 +39,28 @@ export function json(bytes: Uint8Array): unknown {
     return fail('InvalidInput', 'Chat body must contain valid UTF-8 JSON.');
   }
 }
-export function publicError(error: unknown, operation?: string) {
-  const code: (typeof chatReplyErrorCodes)[number] =
-    ApplicationError.is(error) &&
-    chatReplyErrorCodes.includes(error.code as (typeof chatReplyErrorCodes)[number])
-      ? (error.code as (typeof chatReplyErrorCodes)[number])
-      : 'Unavailable';
-  const messages: Record<string, string> = {
-    InvalidInput: 'Chat request is invalid or differs from its original identity.',
-    Unauthorized: 'Chat request is not authorized.',
-    Incompatible: 'Chat authority or protocol is incompatible.',
-    Conflict: 'Chat is busy; retain this request and retry explicitly.',
-    Persistence: 'Chat storage is unavailable; preserve pending input.',
-    Uncertain: 'Chat outcome is uncertain; query its original request.',
-    Unavailable: 'Chat host is unavailable.',
-    Cancelled: 'Chat wait was cancelled.',
-  };
-  return {
-    code,
-    message:
-      code === 'Conflict' && operation === 'getChatTranscriptContent'
-        ? 'Transcript source changed; reload the selected content.'
-        : messages[code],
-  };
+type PublicCode = (typeof chatReplyErrorCodes)[number];
+const messages: Record<PublicCode, string> = {
+  InvalidInput: 'Chat request is invalid or differs from its original identity.',
+  Unauthorized: 'Chat request is not authorized.',
+  Incompatible: 'Chat authority or protocol is incompatible.',
+  Conflict: 'Chat is busy; retain this request and retry explicitly.',
+  Persistence: 'Chat storage is unavailable; preserve pending input.',
+  Uncertain: 'Chat outcome is uncertain; query its original request.',
+  Unavailable: 'Chat host is unavailable.',
+  Cancelled: 'Chat wait was cancelled.',
+};
+/** A failure's public code, with the fixed text clients show for it. */
+export const publicFailure = (code: PublicCode) => ({ code, message: messages[code] });
+/** The public form of a legacy socket failure: its `ApplicationError` code, else `Unavailable`. */
+export function publicError(error: unknown) {
+  return publicFailure(
+    ApplicationError.is(error) && chatReplyErrorCodes.includes(error.code as PublicCode)
+      ? (error.code as PublicCode)
+      : 'Unavailable',
+  );
 }
-const daemonMessages: Record<(typeof chatReplyErrorCodes)[number], string> = {
+const daemonMessages: Record<PublicCode, string> = {
   InvalidInput: 'The host refused this request as invalid.',
   Unauthorized: 'The host did not authorize this request.',
   Incompatible: 'The host’s authority or protocol is incompatible.',
@@ -78,21 +70,14 @@ const daemonMessages: Record<(typeof chatReplyErrorCodes)[number], string> = {
   Unavailable: 'The host could not complete this request; retry.',
   Cancelled: 'The request was cancelled.',
 };
-/** The public form of a daemon operation's failure: its code and any reason clients can show. */
+/** The public form of a file host operation's failure on the legacy socket: its code alone. */
 export function publicDaemonError(error: unknown) {
-  const { code } = publicError(error),
-    reason = ApplicationError.is(error) ? findDaemonErrorReason(error) : undefined;
-  return reason
-    ? { code, message: daemonErrorReasons[reason].message, reason }
-    : { code, message: daemonMessages[code] };
+  const { code } = publicError(error);
+  return { code, message: daemonMessages[code] };
 }
-/** Rebuilds a daemon failure from its code and named reason alone, with the client's own text. */
-export function daemonFailure(code: (typeof chatReplyErrorCodes)[number], reason: unknown) {
-  const known = readDaemonErrorReason(reason, code);
-  return new ApplicationError({
-    code,
-    message: known ? daemonErrorReasons[known].message : daemonMessages[code],
-  });
+/** Rebuilds a file host failure from its code alone, with the client's own text. */
+export function daemonFailure(code: PublicCode) {
+  return new ApplicationError({ code, message: daemonMessages[code] });
 }
 /** How a subscription reconnects after its connection drops. */
 export const streamLimits = {
