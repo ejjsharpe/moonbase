@@ -30,6 +30,18 @@ const editorCommands = new Set(
       ].includes(tag),
   ),
 );
+/** Local chat's native actions, which name no target: they count against local chat's. */
+const localChatProcedures = new Set([
+  'chooseChatFolder',
+  'createChatWorktree',
+  'turnChatIntoProject',
+]);
+/** The chat target a chat procedure counts against; one naming none is the remote connection's. */
+const chatTargetOf = (tag: string, payload: unknown) =>
+  (payload as { backendId?: string } | undefined)?.backendId ??
+  (localChatProcedures.has(tag) ? 'local' : 'remote');
+/** Answers only from main's own state, so it holds no place (as before Effect RPC). */
+const unlimited = new Set(['getChatTargets']);
 const failed = () =>
   new ApplicationError({ code: 'Unavailable', message: 'Application effect failed' });
 
@@ -60,25 +72,27 @@ export function makeIpcAdmission(intercept?: IpcInterception) {
               : undefined;
           if (breach) return Effect.fail(new IpcInputError({ problem: breach }));
         } else if (DesktopChatRpcs.requests.has(tag)) {
-          kind = `chat:${(payload as { backendId?: string } | undefined)?.backendId ?? 'remote'}`;
+          kind = `chat:${chatTargetOf(tag, payload)}`;
           limit = ipcLimits.chatRequests;
           if (!isWithinChatRequestBytes(payload ?? null))
             return Effect.fail(new IpcInputError({ problem: 'chat-request' }));
         }
+        const handle = () =>
+          (intercept ? intercept({ tag, payload }, effect) : effect).pipe(
+            Effect.mapError((error) =>
+              ApplicationError.is(error) ? boundApplicationError(error) : error,
+            ),
+            Effect.catchDefect(() => Effect.fail(failed())),
+          ) as typeof effect;
+        if (unlimited.has(tag)) return restore(handle());
         const key = `${kind}:${watch ? 'watches' : 'requests'}`;
         const count = running.get(key) ?? 0;
         if (count >= limit)
           return Effect.fail(new IpcBusyError({ limit: watch ? 'watches' : 'requests' }));
         running.set(key, count + 1);
-        const handler = intercept ? (intercept({ tag, payload }, effect) as typeof effect) : effect;
-        return restore(
-          handler.pipe(
-            Effect.mapError((error) =>
-              ApplicationError.is(error) ? boundApplicationError(error) : error,
-            ),
-            Effect.catchDefect(() => Effect.fail(failed())),
-          ),
-        ).pipe(Effect.ensuring(Effect.sync(() => running.set(key, running.get(key)! - 1))));
+        return restore(handle()).pipe(
+          Effect.ensuring(Effect.sync(() => running.set(key, running.get(key)! - 1))),
+        );
       }),
     ),
   );

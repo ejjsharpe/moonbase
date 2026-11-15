@@ -142,6 +142,7 @@ test('each kind runs at most its limit of requests and of watches at once, refus
           { id: 'remote', label: 'Remote', mode: 'remote' },
         ],
         getSession: (id) => sessions.get(id),
+        chooseFolder: async () => null,
       },
     },
   });
@@ -155,16 +156,24 @@ test('each kind runs at most its limit of requests and of watches at once, refus
     for (let index = 0; index < ipcLimits.editorRequests; index++)
       send('watchWorkspace', { checkout: target, paths: [] });
     const chatRead = { target: { ...context, conversationId: 'chat' } };
-    for (const backendId of ['local', 'remote'])
-      for (let index = 0; index < ipcLimits.chatRequests; index++)
-        send('getChat', { backendId, input: chatRead });
+    for (let index = 0; index < ipcLimits.chatRequests; index++)
+      send('getChat', { backendId: 'remote', input: chatRead });
+    await waitFor(
+      () => workspace.state.reads === ipcLimits.editorRequests + ipcLimits.chatRequests,
+    );
+    const busy = { ok: false, error: { _tag: 'IpcBusyError', limit: 'requests' } };
+    assert.deepEqual(await f.call('getChat', { backendId: 'remote', input: chatRead }), busy);
+    // Remote chat's full pool leaves local chat's folder picker and the target list alone.
+    assert.deepEqual(await f.call('chooseChatFolder', null), { ok: true, value: null });
+    assert.equal((await f.call('getChatTargets', null)).ok, true);
+    for (let index = 0; index < ipcLimits.chatRequests; index++)
+      send('getChat', { backendId: 'local', input: chatRead });
     await waitFor(
       () =>
         workspace.state.reads === ipcLimits.editorRequests + 2 * ipcLimits.chatRequests &&
         workspace.state.watches === ipcLimits.editorRequests,
     );
     // The next of each kind is refused, not queued.
-    const busy = { ok: false, error: { _tag: 'IpcBusyError', limit: 'requests' } };
     assert.deepEqual(await f.call('readFile', read), busy);
     assert.deepEqual(await f.call('getChat', { backendId: 'local', input: chatRead }), busy);
     assert.deepEqual(await f.call('watchWorkspace', { checkout: target, paths: [] }), {
