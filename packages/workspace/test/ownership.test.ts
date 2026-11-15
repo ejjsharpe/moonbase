@@ -19,6 +19,7 @@ import { fromLegacyRecovery, toLegacyRecovery } from '../src/client/legacy-recov
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { fixture, isError, quote, waitFor } from './recovery-fixture.ts';
 import { captureNative, releaseNative } from './workspace-fixture.ts';
+import { settledDescriptorCount } from './descriptor-count.ts';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
 
 function native<R>(
@@ -331,22 +332,6 @@ test('strict private saved request rejection leaves pending journal data untouch
     f.cleanup();
   }
 });
-
-/**
- * This process's open descriptor count once it stops changing: pipes of earlier helper runs close
- * a moment after their run ends. Gives up after 1,000 turns of the event loop.
- */
-async function settledDescriptorCount() {
-  let count = readdirSync('/dev/fd').length,
-    unchanged = 0;
-  for (let turn = 0; turn < 1000 && unchanged < 20; turn++) {
-    await new Promise<void>((done) => setImmediate(done));
-    const next = readdirSync('/dev/fd').length;
-    unchanged = next === count ? unchanged + 1 : 0;
-    count = next;
-  }
-  return count;
-}
 
 test('capture cancellation settles its helper and releases descriptors before returning cancellation', async () => {
   const f = fixture(),

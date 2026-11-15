@@ -646,8 +646,12 @@ test('a creation cancelled while queued behind another ends at once and adds not
   try {
     const checkout = await f.client.command('openCheckout', { root: f.root });
     const hook = join(f.root, '.git/hooks/post-checkout');
-    const marker = join(f.base, 'first-checkout');
-    writeFileSync(hook, `#!/bin/sh\ntouch '${marker}'\nsleep 2\n`);
+    const marker = join(f.base, 'first-checkout'),
+      release = join(f.base, 'release-first');
+    writeFileSync(
+      hook,
+      `#!/bin/sh\ntouch '${marker}'\nwhile [ ! -e '${release}' ]; do sleep 0.01; done\n`,
+    );
     chmodSync(hook, 0o755);
     let firstDone = false;
     const first = f.client
@@ -670,11 +674,13 @@ test('a creation cancelled while queued behind another ends at once and adds not
     abort.abort();
     await assert.rejects(queued, rejects('Cancelled'));
     assert.equal(firstDone, false, 'the queued creation did not wait for the running one');
+    writeFileSync(release, '');
     const made = await first;
     assert.equal(made.vcs === 'git' && made.worktree, 'linked');
     assert.equal(branches(f.git).includes('queued'), false);
     assert.equal(existsSync(join(f.base, 'queued')), false);
   } finally {
+    writeFileSync(join(f.base, 'release-first'), '');
     await f.close();
   }
 });

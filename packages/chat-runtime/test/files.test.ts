@@ -204,6 +204,12 @@ test('a Send carries the mentions its text spells', async (t) => {
 });
 
 /**
+ * Short enough to keep the stalled-listing tests quick. The budget must also outlast a loaded
+ * machine: a listing stopped before its stdout is read comes back empty, not partial.
+ */
+const stalledTiming = { listingMs: 1_500, stopGraceMs: 200 };
+
+/**
  * Writes a listing command that prints part of the folder, then stalls like ripgrep or Git on a
  * hung mount, with a child that ignores SIGTERM. The child holds no pipe unless `childHoldsOutput`,
  * and the listing itself ignores SIGTERM when `ignoresTerm`. It records its pid in `pids` and the
@@ -253,6 +259,7 @@ test('a cancelled search returns at once, and its stalled listing is stopped at 
       databasePath: join(bin, 'chat.sqlite'),
       models: createModels(),
       ripgrepExecutable: stalled,
+      fileListingTiming: stalledTiming,
       approveFolder: async () => {},
     }),
   );
@@ -293,6 +300,7 @@ test('a stalled Git listing is stopped with its children at its time budget', as
   const index = new ChatFileIndex({
     ripgrepExecutable: missing,
     gitExecutable: await writeStalledListing(bin, 'git'),
+    timing: stalledTiming,
   });
   const result = await index.find(root, '');
   assert.deepEqual(paths(result), ['README.md', 'src/app/main.ts']);
@@ -300,27 +308,24 @@ test('a stalled Git listing is stopped with its children at its time budget', as
   await assertListingStopped(bin);
 });
 
-test(
-  'a listing that ignores SIGTERM, or whose child holds its output, is killed after the grace period',
-  { timeout: 30_000 },
-  async (t) => {
-    const root = await folder(t);
-    const search = async (options: { ignoresTerm?: boolean; childHoldsOutput?: boolean }) => {
-      const bin = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-files-bin-')));
-      t.after(() => rm(bin, { recursive: true, force: true }));
-      const index = new ChatFileIndex({
-        ripgrepExecutable: missing,
-        gitExecutable: await writeStalledListing(bin, 'git', options),
-      });
-      const result = await index.find(root, '');
-      assert.deepEqual(paths(result), ['README.md', 'src/app/main.ts']);
-      assert.equal(result.partial, true);
-      await assertListingStopped(bin);
-    };
-    // Both wait out the same 10 s budget, so they run together.
-    await Promise.all([search({ ignoresTerm: true }), search({ childHoldsOutput: true })]);
-  },
-);
+test('a listing that ignores SIGTERM, or whose child holds its output, is killed after the grace period', async (t) => {
+  const root = await folder(t);
+  const search = async (options: { ignoresTerm?: boolean; childHoldsOutput?: boolean }) => {
+    const bin = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-files-bin-')));
+    t.after(() => rm(bin, { recursive: true, force: true }));
+    const index = new ChatFileIndex({
+      ripgrepExecutable: missing,
+      gitExecutable: await writeStalledListing(bin, 'git', options),
+      timing: stalledTiming,
+    });
+    const result = await index.find(root, '');
+    assert.deepEqual(paths(result), ['README.md', 'src/app/main.ts']);
+    assert.equal(result.partial, true);
+    await assertListingStopped(bin);
+  };
+  // Both wait out the same budget, so they run together.
+  await Promise.all([search({ ignoresTerm: true }), search({ childHoldsOutput: true })]);
+});
 
 test('disposing the runtime stops its running listings and waits for them to exit', async (t) => {
   const root = await folder(t, false),
@@ -333,6 +338,7 @@ test('disposing the runtime stops its running listings and waits for them to exi
       databasePath: join(bin, 'chat.sqlite'),
       models: createModels(),
       ripgrepExecutable: stalled,
+      fileListingTiming: { stopGraceMs: stalledTiming.stopGraceMs },
       approveFolder: async () => {},
     }),
   );

@@ -26,6 +26,7 @@ import {
   type ChatFolders,
   type RootPredicate,
 } from '../src/index.ts';
+import { settledDescriptorCount } from './descriptor-count.ts';
 
 const chat: ChatTarget = {
   host: { hostId: 'chat-folders-host', storeId: 'store' },
@@ -280,9 +281,9 @@ test('a folder is the root of an approved checkout, checked again on every use',
     assert.equal(await has(linked), false);
     await run(host.openCheckout({ root: linked }));
     // A folder check borrows a descriptor: it is not kept against the retained cap.
-    const open = readdirSync('/dev/fd').length;
+    const open = await settledDescriptorCount();
     assert.equal(await has(linked), true);
-    assert.equal(readdirSync('/dev/fd').length, open);
+    assert.equal(await settledDescriptorCount(), open);
     assert.equal(await has(join(root, '.git')), false);
     symlinkSync(root, join(f.base, 'link'));
     assert.equal(await has(join(f.base, 'link')), false);

@@ -103,7 +103,7 @@ test('browsing a small folder does not scan unrelated project files', async (t) 
     writeFileSync(join(f.root, '.gitignore'), 'hidden.ts\n');
     mkdirSync(join(f.root, 'unrelated'));
     for (let index = 0; index < 20100; index++)
-      linkSync(join(f.root, 'src/visible.ts'), join(f.root, 'unrelated', `${index}.ts`));
+      writeFileSync(join(f.root, 'unrelated', `${index}.ts`), '');
     const checkout = await f.client.command('openCheckout', { root: f.root });
     const fastStart = performance.now();
     const fast = await f.client.command('listDirectory', {

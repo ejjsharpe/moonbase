@@ -3,6 +3,7 @@ import type { Models } from '@earendil-works/pi-ai/models';
 import type { Effect, Fiber } from 'effect';
 import type { ChatError } from '@moonbase/contracts/chat-errors';
 import type { ChatCreationSettings, ChatSession } from '@moonbase/contracts/chat';
+import type { ChatFileListingTiming } from './files.ts';
 
 export type LocalPiRuntimeConfiguration = ChatSession & {
   databasePath: string;
@@ -15,6 +16,8 @@ export type LocalPiRuntimeConfiguration = ChatSession & {
   approveFolder?: (cwd: string) => Promise<void>;
   /** Absolute ripgrep for chat file search; otherwise `rg` on PATH, then Git. */
   ripgrepExecutable?: string;
+  /** Shortens the file listing time budget and stop grace; tests only. */
+  fileListingTiming?: Partial<ChatFileListingTiming>;
 };
 export type RetainedWork = {
   run<A>(effect: Effect.Effect<A, ChatError>): Effect.Effect<Fiber.Fiber<A, ChatError>>;

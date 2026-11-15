@@ -21,7 +21,8 @@
       ]
     },
     "test": {
-      "cache": true
+      "cache": true,
+      "inputs": ["default", "^default"]
     },
     "build": {
       "cache": true,

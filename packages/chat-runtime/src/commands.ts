@@ -230,7 +230,10 @@ export class Host {
     observations: Scope.Closeable,
   ) {
     this.config = config;
-    this.files = new ChatFileIndex({ ripgrepExecutable: config.ripgrepExecutable });
+    this.files = new ChatFileIndex({
+      ripgrepExecutable: config.ripgrepExecutable,
+      timing: config.fileListingTiming,
+    });
     this.harness = harness;
     this.identity = identity;
     this.work = work;
