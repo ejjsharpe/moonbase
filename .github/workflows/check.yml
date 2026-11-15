@@ -70,6 +70,9 @@ jobs:
     name: integration (chat)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      # Two files at a time on 4 cores: each also runs a daemon and a forwarder.
+      MOONBASE_TEST_WORKERS: '2'
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7

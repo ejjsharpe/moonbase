@@ -6,6 +6,9 @@ import { join } from 'node:path';
 import type { ChatTarget } from '@moonbase/contracts/chat';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
 import { decodeDaemonSettings } from '../src/daemon-settings.ts';
+import { runDaemon } from '../src/daemon.ts';
+import { readDirectoryArgument } from '../src/data-directory.ts';
+import { describeFailure } from '../src/failure.ts';
 import {
   bounded,
   createFauxClient,
@@ -15,7 +18,12 @@ import {
   until,
   withRoot,
 } from './daemon-fixture.ts';
-import { fauxModelId, fauxProviderId, type FauxScript } from './faux-provider.ts';
+import {
+  createFauxProviders,
+  fauxModelId,
+  fauxProviderId,
+  type FauxScript,
+} from './faux-provider.ts';
 
 const model = { provider: fauxProviderId, modelId: fauxModelId };
 const mode = async (path: string) => (await lstat(path)).mode & 0o777;
@@ -346,20 +354,47 @@ const refusals: Refusal[] = [
     },
   },
 ];
+// Each refusal runs in this process, as the entry runs the daemon; one also runs as a process, to
+// show the entry reports it on stderr alone and exits 1.
 for (const refusal of refusals)
   test(`a daemon refuses ${refusal.name} without disclosing paths or contents`, async () => {
-    await withRoot(async (root, started) => {
+    await withRoot(async (root) => {
       const directory = join(root, 'data'),
         secret = 'private-file-canary-' + randomBytes(8).toString('hex');
       const args = (await refusal.prepare(root, directory, secret)) ?? [directory];
-      const daemon = startDaemon(args);
-      started.push(daemon);
-      assert.deepEqual(await bounded(daemon.exited), [1, null]);
-      assert.equal(daemon.output, '');
-      const failure = JSON.parse(daemon.errors.trim());
-      assert.equal(failure.event, 'failed');
-      assert.equal(typeof failure.error.message, 'string');
+      const ready: string[] = [];
+      const failure = await bounded(
+        runDaemon({
+          directory: readDirectoryArgument(args),
+          signal: new AbortController().signal,
+          ready: (line) => ready.push(line),
+          closeClaudeCode: async () => {},
+          providers: () => createFauxProviders(directory),
+        }).then(
+          () => assert.fail('The daemon started'),
+          (error: unknown) => JSON.stringify(describeFailure(error)),
+        ),
+      );
+      assert.deepEqual(ready, []);
+      assert.equal(typeof JSON.parse(failure).message, 'string');
       for (const leaked of [root, secret])
-        assert.ok(!daemon.errors.includes(leaked), 'discloses ' + leaked);
+        assert.ok(!failure.includes(leaked), 'discloses ' + leaked);
     });
   });
+test('the daemon process reports a refusal on stderr alone and exits 1', async () => {
+  await withRoot(async (root, started) => {
+    const directory = join(root, 'data'),
+      secret = 'private-file-canary-' + randomBytes(8).toString('hex');
+    // An identity others can read: its contents must not reach stderr either.
+    await refusals[2]!.prepare(root, directory, secret);
+    const daemon = startDaemon([directory]);
+    started.push(daemon);
+    assert.deepEqual(await bounded(daemon.exited), [1, null]);
+    assert.equal(daemon.output, '');
+    const failure = JSON.parse(daemon.errors.trim());
+    assert.equal(failure.event, 'failed');
+    assert.equal(typeof failure.error.message, 'string');
+    for (const leaked of [root, secret])
+      assert.ok(!daemon.errors.includes(leaked), 'discloses ' + leaked);
+  });
+});

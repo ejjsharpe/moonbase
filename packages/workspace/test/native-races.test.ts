@@ -20,28 +20,14 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { initRepository } from './repository-fixture.ts';
 const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-native-races-')));
-const helper = join(base, 'filesystem');
-const stagingHelper = join(base, 'filesystem-staging');
+// `scripts/build-native.mjs` builds these with the pause protocol the shipped helper lacks.
+const helper = fileURLToPath(new URL('../dist/test/filesystem-preflight', import.meta.url));
+const stagingHelper = fileURLToPath(new URL('../dist/test/filesystem-copy-stage', import.meta.url));
 beforeAll(() => {
-  // The shipped helper is compiled without this define and has no pause protocol.
-  for (const [binary, define] of [
-    [helper, 'ESCODE_TEST_PREFLIGHT'],
-    [stagingHelper, 'ESCODE_TEST_COPY_STAGE'],
-  ])
-    execFileSync('clang', [
-      '-std=c11',
-      '-Wall',
-      '-Wextra',
-      '-Werror',
-      '-O2',
-      '-D' + define,
-      fileURLToPath(new URL('../native/filesystem.c', import.meta.url)),
-      '-framework',
-      'CoreServices',
-      '-o',
-      binary,
-    ]);
+  for (const binary of [helper, stagingHelper])
+    assert(existsSync(binary), `Build the race helpers first: node scripts/build-native.mjs`);
 });
 afterAll(() => rmSync(base, { recursive: true, force: true }));
 for (const [kind, replacement] of [
@@ -54,7 +40,7 @@ for (const [kind, replacement] of [
   test(`${kind} rejects a source ${replacement ? 'replaced with protected contents' : 'relocated outside the checkout'} during recursive preflight`, async () => {
     const fixture = mkdtempSync(join(base, 'fixture-')),
       root = join(fixture, 'repo');
-    execFileSync('git', ['init', root]);
+    initRepository(root);
     const source = join(root, 'source'),
       outside = join(fixture, 'outside');
     mkdirSync(source);
@@ -122,7 +108,7 @@ for (const [kind, replacement] of [
 test('copy rejects destination-parent replacement during native recursive preflight', async () => {
   const fixture = mkdtempSync(join(base, 'destination-')),
     root = join(fixture, 'repo');
-  execFileSync('git', ['init', root]);
+  initRepository(root);
   mkdirSync(join(root, 'source'));
   mkdirSync(join(root, 'target'));
   writeFileSync(join(root, 'source/file.bin'), Buffer.alloc(1024, 173));
@@ -169,13 +155,16 @@ test('copy rejects destination-parent replacement during native recursive prefli
   }
 });
 
+const files = 3,
+  bytes = 64 * 1024;
 for (const kind of ['folder', 'file'] as const) {
   test(`copy rejects replacement of its open ${kind} staging object without publishing or cleaning the replacement`, async () => {
     const root = mkdtempSync(join(base, 'staging-'));
+    // The helper pauses once the whole copy is staged, so a small source shows the race.
     if (kind === 'folder') {
       mkdirSync(join(root, 'source'));
-      for (let i = 0; i < 2000; i++) writeFileSync(join(root, `source/${i}.txt`), `correct ${i}`);
-    } else writeFileSync(join(root, 'source'), Buffer.alloc(4 * 1024 * 1024, 173));
+      for (let i = 0; i < files; i++) writeFileSync(join(root, `source/${i}.txt`), `correct ${i}`);
+    } else writeFileSync(join(root, 'source'), Buffer.alloc(bytes, 173));
     const source = statSync(join(root, 'source')),
       parent = statSync(root);
     const fd = openSync(root, constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000);
@@ -227,11 +216,11 @@ for (const kind of ['folder', 'file'] as const) {
       );
       assert.equal(statSync(join(root, 'retained-stage')).ino, original.ino);
       if (kind === 'folder')
-        for (let i = 0; i < 2000; i++)
+        for (let i = 0; i < files; i++)
           assert.equal(readFileSync(join(root, `retained-stage/${i}.txt`), 'utf8'), `correct ${i}`);
       else
         assert.equal(
-          readFileSync(join(root, 'retained-stage')).equals(Buffer.alloc(4 * 1024 * 1024, 173)),
+          readFileSync(join(root, 'retained-stage')).equals(Buffer.alloc(bytes, 173)),
           true,
         );
     } finally {

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { Effect } from 'effect';
 import { Store } from '../src/store.ts';
 
+const rounds = 20;
 test('concurrent transactions and plain writes on one store neither collide nor lose writes', async () => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-store-')));
   const store = new Store(base, {
@@ -15,9 +16,11 @@ test('concurrent transactions and plain writes on one store neither collide nor 
     decoders: { rows: (value) => value },
   });
   try {
+    // Eight fibers interleave on the one connection; a transaction that yielded inside itself
+    // would collide at once, so a few rounds each are enough.
     const workers = Array.from({ length: 8 }, (_, worker) =>
       Effect.forEach(
-        Array.from({ length: 500 }, (_, index) => index),
+        Array.from({ length: rounds }, (_, index) => index),
         (index) =>
           Effect.gen(function* () {
             yield* store.transaction(() => store.put('rows', `t-${worker}-${index}`, index));
@@ -38,8 +41,8 @@ test('concurrent transactions and plain writes on one store neither collide nor 
       .prepare("SELECT key FROM records WHERE bucket='rows'")
       .all()
       .map((row) => row.key as string);
-    assert.equal(keys.filter((key) => key.startsWith('t-')).length, 4000);
-    assert.equal(keys.filter((key) => key.startsWith('p-')).length, 4000);
+    assert.equal(keys.filter((key) => key.startsWith('t-')).length, 8 * rounds);
+    assert.equal(keys.filter((key) => key.startsWith('p-')).length, 8 * rounds);
     assert.equal(keys.filter((key) => key.startsWith('rolled-')).length, 0);
   } finally {
     store.close();

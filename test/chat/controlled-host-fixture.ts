@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, realpath, readFile, writeFile, chmod, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createServer, type AddressInfo } from 'node:net';
+import { createServer } from 'node:net';
 import { ManagedRuntime, Layer } from 'effect';
 import {
   makeChatClient,
@@ -17,13 +17,6 @@ import { checkHostHealth } from '@moonbase/daemon-protocol/health';
 import type { ChatTarget } from '@moonbase/contracts/chat';
 import { fauxModel } from './faux-model.ts';
 
-async function findFreePort() {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address() as AddressInfo;
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return port;
-}
 export async function until<T>(get: () => Promise<T>, ready: (v: T) => boolean) {
   const end = Date.now() + 15000;
   while (Date.now() < end) {
@@ -77,7 +70,6 @@ export async function controlledHostFixture(behaviour: URL, hold = false) {
       actorId: 'personal',
     },
     token = randomBytes(32).toString('hex'),
-    port = await findFreePort(),
     log = join(directory, 'forward.jsonl'),
     drop = join(directory, 'drop-send'),
     executable = join(directory, 'controlled-ssh'),
@@ -89,9 +81,11 @@ export async function controlledHostFixture(behaviour: URL, hold = false) {
     });
   await write('identity.json', session);
   await write('token', token);
+  // The host binds any free port and reports it when ready, so a concurrent test can't take it
+  // first; each start, a restart too, serves on a new one, which `root()` then reaches.
   await write('daemon.json', {
     mode: 'host',
-    port,
+    port: 0,
     approvedRoots: [cwd],
     credentialKey: { source: 'file', path: join(directory, 'credential.key') },
   });

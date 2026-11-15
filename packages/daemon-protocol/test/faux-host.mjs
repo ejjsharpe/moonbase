@@ -25,14 +25,8 @@ models.setProvider(faux.provider);
 const record = (event) =>
   appendFile(config.log, JSON.stringify({ event, pid: process.pid }) + '\n');
 faux.setResponses(
-  Array.from({ length: 8 }, () => async (messages, options) => {
+  Array.from({ length: 8 }, () => async (messages) => {
     await record('model');
-    if (config.modelWait) {
-      await new Promise((resolve) =>
-        options.signal?.addEventListener('abort', resolve, { once: true }),
-      );
-      throw Error('Controlled interrupted model');
-    }
     return messages.messages.some((m) => m.role === 'toolResult')
       ? fauxAssistantMessage('Resumed original input')
       : fauxAssistantMessage(fauxToolCall('counted', {}), { stopReason: 'toolUse' });

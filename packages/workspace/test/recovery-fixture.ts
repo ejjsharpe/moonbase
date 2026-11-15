@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -23,6 +22,7 @@ import type { RecoveryLayout, RecoveryState } from '@moonbase/contracts/recovery
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { isWorkspaceHostError, toWireError } from '@moonbase/contracts/workspace-host-errors';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
+import { initRepository } from './repository-fixture.ts';
 export const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
 export const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
 export function fixture() {
@@ -30,7 +30,7 @@ export function fixture() {
     root = join(base, 'repo'),
     dataDirectory = join(base, 'state');
   mkdirSync(root);
-  execFileSync('/usr/bin/git', ['init', '-q', '-b', 'main', root]);
+  initRepository(root);
   writeFileSync(join(root, 'file.txt'), 'original');
   const start = (filesystemHelper = binary) => {
     const runtime = ManagedRuntime.make(

@@ -18,6 +18,7 @@ import { Effect, ManagedRuntime } from 'effect';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
 import { WorkspaceHostLive, type RootPredicate } from '../src/index.ts';
 import { createGitGate } from '../src/filesystem.ts';
+import { initRepository } from './repository-fixture.ts';
 
 /** A file host over a temporary folder; `reserved` is given that folder to name paths in. */
 function setup({
@@ -140,7 +141,7 @@ test('a worktree location is made only inside a folder the predicate allows, and
         'user.email=t@e.invalid',
         ...args,
       ]);
-    git('init', '-q', '-b', 'main');
+    initRepository(root);
     writeFileSync(join(root, 'file.txt'), 'x');
     git('add', '.');
     git('commit', '-qm', 'initial');

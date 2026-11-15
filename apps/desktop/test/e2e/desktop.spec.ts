@@ -20,6 +20,7 @@ import { callMain, callMainScript, editorClientId } from '../fixtures/window-ipc
 import { test, expect, _electron as electron } from '@playwright/test';
 import type { ElectronApplication, Page } from '@playwright/test';
 import {
+  cpSync,
   mkdtempSync,
   mkdirSync,
   writeFileSync,
@@ -59,16 +60,16 @@ declare global {
     release(): void;
   };
 }
-test.beforeEach(async () => {
-  base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-desktop-')));
-  checkout = join(base, 'checkout');
-  mkdirSync(checkout);
+// The controlled checkout is made once per worker and copied for each test.
+let template: string;
+test.beforeAll(() => {
+  template = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-desktop-template-')));
   const git = (...args: string[]) =>
     execFileSync(
       '/usr/bin/git',
       [
         '-C',
-        checkout,
+        template,
         '-c',
         'user.name=Moonbase Test',
         '-c',
@@ -78,13 +79,19 @@ test.beforeEach(async () => {
       { env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' } },
     );
   git('init', '-q', '-b', 'main');
-  writeFileSync(join(checkout, 'a.ts'), "export const value = 'HEAD';\n");
-  writeFileSync(join(checkout, 'b.ts'), 'export const b = 2;\n');
+  writeFileSync(join(template, 'a.ts'), "export const value = 'HEAD';\n");
+  writeFileSync(join(template, 'b.ts'), 'export const b = 2;\n');
   git('add', '.');
   git('commit', '-qm', 'Controlled fixture');
-  writeFileSync(join(checkout, 'a.ts'), "export const value = 'INDEX';\n");
+  writeFileSync(join(template, 'a.ts'), "export const value = 'INDEX';\n");
   git('add', 'a.ts');
-  writeFileSync(join(checkout, 'a.ts'), "export const value = 'WORKING';\n");
+  writeFileSync(join(template, 'a.ts'), "export const value = 'WORKING';\n");
+});
+test.afterAll(() => rmSync(template, { recursive: true, force: true }));
+test.beforeEach(async () => {
+  base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-desktop-')));
+  checkout = join(base, 'checkout');
+  cpSync(template, checkout, { recursive: true });
   await launch();
 });
 async function launch() {
