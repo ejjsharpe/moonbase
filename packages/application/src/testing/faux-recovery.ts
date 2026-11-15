@@ -1,5 +1,6 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
-import { Effect, Queue, Stream } from 'effect';
+import { Effect, Queue, Schema, Stream } from 'effect';
+import { RecoveryStateSchema } from '@moonbase/contracts/recovery-schema';
 import {
   emptyBufferView,
   emptyRecoveryState,
@@ -23,6 +24,7 @@ type FauxRecoveryDependencies = {
 };
 const sameCheckout = (a: CheckoutTarget, b: CheckoutTarget) => checkoutKey(a) === checkoutKey(b);
 const sameTarget = (a: FileTarget, b: FileTarget) => fileKey(a) === fileKey(b);
+const isValidState = Schema.is(RecoveryStateSchema);
 const outlineOf = (state: RecoveryState): RecoveryOutline => ({
   ...state,
   buffers: state.buffers.map(({ draft, ...buffer }) =>
@@ -53,6 +55,8 @@ export function fauxRecovery({ exact, fail }: FauxRecoveryDependencies) {
   const edit = (clientId: string, change: (state: RecoveryState) => void) => {
     const state = read(clientId);
     change(state);
+    // Like the store, an edit that would leave an invalid recovery is refused and changes nothing.
+    if (!isValidState(state)) fail('The edit would leave an invalid recovery.');
     stats.edits++;
     write(clientId, state);
   };
@@ -212,6 +216,15 @@ export function fauxRecovery({ exact, fail }: FauxRecoveryDependencies) {
                 view.tabs = [...new Set(view.tabs.map(swap))];
                 if (view.active !== null) view.active = swap(view.active);
                 if (view.preview !== null) view.preview = swap(view.preview);
+                // The arriving buffer takes over the view and positions of the one giving way.
+                for (const memory of [view.fileViews, view.positions] as Record<
+                  string,
+                  unknown
+                >[]) {
+                  if (held.id in memory && !(buffer.id in memory))
+                    memory[buffer.id] = memory[held.id];
+                  delete memory[held.id];
+                }
               }
             }
             buffer.target = { ...buffer.target, path };
@@ -219,6 +232,18 @@ export function fauxRecovery({ exact, fail }: FauxRecoveryDependencies) {
           state.recentFiles = state.recentFiles.map((t) =>
             inside(t) ? { ...t, path: move(t.path) } : t,
           );
+          // What the view remembers of closed files, and its tree, follow the move by path.
+          const view = state.views[result.checkout.checkoutId];
+          if (view) {
+            const rename = (path: string) =>
+              isPathAtOrInside(path, item.source) ? move(path) : path;
+            view.remembered = Object.fromEntries(
+              Object.entries(view.remembered).map(([path, file]) => [rename(path), file]),
+            );
+            view.tree.expanded = view.tree.expanded.map(rename);
+            view.tree.selected = view.tree.selected.map(rename);
+            view.tree.focus = rename(view.tree.focus);
+          }
         }
         write(clientId, state);
       }

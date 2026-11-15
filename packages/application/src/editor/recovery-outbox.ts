@@ -29,6 +29,8 @@ type OutboxDependencies = {
    * when the refusal stands: the edit is dropped and the flush fails with it.
    */
   resync(edit: RecoveryEditRequest, error: ApplicationError): Promise<boolean>;
+  /** Reads the store's state and sends whatever it lacks of what the editor shows. */
+  reassert(): Promise<void>;
   notify(): void;
   report(error: unknown): void;
 };
@@ -50,6 +52,11 @@ export class RecoveryOutbox {
   private queue: RecoveryEditRequest[] = [];
   private sending: RecoveryEditRequest | undefined;
   private failure: unknown;
+  /**
+   * A tab edit failed, so it may or may not have committed: the store has to be read again and
+   * given what the editor shows before anything else is sent.
+   */
+  private uncertain = false;
   /** The layout last committed, so an unchanged layout is not sent again. */
   private committedLayout: string | undefined;
   private lock = Semaphore.makeUnsafe(1);
@@ -61,7 +68,9 @@ export class RecoveryOutbox {
   }
   /** Whether every edit made so far has committed. */
   get idle() {
-    return !this.queue.length && !this.sending && this.failure === undefined;
+    return (
+      !this.queue.length && !this.sending && this.failure === undefined && !this.uncertain
+    );
   }
   /** Whether the last edit sent failed, so edits wait for the next flush. */
   get failed() {
@@ -137,6 +146,13 @@ export class RecoveryOutbox {
   private async drain() {
     const { clientId, send, ready, resync, notify } = this.dependencies;
     let resyncs = 0;
+    if (this.uncertain) {
+      await ready();
+      await this.dependencies.reassert();
+      this.uncertain = false;
+      this.failure = undefined;
+      notify();
+    }
     while (this.queue.length) {
       await ready();
       const edit = this.queue.shift()!;
@@ -153,10 +169,25 @@ export class RecoveryOutbox {
         } else {
           const { kind: _kind, ...input } = edit;
           await send(edit.kind, { clientId, ...input } as RecoveryEditInput<typeof edit.kind>);
+          // The store moved the tab (a reopened one goes last): the next layout is sent again.
+          if (edit.kind !== 'updateDraft') this.committedLayout = undefined;
         }
         this.failure = undefined;
       } catch (error) {
         this.sending = undefined;
+        if (edit.kind === 'openTab' || edit.kind === 'closeTab') {
+          // A failed close or discard is abandoned with the action that made it, never retried
+          // later behind the editor's back: the tab edits queued for its buffer go too.
+          this.queue = this.queue.filter((queued) => !isStructural(queued, edit.bufferId));
+          if (isRefusal(error) && (await resync(edit, error))) continue;
+          // An answer refusing it proves nothing committed; any other failure may hide a commit,
+          // so the store is read again and given the draft the editor still shows.
+          if (!isRefusal(error)) {
+            this.uncertain = true;
+            this.failure = error;
+          }
+          throw error;
+        }
         if (isRefusal(error) && resyncs++ < maximumResyncs) {
           if (await resync(edit, error)) continue;
           throw error;

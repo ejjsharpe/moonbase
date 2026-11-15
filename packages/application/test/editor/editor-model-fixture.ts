@@ -1,6 +1,6 @@
 import type {
   CheckoutTarget,
-  CheckoutView,
+  CheckoutTree,
   FileTarget,
   FileView,
   EditorPosition,
@@ -80,7 +80,6 @@ type ExpectedEditorController = {
   createWorktree(input: CommandInput<'createWorktree'>): Promise<CheckoutTarget>;
   initializeRepository(checkout: CheckoutTarget): Promise<CheckoutTarget>;
   selectCheckout(target: CheckoutTarget): Promise<boolean>;
-  resolveRecoveryPublication(): Promise<boolean>;
   flush(): Promise<void>;
   buffer(target: FileTarget): Readonly<EditorBuffer> | undefined;
   edit(target: FileTarget, text: string): void;
@@ -104,7 +103,7 @@ type ExpectedEditorController = {
   closeCheckout(checkout: CheckoutTarget): Promise<boolean>;
   prepareQuit(): Promise<boolean>;
   reopen(checkout: CheckoutTarget): Promise<boolean>;
-  tree(checkout: CheckoutTarget, patch: Partial<CheckoutView['tree']>): void;
+  tree(checkout: CheckoutTarget, patch: Partial<CheckoutTree>): void;
   resizeSidebar(width: number): void;
   setFollowActiveFile(follow: boolean): void;
   list(checkout: CheckoutTarget, path?: string): Promise<DirectoryListing>;

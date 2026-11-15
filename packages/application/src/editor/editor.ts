@@ -259,6 +259,10 @@ class EditorModelState {
         while (this.initialization) await this.initialization.done;
       },
       resync: (edit, error) => this.resync(edit, error),
+      reassert: async () => {
+        const loaded = await this.command('loadRecovery', { clientId: this.clientId });
+        if (!this.closing) this.follow(loaded.state, true);
+      },
       notify: () => this.emit(),
       report: (error) => this.report(error),
     });
@@ -653,6 +657,8 @@ class EditorModelState {
     for (const key of Object.keys(this.listings)) if (ofPrevious(key)) delete this.listings[key];
     delete this.git[previousKey];
     this.preservation.rebindClosedReferences(previous, next);
+    // The store relists the checkout, and its buffers follow, with the next layout.
+    this.changed();
   }
   private async addCheckout(target: CheckoutTarget) {
     if (this.closing) return target;

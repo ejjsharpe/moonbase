@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { checkoutKey, fileKey } from '@moonbase/application/editor';
 import { acquireEditor, answering } from './editor-model-fixture.ts';
-import { checkout, second, target, fixture } from './editor-fixture.ts';
+import { checkout, second, target, fixture, storedRecovery } from './editor-fixture.ts';
 
-test('snapshot consumers cannot mutate buffers, recovery, comparisons or discovery in later publications', async () => {
+test('snapshot consumers cannot mutate buffers, recovery, comparisons or discovery in later snapshots', async () => {
   const f = await fixture('snapshots', false);
   try {
     await f.editor.open(target('a.ts'), { view: 'unstaged', intent: 'keep' });
@@ -129,13 +129,12 @@ test('restored drafts and uncertain Save/move facts remain isolated and update e
     const savedRequest = structuredClone(pending);
     pending.text = 'consumer request';
     pending.target.checkout.root = '/consumer';
-    pending.requestId = 'consumer-request';
-    restored.recovery.drafts[0].text = 'consumer restored draft';
-    restored.recovery.drafts[0].disk.version = 'consumer version';
-    restored.recovery.drafts[0].target.path = 'consumer.ts';
+    restored.buffers[1].text = 'consumer restored draft';
+    restored.buffers[1].disk.version = 'consumer version';
+    restored.buffers[1].target.path = 'consumer.ts';
     editor.edit(target('a.ts'), 'newer live a');
     assert.deepEqual(editor.buffer(target('a.ts'))!.pendingSave, savedRequest);
-    assert.deepEqual(editor.getSnapshot().recovery.drafts, expected.recovery.drafts);
+    assert.deepEqual(editor.getSnapshot().buffers[1], expected.buffers[1]);
     assert.equal(await editor.save(target('a.ts')), false);
     assert.equal(editor.buffer(target('a.ts'))!.text, 'newer live a');
     assert.equal(editor.buffer(target('a.ts'))!.disk.text, 'captured save');
@@ -167,11 +166,8 @@ test('restored drafts and uncertain Save/move facts remain isolated and update e
     assert.equal(f.memory.stats.mutations, 1);
     await editor.flush();
     assert.equal(editor.getSnapshot().recoveryReady, true);
-    const state = (await f.client.command('loadRecovery', { clientId: editor.clientId })).state;
-    assert.equal(
-      state.drafts.find((draft) => draft.target.path === 'moved.ts')!.text,
-      'newer live a',
-    );
+    const { drafts } = await storedRecovery(f.client, editor.clientId);
+    assert.equal(drafts.find((draft) => draft.target.path === 'moved.ts')!.text, 'newer live a');
   } finally {
     await editor.dispose();
     await f.dispose();

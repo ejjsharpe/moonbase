@@ -4,6 +4,7 @@ import {
   saveFile,
   captureNative,
   recoveryState,
+  draftsOf,
 } from '../fixtures/editor-fixture.ts';
 import {
   callMain,
@@ -275,7 +276,7 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     await editor(p).press('End');
     await editor(p).pressSequentially(' + live tool editing');
     await expect
-      .poll(async () => (await recovery(p)).state.drafts[0]?.text)
+      .poll(async () => draftsOf((await recovery(p)).state)[0]?.text)
       .toBe('local dirty draft + live tool editing');
     // Remote cwd is never authority to the local editor, even with an equal root string.
     const localCheckout = (await recovery(p)).state.checkouts[0] as CheckoutTarget;
@@ -439,7 +440,7 @@ for (const change of ['external', 'write-failure'])
         p.locator('.view-line').filter({ hasText: 'local dirty draft' }).first(),
       ).toBeVisible();
       await expect
-        .poll(async () => (await recovery(p)).state.drafts[0]?.text)
+        .poll(async () => draftsOf((await recovery(p)).state)[0]?.text)
         .toBe('local dirty draft');
       const bytes = await p.evaluate(() => localStorage.getItem('moonbase.chat.remote.v2'));
       expect(bytes).toBe(change === 'external' ? 'external bytes' : prior);
@@ -604,7 +605,7 @@ test('captured Quit keeps chat/newer drafts and editor conflicts usable; Cancel 
     expect(await readFile(join(f.cwd, 'a.ts'), 'utf8')).toBe('external conflicting change');
     const next = await launch(f);
     current = next.app;
-    await expect.poll(async () => (await recovery(next.page)).state.drafts.length).toBe(0);
+    await expect.poll(async () => draftsOf((await recovery(next.page)).state).length).toBe(0);
     await connect(next.page);
     await expect(next.page.getByLabel('Message', { exact: true })).toHaveValue(
       'newer draft after cancelled Quit',
@@ -620,7 +621,7 @@ test('captured Quit keeps chat/newer drafts and editor conflicts usable; Cancel 
 });
 
 if (!packaged)
-  test('held Save and final publication do not globally block Send/status/Stop; uncertain Quit retains exact publication', async () => {
+  test('a held Save and a lost Quit reply do not block Send/status/Stop; the vetoed Quit keeps the window', async () => {
     const f = await fixture(true);
     let current: ElectronApplication | undefined;
     try {
@@ -653,30 +654,29 @@ if (!packaged)
       await editor(p).press('End');
       await editor(p).pressSequentially(' newer pending recovery');
       await expect
-        .poll(async () => (await recovery(p)).state.drafts[0]?.text)
+        .poll(async () => draftsOf((await recovery(p)).state)[0]?.text)
         .toContain('newer pending recovery');
       await app.evaluate(() => {
-        globalThis.desktopTest.fault = 'final-publication';
+        globalThis.desktopTest.fault = 'closeTab';
       });
       await app.evaluate(({ app }) => app.quit());
       await p.getByRole('dialog').getByRole('button', { name: 'Discard', exact: true }).click();
-      await expect(
-        p.getByRole('button', { name: 'Resolve recovery publication', exact: true }),
-      ).toBeVisible();
-      expect((await recovery(p)).state.drafts).toEqual([]);
+      await expect.poll(() => app.evaluate(() => globalThis.desktopTest.fault)).toBeNull();
+      expect(draftsOf((await recovery(p)).state)).toEqual([]);
       await expect(editor(p)).toBeVisible();
       expect(children.get(app)!.exitCode).toBeNull();
       await tab(p, 'Agents').click();
       await p
         .getByLabel('Message', { exact: true })
-        .fill('latest chat while editor publication unknown');
+        .fill('latest chat while the editor close is unconfirmed');
       await projectTab(p).click();
-      await app.evaluate(() => {
-        globalThis.desktopTest.noStatus = false;
-      });
-      await p.getByRole('button', { name: 'Resolve recovery publication', exact: true }).click();
+      // The close goes again on its own.
+      await expect(p.getByRole('button', { name: 'Retry keeping edits', exact: true })).toHaveCount(
+        0,
+      );
+      // The discard the store committed is the editor's too, so Quit has nothing to ask.
       await expect(
-        p.getByRole('button', { name: 'Resolve recovery publication', exact: true }),
+        p.locator('.view-line').filter({ hasText: 'newer pending recovery' }),
       ).toHaveCount(0);
       expect(await readFile(join(f.cwd, 'a.ts'), 'utf8')).toBe('local dirty draft');
       expect(errors).toEqual([]);
@@ -686,7 +686,7 @@ if (!packaged)
       current = next.app;
       await connect(next.page);
       await expect(next.page.getByLabel('Message', { exact: true })).toHaveValue(
-        'latest chat while editor publication unknown',
+        'latest chat while the editor close is unconfirmed',
       );
       expect((await f.stats()).commands.filter((v) => v === 'stopChat')).toHaveLength(1);
       await stop(next.app);

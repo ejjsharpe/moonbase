@@ -964,7 +964,7 @@ for (const navigation of ['visual', 'recent'] as const)
     await expect(first(page).getByRole('tab', { name: 'welcome.ts', exact: true })).toBeFocused();
   });
 
-test('a checkout clicked during close publication remains selected live and durably', async ({
+test('a checkout clicked while a close edit is held remains selected live and durably', async ({
   page,
 }) => {
   await page.goto('/recovery-race.html');
@@ -1012,7 +1012,7 @@ for (const shortcut of ['close', 'reopen'] as const)
       .toContain('typed after ' + shortcut);
   });
 
-test('keyboard close cancellation and failed publication preserve typing focus and dialog scope', async ({
+test('keyboard close cancellation and a failed close edit preserve typing focus and dialog scope', async ({
   page,
 }) => {
   await page.goto('/');
@@ -1028,7 +1028,7 @@ test('keyboard close cancellation and failed publication preserve typing focus a
     first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }),
   ).toBeFocused();
   await page.keyboard.type('after cancel ');
-  // Let Close consume the fault instead of the draft's debounced publication.
+  // Let Close consume the fault instead of the draft's debounced edit.
   await page.evaluate(() => window.demo.first.flush());
   await page.getByRole('button', { name: 'Fail next recovery', exact: true }).click();
   await first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }).focus();
@@ -1148,7 +1148,7 @@ for (const area of ['staged', 'unstaged'] as const)
     await expect(input).toHaveJSProperty('readOnly', false);
   });
 
-test('uncertain final close is visible, blocks Quit and resolves by exact receipt before focusing its survivor', async ({
+test('a close whose reply is lost is sent again, and the editor ends where the store did', async ({
   page,
 }) => {
   await page.goto('/recovery-race.html');
@@ -1168,21 +1168,35 @@ test('uncertain final close is visible, blocks Quit and resolves by exact receip
     .getByRole('dialog', { name: 'Save changes before closing?', exact: true })
     .getByRole('button', { name: 'Discard', exact: true })
     .click();
-  await expect(
-    page.getByRole('button', { name: 'Resolve recovery publication', exact: true }),
-  ).toBeVisible();
-  expect(await page.evaluate(() => window.recoveryRace.editor.prepareQuit())).toBe(false);
-  expect(
-    await page.evaluate(
-      () =>
-        window.recoveryRace.editor
-          .getSnapshot()
-          .buffers.find((buffer) => buffer.target.path === 'b.ts')?.text,
-    ),
-  ).toBe('captured pending close draft');
-  await page.getByRole('button', { name: 'Resolve recovery publication', exact: true }).click();
+  // The failed edit goes again on its own; once it commits nothing is unconfirmed.
+  await expect
+    .poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().recoveryReady))
+    .toBe(true);
+  await expect(page.getByRole('button', { name: 'Retry keeping edits', exact: true })).toHaveCount(
+    0,
+  );
+  // Ready means every unsaved text the editor shows is kept: none may be shown that is not.
+  const kept = await page.evaluate(async () => {
+    const { buffers } = window.recoveryRace.editor.getSnapshot(),
+      { state } = await window.recoveryRace.load();
+    return {
+      shown: buffers
+        .filter((buffer) => buffer.text !== buffer.disk.text)
+        .map((buffer) => [buffer.target.checkout.checkoutId, buffer.target.path, buffer.text]),
+      stored: state.buffers
+        .filter((buffer) => buffer.draft)
+        .map((buffer) => [
+          buffer.target.checkout.checkoutId,
+          buffer.target.path,
+          buffer.draft!.text,
+        ]),
+    };
+  });
+  expect(kept.shown).toEqual(kept.stored);
+  // The store closed b.ts, discarding its draft as chosen, so the editor's close finishes too.
+  await expect(page.getByRole('tab', { name: 'b.ts', exact: true })).toHaveCount(0);
   await expect(page.getByRole('textbox', { name: 'a.ts editor', exact: true })).toBeFocused();
-  await page.keyboard.type('after exact close resolution ');
+  await page.keyboard.type('after the close finished ');
   await expect
     .poll(() =>
       page.evaluate(
@@ -1195,10 +1209,7 @@ test('uncertain final close is visible, blocks Quit and resolves by exact receip
             )?.text,
       ),
     )
-    .toContain('after exact close resolution');
-  await expect(
-    page.getByRole('button', { name: 'Resolve recovery publication', exact: true }),
-  ).toHaveCount(0);
+    .toContain('after the close finished');
 });
 
 test('selecting an absent survivor during another close loads it after preservation releases', async ({
@@ -1235,7 +1246,7 @@ test('selecting an absent survivor during another close loads it after preservat
     .toContain('after deferred selection');
 });
 
-test('delayed public Copy cannot reopen a destination closed through Monaco UI', async ({
+test('a Copy held mid-flush carries the newer source draft, and its copy closed with Discard stays closed', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -1252,9 +1263,15 @@ test('delayed public Copy cannot reopen a destination closed through Monaco UI',
     editor.edit({ checkout, path: 'a.ts' }, 'source changed after preflight');
     window.recoveryRace.copy.releasePreflight();
   });
-  await expect.poll(() => page.evaluate(() => window.recoveryRace.copy.phase)).toBe('read');
-  await page.getByRole('treeitem', { name: 'copy.ts, untracked', exact: true }).dblclick();
-  await page.getByRole('textbox', { name: 'copy.ts editor', exact: true }).focus();
+  await page.evaluate(() => window.recoveryRace.copy.finish());
+  // The store copied the draft as it stood when the copy ran, and the editor opened it.
+  const copy = page.getByRole('textbox', { name: 'copy.ts editor', exact: true });
+  await page.getByRole('tab', { name: 'copy.ts', exact: true }).click();
+  await expect(copy).toBeVisible();
+  await expect(
+    page.locator('.view-line').filter({ hasText: 'source changed after preflight' }).first(),
+  ).toBeVisible();
+  await copy.focus();
   await page.keyboard.type('destination discarded ');
   await page.getByRole('button', { name: 'Close copy.ts', exact: true }).click();
   await page
@@ -1262,16 +1279,12 @@ test('delayed public Copy cannot reopen a destination closed through Monaco UI',
     .getByRole('button', { name: 'Discard', exact: true })
     .click();
   await expect(page.getByRole('tab', { name: 'copy.ts', exact: true })).toHaveCount(0);
-  await page.evaluate(async () => {
-    window.recoveryRace.copy.releaseRead();
-    await window.recoveryRace.copy.finish();
-    await window.recoveryRace.editor.reconcileRecovery();
-  });
+  await page.evaluate(() => window.recoveryRace.editor.reconcileRecovery());
   await expect(page.getByRole('tab', { name: 'copy.ts', exact: true })).toHaveCount(0);
   expect(
     await page.evaluate(async () =>
-      (await window.recoveryRace.load()).state.drafts.some(
-        (draft) => draft.target.path === 'copy.ts',
+      (await window.recoveryRace.load()).state.buffers.some(
+        (buffer) => buffer.draft && buffer.target.path === 'copy.ts',
       ),
     ),
   ).toBe(false);
@@ -1371,7 +1384,7 @@ for (const area of ['staged', 'unstaged'] as const)
     ).toBeVisible();
   });
 
-test('lost and reordered Save receipts keep Retry Save visible until exact recovery settles', async ({
+test('a lost Save reply keeps Retry Save and its identity while another file saves', async ({
   page,
 }) => {
   await page.goto('/');
@@ -1399,6 +1412,7 @@ test('lost and reordered Save receipts keep Retry Save visible until exact recov
     await first.open({ checkout, path: 'README.md' }, { intent: 'keep' });
     first.edit({ checkout, path: 'README.md' }, 'captured README');
   });
+  // Another file's Save goes through on its own while the lost one waits for Retry Save.
   await saveFile(first(page));
   await expect
     .poll(() =>
@@ -1406,24 +1420,12 @@ test('lost and reordered Save receipts keep Retry Save visible until exact recov
         const buffer = window.demo.first.buffer({
           checkout: window.demo.checkout,
           path: 'README.md',
-        });
-        return !!buffer?.pendingSave && !buffer.saving;
+        })!;
+        return [buffer.disk.text, !!buffer.pendingSave, buffer.saving];
       }),
     )
-    .toBe(true);
-  const pendingB = await page.evaluate(
-    () =>
-      window.demo.first.buffer({ checkout: window.demo.checkout, path: 'README.md' })!.pendingSave!,
-  );
-  // A legitimate background flush may replace the alert; pending identities and controls stay stable.
+    .toEqual(['captured README', false, false]);
   await page.evaluate(() => window.demo.first.flush().catch(window.demo.first.report));
-  expect(
-    await page.evaluate(
-      () =>
-        window.demo.first.buffer({ checkout: window.demo.checkout, path: 'README.md' })!
-          .pendingSave,
-    ),
-  ).toEqual(pendingB);
   expect(
     await page.evaluate(
       () =>
@@ -1431,7 +1433,6 @@ test('lost and reordered Save receipts keep Retry Save visible until exact recov
           .pendingSave,
     ),
   ).toEqual(pendingA);
-  await expect(first(page).getByRole('button', { name: 'Retry Save', exact: true })).toBeVisible();
   const readme = first(page).getByRole('textbox', { name: 'README.md editor', exact: true });
   await readme.focus();
   await readme.press('Meta+a');
@@ -1446,7 +1447,6 @@ test('lost and reordered Save receipts keep Retry Save visible until exact recov
           .pendingSave,
     ),
   ).toBeUndefined();
-  expect(pendingB.target.path).toBe('README.md');
   await page.evaluate(() => window.demo.first.flush());
   expect(
     await page.evaluate(
@@ -1470,7 +1470,7 @@ test('lost and reordered Save receipts keep Retry Save visible until exact recov
     await dismiss.click();
 });
 
-test('Resolve recovers a rejected metadata publication after an already-started Save', async ({
+test('a recovery edit that fails after an already-started Save is retried and loses no text', async ({
   page,
 }) => {
   await page.goto('/save-race.html');
@@ -1478,15 +1478,9 @@ test('Resolve recovers a rejected metadata publication after an already-started 
   await expect(input).toBeVisible();
   await page.evaluate(() => window.saveRace.startB());
   await page.evaluate(() =>
-    window.saveRace.memory.failNext(
-      'persistRecovery',
-      'Controlled before-commit publication failure',
-    ),
+    window.saveRace.memory.failNext('updateDraft', 'Controlled recovery edit failure'),
   );
   await saveFile(page);
-  await expect(
-    page.getByRole('button', { name: 'Resolve recovery publication', exact: true }),
-  ).toBeVisible();
   await page.evaluate(() => window.saveRace.releaseB());
   await input.focus();
   await input.press('Meta+a');
@@ -1496,21 +1490,17 @@ test('Resolve recovers a rejected metadata publication after an already-started 
   await b.focus();
   await b.press('Meta+a');
   await b.pressSequentially('NEWER B');
-  const ids = await page.evaluate(() =>
-    window.saveRace.editor.getSnapshot().buffers.map((buffer) => buffer.pendingSave!.requestId),
+  // The failed edit stays queued and goes again with the next flush.
+  await page.evaluate(() => window.saveRace.editor.flush());
+  expect(await page.evaluate(() => window.saveRace.editor.getSnapshot().errors)).toContain(
+    'Controlled recovery edit failure',
   );
-  await page.getByRole('button', { name: 'Resolve recovery publication', exact: true }).click();
-  await expect(
-    page.getByRole('button', { name: 'Resolve recovery publication', exact: true }),
-  ).toHaveCount(0);
-  await page.evaluate(async () => {
-    await window.saveRace.editor.reconcileRecovery();
-    await window.saveRace.editor.flush();
-  });
+  await expect(page.getByRole('button', { name: 'Retry keeping edits', exact: true })).toHaveCount(
+    0,
+  );
+  // Each Save was sent once.
   expect(await page.evaluate(() => window.saveRace.memory.stats.saves)).toBe(2);
-  expect(
-    await page.evaluate(() => window.saveRace.requests.map((request) => request.requestId).sort()),
-  ).toEqual(ids.sort());
+  expect(await page.evaluate(() => window.saveRace.requests.length)).toBe(2);
   await page.evaluate(() => window.saveRace.restart());
   await expect(b).toBeVisible();
   await expectSaveEnabled(page, true);

@@ -17,16 +17,7 @@ import {
   prepareDaemonData,
   stopDaemon,
 } from '../../apps/desktop/test/fixtures/faux-daemon.mjs';
-
-async function until<T>(read: () => T | Promise<T>, done: (value: T) => boolean, ms = 20000) {
-  const deadline = Date.now() + ms;
-  for (;;) {
-    const value = await read();
-    if (done(value)) return value;
-    if (Date.now() > deadline) throw Error('Condition did not settle.');
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-}
+import { until } from './editor-workspace-fixture.ts';
 
 /**
  * Two clients of one daemon, as two Macs or two windows would be: each has its own recovery store

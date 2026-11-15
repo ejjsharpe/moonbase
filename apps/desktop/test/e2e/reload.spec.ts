@@ -1,6 +1,6 @@
 import { callMain, disconnectHost, editorClientId } from '../fixtures/window-ipc-fixture.ts';
 import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
-import { saveFile, captureNative } from '../fixtures/editor-fixture.ts';
+import { saveFile, captureNative, draftsOf } from '../fixtures/editor-fixture.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
@@ -105,7 +105,7 @@ test('native Reload retains text painted before ordinary recovery debounce @pack
     await editor().press('Meta+a');
     await editor().pressSequentially('local dirty draft');
     await expect
-      .poll(async () => (await recovery()).state.drafts[0]?.text)
+      .poll(async () => draftsOf((await recovery()).state)[0]?.text)
       .toBe('local dirty draft');
     await editor().focus();
     await editor().press('End');
@@ -150,7 +150,7 @@ test('native Reload retains text painted before ordinary recovery debounce @pack
     expect(after).toContain('fresh visible tail');
     // A durable dirty draft must eventually permit an actual reload, without Save or Discard.
     await expect
-      .poll(async () => (await recovery()).state.drafts[0]?.text)
+      .poll(async () => draftsOf((await recovery()).state)[0]?.text)
       .toContain('fresh visible tail');
     await expect.poll(reload).toBe('reload');
     await project.click();

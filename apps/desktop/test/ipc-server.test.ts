@@ -35,6 +35,7 @@ function heldWorkspace() {
       state.watches++;
       return async () => void state.closed++;
     },
+    watchRecovery: () => async () => {},
   };
   return { state, client };
 }
@@ -241,6 +242,7 @@ test('a handler’s defect reaches the renderer without its diagnostics, and an 
           throw failure;
         },
         watch: () => async () => {},
+        watchRecovery: () => async () => {},
       },
     },
   });

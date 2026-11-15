@@ -8,7 +8,7 @@ import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { Effect, Exit, Scope, ManagedRuntime } from 'effect';
 const modelScope = Scope.makeUnsafe();
-import { ApplicationError, type CommandInput } from '@moonbase/contracts/workspace';
+import { ApplicationError } from '@moonbase/contracts/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { Workbench } from '../src/index.ts';
 import { configureMonacoWorkers } from '../src/workers.ts';
@@ -80,12 +80,9 @@ let wait = new Promise<void>((resolve) => {
   release = resolve;
 });
 let holdCopyPreflight = false,
-  holdCopyRead = false,
   copyPhase = '';
-let releaseCopyPreflight = () => {},
-  releaseCopyRead = () => {};
+let releaseCopyPreflight = () => {};
 let copyPreflight = Promise.resolve(),
-  copyRead = Promise.resolve(),
   copying = Promise.resolve();
 const application = await createMoonbaseApplication({
     editors: [
@@ -100,17 +97,6 @@ const application = await createMoonbaseApplication({
               copyPhase = 'preflight';
               await copyPreflight;
               return receipt;
-            }
-            if (
-              name === 'readFile' &&
-              (input as CommandInput<'readFile'>).path === 'copy.ts' &&
-              holdCopyRead
-            ) {
-              holdCopyRead = false;
-              const disk = await client.command(name, input, options);
-              copyPhase = 'read';
-              await copyRead;
-              return disk;
             }
             if (hold && edits.has(name)) {
               waiting = true;
@@ -175,7 +161,6 @@ declare global {
       copy: {
         start(): void;
         releasePreflight(): void;
-        releaseRead(): void;
         finish(): Promise<void>;
         readonly phase: string;
       };
@@ -217,13 +202,9 @@ window.recoveryRace = {
   copy: {
     start() {
       holdCopyPreflight = true;
-      holdCopyRead = true;
       copyPhase = '';
       copyPreflight = new Promise<void>((resolve) => {
         releaseCopyPreflight = resolve;
-      });
-      copyRead = new Promise<void>((resolve) => {
-        releaseCopyRead = resolve;
       });
       copying = editor
         .inspect(alpha, ['a.ts'])
@@ -237,9 +218,7 @@ window.recoveryRace = {
     releasePreflight() {
       releaseCopyPreflight();
     },
-    releaseRead() {
-      releaseCopyRead();
-    },
+
     finish() {
       return copying;
     },
