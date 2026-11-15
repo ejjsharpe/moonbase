@@ -1,4 +1,4 @@
-import { Effect, FiberSet } from 'effect';
+import { Effect, Exit, Fiber, FiberSet, Scope } from 'effect';
 import type {
   LocalHostHandlers,
   ChatServiceShape,
@@ -56,6 +56,12 @@ export type ChatServerOptions = {
   admit?(): () => void;
   /** Called once a workspace connection opens; what it returns, once that closes. */
   trackWorkspaceConnection?(): () => void;
+  /**
+   * How long closing the server waits, on the Clock, for the mutations it still runs (5 s by
+   * default); past it the close goes on without them and `onCloseTimeout` is called.
+   */
+  closeMs?: number;
+  onCloseTimeout?(): void;
 };
 /** A local-mode daemon's features beyond chat: local-mode chat and control, providers, folders. */
 export const localDaemonCapabilities: readonly ChatHostCapability[] = [
@@ -121,6 +127,21 @@ export const serveChat = (
     const admit = options.admit ?? (() => () => {});
     const run = yield* FiberSet.makeRuntimePromise<never>();
     const nonces = createUpgradeNonces();
+    // The RPC servers live in a scope of their own. Closing it waits for the mutations they run,
+    // which a stuck helper could hold for ever, so the wait is bounded; anything unfinished was
+    // journalled where it runs.
+    const serving = yield* Scope.make();
+    yield* Effect.addFinalizer(() =>
+      Effect.gen(function* () {
+        const closing = yield* Effect.forkDetach(Scope.close(serving, Exit.void));
+        yield* Fiber.await(closing).pipe(
+          Effect.timeoutOrElse({
+            duration: options.closeMs ?? 5_000,
+            orElse: () => Effect.sync(() => options.onCloseTimeout?.()),
+          }),
+        );
+      }),
+    );
     const rpc = yield* serveRpc(
       {
         host: expected,
@@ -136,7 +157,7 @@ export const serveChat = (
           : {}),
       },
       { admit },
-    );
+    ).pipe(Scope.provide(serving));
     const workspace = options.workspace
       ? yield* serveWorkspaceRpc(
           { host: expected, workspace: options.workspace },
@@ -146,7 +167,7 @@ export const serveChat = (
               ? { track: options.trackWorkspaceConnection }
               : {}),
           },
-        )
+        ).pipe(Scope.provide(serving))
       : undefined;
     /** Each socket Bun upgrades: its protocol, how many it holds at most, and its connections. */
     const sockets: Record<

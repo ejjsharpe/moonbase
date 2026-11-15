@@ -343,9 +343,13 @@ test('a mutation whose connection drops or whose reply is late is Uncertain, is 
     return { ...completed, id: input.id };
   };
   files.handlers.operationStatus = async (input: { id: string }) => outcomes.get(input.id) ?? null;
-  // The daemon waits for running mutations when it stops.
+  // The daemon waits for running mutations when it stops, up to its close deadline.
   t.after(() => gates.forEach((gate) => gate.resolve()));
-  const daemon = await serveWorkspace(t, files.service);
+  let closeTimedOut = false;
+  const daemon = await serveWorkspace(t, files.service, {
+    closeMs: 5_000,
+    onCloseTimeout: () => void (closeTimedOut = true),
+  });
   const client = await remoteWorkspace(t, daemon, true);
   const { workspace, run } = client;
   // The connection drops while the daemon applies it.
@@ -373,6 +377,14 @@ test('a mutation whose connection drops or whose reply is late is Uncertain, is 
   }
   assert.deepEqual(files.interrupted, []);
   assert.equal(files.calls.filter((call) => call === 'mutate').length, 2);
+  // Stopping waits for a mutation still running only up to its close deadline, then goes on.
+  void run(Effect.flip(workspace.mutate({ ...operation, id: 'op-3' })));
+  await until(
+    async () => gates.length,
+    (count) => count === 3,
+  );
+  await advanceUntil(daemon, daemon.stop());
+  assert(closeTimedOut);
 });
 
 test('requests past the input a connection may hold in flight wait unsent on the client and are refused busy by the daemon, while status calls and watches still run', async (t) => {

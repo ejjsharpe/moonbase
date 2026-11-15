@@ -15,7 +15,7 @@ import {
 } from '@moonbase/contracts/workspace-host-errors';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
 import { RemoteWorkspaceHostLive } from '../src/remote-workspace.ts';
-import { serveChat } from '../src/server.ts';
+import { serveChat, type ChatServerOptions } from '../src/server.ts';
 import { controlledChat, host, nonce } from './controlled-chat-fixture.ts';
 import { refusingDaemon } from './served-services.ts';
 
@@ -102,6 +102,7 @@ export function controlledWorkspace() {
 export async function serveWorkspace(
   t: { after(run: () => unknown): void },
   workspace?: WorkspaceHostServiceShape,
+  options: Pick<ChatServerOptions, 'closeMs' | 'onCloseTimeout'> = {},
 ) {
   const token = nonce(),
     chat = controlledChat(),
@@ -114,7 +115,7 @@ export async function serveWorkspace(
       serveChat(
         { host, token, port },
         { chat: chat.client, daemon: refusingDaemon() },
-        workspace ? { workspace } : {},
+        { ...options, ...(workspace ? { workspace } : {}) },
       ).pipe(Effect.provideService(Scope.Scope, scope)),
     );
     port = Number(new URL(server.origin).port);
@@ -122,7 +123,8 @@ export async function serveWorkspace(
   const stop = async () => {
     const closing = scope;
     scope = undefined;
-    if (closing) await Effect.runPromise(Scope.close(closing, Exit.void));
+    // On the server's clock, so its close deadline moves with `advance`.
+    if (closing) await runtime.runPromise(Scope.close(closing, Exit.void));
   };
   await start();
   t.after(stop);
