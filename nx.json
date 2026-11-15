@@ -5,6 +5,7 @@
       "cache": true,
       "inputs": [
         "default",
+        "^default",
         "{workspaceRoot}/tsconfig.base.json",
         "{workspaceRoot}/packages/config/typescript/**/*.json"
       ]
