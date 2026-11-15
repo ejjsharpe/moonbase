@@ -37,28 +37,29 @@ export function installWindowLifecycle({
 }) {
   let documentId = randomUUID();
   const backgroundFailures: unknown[] = [];
-  /** The failures the current document has heard of, so a re-watch hears only new ones. */
-  let reportedFailures = new Set<unknown>();
+  /** Each failure's id, so a document that hears of one again takes it once. */
+  const failureIds = new Map<unknown, string>();
+  /** Failures the current document reported itself, which it needn't hear of. */
+  let documentFailures = new Set<unknown>();
   const pendingCleanup = new Set<Promise<void>>();
   const reportCleanup = (cleanup: Promise<void>) => {
     const reported = cleanup.catch((error) => {
       if (backgroundFailures.length < 8) backgroundFailures.push(error);
-      if (rendererReady && !window.isDestroyed()) reportFailures([error]);
+      if (rendererReady && !window.isDestroyed()) sendFailure(error);
       console.error('Document cleanup failed:', normalizeApplicationError(error).message);
     });
     pendingCleanup.add(reported);
     void reported.then(() => pendingCleanup.delete(reported));
   };
-  /** Tells the current document of `failures` it hasn't heard of. */
-  const reportFailures = (failures: unknown[] = backgroundFailures) => {
-    for (const error of failures) {
-      if (reportedFailures.has(error)) continue;
-      reportedFailures.add(error);
-      sendAction({
-        action: 'cleanup-error',
-        error: boundApplicationError(normalizeApplicationError(error)),
-      });
-    }
+  /** Tells the documents watching of `error`, under its id. */
+  const sendFailure = (error: unknown) => {
+    let id = failureIds.get(error);
+    if (!id) failureIds.set(error, (id = randomUUID()));
+    sendAction({
+      action: 'cleanup-error',
+      id,
+      error: boundApplicationError(normalizeApplicationError(error)),
+    });
   };
   let quit: { id: string; stage: 'preserve' | 'dispose' } | undefined,
     exiting = false,
@@ -126,7 +127,8 @@ export function installWindowLifecycle({
    */
   function markReady() {
     rendererReady = true;
-    reportFailures();
+    // Sent again to each watch, since one that ended may have missed them.
+    for (const error of backgroundFailures) if (!documentFailures.has(error)) sendFailure(error);
     if (quit) sendAction({ action: quit.stage === 'preserve' ? 'quit' : 'dispose', id: quit.id });
     else if (quitRequested) requestQuit();
   }
@@ -143,8 +145,7 @@ export function installWindowLifecycle({
           return;
         }
         if (backgroundFailures.length < 8) backgroundFailures.push(answer.cleanupError);
-        // The document reported it, so it needn't hear of it.
-        reportedFailures.add(answer.cleanupError);
+        documentFailures.add(answer.cleanupError);
       }
       if (quit.stage === 'dispose' && !answer.consent) {
         console.error('Invalid disposal answer: disposal cannot return to the live workbench.');
@@ -183,7 +184,7 @@ export function installWindowLifecycle({
   window.webContents.on('did-frame-navigate', (_event, _url, _code, _status, isMainFrame) => {
     if (!isMainFrame) return;
     documentId = randomUUID();
-    reportedFailures = new Set();
+    documentFailures = new Set();
     rendererReady = false;
     // A replacement document must prepare its own application before acknowledging Quit.
     quit = undefined;
@@ -193,7 +194,7 @@ export function installWindowLifecycle({
   window.webContents.on('render-process-gone', async (_event, details) => {
     if (terminating || exiting) return;
     documentId = randomUUID();
-    reportedFailures = new Set();
+    documentFailures = new Set();
     reportCleanup(ipc.releaseDocument());
     reportCleanup(chatBackends.releaseDocument());
     rendererReady = false;

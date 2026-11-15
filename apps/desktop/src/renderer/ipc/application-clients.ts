@@ -239,6 +239,8 @@ export function makeShellClients(runtime: DesktopRuntime, bridge: DesktopBridge)
   const { call } = makeCaller(runtime, refused);
   /** Each Quit or disposal request this document took, with its answer once it has one. */
   const quitAnswers = new Map<string, QuitAnswer | undefined>();
+  /** The cleanup failures this document heard of: main tells each watch of them all. */
+  const heardFailures = new Set<string>();
   /** Sends an answer, again while main can't be reached: the document may already be gone. */
   const sendQuitAnswer = (id: string, answer: QuitAnswer) =>
     runApplicationEffect(
@@ -281,7 +283,11 @@ export function makeShellClients(runtime: DesktopRuntime, bridge: DesktopBridge)
           Stream.retry(windowActionsRetry),
         ),
         (action) => {
-          if (action.action === 'cleanup-error') return receive(action);
+          if (action.action === 'cleanup-error') {
+            if (heardFailures.has(action.id)) return;
+            heardFailures.add(action.id);
+            return receive(action);
+          }
           if (!quitAnswers.has(action.id)) {
             quitAnswers.set(action.id, undefined);
             return receive(action);

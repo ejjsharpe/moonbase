@@ -212,11 +212,9 @@ test('a ready document hears of earlier cleanup failures, and a disposal’s own
   f.ready();
   assert.deepEqual(f.actions[0], {
     action: 'cleanup-error',
+    id: (f.actions[0] as { id: string }).id,
     error: new ApplicationError({ code: 'Persistence', message: 'Old' }),
   });
-  // A re-watch hears only failures it hasn't.
-  f.ready();
-  assert.equal(f.actions.length, 1);
   f.lifecycle.requestQuit();
   await f.ack({ id: f.last().id, consent: true });
   await f.ack({
@@ -227,7 +225,7 @@ test('a ready document hears of earlier cleanup failures, and a disposal’s own
   assert.equal(f.released.at(-1), 'exit:1');
 });
 
-test('Quit and its answer survive the actions watch’s connection ending', async () => {
+test('Quit, its answer and a cleanup failure survive the actions watch’s connection ending', async () => {
   const owner: { lifecycle?: WindowLifecycle; loseAnswer?: boolean } = {};
   let readies = 0;
   const ipc = await makeIpcFixture({
@@ -257,19 +255,28 @@ test('Quit and its answer survive the actions watch’s connection ending', asyn
     await waitFor(() => readies === 1);
     // The connection ends with the document still alive, as a ping timeout would end it.
     ipc.closeConnections();
+    f.lifecycle.reportCleanup(
+      Promise.reject(new ApplicationError({ code: 'Persistence', message: 'Between watches' })),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
     f.lifecycle.requestQuit();
-    await waitFor(() => received.length > 0);
+    await waitFor(() => received.length > 1);
     assert.equal(readies, 2);
     const quit = f.last().id;
-    assert.deepEqual(received, [{ action: 'quit', id: quit }]);
+    assert.deepEqual(
+      received.map((action) => action.action),
+      ['cleanup-error', 'quit'],
+    );
     owner.loseAnswer = true;
     await shell.answerQuit(quit, true);
     // Main asks again on the next watch, and the document answers again without asking the user.
     await waitFor(() => received.some((action) => action.action === 'dispose'));
     assert.equal(owner.loseAnswer, false);
+    // Each watch hears of the failure again, and the document takes it once.
+    assert.equal(readies, 3);
     assert.deepEqual(
       received.map((action) => action.action),
-      ['quit', 'dispose'],
+      ['cleanup-error', 'quit', 'dispose'],
     );
   } finally {
     await close().catch(() => {});

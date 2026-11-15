@@ -8,7 +8,11 @@ import { exact, IpcRequestIdSchema } from './ipc-limits.ts';
 /** What main asks of the window's document: to prepare Quit, to dispose, or to report a cleanup failure. */
 export const WindowActionSchema = Schema.Union([
   struct({ action: Schema.Literals(['quit', 'dispose']), id: IpcRequestIdSchema }),
-  struct({ action: Schema.Literal('cleanup-error'), error: IpcApplicationErrorSchema }),
+  struct({
+    action: Schema.Literal('cleanup-error'),
+    id: IpcRequestIdSchema,
+    error: IpcApplicationErrorSchema,
+  }),
 ]);
 export type WindowAction = typeof WindowActionSchema.Type;
 const error = Schema.Union([IpcApplicationErrorSchema, IpcInputError]);
