@@ -625,6 +625,8 @@ test('Tab switches to Find, which previews matches and opens the file at the mat
   // ⌘⇧F starts from the selected text; ⇥ goes back to Go to.
   await page.keyboard.press('ControlOrMeta+Shift+f');
   await expect(find.getByRole('combobox')).toHaveValue('value');
+  // A key pressed before the dialog has focused its field never reaches the picker.
+  await expect(find.getByRole('combobox')).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(page.getByRole('dialog', { name: 'Go to', exact: true })).toBeVisible();
 });
@@ -748,6 +750,8 @@ test('shortcuts switch an open picker, and a failed open stays on screen', async
   await page.goto('/');
   await first(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }).focus();
   await page.keyboard.press('ControlOrMeta+p');
+  // A key pressed before the dialog has focused its field never reaches the picker.
+  await expect(page.getByRole('dialog').getByRole('combobox')).toBeFocused();
   await page.keyboard.press('Tab');
   const find = page.getByRole('dialog', { name: 'Find in files', exact: true });
   await expect(find).toBeVisible();
