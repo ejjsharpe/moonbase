@@ -32,9 +32,7 @@ test('browser shell keeps dirty comparisons, cursor, scroll, Monaco undo and sco
   await page.goto('/?chat');
   await project(page).click();
   await expect(input(page)).toBeVisible();
-  expect(
-    await page.evaluate(() => ({ desktop: 'moonbase' in window, chat: 'moonbaseChat' in window })),
-  ).toEqual({ desktop: false, chat: false });
+  expect(await page.evaluate(() => 'moonbase' in window)).toBe(false);
   expect(
     await page.evaluate(() =>
       window.demo.chat.calls.filter((call) =>

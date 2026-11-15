@@ -1,19 +1,25 @@
 import { normalizeApplicationError } from '@moonbase/effect';
 import { randomUUID } from 'node:crypto';
-import type { App, BrowserWindow, Dialog, IpcMain, IpcMainEvent } from 'electron';
-import { ApplicationError } from '@moonbase/contracts/errors';
-import { decodeApplicationErrorDTO } from '@moonbase/contracts/error-schema';
-import type { EditorSession } from './editor-session.ts';
+import type { App, BrowserWindow, Dialog } from 'electron';
+import type { ApplicationError } from '@moonbase/contracts/errors';
 import type { DesktopChatBackends } from './chat/chat-backends.ts';
-import { channels, errorDTO, keys, record, requestId } from '../ipc/wire.ts';
+import { boundApplicationError } from '../ipc/ipc-errors.ts';
+import type { WindowAction } from '../ipc/window-rpcs.ts';
 
+/** What the window's document answers a `quit` or `dispose` request with. */
+export type QuitAnswer = { id: string; consent: boolean; cleanupError?: ApplicationError };
+
+/**
+ * The window's Quit handshake and document lifetime: it asks the document to prepare Quit and to
+ * dispose (`sendAction`), releases a replaced document's IPC (`ipc`) and chat sessions, and quits
+ * once every owner is released.
+ */
 export function installWindowLifecycle({
   app,
   window,
   dialog,
-  ipcMain,
-  requireTrusted,
-  editorSession,
+  sendAction,
+  ipc,
   chatBackends,
   releaseRoot,
   releaseTransport,
@@ -21,24 +27,33 @@ export function installWindowLifecycle({
   app: Pick<App, 'on' | 'quit' | 'exit'>;
   window: BrowserWindow;
   dialog: Pick<Dialog, 'showMessageBox'>;
-  ipcMain: Pick<IpcMain, 'on' | 'removeListener'>;
-  requireTrusted(event: IpcMainEvent): void;
-  editorSession: Pick<EditorSession, 'releaseDocument' | 'dispose'>;
+  /** Delivers an action to the documents watching for them. */
+  sendAction(action: WindowAction): void;
+  /** The window's IPC: a document's connections and what they hold, then all of it. */
+  ipc: { releaseDocument(): Promise<void>; dispose(): Promise<void> };
   chatBackends: Pick<DesktopChatBackends, 'getSessions' | 'releaseDocument'>;
   releaseRoot(): Promise<void>;
   releaseTransport(): void;
 }) {
   let documentId = randomUUID();
   const backgroundFailures: unknown[] = [];
+  /**
+   * The latest document cleanup failures, as sent: each watch hears of them all again, since one
+   * that ended may have missed them, and the document takes each id once.
+   */
+  const failureReports: Extract<WindowAction, { action: 'cleanup-error' }>[] = [];
   const pendingCleanup = new Set<Promise<void>>();
   const reportCleanup = (cleanup: Promise<void>) => {
     const reported = cleanup.catch((error) => {
       if (backgroundFailures.length < 8) backgroundFailures.push(error);
-      if (rendererReady && !window.isDestroyed())
-        window.webContents.send(channels.action, 'cleanup-error', randomUUID(), {
-          ...errorDTO(error),
-          message: normalizeApplicationError(error).message.slice(0, 512),
-        });
+      const report = {
+        action: 'cleanup-error' as const,
+        id: randomUUID(),
+        error: boundApplicationError(normalizeApplicationError(error)),
+      };
+      failureReports.push(report);
+      if (failureReports.length > 64) failureReports.shift();
+      if (rendererReady && !window.isDestroyed()) sendAction(report);
       console.error('Document cleanup failed:', normalizeApplicationError(error).message);
     });
     pendingCleanup.add(reported);
@@ -63,7 +78,7 @@ export function installWindowLifecycle({
     const failures: unknown[] = backgroundFailures.splice(0);
     for (const cleanup of [
       ...chatBackends.getSessions().map((session) => () => session.dispose()),
-      () => editorSession.dispose(),
+      () => ipc.dispose(),
       releaseRoot,
     ]) {
       try {
@@ -87,8 +102,6 @@ export function installWindowLifecycle({
       }
     } finally {
       exiting = true;
-      ipcMain.removeListener(channels.quit, acknowledgeQuit);
-      ipcMain.removeListener(channels.ready, markReady);
       releaseTransport();
       window.destroy();
       if (failures.length) app.exit(1);
@@ -102,60 +115,39 @@ export function installWindowLifecycle({
     if (!rendererReady) return;
     if (!quit) {
       quit = { id: randomUUID(), stage: 'preserve' };
-      window.webContents.send(channels.action, 'quit', quit.id);
+      sendAction({ action: 'quit', id: quit.id });
     }
   }
-  function markReady(event: IpcMainEvent) {
-    try {
-      requireTrusted(event);
-      rendererReady = true;
-      for (const error of backgroundFailures)
-        window.webContents.send(channels.action, 'cleanup-error', randomUUID(), {
-          ...errorDTO(error),
-          message: normalizeApplicationError(error).message.slice(0, 512),
-        });
-      if (quitRequested) requestQuit();
-    } catch (error) {
-      console.error(normalizeApplicationError(error).message);
-    }
+  /**
+   * The document watches for actions: it is ready for Quit and to hear of cleanup failures. A
+   * watch that replaced one whose connection ended may have missed the pending request, so it is
+   * asked again; the document takes each request once.
+   */
+  function markReady() {
+    rendererReady = true;
+    for (const report of failureReports) sendAction(report);
+    if (quit) sendAction({ action: quit.stage === 'preserve' ? 'quit' : 'dispose', id: quit.id });
+    else if (quitRequested) requestQuit();
   }
-  async function acknowledgeQuit(event: IpcMainEvent, value: unknown) {
-    try {
-      requireTrusted(event);
-    } catch (error) {
-      console.error(normalizeApplicationError(error).message);
-      return;
-    }
+  async function answerQuit(answer: QuitAnswer) {
     const owner = documentId,
       intent = quit;
     try {
-      const v = record(value);
-      keys(v, ['id', 'consent', 'cleanupError'], ['id', 'consent']);
-      requestId(v.id);
-      if (!quit || v.id !== quit.id) return;
-      if (typeof v.consent !== 'boolean')
-        throw new ApplicationError({ code: 'Unauthorized', message: 'No matching Quit request.' });
-      if (v.cleanupError !== undefined) {
-        if (quit.stage !== 'dispose')
-          throw new ApplicationError({
-            code: 'InvalidInput',
-            message: 'Cleanup acknowledgment requires disposal.',
-          });
-        const dto = decodeApplicationErrorDTO(v.cleanupError);
-        const error = new ApplicationError(dto);
-        if (error.message.length > 512)
-          throw new ApplicationError({
-            code: 'InvalidInput',
-            message: 'Malformed cleanup acknowledgment.',
-          });
-        if (backgroundFailures.length < 8) backgroundFailures.push(error);
+      if (!quit || answer.id !== quit.id) return;
+      if (answer.cleanupError !== undefined) {
+        if (quit.stage !== 'dispose') {
+          quit = undefined;
+          show();
+          console.error('Quit failed: a cleanup failure answers only disposal.');
+          return;
+        }
+        if (backgroundFailures.length < 8) backgroundFailures.push(answer.cleanupError);
       }
-      if (quit.stage === 'dispose' && !v.consent)
-        throw new ApplicationError({
-          code: 'InvalidInput',
-          message: 'Disposal cannot return to the live workbench.',
-        });
-      if (!v.consent) {
+      if (quit.stage === 'dispose' && !answer.consent) {
+        console.error('Invalid disposal answer: disposal cannot return to the live workbench.');
+        return;
+      }
+      if (!answer.consent) {
         quit = undefined;
         quitRequested = false;
         show();
@@ -164,7 +156,7 @@ export function installWindowLifecycle({
       // Local agents keep running in the daemon, so Quit asks nothing more of them.
       if (quit.stage === 'preserve') {
         quit = { id: randomUUID(), stage: 'dispose' };
-        window.webContents.send(channels.action, 'dispose', quit.id);
+        sendAction({ action: 'dispose', id: quit.id });
         return;
       }
       await finishQuit();
@@ -179,8 +171,6 @@ export function installWindowLifecycle({
       console.error('Quit failed:', normalizeApplicationError(error).message);
     }
   }
-  ipcMain.on(channels.ready, markReady);
-  ipcMain.on(channels.quit, acknowledgeQuit);
   window.on('close', (event) => {
     if (!exiting) {
       event.preventDefault();
@@ -193,13 +183,13 @@ export function installWindowLifecycle({
     rendererReady = false;
     // A replacement document must prepare its own application before acknowledging Quit.
     quit = undefined;
-    reportCleanup(editorSession.releaseDocument());
+    reportCleanup(ipc.releaseDocument());
     reportCleanup(chatBackends.releaseDocument());
   });
   window.webContents.on('render-process-gone', async (_event, details) => {
     if (terminating || exiting) return;
     documentId = randomUUID();
-    reportCleanup(editorSession.releaseDocument());
+    reportCleanup(ipc.releaseDocument());
     reportCleanup(chatBackends.releaseDocument());
     rendererReady = false;
     quit = undefined;
@@ -233,6 +223,13 @@ export function installWindowLifecycle({
   app.on('second-instance', show);
 
   window.once('ready-to-show', show);
-  return { show, requestQuit, reportCleanup, isQuitting: () => !!quit || terminating };
+  return {
+    show,
+    requestQuit,
+    reportCleanup,
+    markReady,
+    answerQuit,
+    isQuitting: () => !!quit || terminating,
+  };
 }
 export type WindowLifecycle = ReturnType<typeof installWindowLifecycle>;

@@ -1,3 +1,4 @@
+import { callMain } from './window-ipc-fixture.ts';
 import { expect, type Page } from '@playwright/test';
 import { fauxModel } from '../../../../test/chat/faux-model.ts';
 
@@ -22,10 +23,11 @@ export async function disconnectChat(page: Page) {
 }
 
 export async function selectRemoteChat(page: Page) {
-  const label = await page.evaluate(
-    async () =>
-      (await window.moonbaseChat.targets!()).find((target) => target.mode === 'remote')!.label,
-  );
+  const targets = await callMain(page, 'getChatTargets');
+  const label = (targets.value as { mode: string; label: string }[]).find(
+    (target) => target.mode === 'remote',
+  )?.label;
+  if (!label) throw Error('No remote chat target is configured.');
   const hosts = await openSettings(page);
   await expect(hosts.getByRole('listitem').filter({ hasText: label })).toBeVisible();
   // Already the current host, it has no Use button.
@@ -43,21 +45,14 @@ export async function createRemoteChat(page: Page, title: string) {
     page.getByRole('button', { name: 'Refresh saved chats', exact: true }),
   ).toBeEnabled();
   // The host is a daemon: the chat names its model and runs in the host's first approved root.
-  const result = await page.evaluate(
-    async ({ title, model }) => {
-      const session = await window.moonbaseChat.context('remote');
-      const [cwd] = await window.moonbaseChat.recentFolders!('remote');
-      return window.moonbaseChat.call(
-        'chat',
-        'createChat',
-        { session, requestId: crypto.randomUUID(), title, settings: { cwd, model } },
-        crypto.randomUUID(),
-        'remote',
-      );
-    },
-    { title, model: fauxModel },
-  );
-  if (!result.ok) throw Error(result.error.message);
+  const session = (await callMain(page, 'getChatContext', { backendId: 'remote' })).value;
+  const [cwd] = (await callMain(page, 'listChatFolders', { backendId: 'remote' }))
+    .value as string[];
+  const result = await callMain(page, 'createChat', {
+    backendId: 'remote',
+    input: { session, requestId: crypto.randomUUID(), title, settings: { cwd, model: fauxModel } },
+  });
+  if (!result.ok) throw Error(JSON.stringify(result.error));
   await page.getByRole('button', { name: 'Refresh saved chats', exact: true }).click();
   await (await showChat(page, title)).click();
 }

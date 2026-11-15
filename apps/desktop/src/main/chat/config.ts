@@ -10,7 +10,6 @@ import {
 import type { ChatSession } from '@moonbase/contracts/chat';
 import * as Schema from 'effect/Schema';
 import { ChatIdentifierSchema } from '@moonbase/contracts/chat-schema';
-import { invalid } from '../../ipc/chat-wire.ts';
 import { isPrivateTo } from '@moonbase/contracts/files';
 
 const configurationSchema = Schema.Struct({
@@ -51,7 +50,7 @@ export async function readConfiguration(path: string | undefined): Promise<ChatC
     try {
       v = decodeConfiguration(value);
     } catch {
-      return invalid();
+      throw new ApplicationError({ code: 'InvalidInput', message: 'Invalid chat request.' });
     }
     const p = v.profile,
       h = p.expected;

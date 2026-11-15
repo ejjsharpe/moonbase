@@ -8,12 +8,13 @@ import {
   dialog,
   ipcMain,
   Menu,
+  MessageChannelMain,
   net,
   protocol,
   session,
   shell,
 } from 'electron';
-import { Effect, ManagedRuntime } from 'effect';
+import { Cause, Effect, Exit, ManagedRuntime, PubSub, Scope } from 'effect';
 import { WorkspaceService } from '@moonbase/contracts/services';
 import { readInstallationId, WorkspaceRecoveryLive } from '@moonbase/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
@@ -21,11 +22,11 @@ import { acquireDaemonChat, createLocalDaemonClient } from './daemon/local-daemo
 import { mkdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { EditorSession } from './editor-session.ts';
-import { channels } from '../ipc/wire.ts';
+import { ApplicationError } from '@moonbase/contracts/errors';
 import { readConfiguration } from './chat/config.ts';
 import { acquireRemoteChat } from './chat/remote.ts';
-import { channels as chatChannels } from '../ipc/chat-wire.ts';
+import { toLegacyApplicationError, type DesktopIpcError } from '../ipc/ipc-errors.ts';
+import type { WindowAction } from '../ipc/window-rpcs.ts';
 import { respondTranscriptImage, transcriptImagePath } from './chat/transcript-native.ts';
 import { createNativeActions } from './native-actions.ts';
 import { createChatBackends } from './chat/chat-backends.ts';
@@ -38,12 +39,66 @@ import {
   readDaemonSession,
   restartDaemon,
 } from './daemon/local-daemon.ts';
-import { createTrustedDocumentGuard, installCommandIpc } from './ipc.ts';
-import { installWindowLifecycle } from './window-lifecycle.ts';
+import { installWindowLifecycle, type WindowLifecycle } from './window-lifecycle.ts';
+import type { IpcInterception } from './ipc/admission.ts';
+import { makeDocumentHandlers } from './ipc/document-handlers.ts';
+import { EditorApprovals } from './ipc/editor-approvals.ts';
+import { createTrustedDocumentCheck, installIpcConnect } from './ipc/ipc-connect.ts';
+import { makeIpcServer } from './ipc/ipc-server.ts';
 
 const directory = fileURLToPath(new URL('.', import.meta.url));
 /** The packaged daemon bundle's build identifier, which `scripts/build.mjs` defines. */
 declare const MOONBASE_DAEMON_BUILD: string | undefined;
+/** A request's outcome as an unpackaged test entry sees and replaces it. */
+type TestIpcReply =
+  | { ok: true; value: unknown }
+  | { ok: false; error: ApplicationError; interrupted?: boolean };
+/** An unpackaged test entry's view of each IPC request: it may observe, hold or replace it. */
+type TestIpcHook = (
+  request: { tag: string; payload: unknown },
+  proceed: () => Promise<TestIpcReply>,
+) => Promise<TestIpcReply>;
+
+/** An unpackaged test entry's view of each action main sends the document. */
+type TestWindowAction = (action: WindowAction, send: (action: WindowAction) => void) => void;
+
+/** The test entry's hook as the IPC admission's interception; a reply it keeps keeps its exit. */
+function toInterception(hook: TestIpcHook): IpcInterception {
+  const exits = new WeakMap<TestIpcReply, Exit.Exit<unknown, unknown>>();
+  const toReply = (exit: Exit.Exit<unknown, unknown>): TestIpcReply => {
+    let reply: TestIpcReply;
+    const failure = Exit.isFailure(exit) ? Cause.findErrorOption(exit.cause) : undefined;
+    if (Exit.isSuccess(exit)) reply = { ok: true, value: exit.value };
+    else if (failure?._tag === 'Some')
+      reply = { ok: false, error: toLegacyApplicationError(failure.value as DesktopIpcError) };
+    else
+      reply = {
+        ok: false,
+        error: new ApplicationError({ code: 'Cancelled', message: 'Command cancelled' }),
+        interrupted: true,
+      };
+    exits.set(reply, exit);
+    return reply;
+  };
+  return (request, handler) =>
+    Effect.flatMap(Effect.context<never>(), (context) =>
+      Effect.tryPromise({
+        try: (signal) =>
+          hook(request, () =>
+            Effect.runPromiseExitWith(context)(handler, { signal }).then(toReply),
+          ),
+        catch: normalizeApplicationError,
+      }),
+    ).pipe(
+      Effect.flatMap((reply) => {
+        const exit = exits.get(reply);
+        if (exit) return exit;
+        return reply.ok
+          ? Effect.succeed(reply.value)
+          : Effect.fail(new ApplicationError(reply.error));
+      }),
+    );
+}
 
 async function main() {
   const requestedData =
@@ -147,7 +202,6 @@ async function main() {
   );
   session.defaultSession.setPermissionCheckHandler(() => false);
 
-  const requireTrusted = createTrustedDocumentGuard(window, appURL);
   const native = createNativeActions({
     window,
     dialog,
@@ -172,16 +226,13 @@ async function main() {
         );
     },
   });
-  const editorSession = new EditorSession(
-    runtime,
-    client,
-    native,
-    (id, value) => {
-      if (!window.isDestroyed()) window.webContents.send(channels.event, id, value);
-    },
-    // Reveal in Finder applies only to files on this Mac, which are the local daemon's.
-    async () => (await readDaemonSession(daemonDirectory).catch(() => undefined))?.host.hostId,
-  );
+  const approvals = new EditorApprovals();
+  // The window lifecycle, installed below; a report before then only reaches the log.
+  const late: { lifecycle?: WindowLifecycle } = {};
+  const reportCleanup = (error: unknown) => {
+    if (late.lifecycle) late.lifecycle.reportCleanup(Promise.reject(error));
+    else console.error('Cleanup failed:', normalizeApplicationError(error).message);
+  };
   const chatBackends = createChatBackends({
     transcript: {
       writeText: async (text) => {
@@ -194,11 +245,9 @@ async function main() {
     local,
     installationId,
     requestIds: createFileRequestIds(join(userData, 'workspace-v1', 'chat-requests.json')),
-    adoptCheckout: (target) => editorSession.adoptCheckout(target),
+    adoptCheckout: (target) => approvals.adoptCheckout(target),
     remote,
-    emit: (backendId, id, result) => {
-      if (!window.isDestroyed()) window.webContents.send(chatChannels.event, id, result, backendId);
-    },
+    reportCleanup,
     pickFolder: async () => {
       const selection = await dialog.showOpenDialog(window, {
         title: 'Choose a local chat working folder',
@@ -211,7 +260,16 @@ async function main() {
   protocol.handle('moonbase', async (request) => {
     const url = new URL(request.url);
     if (url.pathname.startsWith(transcriptImagePath))
-      return respondTranscriptImage(request, csp, chatBackends.findTranscriptImage);
+      return respondTranscriptImage(request, csp, (token) => {
+        const found = chatBackends.findTranscriptImage(token);
+        // Electron's protocol API is Promise-based; the read runs on main's runtime from here.
+        return (
+          found && {
+            image: found.image,
+            read: (signal) => runApplicationEffect(runtime, found.read, { signal }),
+          }
+        );
+      });
     // Asset cache-busting queries do not grant document/IPC authority.
     const path = resolve(rendererRoot, '.' + decodeURIComponent(url.pathname));
     if (
@@ -230,27 +288,68 @@ async function main() {
       return new Response('Not found', { status: 404 });
     }
   });
-  const lifecycle = installWindowLifecycle({
+  // Built synchronously: Quit may arrive any time after the window exists, and the lifecycle
+  // below must be installed before it can.
+  const actions = runtime.runSync(PubSub.unbounded<WindowAction>());
+  const testIpc = app.isPackaged
+    ? undefined
+    : (globalThis as { moonbaseTestIpc?: TestIpcHook }).moonbaseTestIpc;
+  const ipc = runtime.runSync(
+    Scope.provide(
+      makeIpcServer(
+        makeDocumentHandlers({
+          editor: {
+            client,
+            native,
+            approvals,
+            // Reveal in Finder applies only to files on this Mac, which are the local daemon's.
+            localHostId: async () =>
+              (await readDaemonSession(daemonDirectory).catch(() => undefined))?.host.hostId,
+            reportCleanup,
+          },
+          chat: {
+            backends: chatBackends,
+            isQuitting: () => late.lifecycle?.isQuitting() ?? false,
+            reportCleanup,
+          },
+          actions,
+          lifecycle: () => late.lifecycle!,
+          ...(testIpc ? { intercept: toInterception(testIpc) } : {}),
+        }),
+      ),
+      Scope.forkUnsafe(runtime.scope, 'parallel'),
+    ),
+  );
+  const uninstallIpcConnect = installIpcConnect({
+    ipcMain,
+    isTrusted: createTrustedDocumentCheck(window, appURL),
+    connect: ipc.connect,
+    openChannel: () => new MessageChannelMain(),
+  });
+  const lifecycle = (late.lifecycle = installWindowLifecycle({
     app,
     window,
     dialog,
-    ipcMain,
-    requireTrusted,
-    editorSession,
+    sendAction: (action) => {
+      const publish = (next: WindowAction) => void PubSub.publishUnsafe(actions, next);
+      // An unpackaged test entry may hold or reorder what main asks of the document.
+      const test = app.isPackaged
+        ? undefined
+        : (globalThis as { moonbaseTestWindowAction?: TestWindowAction }).moonbaseTestWindowAction;
+      if (test) test(action, publish);
+      else publish(action);
+    },
+    ipc: {
+      releaseDocument: () => runApplicationEffect(runtime, ipc.releaseDocument),
+      dispose: () => runApplicationEffect(runtime, ipc.dispose),
+    },
     chatBackends,
     releaseRoot: () => runApplicationEffect(runtime, runtime.disposeEffect),
     releaseTransport: () => {
-      uninstallCommandIpc();
+      uninstallIpcConnect();
       protocol.unhandle('moonbase');
     },
-  });
-  const uninstallCommandIpc = installCommandIpc({
-    ipcMain,
-    requireTrusted,
-    editorSession,
-    chatBackends,
-    lifecycle,
-  });
+  }));
   const { show, requestQuit } = lifecycle;
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([

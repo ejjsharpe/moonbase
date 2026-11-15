@@ -1,4 +1,3 @@
-import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import type { ChatClient, ChatSnapshot, ChatTranscriptSelection } from '@moonbase/contracts/chat';
@@ -9,15 +8,13 @@ import {
 } from '@moonbase/application/chat';
 import { parseTranscriptMarkdown } from '../../ipc/transcript-markdown.ts';
 import {
-  fields,
-  invalid,
   maximumTranscriptImageBytes,
-  record,
   type TranscriptCopy,
   type TranscriptImage,
-} from '../../ipc/chat-wire.ts';
-import type { IpcRequest } from '../ipc-lifetime.ts';
+} from '../../ipc/chat-rpcs.ts';
 
+/** One native read's cancellation, and where a cleanup failure goes once no reply can carry it. */
+export type NativeRequest = { signal: AbortSignal; reportCleanup(error: unknown): void };
 export type NativeTranscriptActions = {
   writeText(text: string): Promise<void>;
   openExternal(url: string): Promise<void>;
@@ -33,64 +30,11 @@ const makeSourceChangedError = () =>
     code: 'Conflict',
     message: 'Transcript source changed. Reload the content and try Copy again.',
   });
-export function decodeTranscriptCopy(input: unknown): TranscriptCopy {
-  const value = record(input);
-  fields(value, ['source', 'selection', 'code'], ['source']);
-  const decoded = decodeChatInput('getChatTranscriptContent', {
-    source: value.source,
-    ...(value.selection !== undefined ? { selection: value.selection } : {}),
-  });
-  if (value.code !== undefined) {
-    const code = record(value.code);
-    fields(code, ['start']);
-    if (
-      !decoded.selection ||
-      !Number.isSafeInteger(code.start) ||
-      (code.start as number) < 0 ||
-      (code.start as number) >= decoded.selection.bytes
-    )
-      invalid();
-  }
-  return { ...decoded, ...(value.code ? { code: value.code as TranscriptCopy['code'] } : {}) };
-}
-export function decodeTranscriptLink(input: unknown) {
-  const value = record(input);
-  fields(value, ['url']);
-  if (
-    typeof value.url !== 'string' ||
-    value.url.length > 8192 ||
-    [...(value.url as string)].some(
-      (char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127,
-    )
-  )
-    invalid();
-  let url: URL;
-  try {
-    url = new URL(value.url as string);
-  } catch {
-    return invalid();
-  }
-  if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password)
-    invalid();
-  return url.href;
-}
-
 export const transcriptImagePath = '/transcript-image/';
 const imageSignatures: Record<TranscriptImage['mimeType'], number[]> = {
   'image/png': [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
   'image/jpeg': [0xff, 0xd8, 0xff],
 };
-export function decodeTranscriptImage(input: unknown): TranscriptImage {
-  const value = record(input);
-  fields(value, ['source', 'selection', 'mimeType']);
-  if (typeof value.mimeType !== 'string' || !Object.hasOwn(imageSignatures, value.mimeType))
-    invalid();
-  const { source, selection } = decodeChatInput('getChatTranscriptContent', {
-    source: value.source,
-    selection: value.selection,
-  });
-  return { source, selection: selection!, mimeType: value.mimeType as TranscriptImage['mimeType'] };
-}
 export type TranscriptImageReader = {
   image: TranscriptImage;
   read(signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>>;
@@ -137,7 +81,7 @@ export async function respondTranscriptImage(
 async function readTranscript<T>(
   chat: ChatClient,
   input: Pick<TranscriptCopy, 'source' | 'selection'>,
-  request: IpcRequest,
+  request: NativeRequest,
   encoding: 'utf8' | 'base64',
   limit: { bytes: number; message: string },
   finish: (parts: string[][], check: () => void) => Promise<T>,
@@ -162,7 +106,7 @@ async function readTranscript<T>(
     return promise;
   };
   const check = () => {
-    if (!request.isLive() || request.signal.aborted)
+    if (request.signal.aborted)
       throw new ApplicationError({ code: 'Cancelled', message: 'Transcript read cancelled.' });
     if (observationError) throw observationError;
     if (
@@ -190,7 +134,7 @@ async function readTranscript<T>(
   const aborted = () => ready.resolve();
   request.signal.addEventListener('abort', aborted, { once: true });
   if (request.signal.aborted) ready.resolve();
-  try {
+  const run = async () => {
     if (close) await ready.promise;
     check();
     // The iterator validates every manifest/content echo, chunk and continuation independently of UI retention.
@@ -263,27 +207,27 @@ async function readTranscript<T>(
       }
     check();
     return await finish(parts, check);
-  } finally {
-    request.signal.removeEventListener('abort', aborted);
-    const [, observation] = await Promise.allSettled([
-      Promise.allSettled(pending),
-      Promise.resolve().then(() => close?.()),
-    ]);
-    if (observation.status === 'rejected') {
-      // Retain failed cleanup at the captured document even when the Copy reply is lost.
-      const release = await request.retainDocumentRelease(async () => {
-        throw observation.reason;
-      });
-      await release();
-    }
+  };
+  const [outcome] = await Promise.allSettled([run()]);
+  request.signal.removeEventListener('abort', aborted);
+  const [, observation] = await Promise.allSettled([
+    Promise.allSettled(pending),
+    Promise.resolve().then(() => close?.()),
+  ]);
+  if (observation.status === 'rejected') {
+    // Report failed cleanup even when the Copy reply is lost, and fail the Copy with it.
+    request.reportCleanup(observation.reason);
+    throw observation.reason;
   }
+  if (outcome.status === 'rejected') throw outcome.reason;
+  return outcome.value;
 }
 
 /** Main-only Copy; the request owns observation and actual IO settlement. */
 export function copyTranscript(
   chat: ChatClient,
   input: TranscriptCopy,
-  request: IpcRequest,
+  request: NativeRequest,
   native: NativeTranscriptActions,
 ) {
   const { code } = input;
@@ -321,7 +265,7 @@ export function copyTranscript(
       });
     }
     // Await the OS result; a failed write must never become a success notification.
-    if (!request.isLive() || request.signal.aborted)
+    if (request.signal.aborted)
       throw new ApplicationError({
         code: 'Cancelled',
         message: 'Copy was cancelled after the clipboard write began.',
@@ -329,7 +273,11 @@ export function copyTranscript(
   });
 }
 
-export function readTranscriptImage(chat: ChatClient, image: TranscriptImage, request: IpcRequest) {
+export function readTranscriptImage(
+  chat: ChatClient,
+  image: TranscriptImage,
+  request: NativeRequest,
+) {
   const limit = {
     bytes: maximumTranscriptImageBytes,
     message: 'Stored image exceeds the 4 MiB preview limit.',

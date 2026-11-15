@@ -6,6 +6,7 @@ import {
   type Page,
 } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
+import { callMain } from '../fixtures/window-ipc-fixture.ts';
 import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -148,29 +149,22 @@ test('local chat runs in the daemon: setup, picker folders, tools, @ search; Qui
     // The app started the profile's daemon; the renderer knows only its public identity.
     const pid = (await readDaemonPid(profile.daemon))!;
     expect(isAlive(pid)).toBe(true);
-    const context = await page.evaluate(() => window.moonbaseChat.context('local'));
+    const context = (await callMain(page, 'getChatContext', { backendId: 'local' })).value;
     const identity = JSON.parse(await readFile(join(profile.daemon, 'identity.json'), 'utf8'));
     expect(context).toEqual(identity);
     // A renderer-chosen folder gains no authority.
-    const unauthorized = await page.evaluate(
-      async (context) =>
-        window.moonbaseChat.call(
-          'chat',
-          'createChat',
-          {
-            session: context,
-            requestId: 'forged',
-            title: 'No approval',
-            settings: {
-              cwd: '/private/tmp',
-              model: { provider: 'openai-api-key', modelId: 'openai-api-key-faux' },
-            },
-          },
-          crypto.randomUUID(),
-          'local',
-        ),
-      context,
-    );
+    const unauthorized = await callMain(page, 'createChat', {
+      backendId: 'local',
+      input: {
+        session: context,
+        requestId: 'forged',
+        title: 'No approval',
+        settings: {
+          cwd: '/private/tmp',
+          model: { provider: 'openai-api-key', modelId: 'openai-api-key-faux' },
+        },
+      },
+    });
     expect(unauthorized).toMatchObject({ ok: false, error: { code: 'Unauthorized' } });
     await addProviderKey(page, 'sk-controlled-private-key');
     for (const [index, folder] of [first, second].entries()) {
@@ -236,7 +230,7 @@ test('local chat runs in the daemon: setup, picker folders, tools, @ search; Qui
     await (await showChat(page, /Keep working after Quit/)).click();
     await expect(page.getByText('Long task finished after Quit', { exact: true })).toBeVisible();
     expect(await readDaemonPid(profile.daemon)).toBe(pid);
-    expect(await page.evaluate(() => window.moonbaseChat.context('local'))).toEqual(context);
+    expect((await callMain(page, 'getChatContext', { backendId: 'local' })).value).toEqual(context);
     await showChat(page, /Local conversation 0/);
     await showChat(page, /Local conversation 1/);
     const saved = await page.evaluate(() => localStorage.getItem('moonbase.chat.local.v1'));
@@ -440,28 +434,15 @@ test('folder authority: a chat without a project becomes one, and an editor chec
     await page.getByLabel('Message', { exact: true }).fill('Plan a trip');
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     await expect(page.getByText('Own folder reply', { exact: true })).toBeVisible();
-    const own = await page.evaluate(async () => {
-      const session = await window.moonbaseChat.context('local');
-      const reply = await window.moonbaseChat.call(
-        'chat',
-        'listChats',
-        { session },
-        crypto.randomUUID(),
-        'local',
-      );
-      return (reply as { value: { conversations: { cwd: string }[] } }).value.conversations[0].cwd;
-    });
+    const session = (await callMain(page, 'getChatContext', { backendId: 'local' })).value;
+    const listed = await callMain(page, 'listChats', { backendId: 'local', input: { session } });
+    const own = (listed.value as { conversations: { cwd: string }[] }).conversations[0]!.cwd;
     expect(own.startsWith(join(profile.daemon, 'chats') + '/')).toBe(true);
     await page.getByRole('button', { name: 'Turn into project', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Turn into project', exact: true })).toBeHidden();
     // Only the chat's own folder can become a project; a forged one is refused by the daemon.
-    const forged = await page.evaluate(() =>
-      window.moonbaseChat.turnIntoProject!('missing-chat').then(
-        () => 'opened',
-        (error: Error) => error.message,
-      ),
-    );
-    expect(forged).not.toBe('opened');
+    const forged = await callMain(page, 'turnChatIntoProject', { conversationId: 'missing-chat' });
+    expect(forged.ok).toBe(false);
     // A checkout the editor opened is a folder a chat may use, without the picker.
     await pickWith(app, repository);
     await page.getByRole('button', { name: 'Open checkout', exact: true }).click();

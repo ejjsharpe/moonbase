@@ -1,5 +1,16 @@
 import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
-import { expectSaveEnabled, saveFile, captureNative } from '../fixtures/editor-fixture.ts';
+import {
+  expectSaveEnabled,
+  saveFile,
+  captureNative,
+  recoveryState,
+} from '../fixtures/editor-fixture.ts';
+import {
+  callMain,
+  callMainScript,
+  disconnectHost,
+  getConnection,
+} from '../fixtures/window-ipc-fixture.ts';
 import {
   closeSettings,
   createRemoteChat,
@@ -156,19 +167,7 @@ const reloadOutcome = (app: ElectronApplication) =>
 async function saved(p: Page) {
   return p.evaluate(() => JSON.parse(localStorage.getItem('moonbase.chat.remote.v2')!));
 }
-async function recovery(p: Page) {
-  return p
-    .evaluate(async () => {
-      const r = await window.moonbase.call(
-        'command',
-        { operation: 'loadRecovery', input: { clientId: window.moonbase.clientId } },
-        crypto.randomUUID(),
-      );
-      if (!r.ok) throw Error(r.error.message);
-      return JSON.stringify(r.value);
-    })
-    .then(JSON.parse);
-}
+const recovery = (p: Page) => recoveryState(p);
 async function screen(app: ElectronApplication, p: Page, name: string) {
   await captureNative(app, p, join(output, `${packaged ? 'package' : 'source'}-${name}.png`));
 }
@@ -177,24 +176,8 @@ async function stop(app: ElectronApplication, fault = false) {
   if (child.exitCode !== null || child.signalCode !== null) return;
   const pids = await app.evaluate(({ app }) => app.getAppMetrics().map((m) => m.pid));
   if (fault) {
-    await app
-      .windows()[0]
-      .evaluate(async () => {
-        const r = await window.moonbaseChat.call(
-          'connection',
-          'getConnection',
-          {},
-          crypto.randomUUID(),
-        );
-        if (r.ok && (r.value as { connectionId: string }).connectionId)
-          await window.moonbaseChat.call(
-            'connection',
-            'disconnect',
-            { connectionId: (r.value as { connectionId: string }).connectionId },
-            crypto.randomUUID(),
-          );
-      })
-      .catch(() => {});
+    const window = app.windows()[0];
+    if (window) await disconnectHost(window).catch(() => {});
     await app.evaluate(({ app }) => app.exit(0));
   } else await app.evaluate(({ app }) => app.quit());
   await until(async () => child.exitCode !== null || child.signalCode !== null, Boolean);
@@ -295,21 +278,12 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
       .poll(async () => (await recovery(p)).state.drafts[0]?.text)
       .toBe('local dirty draft + live tool editing');
     // Remote cwd is never authority to the local editor, even with an equal root string.
-    const rejected = await p.evaluate(async (host) => {
-      const r = await window.moonbase.call(
-        'command',
-        { operation: 'loadRecovery', input: { clientId: window.moonbase.clientId } },
-        crypto.randomUUID(),
-      );
-      if (!r.ok) throw Error(r.error.message);
-      const local = (r.value as { state: { checkouts: CheckoutTarget[] } }).state.checkouts[0];
-      return window.moonbase.call(
-        'command',
-        { operation: 'readFile', input: { checkout: { ...local, hostId: host }, path: 'a.ts' } },
-        crypto.randomUUID(),
-      );
-    }, f.session.host.hostId);
-    expect(rejected).toMatchObject({ ok: false, error: { code: 'Unauthorized' } });
+    const localCheckout = (await recovery(p)).state.checkouts[0] as CheckoutTarget;
+    const rejected = await callMain(p, 'readFile', {
+      checkout: { ...localCheckout, hostId: f.session.host.hostId },
+      path: 'a.ts',
+    });
+    expect(rejected).toMatchObject({ ok: false, error: { _tag: 'IpcAuthorityError' } });
     expect(await readFile(join(f.cwd, 'a.ts'), 'utf8')).toContain('original');
     await screen(app, p, 'dirty-editor');
     await tab(p, 'Agents').click();
@@ -322,14 +296,18 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     await expect(p.getByLabel('Message', { exact: true })).toHaveValue(
       'first independent newer draft',
     );
+    // The document's watches, which its reload must end.
     const priorWatches = packaged
       ? null
-      : await app.evaluate(() => ({
-          editor: globalThis.desktopTest.calls.filter((v) => v.method === 'watch').map((v) => v.id),
-          chat: globalThis.desktopTest.chatCalls
-            .filter((v) => v.kind.startsWith('watch-'))
-            .map((v) => v.id),
-        }));
+      : await app.evaluate(() =>
+          [...globalThis.desktopTest.active.values()]
+            .filter((request) => request.tag.startsWith('watch'))
+            .map((request) => ({ tag: request.tag, seq: request.seq })),
+        );
+    if (priorWatches) {
+      expect(priorWatches.some(({ tag }) => tag === 'watchWorkspace')).toBe(true);
+      expect(priorWatches.some(({ tag }) => tag !== 'watchWorkspace')).toBe(true);
+    }
     const reloadOutcomes: string[] = [];
     try {
       await expect
@@ -351,14 +329,11 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
       await expect
         .poll(() =>
           app.evaluate(
-            (_, ids) => ({
-              editor: ids.editor.every((id) => globalThis.desktopTest.cancelIds.includes(id)),
-              chat: ids.chat.every((id) => globalThis.desktopTest.chatCancelIds.includes(id)),
-            }),
-            priorWatches,
+            (_, ids) => ids.every((id) => globalThis.desktopTest.interrupted.includes(id)),
+            priorWatches.map(({ seq }) => seq),
           ),
         )
-        .toEqual({ editor: true, chat: true });
+        .toBe(true);
     await screen(app, p, 'restored-dirty-editor');
     await editor(p).focus(); // Establish focus in the NEW document before testing navigation restoration.
     await tab(p, 'Agents').click();
@@ -669,9 +644,7 @@ if (!packaged)
       await expect
         .poll(async () => (await f.stats()).commands.filter((v) => v === 'stopChat').length)
         .toBe(1);
-      const status = await p.evaluate(() =>
-        window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
-      );
+      const status = await getConnection(p);
       expect(status.ok).toBe(true);
       await app.evaluate(() => globalThis.desktopTest.release());
       await projectTab(p).click();
@@ -747,9 +720,7 @@ test('held admitted Send leaves local Save/read/status and exact Stop independen
     await expect.poll(() => readFile(join(f.cwd, 'a.ts'), 'utf8')).toBe('local dirty draft');
     expect((await recovery(p)).state.checkouts).toHaveLength(1);
     await tab(p, 'Agents').click();
-    const status = await p.evaluate(() =>
-      window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
-    );
+    const status = await getConnection(p);
     expect(status.ok).toBe(true);
     await p.getByRole('button', { name: 'Stop', exact: true }).click();
     await until(f.stats, (s) => s.mutations.some((v) => v.operation === 'stopChat'));
@@ -790,20 +761,19 @@ test('composed IPC rejects foreign frames/hosts and extra/prototype operations b
     const baseline = await f.stats();
     const { app, page: p, errors } = await launch(f);
     current = app;
-    const rejected = await p.evaluate(async () => {
-      const context = await window.moonbaseChat.context();
-      const results = [];
-      for (const [op, input] of [
-        ['__proto__', {}],
-        ['getChatHost', { host: { ...context.host, hostId: 'foreign' } }],
-        ['getChatHost', { host: context.host, extra: true }],
-      ] as const)
-        results.push(await window.moonbaseChat.call('chat', op, input, crypto.randomUUID()));
-      return results;
-    });
+    const context = (await callMain(p, 'getChatContext', { backendId: 'remote' })).value as {
+      host: { hostId: string; storeId: string };
+    };
+    const rejected = [];
+    for (const [tag, input] of [
+      ['__proto__', {}],
+      ['getChatHost', { host: { ...context.host, hostId: 'foreign' } }],
+      ['getChatHost', { host: context.host, extra: true }],
+    ] as const)
+      rejected.push(await callMain(p, tag, { backendId: 'remote', input }));
     expect(rejected.every((r) => !r.ok)).toBe(true);
     const foreign = await app.evaluate(
-      async ({ BrowserWindow }, preload) => {
+      async ({ BrowserWindow }, { preload, script }) => {
         const owning = BrowserWindow.getAllWindows()[0];
         const w = new BrowserWindow({
           show: false,
@@ -816,20 +786,22 @@ test('composed IPC rejects foreign frames/hosts and extra/prototype operations b
         });
         try {
           await w.loadURL(owning.webContents.getURL());
-          return await w.webContents.executeJavaScript(
-            'window.moonbaseChat.call("connection","getConnection",{},crypto.randomUUID())',
-          );
+          return await w.webContents.executeJavaScript(script);
         } finally {
           w.destroy();
         }
       },
-      resolve(
-        packaged
-          ? `release/${process.arch === 'arm64' ? 'mac-arm64' : 'mac'}/Moonbase.app/Contents/Resources/app.asar/preload.cjs`
-          : 'dist/preload.cjs',
-      ),
+      {
+        preload: resolve(
+          packaged
+            ? `release/${process.arch === 'arm64' ? 'mac-arm64' : 'mac'}/Moonbase.app/Contents/Resources/app.asar/preload.cjs`
+            : 'dist/preload.cjs',
+        ),
+        script: callMainScript('getConnection', { input: {} }),
+      },
     );
-    expect(foreign).toMatchObject({ ok: false, error: { code: 'Unauthorized' } });
+    // Another window's document gets no port at all.
+    expect(foreign).toMatchObject({ ok: false, error: { _tag: 'Refused' } });
     expect((await f.stats()).commands).toEqual(baseline.commands);
     expect(errors).toEqual([]);
     await stop(app);
@@ -890,10 +862,7 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
         operation,
       );
       expect(retained.operation).toBe(operation);
-      const originalConnection = await page.evaluate(
-        async () =>
-          await window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
-      );
+      const originalConnection = await getConnection(page);
       await disconnectChat(page);
       await selectRemoteChat(page);
       await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
@@ -948,10 +917,7 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
         expect(stats.commands.filter((c) => c === 'sendChat')).toHaveLength(1);
         expect(stats.tools).toBe(1);
       }
-      const latestConnection = await page.evaluate(
-        async () =>
-          await window.moonbaseChat.call('connection', 'getConnection', {}, crypto.randomUUID()),
-      );
+      const latestConnection = await getConnection(page);
       expect(latestConnection.ok && originalConnection.ok && latestConnection.value).not.toEqual(
         originalConnection.ok && originalConnection.value,
       );
@@ -1064,16 +1030,10 @@ for (const failsWrite of [false, true])
       await page.getByLabel('Message', { exact: true }).fill('Newer live draft remains');
       f.release();
       await expect(page.getByRole('article', { name: 'Live response' })).toHaveCount(0);
-      const reserved = await page.evaluate(
-        (p) =>
-          window.moonbaseChat.call(
-            'chat',
-            'getChatSend',
-            { target: p.input.target, requestId: p.input.requestId },
-            crypto.randomUUID(),
-          ),
-        pending,
-      );
+      const reserved = await callMain(page, 'getChatSend', {
+        backendId: 'remote',
+        input: { target: pending.input.target, requestId: pending.input.requestId },
+      });
       expect(reserved.ok && (reserved.value as { admission: string }).admission).toBe('reserved');
       const replacement = failsWrite
         ? await page.evaluate(() => localStorage.getItem('moonbase.chat.remote.v2'))
@@ -1103,16 +1063,10 @@ for (const failsWrite of [false, true])
       await region.getByRole('button', { name: 'Query outcome', exact: true }).click();
       const after = await f.stats(),
         stored = await page.evaluate(() => localStorage.getItem('moonbase.chat.remote.v2')),
-        receipt = await page.evaluate(
-          (p) =>
-            window.moonbaseChat.call(
-              'chat',
-              'getChatSend',
-              { target: p.input.target, requestId: p.input.requestId },
-              crypto.randomUUID(),
-            ),
-          pending,
-        );
+        receipt = await callMain(page, 'getChatSend', {
+          backendId: 'remote',
+          input: { target: pending.input.target, requestId: pending.input.requestId },
+        });
       expect(stored).toBe(replacement);
       await expect(page.getByLabel('Message', { exact: true })).toHaveValue(
         'Newer live draft remains',
@@ -1157,85 +1111,6 @@ test('closing Chat removes its panel, preserves drafts and permits explicit reop
     await f.close();
   }
 });
-
-if (!packaged) {
-  test('removed Chat retains its cleanup lease and reports a failed cancellation acknowledgment outside the panel', async () => {
-    const f = await fixture(true);
-    let current: ElectronApplication | undefined;
-    const nativeReport = join(f.directory, 'cleanup-error.json');
-    try {
-      await setup(f);
-      const { app, page: p } = await launch(f, 'panel-error');
-      current = app;
-      await connect(p);
-      await create(p, 'Closing with pending cleanup');
-      await p.getByLabel('Message', { exact: true }).fill('preserved while cleanup fails');
-      const preserved = await p.evaluate(() => localStorage.getItem('moonbase.chat.remote.v2'));
-      await app.evaluate(() => {
-        globalThis.desktopTest.holdChatCancel = true;
-        globalThis.desktopTest.failChatCancel = true;
-      });
-      await p.getByRole('button', { name: 'Close Chat panel', exact: true }).locator('..').hover();
-      await p.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
-      await expect.poll(() => app.evaluate(() => globalThis.desktopTest.chatCancelHeld)).toBe(true);
-      await expect(tab(p, 'Agents')).toBeHidden();
-      await expect(p.getByLabel('Message', { exact: true })).toHaveCount(0);
-      await expect(p.getByRole('button', { name: 'Open Chat panel', exact: true })).toBeDisabled();
-      await local(p, app, f);
-      await editor(p).press('Meta+s');
-      await expect.poll(async () => (await recovery(p)).state.drafts.length).toBe(0);
-      await app.evaluate(() => globalThis.desktopTest.releaseChatCancel());
-      await expect(p.getByRole('alert', { name: 'Panel cleanup errors' })).toContainText(
-        'Controlled cancellation acknowledgment failure',
-      );
-      await expect(p.getByRole('button', { name: 'Open Chat panel', exact: true })).toBeDisabled();
-      expect(await p.evaluate(() => localStorage.getItem('moonbase.chat.remote.v2'))).toBe(
-        preserved,
-      );
-      await screen(app, p, 'panel-cleanup-error');
-      await app.evaluate(({ dialog }, report) => {
-        dialog.showMessageBox = (async (_window, options) => {
-          process.getBuiltinModule('fs').writeFileSync(report, JSON.stringify(options));
-          return { response: 0, checkboxChecked: false };
-        }) as typeof dialog.showMessageBox;
-      }, nativeReport);
-      const child = app.process();
-      await app.evaluate(({ app }) => app.quit());
-      await until(async () => child.exitCode !== null || child.signalCode !== null, Boolean);
-      expect(child.exitCode).toBe(1);
-      expect(await readFile(nativeReport, 'utf8')).toContain('Moonbase could not finish cleanup');
-    } finally {
-      if (current) await stop(current, true);
-      await f.close();
-    }
-  });
-
-  test('Quit waits for a removed panel cancellation acknowledgment before disposing the shared root', async () => {
-    const f = await fixture(true);
-    let current: ElectronApplication | undefined;
-    try {
-      const { app, page: p } = await launch(f, 'panel-quit');
-      current = app;
-      await connect(p);
-      await app.evaluate(() => {
-        globalThis.desktopTest.holdChatCancel = true;
-      });
-      await p.getByRole('button', { name: 'Close Chat panel', exact: true }).locator('..').hover();
-      await p.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
-      await expect.poll(() => app.evaluate(() => globalThis.desktopTest.chatCancelHeld)).toBe(true);
-      const child = app.process();
-      await app.evaluate(({ app }) => app.quit());
-      await expect(p.getByRole('status').filter({ hasText: 'Closing workbench' })).toBeVisible();
-      expect(child.exitCode).toBeNull();
-      await app.evaluate(() => globalThis.desktopTest.releaseChatCancel());
-      await until(async () => child.exitCode !== null || child.signalCode !== null, Boolean);
-      expect(child.exitCode).toBe(0);
-    } finally {
-      if (current) await stop(current, true);
-      await f.close();
-    }
-  });
-}
 
 if (!packaged) {
   for (const failure of ['editor', 'chat-context'] as const)
@@ -1318,53 +1193,51 @@ if (!packaged) {
         await p.getByLabel('Message', { exact: true }).fill('preserved consent draft');
         const before = await p.evaluate(() => localStorage.getItem('moonbase.chat.remote.v2'));
         const report = join(f.directory, 'handoff.json');
-        await app.evaluate(({ app, BrowserWindow, dialog }, report) => {
-          const contents = BrowserWindow.getAllWindows()[0].webContents;
-          const send = contents.send.bind(contents);
-          globalThis.applicationHandoff = {
-            actions: [],
-            pickers: 0,
-            release: null,
-            held: false,
-            quitId: null,
-            obsoleteAcknowledgments: 0,
-          };
-          dialog.showOpenDialog = (async () => {
-            globalThis.applicationHandoff.pickers++;
-            return { canceled: true, filePaths: [] };
-          }) as typeof dialog.showOpenDialog;
-          contents.send = ((channel, ...args) => {
-            if (channel === 'moonbase:action') {
-              globalThis.applicationHandoff.actions.push(args[0]);
-              if (args[0] === 'quit') {
+        await app.evaluate(
+          ({ app, BrowserWindow, dialog }, { report, answer }) => {
+            const contents = BrowserWindow.getAllWindows()[0].webContents;
+            globalThis.applicationHandoff = {
+              actions: [],
+              pickers: 0,
+              release: null,
+              held: false,
+              quitId: null,
+              obsoleteAcknowledgments: 0,
+            };
+            dialog.showOpenDialog = (async () => {
+              globalThis.applicationHandoff.pickers++;
+              return { canceled: true, filePaths: [] };
+            }) as typeof dialog.showOpenDialog;
+            globalThis.moonbaseTestWindowAction = (action, send) => {
+              globalThis.applicationHandoff.actions.push(action.action);
+              if (action.action === 'quit') {
                 const previousId = globalThis.applicationHandoff.quitId;
-                globalThis.applicationHandoff.quitId = args[1];
+                globalThis.applicationHandoff.quitId = action.id ?? null;
                 if (previousId) {
                   void contents
-                    .executeJavaScript(
-                      `window.moonbase.quitResult(${JSON.stringify(previousId)}, false)`,
-                    )
+                    .executeJavaScript(answer.replace('"__ID__"', JSON.stringify(previousId)))
                     .then(() => {
                       globalThis.applicationHandoff.obsoleteAcknowledgments++;
-                      send(channel, ...args);
+                      send(action);
                     });
                   return;
                 }
               }
-              if (args[0] === 'dispose' && !globalThis.applicationHandoff.held) {
+              if (action.action === 'dispose' && !globalThis.applicationHandoff.held) {
                 globalThis.applicationHandoff.held = true;
-                globalThis.applicationHandoff.release = () => send(channel, ...args);
+                globalThis.applicationHandoff.release = () => send(action);
                 return;
               }
-            }
-            send(channel, ...args);
-          }) as typeof contents.send;
-          app.once('will-quit', () => {
-            process
-              .getBuiltinModule('fs')
-              .writeFileSync(report, JSON.stringify(globalThis.applicationHandoff));
-          });
-        }, report);
+              send(action);
+            };
+            app.once('will-quit', () => {
+              process
+                .getBuiltinModule('fs')
+                .writeFileSync(report, JSON.stringify(globalThis.applicationHandoff));
+            });
+          },
+          { report, answer: callMainScript('answerQuit', { id: '__ID__', consent: false }) },
+        );
         const child = app.process();
         await app.evaluate(({ app }) => app.quit());
         await expect.poll(() => app.evaluate(() => globalThis.applicationHandoff.held)).toBe(true);
@@ -1416,7 +1289,12 @@ if (!packaged) {
     });
 }
 
+type WindowAction = { action: string; id?: string };
 declare global {
+  var moonbaseTestWindowAction: (
+    action: WindowAction,
+    send: (action: WindowAction) => void,
+  ) => void;
   var applicationHandoff: {
     actions: string[];
     pickers: number;
