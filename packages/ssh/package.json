@@ -10,7 +10,9 @@
     "build": "tsc --noEmit -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint .",
-    "test": "node --experimental-strip-types --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} test/*.test.ts"
+    "test": "node --experimental-strip-types --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} test/*.test.ts test/macos/*.test.ts",
+    "test:linux": "node --experimental-strip-types --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} test/*.test.ts",
+    "test:macos": "node --experimental-strip-types --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} test/macos/*.test.ts"
   },
   "dependencies": {
     "effect": "4.1.0",
@@ -19,5 +21,10 @@
   },
   "devDependencies": {
     "@moonbase/application": "workspace:*"
+  },
+  "nx": {
+    "tags": [
+      "macos-tests"
+    ]
   }
 }
