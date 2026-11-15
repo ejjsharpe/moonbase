@@ -662,7 +662,6 @@ if (!packaged)
       await app.evaluate(({ app }) => app.quit());
       await p.getByRole('dialog').getByRole('button', { name: 'Discard', exact: true }).click();
       await expect.poll(() => app.evaluate(() => globalThis.desktopTest.fault)).toBeNull();
-      expect(draftsOf((await recovery(p)).state)).toEqual([]);
       await expect(editor(p)).toBeVisible();
       expect(children.get(app)!.exitCode).toBeNull();
       await tab(p, 'Agents').click();
@@ -670,17 +669,21 @@ if (!packaged)
         .getByLabel('Message', { exact: true })
         .fill('latest chat while the editor close is unconfirmed');
       await projectTab(p).click();
-      // The close goes again on its own.
+      // The store committed the discard but its reply was lost: the editor still shows the draft,
+      // and its edits go again on their own, giving the draft back to the store.
       await expect(p.getByRole('button', { name: 'Retry keeping edits', exact: true })).toHaveCount(
         0,
       );
-      // The discard the store committed is the editor's too, so Quit has nothing to ask.
       await expect(
         p.locator('.view-line').filter({ hasText: 'newer pending recovery' }),
-      ).toHaveCount(0);
+      ).toHaveCount(1);
+      await expect
+        .poll(async () => draftsOf((await recovery(p)).state)[0]?.text)
+        .toContain('newer pending recovery');
       expect(await readFile(join(f.cwd, 'a.ts'), 'utf8')).toBe('local dirty draft');
       expect(errors).toEqual([]);
-      await stop(app);
+      // The draft is kept, so a Quit would ask about it again; exit instead.
+      await stop(app, true);
       current = undefined;
       const next = await launch(f);
       current = next.app;
@@ -689,7 +692,7 @@ if (!packaged)
         'latest chat while the editor close is unconfirmed',
       );
       expect((await f.stats()).commands.filter((v) => v === 'stopChat')).toHaveLength(1);
-      await stop(next.app);
+      await stop(next.app, true);
       current = undefined;
     } finally {
       if (current) await stop(current, true);
