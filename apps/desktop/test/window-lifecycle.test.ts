@@ -214,6 +214,9 @@ test('a ready document hears of earlier cleanup failures, and a disposal’s own
     action: 'cleanup-error',
     error: new ApplicationError({ code: 'Persistence', message: 'Old' }),
   });
+  // A re-watch hears only failures it hasn't.
+  f.ready();
+  assert.equal(f.actions.length, 1);
   f.lifecycle.requestQuit();
   await f.ack({ id: f.last().id, consent: true });
   await f.ack({
