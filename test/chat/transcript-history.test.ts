@@ -5,10 +5,9 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { ManagedRuntime } from 'effect';
 import { createMoonbaseApplication } from '@moonbase/application';
-import { transcriptLimits } from '@moonbase/application/chat';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
-import { mkdtemp, realpath, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { controlledHostFixture, until } from './controlled-host-fixture.ts';
@@ -17,9 +16,17 @@ import {
   seedTranscriptHistory,
   seedTranscriptLongText,
 } from '../../packages/chat-runtime/test/transcript-history-fixture.ts';
+import { scaledTranscriptLimits as limits } from '../../packages/application/test/chat/transcript/transcript-limits-fixture.ts';
+
+/**
+ * The client keeps an eighth of production's transcript limits, so history a little past its
+ * record budget and one part a little past its content budget are evicted from.
+ */
+const records = 141,
+  repeats = 200_000;
 
 for (const mode of ['local', 'remote'] as const)
-  test(`integrated ${mode} controller reveals evicted Find and around targets across 1,121 real mixed records`, async (t) => {
+  test(`integrated ${mode} controller reveals evicted Find and around targets across real mixed records past the record budget`, async (t) => {
     const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-around-')));
     const remote =
       mode === 'remote'
@@ -59,6 +66,7 @@ for (const mode of ['local', 'remote'] as const)
         context: session,
         // The remote host is the daemon in host mode: local-mode chats over a connection.
         mode: 'local',
+        transcriptLimits: limits,
         ...(root ? { connection: root.connection } : {}),
         storage: {
           read: () => saved,
@@ -98,8 +106,8 @@ for (const mode of ['local', 'remote'] as const)
     );
     const target = controller.getSnapshot().selected!;
     const ids = remote
-      ? await remote.seedHistory(target)
-      : await seedTranscriptHistory(harness, target);
+      ? await remote.seedHistory(target, records)
+      : await seedTranscriptHistory(harness, target, records);
     await until(
       async () => controller.getSnapshot(),
       (state) =>
@@ -108,23 +116,21 @@ for (const mode of ['local', 'remote'] as const)
         (!remote || state.snapshot.observationStatus === 'connected'),
     );
     const counters = async () => (remote ? (await remote.stats()).reads! : structuredClone(reads));
-    const work: unknown[] = [];
-    for (const index of [1, 561, 1119, 1]) {
+    for (const index of [1, 70, 139, 1]) {
       const before = await counters();
       await controller.jumpToEntry(ids[index]);
       const state = controller.getSnapshot().transcript;
       assert.equal(state.error, null);
       assert(state.entries.some((entry) => entry.id === ids[index]));
       assert.equal(new Set(state.entries.map((entry) => entry.id)).size, state.entries.length);
-      assert(state.entries.length <= transcriptLimits.summaryRecords);
+      assert(state.entries.length <= limits.summaryRecords);
       const after = await counters(),
         ranges = after.ranges!.slice(before.ranges!.length);
       assert(ranges.length <= 35, `distance-independent around read: ${ranges.length}`);
       assert(ranges.every((range) => range.limit === 1 && range.rows <= 1));
       assert(ranges.filter((range) => range.min === null && range.max === null).length <= 1);
-      work.push({ index, ranges });
     }
-    for (const index of [1, 561, 1119]) {
+    for (const index of [1, 70, 139]) {
       await controller.findTranscript(`record ${index} 🌔`);
       await until(
         async () => controller.getSnapshot().transcript,
@@ -148,7 +154,7 @@ for (const mode of ['local', 'remote'] as const)
       );
     }
     controller.closeFind();
-    const input = { target, entryId: ids[561] };
+    const input = { target, entryId: ids[70] };
     const first = await chat.command('getChatHistoryAround', input);
     assert(first.olderCursor && first.newerCursor);
     const seen = new Set(first.entries.map((entry) => entry.id));
@@ -178,19 +184,18 @@ for (const mode of ['local', 'remote'] as const)
     await assert.rejects(
       chat.command('getChatHistoryAround', {
         target: { ...target, actorId: 'different' },
-        entryId: ids[561],
+        entryId: ids[70],
       }),
     );
     await assert.rejects(
       chat.command('getChatHistoryAround', {
         target: { ...target, conversationId: '999999998' },
-        entryId: ids[561],
+        entryId: ids[70],
       }),
     );
     const long = remote
-      ? await remote.seedLongText(target)
-      : await seedTranscriptLongText(harness, target);
-    const started = performance.now();
+      ? await remote.seedLongText(target, repeats)
+      : await seedTranscriptLongText(harness, target, repeats);
     await until(
       async () => controller.getSnapshot(),
       (state) => state.snapshot?.transcriptBoundary === long.entryId,
@@ -214,8 +219,7 @@ for (const mode of ['local', 'remote'] as const)
         .transcript.content.find(
           (item) => item.source.kind === 'entry' && item.source.entryId === long.entryId,
         );
-    let peak = 0,
-      chunks = 0;
+    let peak = 0;
     while ((content()?.loadedText ?? 0) < long.late + 6) {
       const before = content()?.loadedBytes ?? 0;
       await controller.loadTranscriptPart(source, selection);
@@ -230,8 +234,7 @@ for (const mode of ['local', 'remote'] as const)
             0,
           ),
       );
-      assert(peak <= 8 * 1024 * 1024);
-      chunks++;
+      assert(peak <= limits.contentBytes);
     }
     const tail = content()!,
       near = controller.getSnapshot().transcript.find;
@@ -253,9 +256,7 @@ for (const mode of ['local', 'remote'] as const)
       'NEEDLE',
     );
     await controller.previousFindMatch();
-    const beforePrefix = await counters();
     await controller.loadTranscriptPart(source, selection, true);
-    const afterPrefix = await counters();
     // The host may serve the prefix from its built-parts cache, so the reread
     // is proven by the controller's retained range rather than SDK entry reads.
     assert.equal(content()!.retainedFrom, 0);
@@ -263,31 +264,7 @@ for (const mode of ['local', 'remote'] as const)
     assert(content()!.chunks[0].data.startsWith('early NEEDLE 😀\r\n'));
     assert.equal(controller.getSnapshot().transcript.find.active?.start, 6);
     assert.equal(controller.getSnapshot().transcript.find.upperEntryId, near.upperEntryId);
-    work.push({
-      longFind: long,
-      chunks,
-      peakSerializedCache: peak,
-      retainedByteBase: tail.retainedFrom,
-      retainedUTF16Base,
-      previousRereadEntries: afterPrefix.entries - beforePrefix.entries,
-      milliseconds: performance.now() - started,
-    });
     controller.closeFind();
-    await mkdir('test-results/qualification-116', { recursive: true });
-    await writeFile(
-      `test-results/qualification-116/around-${mode}.json`,
-      JSON.stringify(
-        {
-          mode,
-          rows: ids.length,
-          work,
-          traversed: seen.size,
-          commands: remote ? (await remote.stats()).commands : undefined,
-        },
-        null,
-        2,
-      ),
-    );
     assert(!JSON.stringify(saved).includes('qualification record'));
     assert(!JSON.stringify(saved).includes('NEEDLE'));
     if (remote)

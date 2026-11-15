@@ -134,7 +134,7 @@ test('every accepted snapshot change notifies subscribers once', async (t) => {
 for (const close of ['closeView', 'detach', 'dispose'] as const)
   test(`${close} releases after a bounded grace when a ChatClient read ignores cancellation`, async (t) => {
     const closeGraceMs = 50;
-    const f = await transcriptController(t, 1, true, { transcriptCloseGraceMs: closeGraceMs });
+    const f = await transcriptController(t, 1, true, { transcriptLimits: { closeGraceMs } });
     const entered = Promise.withResolvers<void>();
     let signal: AbortSignal | undefined;
     f.handlers.set('getChatTranscriptContent', (_input, abort) => {

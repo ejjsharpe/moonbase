@@ -3,7 +3,8 @@ import { createHmac } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer, type RequestListener } from 'node:http';
 import { test, type TestContext } from 'node:test';
-import { Cause, Effect, Exit } from 'effect';
+import { Cause, Effect, Exit, ManagedRuntime } from 'effect';
+import { TestClock } from 'effect/testing';
 import type { ApplicationErrorCode } from '@moonbase/contracts/errors';
 import {
   HostVerificationError,
@@ -256,23 +257,34 @@ test(
   },
 );
 
-test(
-  'a stalled health body reaches its deadline and releases the response',
-  { timeout: 10000 },
-  async (t) => {
-    let close!: () => void;
-    const closed = new Promise<void>((resolve) => {
+test('a stalled health body reaches its deadline and releases the response', async (t) => {
+  let enter!: () => void, close!: () => void;
+  const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    }),
+    closed = new Promise<void>((resolve) => {
       close = resolve;
     });
-    const input = await endpoint(t, (_request, response) => {
-      response.on('close', close);
-      response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.write('{');
-    });
-    await fails(input, 'Unavailable');
-    await closed;
-  },
-);
+  const input = await endpoint(t, (_request, response) => {
+    response.on('close', close);
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.write('{');
+    enter();
+  });
+  const runtime = ManagedRuntime.make(TestClock.layer());
+  t.after(() => runtime.dispose());
+  const result = runtime.runPromiseExit(checkHostHealth(input));
+  await entered;
+  await runtime.runPromise(TestClock.adjust('5 seconds'));
+  const exit = await result;
+  assert(Exit.isFailure(exit), 'health must fail');
+  assert(
+    exit.cause.reasons.some(
+      (reason) => Cause.isFailReason(reason) && refused('Unavailable')(reason.error),
+    ),
+  );
+  await closed;
+});
 
 test('health proofs under the protocol 1 domain are refused both ways, and capabilities are signed', async (t) => {
   const oldProof = (phase: string, nonce: string, ...fields: unknown[]) =>

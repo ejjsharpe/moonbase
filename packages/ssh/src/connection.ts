@@ -16,7 +16,7 @@ import {
   type ChatHostEndpoint,
   type ConnectionServiceShape,
 } from '@moonbase/contracts/services';
-import { SshProcess } from './process.ts';
+import { defaultSshStopTiming, SshProcess, type SshStopTiming } from './process.ts';
 import {
   defaultSshExecutable,
   type DecodedSshConfiguration,
@@ -60,6 +60,8 @@ export type SshOptions = {
   verify: (endpoint: ChatHostEndpoint) => Effect.Effect<ChatHostHealth, HostVerificationError>;
   /** How long a connection may take to verify its host; 20 seconds unless a test shortens it. */
   startupMs?: number;
+  /** How long stopping an owned process group may take; tests shorten it. */
+  stopTiming?: Partial<SshStopTiming>;
 };
 /**
  * Root-scoped capability only. The consumer composes the process runtime and shared handlers, and
@@ -75,7 +77,11 @@ export function SshLive(input: SshConfiguration, options: SshOptions) {
         scope = yield* Effect.scope;
       const owner = yield* Effect.acquireRelease(
         Effect.sync(
-          () => new Connection(config, scope, options.verify, options.startupMs ?? 20_000),
+          () =>
+            new Connection(config, scope, options.verify, options.startupMs ?? 20_000, {
+              ...defaultSshStopTiming,
+              ...options.stopTiming,
+            }),
         ),
         (c) => c.dispose(),
       );
@@ -93,16 +99,19 @@ class Connection {
   private readonly observers = new Set<Queue.Queue<ConnectionSnapshot, Cause.Done>>();
   private closed = false;
   readonly startupMs: number;
+  readonly stopTiming: SshStopTiming;
   readonly verify: SshOptions['verify'];
   constructor(
     config: DecodedSshConfiguration,
     scope: Scope.Scope,
     verify: SshOptions['verify'],
     startupMs: number,
+    stopTiming: SshStopTiming,
   ) {
     this.config = config;
     this.verify = verify;
     this.startupMs = startupMs;
+    this.stopTiming = stopTiming;
     this.scope = scope;
     this.state = { profile: config.profile, state: 'disconnected', connectionId: null };
     this.service = {
@@ -305,6 +314,7 @@ class Connection {
           args,
           this.config.token,
           captureOutput,
+          this.stopTiming,
         );
         g.processes.add(child);
         void child.terminal.then(() => {

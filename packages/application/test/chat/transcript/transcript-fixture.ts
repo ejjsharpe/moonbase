@@ -9,10 +9,11 @@ import type {
   ChatTranscriptPart,
   ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
-import type { ChatDependencies } from '@moonbase/application/chat';
+import { defaultTranscriptLimits, type ChatDependencies } from '@moonbase/application/chat';
 import { fauxChat } from '@moonbase/application/testing/faux-chat';
 import { modelRoot } from '../chat-model-fixture.ts';
 
+export { scaledTranscriptLimits } from './transcript-limits-fixture.ts';
 export const digest = (text: string) => createHash('sha256').update(text).digest('hex');
 export const part = (partId: string, text: string): ChatTranscriptPart => ({
   partId,
@@ -237,7 +238,7 @@ export async function transcriptController(
   t: { after: (close: () => Promise<void>) => void },
   count = 640,
   local = true,
-  options: Pick<ChatDependencies, 'transcriptCloseGraceMs' | 'transcriptWatchRetryMs'> = {},
+  options: Pick<ChatDependencies, 'transcriptLimits'> = {},
 ) {
   const fixture = transcriptFixture(count, local),
     root = modelRoot();
@@ -246,7 +247,8 @@ export async function transcriptController(
   await controller.start();
   if (!local) await controller.connect();
   await controller.select(fixture.target);
-  return { ...fixture, fixture, controller, root };
+  const limits = { ...defaultTranscriptLimits, ...options.transcriptLimits };
+  return { ...fixture, fixture, controller, root, limits };
 }
 export const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 export type ContentReply = Extract<ChatOutput<'getChatTranscriptContent'>, { kind: 'content' }>;

@@ -250,11 +250,13 @@ test('steady provider progress publishes while projection is slower than the com
     return result;
   });
   const before = { ...measured.counts };
-  for (let i = 0; i < 25; i++) {
+  const progressViews = () => watch.views.filter((view) => view.run?.text.startsWith('steady '));
+  // The provider keeps streaming faster than each projection commits, until two views are out.
+  for (let i = 0; i < 25 && progressViews().length < 2; i++) {
     emit('steady ' + i);
     await delay(110);
   }
-  const progress = watch.views.filter((view) => view.run?.text.startsWith('steady '));
+  const progress = progressViews();
   const during = { ...measured.counts };
   const final = fauxAssistantMessage('completed steady stream');
   stream.push({ type: 'done', reason: 'stop', message: final });

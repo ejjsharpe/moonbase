@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ChatOutput } from '@moonbase/contracts/chat';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { transcriptController, tick } from './transcript-fixture.ts';
+import { scaledTranscriptLimits, transcriptController, tick } from './transcript-fixture.ts';
 
 async function until(check: () => boolean) {
   for (let i = 0; i < 200; i++) {
@@ -13,15 +13,15 @@ async function until(check: () => boolean) {
 }
 
 test('selected Find scans empty intermediate slices, pins first match, bounds retention and replays the fixed cutoff', async (t) => {
-  const f = await transcriptController(t, 1100);
+  const f = await transcriptController(t, 138, true, { transcriptLimits: scaledTranscriptLimits });
   await f.controller.findTranscript('same');
   let state = f.controller.getSnapshot().transcript.find;
   assert.equal(state.status, 'complete');
-  assert.equal(state.count, 1100);
+  assert.equal(state.count, 138);
   assert.equal(state.active?.source.entryId, 'e0');
-  assert.equal(state.matches.length, 256);
-  assert.equal(state.retainedFrom, 844);
-  assert.equal(state.upperEntryId, 'e1099');
+  assert.equal(state.matches.length, f.limits.findMatches);
+  assert.equal(state.retainedFrom, 138 - f.limits.findMatches);
+  assert.equal(state.upperEntryId, 'e137');
   await f.controller.nextFindMatch();
   state = f.controller.getSnapshot().transcript.find;
   assert.equal(state.active?.source.entryId, 'e1');
@@ -144,12 +144,14 @@ test('retained text chunks retain UTF16 bases independently of byte offsets', as
 
 test('Find reaches beginning/middle/end on local and remote controllers and surfaces missing targets', async (t) => {
   for (const local of [true, false]) {
-    const f = await transcriptController(t, 1100, local);
-    for (const index of [0, 550, 1099])
+    const f = await transcriptController(t, 138, local, {
+      transcriptLimits: scaledTranscriptLimits,
+    });
+    for (const index of [0, 69, 137])
       f.sources.get(JSON.stringify(f.entries[index].transcript!.source))!.data[0] = 'needle';
     await f.controller.findTranscript('needle');
     assert.equal(f.controller.getSnapshot().transcript.find.count, 3);
-    for (const index of [550, 1099]) {
+    for (const index of [69, 137]) {
       await f.controller.nextFindMatch();
       assert.equal(f.controller.getSnapshot().transcript.find.active?.source.entryId, `e${index}`);
       assert(
@@ -158,7 +160,7 @@ test('Find reaches beginning/middle/end on local and remote controllers and surf
     }
     f.publish({ ...f.snapshot, transcriptBoundary: 'new-entry' });
     assert.equal(f.controller.getSnapshot().transcript.find.refreshAvailable, true);
-    assert.equal(f.controller.getSnapshot().transcript.find.upperEntryId, 'e1099');
+    assert.equal(f.controller.getSnapshot().transcript.find.upperEntryId, 'e137');
     f.handlers.set('getChatHistoryAround', async () => {
       throw new ApplicationError({ code: 'InvalidInput', message: 'Saved entry is unavailable.' });
     });
@@ -320,7 +322,7 @@ test('reading before a delayed first result suppresses automatic reveal without 
 
 test('reconnecting and failed observations cancel Find and keep a visible retry state without stale publication', async (t) => {
   for (const failure of ['reconnecting', 'failed'] as const) {
-    const f = await transcriptController(t, 64, false, { transcriptWatchRetryMs: [] });
+    const f = await transcriptController(t, 64, false, { transcriptLimits: { watchRetryMs: [] } });
     let release!: () => void, signal: AbortSignal | undefined;
     const held = new Promise<void>((resolve) => (release = resolve));
     f.handlers.set('findChatTranscript', async (_input, abort, fallback) => {

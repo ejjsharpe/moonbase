@@ -2963,7 +2963,7 @@ test('the chat list follows its watch: changes merge without listing, and a rese
     connection: f.connection,
     context,
     storage: new Storage(),
-    transcriptWatchRetryMs: [0],
+    transcriptLimits: { watchRetryMs: [0] },
   });
   const until = async (done: () => boolean) => {
     while (!done()) await turn();

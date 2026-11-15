@@ -8,7 +8,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { Effect, ManagedRuntime, Queue } from 'effect';
+import { Effect, Layer, ManagedRuntime, Queue } from 'effect';
+import { TestClock } from 'effect/testing';
 import { ApplicationError, type ObservationClose } from '@moonbase/contracts/workspace';
 import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { chatHostVersion, chatProtocolVersion } from '@moonbase/contracts/host';
@@ -106,10 +107,15 @@ const verify: SshOptions['verify'] = (endpoint: ChatHostEndpoint) =>
         ? error
         : new HostVerificationError({ reason: 'unreachable' }),
   });
+/**
+ * A short stop for the cases that wait out the SIGTERM grace or the whole stop deadline (a group
+ * that ignores SIGTERM, or one whose absence stays unconfirmed).
+ */
+const quickStop = { deadlineMs: 1000, termGraceMs: 200 };
 async function fixture(
   mode = 'normal',
   healthMode = 'valid',
-  options: Omit<SshOptions, 'verify'> = {},
+  { testClock = false, ...options }: Omit<SshOptions, 'verify'> & { testClock?: boolean } = {},
 ) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-ssh-'))),
     key = randomBytes(32).toString('base64url'),
@@ -165,7 +171,8 @@ async function fixture(
   };
   const config = { profile, token: key, sshExecutable: executable };
   const start = (configuration: SshConfiguration = config) => {
-    const runtime = ManagedRuntime.make(SshLive(configuration, { verify, ...options }));
+    const layer = SshLive(configuration, { verify, ...options });
+    const runtime = ManagedRuntime.make(testClock ? Layer.merge(layer, TestClock.layer()) : layer);
     return { runtime, client: makeConnectionClient(runtime) };
   };
   const current = start();
@@ -179,6 +186,9 @@ async function fixture(
     );
   return {
     ...current,
+    /** Moves the connection's `TestClock`, with `testClock` set. */
+    advance: (duration: Parameters<typeof TestClock.adjust>[0]) =>
+      current.runtime.runPromise(TestClock.adjust(duration)),
     base,
     key,
     log,
@@ -453,7 +463,7 @@ test('executable spawn failure is typed and does not disclose paths or private v
 });
 
 test('root disposal kills an uncooperative owned child, releases the forward and isolates other runtimes', async () => {
-  const f = await fixture('ignore-term'),
+  const f = await fixture('ignore-term', 'valid', { stopTiming: quickStop }),
     other = f.start();
   try {
     const first = await f.client.command('connect', { profileId: 'configured' });
@@ -667,14 +677,19 @@ test('disconnect and root disposal during startup release the pending generation
 });
 
 test('a stalled forwarded health response is read again until the startup deadline, then releases the reader, child and port', async () => {
-  const f = await fixture('normal', 'stall', { startupMs: 2000 });
+  const f = await fixture('normal', 'stall', { testClock: true });
   try {
-    await assert.rejects(
+    const connecting = assert.rejects(
       f.client.command('connect', { profileId: 'configured' }),
       (e) => failure('Unavailable')(e) && /startup deadline/.test((e as ApplicationError).message),
     );
-    // Each read that timed out (`read-failed`) was tried again.
-    assert(f.requests.length > 1);
+    // Each read that timed out (`read-failed`) is tried again after the retry pause.
+    await until(async () => {
+      await f.advance('50 millis');
+      return f.requests.length > 1;
+    }, 'a stalled health read was not tried again');
+    await f.advance('20 seconds');
+    await connecting;
     assert.equal((await f.client.command('getConnection', {})).state, 'failed');
     await assert.rejects(f.endpoint(), failure('Unavailable'));
     await until(() => f.spawned().every((child) => !alive(child.pid)));
@@ -798,7 +813,7 @@ for (const [mode, action] of [
   ['held-none', 'dispose'],
 ])
   test(`SSH ${action} invalidates the endpoint and reaps ${mode} helper group without touching a different generation`, async () => {
-    const f = await fixture(mode),
+    const f = await fixture(mode, 'valid', { stopTiming: quickStop }),
       unrelated = f.start();
     try {
       const first = await f.client.command('connect', { profileId: 'configured' });
@@ -918,7 +933,7 @@ for (const action of ['exit', 'cancel'])
   });
 
 test('cancellation during admitted teardown cannot strand the owned helper group', async () => {
-  const f = await fixture('held-both'),
+  const f = await fixture('held-both', 'valid', { stopTiming: quickStop }),
     abort = new AbortController();
   try {
     const connected = await f.client.command('connect', { profileId: 'configured' });
@@ -954,7 +969,7 @@ test('cancellation during admitted teardown cannot strand the owned helper group
 
 for (const persistent of [false, true])
   test(`${persistent ? 'persistent' : 'transient'} EPERM during owned-group exit requires confirmed absence`, async () => {
-    const f = await fixture('held-both'),
+    const f = await fixture('held-both', 'valid', { stopTiming: quickStop }),
       other = f.start(),
       originalKill = process.kill.bind(process);
     let observations = 0,
@@ -994,10 +1009,13 @@ for (const persistent of [false, true])
       if (persistent) {
         await assert.rejects(releasing, failure('Unavailable'));
         assert(
-          performance.now() - started >= 2400,
-          'persistent ambiguity failed before the existing cleanup budget',
+          performance.now() - started >= quickStop.deadlineMs - 100,
+          'persistent ambiguity failed before the cleanup deadline',
         );
-        assert(performance.now() - started < 3500, 'persistent ambiguity exceeded its bound');
+        assert(
+          performance.now() - started < quickStop.deadlineMs + 1000,
+          'persistent ambiguity exceeded its bound',
+        );
         assert.equal((await f.client.command('getConnection', {})).state, 'disconnecting');
         await assert.rejects(
           f.client.command('connect', { profileId: 'configured' }),
