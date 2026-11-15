@@ -1,17 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomBytes } from 'node:crypto';
-import {
-  chmod,
-  lstat,
-  mkdir,
-  readFile,
-  readdir,
-  rm,
-  stat,
-  symlink,
-  writeFile,
-} from 'node:fs/promises';
+import { chmod, lstat, mkdir, readFile, readdir, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ChatTarget } from '@moonbase/contracts/chat';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
@@ -22,25 +12,14 @@ import {
   findFreePort,
   readJson,
   startDaemon,
-  temporaryRoot,
   until,
-  type DaemonProcess,
+  withRoot,
 } from './daemon-fixture.ts';
 import { fauxModelId, fauxProviderId, type FauxScript } from './faux-provider.ts';
 
 const model = { provider: fauxProviderId, modelId: fauxModelId };
 const mode = async (path: string) => (await lstat(path)).mode & 0o777;
 
-async function withRoot(run: (root: string, started: DaemonProcess[]) => Promise<void>) {
-  const root = await temporaryRoot(),
-    started: DaemonProcess[] = [];
-  try {
-    await run(root, started);
-  } finally {
-    await Promise.all(started.map((daemon) => daemon.stop('SIGKILL')));
-    await rm(root, { recursive: true, force: true });
-  }
-}
 const writeHostSettings = async (directory: string, roots: string[], key: string) =>
   writeFile(
     join(directory, 'daemon.json'),
