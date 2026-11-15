@@ -59,6 +59,7 @@ for (const entry of [
   'native-actions',
   'ipc/ipc-connect',
   'ipc/ipc-server',
+  'ipc/document-handlers',
   'window-lifecycle',
   'chat/chat-backends',
 ])
