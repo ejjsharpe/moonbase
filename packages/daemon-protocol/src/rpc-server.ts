@@ -34,8 +34,9 @@ const busy = () => new HostUnavailableError({ reason: 'busy' });
 const failed = () => new HostUnavailableError({ reason: 'failed' });
 
 /**
- * About the bytes `value` takes as JSON, counted without encoding it: the characters of its
- * strings and keys and a few bytes for everything else. Escapes are not counted.
+ * At most the bytes `value` takes as JSON, counted without encoding it: its strings' and keys'
+ * characters with their quotes, and its other values as written. Separators and escapes are not
+ * counted, so a client that charges a request its encoded length never passes the bound first.
  */
 function estimateBytes(value: unknown): number {
   let bytes = 0;
@@ -44,14 +45,17 @@ function estimateBytes(value: unknown): number {
     const next = pending.pop();
     if (typeof next === 'string') bytes += next.length + 2;
     else if (Array.isArray(next)) {
-      bytes += 2 + next.length;
+      bytes += 2;
       for (const item of next) pending.push(item);
     } else if (next !== null && typeof next === 'object') {
+      bytes += 2;
       for (const [key, item] of Object.entries(next)) {
-        bytes += key.length + 4;
+        // JSON leaves out a key whose value is undefined.
+        if (item === undefined) continue;
+        bytes += key.length + 3;
         pending.push(item);
       }
-    } else bytes += 8;
+    } else if (next !== undefined) bytes += String(next).length;
   }
   return bytes;
 }
@@ -131,6 +135,9 @@ export const serveRpc = (services: RpcServices, options: RpcServerOptions) =>
     const { connections, protocol } = yield* socketProtocol({
       messageBytes: rpcLimits.messageBytes,
       queuedBytes: rpcLimits.queuedBytes,
+      // A client may have every request and watch it may run unread, each up to a message, and a
+      // message more of pings and interrupts.
+      unreadBytes: (rpcLimits.requests + rpcLimits.watches + 1) * rpcLimits.messageBytes,
     });
     const shared = [
       protocol,
@@ -173,6 +180,13 @@ export const serveWorkspaceRpc = (
     const { connections, protocol } = yield* socketProtocol({
       messageBytes: workspaceRpcLimits.messageBytes,
       queuedBytes: workspaceRpcLimits.queuedBytes,
+      // A client may have its in-flight input unread (`RemoteWorkspaceHostLive` keeps to it), its
+      // status calls and watches, each a small message, and a message more of envelopes, pings and
+      // interrupts.
+      unreadBytes:
+        workspaceRpcLimits.inFlightBytes +
+        (workspaceRpcLimits.statusRequests + workspaceRpcLimits.watches) * rpcLimits.messageBytes +
+        workspaceRpcLimits.messageBytes,
       ...(options.track ? { track: options.track } : {}),
     });
     const admission = makeAdmission(options, {

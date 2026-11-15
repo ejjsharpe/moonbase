@@ -72,11 +72,11 @@ export type CallOptions<A> = {
   /** How long to wait for the reply; `requestDeadlineMs` by default. */
   deadlineMs?: number;
   /**
-   * Places the request takes one of before it is sent, waiting up to its deadline (refused
-   * `HostUnavailableError` `busy`, never sent, past it). It keeps it until the daemon has answered
-   * or the connection closed, even after its caller gave up on it.
+   * What the request holds before it is sent (a place, its bytes), waiting up to its deadline for
+   * all of it (refused `HostUnavailableError` `busy`, never sent, past it). It keeps them until
+   * the daemon has answered or the connection closed, even after its caller gave up on it.
    */
-  places?: Semaphore.Semaphore;
+  places?: readonly Hold[];
   /** Refuses a reply against the daemon's signed health. */
   check?: (output: A, health: ChatHostHealth) => void;
 };
@@ -153,14 +153,16 @@ function boundInbound(ws: WebSocket, bytes: number): Socket.WebSocketLike {
   } as Socket.WebSocketLike;
 }
 
+/** Permits of a semaphore a request holds while the daemon runs it: a place, or its bytes. */
+export type Hold = { semaphore: Semaphore.Semaphore; permits: number };
 /**
- * Runs `send` holding one of `places`: it waits up to `deadlineMs` for one, then sends in a fiber
- * of the connection's `scope` that keeps the place until the daemon answers or the connection
- * closes. A caller that stops waiting (past `deadlineMs`, or interrupted) cancels a read; a
- * mutation keeps running and keeps its place.
+ * Runs `send` holding `holds`: it waits up to `deadlineMs` for all of them, in order, then sends
+ * in a fiber of the connection's `scope` that keeps them until the daemon answers or the
+ * connection closes. A caller that stops waiting (past `deadlineMs`, or interrupted) cancels a
+ * read; a mutation keeps running and keeps what it holds.
  */
 const holdPlace = <A, E>(
-  places: Semaphore.Semaphore,
+  holds: readonly Hold[],
   deadlineMs: number,
   mutation: boolean,
   scope: Scope.Scope,
@@ -169,16 +171,28 @@ const holdPlace = <A, E>(
 ) =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
-      yield* restore(
-        places.take(1).pipe(
-          Effect.timeoutOrElse({
-            duration: deadlineMs,
-            orElse: () => Effect.fail(unavailable('busy')),
-          }),
-        ),
-      );
+      const clock = yield* Clock.Clock;
+      const until = clock.currentTimeMillisUnsafe() + deadlineMs;
+      const release = (taken: readonly Hold[]) =>
+        Effect.forEach(taken, ({ semaphore, permits }) => semaphore.release(permits), {
+          discard: true,
+        });
+      // Each is taken in an interruptible wait, and recorded as held before anything else runs.
+      const taken: Hold[] = [];
+      for (const hold of holds) {
+        const left = Math.max(0, until - clock.currentTimeMillisUnsafe());
+        yield* restore(
+          hold.semaphore.take(hold.permits).pipe(
+            Effect.timeoutOrElse({
+              duration: left,
+              orElse: () => Effect.fail(unavailable('busy')),
+            }),
+          ),
+        ).pipe(Effect.onError(() => release(taken)));
+        taken.push(hold);
+      }
       // Taken and forked in one uninterruptible step, so the place is always released.
-      const fiber = yield* Effect.forkIn(send.pipe(Effect.ensuring(places.release(1))), scope);
+      const fiber = yield* Effect.forkIn(send.pipe(Effect.ensuring(release(taken))), scope);
       // A read its caller stops waiting for is cancelled: asked at once, not awaited, so its
       // place frees once the daemon was told. A mutation keeps running.
       const abandon = Effect.sync(() => {

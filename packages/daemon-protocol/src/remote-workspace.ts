@@ -169,6 +169,10 @@ export const RemoteWorkspaceHostLive = (config: {
           ),
       });
       const places = yield* Semaphore.make(workspaceRpcLimits.requests);
+      // The daemon's in-flight input bound, kept here too by encoded bytes, so a request the daemon
+      // would refuse `busy` for it waits for room instead, and the messages an honest client has
+      // unread on the daemon stay within what it allows.
+      const bytes = yield* Semaphore.make(workspaceRpcLimits.inFlightBytes);
       const statusPlaces = yield* Semaphore.make(workspaceRpcLimits.statusRequests);
       /** Refuses an input naming a checkout (or chat) of another host. */
       const ownHost = (operation: string, input: unknown) =>
@@ -176,27 +180,29 @@ export const RemoteWorkspaceHostLive = (config: {
         hostInputCheckout(input)!.hostId === host.hostId
           ? Effect.void
           : Effect.fail(new UnauthorizedError({ operation }));
-      /** Decodes an input and bounds its JSON; a refused one is never sent. */
+      /** Decodes an input and bounds its JSON, giving its size; a refused one is never sent. */
       const prepare = <K extends HostCommand>(operation: K, raw: HostInput<K>) =>
         Effect.flatMap(
           Effect.try({
             try: () => {
               const input = decodeHostInput(operation, raw);
-              if (Buffer.byteLength(JSON.stringify(input)) > workspaceRpcLimits.payloadBytes)
+              // The payload as sent: what the daemon charges, and bounds, a request by.
+              const size = Buffer.byteLength(JSON.stringify({ host, input }));
+              if (size > workspaceRpcLimits.payloadBytes)
                 throw new InvalidRequestError({ problem: 'request-too-large' });
-              return input;
+              return { input, size };
             },
             catch: (error) =>
               error instanceof InvalidRequestError
                 ? error
                 : new InvalidRequestError({ problem: 'invalid-input' }),
           }),
-          (input) => Effect.as(ownHost(operation, input), input),
+          (prepared) => Effect.as(ownHost(operation, prepared.input), prepared),
         );
       const send =
         <K extends HostCommand>(operation: K) =>
         (raw: HostInput<K>): Effect.Effect<HostOutput<K>, WorkspaceHostError> =>
-          Effect.flatMap(prepare(operation, raw), (input) =>
+          Effect.flatMap(prepare(operation, raw), ({ input, size }) =>
             link.call<HostOutput<K>, WorkspaceHostError>(
               operation,
               { host, input },
@@ -204,7 +210,13 @@ export const RemoteWorkspaceHostLive = (config: {
                 mutation: isHostMutation(operation),
                 capability: chatHostCapabilities.workspace,
                 deadlineMs: hostDeadlineMs(operation),
-                places: statusOperations.has(operation) ? statusPlaces : places,
+                // Status calls have places of their own and are not charged for their input.
+                places: statusOperations.has(operation)
+                  ? [{ semaphore: statusPlaces, permits: 1 }]
+                  : [
+                      { semaphore: places, permits: 1 },
+                      { semaphore: bytes, permits: size },
+                    ],
                 check: (output) => {
                   for (const checkout of outputCheckouts(operation, output))
                     if (checkout.hostId !== host.hostId)

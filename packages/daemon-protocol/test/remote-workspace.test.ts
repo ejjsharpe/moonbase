@@ -375,36 +375,85 @@ test('a mutation whose connection drops or whose reply is late is Uncertain, is 
   assert.equal(files.calls.filter((call) => call === 'mutate').length, 2);
 });
 
-test('a request past the input a connection may hold in flight is refused before it runs, a mutation as never sent, while status calls and watches still run', async (t) => {
+test('requests past the input a connection may hold in flight wait unsent on the client and are refused busy by the daemon, while status calls and watches still run', async (t) => {
   const files = controlledWorkspace(),
-    held = Promise.withResolvers<never>();
-  t.after(() => held.reject(Error('done')));
-  files.handlers.getIgnoredPaths = () => held.promise;
+    holds: PromiseWithResolvers<{ paths: string[] }>[] = [];
+  t.after(() => holds.forEach((hold) => hold.resolve({ paths: [] })));
+  files.handlers.getIgnoredPaths = () => {
+    const hold = Promise.withResolvers<{ paths: string[] }>();
+    holds.push(hold);
+    return hold.promise;
+  };
   files.handlers.readFile = async () => ({ text: 'ok', version: 'v1' });
   files.handlers.saveStatus = async () => ({ kind: 'not-started' });
+  files.handlers.saveFile = async () => ({ kind: 'saved', version: 'v1' });
   const daemon = await serveWorkspace(t, files.service);
-  const { workspace, run } = await remoteWorkspace(t, daemon);
+  const client = await remoteWorkspace(t, daemon);
+  const { workspace, run } = client;
   // Two requests of nearly a request's bound each hold their input while the host runs them.
   const input = holding(workspaceRpcLimits.payloadBytes - 64 * 1024);
-  for (let index = 0; index < 2; index++)
-    void run(workspace.getIgnoredPaths(input)).catch(() => {});
+  const reads = [0, 1].map(() => run(workspace.getIgnoredPaths(input)));
   await until(
     async () => files.calls.length,
     (count) => count === 2,
   );
-  // A mutation that would pass the bound never runs, so it is busy, not Uncertain.
-  assertError(await failure(run, workspace.saveFile(saveInput('x'.repeat(1024 * 1024)))), {
-    _tag: 'HostUnavailableError',
-    reason: 'busy',
-  });
-  assert.deepEqual(files.calls, ['getIgnoredPaths', 'getIgnoredPaths']);
+  // A small read still fits; a save that would pass the bound waits on the client, unsent, and
+  // requests after it wait their turn.
+  assert.equal((await run(workspace.readFile(fileTarget))).text, 'ok');
+  const save = run(workspace.saveFile(saveInput('x'.repeat(1024 * 1024))));
   // The bound is for plain requests' input: a status call and a watch still have their places.
   assert.deepEqual(await run(workspace.saveStatus({ ...identity, requestId: 'save-1' })), {
     kind: 'not-started',
   });
   const watched = await run(Stream.runHead(workspace.watch({ checkout, paths: [''] })));
   assert.equal(watched._tag, 'Some');
-  assert.equal((await run(workspace.readFile(fileTarget))).text, 'ok');
+  assert(!files.calls.includes('saveFile'));
+  // A client that skips that bound is refused by the daemon (per connection) before it runs: busy,
+  // so a mutation it refused was never applied.
+  const linkRuntime = ManagedRuntime.make(EndpointConnectionLive(daemon.endpoint));
+  t.after(() => linkRuntime.dispose());
+  const refused = await linkRuntime.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const direct = yield* makeRpcLink({
+          host,
+          group: WorkspaceRpcs,
+          path: workspaceRpcPath,
+          protocol: workspaceRpcProtocol,
+          inboundBytes: workspaceRpcLimits.messageBytes,
+          errors: workspaceErrorSchemaOf('saveFile').members as never,
+          present: (error) => error,
+        });
+        const capability = chatHostCapabilities.workspace;
+        const read = direct.call(
+          'getIgnoredPaths',
+          { host, input },
+          { mutation: false, capability },
+        );
+        for (let index = 0; index < 2; index++) yield* Effect.forkScoped(Effect.ignore(read));
+        yield* Effect.promise(() =>
+          until(
+            async () => files.calls.filter((call) => call === 'getIgnoredPaths').length,
+            (count) => count === 4,
+          ),
+        );
+        return yield* Effect.flip(
+          direct.call(
+            'saveFile',
+            { host, input: saveInput('x'.repeat(1024 * 1024), 'save-2') },
+            { mutation: true, capability },
+          ),
+        );
+      }),
+    ),
+  );
+  assertError(refused, { _tag: 'HostUnavailableError', reason: 'busy' });
+  // Once a held request answers, the save is sent.
+  holds[0]!.resolve({ paths: [] });
+  assert.equal((await save).kind, 'saved');
+  holds[1]!.resolve({ paths: [] });
+  await Promise.all(reads);
+  assert.equal(files.calls.filter((call) => call === 'saveFile').length, 1);
 });
 
 test('a request keeps its place until the daemon answers it, status calls keep places of their own, a wait for a place ends unsent at its deadline, and a cancelled read frees its place at once', async (t) => {
@@ -639,16 +688,33 @@ test('large workspace replies a client is slow to read never delay chat updates,
     return stuck.state.closed;
   }, Boolean);
 
-  // While replies past `queuedBytes` wait for it, the daemon reads no requests; a client that
-  // keeps sending meanwhile is closed rather than held in memory.
-  const flooding = await slowReader(t, daemon, 6);
+  // While replies past `queuedBytes` wait for it, the daemon reads no requests. A client that
+  // sends what an honest one may meanwhile (its in-flight input, a message per status call and
+  // watch) is kept; one that keeps sending is cut rather than held in memory.
+  const honest = await slowReader(t, daemon, 6),
+    flooding = await slowReader(t, daemon, 6);
   await until(
     async () => files.calls.length,
-    (count) => count === 9,
+    (count) => count === 15,
   );
-  for (let index = 0; index < 3; index++) flooding.send(workspaceRpcLimits.messageBytes - 1024);
+  for (let index = 0; index < 2; index++)
+    honest.send(workspaceRpcLimits.inFlightBytes / 2 - 64 * 1024);
+  for (
+    let index = 0;
+    index < workspaceRpcLimits.statusRequests + workspaceRpcLimits.watches;
+    index++
+  )
+    honest.ping();
   await until(async () => {
-    flooding.ping();
+    flooding.send(workspaceRpcLimits.messageBytes - 1024);
     return flooding.state.closed;
   }, Boolean);
+  // The honest client gets all six replies once it reads, and stays connected.
+  const before = honest.state.received;
+  honest.resume();
+  await until(
+    async () => honest.state.received - before,
+    (bytes) => bytes > 5 * reply,
+  );
+  assert(!honest.state.closed);
 });

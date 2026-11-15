@@ -25,6 +25,11 @@ export type RpcConnectionOptions = {
   messageBytes: number;
   /** Reply bytes waiting to be written past which the connection reads no further requests. */
   queuedBytes: number;
+  /**
+   * The most an honest client may have sent and the daemon not read while it reads no requests;
+   * a client past it is cut.
+   */
+  unreadBytes: number;
   /** Called once a connection opens; what it returns, once that closes. */
   track?(): () => void;
 };
@@ -34,7 +39,7 @@ export type RpcConnectionOptions = {
  * on. Bun upgrades a connection only once its proof checked out; each one then becomes an Effect
  * `Socket` that writes one message at a time and waits while Bun buffers more than
  * `rpcLimits.outboundBytes` (closing the connection when the client drains nothing for
- * `rpcLimits.drainMs`, cut without a close frame), that reads no requests while `queuedBytes` of replies wait to be written (cutting a client that sends more than two messages' bound meanwhile),
+ * `rpcLimits.drainMs`, cut without a close frame), that reads no requests while `queuedBytes` of replies wait to be written (cutting a client that sends more meanwhile than an honest one can, `unreadBytes`),
  * and that closes on a message past `messageBytes` and after `rpcLimits.idleMs` on the Clock
  * without one (clients ping every 5 s).
  */
@@ -71,7 +76,7 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
             unread += sizeOf(message);
             // While reads are held back a client may not pile messages up in the daemon. It is cut
             // at once: a close frame would wait behind the replies it has not read.
-            if (!reading.isOpen() && unread > 2 * options.messageBytes) return ws.terminate();
+            if (!reading.isOpen() && unread > options.unreadBytes) return ws.terminate();
             Queue.offerUnsafe(inbound, message);
           },
           drained: wake,
