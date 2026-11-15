@@ -392,15 +392,14 @@ test('requests past the input a connection may hold in flight wait unsent on the
   const { workspace, run } = client;
   // Two requests of nearly a request's bound each hold their input while the host runs them.
   const input = holding(workspaceRpcLimits.payloadBytes - 64 * 1024);
-  const reads = [0, 1].map(() => run(workspace.getIgnoredPaths(input)));
+  const reads = [0, 1].map(() => run(Effect.flip(workspace.getIgnoredPaths(input))));
   await until(
     async () => files.calls.length,
     (count) => count === 2,
   );
-  // A small read still fits; a save that would pass the bound waits on the client, unsent, and
-  // requests after it wait their turn.
+  // A small read still fits; a save that would pass the bound waits on the client, unsent.
   assert.equal((await run(workspace.readFile(fileTarget))).text, 'ok');
-  const save = run(workspace.saveFile(saveInput('x'.repeat(1024 * 1024))));
+  const save = run(Effect.flip(workspace.saveFile(saveInput('x'.repeat(1024 * 1024)))));
   // The bound is for plain requests' input: a status call and a watch still have their places.
   assert.deepEqual(await run(workspace.saveStatus({ ...identity, requestId: 'save-1' })), {
     kind: 'not-started',
@@ -448,12 +447,27 @@ test('requests past the input a connection may hold in flight wait unsent on the
     ),
   );
   assertError(refused, { _tag: 'HostUnavailableError', reason: 'busy' });
-  // Once a held request answers, the save is sent.
-  holds[0]!.resolve({ paths: [] });
-  assert.equal((await save).kind, 'saved');
-  holds[1]!.resolve({ paths: [] });
-  await Promise.all(reads);
-  assert.equal(files.calls.filter((call) => call === 'saveFile').length, 1);
+  // The connection closes while the save waits for its bytes: it was never sent, so it is busy,
+  // not Uncertain, and the reads it carried lost their replies.
+  client.replace();
+  assert.deepEqual(await run(workspace.saveStatus({ ...identity, requestId: 'save-1' })), {
+    kind: 'not-started',
+  });
+  assertError(await save, { _tag: 'HostUnavailableError', reason: 'busy' });
+  for (const read of reads)
+    assertError(await read, {
+      _tag: 'HostUnavailableError',
+      reason: 'reply-lost',
+    });
+  assert(!files.calls.includes('saveFile'));
+  // Nothing it held is kept: requests filling the whole bound again go through.
+  files.handlers.getIgnoredPaths = async () => ({ paths: [] });
+  const again = await Promise.all([
+    run(workspace.getIgnoredPaths(input)),
+    run(workspace.getIgnoredPaths(input)),
+    run(workspace.saveFile(saveInput('x'.repeat(1024 * 1024), 'save-3'))),
+  ]);
+  assert.equal((again[2] as { kind: string }).kind, 'saved');
 });
 
 test('a request keeps its place until the daemon answers it, status calls keep places of their own, a wait for a place ends unsent at its deadline, and a cancelled read frees its place at once', async (t) => {
@@ -624,6 +638,8 @@ async function slowReader(
     /** Sends an RPC ping, which counts as activity; it fails once the daemon has closed. */
     ping: () =>
       tcp.write(encodeWebSocketFrame(1, Buffer.from(JSON.stringify({ _tag: 'Ping' })), true)),
+    /** What the client has written that the connection has not taken yet. */
+    pending: () => tcp.writableLength,
     /** Sends a message of `bytes`, which the daemon reads only as far as its framing. */
     send: (bytes: number) => tcp.write(encodeWebSocketFrame(1, Buffer.alloc(bytes, 0x20), true)),
   };
@@ -631,7 +647,7 @@ async function slowReader(
 /** About the bytes of one `getIgnoredPaths` reply these tests make. */
 const reply = 15_000_000;
 
-test('large workspace replies a client is slow to read never delay chat updates, are all written once it reads, and one that never reads is dropped', async (t) => {
+test('large workspace replies a client is slow to read never delay chat updates, are all written once it reads, hold back its reading meanwhile, and one that never reads is dropped', async (t) => {
   const files = controlledWorkspace(),
     paths = Array.from({ length: 3800 }, () => 'p'.repeat(4000));
   files.handlers.getIgnoredPaths = async () => ({ paths });
@@ -688,33 +704,28 @@ test('large workspace replies a client is slow to read never delay chat updates,
     return stuck.state.closed;
   }, Boolean);
 
-  // While replies past `queuedBytes` wait for it, the daemon reads no requests. A client that
-  // sends what an honest one may meanwhile (its in-flight input, a message per status call and
-  // watch) is kept; one that keeps sending is cut rather than held in memory.
-  const honest = await slowReader(t, daemon, 6),
-    flooding = await slowReader(t, daemon, 6);
+  // While replies past `queuedBytes` wait for it, the daemon stops reading the connection: what
+  // the client keeps sending meanwhile backs up in its own buffers, not the daemon's, and it stays
+  // connected until it reads, when both directions flow again.
+  const busy = await slowReader(t, daemon, 6);
   await until(
     async () => files.calls.length,
-    (count) => count === 15,
+    (count) => count === 9,
   );
-  for (let index = 0; index < 2; index++)
-    honest.send(workspaceRpcLimits.inFlightBytes / 2 - 64 * 1024);
-  for (
-    let index = 0;
-    index < workspaceRpcLimits.statusRequests + workspaceRpcLimits.watches;
-    index++
-  )
-    honest.ping();
-  await until(async () => {
-    flooding.send(workspaceRpcLimits.messageBytes - 1024);
-    return flooding.state.closed;
-  }, Boolean);
-  // The honest client gets all six replies once it reads, and stays connected.
-  const before = honest.state.received;
-  honest.resume();
+  for (let index = 0; index < 6; index++) busy.send(workspaceRpcLimits.messageBytes - 1024);
   await until(
-    async () => honest.state.received - before,
+    async () => busy.pending(),
+    (bytes) => bytes > 4 * workspaceRpcLimits.messageBytes,
+  );
+  const before = busy.state.received;
+  busy.resume();
+  await until(
+    async () => busy.state.received - before,
     (bytes) => bytes > 5 * reply,
   );
-  assert(!honest.state.closed);
+  await until(
+    async () => busy.pending(),
+    (bytes) => bytes === 0,
+  );
+  assert(!busy.state.closed);
 });

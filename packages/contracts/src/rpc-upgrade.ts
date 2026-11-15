@@ -37,7 +37,7 @@ export const rpcLimits = {
    */
   outboundBytes: 1024 * 1024,
   drainMs: 20_000,
-  /** Replies waiting to be written past which a connection reads no further requests. */
+  /** Replies waiting to be written past which the daemon stops reading a connection. */
   queuedBytes: 16 * 1024 * 1024,
   /**
    * The client's bound on connecting: signed health, TCP, an SSH forward's channel and the
@@ -65,7 +65,7 @@ export const workspaceRpcLimits = {
    * `HostUnavailableError` (`busy`) before it runs.
    */
   inFlightBytes: 32 * 1024 * 1024,
-  /** Replies waiting to be written past which a connection reads no further requests. */
+  /** Replies waiting to be written past which the daemon stops reading a connection. */
   queuedBytes: 64 * 1024 * 1024,
   /**
    * The slowest link the workspace socket keeps working over. A message counts only once it has

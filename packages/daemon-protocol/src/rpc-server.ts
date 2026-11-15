@@ -135,9 +135,6 @@ export const serveRpc = (services: RpcServices, options: RpcServerOptions) =>
     const { connections, protocol } = yield* socketProtocol({
       messageBytes: rpcLimits.messageBytes,
       queuedBytes: rpcLimits.queuedBytes,
-      // A client may have every request and watch it may run unread, each up to a message, and a
-      // message more of pings and interrupts.
-      unreadBytes: (rpcLimits.requests + rpcLimits.watches + 1) * rpcLimits.messageBytes,
     });
     const shared = [
       protocol,
@@ -180,13 +177,6 @@ export const serveWorkspaceRpc = (
     const { connections, protocol } = yield* socketProtocol({
       messageBytes: workspaceRpcLimits.messageBytes,
       queuedBytes: workspaceRpcLimits.queuedBytes,
-      // A client may have its in-flight input unread (`RemoteWorkspaceHostLive` keeps to it), its
-      // status calls and watches, each a small message, and a message more of envelopes, pings and
-      // interrupts.
-      unreadBytes:
-        workspaceRpcLimits.inFlightBytes +
-        (workspaceRpcLimits.statusRequests + workspaceRpcLimits.watches) * rpcLimits.messageBytes +
-        workspaceRpcLimits.messageBytes,
       ...(options.track ? { track: options.track } : {}),
     });
     const admission = makeAdmission(options, {

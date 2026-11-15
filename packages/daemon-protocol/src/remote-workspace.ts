@@ -170,8 +170,8 @@ export const RemoteWorkspaceHostLive = (config: {
       });
       const places = yield* Semaphore.make(workspaceRpcLimits.requests);
       // The daemon's in-flight input bound, kept here too by encoded bytes, so a request the daemon
-      // would refuse `busy` for it waits for room instead, and the messages an honest client has
-      // unread on the daemon stay within what it allows.
+      // would refuse `busy` for it waits for room instead. Waiters are not served in order: a
+      // smaller later request may go first.
       const bytes = yield* Semaphore.make(workspaceRpcLimits.inFlightBytes);
       const statusPlaces = yield* Semaphore.make(workspaceRpcLimits.statusRequests);
       /** Refuses an input naming a checkout (or chat) of another host. */

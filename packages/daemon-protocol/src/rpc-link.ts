@@ -156,8 +156,8 @@ function boundInbound(ws: WebSocket, bytes: number): Socket.WebSocketLike {
 /** Permits of a semaphore a request holds while the daemon runs it: a place, or its bytes. */
 export type Hold = { semaphore: Semaphore.Semaphore; permits: number };
 /**
- * Runs `send` holding `holds`: it waits up to `deadlineMs` for all of them, in order, then sends
- * in a fiber of the connection's `scope` that keeps them until the daemon answers or the
+ * Runs `send` holding `holds`: it waits up to `deadlineMs` for all of them, one after another, then
+ * sends in a fiber of the link's scope that keeps them until the daemon answers or the
  * connection closes. A caller that stops waiting (past `deadlineMs`, or interrupted) cancels a
  * read; a mutation keeps running and keeps what it holds.
  */
@@ -165,9 +165,10 @@ const holdPlace = <A, E>(
   holds: readonly Hold[],
   deadlineMs: number,
   mutation: boolean,
-  scope: Scope.Scope,
+  connection: { scope: Scope.Scope; isOpen(): boolean },
   send: Effect.Effect<A, E>,
   late: E,
+  unsent: E,
 ) =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
@@ -185,14 +186,24 @@ const holdPlace = <A, E>(
           hold.semaphore.take(hold.permits).pipe(
             Effect.timeoutOrElse({
               duration: left,
-              orElse: () => Effect.fail(unavailable('busy')),
+              orElse: () => Effect.fail(unsent),
             }),
           ),
         ).pipe(Effect.onError(() => release(taken)));
         taken.push(hold);
       }
+      // A connection that closed while the request waited carries nothing more: it was never sent.
+      if (!connection.isOpen()) {
+        yield* release(taken);
+        return yield* Effect.fail(unsent);
+      }
       // Taken and forked in one uninterruptible step, so the place is always released.
-      const fiber = yield* Effect.forkIn(send.pipe(Effect.ensuring(release(taken))), scope);
+      // In the link's scope, which outlives connections: the send ends when its connection closes
+      // (the RPC client interrupts what it carried), so what it holds is always released.
+      const fiber = yield* Effect.forkIn(
+        send.pipe(Effect.ensuring(release(taken))),
+        connection.scope,
+      );
       // A read its caller stops waiting for is cancelled: asked at once, not awaited, so its
       // place frees once the daemon was told. A mutation keeps running.
       const abandon = Effect.sync(() => {
@@ -234,9 +245,16 @@ export const makeRpcLink = <Rpcs extends Rpc.Any>(config: RpcLinkConfiguration<R
     ];
     /** Whether a failure is the daemon's (as presented) or the link's own, rather than unknown. */
     const isLinkError = (error: unknown): error is DaemonLinkError => isOneOf(linkErrors, error);
+    const linkScope = yield* Effect.scope;
     let current: Generation | undefined;
+    /** Closes a generation's connection, marking it gone first, so nothing waiting sends on it. */
+    const closeGeneration = (generation: Generation) =>
+      Effect.suspend(() => {
+        generation.alive = false;
+        return Scope.close(generation.scope, Exit.void);
+      });
     yield* Effect.addFinalizer(() =>
-      Effect.suspend(() => (current ? Scope.close(current.scope, Exit.void) : Effect.void)),
+      Effect.suspend(() => (current ? closeGeneration(current) : Effect.void)),
     );
 
     /** Opens a connection to `endpoint` and waits until it is upgraded. */
@@ -336,7 +354,7 @@ export const makeRpcLink = <Rpcs extends Rpc.Any>(config: RpcLinkConfiguration<R
           if (current?.alive && current.connectionId === endpoint.connectionId) return current;
           const old = current;
           current = undefined;
-          if (old) yield* Scope.close(old.scope, Exit.void);
+          if (old) yield* closeGeneration(old);
           const opened = yield* open(endpoint);
           current = opened;
           return opened;
@@ -359,13 +377,22 @@ export const makeRpcLink = <Rpcs extends Rpc.Any>(config: RpcLinkConfiguration<R
         if (!generation.health.capabilities.includes(options.capability))
           return yield* Effect.fail(notServed());
         const deadlineMs = options.deadlineMs ?? P.requestDeadlineMs;
-        const late = lostReply(options.mutation, operation);
+        const late = lostReply(options.mutation, operation),
+          unsent = unavailable('busy');
         const send = (
           generation.client[operation] as (payload: object) => Effect.Effect<unknown, unknown>
         )(payload);
         const exit = yield* Effect.exit(
           options.places
-            ? holdPlace(options.places, deadlineMs, options.mutation, generation.scope, send, late)
+            ? holdPlace(
+                options.places,
+                deadlineMs,
+                options.mutation,
+                { scope: linkScope, isOpen: () => generation.alive },
+                send,
+                late,
+                unsent,
+              )
             : send.pipe(
                 Effect.timeoutOrElse({ duration: deadlineMs, orElse: () => Effect.fail(late) }),
               ),
@@ -374,6 +401,8 @@ export const makeRpcLink = <Rpcs extends Rpc.Any>(config: RpcLinkConfiguration<R
           if (Cause.hasInterruptsOnly(exit.cause)) return yield* Effect.interrupt;
           const error = Cause.squash(exit.cause);
           if (error === late) return yield* Effect.fail(late);
+          // Refused before it was sent, whatever became of the connection since.
+          if (error === unsent) return yield* Effect.fail(unsent);
           // Only an error the daemon's procedures declare is its answer; anything else lost it.
           if (isTransport(error) || !isOneOf(config.errors, error))
             return yield* Effect.fail(lostReply(options.mutation, operation));

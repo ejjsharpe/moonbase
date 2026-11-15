@@ -1,4 +1,4 @@
-import { Cause, Effect, FiberSet, Latch, Layer, Queue, Semaphore } from 'effect';
+import { Cause, Effect, FiberSet, Layer, Queue, Semaphore } from 'effect';
 import * as Socket from 'effect/socket/Socket';
 import * as SocketServer from 'effect/socket/SocketServer';
 import * as NetAddress from 'effect/net/NetAddress';
@@ -23,13 +23,8 @@ const sizeOf = (message: string | Uint8Array) =>
 export type RpcConnectionOptions = {
   /** The largest message a connection may send; a larger one closes it. */
   messageBytes: number;
-  /** Reply bytes waiting to be written past which the connection reads no further requests. */
+  /** Reply bytes waiting to be written past which the daemon stops reading the connection. */
   queuedBytes: number;
-  /**
-   * The most an honest client may have sent and the daemon not read while it reads no requests;
-   * a client past it is cut.
-   */
-  unreadBytes: number;
   /** Called once a connection opens; what it returns, once that closes. */
   track?(): () => void;
 };
@@ -39,9 +34,11 @@ export type RpcConnectionOptions = {
  * on. Bun upgrades a connection only once its proof checked out; each one then becomes an Effect
  * `Socket` that writes one message at a time and waits while Bun buffers more than
  * `rpcLimits.outboundBytes` (closing the connection when the client drains nothing for
- * `rpcLimits.drainMs`, cut without a close frame), that reads no requests while `queuedBytes` of replies wait to be written (cutting a client that sends more meanwhile than an honest one can, `unreadBytes`),
- * and that closes on a message past `messageBytes` and after `rpcLimits.idleMs` on the Clock
- * without one (clients ping every 5 s).
+ * `rpcLimits.drainMs`, cut without a close frame), that stops reading from the connection while
+ * `queuedBytes` of replies wait to be written (so what a client sends meanwhile waits in its own
+ * and the kernel's buffers, never the daemon's), and that closes on a message past
+ * `messageBytes` and after `rpcLimits.idleMs` on the Clock without one while it reads (clients
+ * ping every 5 s).
  */
 export const makeRpcConnections = (options: RpcConnectionOptions) =>
   Effect.gen(function* () {
@@ -57,14 +54,11 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
         // Holds a mark while a message arrived since the idle wait last took one.
         const activity = yield* Queue.sliding<void>(1);
         // Writes go one at a time, so at most one waits for a drain: its wake-up is this.
-        // Open while the replies waiting to be written hold less than `queuedBytes`; while it is
-        // closed the connection reads no further requests.
-        const reading = yield* Latch.make(true);
         let waiting: (() => void) | undefined,
           closed = false,
           queued = 0,
-          // Bytes of messages received and not yet read.
-          unread = 0;
+          // Set while replies past `queuedBytes` wait to be written: Bun reads nothing meanwhile.
+          paused = false;
         const wake = () => {
           const resume = waiting;
           waiting = undefined;
@@ -73,10 +67,6 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
         ws.data.connection = {
           receive(message) {
             Queue.offerUnsafe(activity, undefined);
-            unread += sizeOf(message);
-            // While reads are held back a client may not pile messages up in the daemon. It is cut
-            // at once: a close frame would wait behind the replies it has not read.
-            if (!reading.isOpen() && unread > options.unreadBytes) return ws.terminate();
             Queue.offerUnsafe(inbound, message);
           },
           drained: wake,
@@ -114,7 +104,10 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
           return Effect.uninterruptibleMask((restore) =>
             Effect.suspend(() => {
               queued += bytes;
-              if (queued >= options.queuedBytes) reading.closeUnsafe();
+              if (queued >= options.queuedBytes && !paused && !closed) {
+                paused = true;
+                ws.pause();
+              }
               return restore(
                 writes.withPermits(1)(
                   Effect.andThen(
@@ -129,7 +122,10 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
                 Effect.ensuring(
                   Effect.sync(() => {
                     queued -= bytes;
-                    if (queued < options.queuedBytes) reading.openUnsafe();
+                    if (queued < options.queuedBytes && paused) {
+                      paused = false;
+                      if (!closed) ws.resume();
+                    }
                   }),
                 ),
               );
@@ -143,24 +139,22 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
         };
         const socket = Socket.make({
           reader: Effect.succeed({
-            pull: Effect.andThen(
-              reading.await,
-              Effect.map(Queue.takeAll(inbound), (messages) => {
-                for (const message of messages) unread -= sizeOf(message);
-                return messages as never;
-              }),
-            ),
+            pull: Effect.map(Queue.takeAll(inbound), (messages) => messages as never),
             upgrade: () => Effect.fail(Socket.SocketUpgradeError.unsupported as never),
           }),
           writer: Effect.succeed(writer),
         });
-        // A connection silent past its idle bound is closed; any message, a ping too, counts.
+        // A connection silent past its idle bound is closed; any message, a ping too, counts. While
+        // the daemon itself reads nothing, the client is not silent; the drain bound applies.
         yield* Effect.forkScoped(
           Effect.forever(
             Queue.take(activity).pipe(
               Effect.timeoutOrElse({
                 duration: rpcLimits.idleMs,
-                orElse: () => Effect.sync(() => ws.close(closeCodes.policy)),
+                orElse: () =>
+                  Effect.sync(() => {
+                    if (!paused) ws.close(closeCodes.policy);
+                  }),
               }),
             ),
           ),
