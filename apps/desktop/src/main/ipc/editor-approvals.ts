@@ -9,6 +9,16 @@ const sameCheckout = (a: CheckoutTarget, b: CheckoutTarget) => {
   return fields.length === Object.keys(y).length && fields.every((k) => x[k] === y[k]);
 };
 type Refusal = IpcAuthorityError['refusal'];
+type CommandCheck<K extends WorkspaceCommand> = (
+  input: CommandInput<K>,
+  grants: DocumentGrants,
+) => Refusal | undefined;
+type ReplyRecord<K extends WorkspaceCommand> = (
+  output: CommandOutput<K>,
+  grants: DocumentGrants,
+) => void;
+/** Commands whose client ID may name another client, whose operation their own check approves. */
+const foreignClientCommands = new Set<WorkspaceCommand>(['operationStatus']);
 
 /**
  * What the editor's documents may name: checkouts main opened or adopted, and operations recovery
@@ -40,30 +50,10 @@ export class EditorApprovals {
     if ('checkout' in v && !this.isApproved(v.checkout as CheckoutTarget)) return 'checkout';
     if ('target' in v && !this.isApproved((v.target as { checkout: CheckoutTarget }).checkout))
       return 'checkout';
-    const isOwnOperation = (clientId: unknown, id: unknown) =>
-      clientId === editorClientId || this.operations.has(JSON.stringify([clientId, id]));
-    if (operation === 'operationStatus') {
-      if (!isOwnOperation(v.clientId, v.id)) return 'foreign-client';
-    } else if ('clientId' in v && v.clientId !== editorClientId) return 'foreign-client';
-    if (operation === 'acknowledgeOperation' && !isOwnOperation(v.operationClientId, v.id))
+    if (!foreignClientCommands.has(operation) && 'clientId' in v && v.clientId !== editorClientId)
       return 'foreign-client';
-    if (operation === 'persistRecovery') {
-      const { state } = input as CommandInput<'persistRecovery'>;
-      if (!state.checkouts.every((target) => this.isApproved(target))) return 'checkout';
-    }
-    if (operation === 'openCheckout') {
-      const { root } = input as CommandInput<'openCheckout'>;
-      // A picked root opens once; a listed worktree or a known checkout's root opens again.
-      if (
-        !grants.roots.delete(root) &&
-        !grants.worktrees.has(root) &&
-        ![...this.known.values()].some((target) => target.root === root)
-      )
-        return 'root';
-    }
-    // A renderer location would create directories anywhere; it needs a native grant first.
-    if (operation === 'createWorktree') return 'worktree-location';
-    return undefined;
+    const check = this.checks[operation] as CommandCheck<K> | undefined;
+    return check?.(input, grants);
   }
   /** Takes in what a command's reply approves. */
   record<K extends WorkspaceCommand>(
@@ -71,20 +61,42 @@ export class EditorApprovals {
     output: CommandOutput<K>,
     grants: DocumentGrants,
   ) {
-    // After `git init` the folder's Git target replaces its approval under the same ID.
-    if (operation === 'openCheckout' || operation === 'initializeRepository') {
-      const target = output as CheckoutTarget;
-      this.known.set(target.checkoutId, target);
-    }
-    if (operation === 'listWorktrees')
-      for (const worktree of (output as CommandOutput<'listWorktrees'>).worktrees)
-        grants.worktrees.add(worktree.root);
-    if (operation === 'loadRecovery') {
-      const load = output as CommandOutput<'loadRecovery'>;
-      for (const target of load.state.checkouts) this.known.set(target.checkoutId, target);
-      for (const fact of load.operations)
-        this.operations.add(JSON.stringify([fact.clientId, fact.id]));
-    }
+    const record = this.records[operation] as ReplyRecord<K> | undefined;
+    record?.(output, grants);
   }
+  private isOwnOperation(clientId: string, id: string) {
+    return clientId === editorClientId || this.operations.has(JSON.stringify([clientId, id]));
+  }
+  /** The further checks of a command, after its checkouts and client ID. */
+  private readonly checks: { [K in WorkspaceCommand]?: CommandCheck<K> } = {
+    operationStatus: ({ clientId, id }) =>
+      this.isOwnOperation(clientId, id) ? undefined : 'foreign-client',
+    acknowledgeOperation: ({ operationClientId, id }) =>
+      this.isOwnOperation(operationClientId, id) ? undefined : 'foreign-client',
+    persistRecovery: ({ state }) =>
+      state.checkouts.every((target) => this.isApproved(target)) ? undefined : 'checkout',
+    // A picked root opens once; a listed worktree or a known checkout's root opens again.
+    openCheckout: ({ root }, grants) =>
+      grants.roots.delete(root) ||
+      grants.worktrees.has(root) ||
+      [...this.known.values()].some((target) => target.root === root)
+        ? undefined
+        : 'root',
+    // A renderer location would create directories anywhere; it needs a native grant first.
+    createWorktree: () => 'worktree-location',
+  };
+  /** What a command's reply approves. */
+  private readonly records: { [K in WorkspaceCommand]?: ReplyRecord<K> } = {
+    openCheckout: (target) => this.known.set(target.checkoutId, target),
+    // After `git init` the folder's Git target replaces its approval under the same ID.
+    initializeRepository: (target) => this.known.set(target.checkoutId, target),
+    listWorktrees: ({ worktrees }, grants) => {
+      for (const worktree of worktrees) grants.worktrees.add(worktree.root);
+    },
+    loadRecovery: ({ state, operations }) => {
+      for (const target of state.checkouts) this.known.set(target.checkoutId, target);
+      for (const fact of operations) this.operations.add(JSON.stringify([fact.clientId, fact.id]));
+    },
+  };
 }
 export type DocumentGrants = ReturnType<EditorApprovals['makeDocumentGrants']>;
