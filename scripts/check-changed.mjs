@@ -1,6 +1,9 @@
 // Runs the fast checks for what this branch changed; CI still runs everything.
+//   check-changed [base] [--full] [--integration]
+// By default it tests only the packages that own a changed file and typechecks every affected package.
+// --full also tests their dependents; --integration also runs both root integration suites.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 
 const git = (...args) =>
   execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
@@ -22,7 +25,8 @@ const findBase = () => {
   process.exit(1);
 };
 
-const base = process.argv[2] ?? findBase();
+const flags = new Set(process.argv.slice(2).filter((arg) => arg.startsWith('--')));
+const base = process.argv.slice(2).find((arg) => !arg.startsWith('--')) ?? findBase();
 const changed = [
   ...lines(git('diff', '-z', '--name-only', '--diff-filter=d', base)),
   ...lines(git('ls-files', '-z', '--others', '--exclude-standard')),
@@ -45,5 +49,32 @@ if (source.length > 0) {
   run('bunx', ['oxfmt', '--check', ...source]);
   run('bunx', ['oxlint', '--report-unused-disable-directives', ...source]);
 }
+
+const code = changed.filter((file) => !file.endsWith('.md'));
+if (code.length === 0) process.exit(0);
+
+// Files every package's checks read.
+const shared =
+  /^(bun\.lock|nx\.json|tsconfig\.base\.json|oxlint\.config\.mts|oxfmt\.config\.mts|packages\/config\/)/;
 // Measured: 4-way parallel ran every suite in ~110s against ~260s serial. nx caches typecheck.
-run('bunx', ['nx', 'affected', '-t', 'typecheck', 'test', `--base=${base}`, '--parallel=4']);
+const parallel = '--parallel=4';
+if (flags.has('--full') || code.some((file) => shared.test(file))) {
+  run('bunx', ['nx', 'affected', '-t', 'typecheck', 'test', `--base=${base}`, parallel]);
+} else {
+  run('bunx', ['nx', 'affected', '-t', 'typecheck', `--base=${base}`, parallel]);
+  const edited = new Set();
+  for (const file of code) {
+    const folder = file.match(/^(apps|packages)\/[^/]+\//)?.[0];
+    if (folder && existsSync(`${folder}package.json`))
+      edited.add(JSON.parse(readFileSync(`${folder}package.json`, 'utf8')).name);
+  }
+  if (edited.size > 0)
+    run('bunx', ['nx', 'run-many', '-t', 'test', `--projects=${[...edited].join(',')}`, parallel]);
+}
+
+// The root integration suites run a real daemon; locally they run only when edited or asked for.
+const integration = flags.has('--integration');
+if (integration || code.some((file) => file.startsWith('test/chat/')))
+  run('bun', ['run', 'test:chat-integration']);
+if (integration || code.some((file) => file.startsWith('test/editor-workspace/')))
+  run('bun', ['run', 'test:editor-integration']);

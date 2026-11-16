@@ -56,7 +56,8 @@ Atoms hold no domain logic, so a headless test or a non-React client can use the
 ## Verifying
 
 - While iterating, run the one test file you changed (`bun test <file> -t "<name>"`, or `node --experimental-strip-types --test <file>`), not the package suite.
-- Before you push, run `bun run check:changed`: foundation check, format and lint on changed files, and typecheck and tests for affected packages and their dependents. CI runs the full suites.
+- Before you push, run `bun run check:changed`: foundation check, format and lint on changed files, typecheck for every affected package, and the suites of the packages you edited (and a root integration suite you edited). Add `--full` to also test dependents, and `--integration` when you change the daemon or chat wire.
+- CI runs every suite on every PR.
 - Don't run `bun run test`, the root integration suites or the Playwright projects unless asked. Run only the Playwright project for the surface you touched.
 
 ## Safety

@@ -368,6 +368,8 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     await expect
       .poll(() => readFile(join(f.cwd, 'a.ts'), 'utf8'))
       .toBe('local dirty draft + live tool editing');
+    // The bytes land before the Save settles, and Close refuses while it is in flight.
+    await expectSaveEnabled(p, true);
     await p.getByRole('button', { name: 'Close a.ts', exact: true }).click();
     await expect(editor(p)).toHaveCount(0);
     expect((await f.stats()).commands.filter((v) => v === 'stopChat')).toHaveLength(0);
@@ -565,6 +567,8 @@ test('native 200% normal/constrained live chat keeps wheel/Tab Stop and Send rea
     await expect
       .poll(() => readFile(join(f.cwd, 'a.ts'), 'utf8'))
       .toBe('local dirty draft after zoom');
+    // Quit refuses while the Save is in flight.
+    await expectSaveEnabled(p, true);
     expect(errors).toEqual([]);
     await stop(app);
     current = undefined;
