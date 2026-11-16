@@ -4,7 +4,7 @@ import { Context, Effect, Layer, Stream } from 'effect';
 import type { ChatError } from '@moonbase/contracts/chat-errors';
 import { ChatService, type ChatServiceShape } from '@moonbase/contracts/services';
 import { type Host, safeError } from './commands.ts';
-import { watchChatListState } from './chat-list.ts';
+import { watchChatListState } from './chat-list/watch-chat-list.ts';
 import { ClaudeCodeWorkingDirectory } from './claude-code-working-directory.ts';
 import { LocalPiControl } from './local-pi-control.ts';
 import { openHost } from './resources.ts';

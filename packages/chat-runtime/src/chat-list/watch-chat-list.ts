@@ -8,7 +8,7 @@ import {
   type ChatSummary,
 } from '@moonbase/contracts/chat';
 import { readOnChange } from '@moonbase/effect/changes';
-import { watchError, type Host } from './commands.ts';
+import { watchError, type Host } from '../commands.ts';
 
 /**
  * The chat list's first page and the chats past it that changed while watching, read again after

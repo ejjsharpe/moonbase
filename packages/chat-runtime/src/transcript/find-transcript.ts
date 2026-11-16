@@ -8,14 +8,16 @@ import {
   type ChatInput,
   type ChatOutput,
 } from '@moonbase/contracts/chat';
-import { getEntryTextValues, hashJson, scanAdjacentEntry } from './transcript.ts';
+import { hashJson } from '../hash-json.ts';
+import { getEntryTextValues } from './message-values.ts';
+import { scanAdjacentEntry } from './saved-entries.ts';
 import {
   maximumFindPathChars,
   maximumFindPathDepth,
   openTranscriptCursor,
   writeCursor,
   type TranscriptCursor,
-} from './cursors.ts';
+} from '../cursors.ts';
 import { checkChatReplySize } from '@moonbase/contracts/chat-validation';
 import { InvalidChatRequestError } from '@moonbase/contracts/chat-errors';
 

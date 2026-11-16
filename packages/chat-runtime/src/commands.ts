@@ -53,15 +53,15 @@ import {
 import {
   listConversations,
   readListedConversation,
-  readHistory,
-  readHistoryAround,
-  projectSnapshot,
   summarizeConversation,
-  type SnapshotCache,
-} from './history.ts';
+} from './chat-list/list-chats.ts';
+import { projectSnapshot, type SnapshotCache } from './history/chat-snapshot.ts';
+import { readHistoryAround } from './history/history-around.ts';
+import { readHistory } from './history/history-page.ts';
 import type { LocalPiRuntimeConfiguration, RetainedWork } from './runtime-types.ts';
-import { findTranscript } from './find.ts';
-import { isNestedSourceEnded, readTranscriptContent } from './transcript.ts';
+import { findTranscript } from './transcript/find-transcript.ts';
+import { isNestedSourceEnded } from './transcript/nested-calls.ts';
+import { readTranscriptContent } from './transcript/transcript-content.ts';
 import {
   isCancellableChatRead,
   isChatMutation,

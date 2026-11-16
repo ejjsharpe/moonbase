@@ -1,4 +1,7 @@
+import { createHash } from 'node:crypto';
+import type { Cursor } from '@earendil-works/pi-durable';
 import * as Schema from 'effect/Schema';
+import { readObject } from '@moonbase/contracts/common';
 import { InvalidChatRequestError } from '@moonbase/contracts/chat-errors';
 import { boundedText, naturalNumber, recordId } from './field-schemas.ts';
 
@@ -53,13 +56,36 @@ const historyCursor = Schema.Struct({
   conversationId: Schema.optional(boundedText(512)),
   scan: Schema.NullOr(Schema.Record(Schema.String, Schema.Json)),
 });
-/** A list or history cursor's envelope around Pi's scan position. */
-export function openHistoryCursor(encoded: string) {
-  const result = decode(historyCursor, readCursorJson(encoded));
-  if (result.scan?.start === true)
-    decode(Schema.Struct({ start: Schema.Literal(true) }), result.scan);
-  return result;
+/** A listing cursor is bound to the store's identity, and a history cursor also to its chat. */
+export function getScanCursorScope(identity: string, conversationId?: string) {
+  const owner = createHash('sha256').update(identity).digest('hex');
+  return conversationId === undefined ? owner : owner + ':' + conversationId;
 }
+/** Opens a list or history cursor of `kind` in `scope`: Pi's scan position, or none at the start. */
+export function openScanCursor(
+  encoded: string | undefined,
+  kind: 'list' | 'history',
+  scope: string,
+): Cursor | undefined {
+  if (encoded === undefined) return undefined;
+  try {
+    const value = decode(historyCursor, readCursorJson(encoded));
+    if (value.scan?.start === true)
+      decode(Schema.Struct({ start: Schema.Literal(true) }), value.scan);
+    if (value.kind !== kind || value.conversationId !== scope) throw Error();
+    return value.scan === null || value.scan?.start === true
+      ? undefined
+      : (readObject(value.scan) as Cursor);
+  } catch {
+    throw new InvalidChatRequestError({ problem: 'history-cursor' });
+  }
+}
+/** A list or history cursor for Pi's scan position; none once the scan is done. */
+export const writeScanCursor = (
+  scan: Cursor | { start: true } | undefined,
+  kind: 'list' | 'history',
+  scope: string,
+) => (scan === undefined ? null : writeCursor({ kind, conversationId: scope, scan }));
 
 const findPartPositionSchema = Schema.Struct({
   message: naturalNumber,
