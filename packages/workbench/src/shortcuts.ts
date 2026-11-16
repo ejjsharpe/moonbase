@@ -1,8 +1,11 @@
 /** A shortcut's keys are written the Mac way (`Shift+Meta+P`); they show per platform. */
 export type Shortcut = { label: string; keys: string };
 
-/** Whether this is a Mac, where `Meta` is ⌘; elsewhere it is Ctrl. */
-export const onMac = typeof navigator !== 'undefined' && navigator.platform.includes('Mac');
+/**
+ * Whether this is a Mac, where `Meta` is ⌘; elsewhere it is Ctrl. Read from the user agent, as Monaco's
+ * keymap is (Chromium says Macintosh on Apple silicon too).
+ */
+export const onMac = typeof navigator !== 'undefined' && navigator.userAgent.includes('Macintosh');
 const keyGlyphs: Record<string, string> = onMac
   ? {
       Meta: '⌘',

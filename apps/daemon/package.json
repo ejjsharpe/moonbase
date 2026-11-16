@@ -27,6 +27,28 @@
   "nx": {
     "tags": [
       "macos-tests"
-    ]
+    ],
+    "targets": {
+      "test": {
+        "dependsOn": [
+          {
+            "projects": [
+              "@moonbase/workspace"
+            ],
+            "target": "build"
+          }
+        ]
+      },
+      "test:macos": {
+        "dependsOn": [
+          {
+            "projects": [
+              "@moonbase/workspace"
+            ],
+            "target": "build"
+          }
+        ]
+      }
+    }
   }
 }
