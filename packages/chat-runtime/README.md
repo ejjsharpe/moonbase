@@ -10,6 +10,8 @@
 
 The runtime trusts its typed configuration and inputs, which the daemon protocol's server decoded from the wire. It decodes only what comes back to it: its stored records, each time it reads one (`stored-records.ts`), and the cursors clients return (`cursors.ts`).
 
+Inside, `commands/` holds the `Host` (the open store and the gates every command runs through) and one file per command family; `transcript/` builds saved and live transcripts, their manifests and content reads, and Find; `history/` builds history pages, snapshots and the window around an entry; `chat-list/` lists and watches chats.
+
 The daemon serves the runtime over [`@moonbase/daemon-protocol`](../daemon-protocol/README.md), which owns the wire protocol, its server and the remote client services. **A working folder is tool context, not a filesystem sandbox.**
 
 ## Behavior worth knowing
