@@ -2,7 +2,8 @@ import * as stylex from '@stylexjs/stylex';
 import { ContextMenu } from '@base-ui/react/context-menu';
 import { Icon } from '@moonbase/ui/icons';
 import { overlays } from '@moonbase/ui/overlays';
-import { ariaKeys, formatKeys, type FileCommand } from './file-commands.ts';
+import type { FileCommand } from './file-commands.ts';
+import { ariaKeys, formatKeys } from '../shortcuts.ts';
 import type { TreeMenuState } from './use-tree-menu.ts';
 
 /** The files tree's right-click menu of `commands` for the entries `menu` was opened on. */

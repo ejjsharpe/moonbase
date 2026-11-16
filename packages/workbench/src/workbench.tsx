@@ -15,7 +15,7 @@ import { Mutation, type Action } from './mutation-dialog.tsx';
 import { useMutationRunner } from './mutation-runner.tsx';
 import { useMoveUndo } from './files-tree/move-undo.ts';
 import { useFileClipboard } from './files-tree/file-clipboard.ts';
-import { formatKeys, isCommandKey } from './files-tree/file-commands.ts';
+import { formatKeys, isCommandKey, type Shortcut } from './shortcuts.ts';
 import { Popup } from './popup.tsx';
 import {
   forwardRef,
@@ -50,7 +50,7 @@ import {
 import { MonacoView, readSelection, type EditorReveal } from './monaco-view.tsx';
 import { WorktreeSwitcher } from './worktree-switcher.tsx';
 import { ExplorerMenu, type ExplorerAction } from './explorer-menu.tsx';
-import { CheatSheet, editorShortcuts, type Shortcut } from './cheat-sheet.tsx';
+import { CheatSheet, editorShortcuts } from './cheat-sheet.tsx';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { styles } from './workbench-styles.ts';
 import { Icon } from '@moonbase/ui/icons';
