@@ -468,9 +468,9 @@ test('journal entries leave after acknowledgement and the window; a feed gap kee
     );
     assert(existsSync(join(h.root, 'back.txt')));
     // Within the window an acknowledged entry is still replayable.
-    h.advance(4_000);
+    await h.advance(4_000);
     assert.equal((await status('first'))?.outcome, 'completed');
-    h.advance(2_000);
+    await h.advance(2_000);
     await bob.runtime.dispose();
     await runtime.dispose();
     ({ host, runtime } = await h.startHost(5_000));

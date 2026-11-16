@@ -10,7 +10,5 @@ export class HostSettings extends Context.Service<
     readonly allowRoot: RootPredicate | undefined;
     /** The daemon's chat folders, for `turnChatIntoProject`. */
     readonly chats: ChatFolders | undefined;
-    /** The journal's clock. */
-    readonly now: () => number;
   }
 >()('moonbase/workspace/HostSettings') {}

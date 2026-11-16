@@ -1,4 +1,4 @@
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Queue, Scope, Stream } from 'effect';
+import { Context, Deferred, Duration, Effect, Exit, Layer, Queue, Scope, Stream } from 'effect';
 import {
   CheckoutChangedError,
   InvalidPathError,
@@ -10,6 +10,9 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { attempt } from '../attempt.ts';
 import { errorText, path, same } from '../validation.ts';
 import { Checkouts } from './checkouts.ts';
+
+/** A watch reports at most one event this often. */
+const observationInterval = Duration.millis(100);
 
 const isInside = (path: string, parent: string) => {
   const rel = relative(parent, path);
@@ -167,8 +170,9 @@ export class Observations {
         const events = Stream.fromQueue(changes).pipe(
           Stream.mapEffect(() =>
             Effect.gen(function* () {
-              const timer = yield* Effect.forkIn(Effect.sleep('100 millis'), scope);
-              yield* Fiber.join(timer);
+              // Gathers the rest of a burst (a checkout writes many files) into one event. A watch
+              // closing meanwhile shuts the queue, and clearing it then ends the stream.
+              yield* Effect.sleep(observationInterval);
               yield* Queue.clear(changes);
               return yield* Effect.sync(() => {
                 const paths = changedPaths;

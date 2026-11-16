@@ -2,7 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Effect, ManagedRuntime } from 'effect';
+import { Clock, Duration, Effect, Layer, ManagedRuntime, Scope } from 'effect';
+import { TestClock } from 'effect/testing';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { WorkspaceHostService, type WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/workspace';
@@ -26,17 +27,17 @@ export function harness() {
       ...args,
     ]).toString();
   const runtimes: { dispose(): Promise<void> }[] = [];
-  let clock = 1_000;
+  // One clock for every host the harness starts, so retention spans a host restart.
+  const clock = Effect.runSync(
+    TestClock.make({ warningDelay: Duration.infinity }).pipe(Scope.provide(Scope.makeUnsafe())),
+  );
   const startHost = async (retention = 60_000, name = 'host', hostId = 'split-host') => {
     const runtime = ManagedRuntime.make(
-      WorkspaceHostLive(
-        {
-          dataDirectory: join(base, name),
-          hostId,
-          journalRetentionMs: retention,
-        },
-        () => clock,
-      ),
+      WorkspaceHostLive({
+        dataDirectory: join(base, name),
+        hostId,
+        journalRetentionMs: retention,
+      }).pipe(Layer.provide(Layer.succeed(Clock.Clock, clock))),
     );
     runtimes.push(runtime);
     return { runtime, host: await runtime.runPromise(WorkspaceHostService) };
@@ -67,7 +68,8 @@ export function harness() {
     git,
     startHost,
     startClient,
-    advance: (ms: number) => (clock += ms),
+    /** Moves the hosts' journal clock on. */
+    advance: (ms: number) => Effect.runPromise(clock.adjust(ms)),
     async close() {
       for (const runtime of runtimes.reverse()) await runtime.dispose().catch(() => {});
       rmSync(base, { recursive: true, force: true });
