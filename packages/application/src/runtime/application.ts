@@ -31,6 +31,8 @@ const reasons = {
   'preserve-first': 'Preserve the current chat before switching targets.',
   'cleanup-pending': 'Chat still owns unfinished cleanup. Quit and recover before reopening it.',
   unavailable: 'Chat is unavailable.',
+  'cleanup-failed': 'Chat cleanup failed.',
+  'nothing-composed': 'Supply an editor or chat capability.',
   'invalid-targets':
     'Supply distinct named chat targets and a matching default, or the single chat capability.',
 } as const;
@@ -38,10 +40,14 @@ const reasons = {
 /** What the application's composition refused or could not do. */
 export class ApplicationLifecycleError extends Schema.TaggedError<ApplicationLifecycleError>()(
   'ApplicationLifecycleError',
-  { reason: Schema.Literals(Object.keys(reasons) as (keyof typeof reasons)[]) },
+  {
+    reason: Schema.Literals(Object.keys(reasons) as (keyof typeof reasons)[]),
+    /** Moonbase's own text of what failed (an acquisition's), shown instead of the reason. */
+    detail: Schema.optional(Schema.String),
+  },
 ) {
   override get message(): string {
-    return reasons[this.reason];
+    return this.detail || reasons[this.reason];
   }
 }
 
