@@ -7,7 +7,6 @@ import {
   observeApplicationStream,
 } from '@moonbase/application/chat/promises';
 import { releaseResource } from '@moonbase/effect';
-import type { ObservationClose } from '@moonbase/contracts/common';
 
 function event() {
   let resolve!: () => void;
@@ -250,4 +249,3 @@ test('unknown defects and raw Effect evidence never expose private diagnostics',
     await runtime.dispose();
   }
 });
-

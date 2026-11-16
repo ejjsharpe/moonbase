@@ -55,10 +55,12 @@ export function makeApplication(options: Options) {
     layer as Layer.Layer<never, unknown>,
   );
   const run = <A, E>(effect: Effect.Effect<A, E, never>) => runtime.runPromise(effect);
-  const use = <A, E, I, S>(service: Effect.Effect<S, never, I>, f: (service: S) => Effect.Effect<A, E>) =>
-    run(Effect.flatMap(service as Effect.Effect<S>, f));
+  const through = <A, E, I, S>(
+    service: Effect.Effect<S, never, I>,
+    f: (service: S) => Effect.Effect<A, E>,
+  ) => run(Effect.flatMap(service as Effect.Effect<S>, f));
   const app = <A, E>(f: (app: MoonbaseApplication['Service']) => Effect.Effect<A, E>) =>
-    use(MoonbaseApplication, f);
+    through(MoonbaseApplication, f);
   return {
     memory,
     runtime,
@@ -75,7 +77,10 @@ export function makeApplication(options: Options) {
     chat: () => app((a) => Effect.map(SubscriptionRef.get(a.chat.state), (s) => s.controller)),
     canUnload: () =>
       runtime.runSync(
-        Effect.flatMap(MoonbaseApplication as unknown as Effect.Effect<MoonbaseApplication['Service']>, (a) => a.canUnload),
+        Effect.flatMap(
+          MoonbaseApplication as unknown as Effect.Effect<MoonbaseApplication['Service']>,
+          (a) => a.canUnload,
+        ),
       ),
     prepareQuit: () => app((a) => a.prepareQuit),
     /** Waits until the chat's release has ended. */
@@ -87,27 +92,28 @@ export function makeApplication(options: Options) {
         ),
       ),
     editor: {
-      openCheckout: () => use(EditorCheckouts, (c) => c.openCheckout(checkout.root)),
-      open: (file: FileTarget = target) => use(EditorTabs, (t) => t.open(file)),
-      edit: (text: string, file: FileTarget = target) => use(EditorTabs, (t) => t.edit(file, text)),
-      flush: () => use(RecoverySync, (r) => r.flush),
+      openCheckout: () => through(EditorCheckouts, (c) => c.openCheckout(checkout.root)),
+      open: (file: FileTarget = target) => through(EditorTabs, (t) => t.open(file)),
+      edit: (text: string, file: FileTarget = target) =>
+        through(EditorTabs, (t) => t.edit(file, text)),
+      flush: () => through(RecoverySync, (r) => r.flush),
       text: (file: FileTarget = target) =>
-        use(EditorBuffers, (b) => Effect.map(b.find(file), (buffer) => buffer?.text)),
+        through(EditorBuffers, (b) => Effect.map(b.find(file), (buffer) => buffer?.text)),
       admissionsOpen: () =>
-        use(EditorSession, (s) => Effect.map(s.get, (state) => state.admissionsOpen)),
+        through(EditorSession, (s) => Effect.map(s.get, (state) => state.admissionsOpen)),
       /** The next close prompt, waiting for one if none is shown. */
       closePrompt: () =>
-        use(EditorPreservation, (p) =>
+        through(EditorPreservation, (p) =>
           SubscriptionRef.changes(p.closePrompt).pipe(
             Stream.filter((prompt): prompt is ClosePrompt => prompt !== null),
             Stream.runHead,
-            Effect.map((prompt) => prompt._tag === 'Some' ? prompt.value : undefined),
+            Effect.map((prompt) => (prompt._tag === 'Some' ? prompt.value : undefined)),
           ),
         ),
       answer: (id: string, choice: 'save' | 'discard' | 'cancel') =>
-        use(EditorPreservation, (p) => p.answerClose(id, choice)),
+        through(EditorPreservation, (p) => p.answerClose(id, choice)),
       drafts: () =>
-        use(WorkspaceService, (w) =>
+        through(WorkspaceService, (w) =>
           Effect.map(w.loadRecovery({ clientId: 'one' }), ({ state }) =>
             state.buffers.flatMap((b) => (b.draft ? [b.draft.text] : [])),
           ),

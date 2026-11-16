@@ -13,7 +13,9 @@ export async function openChatApplication(
     }),
   );
   const app = await runtime.runPromise(
-    MoonbaseApplication.use((service) => Effect.succeed(service)),
+    Effect.gen(function* () {
+      return yield* MoonbaseApplication;
+    }),
   );
   await runtime.runPromise(app.start);
   const { controller } = await runtime.runPromise(SubscriptionRef.get(app.chat.state));

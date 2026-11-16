@@ -49,7 +49,11 @@ export async function checkHeadlessApplication() {
     const runtime: ManagedRuntime.ManagedRuntime<MoonbaseApplication, unknown> =
       ManagedRuntime.make(layer as Layer.Layer<MoonbaseApplication, unknown>);
     try {
-      const app = await runtime.runPromise(MoonbaseApplication.use((service) => Effect.succeed(service)));
+      const app = await runtime.runPromise(
+        Effect.gen(function* () {
+          return yield* MoonbaseApplication;
+        }),
+      );
       await runtime.runPromise(app.start as Effect.Effect<void, unknown>);
       invariant(chat.calls.length === 0, 'Starting invoked a remote command');
       if (mode !== 'chat')

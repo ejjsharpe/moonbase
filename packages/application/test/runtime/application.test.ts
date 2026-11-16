@@ -29,8 +29,10 @@ test('an editor application unloads once every edit is in recovery', async () =>
 
 test('a chat-only application needs its chat, and shows no private failure text', async () => {
   const failing = makeApplication({ chat: Effect.fail(Error('private-provider-key')) });
-  await assert.rejects(failing.start(), (error: Error) =>
-    isLifecycleError('unavailable')(error) && !error.message.includes('private-provider-key'),
+  await assert.rejects(
+    failing.start(),
+    (error: Error) =>
+      isLifecycleError('unavailable')(error) && !error.message.includes('private-provider-key'),
   );
   await failing.dispose();
   const absent = makeApplication({ chat: Effect.succeed(null) });
@@ -121,7 +123,10 @@ test('a vetoed Quit restores admissions; a consented one fences the editor and t
     await assert.rejects(f.editor.edit('blocked'), (error) => isEditorError(error));
     assert.equal(await f.editor.text(), 'original');
     assert.equal(await f.app((a) => a.closeChat), false);
-    await assert.rejects(f.app((a) => a.openChat), isLifecycleError('closing'));
+    await assert.rejects(
+      f.app((a) => a.openChat),
+      isLifecycleError('closing'),
+    );
     assert.equal(f.canUnload(), true);
   } finally {
     await f.dispose();
@@ -152,18 +157,25 @@ for (const fails of [false, true])
       old.setDraft('late');
       assert.equal(chat.storage.writes, writes);
       if (fails)
-        held.reject(new ApplicationError({ code: 'Persistence', message: 'Cleanup failed safely' }));
+        held.reject(
+          new ApplicationError({ code: 'Persistence', message: 'Cleanup failed safely' }),
+        );
       else held.resolve();
       await f.cleanupSettled();
       if (fails) {
         const snapshot = await f.snapshot();
         assert.equal(snapshot.chat.state, 'cleanup-blocked');
-        assert(snapshot.cleanup.errors.some((message) => message.includes('Cleanup failed safely')));
+        assert(
+          snapshot.cleanup.errors.some((message) => message.includes('Cleanup failed safely')),
+        );
         await assert.rejects(
           f.app((a) => a.openChat),
           isLifecycleError('cleanup-pending'),
         );
-        await assert.rejects(f.app((a) => a.release), isLifecycleError('cleanup-failed'));
+        await assert.rejects(
+          f.app((a) => a.release),
+          isLifecycleError('cleanup-failed'),
+        );
         assert.equal((await f.snapshot()).phase, 'failed');
       } else assert(await f.app((a) => a.openChat));
     } finally {
@@ -237,12 +249,17 @@ test('named targets keep separate drafts and switch only once the old chat is re
     assert.equal((await f.snapshot()).chatTargetId, 'remote');
     await second.start();
     await second.connect();
-    await second.create('Remote', { cwd: '/remote', model: { provider: 'fake', modelId: 'first' } });
+    await second.create('Remote', {
+      cwd: '/remote',
+      model: { provider: 'fake', modelId: 'first' },
+    });
     second.setDraft('remote draft');
     const back = (await f.app((a) => a.selectChatTarget('local')))!;
     assert.equal(back.getSnapshot().draft, 'local draft');
     assert.equal(JSON.parse(remote.storage.value!).drafts[0].text, 'remote draft');
-    assert(![...local.calls, ...remote.calls].some((call) => ['sendChat', 'stopChat'].includes(call)));
+    assert(
+      ![...local.calls, ...remote.calls].some((call) => ['sendChat', 'stopChat'].includes(call)),
+    );
   } finally {
     await f.dispose();
   }

@@ -9,7 +9,13 @@ export type NamedChatTarget = {
   label: string;
   acquire: Effect.Effect<ChatDependencies | null, unknown>;
 };
-export type ApplicationPhase = 'live' | 'preparing' | 'prepared' | 'disposing' | 'disposed' | 'failed';
+export type ApplicationPhase =
+  | 'live'
+  | 'preparing'
+  | 'prepared'
+  | 'disposing'
+  | 'disposed'
+  | 'failed';
 export type ApplicationChatStatus =
   | 'unavailable'
   | 'opening'

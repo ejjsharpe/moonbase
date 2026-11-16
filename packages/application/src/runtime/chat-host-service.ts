@@ -77,7 +77,8 @@ export type ChatHostShape = {
 
 const failureOf = (exit: Exit.Failure<unknown, unknown>) => {
   const reason = exit.cause.reasons.find((item) => item._tag === 'Fail' || item._tag === 'Die');
-  return reason?._tag === 'Fail' ? reason.error : reason?._tag === 'Die' ? reason.defect : undefined;
+  if (reason?._tag === 'Fail') return reason.error;
+  return reason?._tag === 'Die' ? reason.defect : undefined;
 };
 
 /** The chat the application shows: one target's at a time, opened, switched and released. */
@@ -131,7 +132,9 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
               ),
               yield* Effect.exit(Scope.close(instance.scope, Exit.void)),
             ];
-            const failures = exits.flatMap((exit) => (Exit.isFailure(exit) ? [failureOf(exit)] : []));
+            const failures = exits.flatMap((exit) =>
+              Exit.isFailure(exit) ? [failureOf(exit)] : [],
+            );
             if (failures.length) return yield* Effect.fail(failures[0]);
           });
         /** Releases the chat's instance as the application's cleanup, which blocks reopening. */
@@ -299,11 +302,12 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
             if (taken.switching) yield* Effect.exit(Deferred.await(taken.switching));
             // An acquisition that finished meanwhile released its own instance.
             const { cleanup } = yield* Ref.get(steps);
-            const released: Exit.Exit<unknown, unknown> = taken.current
-              ? yield* Effect.exit(ownCleanup(taken.current))
-              : cleanup
-                ? yield* Effect.exit(Deferred.await(cleanup))
-                : Exit.void;
+            const pending = taken.current
+              ? ownCleanup(taken.current)
+              : cleanup && Deferred.await(cleanup);
+            const released: Exit.Exit<unknown, unknown> = pending
+              ? yield* Effect.exit(pending)
+              : Exit.void;
             if (Exit.isFailure(released))
               return yield* fail('cleanup-failed', joinFailures([failureOf(released)]));
           }),
