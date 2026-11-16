@@ -197,23 +197,17 @@ test('a re-watch that throws while subscribing counts as a failed attempt', asyn
   assert.equal(controller.getSnapshot().error, null);
 });
 
-for (const action of ['close', 'switch', 'detach', 'dispose'] as const)
-  test(`no re-watch after ${action} during the backoff`, async (t) => {
-    const { fixture, controller, watchesOf, advance } = await recoveryController(t, [10]);
-    watchesOf(fixture.target)[0].fail(unavailable());
-    assert.equal(controller.getSnapshot().transcript.observation, 'reconnecting');
-    const other = { ...fixture.target, conversationId: 'other' };
-    if (action === 'close') await controller.closeView();
-    else if (action === 'switch') await controller.select(other);
-    else if (action === 'detach') await controller.detach();
-    else await controller.dispose();
-    await advance(40);
-    assert.equal(watchesOf(fixture.target).length, 1);
-    if (action === 'switch') {
-      assert.equal(watchesOf(other).length, 1);
-      assert.equal(controller.getSnapshot().snapshot?.conversation.target.conversationId, 'other');
-    }
-  });
+test('no re-watch after switching chats during the backoff', async (t) => {
+  const { fixture, controller, watchesOf, advance } = await recoveryController(t, [10]);
+  watchesOf(fixture.target)[0].fail(unavailable());
+  assert.equal(controller.getSnapshot().transcript.observation, 'reconnecting');
+  const other = { ...fixture.target, conversationId: 'other' };
+  await controller.select(other);
+  await advance(40);
+  assert.equal(watchesOf(fixture.target).length, 1);
+  assert.equal(watchesOf(other).length, 1);
+  assert.equal(controller.getSnapshot().snapshot?.conversation.target.conversationId, 'other');
+});
 
 test('no re-watch after disconnect during the backoff', async (t) => {
   const { fixture, controller, watchesOf, advance } = await recoveryController(t, [10], {

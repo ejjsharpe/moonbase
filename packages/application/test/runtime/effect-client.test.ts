@@ -87,7 +87,7 @@ test('two observers share a caller runtime; closing waits for finalization and f
   }
 });
 
-test('public helper preserves typed identity, pre-abort and composite cleanup evidence', async () => {
+test('public helper preserves typed identity, pre-abort, in-flight cancellation and composite cleanup evidence', async () => {
   const runtime = ManagedRuntime.make(Layer.empty);
   const failure = new ApplicationError({ code: 'Uncertain', message: 'Possible admission' });
   let dispatched = false;
@@ -109,6 +109,29 @@ test('public helper preserves typed identity, pre-abort and composite cleanup ev
       (error) => ApplicationError.is(error) && error.code === 'Cancelled',
     );
     assert.equal(dispatched, false);
+    const entered = event(),
+      cancelling = new AbortController();
+    let interrupted = false;
+    const pending = runApplicationEffect(
+      runtime,
+      Effect.sync(entered.resolve).pipe(
+        Effect.andThen(Effect.never),
+        Effect.ensuring(
+          Effect.sync(() => {
+            interrupted = true;
+          }),
+        ),
+      ),
+      { signal: cancelling.signal },
+    );
+    await entered.promise;
+    assert.equal(await runApplicationEffect(runtime, Effect.succeed('concurrent')), 'concurrent');
+    cancelling.abort();
+    await assert.rejects(
+      pending,
+      (error) => ApplicationError.is(error) && error.code === 'Cancelled',
+    );
+    assert.equal(interrupted, true);
     await assert.rejects(
       runApplicationEffect(
         runtime,

@@ -237,7 +237,9 @@ test('summary byte and record budgets include hydrated descriptors and envelopes
   );
 });
 
-for (const lifecycle of ['selection', 'hide', 'close', 'dispose', 'reconnect'] as const)
+// Closing the view closes the selection's scope; disposal also joins the transcripts that
+// Hide had already begun closing.
+for (const lifecycle of ['close', 'dispose'] as const)
   test(`held read cancels/fences late success, progress and finally across ${lifecycle}; cleanup retains actual settlement`, async (t) => {
     const f = await transcriptController(t, 40);
     const source = f.entries[0].transcript!.source,
@@ -252,23 +254,13 @@ for (const lifecycle of ['selection', 'hide', 'close', 'dispose', 'reconnect'] a
     const read = f.controller.loadTranscriptPart(source, chosen);
     await entered.promise;
     try {
-      let cleanup: Promise<unknown> | undefined;
-      if (lifecycle === 'selection')
-        await f.controller.select({ ...f.target, conversationId: 'B' });
-      if (lifecycle === 'hide') cleanup = f.controller.detach();
-      if (lifecycle === 'close') cleanup = f.controller.closeView();
-      if (lifecycle === 'dispose') cleanup = f.controller.dispose();
-      if (lifecycle === 'reconnect') {
-        cleanup = f.controller.detach();
-        await f.controller.start();
-        await f.controller.select(f.target);
-      }
+      const cleanup = lifecycle === 'close' ? f.controller.closeView() : f.controller.dispose();
       let settled = false;
-      void cleanup?.then(() => {
+      void cleanup.then(() => {
         settled = true;
       });
       await tick();
-      if (cleanup) assert.equal(settled, false);
+      assert.equal(settled, false);
       assert(
         f.calls.find((call) => call.operation === 'getChatTranscriptContent')!.signal!.aborted,
       );

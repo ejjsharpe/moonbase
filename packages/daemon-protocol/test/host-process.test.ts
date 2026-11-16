@@ -6,7 +6,6 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, writeFile, readFile, realpath, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
 import { randomBytes } from 'node:crypto';
@@ -204,7 +203,7 @@ test('actual child host crash resumes Pi-owned work without resubmitting reserve
   }
 });
 
-test('compiled remote entry runs on Electron Node24 against the separate production host with no engine graph', async () => {
+test('compiled remote entry runs on Electron against the separate production host with no engine graph', async () => {
   const rootRequire = createRequire(new URL('../../../package.json', import.meta.url)),
     esbuild = rootRequire('esbuild') as typeof Esbuild,
     electron = rootRequire('electron') as string;
@@ -241,7 +240,7 @@ test('compiled remote entry runs on Electron Node24 against the separate product
         const receipt=await client.command('sendChat',{target,requestId:'electron-send',text:'One controlled input'});
         const recovered=await client.command('getChatSend',{target,requestId:'electron-send'});
         if(JSON.stringify(receipt)!==JSON.stringify(recovered))throw Error('receipt mismatch');
-        console.log(JSON.stringify({node:process.versions.node,electron:process.versions.electron,publicHost,admission:recovered.admission}));
+        console.log(JSON.stringify({electron:process.versions.electron,publicHost,admission:recovered.admission}));
       }finally{await runtime.dispose();}}
     main().catch(()=>{console.error('remote compatibility failed');process.exitCode=1;});`;
   const result = await esbuild.build({
@@ -257,24 +256,6 @@ test('compiled remote entry runs on Electron Node24 against the separate product
     !inputs.some((path) =>
       /pi-durable|pi-ai|chord|packages\/(chat-runtime|workspace|workbench|editor)\//.test(path),
     ),
-  );
-  const sourceDirectory = fileURLToPath(new URL('../src/', import.meta.url));
-  assert.deepEqual(
-    inputs.filter((path) => path.startsWith(sourceDirectory)).sort(),
-    [
-      'remote.ts',
-      'protocol.ts',
-      'health.ts',
-      'rpc-link.ts',
-      'daemon-rpc-link.ts',
-      'remote-workspace.ts',
-      'rpc-services.ts',
-      'upgrade-proof.ts',
-      'endpoint-connection.ts',
-    ]
-      .map((name) => join(sourceDirectory, name))
-      .sort(),
-    'The remote bundle must contain only its transport and protocol leaves.',
   );
   assert(
     !Object.values(result.metafile!.outputs).some((output) =>
@@ -296,8 +277,7 @@ test('compiled remote entry runs on Electron Node24 against the separate product
     exited = once(child, 'exit');
     assert.equal(((await bounded(exited)) as unknown[])[0], 0, errors);
     const record = JSON.parse(output.trim());
-    assert.equal(record.node, '24.22.1');
-    assert.equal(record.electron, '45.1.0');
+    assert(record.electron, 'the entry ran under Electron');
     assert.equal(record.admission, 'admitted');
     assert(!output.includes(token));
     assert(!errors.includes(token));

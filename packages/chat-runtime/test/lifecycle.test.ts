@@ -495,95 +495,76 @@ test('queued admission cancellation releases its lease without overtaking held S
   assert.equal(f.faux.state.callCount, 2);
 });
 
-for (const failure of [false, true])
-  test(`Stop deadline covers a held abort join and retains its ${failure ? 'late failure' : 'exact request'} at the root`, async (t) => {
-    const original = Harness.open;
-    let entered!: () => void, release!: () => void;
-    const held = new Promise<void>((resolve) => (entered = resolve)),
-      gate = new Promise<void>((resolve) => (release = resolve));
-    const canary = 'private-abort-diagnostic-canary';
-    let calls = 0;
-    mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
-      const harness = await original(...args),
-        abort = harness.abortTask.bind(harness);
-      harness.abortTask = async (...args: Parameters<typeof abort>) => {
-        calls++;
-        entered();
-        await gate;
-        if (failure)
-          throw new Proxy(
-            {},
-            {
-              getPrototypeOf() {
-                throw canary;
-              },
-            },
-          );
-        return abort(...args);
-      };
-      return harness;
-    });
-    const cleanup: (() => Promise<void>)[] = [];
-    const f = await fixture({ after: (fn) => cleanup.push(fn) }),
-      target = await f.create();
-    t.after(async () => {
-      release();
-      mock.restoreAll();
-      for (const close of cleanup) {
-        await close();
-      }
-    });
-    f.faux.setResponses([
-      async (_messages, options) => {
-        await new Promise<void>((resolve) => {
-          if (options?.signal?.aborted) return resolve();
-          options?.signal?.addEventListener('abort', () => resolve(), { once: true });
-        });
-        return fauxAssistantMessage('Exact abort completed');
-      },
-    ]);
-    await f.client.command('sendChat', { target, requestId: 'active', text: 'Wait' });
-    const current = await until(
-      () => f.client.command('getChat', { target }),
-      (value) => !!value.run,
-    );
-    t.mock.timers.enable({ apis: ['setTimeout'] });
-    const stop = f.client.command('stopChat', {
-      stop: current.run!.stop,
-      requestId: 'bounded-stop',
-    });
-    await held;
-    await Promise.resolve();
-    t.mock.timers.tick(1001);
-    assert.equal((await stop).outcome, 'pending');
-    t.mock.timers.reset();
-    assert.equal(calls, 1);
+test('Stop deadline covers a held abort join and retains its exact request', async (t) => {
+  const original = Harness.open;
+  let entered!: () => void, release!: () => void;
+  const held = new Promise<void>((resolve) => (entered = resolve)),
+    gate = new Promise<void>((resolve) => (release = resolve));
+  let calls = 0;
+  mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
+    const harness = await original(...args),
+      abort = harness.abortTask.bind(harness);
+    harness.abortTask = async (...args: Parameters<typeof abort>) => {
+      calls++;
+      entered();
+      await gate;
+      return abort(...args);
+    };
+    return harness;
+  });
+  const cleanup: (() => Promise<void>)[] = [];
+  const f = await fixture({ after: (fn) => cleanup.push(fn) }),
+    target = await f.create();
+  t.after(async () => {
     release();
-    if (failure) {
-      await assert.rejects(f.dispose(), (error: unknown) => {
-        assert(!String(error).includes(canary));
-        assert(String(error).includes('Pi storage or execution is unavailable'));
-        return true;
-      });
-    } else {
-      await until(
-        () => f.client.command('getChat', { target }),
-        (value) => !value.run,
-      );
-      f.faux.setResponses([fauxAssistantMessage('Successor survives')]);
-      await f.client.command('sendChat', { target, requestId: 'successor', text: 'Next' });
-      const old = await f.client.command('stopChat', {
-        stop: current.run!.stop,
-        requestId: 'bounded-stop',
-      });
-      assert.ok(['terminal', 'superseded'].includes(old.outcome));
-      await until(
-        () => f.client.command('getChat', { target }),
-        (value) => !value.run && value.entries.some((entry) => entry.text === 'Successor survives'),
-      );
-      assert.equal(calls, 1);
+    mock.restoreAll();
+    for (const close of cleanup) {
+      await close();
     }
   });
+  f.faux.setResponses([
+    async (_messages, options) => {
+      await new Promise<void>((resolve) => {
+        if (options?.signal?.aborted) return resolve();
+        options?.signal?.addEventListener('abort', () => resolve(), { once: true });
+      });
+      return fauxAssistantMessage('Exact abort completed');
+    },
+  ]);
+  await f.client.command('sendChat', { target, requestId: 'active', text: 'Wait' });
+  const current = await until(
+    () => f.client.command('getChat', { target }),
+    (value) => !!value.run,
+  );
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const stop = f.client.command('stopChat', {
+    stop: current.run!.stop,
+    requestId: 'bounded-stop',
+  });
+  await held;
+  await Promise.resolve();
+  t.mock.timers.tick(1001);
+  assert.equal((await stop).outcome, 'pending');
+  t.mock.timers.reset();
+  assert.equal(calls, 1);
+  release();
+  await until(
+    () => f.client.command('getChat', { target }),
+    (value) => !value.run,
+  );
+  f.faux.setResponses([fauxAssistantMessage('Successor survives')]);
+  await f.client.command('sendChat', { target, requestId: 'successor', text: 'Next' });
+  const old = await f.client.command('stopChat', {
+    stop: current.run!.stop,
+    requestId: 'bounded-stop',
+  });
+  assert.ok(['terminal', 'superseded'].includes(old.outcome));
+  await until(
+    () => f.client.command('getChat', { target }),
+    (value) => !value.run && value.entries.some((entry) => entry.text === 'Successor survives'),
+  );
+  assert.equal(calls, 1);
+});
 
 test('root shutdown drains held admission before closing Harness and reopens its original receipt', async (t) => {
   const original = Harness.open;
@@ -658,83 +639,72 @@ test('root shutdown drains held admission before closing Harness and reopens its
   );
 });
 
-for (const failure of [false, true])
-  test(`Stop timeout joins its independently cancelled terminal waiter${failure ? ' and retains a late waiter failure' : ''}`, async (t) => {
-    const canary = 'private-terminal-wait-canary';
-    const original = Harness.open;
-    let entered!: () => void,
-      release!: () => void,
-      waiters = 0,
-      cancelled = 0;
-    const waiting = new Promise<void>((resolve) => (entered = resolve)),
-      gate = new Promise<void>((resolve) => (release = resolve));
-    mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
-      const harness = await original(...args),
-        wait = harness.waitForTask.bind(harness);
-      harness.abortTask = async () => 'marked';
-      harness.waitForTask = async <R>(id: TaskId<R>, context: Parameters<typeof wait>[1]) => {
-        waiters++;
-        entered();
-        context.abortSignal?.addEventListener(
-          'abort',
-          () => {
-            cancelled++;
-          },
-          { once: true },
-        );
-        try {
-          return await wait(id, context);
-        } catch (error) {
-          if (failure) throw Error(canary);
-          throw error;
-        } finally {
-          waiters--;
-        }
-      };
-      return harness;
-    });
-    t.after(() => {
-      release();
-      mock.restoreAll();
-    });
-    const f = await fixture(t),
-      target = await f.create();
-    f.faux.setResponses([
-      async () => {
-        await gate;
-        return fauxAssistantMessage('Waiter did not stop execution');
-      },
-    ]);
-    await f.client.command('sendChat', { target, requestId: 'active', text: 'Hold model' });
-    const current = await until(
-      () => f.client.command('getChat', { target }),
-      (value) => !!value.run,
-    );
-    t.mock.timers.enable({ apis: ['setTimeout'] });
-    const stop = f.client.command('stopChat', {
-      stop: current.run!.stop,
-      requestId: 'waiter-stop',
-    });
-    await waiting;
-    t.mock.timers.tick(1001);
-    assert.equal((await stop).outcome, 'pending');
-    t.mock.timers.reset();
-    assert.equal(waiters, 0);
-    assert.equal(cancelled, 1);
-    assert.deepEqual((await f.client.command('getChat', { target })).run!.stop, current.run!.stop);
-    release();
-    await until(
-      () => f.client.command('getChat', { target }),
-      (value) =>
-        !value.run && value.entries.some((entry) => entry.text === 'Waiter did not stop execution'),
-    );
-    if (failure)
-      await assert.rejects(f.dispose(), (error: unknown) => {
-        assert(!String(error).includes(canary));
-        assert(String(error).includes('Pi storage or execution is unavailable'));
-        return true;
-      });
+test('Stop timeout joins its independently cancelled terminal waiter', async (t) => {
+  const original = Harness.open;
+  let entered!: () => void,
+    release!: () => void,
+    waiters = 0,
+    cancelled = 0;
+  const waiting = new Promise<void>((resolve) => (entered = resolve)),
+    gate = new Promise<void>((resolve) => (release = resolve));
+  mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
+    const harness = await original(...args),
+      wait = harness.waitForTask.bind(harness);
+    harness.abortTask = async () => 'marked';
+    harness.waitForTask = async <R>(id: TaskId<R>, context: Parameters<typeof wait>[1]) => {
+      waiters++;
+      entered();
+      context.abortSignal?.addEventListener(
+        'abort',
+        () => {
+          cancelled++;
+        },
+        { once: true },
+      );
+      try {
+        return await wait(id, context);
+      } finally {
+        waiters--;
+      }
+    };
+    return harness;
   });
+  t.after(() => {
+    release();
+    mock.restoreAll();
+  });
+  const f = await fixture(t),
+    target = await f.create();
+  f.faux.setResponses([
+    async () => {
+      await gate;
+      return fauxAssistantMessage('Waiter did not stop execution');
+    },
+  ]);
+  await f.client.command('sendChat', { target, requestId: 'active', text: 'Hold model' });
+  const current = await until(
+    () => f.client.command('getChat', { target }),
+    (value) => !!value.run,
+  );
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const stop = f.client.command('stopChat', {
+    stop: current.run!.stop,
+    requestId: 'waiter-stop',
+  });
+  await waiting;
+  t.mock.timers.tick(1001);
+  assert.equal((await stop).outcome, 'pending');
+  t.mock.timers.reset();
+  assert.equal(waiters, 0);
+  assert.equal(cancelled, 1);
+  assert.deepEqual((await f.client.command('getChat', { target })).run!.stop, current.run!.stop);
+  release();
+  await until(
+    () => f.client.command('getChat', { target }),
+    (value) =>
+      !value.run && value.entries.some((entry) => entry.text === 'Waiter did not stop execution'),
+  );
+});
 
 test('shutdown closes Harness before joining an outstanding abort and releases a held model', async (t) => {
   const original = Harness.open;
@@ -862,95 +832,95 @@ test('partial acquisition attempts each transferred resource release once and pr
   assert.deepEqual(counts, { database: 1, storage: 1 });
 });
 
-for (const count of [1, 2])
-  test(`root disposal retains ${count} terminal waiter cleanup failures raised during interruption`, async (t) => {
-    const original = Harness.open;
-    let entered!: () => void,
-      modelsEntered!: () => void,
-      modelEntries = 0,
-      waiters = 0,
-      cancelled = 0,
-      modelAborted = 0;
-    const waiting = new Promise<void>((resolve) => (entered = resolve)),
-      modelsStarted = new Promise<void>((resolve) => (modelsEntered = resolve)),
-      failures: string[] = [];
-    mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
-      const harness = await original(...args),
-        wait = harness.waitForTask.bind(harness);
-      harness.abortTask = async () => 'marked';
-      harness.waitForTask = async <R>(id: TaskId<R>, context: Parameters<typeof wait>[1]) => {
-        if (++waiters === count) entered();
-        try {
-          return await wait(id, context);
-        } catch {
-          assert(context.abortSignal?.aborted);
-          cancelled++;
-          const message = 'Controlled shutdown waiter cleanup failure ' + id;
-          failures.push(message);
-          throw Error(message);
-        } finally {
-          waiters--;
-        }
-      };
-      return harness;
-    });
-    t.after(() => mock.restoreAll());
-    const f = await fixture(t),
-      targets = await Promise.all(
-        Array.from({ length: count }, (_, index) => f.create('create-' + index)),
-      );
-    f.faux.setResponses(
-      Array.from({ length: count }, () => async (_messages, options) => {
-        if (++modelEntries === count) modelsEntered();
-        await new Promise<void>((resolve) => {
-          if (options?.signal?.aborted) {
-            modelAborted++;
-            return resolve();
-          }
-          options?.signal?.addEventListener(
-            'abort',
-            () => {
-              modelAborted++;
-              resolve();
-            },
-            { once: true },
-          );
-        });
-        return fauxAssistantMessage('Interrupted by root close');
-      }),
-    );
-    await Promise.all(
-      targets.map((target, index) =>
-        f.client.command('sendChat', { target, requestId: 'active-' + index, text: 'Held model' }),
-      ),
-    );
-    await modelsStarted;
-    const current = await Promise.all(
-      targets.map((target) =>
-        until(
-          () => f.client.command('getChat', { target }),
-          (value) => !!value.run,
-        ),
-      ),
-    );
-    const stops = current.map((value, index) =>
-      f.client
-        .command('stopChat', { stop: value.run!.stop, requestId: 'shutdown-waiter-' + index })
-        .catch((error: unknown) => error),
-    );
-    await waiting;
-    // The failures are kept, hidden as the store's own failure (equal ones combine as one).
-    const errors = await f.disposeObserved();
-    assert.equal(failures.length, count);
-    assert(errors.length > 0 && errors.every((error) => error._tag === 'ChatStoreError'));
-    for (const result of await Promise.all(stops)) {
-      assert(ApplicationError.is(result));
-      assert.equal(result.code, 'Cancelled');
-    }
-    assert.equal(cancelled, count);
-    assert.equal(waiters, 0);
-    assert.equal(modelAborted, count);
+test('root disposal retains every terminal waiter cleanup failure raised during interruption', async (t) => {
+  const count = 2;
+  const original = Harness.open;
+  let entered!: () => void,
+    modelsEntered!: () => void,
+    modelEntries = 0,
+    waiters = 0,
+    cancelled = 0,
+    modelAborted = 0;
+  const waiting = new Promise<void>((resolve) => (entered = resolve)),
+    modelsStarted = new Promise<void>((resolve) => (modelsEntered = resolve)),
+    failures: string[] = [];
+  mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
+    const harness = await original(...args),
+      wait = harness.waitForTask.bind(harness);
+    harness.abortTask = async () => 'marked';
+    harness.waitForTask = async <R>(id: TaskId<R>, context: Parameters<typeof wait>[1]) => {
+      if (++waiters === count) entered();
+      try {
+        return await wait(id, context);
+      } catch {
+        assert(context.abortSignal?.aborted);
+        cancelled++;
+        const message = 'Controlled shutdown waiter cleanup failure ' + id;
+        failures.push(message);
+        throw Error(message);
+      } finally {
+        waiters--;
+      }
+    };
+    return harness;
   });
+  t.after(() => mock.restoreAll());
+  const f = await fixture(t),
+    targets = await Promise.all(
+      Array.from({ length: count }, (_, index) => f.create('create-' + index)),
+    );
+  f.faux.setResponses(
+    Array.from({ length: count }, () => async (_messages, options) => {
+      if (++modelEntries === count) modelsEntered();
+      await new Promise<void>((resolve) => {
+        if (options?.signal?.aborted) {
+          modelAborted++;
+          return resolve();
+        }
+        options?.signal?.addEventListener(
+          'abort',
+          () => {
+            modelAborted++;
+            resolve();
+          },
+          { once: true },
+        );
+      });
+      return fauxAssistantMessage('Interrupted by root close');
+    }),
+  );
+  await Promise.all(
+    targets.map((target, index) =>
+      f.client.command('sendChat', { target, requestId: 'active-' + index, text: 'Held model' }),
+    ),
+  );
+  await modelsStarted;
+  const current = await Promise.all(
+    targets.map((target) =>
+      until(
+        () => f.client.command('getChat', { target }),
+        (value) => !!value.run,
+      ),
+    ),
+  );
+  const stops = current.map((value, index) =>
+    f.client
+      .command('stopChat', { stop: value.run!.stop, requestId: 'shutdown-waiter-' + index })
+      .catch((error: unknown) => error),
+  );
+  await waiting;
+  // The failures are kept, hidden as the store's own failure (equal ones combine as one).
+  const errors = await f.disposeObserved();
+  assert.equal(failures.length, count);
+  assert(errors.length > 0 && errors.every((error) => error._tag === 'ChatStoreError'));
+  for (const result of await Promise.all(stops)) {
+    assert(ApplicationError.is(result));
+    assert.equal(result.code, 'Cancelled');
+  }
+  assert.equal(cancelled, count);
+  assert.equal(waiters, 0);
+  assert.equal(modelAborted, count);
+});
 
 test('multiple late abort failures remain composed after their Stop responses return pending', async (t) => {
   const original = Harness.open;

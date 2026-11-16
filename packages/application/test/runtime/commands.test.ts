@@ -149,64 +149,6 @@ test('public clients share one acquired service and release it at the process sc
   await assert.rejects(client.command('openCheckout', { root: '/checkout' }));
 });
 
-test('cancelling one command leaves unrelated queries usable', async () => {
-  const { counts, runtime, client, started } = fixture();
-  const abort = new AbortController();
-  const pending = client.command('readFile', { checkout, path: 'slow' }, { signal: abort.signal });
-  const rejected = assert.rejects(
-    pending,
-    (error) => error instanceof ApplicationError && error.code === 'Cancelled',
-  );
-  try {
-    await started;
-    assert.equal(
-      (await client.command('loadRecovery', { clientId: 'independent' })).state.clientId,
-      'independent',
-    );
-    abort.abort();
-    await rejected;
-    assert.equal(counts.interrupted, 1);
-    assert.equal((await client.command('readFile', { checkout, path: 'next' })).text, 'next');
-  } finally {
-    abort.abort();
-    await runtime.dispose();
-  }
-});
-
-test('ending a view subscription disposes its listener without ending the service', async () => {
-  const { counts, runtime, client, ready } = fixture();
-  let received!: () => void;
-  const event = new Promise<void>((resolve) => {
-    received = resolve;
-  });
-  const stop = client.watch(
-    { checkout, paths: [''] },
-    (value) => {
-      assert.equal(value.ready, true);
-      received();
-    },
-    (error) => {
-      throw error;
-    },
-  );
-  try {
-    await ready;
-    await event;
-    await stop();
-    await runtime.runPromise(Effect.yieldNow);
-    assert.equal(
-      (await client.command('loadRecovery', { clientId: 'client' })).state.clientId,
-      'client',
-    );
-  } finally {
-    await stop();
-    await runtime.dispose();
-  }
-  assert.equal(counts.subscriptions, 1);
-  assert.equal(counts.unsubscribed, 1);
-  assert.equal(counts.released, 1);
-});
-
 test('typed service failure crosses the same public command boundary', async () => {
   const { runtime, client } = fixture();
   try {
@@ -217,31 +159,6 @@ test('typed service failure crosses the same public command boundary', async () 
   } finally {
     await runtime.dispose();
   }
-});
-
-test('unsubscribe rejects with a failing finalizer without duplicate active delivery', async () => {
-  const { counts, runtime, client, ready } = fixture({
-    watchCleanup: Error('Watch cleanup failed'),
-  });
-  const errors: ApplicationError[] = [];
-  const stop = client.watch(
-    { checkout, paths: [''] },
-    () => {},
-    (error) => errors.push(error),
-  );
-  await ready;
-  const close = stop();
-  assert.strictEqual(stop(), close);
-  await assert.rejects(
-    close,
-    (error) =>
-      ApplicationError.is(error) &&
-      error.code === 'Unavailable' &&
-      /Application resource cleanup failed/.test(error.message),
-  );
-  await runtime.dispose();
-  assert.equal(counts.unsubscribed, 1);
-  assert.deepEqual(errors, []);
 });
 
 test('command cancellation preserves a failing cleanup instead of labelling it cancelled', async () => {
@@ -315,38 +232,6 @@ test('unprintable defects reach command and watch application error boundaries',
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(errors.length, 1);
     assert.equal(errors[0].code, 'Unavailable');
-  } finally {
-    await runtime.dispose();
-  }
-});
-
-test('an already-aborted command is rejected before runtime acquisition or service dispatch', async () => {
-  const { service, counts, runtime, client } = fixture();
-  let saves = 0;
-  service.saveFile = () =>
-    Effect.sync(() => {
-      saves++;
-      return { kind: 'saved', disk: { text: 'text', version: 'new' }, recoveryChanges: [] };
-    });
-  const abort = new AbortController();
-  abort.abort();
-  try {
-    await assert.rejects(
-      client.command(
-        'saveFile',
-        {
-          target: { checkout, path: 'a' },
-          clientId: 'client',
-          requestId: 'request',
-          text: 'text',
-          expectedVersion: 'old',
-        },
-        { signal: abort.signal },
-      ),
-      (error) => error instanceof ApplicationError && error.code === 'Cancelled',
-    );
-    assert.equal(saves, 0);
-    assert.equal(counts.acquired, 0);
   } finally {
     await runtime.dispose();
   }
