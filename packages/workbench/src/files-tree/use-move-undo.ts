@@ -1,79 +1,18 @@
 import { getParentPath } from '@moonbase/contracts/paths';
 import { useEffect, useRef, useState } from 'react';
-import type { CheckoutTarget, DirectoryEntry } from '@moonbase/contracts/workspace';
-import { checkoutKey, readOwn, type EditorController } from '@moonbase/application/editor';
+import type { CheckoutTarget } from '@moonbase/contracts/workspace';
+import { checkoutKey } from '@moonbase/application/editor';
 import {
   describeUndo,
   findUndoProblem,
-  listFoldersToExpand,
   listTransferred,
   listUndoMoves,
   type MoveRecord,
 } from './files-tree-drop.ts';
+import { listFolders } from './list-folders.ts';
+import { selectEntries } from './select-entries.ts';
 import type { RunMutation } from '../mutation-runner.tsx';
-
-/**
- * Expands the folders that show `paths` in a checkout's tree, lists the newly expanded ones, and
- * selects `paths`, focusing the first.
- */
-export function selectEntries(
-  controller: EditorController,
-  checkout: CheckoutTarget,
-  paths: readonly string[],
-) {
-  const tree = readOwn(controller.getSnapshot().recovery.views, checkout.checkoutId)?.tree;
-  if (!tree || !paths.length) return;
-  const opening = [
-    ...new Set(paths.flatMap((path) => listFoldersToExpand(getParentPath(path)))),
-  ].filter((folder) => !tree.expanded.includes(folder));
-  controller.tree(checkout, {
-    expanded: [...tree.expanded, ...opening],
-    focus: paths[0],
-    selected: [...paths],
-  });
-  for (const folder of opening) void controller.list(checkout, folder).catch(controller.report);
-}
-
-/**
- * Lists the folders an undo or paste reads: each folder's entries, or none when it is gone. A
- * folder whose listing fails is gone only when its parent lists without it; otherwise, since it
- * may still be there, the result names it as `unlisted`.
- */
-export async function listFolders(
-  controller: EditorController,
-  checkout: CheckoutTarget,
-  folders: readonly string[],
-) {
-  type Read = readonly DirectoryEntry[] | 'gone' | 'unlisted';
-  const reads = new Map<string, Promise<Read>>();
-  const read = (folder: string): Promise<Read> => {
-    const known = reads.get(folder);
-    if (known) return known;
-    const reading = (async (): Promise<Read> => {
-      try {
-        const listing = await controller.list(checkout, folder);
-        if (!listing.error) return listing.entries;
-      } catch {
-        // The editor reports the failure; whether the folder is gone is decided below.
-      }
-      if (!folder) return 'unlisted';
-      const parent = await read(getParentPath(folder));
-      if (parent === 'unlisted') return parent;
-      if (parent === 'gone' || !parent.some((entry) => entry.path === folder && entry.directory))
-        return 'gone';
-      return 'unlisted';
-    })();
-    reads.set(folder, reading);
-    return reading;
-  };
-  const listings = new Map<string, readonly DirectoryEntry[]>();
-  let unlisted: string | undefined;
-  for (const [index, entries] of (await Promise.all(folders.map(read))).entries()) {
-    if (entries === 'unlisted') unlisted ??= folders[index];
-    else if (entries !== 'gone') listings.set(folders[index], entries);
-  }
-  return { listings, unlisted };
-}
+import type { EditorActions } from '../editor-actions.ts';
 
 /**
  * The last move or rename made from each open checkout's tree, and undoing it by moving the
@@ -81,7 +20,7 @@ export async function listFolders(
  * forgets it, and so does closing the checkout.
  */
 export function useMoveUndo(
-  controller: EditorController,
+  actions: EditorActions,
   runMutation: RunMutation,
   openCheckouts: readonly CheckoutTarget[],
 ) {
@@ -153,16 +92,16 @@ export function useMoveUndo(
           current.moves.flatMap((move) => [getParentPath(move.to), getParentPath(move.from)]),
         ),
       ];
-      const { listings, unlisted } = await listFolders(controller, checkout, folders);
+      const { listings, unlisted } = await listFolders(actions, checkout, folders);
       if (unlisted !== undefined) {
-        controller.report(
+        actions.report(
           `Can’t undo the move yet: ${unlisted || 'the checkout’s root'} couldn’t be listed. Try again.`,
         );
         return false;
       }
       const problem = findUndoProblem(current.moves, (folder) => listings.get(folder));
       if (problem) {
-        controller.report(problem);
+        actions.report(problem);
         settle(key, current);
         return false;
       }
@@ -182,16 +121,16 @@ export function useMoveUndo(
             ...steps.slice(index + 1).flatMap((step) => step.moves),
           ];
           settle(key, current, { ...current, moves: left });
-          if (restored.length) selectEntries(controller, checkout, restored);
+          if (restored.length) selectEntries(actions, checkout, restored);
           return false;
         }
         restored.push(...step.moves.map((move) => move.from));
       }
       settle(key, current);
-      selectEntries(controller, checkout, restored);
+      selectEntries(actions, checkout, restored);
       return true;
     } catch (error) {
-      controller.report(error);
+      actions.report(error);
       return false;
     } finally {
       undoing.current = false;
