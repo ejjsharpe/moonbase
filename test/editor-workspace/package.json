@@ -1,4 +1,20 @@
 {
+  "name": "@moonbase/editor-integration",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "typecheck": "bun check --no-script -p tsconfig.json",
+    "test:macos": "node ../../packages/workspace/scripts/build-native.mjs && bun test --timeout 60000 ."
+  },
+  "nx": {
+    "tags": [
+      "macos-tests"
+    ],
+    "implicitDependencies": [
+      "@moonbase/application",
+      "@moonbase/workspace",
+      "@moonbase/daemon-protocol",
+      "@moonbase/daemon"
+    ]
+  }
 }

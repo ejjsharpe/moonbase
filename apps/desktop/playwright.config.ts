@@ -28,14 +28,22 @@ export default defineConfig({
   reporter: [['list'], ['json', { outputFile: join(outputDir, 'timings.json') }]],
   globalTeardown: './test/fixtures/global-teardown.ts',
   use: { trace: 'retain-on-failure' },
+  // `native` runs the Electron specs from source; select a subset by file or `--grep`.
   projects: [
-    { name: 'editor', testMatch: 'desktop.spec.ts' },
-    { name: 'local', testMatch: 'local-chat.spec.ts' },
-    { name: 'transcripts', testMatch: 'integrated-transcript.spec.ts' },
-    { name: 'configuration', testMatch: 'configuration.spec.ts' },
-    { name: 'reload', testMatch: ['reload.spec.ts', 'document-lifecycle.spec.ts'] },
-    { name: 'composition', testMatch: ['composition.spec.ts', 'lifecycle.spec.ts'] },
-    { name: 'recovery', testMatch: 'recovery.spec.ts' },
+    {
+      name: 'native',
+      testMatch: [
+        'desktop.spec.ts',
+        'local-chat.spec.ts',
+        'integrated-transcript.spec.ts',
+        'configuration.spec.ts',
+        'reload.spec.ts',
+        'document-lifecycle.spec.ts',
+        'composition.spec.ts',
+        'lifecycle.spec.ts',
+        'recovery.spec.ts',
+      ],
+    },
     { name: 'packaged', testMatch: 'packaged.spec.ts' },
   ],
 });

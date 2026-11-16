@@ -1,4 +1,17 @@
 {
+  "name": "@moonbase/chat-integration",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "typecheck": "bun check --no-script -p tsconfig.json",
+    "test": "node --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} *.test.ts"
+  },
+  "nx": {
+    "implicitDependencies": [
+      "@moonbase/application",
+      "@moonbase/chat-runtime",
+      "@moonbase/daemon-protocol",
+      "@moonbase/daemon"
+    ]
+  }
 }

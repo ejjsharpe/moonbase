@@ -21,24 +21,14 @@ concurrency:
 # Tests that need macOS sit in each package's `test/macos/` (and all of `packages/workspace`); packages
 # that have them carry the `macos-tests` Nx tag. The `macos` job runs those, the Linux jobs the rest.
 # The account runs at most 5 macOS jobs at once and a merge and a PR push can run together, so a run
-# uses two: `macos` and `electron`.
+# uses three: `macos`, `electron (native)` and `electron (package)`.
 jobs:
   static:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
-        with:
-          node-version: '26.13.0'
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.4
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-      - run: bun install --frozen-lockfile
+      - uses: ./.github/actions/setup
       - run: bun run check:foundation
       - run: node --test scripts/*.test.mjs
       - run: bun run typecheck
@@ -59,44 +49,12 @@ jobs:
         with:
           # `nx affected` compares with the base branch.
           fetch-depth: 0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
-        with:
-          node-version: '26.13.0'
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.4
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-      - run: bun install --frozen-lockfile
+      - uses: ./.github/actions/setup
       # `CI` is set, so the chat-runtime ripgrep test fails rather than skips without it.
       - run: node scripts/prepare-ripgrep.mjs
       - run: echo "MOONBASE_TEST_RIPGREP=$PWD/dist/tools/ripgrep/rg" >> "$GITHUB_ENV"
       - run: bunx nx $NX_RUN -t test --exclude='tag:macos-tests' --parallel=2 --output-style=static
       - run: bunx nx $NX_RUN -t test:linux --parallel=2 --output-style=static
-
-  integration-chat:
-    name: integration (chat)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    env:
-      # Two files at a time on 4 cores: each also runs a daemon and a forwarder.
-      MOONBASE_TEST_WORKERS: '2'
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
-        with:
-          node-version: '26.13.0'
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.4
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-      - run: bun install --frozen-lockfile
-      - run: bun run test:chat-integration
 
   # The workspace's native filesystem binary, the Keychain and the daemon's file host need macOS.
   macos:
@@ -109,24 +67,13 @@ jobs:
         with:
           # `nx affected` compares with the base branch.
           fetch-depth: 0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
-        with:
-          node-version: '26.13.0'
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.4
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-      - run: bun install --frozen-lockfile
+      - uses: ./.github/actions/setup
       - run: node scripts/prepare-ripgrep.mjs
       - run: echo "MOONBASE_TEST_RIPGREP=$PWD/dist/tools/ripgrep/rg" >> "$GITHUB_ENV"
       # The runner is ephemeral, so the chat-runtime suite may create and delete a temporary keychain.
       - run: bunx nx $NX_RUN -t test:macos --parallel=1 --output-style=static
         env:
           MOONBASE_TEST_KEYCHAIN: '1'
-      - run: bun run test:editor-integration
       - run: bunx nx run @moonbase/desktop:build
       - run: node apps/desktop/scripts/check-renderer.mjs
 
@@ -139,17 +86,7 @@ jobs:
         with:
           # `nx affected` compares with the base branch.
           fetch-depth: 0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
-        with:
-          node-version: '26.13.0'
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.4
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-      - run: bun install --frozen-lockfile
+      - uses: ./.github/actions/setup
       - id: affected
         run: echo "projects=$(bunx nx show projects --json $NX_PROJECTS --with-target test:ui --with-target test:browser)" >> "$GITHUB_OUTPUT"
       - if: steps.affected.outputs.projects != '[]'
@@ -166,10 +103,11 @@ jobs:
             apps/desktop/test-results/browser
           if-no-files-found: ignore
 
-  # Real Electron from source, then the packaged app's tagged subset. The app's files need macOS.
-  electron:
+  # Real Electron from source. The app's files need macOS.
+  electron-native:
+    name: electron (native)
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     env:
       NX_DAEMON: 'false'
     steps:
@@ -177,17 +115,7 @@ jobs:
         with:
           # `nx affected` compares with the base branch.
           fetch-depth: 0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
-        with:
-          node-version: '26.13.0'
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.4
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-      - run: bun install --frozen-lockfile
+      - uses: ./.github/actions/setup
       - id: affected
         run: echo "projects=$(bunx nx show projects --json $NX_PROJECTS --with-target test:native)" >> "$GITHUB_OUTPUT"
       - if: steps.affected.outputs.projects != '[]'
@@ -196,19 +124,44 @@ jobs:
         run: bunx nx run @moonbase/desktop:build
       - if: steps.affected.outputs.projects != '[]'
         run: bun run --cwd apps/desktop test:native
+      # Failures' traces, and the timings of the run.
+      - if: always() && steps.affected.outputs.projects != '[]'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: electron-native-results
+          path: apps/desktop/test-results
+          if-no-files-found: ignore
+
+  # The packaged app, and the tagged subset of the Electron tests run against it.
+  electron-package:
+    name: electron (package)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      NX_DAEMON: 'false'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # `nx affected` compares with the base branch.
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+      - id: affected
+        run: echo "projects=$(bunx nx show projects --json $NX_PROJECTS --with-target test:native)" >> "$GITHUB_OUTPUT"
+      - if: steps.affected.outputs.projects != '[]'
+        run: node scripts/prepare-ripgrep.mjs
       # Packaging bundles the pinned Bun that runs the daemon.
       - if: steps.affected.outputs.projects != '[]'
         run: node scripts/prepare-bun.mjs
+      # `package` builds first.
       - if: steps.affected.outputs.projects != '[]'
         run: bunx nx run @moonbase/desktop:package
       - if: steps.affected.outputs.projects != '[]'
         run: bun run --cwd apps/desktop check:package
       - if: steps.affected.outputs.projects != '[]'
         run: bun run --cwd apps/desktop test:package
-      # Failures' traces, and the timings of each run (`native/` and `package/`).
       - if: always() && steps.affected.outputs.projects != '[]'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: electron-results
+          name: electron-package-results
           path: apps/desktop/test-results
           if-no-files-found: ignore

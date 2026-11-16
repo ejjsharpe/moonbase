@@ -36,7 +36,7 @@ The daemon serves the runtime over [`@moonbase/daemon-protocol`](../daemon-proto
 bun run --cwd packages/chat-runtime typecheck
 bun run --cwd packages/chat-runtime lint
 bun run --cwd packages/chat-runtime test
-bun run test:chat-integration
+bun run --cwd test/chat test
 ```
 
 `test` runs the suite under `bun test`, the runtime the daemon ships on; `test:linux` leaves out `test/macos/` (the temporary-keychain test) and `test:macos` runs only it. The ripgrep listing test fails rather than skips when `CI` is set and no ripgrep is found. Tests use controlled providers and temporary SQLite stores, never real provider quota or SSH hosts.

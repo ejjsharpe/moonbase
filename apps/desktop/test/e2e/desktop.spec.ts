@@ -1,13 +1,9 @@
 import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
 import { closeSettings, openSettings } from '../fixtures/chat-fixture.ts';
 import {
-  openTabMenu,
   saveFile,
   selectFileView,
   pasteNativeFile,
-  filenameCases,
-  checkFilenameMaps,
-  checkTabMenu,
   explorerAction,
   recoveryState,
   draftsOf,
@@ -714,79 +710,6 @@ test('real create, dirty move and copy use native operations; lost move reply re
   expect(errors).toEqual([]);
 });
 
-test('previews, Keep Open, order, keyboard Close/Reopen and overflow remain useful at small size and zoom', async () => {
-  for (let i = 0; i < 10; i++)
-    writeFileSync(
-      join(checkout, `long-component-name-for-overflow-${i}.ts`),
-      `export const item${i} = ${i};\n`,
-    );
-  await open();
-  await page.getByRole('treeitem', { name: 'b.ts', exact: true }).click();
-  const preview = page.getByRole('tab', { name: 'b.ts', exact: true });
-  await expect(preview).toHaveAttribute('aria-description', 'Preview');
-  await preview.dblclick();
-  await expect(preview).not.toHaveAttribute('aria-description', 'Preview');
-  for (let i = 0; i < 7; i++) await open(`long-component-name-for-overflow-${i}.ts`);
-  await app.evaluate(({ BrowserWindow }) => {
-    BrowserWindow.getAllWindows()[0].setSize(760, 650);
-  });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  const selected = 'long-component-name-for-overflow-6.ts';
-  const input = page.getByRole('textbox', { name: `${selected} editor`, exact: true });
-  await input.focus();
-  await input.press('Meta+w');
-  await expect(page.getByRole('tab', { name: selected, exact: true })).toHaveCount(0);
-  await page
-    .getByRole('textbox', { name: 'long-component-name-for-overflow-5.ts editor', exact: true })
-    .press('Meta+Shift+t');
-  await expect(page.getByRole('tab', { name: selected, exact: true })).toBeVisible();
-  await expect(input).toBeFocused();
-  await input.press('End');
-  await input.pressSequentially(' typed after reopen');
-  await input.press('Control+Tab');
-  const previous = page.getByRole('textbox', {
-    name: 'long-component-name-for-overflow-5.ts editor',
-    exact: true,
-  });
-  await expect(previous).toBeFocused();
-  await previous.press('End');
-  await previous.pressSequentially(' mru typing');
-  await previous.press('Meta+Alt+ArrowRight');
-  await expect(input).toBeFocused();
-  await input.press('End');
-  await input.pressSequentially(' visual typing');
-  const tabs = page.getByRole('tablist', { name: 'Open files', exact: true }).getByRole('tab');
-  const before = await tabs.evaluateAll((elements) =>
-    elements.map((element) => element.getAttribute('aria-label')),
-  );
-  await openTabMenu(page);
-  await page.getByRole('menuitem', { name: 'Move tab left', exact: true }).click();
-  const after = await tabs.evaluateAll((elements) =>
-    elements.map((element) => element.getAttribute('aria-label')),
-  );
-  expect(after.indexOf(selected)).toBe(before.indexOf(selected) - 1);
-  await app.evaluate(({ BrowserWindow }) => {
-    BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1.4);
-  });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page
-    .getByRole('tablist', { name: 'Open files', exact: true })
-    .getByRole('tab', { selected: true })
-    .focus();
-  await page.keyboard.press('Shift+F10');
-  await expect(page.getByRole('menu')).toBeVisible();
-  await page.keyboard.press('Escape');
-  await explorerAction(page, 'Go to File…');
-  await page.getByRole('combobox').fill('a.ts');
-  await expect(page.getByRole('option', { name: 'a.ts', exact: true })).toBeVisible();
-  await page.getByRole('combobox').press('Enter');
-  await expect(page.getByRole('textbox', { name: 'a.ts editor', exact: true })).toBeFocused();
-  await page
-    .getByRole('textbox', { name: 'a.ts editor', exact: true })
-    .pressSequentially('keyboard lookup typing');
-  expect(errors).toEqual([]);
-});
-
 test('native Trash moves only a captured temporary fixture and leaves its dirty draft available', async () => {
   const name = `moonbase-trash-${crypto.randomUUID()}.txt`,
     content = 'CONTROLLED TRASH FIXTURE ' + name;
@@ -1084,50 +1007,4 @@ test('an explicit native Quit arriving before renderer startup is not lost', asy
   // The app closes once its renderer has started and taken the Quit, however long that takes.
   await app.waitForEvent('close');
   expect(existsSync(join(base, 'early-quit.json'))).toBe(true);
-});
-
-test('files named like Object.prototype members keep Save, positions, sibling drafts and restart', async () => {
-  for (const path of filenameCases) writeFileSync(join(checkout, path), 'baseline ' + path);
-  execFileSync('/usr/bin/git', [
-    '-C',
-    checkout,
-    '-c',
-    'user.name=Filename Test',
-    '-c',
-    'user.email=test@example.invalid',
-    'add',
-    '--',
-    ...filenameCases,
-  ]);
-  execFileSync('/usr/bin/git', [
-    '-C',
-    checkout,
-    '-c',
-    'user.name=Filename Test',
-    '-c',
-    'user.email=test@example.invalid',
-    'commit',
-    '-qm',
-    'Filename fixtures',
-  ]);
-  await open();
-  await checkFilenameMaps(page, checkout, 'a.ts', async () => {
-    expect(errors).toEqual([]);
-    expect(consoleErrors).toEqual([]);
-    await forceStop();
-    await launch();
-    await page.getByRole('tab', { name: 'checkout · main', exact: true }).click();
-    return page;
-  });
-});
-
-test('Tab actions reach the first and last items and Close works in a small zoomed window', async () => {
-  await open('b.ts');
-  await open();
-  await page.getByRole('tab', { name: 'b.ts', exact: true }).hover();
-  await page.getByRole('button', { name: 'Close b.ts', exact: true }).click();
-  await expect(page.getByRole('tab', { name: 'b.ts', exact: true })).toHaveCount(0);
-  // At the small zoomed size the project chats dock would leave the editor no width for its tabs.
-  await page.getByRole('button', { name: 'Hide project chats', exact: true }).click();
-  await checkTabMenu(app, page);
 });

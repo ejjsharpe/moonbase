@@ -3,7 +3,7 @@
 Runs public application clients against the real daemon in host mode, in temporary data on Bun, reached through a controlled TCP forwarder in place of SSH. Covers connection and authentication, reply loss and retry for Create/Send/Stop, restart without resend, streaming, transcript reads, approved roots and `@` search, provider setup and model choice, and cleanup. Providers are counted fakes; no real provider or SSH host is used.
 
 ```sh
-bun run test:chat-integration
+bun run --cwd test/chat test
 ```
 
 `daemon-host-process.ts` is the host's test entry: `runDaemon` with the faux providers and tools of a behaviour module (`faux-reply.mjs`, `faux-stream.mjs`, `faux-tool.mjs`, or the desktop's `faux-stored-image.mjs`), and `host-control.ts` counting and holding requests over IPC. These and `forward-process.mjs` are test fixtures, not product code. Its files run in up to `MOONBASE_TEST_WORKERS` processes (default 4), each host on a port it picks itself; run the suite apart from other resource-heavy suites.
