@@ -1,4 +1,5 @@
-import { Context, type Deferred, Effect, Layer } from 'effect';
+import { Clock, Context, Effect, Layer } from 'effect';
+import { makeSharedCalls } from '../shared-calls.ts';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
   InterruptedRequestError,
@@ -59,7 +60,8 @@ type JournalDependencies = {
   checkouts: Pick<Checkouts['Service'], 'directory'>;
   /** Whether a running save or operation holds paths of a checkout. */
   leases: Pick<Leases['Service'], 'isActive'>;
-  now: () => number;
+  /** The journal's time: when entries were reserved, settled and acknowledged. */
+  clock: Clock.Clock;
   retentionMs: number;
 };
 
@@ -74,26 +76,27 @@ export class Journal {
   private readonly volatileOperations = new Map<string, HostOperationRecord>();
   private readonly activeSaves = new Set<string>();
   /** The requests running in this process, so a concurrent duplicate waits for the first. */
-  readonly runningRequests = new Map<
-    string,
-    { input: unknown; outcome: Deferred.Deferred<CheckoutTarget, WorkspaceFailure> }
-  >();
+  readonly runningRequests = makeSharedCalls<CheckoutTarget, WorkspaceFailure>();
   private readonly store: Store;
   private readonly checkouts: JournalDependencies['checkouts'];
   private readonly leases: JournalDependencies['leases'];
-  private readonly now: () => number;
+  private readonly clock: Clock.Clock;
   private readonly retentionMs: number;
   private compactedAt = 0;
   /** Names this store's feed; a recreated store starts a new one. */
   readonly epoch: string;
-  constructor({ store, checkouts, leases, now, retentionMs }: JournalDependencies) {
+  constructor({ store, checkouts, leases, clock, retentionMs }: JournalDependencies) {
     this.store = store;
     this.checkouts = checkouts;
     this.leases = leases;
-    this.now = now;
+    this.clock = clock;
     this.retentionMs = retentionMs;
     this.epoch = store.get<string>('meta', 'feed-epoch') ?? randomUUID();
     store.put('meta', 'feed-epoch', this.epoch);
+  }
+
+  private now() {
+    return this.clock.currentTimeMillisUnsafe();
   }
 
   saveId = (i: SaveIdentity) => key(i.installationId, i.clientId, i.requestId);
@@ -569,7 +572,9 @@ export class HostJournal extends Context.Service<HostJournal, Journal>()(
   static readonly layer = Layer.effect(
     HostJournal,
     Effect.gen(function* () {
-      const { config, now } = yield* HostSettings;
+      const { config } = yield* HostSettings;
+      // The clock the host was composed with, which tests replace with a `TestClock`.
+      const clock = yield* Clock.Clock;
       const store = yield* HostStore;
       const checkouts = yield* Checkouts;
       const leases = yield* Leases;
@@ -579,7 +584,7 @@ export class HostJournal extends Context.Service<HostJournal, Journal>()(
             store,
             checkouts,
             leases,
-            now,
+            clock,
             retentionMs: config.journalRetentionMs ?? 7 * 24 * 60 * 60 * 1000,
           }),
       );

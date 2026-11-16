@@ -1,6 +1,6 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { randomUUID } from 'node:crypto';
-import { Cause, Deferred, Effect, Exit, FiberSet, Option, Stream } from 'effect';
+import { Cause, Effect, Exit, FiberSet, Option, Stream } from 'effect';
 import type {
   WorkspaceHostServiceShape,
   WorkspaceServiceShape,
@@ -29,7 +29,7 @@ import {
 import { attempt, type WorkspaceFailure } from '../attempt.ts';
 import { cancellationPoint } from '../cancellation.ts';
 import { getOperationPaths } from '../operation-paths.ts';
-import { asSharedOutcome, asWorkspaceError, runOwned, withWorkspaceErrors } from '../owned-work.ts';
+import { asWorkspaceError, runOwned, withWorkspaceErrors } from '../owned-work.ts';
 import { canonical, errorText, folded, hash, key, path, same } from '../validation.ts';
 import type { OperationRecord, SaveRecord } from './client-schema.ts';
 import type { ClientStore } from './client-store.ts';
@@ -43,6 +43,8 @@ import {
 } from './operation-recovery.ts';
 import { RecoveryContext, type HostPorts, type Recoveries } from './recovery-context.ts';
 import { makeRecoveryEdits } from './recovery-edits.ts';
+import { makeKeyedLock } from '../keyed-lock.ts';
+import { makeSharedCalls } from '../shared-calls.ts';
 import { loadRecovery } from './recovery-load.ts';
 import { makeRecoveryOutlines } from './recovery-outlines.ts';
 import { acknowledgeSaves, getBaseline, publishSaves, replaySave } from './save-recovery.ts';
@@ -105,9 +107,9 @@ export const makeClientWorkspace = ({
     /** The same recovery, asking the host questions a cancelled caller cannot stop. */
     const settled = context.withHost(makePorts(host, installationId, false));
     const outlines = yield* makeRecoveryOutlines(store);
-    const edits = makeRecoveryEdits(context);
+    const edits = makeRecoveryEdits(context, yield* makeKeyedLock);
     /** Calls under a stored request ID that are in flight, so a concurrent duplicate shares one. */
-    const requests = new Map<string, Deferred.Deferred<unknown, WorkspaceFailure>>();
+    const requests = makeSharedCalls<unknown, WorkspaceFailure>();
     const run = <A>(work: Effect.Effect<A, WorkspaceFailure>, persistence = false) =>
       runOwned(operations, withWorkspaceErrors(work, persistence));
     const fromHost = <A>(call: Effect.Effect<A, WorkspaceHostError>) =>
@@ -129,14 +131,10 @@ export const makeClientWorkspace = ({
     ): Effect.Effect<A, WorkspaceFailure> =>
       Effect.gen(function* () {
         const name = hash(canonical([operation, input]));
-        const running = requests.get(name);
-        if (running) return (yield* Effect.interruptible(Deferred.await(running))) as A;
-        const outcome = Deferred.makeUnsafe<unknown, WorkspaceFailure>();
-        requests.set(name, outcome);
-        // Lets a duplicate sent at the same time find this one in flight and share it.
-        yield* Effect.yieldNow;
-        const exit = yield* Effect.exit(
+        return (yield* requests(name, input, operation, () =>
           Effect.gen(function* () {
+            // Lets a duplicate sent at the same time find this one in flight and share it.
+            yield* Effect.yieldNow;
             const kept = (yield* attempt(() => store.get<{ requestId: string }>('requests', name)))
               ?.requestId;
             const requestId = kept ?? randomUUID();
@@ -147,11 +145,7 @@ export const makeClientWorkspace = ({
             if (!unknown) yield* attempt(() => store.delete('requests', name));
             return yield* sent;
           }),
-        );
-        requests.delete(name);
-        // A duplicate whose first call was cancelled learns that, not that the client closed.
-        Deferred.doneUnsafe(outcome, asSharedOutcome(exit, operation));
-        return yield* exit;
+        )) as A;
       });
 
     const initializeRepository = (target: CheckoutTarget) =>

@@ -1,4 +1,4 @@
-import { Cause, Deferred, Effect, Exit, Option } from 'effect';
+import { Cause, Effect, Exit, Option } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import type { HostInput, HostOutput } from '@moonbase/contracts/workspace-host';
 import {
@@ -13,9 +13,7 @@ import {
 } from '@moonbase/contracts/workspace-host-errors';
 import { join } from 'node:path';
 import { asWorkspaceFailure, attempt, type WorkspaceFailure } from '../attempt.ts';
-import { asSharedOutcome } from '../owned-work.ts';
 import type { HostRequestRecord } from '../schema.ts';
-import { same } from '../validation.ts';
 import { makeChatWorktree } from './chat-worktrees.ts';
 import { Checkouts } from './checkouts.ts';
 import { HostJournal, type RequestOperation } from './host-journal.ts';
@@ -51,33 +49,18 @@ const once = <K extends RequestOperation>(
 ) =>
   Effect.gen(function* () {
     const journal = yield* HostJournal;
-    const requests = journal.runningRequests;
     const id = journal.requestId(operation, input);
-    // Finding a running duplicate, or reserving and registering this request as running, is one
-    // synchronous step, so two copies never both miss each other.
-    const outcome = Deferred.makeUnsafe<CheckoutTarget, WorkspaceFailure>();
-    const found = yield* attempt(() => {
-      const first = requests.get(id);
-      if (first) return { first };
-      const record = journal.reserveRequest(id, input);
-      if (!record) requests.set(id, { input, outcome });
-      return { record };
-    });
-    if (found.first) {
-      if (!same(found.first.input, input))
-        return yield* new WorkspaceConflictError({ conflict: 'request-payload' });
-      return (yield* Effect.interruptible(Deferred.await(found.first.outcome))) as HostOutput<K>;
-    }
-    const record = found.record;
-    if (record)
-      return (yield* attempt(() =>
-        journal.replayRequest(record, operation, input),
-      )) as HostOutput<K>;
-    const exit = yield* Effect.exit(settleRequest(journal, id, input, work));
-    requests.delete(id);
-    // A duplicate whose first request was cancelled learns that, not that the host closed.
-    Deferred.doneUnsafe(outcome, asSharedOutcome(exit, operation));
-    return yield* exit;
+    return (yield* journal.runningRequests(id, input, operation, () => {
+      // A reservation already in the journal is a finished request (or one an earlier host
+      // process left), replayed; otherwise this one runs.
+      try {
+        const record = journal.reserveRequest(id, input);
+        if (record) return attempt(() => journal.replayRequest(record, operation, input));
+      } catch (error) {
+        return Effect.fail(asWorkspaceFailure(error));
+      }
+      return settleRequest(journal, id, input, work);
+    })) as HostOutput<K>;
   });
 
 /**

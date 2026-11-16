@@ -190,7 +190,7 @@ const makeFileHost = Effect.gen(function* () {
  * The file host's layer: its store, checkouts, journal and helpers, each released after
  * everything that uses it has stopped.
  */
-export function makeFileHostLayer(configuration: WorkspaceHostConfiguration, now = Date.now) {
+export function makeFileHostLayer(configuration: WorkspaceHostConfiguration) {
   const settings = Layer.effect(
     HostSettings,
     Effect.map(
@@ -199,7 +199,6 @@ export function makeFileHostLayer(configuration: WorkspaceHostConfiguration, now
         config,
         allowRoot: configuration.allowRoot,
         chats: configuration.chats,
-        now,
       }),
     ),
   );

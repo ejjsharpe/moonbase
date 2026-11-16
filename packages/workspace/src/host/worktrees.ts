@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
-import { Cause, Context, Data, Effect, Exit, Layer, Scope, Semaphore } from 'effect';
+import { Cause, Context, Data, Effect, Exit, Layer, Scope } from 'effect';
+import { makeKeyedLock, type KeyedLock } from '../keyed-lock.ts';
 import type { CheckoutTarget, CommandInput, Worktree } from '@moonbase/contracts/workspace';
 import {
   BranchTakenError,
@@ -112,10 +113,19 @@ export class Worktrees {
   /** Where a failure that does not undo a finished creation is reported: the host's close. */
   private readonly reports: Scope.Scope;
   /** Creations run one at a time per project, so none mistakes another's worktree for its own. */
-  private readonly creations = new Map<string, Semaphore.Semaphore>();
-  constructor({ checkouts, reports }: { checkouts: Checkouts['Service']; reports: Scope.Scope }) {
+  private readonly creations: KeyedLock;
+  constructor({
+    checkouts,
+    reports,
+    creations,
+  }: {
+    checkouts: Checkouts['Service'];
+    reports: Scope.Scope;
+    creations: KeyedLock;
+  }) {
     this.checkouts = checkouts;
     this.reports = reports;
+    this.creations = creations;
   }
   /** A plain folder has no worktrees, like a bare repository. */
   listWorktrees(target: CheckoutTarget, open?: Directory) {
@@ -131,14 +141,9 @@ export class Worktrees {
    * One cancelled while it waits for another creation in the project ends at once.
    */
   createWorktree(input: CommandInput<'createWorktree'>) {
-    return Effect.gen({ self: this }, function* () {
-      const key = input.checkout.projectId;
-      let turn = this.creations.get(key);
-      if (!turn) this.creations.set(key, (turn = Semaphore.makeUnsafe(1)));
-      yield* Effect.interruptible(turn.take(1));
-      yield* Effect.addFinalizer(() => turn.release(1));
-      return yield* this.createNow(input);
-    }).pipe(Effect.scoped);
+    return this.creations(input.checkout.projectId, this.createNow(input), {
+      cancellableWait: true,
+    });
   }
   private createNow(input: CommandInput<'createWorktree'>) {
     return Effect.gen({ self: this }, function* () {
@@ -373,7 +378,11 @@ export class WorkspaceWorktrees extends Context.Service<WorkspaceWorktrees, Work
     WorkspaceWorktrees,
     Effect.gen(function* () {
       const checkouts = yield* Checkouts;
-      return new Worktrees({ checkouts, reports: yield* Effect.scope });
+      return new Worktrees({
+        checkouts,
+        reports: yield* Effect.scope,
+        creations: yield* makeKeyedLock,
+      });
     }),
   );
 }

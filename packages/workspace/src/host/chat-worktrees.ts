@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { Effect } from 'effect';
+import { Data, Effect, Schedule } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { maximumBranchName } from '@moonbase/contracts/workspace-host-schema';
 import {
@@ -54,41 +54,49 @@ export const makeChatWorktree = ({ root, branch }: { root: string; branch: strin
       }
     });
     const directory = yield* checkouts.directory(target);
-    let prefix = branch;
-    for (let tries = 1; ; tries++) {
-      const name = tries === 1 ? prefix : `${prefix}-${tries}`;
-      const clash = yield* Effect.interruptible(findRefClash(directory, name));
-      // A branch named like one of the name's folders (`chat` for `chat/topic`) blocks it in Git:
-      // use `chat-topic`, which has no folders to clash with.
-      if (clash === 'folder') {
-        prefix = prefix.replaceAll('/', '-');
-        tries = 0;
-        continue;
-      }
-      // Branches inside the name (`chat/topic` for `chat`) block it as a taken one would.
-      const made = yield* Effect.exit(
-        clash === 'inside'
-          ? Effect.fail(new BranchTakenError({ branch: name, inside: true }))
-          : worktrees.createWorktree({
-              checkout: target,
-              base: 'HEAD',
-              branch: name,
-              location: join(parent, name.replaceAll('/', '-')),
-            }),
-      );
-      if (made._tag === 'Success') return made.value as CheckoutTarget;
-      const failure = made.cause.reasons.find((reason) => reason._tag === 'Fail');
-      if (
-        failure?._tag === 'Fail' &&
-        // A taken branch or location: try the next name.
-        (failure.error instanceof BranchTakenError ||
-          failure.error instanceof WorkspaceConflictError) &&
-        tries < maximumAttempts
-      )
-        continue;
-      return yield* Effect.failCause(made.cause);
-    }
+    /** Creates the worktree under `prefix`, then `prefix-2`, `prefix-3` and so on while taken. */
+    const createNumbered = (prefix: string) =>
+      Effect.suspend(() => {
+        let tries = 0;
+        return Effect.suspend(() => {
+          tries++;
+          return createNamed(tries === 1 ? prefix : `${prefix}-${tries}`);
+        }).pipe(
+          Effect.retry({
+            schedule: Schedule.recurs(maximumAttempts - 1),
+            // A taken branch or location: try the next name.
+            while: (error) =>
+              error instanceof BranchTakenError || error instanceof WorkspaceConflictError,
+          }),
+        );
+      });
+    const createNamed = (name: string) =>
+      Effect.gen(function* () {
+        const clash = yield* Effect.interruptible(findRefClash(directory, name));
+        // A branch named like one of the name's folders (`chat` for `chat/topic`) blocks it in
+        // Git, and every numbered name too: use `chat-topic`, which has no folders to clash with.
+        if (clash === 'folder') return yield* new FolderClash();
+        // Branches inside the name (`chat/topic` for `chat`) block it as a taken one would.
+        if (clash === 'inside') return yield* new BranchTakenError({ branch: name, inside: true });
+        return (yield* worktrees.createWorktree({
+          checkout: target,
+          base: 'HEAD',
+          branch: name,
+          location: join(parent, name.replaceAll('/', '-')),
+        })) as CheckoutTarget;
+      });
+    return yield* createNumbered(branch).pipe(
+      Effect.catchTag('FolderClash', () =>
+        createNumbered(branch.replaceAll('/', '-')).pipe(
+          // A name with no folders has none to clash with.
+          Effect.catchTag('FolderClash', (clash) => Effect.die(clash)),
+        ),
+      ),
+    );
   });
+
+/** A branch named like one of a chat branch's folders blocks it; never leaves this module. */
+class FolderClash extends Data.TaggedError('FolderClash') {}
 
 /**
  * How existing branches block `name` as a folder/file clash in Git's ref store: one named like a
