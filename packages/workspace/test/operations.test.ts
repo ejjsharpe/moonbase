@@ -14,7 +14,7 @@ import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { makeWorkspaceClient } from './workspace-client-fixture.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { quote, fixture, isError, seed, waitFor } from './recovery-fixture.ts';
 import { captureNative, releaseNative } from './workspace-fixture.ts';
@@ -337,7 +337,7 @@ test('expiry cannot close native descriptors across a multi-item operation longe
       filesystemHelper: helper,
     }).pipe(Layer.provideMerge(TestClock.layer())),
   );
-  const client = makeEditorClient(runtime);
+  const client = makeWorkspaceClient(runtime);
   const names = Array.from({ length: 16 }, (_, i) => 'external-' + i);
   try {
     const external = names.map((name) => join(f.base, name));

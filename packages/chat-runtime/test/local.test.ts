@@ -11,7 +11,7 @@ import {
   fauxAssistantMessage,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux';
-import { makeChatClient } from '@moonbase/application/runtime/clients';
+import { makeChatClient } from '@moonbase/application/chat/clients';
 import { LocalPiRuntimeLive, LocalPiControl } from '../src/index.ts';
 
 const session = { host: { hostId: 'local-test', storeId: 'local-store' }, actorId: 'local-owner' };

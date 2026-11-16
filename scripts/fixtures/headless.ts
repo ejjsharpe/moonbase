@@ -5,12 +5,12 @@ export {
   iterateTranscriptSource,
   makeTranscriptReader,
 } from '@moonbase/application/chat';
-export { makeEditorModel, makeEditorController } from '@moonbase/application/editor';
-export { makeChatClient, makeEditorClient } from '@moonbase/application/runtime/clients';
+export { editorLayer, makeEditorAtoms } from '@moonbase/application/editor';
+export { makeChatClient } from '@moonbase/application/chat/clients';
 export {
   runApplicationEffect,
   observeApplicationStream,
-} from '@moonbase/application/runtime/effect-client';
+} from '@moonbase/application/chat/promises';
 export { ApplicationError } from '@moonbase/contracts/errors';
 export { WorkspaceService, ConnectionService, ChatService } from '@moonbase/contracts/services';
 export { decodeChatInput } from '@moonbase/contracts/chat-schema';

@@ -20,7 +20,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { LocalPiRuntimeLive } from '../src/index.ts';
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { Effect, Layer } from 'effect';
-import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
+import { runApplicationEffect } from '@moonbase/application/chat/promises';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
 import { session, delay, until, fixture } from './runtime-fixture.ts';
 

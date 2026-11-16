@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Effect, ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { makeWorkspaceClient } from './workspace-client-fixture.ts';
 import { WorkspaceHostService, type WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { WorkspaceHostLive, WorkspaceRecoveryLive } from '../src/index.ts';
@@ -59,7 +59,7 @@ export function harness() {
       ),
     );
     runtimes.push(runtime);
-    return { runtime, client: makeEditorClient(runtime) };
+    return { runtime, client: makeWorkspaceClient(runtime) };
   };
   return {
     base,

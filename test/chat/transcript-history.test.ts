@@ -5,7 +5,7 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { ManagedRuntime } from 'effect';
 import { createMoonbaseApplication } from '@moonbase/application';
-import { makeChatClient } from '@moonbase/application/runtime/clients';
+import { makeChatClient } from '@moonbase/application/chat/clients';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

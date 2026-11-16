@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { makeWorkspaceClient } from './workspace-client-fixture.ts';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { bufferIdOf, draftsOf, seed } from './recovery-fixture.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 process.on('SIGXFSZ', () => {});
 const [root, dataDirectory] = process.argv.slice(2);
 const runtime = ManagedRuntime.make(WorkspaceLive({ hostId: 'size-limited-test', dataDirectory }));
-const client = makeEditorClient(runtime);
+const client = makeWorkspaceClient(runtime);
 try {
   const checkout = await client.command('openCheckout', { root }),
     target = { checkout, path: 'file.txt' };

@@ -9,7 +9,7 @@ import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/provid
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { createMoonbaseApplication } from '@moonbase/application';
-import { makeChatClient } from '@moonbase/application/runtime/clients';
+import { makeChatClient } from '@moonbase/application/chat/clients';
 import type { ChatState } from '@moonbase/application/chat';
 import { controlledHostFixture, until } from './controlled-host-fixture.ts';
 

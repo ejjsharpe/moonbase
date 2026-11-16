@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { makeWorkspaceClient } from './workspace-client-fixture.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 const [root, dataDirectory, filesystemHelper, ripgrepExecutable] = process.argv.slice(2);
 const runtime = ManagedRuntime.make(
   WorkspaceLive({ hostId: 'asset-test', dataDirectory, filesystemHelper, ripgrepExecutable }),
 );
 try {
-  const client = makeEditorClient(runtime),
+  const client = makeWorkspaceClient(runtime),
     checkout = await client.command('openCheckout', { root }),
     target = { checkout, path: 'file.txt' };
   const disk = await client.command('readFile', target);

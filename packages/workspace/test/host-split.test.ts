@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { Effect, ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { makeWorkspaceClient } from './workspace-client-fixture.ts';
 import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
 import { readInstallationId, WorkspaceRecoveryLive } from '../src/index.ts';
@@ -734,7 +734,7 @@ test('the client store mints its installation ID once and names itself to the ho
     assert.equal(readInstallationId(dataDirectory), installationId);
     const runtime = ManagedRuntime.make(WorkspaceRecoveryLive({ dataDirectory }, host));
     try {
-      await makeEditorClient(runtime).command('saveFile', {
+      await makeWorkspaceClient(runtime).command('saveFile', {
         target: { checkout, path: 'file.txt' },
         clientId: 'window',
         requestId: 'save',
