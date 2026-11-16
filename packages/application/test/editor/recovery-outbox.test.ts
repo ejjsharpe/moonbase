@@ -1,4 +1,4 @@
-import { acquireEditor } from './editor-model-fixture.ts';
+import { acquireEditor, answering } from './editor-model-fixture.ts';
 import { holding, storedRecovery } from './editor-fixture.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -18,10 +18,13 @@ const checkout: CheckoutTarget = {
 };
 const target = { checkout, path: 'a.ts' };
 const other = { checkout, path: 'b.ts' };
+const third = { checkout, path: 'c.ts' };
 
 /** An editor whose commands the test can hold, with a.ts open. */
 async function fixture() {
-  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'disk', 'b.ts': 'other' } }]),
+  const memory = fauxWorkspace([
+      { checkout, files: { 'a.ts': 'disk', 'b.ts': 'other', 'c.ts': 'third' } },
+    ]),
     runtime = ManagedRuntime.make(memory.layer),
     raw = makeEditorClient(runtime);
   const { client, sent, hold } = holding(raw);
@@ -141,7 +144,7 @@ test("a buffer's newer text replaces its unsent text", async () => {
   }
 });
 
-test('a failed edit keeps recovery failed and unready until it goes again and commits', async () => {
+test('a failed edit keeps recovery failed and unready until a later flush succeeds', async () => {
   const f = await fixture();
   try {
     f.editor.edit(target, 'kept after failure');
@@ -156,16 +159,6 @@ test('a failed edit keeps recovery failed and unready until it goes again and co
     assert.equal(f.editor.getSnapshot().recoveryFailed, false);
     assert.equal(f.editor.getSnapshot().recoveryReady, true);
     assert.equal((await f.stored()).drafts[0].text, 'newer after failure');
-    // Without a change or a flush, a failed edit goes again on its own.
-    f.memory.failNext('updateDraft', 'Store unavailable');
-    f.editor.edit(target, 'kept by the retry');
-    await assert.rejects(f.editor.flush(), /Store unavailable/);
-    for (let turn = 0; !f.editor.getSnapshot().recoveryReady; turn++) {
-      assert(turn < 300, 'the failed edit was not sent again');
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    assert.equal(f.editor.getSnapshot().recoveryFailed, false);
-    assert.equal((await f.stored()).drafts[0].text, 'kept by the retry');
   } finally {
     await f.dispose();
   }
@@ -239,6 +232,145 @@ test("a reload's discard and reopen keep the tab's place in the store", async ()
     const stored = await f.stored();
     assert.deepEqual(stored.drafts, []);
     assert.deepEqual(stored.tabs(checkout.checkoutId), ['a.ts', 'b.ts']);
+  } finally {
+    await f.dispose();
+  }
+});
+
+test('a failed preview close leaves no stale buffer: reopening its file ends in one open, not a loop', async () => {
+  const f = await fixture();
+  try {
+    await f.editor.open(other, { intent: 'preview' });
+    await f.editor.flush();
+    // Replacing the preview closes b.ts; that close fails before reaching the store.
+    f.memory.failNext('closeTab', 'Store unavailable', false, 'Unavailable');
+    await f.editor.open(third, { intent: 'preview' });
+    await assert.rejects(f.editor.flush(), /Store unavailable/);
+    assert.equal(f.editor.getSnapshot().recoveryFailed, true);
+    await f.editor.flush();
+    assert.equal(f.editor.getSnapshot().recoveryFailed, false);
+    assert.equal(
+      (await f.stored()).state.buffers.filter((b) => b.target.path === 'b.ts').length,
+      1,
+      'the store still holds the buffer the editor closed',
+    );
+    // Opened again under a new buffer, the file is refused once; the resync closes the stale
+    // buffer and opens the new one.
+    const before = f.sent.length;
+    await f.editor.open(other, { intent: 'keep' });
+    await f.editor.flush();
+    assert(f.sent.length - before < 12, 'the open was sent again and again');
+    assert.equal(f.editor.getSnapshot().recoveryReady, true);
+    const stored = await f.stored();
+    const shown = f.editor.getSnapshot().recovery.views[checkout.checkoutId]!.openFiles;
+    assert.deepEqual(stored.tabs(checkout.checkoutId), shown);
+    assert.deepEqual([...shown].sort(), ['a.ts', 'b.ts', 'c.ts']);
+    assert.equal(stored.state.buffers.filter((b) => b.target.path === 'b.ts').length, 1);
+  } finally {
+    await f.dispose();
+  }
+});
+
+test('a refusal that no resync resolves ends in a failed recovery, not a loop', async () => {
+  const f = await fixture();
+  try {
+    // Every open is refused as given.
+    for (let turn = 0; turn < 8; turn++)
+      f.memory.failNext('openTab', 'Another buffer is already open for this file.');
+    await f.editor.open(other, { intent: 'keep' });
+    const before = f.sent.length;
+    await assert.rejects(f.editor.flush());
+    assert(f.sent.length - before < 12);
+    assert.equal(f.editor.getSnapshot().recoveryFailed, true);
+  } finally {
+    await f.dispose();
+  }
+});
+
+for (const kind of ['close', 'quit', 'reload'] as const)
+  test(`a ${kind} Discard whose reply is lost stands once the store shows it committed`, async () => {
+    const f = await fixture();
+    try {
+      f.editor.edit(target, 'discarded');
+      await f.editor.flush();
+      assert.equal((await f.stored()).drafts[0]?.text, 'discarded');
+      // The store commits the close, then its reply is lost.
+      f.memory.failNext('closeTab', 'Reply lost', true, 'Uncertain');
+      let done: boolean;
+      if (kind === 'reload') {
+        f.memory.externalWrite(target, 'reloaded');
+        done = await f.editor.reload(target);
+      } else
+        done = await answering(
+          f.editor,
+          () => (kind === 'close' ? f.editor.close([target]) : f.editor.prepareQuit()),
+          async () => 'discard',
+        );
+      assert.equal(done, true);
+      await f.editor.flush();
+      const snapshot = f.editor.getSnapshot();
+      assert.equal(snapshot.recoveryReady, true);
+      const stored = await f.stored();
+      assert.deepEqual(stored.drafts, []);
+      // What the editor shows is what the store holds.
+      if (kind === 'close') {
+        assert.equal(f.editor.buffer(target), undefined);
+        assert.deepEqual(stored.tabs(checkout.checkoutId), []);
+      } else {
+        assert.equal(f.editor.buffer(target)?.text, kind === 'reload' ? 'reloaded' : 'disk');
+        assert.deepEqual(stored.tabs(checkout.checkoutId), ['a.ts']);
+      }
+    } finally {
+      await f.dispose();
+    }
+  });
+
+test('a Discard whose reply is lost, and not committed, keeps the draft shown and stored', async () => {
+  const f = await fixture();
+  try {
+    f.editor.edit(target, 'kept');
+    await f.editor.flush();
+    f.memory.failNext('closeTab', 'Store unavailable', false, 'Unavailable');
+    const done = await answering(
+      f.editor,
+      () => f.editor.close([target]),
+      async () => 'discard',
+    );
+    assert.equal(done, false);
+    assert.equal(f.editor.buffer(target)?.text, 'kept');
+    assert.equal(f.editor.getSnapshot().recoveryFailed, true);
+    assert.equal((await f.stored()).drafts[0]?.text, 'kept');
+    // Nothing sends the Discard again: the user's retry leaves the draft where it is.
+    await f.editor.flush();
+    assert.equal(f.editor.getSnapshot().recoveryFailed, false);
+    assert.equal((await f.stored()).drafts[0]?.text, 'kept');
+    assert.equal(f.editor.buffer(target)?.text, 'kept');
+  } finally {
+    await f.dispose();
+  }
+});
+
+test('a lost Discard reply the store cannot be asked about is settled by the next flush', async () => {
+  const f = await fixture();
+  try {
+    f.editor.edit(target, 'discarded later');
+    await f.editor.flush();
+    f.memory.failNext('closeTab', 'Reply lost', true, 'Uncertain');
+    f.memory.failNext('loadRecovery', 'Store unavailable', false, 'Unavailable');
+    const done = await answering(
+      f.editor,
+      () => f.editor.close([target]),
+      async () => 'discard',
+    );
+    assert.equal(done, false);
+    assert.equal(f.editor.getSnapshot().recoveryReady, false);
+    // The store shows the close committed: the Discard stands and the tab closes.
+    await f.editor.flush();
+    assert.equal(f.editor.buffer(target), undefined);
+    assert.equal(f.editor.getSnapshot().recoveryReady, true);
+    const stored = await f.stored();
+    assert.deepEqual(stored.drafts, []);
+    assert.deepEqual(stored.tabs(checkout.checkoutId), []);
   } finally {
     await f.dispose();
   }

@@ -2,7 +2,11 @@ import { normalizeApplicationError } from '@moonbase/effect';
 import { getParentPath, isPathAtOrInside } from '@moonbase/contracts/paths';
 import { EditorDiscovery } from './discovery.ts';
 import { EditorPreservation, type ConfirmedClose } from './preservation.ts';
-import { RecoveryOutbox, type RecoveryEditRequest } from './recovery-outbox.ts';
+import {
+  RecoveryOutbox,
+  type DebounceRunner,
+  type RecoveryEditRequest,
+} from './recovery-outbox.ts';
 import {
   emptyCheckoutView,
   emptyEditorRecovery,
@@ -115,6 +119,8 @@ export type EditorBuffer = {
   conflict?: FileDocument;
   pendingSave?: PendingSave;
   saving: boolean;
+  /** Its file isn't on disk (text kept apart from a replaced file): a Save creates it. */
+  newFile?: boolean;
 };
 export type CloseChoice = 'save' | 'discard' | 'cancel';
 export type ClosePrompt = { id: string; buffer: Readonly<EditorBuffer> };
@@ -225,14 +231,7 @@ class EditorModelState {
   private discovery: EditorDiscovery;
   private snapshot!: EditorSnapshot;
   private scope: Scope.Closeable;
-  constructor(
-    scope: Scope.Closeable,
-    options: EditorDependencies,
-    handles: {
-      debounce: FiberHandle.FiberHandle<void, never>;
-      retry: FiberHandle.FiberHandle<void, never>;
-    },
-  ) {
+  constructor(scope: Scope.Closeable, options: EditorDependencies, debounce: DebounceRunner) {
     this.scope = scope;
     this.client = options.client;
     this.clientId = options.clientId ?? crypto.randomUUID();
@@ -250,7 +249,7 @@ class EditorModelState {
       notify: () => this.emit(),
       report: (error) => this.report(error),
     });
-    this.outbox = new RecoveryOutbox(handles, {
+    this.outbox = new RecoveryOutbox(debounce, {
       clientId: this.clientId,
       execute: (effect) => this.run(effect),
       send: async (kind, input) => {
@@ -262,10 +261,16 @@ class EditorModelState {
         while (this.initialization) await this.initialization.done;
       },
       resync: (edit, error) => this.resync(edit, error),
-      reassert: async () => {
-        const loaded = await this.command('loadRecovery', { clientId: this.clientId });
-        if (!this.closing) this.follow(loaded.state, true);
+      settleClose: async (bufferId) => {
+        const loaded = await this.command(
+          'loadRecovery',
+          { clientId: this.clientId },
+          this.scope,
+          false,
+        );
+        return !loaded.state.buffers.some((buffer) => buffer.id === bufferId);
       },
+      finishClose: (edit, reopen) => this.finishClose(edit.bufferId, reopen),
       notify: () => this.emit(),
       report: (error) => this.report(error),
     });
@@ -353,7 +358,9 @@ class EditorModelState {
   }
   report = (error: unknown) => {
     if (this.closing || this.discovery.isObsoleteReadError(error)) return;
-    this.errors = [...this.errors.slice(-19), normalizeApplicationError(error).message];
+    // The editor's own notes are text; anything else is a failure with its message.
+    const message = typeof error === 'string' ? error : normalizeApplicationError(error).message;
+    this.errors = [...this.errors.slice(-19), message];
     this.emit();
   };
   clearErrors() {
@@ -860,6 +867,8 @@ class EditorModelState {
           this.report(
             editorError('File unavailable on disk. Retained buffer and edits remain accessible.'),
           );
+          // Saving it creates the file, which never replaces one that exists after all.
+          this.buffers.get(key)!.newFile = true;
           disk = null;
         }
       } else {
@@ -879,6 +888,7 @@ class EditorModelState {
       if (mode === 'file') this.comparisonAttempts.delete(key);
       else this.comparisonAttempts.set(key, { mode });
       let buffer = this.buffers.get(key);
+      if (buffer && disk && mode === 'file') buffer.newFile = undefined;
       if (!buffer && disk) {
         buffer = { target, text: disk.text, disk, saving: false };
         this.buffers.set(key, buffer);
@@ -948,6 +958,7 @@ class EditorModelState {
     }
     const buffer = this.buffers.get(fileKey(target));
     if (!buffer || buffer.saving) return false;
+    if (buffer.newFile) return this.createFile(buffer);
     const request = buffer.pendingSave ?? {
       target: structuredClone(target),
       clientId: this.clientId,
@@ -991,6 +1002,48 @@ class EditorModelState {
         this.report(error);
       }
       return buffer.text === result.disk.text;
+    } finally {
+      if (!this.closing) {
+        buffer.saving = false;
+        this.emit();
+      }
+    }
+  }
+  /**
+   * Saves a buffer whose file isn't on disk by creating the file with its text. Creation never
+   * replaces a file: one that exists by now refuses it, and the text stays a draft.
+   */
+  private async createFile(buffer: EditorBuffer) {
+    buffer.saving = true;
+    this.emit();
+    try {
+      const { target } = buffer;
+      const result = await this.mutateFiles(
+        {
+          checkout: target.checkout,
+          kind: 'create-file',
+          sources: [],
+          destination: target.path,
+          text: buffer.text,
+        },
+        buffer,
+      );
+      if (result.outcome !== 'completed') return false;
+      const disk = await this.command('readFile', target);
+      buffer.newFile = undefined;
+      buffer.disk = disk;
+      buffer.conflict = undefined;
+      // The file holds the text now. The store's draft still stands over the file it was kept
+      // from, so it is dropped as a Discard would, keeping the tab; newer typing is sent after.
+      const tab = this.tabs.get(fileKey(target));
+      if (tab) this.outbox.discardDraft(tab.id, tab.target);
+      this.sendDraft(buffer);
+      this.outbox.updateLayout();
+      await this.outbox.flush();
+      return buffer.text === disk.text;
+    } catch (error) {
+      this.report(error);
+      return false;
     } finally {
       if (!this.closing) {
         buffer.saving = false;
@@ -1650,9 +1703,19 @@ class EditorModelState {
   }
   async mutate(input: Omit<WorkspaceOperation, 'clientId' | 'id'> & { id?: string }) {
     this.assertAdmission();
+    return this.mutateFiles(input);
+  }
+  /**
+   * `saving` is a Save of a buffer whose file isn't on disk, which creates it with the buffer's
+   * text; it may run inside a Close's preservation, whose Save it is.
+   */
+  private async mutateFiles(
+    input: Omit<WorkspaceOperation, 'clientId' | 'id'> & { id?: string },
+    saving?: EditorBuffer,
+  ) {
     this.checkout(input.checkout);
     this.assertNotInitializing(input.checkout);
-    if (this.preservation.active)
+    if (this.preservation.active && !saving)
       throw editorError('Finish the captured preservation action first.');
     const operation: WorkspaceOperation = {
       ...structuredClone(input),
@@ -1685,6 +1748,7 @@ class EditorModelState {
     if (
       [...this.buffers.values()].some(
         (buffer) =>
+          buffer !== saving &&
           sameCheckout(buffer.target.checkout, operation.checkout) &&
           !operation.sources.some((source) =>
             isPathAtOrInside(buffer.target.path, source.target.path),
@@ -1712,7 +1776,8 @@ class EditorModelState {
     )
       throw editorError('Resolve the source Save before moving or copying it.');
     // Send the source drafts before any external mutation, including Trash.
-    await this.flushRecovery();
+    if (saving) await this.outbox.flush();
+    else await this.flushRecovery();
     const uncertain: OperationResult = {
       id: operation.id,
       clientId: this.clientId,
@@ -1921,7 +1986,24 @@ class EditorModelState {
       changed = true;
     }
     for (const buffer of store.buffers) {
-      if (!buffer.draft || shown.has(buffer.id) || this.closedBuffers.has(buffer.id)) continue;
+      if (!buffer.draft || this.closedBuffers.has(buffer.id)) continue;
+      if (shown.has(buffer.id)) {
+        // A draft the store made over a clean tab (another window's copy onto it) is the newer:
+        // the tab takes it, rather than sending its stale text over it.
+        const key = fileKey(buffer.target),
+          own = this.buffers.get(key);
+        if (!own || isDirty(own) || this.outbox.isDraftPending(buffer.id)) continue;
+        if (!('text' in buffer.draft)) {
+          unread = true;
+          continue;
+        }
+        if (own.text === buffer.draft.text && own.disk.version === buffer.draft.disk.version)
+          continue;
+        own.text = buffer.draft.text;
+        own.disk = structuredClone(buffer.draft.disk);
+        changed = true;
+        continue;
+      }
       if (!('text' in buffer.draft)) {
         unread = true;
         continue;
@@ -1938,6 +2020,11 @@ class EditorModelState {
       const drafts = new Map(
         (store as RecoveryState).buffers.map((buffer) => [buffer.id, buffer.draft?.text]),
       );
+      // A clean buffer the editor no longer shows (one whose close was lost) is closed, so it
+      // never holds a file the editor opens again under another buffer.
+      for (const buffer of (store as RecoveryState).buffers)
+        if (!buffer.draft && !shown.has(buffer.id) && !this.outbox.isTabPending(buffer.id))
+          this.outbox.closeTab(buffer.id);
       for (const [key, tab] of this.tabs) {
         if (this.outbox.isTabPending(tab.id)) continue;
         if (!held.has(tab.id)) this.outbox.openTab(tab.id, tab.target);
@@ -2001,6 +2088,32 @@ class EditorModelState {
     this.comparisonAttempts.delete(key);
   }
   /**
+   * A close whose reply was lost committed, as the store showed later: the Discard stands. A
+   * closed tab closes here too; a Discard that keeps its tab (Quit, Reload) drops its text.
+   */
+  private finishClose(bufferId: string, reopen: { target: FileTarget } | undefined) {
+    const entry = [...this.tabs].find(([, tab]) => tab.id === bufferId);
+    if (!entry) return;
+    const [key, tab] = entry;
+    const buffer = this.buffers.get(key);
+    if (reopen) {
+      if (buffer) {
+        buffer.text = buffer.disk.text;
+        buffer.conflict = undefined;
+      }
+      this.outbox.openTab(tab.id, tab.target);
+    } else {
+      closeRecoveryReferences(this.recovery, [tab.target], 'files');
+      this.closedBuffers.add(tab.id);
+      this.tabs.delete(key);
+      this.buffers.delete(key);
+      delete this.comparisons[key];
+      this.comparisonAttempts.delete(key);
+    }
+    this.changed();
+    this.emit();
+  }
+  /**
    * Keeps text the store has no place for (its buffer was replaced) as a draft at a new path
    * beside its file, with the file text it was edited from, and says where.
    */
@@ -2011,15 +2124,17 @@ class EditorModelState {
         .filter((tab) => sameCheckout(tab.target.checkout, checkout))
         .map((tab) => tab.target.path),
     );
+    // Files the editor has listed are taken too; a Save creates the file and never replaces one.
+    for (const listing of Object.values(this.listings))
+      for (const entry of listing.entries) taken.add(entry.path);
     const target = { checkout, path: findFreePath(buffer.target.path, taken) };
     const tab = { id: crypto.randomUUID(), target };
     this.showDraft(tab, { text: buffer.text, disk: buffer.disk });
+    this.buffers.get(fileKey(target))!.newFile = true;
     this.outbox.openTab(tab.id, target);
     this.outbox.updateDraft(tab.id, buffer.text, buffer.disk);
     this.report(
-      editorError(
-        `${buffer.target.path} was replaced while it had unsaved changes. They are kept in ${target.path}.`,
-      ),
+      `${buffer.target.path} was replaced while it had unsaved changes. They are kept in ${target.path}; Save creates it.`,
     );
   }
   /** Immediately stop admissions; cleanup is owned by the caller outside this model scope. */
@@ -2141,10 +2256,12 @@ export const makeEditorModel = (
 ): Effect.Effect<EditorModel, ApplicationError, Scope.Scope> =>
   Effect.gen(function* () {
     const scope = yield* Scope.make();
-    const handle = FiberHandle.make<void, never>().pipe(Effect.provideService(Scope.Scope, scope));
-    const handles = { debounce: yield* handle, retry: yield* handle };
+    const handle = yield* FiberHandle.make<void, never>().pipe(
+      Effect.provideService(Scope.Scope, scope),
+    );
+    const debounce: DebounceRunner = yield* FiberHandle.runtime(handle)<never>();
     const model = yield* Effect.try({
-      try: () => new EditorModelState(scope, dependencies, handles),
+      try: () => new EditorModelState(scope, dependencies, debounce),
       catch: normalizeApplicationError,
     });
     yield* Effect.addFinalizer(() => model.release());

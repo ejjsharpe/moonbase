@@ -1381,3 +1381,82 @@ test("closing a restored active clean file loads its survivor's remembered compa
     await f.dispose();
   }
 });
+
+test("another window's copy onto a clean tab gives the tab the copied draft, not its stale text", async () => {
+  const f = await fixture('copy-onto-tab');
+  const { editor } = f;
+  try {
+    await editor.open(target('a.ts'));
+    editor.edit(target('a.ts'), 'SOURCE DRAFT');
+    await editor.open(target('b.ts'), { intent: 'keep' });
+    await editor.flush();
+    // Another client of the store copies a.ts over b.ts, which this editor shows clean.
+    await f.client.command('mutate', {
+      id: 'copy-over',
+      clientId: 'other-window',
+      checkout,
+      kind: 'copy',
+      sources: await f.client.command('inspectEntries', { checkout, paths: ['a.ts'] }),
+      replacements: await f.client.command('inspectEntries', { checkout, paths: ['b.ts'] }),
+      destination: 'b.ts',
+    });
+    await editor.reconcileRecovery();
+    await editor.flush();
+    assert.equal(editor.buffer(target('b.ts'))?.text, 'SOURCE DRAFT');
+    const { state } = await f.client.command('loadRecovery', { clientId: editor.clientId });
+    const copied = state.buffers.find((b) => b.target.path === 'b.ts')?.draft;
+    assert.equal(copied?.text, 'SOURCE DRAFT');
+    assert.equal(copied?.disk.version, editor.buffer(target('b.ts'))?.disk.version);
+  } finally {
+    await f.dispose();
+  }
+});
+
+test('text kept beside a replaced file saves by creating its own file, never replacing one', async () => {
+  const f = await fixture('kept-text', false);
+  const { editor } = f;
+  try {
+    await editor.open(target('a.ts'), { intent: 'keep' });
+    await editor.open(target('b.ts'), { intent: 'keep' });
+    await editor.flush();
+    // An existing file holds the first free name, and the editor has listed it.
+    await f.client.command('mutate', {
+      id: 'occupy',
+      clientId: 'other-window',
+      checkout,
+      kind: 'create-file',
+      sources: [],
+      destination: 'b (unsaved).ts',
+      text: 'NOT YOURS',
+    });
+    await editor.list(checkout);
+    // Text typed into b.ts is not yet sent when another client moves a.ts over it.
+    editor.edit(target('b.ts'), 'typed over b');
+    await f.client.command('mutate', {
+      id: 'move-over',
+      clientId: 'other-window',
+      checkout,
+      kind: 'move',
+      sources: await f.client.command('inspectEntries', { checkout, paths: ['a.ts'] }),
+      replacements: await f.client.command('inspectEntries', { checkout, paths: ['b.ts'] }),
+      destination: 'b.ts',
+    });
+    await editor.reconcileRecovery();
+    await editor.flush();
+    const kept = target('b (unsaved 2).ts');
+    assert.equal(editor.buffer(kept)?.text, 'typed over b');
+    assert.match(editor.getSnapshot().errors.join(' '), /b \(unsaved 2\)\.ts/);
+    // Saving creates the file with the text and leaves the other one as it was.
+    assert.equal(await editor.save(kept, true), true);
+    assert.equal((await f.client.command('readFile', kept)).text, 'typed over b');
+    assert.equal((await f.client.command('readFile', target('b (unsaved).ts'))).text, 'NOT YOURS');
+    assert.equal(editor.buffer(kept)?.text, editor.buffer(kept)?.disk.text);
+    const { state } = await f.client.command('loadRecovery', { clientId: editor.clientId });
+    assert.deepEqual(
+      state.buffers.filter((b) => b.draft).map((b) => [b.target.path, b.draft!.text]),
+      [],
+    );
+  } finally {
+    await f.dispose();
+  }
+});

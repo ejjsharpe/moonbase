@@ -263,6 +263,17 @@ test(
       assert.equal(restored.buffer(kept)?.text, 'X UNSENT\n');
       assert.equal(restored.buffer(kept)?.disk.text, 'REPLACED\n');
       assert.equal(restored.buffer(destination)?.text, 'B\n');
+      // Saving the kept text creates its file (it never replaces one) and leaves no draft.
+      await restored.open(kept);
+      assert.equal(await restored.save(kept, true), true);
+      assert.equal(readFileSync(join(f.roots[0], kept.path), 'utf8'), 'X UNSENT\n');
+      assert.equal(readFileSync(join(f.roots[0], 'dest/b.ts'), 'utf8'), 'B\n');
+      await restored.flush();
+      const state = await f.loadRecovery('window-x');
+      assert.deepEqual(
+        state.buffers.filter((b) => b.draft).map((b) => b.target.path),
+        [],
+      );
     } finally {
       release.resolve();
       await f.close();

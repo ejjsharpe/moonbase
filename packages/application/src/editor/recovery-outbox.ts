@@ -1,5 +1,4 @@
-import { normalizeApplicationError } from '@moonbase/effect';
-import { Effect, FiberHandle, Semaphore } from 'effect';
+import { Effect, Semaphore } from 'effect';
 import type { RecoveryEdit, RecoveryEditInput, RecoveryLayout } from '@moonbase/contracts/recovery';
 import {
   ApplicationError,
@@ -13,6 +12,10 @@ export type RecoveryEditRequest =
   | { kind: 'closeTab'; bufferId: string; discard: boolean }
   | { kind: 'updateDraft'; bufferId: string; text: string; disk: FileDocument }
   | { kind: 'updateLayout' };
+type CloseRequest = Extract<RecoveryEditRequest, { kind: 'closeTab' }>;
+type OpenRequest = Extract<RecoveryEditRequest, { kind: 'openTab' }>;
+/** Runs an effect as the one debounce fiber, owned by the editor's scope, replacing the last. */
+export type DebounceRunner = (effect: Effect.Effect<void>) => unknown;
 type Run = <A>(effect: Effect.Effect<A, ApplicationError>) => Promise<A>;
 type OutboxDependencies = {
   clientId: string;
@@ -29,8 +32,13 @@ type OutboxDependencies = {
    * when the refusal stands: the edit is dropped and the flush fails with it.
    */
   resync(edit: RecoveryEditRequest, error: ApplicationError): Promise<boolean>;
-  /** Reads the store's state and sends whatever it lacks of what the editor shows. */
-  reassert(): Promise<void>;
+  /** Whether the store no longer holds the buffer: a close sent for it committed. */
+  settleClose(bufferId: string): Promise<boolean>;
+  /**
+   * Finishes, in the editor, a close whose lost reply was settled only later, as committed:
+   * its tab closes, or (`reopen`, a Discard that keeps the tab) its text goes back to disk.
+   */
+  finishClose(edit: CloseRequest, reopen: OpenRequest | undefined): void;
   notify(): void;
   report(error: unknown): void;
 };
@@ -52,33 +60,20 @@ export class RecoveryOutbox {
   private queue: RecoveryEditRequest[] = [];
   private sending: RecoveryEditRequest | undefined;
   private failure: unknown;
-  /**
-   * A tab edit failed, so it may or may not have committed: the store has to be read again and
-   * given what the editor shows before anything else is sent.
-   */
-  private uncertain = false;
+  /** A close whose reply was lost and whose outcome the store could not be asked for yet. */
+  private unsettled: { edit: CloseRequest; reopen: OpenRequest | undefined } | undefined;
   /** The layout last committed, so an unchanged layout is not sent again. */
   private committedLayout: string | undefined;
   private lock = Semaphore.makeUnsafe(1);
-  private debounce: FiberHandle.FiberHandle<void, never>;
-  /** The retry after a failed flush, and how many flushes in a row have failed. */
-  private retry: FiberHandle.FiberHandle<void, never>;
-  private failures = 0;
+  private debounce: DebounceRunner;
   private dependencies: OutboxDependencies;
-  constructor(
-    handles: {
-      debounce: FiberHandle.FiberHandle<void, never>;
-      retry: FiberHandle.FiberHandle<void, never>;
-    },
-    dependencies: OutboxDependencies,
-  ) {
-    this.debounce = handles.debounce;
-    this.retry = handles.retry;
+  constructor(debounce: DebounceRunner, dependencies: OutboxDependencies) {
+    this.debounce = debounce;
     this.dependencies = dependencies;
   }
   /** Whether every edit made so far has committed. */
   get idle() {
-    return !this.queue.length && !this.sending && this.failure === undefined && !this.uncertain;
+    return !this.queue.length && !this.sending && this.failure === undefined && !this.unsettled;
   }
   /** Whether the last edit sent failed, so edits wait for the next flush. */
   get failed() {
@@ -88,11 +83,10 @@ export class RecoveryOutbox {
   isTabPending(bufferId: string) {
     return [this.sending, ...this.queue].some((edit) => edit && isStructural(edit, bufferId));
   }
-  /** The text not yet committed for a buffer, if any. */
-  pendingDraft(bufferId: string) {
-    return this.queue.findLast(
-      (edit): edit is Extract<RecoveryEditRequest, { kind: 'updateDraft' }> =>
-        edit.kind === 'updateDraft' && edit.bufferId === bufferId,
+  /** Whether text for the buffer is queued or being sent. */
+  isDraftPending(bufferId: string) {
+    return [this.sending, ...this.queue].some(
+      (edit) => edit?.kind === 'updateDraft' && edit.bufferId === bufferId,
     );
   }
   openTab(bufferId: string, target: FileTarget) {
@@ -132,59 +126,40 @@ export class RecoveryOutbox {
   }
   /** Sends the edits once nothing has changed for a moment. */
   schedule() {
-    const { execute, report } = this.dependencies;
-    void execute(
-      FiberHandle.run(
-        this.debounce,
-        Effect.sleep('150 millis').pipe(
-          Effect.andThen(Effect.tryPromise({ try: () => this.flush(), catch: (error) => error })),
-          Effect.catch((error) => Effect.sync(() => report(error))),
-        ),
+    const { report } = this.dependencies;
+    // The debounce fiber belongs to the editor's scope; a newer change replaces it.
+    this.debounce(
+      Effect.sleep('150 millis').pipe(
+        Effect.andThen(Effect.tryPromise({ try: () => this.flush(), catch: (error) => error })),
+        Effect.catch((error) => Effect.sync(() => report(error))),
       ),
-    ).catch(report);
+    );
   }
   /**
-   * Sends every edit made so far; resolves once each has committed. After a failure the edits are
-   * sent again on their own, after 1, 2 and then every 5 seconds, until a flush succeeds.
+   * Sends every edit made so far; resolves once each has committed. A failed edit is not sent
+   * again on its own: the next change, flush or Retry sends it.
    */
   flush(): Promise<void> {
-    return this.dependencies
-      .execute(
-        this.lock.withPermits(1)(
-          Effect.tryPromise({ try: () => this.drain(), catch: normalizeApplicationError }),
-        ),
-      )
-      .then(
-        () => {
-          this.failures = 0;
-        },
-        (error: unknown) => {
-          if (!this.idle) this.retryLater();
-          throw error;
-        },
-      );
-  }
-  private retryLater() {
-    const { execute, report } = this.dependencies;
-    const delay = [1000, 2000][this.failures++] ?? 5000;
-    void execute(
-      FiberHandle.run(
-        this.retry,
-        Effect.sleep(delay).pipe(
-          Effect.andThen(Effect.tryPromise({ try: () => this.flush(), catch: (error) => error })),
-          // The flush reported nothing new: each failure was reported when it first happened.
-          Effect.ignore,
-        ),
+    return this.dependencies.execute(
+      this.lock.withPermits(1)(
+        Effect.tryPromise({ try: () => this.drain(), catch: (error) => error as ApplicationError }),
       ),
-    ).catch(report);
+    );
   }
   private async drain() {
-    const { clientId, send, ready, resync, notify } = this.dependencies;
+    const { clientId, send, ready, resync, settleClose, finishClose, notify } = this.dependencies;
     let resyncs = 0;
-    if (this.uncertain) {
+    const refuse = (error: ApplicationError) => {
+      // A refusal that a resync can't resolve ends here, with the failure shown.
+      this.failure = error;
+      throw error;
+    };
+    if (this.unsettled) {
+      // A close whose outcome is unknown: the store says whether it committed.
       await ready();
-      await this.dependencies.reassert();
-      this.uncertain = false;
+      const { edit, reopen } = this.unsettled;
+      if (await settleClose(edit.bufferId)) finishClose(edit, reopen);
+      this.unsettled = undefined;
       this.failure = undefined;
       notify();
     }
@@ -208,33 +183,47 @@ export class RecoveryOutbox {
           if (edit.kind !== 'updateDraft') this.committedLayout = undefined;
         }
         this.failure = undefined;
-      } catch (error) {
+      } catch (caught) {
+        const error = caught as ApplicationError;
         this.sending = undefined;
-        if (edit.kind === 'openTab' || edit.kind === 'closeTab') {
-          // A failed close or discard is abandoned with the action that made it, never retried
-          // later behind the editor's back: the tab edits queued for its buffer go too.
+        if (edit.kind === 'closeTab') {
+          // A close is part of the action that made it (a Close, a Discard, a Reload) and is
+          // never sent again behind the editor's back: the tab edits queued after it go too.
+          const next = this.queue[0];
+          const reopen =
+            next?.kind === 'openTab' && next.bufferId === edit.bufferId ? next : undefined;
           this.queue = this.queue.filter((queued) => !isStructural(queued, edit.bufferId));
-          if (isRefusal(error) && (await resync(edit, error))) continue;
-          // An answer refusing it proves nothing committed; any other failure may hide a commit,
-          // so the store is read again and given the draft the editor still shows.
-          if (!isRefusal(error)) {
-            this.uncertain = true;
-            this.failure = error;
+          if (isRefusal(error)) {
+            if (resyncs++ < maximumResyncs) await resync(edit, error);
+            refuse(error);
           }
-          throw error;
+          // Its reply was lost: the store says whether it committed. One that did stands (the
+          // action goes on); one that didn't leaves the draft where the editor shows it.
+          let committed: boolean;
+          try {
+            committed = await settleClose(edit.bufferId);
+          } catch {
+            this.unsettled = { edit, reopen };
+            refuse(error);
+          }
+          if (!committed!) refuse(error);
+          if (reopen) this.queue.unshift(reopen);
+          continue;
         }
-        if (isRefusal(error) && resyncs++ < maximumResyncs) {
-          if (await resync(edit, error)) continue;
-          throw error;
+        if (isRefusal(error)) {
+          if (resyncs++ < maximumResyncs && (await resync(edit, error))) continue;
+          refuse(error);
         }
         this.queue.unshift(edit);
-        this.failure = error;
-        throw error;
+        refuse(error);
       } finally {
         this.sending = undefined;
         notify();
       }
     }
+    // Everything made so far has committed, or was abandoned with the action that made it.
+    this.failure = undefined;
+    notify();
   }
   /** Forgets what is queued; for an editor that is closing. */
   clear() {

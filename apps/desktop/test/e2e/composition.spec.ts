@@ -621,7 +621,7 @@ test('captured Quit keeps chat/newer drafts and editor conflicts usable; Cancel 
 });
 
 if (!packaged)
-  test('a held Save and a lost Quit reply do not block Send/status/Stop; the vetoed Quit keeps the window', async () => {
+  test('a held Save and a lost Quit reply do not block Send/status/Stop; the committed Discard lets Quit end', async () => {
     const f = await fixture(true);
     let current: ElectronApplication | undefined;
     try {
@@ -656,34 +656,22 @@ if (!packaged)
       await expect
         .poll(async () => draftsOf((await recovery(p)).state)[0]?.text)
         .toContain('newer pending recovery');
-      await app.evaluate(() => {
-        globalThis.desktopTest.fault = 'closeTab';
-      });
-      await app.evaluate(({ app }) => app.quit());
-      await p.getByRole('dialog').getByRole('button', { name: 'Discard', exact: true }).click();
-      await expect.poll(() => app.evaluate(() => globalThis.desktopTest.fault)).toBeNull();
-      await expect(editor(p)).toBeVisible();
-      expect(children.get(app)!.exitCode).toBeNull();
       await tab(p, 'Agents').click();
       await p
         .getByLabel('Message', { exact: true })
         .fill('latest chat while the editor close is unconfirmed');
       await projectTab(p).click();
-      // The store committed the discard but its reply was lost: the editor still shows the draft,
-      // and its edits go again on their own, giving the draft back to the store.
-      await expect(p.getByRole('button', { name: 'Retry keeping edits', exact: true })).toHaveCount(
-        0,
-      );
-      await expect(
-        p.locator('.view-line').filter({ hasText: 'newer pending recovery' }),
-      ).toHaveCount(1);
-      await expect
-        .poll(async () => draftsOf((await recovery(p)).state)[0]?.text)
-        .toContain('newer pending recovery');
+      await app.evaluate(() => {
+        globalThis.desktopTest.fault = 'closeTab';
+      });
+      await app.evaluate(({ app }) => app.quit());
+      await p.getByRole('dialog').getByRole('button', { name: 'Discard', exact: true }).click();
+      // The discard committed and only its reply was lost: the editor reads the store, the
+      // Discard stands, and Quit goes on.
+      const child = children.get(app)!;
+      await until(async () => child.exitCode !== null || child.signalCode !== null, Boolean);
       expect(await readFile(join(f.cwd, 'a.ts'), 'utf8')).toBe('local dirty draft');
       expect(errors).toEqual([]);
-      // The draft is kept, so a Quit would ask about it again; exit instead.
-      await stop(app, true);
       current = undefined;
       const next = await launch(f);
       current = next.app;
@@ -691,8 +679,9 @@ if (!packaged)
       await expect(next.page.getByLabel('Message', { exact: true })).toHaveValue(
         'latest chat while the editor close is unconfirmed',
       );
+      expect(draftsOf((await recovery(next.page)).state)).toEqual([]);
       expect((await f.stats()).commands.filter((v) => v === 'stopChat')).toHaveLength(1);
-      await stop(next.app, true);
+      await stop(next.app);
       current = undefined;
     } finally {
       if (current) await stop(current, true);

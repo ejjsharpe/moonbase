@@ -491,7 +491,7 @@ test('window close hides mounted Monaco; Quit Cancel preserves undo, then Save q
   db.close();
 });
 
-test('SQLite contention vetoes Quit Discard; the edit goes again and the window stays usable', async () => {
+test('SQLite contention vetoes Quit Discard; the draft stays and the window stays usable', async () => {
   await open();
   await edit('draft survives contention');
   await expect
@@ -509,10 +509,13 @@ test('SQLite contention vetoes Quit Discard; the edit goes again and the window 
     db.exec('ROLLBACK');
     db.close();
   }
-  // Once the store is free the failed edit goes again on its own.
+  // The Discard did not commit, so the draft stays; once the store is free, Retry clears the
+  // failure without sending the Discard again.
+  await page.getByRole('button', { name: 'Retry keeping edits', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Retry keeping edits', exact: true })).toHaveCount(
     0,
   );
+  expect(draftsOf((await recovery()).state)[0]?.text).toBe('draft survives contention');
   await expect(page.getByRole('tab', { name: 'a.ts', exact: true })).toBeVisible();
   const input = page.getByRole('textbox', { name: 'a.ts editor', exact: true });
   await input.focus();
@@ -969,7 +972,7 @@ test('native Trash moves only a captured temporary fixture and leaves its dirty 
     .toBe('retained after native Trash');
 });
 
-test('a lost reply to Quit Discard keeps the window and the draft, which the store gets back', async () => {
+test('a Quit Discard whose reply is lost stands once the store shows it committed, and Quit ends', async () => {
   await open();
   await edit('consented pending discard');
   await expect
@@ -978,25 +981,15 @@ test('a lost reply to Quit Discard keeps the window and the draft, which the sto
   await app.evaluate(() => {
     globalThis.desktopTest.fault = 'closeTab';
   });
-  await quit();
-  await page.getByRole('button', { name: 'Discard', exact: true }).click();
-  // The discard committed in the store but its reply was lost, so Quit stopped short. The editor
-  // still shows the draft, and the edits go again on their own, giving it back to the store.
-  await expect.poll(() => app.evaluate(() => globalThis.desktopTest.fault)).toBeNull();
-  await expect(page.getByRole('button', { name: 'Retry keeping edits', exact: true })).toHaveCount(
-    0,
-  );
-  await expect
-    .poll(async () => draftsOf((await recovery()).state)[0]?.text)
-    .toBe('consented pending discard');
-  expect(
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()),
-  ).toBe(true);
   const exited = app.waitForEvent('close');
   await quit();
   await page.getByRole('button', { name: 'Discard', exact: true }).click();
+  // The discard committed in the store and only its reply was lost: the editor reads the store,
+  // the Discard stands, and Quit goes on.
   await exited;
   expect(readFileSync(join(checkout, 'a.ts'), 'utf8')).toContain('WORKING');
+  await launch();
+  expect(draftsOf((await recovery()).state)).toEqual([]);
 });
 
 test('a command cancelled over real IPC is interrupted in main and leaves unrelated IO usable', async () => {

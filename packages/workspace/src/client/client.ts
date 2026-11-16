@@ -267,13 +267,21 @@ export const makeClientWorkspace = ({
         return Effect.fail(
           new UnreadableRecoveryError({ client: recoveries.unreadable[0].client }),
         );
-      for (const { state } of recoveries.readable)
+      // A file created with the creating client's own draft text saves that draft; it
+      // orphans nothing.
+      const saves = (client: string, path: string, text: string) =>
+        input.kind === 'create-file' &&
+        client === input.clientId &&
+        path === input.destination &&
+        text === input.text;
+      for (const { client, state } of recoveries.readable)
         if (
           state.buffers.some(
             ({ draft, target }) =>
               draft &&
               target.checkout.checkoutId === input.checkout.checkoutId &&
-              conflicts(target.path),
+              conflicts(target.path) &&
+              !saves(client, target.path, draft.text),
           )
         )
           return Effect.fail(new InvalidRecoveryRequestError({ problem: 'destination-drafts' }));
