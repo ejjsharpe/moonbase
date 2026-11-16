@@ -1,4 +1,5 @@
-import { Effect, Semaphore } from 'effect';
+import { Effect } from 'effect';
+import type { KeyedLock } from '../keyed-lock.ts';
 import {
   emptyBufferView,
   emptyRecoveryState,
@@ -11,7 +12,7 @@ import {
   InvalidRecoveryRequestError,
   RecoveryPublicationError,
 } from '@moonbase/contracts/workspace-errors';
-import { attempt, type WorkspaceFailure } from '../attempt.ts';
+import { attempt } from '../attempt.ts';
 import { hash, key, same } from '../validation.ts';
 import { followCheckouts } from './feed-sync.ts';
 import type { RecoveryContext } from './recovery-context.ts';
@@ -27,15 +28,8 @@ const viewOf = (state: RecoveryState, checkoutId: string) =>
  * edit is the client's own word: it advances the client's publication, so a save begun before it
  * never restores older text over it.
  */
-export const makeRecoveryEdits = (context: RecoveryContext) => {
+export const makeRecoveryEdits = (context: RecoveryContext, inOrder: KeyedLock) => {
   const { store } = context;
-  const turns = new Map<string, Semaphore.Semaphore>();
-  const inOrder = <A>(clientId: string, work: Effect.Effect<A, WorkspaceFailure>) =>
-    Effect.suspend(() => {
-      let turn = turns.get(clientId);
-      if (!turn) turns.set(clientId, (turn = Semaphore.makeUnsafe(1)));
-      return Semaphore.withPermit(turn)(work);
-    });
   /** Applies `change` to the client's committed recovery; it returns `false` when it changed nothing. */
   const commit = (clientId: string, change: (state: RecoveryState) => boolean | void) =>
     store.transaction(() => {

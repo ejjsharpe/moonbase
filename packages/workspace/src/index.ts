@@ -32,9 +32,10 @@ export type WorkspaceRecoveryConfiguration = {
 /**
  * The file host: approvals, reads, saves, file operations, Git, search and watching, with the
  * journals of the saves and operations it admitted. It keeps no client recovery. Scoped resources
- * only; the shared application composition root supplies the runtime. `now` is the journal clock.
+ * only; the shared application composition root supplies the runtime. Its journal keeps time by
+ * the `Clock` it is composed with.
  */
-export function WorkspaceHostLive(configuration: WorkspaceHostConfiguration, now?: () => number) {
+export function WorkspaceHostLive(configuration: WorkspaceHostConfiguration) {
   return Layer.mergeAll(
     Layer.effect(
       WorkspaceHostService,
@@ -47,7 +48,7 @@ export function WorkspaceHostLive(configuration: WorkspaceHostConfiguration, now
         has: (path: string) => host.hasFolder(path).pipe(Effect.mapError(toWireError)),
       })),
     ),
-  ).pipe(Layer.provide(makeFileHostLayer(configuration, now)));
+  ).pipe(Layer.provide(makeFileHostLayer(configuration)));
 }
 
 /**
@@ -96,14 +97,13 @@ export function WorkspaceRecoveryLive(
  */
 export function WorkspaceLocalLive(
   configuration: WorkspaceHostConfiguration & { installationId: string },
-  now?: () => number,
 ) {
   const { installationId, ...hostConfiguration } = configuration;
   return Layer.unwrap(
     Effect.map(WorkspaceHostService, (host) =>
       WorkspaceRecoveryLive({ dataDirectory: configuration.dataDirectory, installationId }, host),
     ),
-  ).pipe(Layer.provideMerge(WorkspaceHostLive(hostConfiguration, now)));
+  ).pipe(Layer.provideMerge(WorkspaceHostLive(hostConfiguration)));
 }
 
 /**

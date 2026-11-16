@@ -11,14 +11,9 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { fileURLToPath } from 'node:url';
 import { attempt, type WorkspaceFailure } from '../attempt.ts';
 import { HelperFailure } from '../system-failures.ts';
-import {
-  createGitGate,
-  Directory,
-  identity,
-  makeRunner,
-  O_NOFOLLOW_ANY,
-  type Run,
-} from '../filesystem.ts';
+import { Directory, identity, O_NOFOLLOW_ANY } from '../filesystem.ts';
+import { makeFilesystemHelper } from '../filesystem-helper.ts';
+import { makeGitGate } from '../git-gate.ts';
 import type { Approval } from '../schema.ts';
 import { canonical, folded, hash, same } from '../validation.ts';
 import { HostSettings } from './host-settings.ts';
@@ -66,8 +61,6 @@ export const readBranch = (directory: Directory) =>
 export class Checkouts extends Context.Service<
   Checkouts,
   {
-    /** Runs the filesystem helper. */
-    readonly run: Run;
     /** The Git the host runs. */
     readonly git: string;
     /** The approval of exactly `target`; refuses any other host's or a changed one. */
@@ -105,17 +98,17 @@ export class Checkouts extends Context.Service<
       const { config, allowRoot } = yield* HostSettings;
       const store = yield* HostStore;
       const git = config.gitExecutable;
-      const gitReady = createGitGate(git);
+      const gitReady = yield* makeGitGate(git);
       const helper =
         config.filesystemHelper ?? fileURLToPath(new URL('../../dist/filesystem', import.meta.url));
-      const run = makeRunner(helper);
+      const filesystemHelper = makeFilesystemHelper(helper);
       // Resolved once: the host's own reserved paths don't move while it runs.
       const reserved = [store.directory, ...(config.reserved ?? [])].map(resolveNearest);
       // Open directories close after everything that may use them has stopped.
       const directoryScope = yield* Scope.fork(yield* Effect.scope);
       const directories = new Map<string, Directory>();
       const makeDirectory = (root: string, expected: string) =>
-        new Directory(root, expected, run, git, gitReady);
+        new Directory(root, expected, filesystemHelper, git, gitReady);
 
       const approval = (target: CheckoutTarget) => {
         if (target.hostId !== config.hostId) throw new CheckoutAccessError({ refusal: 'remote' });
@@ -413,7 +406,6 @@ export class Checkouts extends Context.Service<
           );
         });
       return {
-        run,
         git,
         approval,
         refuseReserved,
