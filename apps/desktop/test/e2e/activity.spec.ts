@@ -885,7 +885,7 @@ test("Find revealing a match in a call's output shows the call's card open, and 
   await expect(chevron).toHaveAttribute('aria-expanded', 'false');
   await expect(result.getByRole('button', { name: /^Activity/ })).toHaveCount(0);
   await page.getByRole('region', { name: 'Chat transcript', exact: true }).focus();
-  await page.keyboard.press('ControlOrMeta+f');
+  await page.keyboard.press('Meta+f');
   await page.getByRole('textbox', { name: 'Find in conversation', exact: true }).fill('needle');
   await expect(result.locator('pre')).toBeVisible();
   await expect
@@ -1182,7 +1182,7 @@ test('a folded run opens for a Find match in it, folds again for that match, and
   const fold = page.locator('[data-transcript-activity-group]');
   await expect(fold).toHaveAttribute('aria-expanded', 'false');
   await transcriptList(page).focus();
-  await page.keyboard.press('ControlOrMeta+f');
+  await page.keyboard.press('Meta+f');
   const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
   await find.fill('needle');
   await expect(fold).toHaveAttribute('aria-expanded', 'true');

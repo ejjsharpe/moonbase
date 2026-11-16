@@ -274,7 +274,7 @@ test('Finder drops are refused while a name is typed or a dialog is open', async
   await name.press('Escape');
   await row(page, 'welcome.ts').click();
   const area = await emptyArea(page);
-  await tree(page).press('ControlOrMeta+Backspace');
+  await tree(page).press('Meta+Backspace');
   const trash = page.getByRole('dialog', { name: 'Move to Trash', exact: true });
   await expect(trash).toBeVisible();
   // The dialog hides the tree from the accessibility tree, but a drop can still reach it.

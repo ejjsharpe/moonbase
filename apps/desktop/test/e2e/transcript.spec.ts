@@ -820,14 +820,14 @@ test.describe('the virtualized transcript', () => {
 
     // A focused element that stayed mounted gets focus back.
     await table(398).focus();
-    await page.keyboard.press('ControlOrMeta+f');
+    await page.keyboard.press('Meta+f');
     await expect(field).toBeFocused();
     await field.press('Escape');
     await expect(table(398)).toBeFocused();
 
     // A match far back unmounts the focused row, which leaves focus on the transcript.
     await table(399).focus();
-    await page.keyboard.press('ControlOrMeta+f');
+    await page.keyboard.press('Meta+f');
     await field.fill('needle');
     await expect(findStatus(page, /2 matches/)).toBeVisible();
     await field.press('Shift+Enter');
@@ -1882,7 +1882,7 @@ test('Find reading navigation cancels held reveal and editor shortcuts retain th
   await expect(
     page.getByRole('textbox', { name: 'Find in conversation', exact: true }),
   ).toHaveCount(0);
-  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).press('ControlOrMeta+p');
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).press('Meta+p');
   await expect(page.getByRole('dialog', { name: 'Go to', exact: true })).toBeVisible();
 });
 

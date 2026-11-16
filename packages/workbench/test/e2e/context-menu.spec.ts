@@ -690,7 +690,7 @@ test('file, folder, multi-item and shell-less menus offer only their own command
   page,
 }) => {
   await page.goto('/');
-  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+  const mod = 'Meta';
   await row(page, 'README.md').click({ button: 'right' });
   const file = await menuItems(page);
   expect(file).toContain('Open [Enter]');
@@ -735,7 +735,7 @@ test('copy, reveal and mention reach the shell and copy returns focus to the tre
   await row(page, 'README.md').click({ button: 'right' });
   await item(page, 'Copy Relative Path').click();
   await row(page, 'src').click({ button: 'right' });
-  await item(page, process.platform === 'darwin' ? 'Reveal in Finder' : 'Show in Folder').click();
+  await item(page, 'Reveal in Finder').click();
   await expect(tree(page)).toBeFocused();
   await tree(page).press('Home');
   await tree(page).press('Shift+End');
@@ -765,14 +765,14 @@ test('tree shortcuts run the selection’s menu commands', async ({ page }) => {
   await expect(rename).toHaveValue('README.md');
   await rename.press('Escape');
   await expect(tree(page)).toBeFocused();
-  await tree(page).press('ControlOrMeta+Alt+KeyC');
-  await tree(page).press('ControlOrMeta+Alt+Shift+KeyC');
-  await tree(page).press('ControlOrMeta+Alt+KeyR');
+  await tree(page).press('Meta+Alt+KeyC');
+  await tree(page).press('Meta+Alt+Shift+KeyC');
+  await tree(page).press('Meta+Alt+KeyR');
   expect(await page.evaluate(() => [window.demo.copied, window.demo.revealed])).toEqual([
     ['/demo/moonbase/README.md', 'README.md'],
     ['/demo/moonbase/README.md'],
   ]);
-  await tree(page).press('ControlOrMeta+Backspace');
+  await tree(page).press('Meta+Backspace');
   const trash = page.getByRole('dialog', { name: 'Move to Trash', exact: true });
   await expect(trash).toContainText('README.md');
   await trash.getByRole('button', { name: 'Cancel', exact: true }).click();
