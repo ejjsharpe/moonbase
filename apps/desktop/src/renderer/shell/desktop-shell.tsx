@@ -74,8 +74,8 @@ export type DesktopShellProps = {
   selectDroppedImports?: (checkout: CheckoutTarget, files: File[]) => Promise<string[]>;
 };
 const noSubscription = () => () => {};
-/** Electron reports MacIntel on Apple silicon too. */
-const mac = navigator.platform.startsWith('Mac');
+/** From the user agent, as Monaco's keymap is; Electron says Macintosh on Apple silicon too. */
+const mac = navigator.userAgent.includes('Macintosh');
 const railCollapsedKey = 'moonbase.rail.collapsed';
 const sidebarHiddenKey = 'moonbase.sidebar.hidden';
 /**

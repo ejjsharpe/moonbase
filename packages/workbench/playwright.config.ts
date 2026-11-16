@@ -5,6 +5,8 @@ export default defineConfig({
   testDir: './test/e2e',
   testMatch: '*.spec.ts',
   workers: '50%',
+  // One retry on CI; a test that passes only on retry is reported as flaky.
+  retries: process.env.CI ? 1 : 0,
   fullyParallel: true,
   reporter: [['list'], ['json', { outputFile: 'test-results/timings.json' }]],
   use: {
