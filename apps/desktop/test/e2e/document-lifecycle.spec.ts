@@ -1,3 +1,4 @@
+import { waitForExit } from '../fixtures/app-fixture.ts';
 import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
 import {
   prepareCrashRecovery,
@@ -226,28 +227,8 @@ for (const mode of ['reload', 'veto', 'crash'])
         );
         expect(saved.ok).toBe(true);
       }
-      writeFileSync(
-        test.info().outputPath('document.json'),
-        JSON.stringify(
-          {
-            mode,
-            identity,
-            observers,
-            waitId,
-            probe: await app.evaluate(() => globalThis.reloadProbe),
-            rootPid: child.pid,
-            target,
-          },
-          null,
-          2,
-        ),
-      );
     } finally {
       try {
-        writeFileSync(
-          test.info().outputPath('final-probe.json'),
-          JSON.stringify(await app.evaluate(() => globalThis.reloadProbe), null, 2),
-        );
         const held = await app.evaluate(() => globalThis.reloadProbe?.held);
         if (held) {
           pids.add(held);
@@ -263,7 +244,7 @@ for (const mode of ['reload', 'veto', 'crash'])
         ))
           pids.add(pid);
         await app.evaluate(({ app }) => app.exit(0));
-        await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+        await waitForExit(child);
         for (const pid of pids)
           await expect
             .poll(() => {
@@ -280,13 +261,5 @@ for (const mode of ['reload', 'veto', 'crash'])
         await stopDaemon(join(base, 'data', 'daemon-v1'));
       }
       rmSync(base, { recursive: true });
-      writeFileSync(
-        test.info().outputPath('cleanup.json'),
-        JSON.stringify(
-          { pids: [...pids], absent: true, directory: base, removed: true, configured: false },
-          null,
-          2,
-        ),
-      );
     }
   });

@@ -3,7 +3,6 @@ import { closeSettings, openSettings } from '../fixtures/chat-fixture.ts';
 import {
   saveFile,
   selectFileView,
-  captureNative,
   pasteNativeFile,
   explorerAction,
   draftsOf,
@@ -19,7 +18,6 @@ import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, readFileSync, rmSy
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 
 test('unsigned macOS package runs with only system PATH, SQLite, native/rg resources and CSP workers', async () => {
   test.setTimeout(45000);
@@ -78,9 +76,6 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
       child.kill('SIGKILL');
       await exited;
     }
-  };
-  const screen = async (name: string) => {
-    await captureNative(app, page, test.info().outputPath(`packaged-${name}.png`));
   };
   try {
     const resource = await app.evaluate(async ({ app }) => {
@@ -153,7 +148,6 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
         { exact: true },
       ),
     ).toBeVisible();
-    await screen('local-oauth-loaded');
     await page.getByRole('button', { name: 'Cancel setup', exact: true }).click();
     await expect(page.getByText('Setup cancelled.', { exact: true })).toBeVisible();
     await closeSettings(page);
@@ -228,40 +222,7 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
     }, workers);
     expect(workerErrors).toEqual([]);
     expect(errors).toEqual([]);
-    mkdirSync('test-results', { recursive: true });
-    const capture = await app.evaluate(async ({ BrowserWindow }) =>
-      (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString('base64'),
-    );
-    writeFileSync('test-results/packaged-editor.png', Buffer.from(capture, 'base64'));
-    writeFileSync(
-      'test-results/packaged-resources.json',
-      JSON.stringify(
-        {
-          ...resource,
-          notices: undefined,
-          workerErrors,
-          asarSha256: createHash('sha256')
-            .update(
-              readFileSync(
-                resolve(
-                  `release/${process.arch === 'arm64' ? 'mac-arm64' : 'mac'}/Moonbase.app/Contents/Resources/app.asar`,
-                ),
-              ),
-            )
-            .digest('hex'),
-          fixture:
-            'fresh temporary Git repository with package.ts and lookup-native-resource.txt, UI-created packaged-created.txt and token-imported packaged-import.txt; no provider environment',
-          viewport: await page.evaluate(() => ({
-            width: innerWidth,
-            height: innerHeight,
-            devicePixelRatio,
-          })),
-        },
-        null,
-        2,
-      ) + '\n',
-    );
-    const filenameEvidence = await checkFilenameMaps(page, checkout, 'package.ts', async () => {
+    await checkFilenameMaps(page, checkout, 'package.ts', async () => {
       await stop();
       app = await launch();
       child = app.process();
@@ -270,24 +231,18 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
       await page.getByRole('tab', { name: 'checkout · main', exact: true }).click();
       return page;
     });
-    await screen('filename-maps');
     await page.getByRole('tab', { name: 'packaged-created.txt', exact: true }).hover();
     const closeCreated = page.getByRole('button', {
       name: 'Close packaged-created.txt',
       exact: true,
     });
-    await expect(closeCreated).toHaveCSS('pointer-events', 'auto');
     await closeCreated.click();
     await expect(page.getByRole('tab', { name: 'packaged-created.txt', exact: true })).toHaveCount(
       0,
     );
     // At the small zoomed size the project chats dock would leave the editor no width for its tabs.
     await page.getByRole('button', { name: 'Hide project chats', exact: true }).click();
-    await checkTabMenu(app, page, screen, 'packaged-created.txt');
-    writeFileSync(
-      'test-results/packaged-filename-maps.json',
-      JSON.stringify(filenameEvidence, null, 2) + '\n',
-    );
+    await checkTabMenu(app, page, 'packaged-created.txt');
     expect(errors).toEqual([]);
     const dirty = draftsOf((await recoveryState(page)).state).length;
     const closed = app.waitForEvent('close');

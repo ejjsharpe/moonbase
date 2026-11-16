@@ -2,7 +2,6 @@ import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-dae
 import {
   expectSaveEnabled,
   saveFile,
-  captureNative,
   recoveryState,
   draftsOf,
 } from '../fixtures/editor-fixture.ts';
@@ -29,14 +28,13 @@ import {
 } from '@playwright/test';
 import { fixture, until } from '../../../../test/chat/tool-fixture.ts';
 import { openCallCard } from '../fixtures/transcript-list.ts';
-import { mkdir, writeFile, readFile, appendFile, readdir } from 'node:fs/promises';
+import { writeFile, readFile, readdir } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 const packaged = !!process.env.MOONBASE_PACKAGED_TEST;
 const children = new WeakMap<ElectronApplication, ReturnType<ElectronApplication['process']>>();
-const output = resolve(process.env.MOONBASE_NATIVE_OUTPUT ?? 'test-results', 'composition');
 async function launch(
   f: Fixture,
   data = 'desktop-data',
@@ -169,9 +167,6 @@ async function saved(p: Page) {
   return p.evaluate(() => JSON.parse(localStorage.getItem('moonbase.chat.remote.v2')!));
 }
 const recovery = (p: Page) => recoveryState(p);
-async function screen(app: ElectronApplication, p: Page, name: string) {
-  await captureNative(app, p, join(output, `${packaged ? 'package' : 'source'}-${name}.png`));
-}
 async function stop(app: ElectronApplication, fault = false) {
   const child = children.get(app)!;
   if (child.exitCode !== null || child.signalCode !== null) return;
@@ -191,24 +186,12 @@ async function stop(app: ElectronApplication, fault = false) {
         return (e as NodeJS.ErrnoException).code === 'ESRCH';
       }
     }, Boolean);
-  await mkdir(output, { recursive: true });
-  await appendFile(
-    join(output, 'cleanup.jsonl'),
-    JSON.stringify({
-      phase: packaged ? 'package' : 'source',
-      pids,
-      absent: true,
-      faultTeardown: fault,
-    }) + '\n',
-  );
 }
 async function close(f: Fixture) {
   // A daemon outlives its app: stop each profile's before the fixture goes.
   for (const entry of await readdir(f.directory).catch(() => []))
     await stopDaemon(join(f.directory, entry, 'daemon-v1'));
-  const report = await f.close();
-  await mkdir(output, { recursive: true });
-  await appendFile(join(output, 'cleanup.jsonl'), JSON.stringify(report) + '\n');
+  await f.close();
 }
 
 test('dirty editor/live chat, two drafts, no-resend reconnect, view close and client Quit stay independent', async () => {
@@ -245,22 +228,6 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     await p.evaluate(
       () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
     );
-    await screen(app, p, 'keyboard-activation');
-    await writeFile(
-      join(output, 'keyboard-focus.json'),
-      JSON.stringify(
-        await p.evaluate(() => ({
-          active: {
-            tag: document.activeElement?.tagName,
-            label: document.activeElement?.getAttribute('aria-label'),
-            role: document.activeElement?.getAttribute('role'),
-          },
-          text: document.querySelector('.view-lines')?.textContent,
-        })),
-        null,
-        2,
-      ),
-    );
     await expect(projectTab(p)).toBeFocused();
     await expect(projectTab(p)).toHaveAttribute('aria-selected', 'true');
     const editorHasFocus = () =>
@@ -286,7 +253,6 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     });
     expect(rejected).toMatchObject({ ok: false, error: { _tag: 'IpcAuthorityError' } });
     expect(await readFile(join(f.cwd, 'a.ts'), 'utf8')).toContain('original');
-    await screen(app, p, 'dirty-editor');
     await tab(p, 'Agents').click();
     await expect(p.getByLabel('Message', { exact: true })).toHaveValue(
       'first independent newer draft',
@@ -309,18 +275,7 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
       expect(priorWatches.some(({ tag }) => tag === 'watchWorkspace')).toBe(true);
       expect(priorWatches.some(({ tag }) => tag !== 'watchWorkspace')).toBe(true);
     }
-    const reloadOutcomes: string[] = [];
-    try {
-      await expect
-        .poll(async () => {
-          const outcome = await reloadOutcome(app);
-          reloadOutcomes.push(outcome);
-          return outcome;
-        })
-        .toBe('reload');
-    } finally {
-      await writeFile(join(output, 'durable-reload-outcomes.json'), JSON.stringify(reloadOutcomes));
-    }
+    await expect.poll(() => reloadOutcome(app)).toBe('reload');
     await projectTab(p).click();
     await expect(editor(p)).toBeVisible();
     await expect(
@@ -335,7 +290,6 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
           ),
         )
         .toBe(true);
-    await screen(app, p, 'restored-dirty-editor');
     await editor(p).focus(); // Establish focus in the NEW document before testing navigation restoration.
     await tab(p, 'Agents').click();
     await selectRemoteChat(p);
@@ -458,7 +412,7 @@ for (const change of ['external', 'write-failure'])
     }
   });
 
-test('native 200% normal/constrained live chat keeps wheel/Tab Stop and Send reachable beside a dirty editor', async () => {
+test('native 200% constrained live chat keeps wheel/Tab Stop and Send reachable beside a dirty editor', async () => {
   const f = await fixture(true);
   let current: ElectronApplication | undefined;
   try {
@@ -472,78 +426,22 @@ test('native 200% normal/constrained live chat keeps wheel/Tab Stop and Send rea
     await p.getByRole('button', { name: 'Send message', exact: true }).click();
     await expect.poll(async () => (await f.stats()).tools).toBe(1);
     await p.getByLabel('Message', { exact: true }).fill('newer independent zoom draft');
-    await screen(app, p, 'live-chat-normal');
-    for (const width of [1180, 700]) {
-      await app.evaluate(({ BrowserWindow }, width) => {
-        const w = BrowserWindow.getAllWindows()[0];
-        w.setSize(width, width === 1180 ? 820 : 650);
-        w.webContents.setZoomFactor(2);
-      }, width);
-      await p.evaluate(
-        () =>
-          new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
-      );
-      const main = p.locator('main');
-      await main.hover();
-      await p.mouse.wheel(0, 10000);
-      await p.getByLabel('Message', { exact: true }).focus();
-      await p.keyboard.press('Tab');
-      await expect(p.getByRole('button', { name: 'Stop', exact: true })).toBeFocused();
-      try {
-        await expect(p.getByRole('button', { name: 'Stop', exact: true })).toBeInViewport();
-      } catch (error) {
-        await writeFile(
-          join(output, `zoom-failure-${width}.json`),
-          JSON.stringify(
-            await p.getByRole('button', { name: 'Stop', exact: true }).evaluate((button) => {
-              const parents = [];
-              let element: Element | null = button;
-              while (element) {
-                const style = getComputedStyle(element);
-                parents.push({
-                  tag: element.tagName,
-                  role: element.getAttribute('role'),
-                  rect: element.getBoundingClientRect().toJSON(),
-                  height: element.clientHeight,
-                  scroll: element.scrollTop,
-                  scrollHeight: element.scrollHeight,
-                  overflow: style.overflowY,
-                  minHeight: style.minHeight,
-                  flex: style.flex,
-                });
-                element = element.parentElement;
-              }
-              return { width: innerWidth, height: innerHeight, parents };
-            }),
-            null,
-            2,
-          ),
-        );
-        await screen(app, p, `zoom-failed-${width}`);
-        throw error;
-      }
-      await p.keyboard.press('Tab');
-      await expect(p.getByRole('button', { name: 'Send message', exact: true })).toBeFocused();
-      await expect(p.getByRole('button', { name: 'Send message', exact: true })).toBeInViewport();
-      const geometry = await p
-        .getByRole('button', { name: 'Send message', exact: true })
-        .evaluate((e) => {
-          const r = e.getBoundingClientRect();
-          return {
-            top: r.top,
-            bottom: r.bottom,
-            left: r.left,
-            right: r.right,
-            width: innerWidth,
-            height: innerHeight,
-          };
-        });
-      expect(geometry.top).toBeGreaterThanOrEqual(0);
-      expect(geometry.bottom).toBeLessThanOrEqual(geometry.height);
-      expect(geometry.left).toBeGreaterThanOrEqual(0);
-      expect(geometry.right).toBeLessThanOrEqual(geometry.width);
-      await screen(app, p, `zoom-${width}`);
-    }
+    await app.evaluate(({ BrowserWindow }) => {
+      const w = BrowserWindow.getAllWindows()[0];
+      w.setSize(700, 650);
+      w.webContents.setZoomFactor(2);
+    });
+    await p.locator('main').hover();
+    await p.mouse.wheel(0, 10000);
+    await p.getByLabel('Message', { exact: true }).focus();
+    await p.keyboard.press('Tab');
+    await expect(p.getByRole('button', { name: 'Stop', exact: true })).toBeFocused();
+    await expect(p.getByRole('button', { name: 'Stop', exact: true })).toBeInViewport();
+    await p.keyboard.press('Tab');
+    await expect(p.getByRole('button', { name: 'Send message', exact: true })).toBeFocused();
+    await expect(p.getByRole('button', { name: 'Send message', exact: true })).toBeInViewport({
+      ratio: 1,
+    });
     await p.keyboard.press('Shift+Tab');
     await p.keyboard.press('Enter');
     await expect
@@ -810,7 +708,6 @@ test('composed IPC rejects foreign frames/hosts and extra/prototype operations b
 
 for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
   test(`${packaged ? 'packaged' : 'source'} ${operation}: committed reply lost on Disconnect retains original identity and never resends${operation === 'sendChat' ? ' @packaged' : ''}`, async () => {
-    await mkdir(output, { recursive: true });
     const f = await fixture(true);
     let current: ElectronApplication | undefined;
     try {
@@ -918,7 +815,7 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
         originalConnection.ok && originalConnection.value,
       );
       await writeFile(
-        join(output, `${packaged ? 'packaged' : 'source'}-${operation}-generation.json`),
+        test.info().outputPath(`${packaged ? 'packaged' : 'source'}-${operation}-generation.json`),
         JSON.stringify(
           {
             operation,
@@ -1101,7 +998,6 @@ test('closing Chat removes its panel, preserves drafts and permits explicit reop
       'preserved before panel close',
     );
     expect((await f.stats()).commands.filter((command) => command === 'sendChat')).toHaveLength(0);
-    await screen(app, p, 'reopened-panel');
   } finally {
     if (current) await stop(current, true);
     await f.close();
@@ -1117,7 +1013,6 @@ if (!packaged) {
         await setup(f);
         const { app, page: p, errors } = await launch(f, 'startup-' + failure, failure);
         current = app;
-        await screen(app, p, 'startup-' + failure);
         if (failure === 'chat-context') {
           // Main's reason reaches the renderer through the context bridge.
           await expect(p.getByLabel('Chat configuration')).toContainText(

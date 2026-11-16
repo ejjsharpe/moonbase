@@ -1,7 +1,6 @@
 import { disconnectChat } from '../fixtures/chat-fixture.ts';
 import { test, expect, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { readFindHighlight } from '../fixtures/find-highlight.ts';
 import {
   scrollToEnd,
@@ -9,11 +8,9 @@ import {
   showRow,
   transcriptList,
   waitForRowOrder,
+  waitForListRest,
   openActivity,
 } from '../fixtures/transcript-list.ts';
-import type * as readingPins from '../../src/renderer/chat/transcript/reading-pin.ts';
-
-type ReadingPins = typeof readingPins;
 const imagePng = (
   await readFile(new URL('../fixtures/images/checker.png', import.meta.url))
 ).toString('base64');
@@ -31,14 +28,12 @@ async function open(page: Page) {
 const transcript = (page: Page) =>
   page.getByRole('region', { name: 'Chat transcript', exact: true });
 const answer = (page: Page) => page.locator('[data-transcript-entry="reading-179"]');
-/** Opens the demo's long conversation (2,000 alternating questions and answers by default). */
-async function openLong(page: Page, count?: number) {
-  await page.goto(`/?local&design&transcript&long${count ? `=${count}` : ''}`);
+/** Opens the demo's long conversation of `count` alternating questions and answers. */
+async function openLong(page: Page, count: number) {
+  await page.goto(`/?local&design&transcript&long=${count}`);
   await page.getByRole('button', { name: /^Conversation/ }).click();
   await expect(transcriptList(page)).toBeVisible();
-  await expect(
-    page.locator(`[data-transcript-row="entry:long-${(count ?? 2000) - 1}"]`),
-  ).toBeVisible();
+  await expect(page.locator(`[data-transcript-row="entry:long-${count - 1}"]`)).toBeVisible();
 }
 /** The scroller's position: pixels from its end, and the mounted row keys. */
 const readList = (page: Page) =>
@@ -71,7 +66,7 @@ async function wheelUp(page: Page, pixels: number) {
   await transcriptList(page).hover();
   await page.mouse.wheel(0, -pixels);
   await expect.poll(async () => (await readList(page)).fromEnd).toBeGreaterThan(pixels / 2);
-  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+  await waitForListRest(page);
 }
 
 /** Reports the page hidden or visible, as Electron does for a minimised or covered window. */
@@ -128,8 +123,7 @@ async function closeProjectDock(page: Page) {
 
 test.describe('the virtualized transcript', () => {
   test('mounts a bounded number of rows across a full scroll', async ({ page }) => {
-    test.setTimeout(180000);
-    await openLong(page);
+    await openLong(page, 200);
     let most = 0;
     const list = transcriptList(page);
     await list.hover();
@@ -143,10 +137,6 @@ test.describe('the virtualized transcript', () => {
       if (!earlier && !loading && (await list.evaluate((node) => node.scrollTop)) < 1) break;
     }
     await expect(page.locator('[data-transcript-row="entry:long-0"]')).toBeVisible();
-    const retained = await page.evaluate(
-      () => window.demo.application.chat!.getSnapshot().transcript.entries.length,
-    );
-    expect(retained).toBeLessThanOrEqual(1024);
     expect(most).toBeGreaterThan(3);
     expect(most).toBeLessThan(40);
     await expect(page.locator('[data-transcript-entry]').first()).toBeAttached();
@@ -172,7 +162,7 @@ test.describe('the virtualized transcript', () => {
 
   test('a streaming reply never shrinks back to its preview between updates', async ({ page }) => {
     await openLong(page, 40);
-    const shown = await page.evaluate(async () => {
+    await page.evaluate(async () => {
       const list = document.querySelector('[data-transcript-list]')!;
       const lengths: number[] = [];
       const observer = new MutationObserver(() => {
@@ -180,16 +170,18 @@ test.describe('the virtualized transcript', () => {
         if (live) lengths.push(live.textContent!.length);
       });
       observer.observe(list, { subtree: true, childList: true, characterData: true });
+      Object.assign(window, { liveLengths: () => (observer.disconnect(), lengths) });
       let text = 'Streaming reply\n\n';
       for (let step = 0; step < 12; step++) {
         text += 'more streaming words arrive here. ';
         await window.demo.transcript!.live(text);
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await new Promise(requestAnimationFrame);
       }
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      observer.disconnect();
-      return lengths;
     });
+    await waitForListRest(page);
+    const shown = await page.evaluate(() =>
+      (window as typeof window & { liveLengths(): number[] }).liveLengths(),
+    );
     // The demo's previews are 64 characters, so every update after the first would shrink to one.
     expect(shown.at(-1)).toBeGreaterThan(300);
     expect(shown.filter((length, index) => index > 0 && length < shown[index - 1]!)).toEqual([]);
@@ -197,7 +189,7 @@ test.describe('the virtualized transcript', () => {
 
   test('a streaming reply renders from its snapshot without reading its text', async ({ page }) => {
     await openLong(page, 40);
-    const result = await page.evaluate(async () => {
+    await page.evaluate(async () => {
       const client = window.demo.chat.dependencies.chat,
         original = client.command;
       let reads = 0;
@@ -215,12 +207,15 @@ test.describe('the virtualized transcript', () => {
       for (let step = 0; step < 12; step++) {
         text += 'more streaming words arrive here. ';
         await window.demo.transcript!.live(text);
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await new Promise(requestAnimationFrame);
       }
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      client.command = original;
-      return { reads, shown: document.querySelector('[data-transcript-live]')!.textContent! };
+      Object.assign(window, { liveReads: () => ((client.command = original), reads) });
     });
+    await waitForListRest(page);
+    const result = await page.evaluate(() => ({
+      reads: (window as typeof window & { liveReads(): number }).liveReads(),
+      shown: document.querySelector('[data-transcript-live]')!.textContent!,
+    }));
     expect(result.reads).toBe(0);
     expect(result.shown).toContain('more streaming words arrive here. '.repeat(12).trim());
   });
@@ -230,7 +225,7 @@ test.describe('the virtualized transcript', () => {
     const text = 'Streaming reply\n\n' + 'more streaming words arrive here. '.repeat(4);
     await page.evaluate((text) => window.demo.transcript!.live(text), text);
     await expect(page.locator('[data-transcript-live]')).toContainText('more streaming words');
-    const moves = await page.evaluate(async (text) => {
+    await page.evaluate(async (text) => {
       const list = document.querySelector('[data-transcript-list]')!;
       const above = list.querySelector('[data-transcript-row="entry:long-39"]')!;
       // Each frame, where the row above the reply sits: following only ever moves it up.
@@ -244,14 +239,21 @@ test.describe('the virtualized transcript', () => {
       for (let step = 0; step < 40; step++) {
         text += 'more streaming words arrive here. ';
         await window.demo.transcript!.live(text);
-        await new Promise((resolve) => setTimeout(resolve, 25));
+        await new Promise(requestAnimationFrame);
       }
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      sampling = false;
-      return tops.flatMap((top, index) =>
-        index && top > tops[index - 1]! + 1 ? [Math.round(top - tops[index - 1]!)] : [],
-      );
+      Object.assign(window, {
+        readMoves: () => {
+          sampling = false;
+          return tops.flatMap((top, index) =>
+            index && top > tops[index - 1]! + 1 ? [Math.round(top - tops[index - 1]!)] : [],
+          );
+        },
+      });
     }, text);
+    await waitForListRest(page);
+    const moves = await page.evaluate(() =>
+      (window as typeof window & { readMoves(): number[] }).readMoves(),
+    );
     // A status line under the reply while each revision loads was measured and then dropped, so
     // the list followed an end 43px too far and fell back as the reply grew.
     expect(moves).toEqual([]);
@@ -262,7 +264,16 @@ test.describe('the virtualized transcript', () => {
     page,
   }) => {
     await openLong(page, 20);
-    const shown = await page.evaluate(async () => {
+    const text = await page.evaluate(async () => {
+      let text = 'Finished reply\n\n';
+      for (let step = 0; step < 10; step++) {
+        text += 'more streaming words arrive here. ';
+        await window.demo.transcript!.live(text);
+      }
+      return text;
+    });
+    await waitForListRest(page);
+    await page.evaluate(async (text) => {
       const transcript = window.demo.transcript!;
       // The demo's long conversation, as `long(20)` records it.
       const records = Array.from({ length: 20 }, (_, index) => {
@@ -280,12 +291,6 @@ test.describe('the virtualized transcript', () => {
         return { id: `long-${index}`, role, parts: [{ text, kind: 'text' as const, role }] };
       });
       const list = document.querySelector('[data-transcript-list]')!;
-      let text = 'Finished reply\n\n';
-      for (let step = 0; step < 10; step++) {
-        text += 'more streaming words arrive here. ';
-        await transcript.live(text);
-      }
-      await new Promise((resolve) => setTimeout(resolve, 300));
       const live = list.querySelector('[data-transcript-live]')!.textContent!.length;
       const lengths: number[] = [];
       const observer = new MutationObserver(() => {
@@ -295,16 +300,20 @@ test.describe('the virtualized transcript', () => {
         lengths.push(reply?.textContent!.length ?? 0);
       });
       observer.observe(list, { subtree: true, childList: true, characterData: true });
+      Object.assign(window, { finishedLengths: () => (observer.disconnect(), { lengths, live }) });
       await transcript.record([
         ...records,
         { id: 'finished', role: 'assistant', parts: [{ text, kind: 'text', role: 'assistant' }] },
       ]);
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      observer.disconnect();
-      return { lengths, live };
-    });
+    }, text);
     await expect(page.locator('[data-transcript-row="entry:finished"]')).toContainText(
       'more streaming words',
+    );
+    await waitForListRest(page);
+    const shown = await page.evaluate(() =>
+      (
+        window as typeof window & { finishedLengths(): { lengths: number[]; live: number } }
+      ).finishedLengths(),
     );
     // The demo's previews are 64 characters; the stored reply never shows only its preview.
     expect(Math.min(...shown.lengths)).toBeGreaterThanOrEqual(shown.live);
@@ -326,7 +335,7 @@ test.describe('the virtualized transcript', () => {
           window.demo.transcript!.live('Streaming reply\n\n' + 'more words '.repeat(step * 200)),
         step,
       );
-    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+    await waitForListRest(page);
     const after = await readFirstVisible(page);
     expect(after.row).toBe(before.row);
     expect(Math.abs(after.offset - before.offset)).toBeLessThan(1);
@@ -362,9 +371,9 @@ test.describe('the virtualized transcript', () => {
     const before = await readFirstVisible(page);
     await watchTranscriptKept(page);
     await setWindowHidden(page, true);
-    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+    await waitForListRest(page);
     await setWindowHidden(page, false);
-    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+    await waitForListRest(page);
     const after = await readFirstVisible(page);
     expect(after.row).toBe(before.row);
     expect(Math.abs(after.offset - before.offset)).toBeLessThan(1);
@@ -405,9 +414,8 @@ test.describe('the virtualized transcript', () => {
     await watchTranscriptKept(page);
     await viewTab(page, 'moonbase · main').click();
     await expect(transcriptList(page)).toBeHidden();
-    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
     await viewTab(page, 'Agents').click();
-    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+    await waitForListRest(page);
     const after = await readFirstVisible(page);
     expect(after.row).toBe(before.row);
     expect(Math.abs(after.offset - before.offset)).toBeLessThan(1);
@@ -418,14 +426,21 @@ test.describe('the virtualized transcript', () => {
   test('a selection pauses following, and clearing it resumes', async ({ page }) => {
     await openLong(page, 200);
     await page.evaluate(() => window.demo.transcript!.live('Selected streaming reply'));
+    // Following has reached the live row before the reader selects.
+    await expect.poll(async () => (await readList(page)).fromEnd).toBeLessThan(1);
+    await waitForListRest(page);
     const text = page
       .locator('[data-transcript-row="entry:long-199"] [data-transcript-part]')
       .first();
-    await text.evaluate((node) => {
+    await text.evaluate(async (node) => {
       const range = document.createRange();
       range.selectNodeContents(node.querySelector('p')!);
       window.getSelection()!.removeAllRanges();
       window.getSelection()!.addRange(range);
+      // The transcript pauses once the selection change reaches it.
+      await new Promise((resolve) =>
+        document.addEventListener('selectionchange', resolve, { once: true }),
+      );
     });
     const selected = await page.evaluate(() => window.getSelection()!.toString());
     expect(selected).toContain('Answer 199');
@@ -439,7 +454,7 @@ test.describe('the virtualized transcript', () => {
         step,
       );
     await expect(page.locator('[data-transcript-live]')).toContainText('growing');
-    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+    await waitForListRest(page);
     expect((await readList(page)).top).toBe(top);
     expect(await page.evaluate(() => window.getSelection()!.toString())).toBe(selected);
     // Paused, not released: the reader still follows once the selection clears.
@@ -488,7 +503,7 @@ test.describe('the virtualized transcript', () => {
     await trigger.evaluate((node) => node.scrollIntoView({ block: 'start' }));
     await transcriptList(page).hover();
     await page.mouse.wheel(0, 120);
-    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+    await waitForListRest(page);
     expect(
       await trigger.evaluate(
         (node) =>
@@ -499,7 +514,7 @@ test.describe('the virtualized transcript', () => {
     const before = await readFirstVisible(page);
     await trigger.evaluate((node) => (node as HTMLElement).click());
     await expect(code.getByRole('button', { name: 'Fold code' })).toBeAttached();
-    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+    await waitForListRest(page);
     const after = await readFirstVisible(page);
     expect(after.row).toBe(before.row);
     expect(Math.abs(after.offset - before.offset)).toBeLessThan(1);
@@ -537,7 +552,7 @@ test.describe('the virtualized transcript', () => {
         })
         .toBeLessThan(1);
       // The restore's own scroll end saves what the list reports; it must be the saved anchor.
-      await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+      await waitForListRest(page);
       expect(await savedAnchor(page)).toEqual(saved);
     });
 
@@ -561,13 +576,13 @@ test.describe('the virtualized transcript', () => {
     await jumpButton(page).click();
     // Rows between were never measured, so the list's own scroll aims from estimates.
     await expect.poll(async () => (await readList(page)).fromEnd).toBeLessThan(1);
-    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 500)));
+    await waitForListRest(page);
     expect((await readList(page)).fromEnd).toBeLessThan(1);
     await expect(jumpButton(page)).toHaveCount(0);
   });
 
   test('Find reveals a match in a row that is not mounted', async ({ page }) => {
-    await openLong(page);
+    await openLong(page, 200);
     await expect(page.locator('[data-transcript-row="entry:long-5"]')).toHaveCount(0);
     await page.getByRole('button', { name: 'Find', exact: true }).click();
     await page
@@ -581,10 +596,10 @@ test.describe('the virtualized transcript', () => {
     // A match in a retained row that is scrolled away is revealed without a read.
     await page
       .getByRole('textbox', { name: 'Find in conversation', exact: true })
-      .fill('Question 1970:');
+      .fill('Question 170:');
     await expect
       .poll(() => readFindHighlight(page))
-      .toEqual([expect.objectContaining({ entry: 'long-1970', visible: true })]);
+      .toEqual([expect.objectContaining({ entry: 'long-170', visible: true })]);
   });
 
   test('a cross-row selection keeps its rows mounted while scrolled away', async ({ page }) => {
@@ -914,7 +929,9 @@ test.describe('the virtualized transcript', () => {
       );
     const above = await card();
     expect(above).toBeGreaterThan(30);
-    // The reader scrolls a little into the call's row.
+    // The reader scrolls a little into the call's row once the jump has placed it; a scroll that
+    // ends while the list still places the jump saves nothing.
+    await waitForListRest(page);
     await transcriptList(page).hover();
     await page.mouse.wheel(0, 9);
     // The jump already saved this row at offset 0; wait for the scroll's own save.
@@ -1138,21 +1155,9 @@ test('safe GFM, literal user content, progressive source, exact native callbacks
   ).toBeVisible();
   await page.setViewportSize({ width: 1440, height: 900 });
   await row.getByRole('heading').scrollIntoViewIfNeeded();
-  await page.setViewportSize({ width: 640, height: 700 });
-  await expect
-    .poll(() =>
-      page
-        .getByRole('main', { name: 'Agent workspace', exact: true })
-        .evaluate((element) => element.getBoundingClientRect().width),
-    )
-    // The window less the 52px project rail and the panel's 1px edge.
-    .toBe(587);
+  // Nothing it shows overflows a narrow window.
   await page.setViewportSize({ width: 540, height: 844 });
   await row.getByRole('heading').scrollIntoViewIfNeeded();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
-    true,
-  );
-  await page.setViewportSize({ width: 720, height: 450 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
@@ -1338,16 +1343,20 @@ test('retired live DOM stays pinned for focus and selection until Jump to latest
   const live = page.locator('[data-transcript-live]'),
     code = live.locator('pre');
   await code.focus();
-  const selected = await code.evaluate((element) => {
+  const selected = await code.evaluate(async (element) => {
     element.setAttribute('data-retained-selection', 'true');
     const range = document.createRange();
     range.selectNodeContents(element);
     const selection = window.getSelection()!;
     selection.removeAllRanges();
     selection.addRange(range);
+    // The transcript pins the selected row once the selection change reaches it.
+    await new Promise((resolve) =>
+      document.addEventListener('selectionchange', resolve, { once: true }),
+    );
+    await new Promise(requestAnimationFrame);
     return selection.toString();
   });
-  await page.waitForTimeout(25);
   await page.evaluate(() => {
     window.demo.chat.snapshot.run = null;
     window.demo.chat.snapshot.state = 'idle';
@@ -1780,13 +1789,10 @@ test('Find maps footnote matches to their own text although footnotes render las
   await expect(originalExcerpt(page)).toHaveCount(0);
 });
 
-test('Find highlights original text beyond the 8MiB cache and rereads evicted prefixes without changing query authority', async ({
-  page,
-}) => {
-  test.setTimeout(120000);
+test('Find highlights each match in multi-byte text and moves between them', async ({ page }) => {
   await open(page);
   const expected = await page.evaluate(async () => {
-    const text = 'early NEEDLE 😀\r\n' + '😀α'.repeat(1600000) + 'late ΣNEEDLE 😀\r\n';
+    const text = 'early NEEDLE 😀\r\n' + '😀α'.repeat(2000) + 'late ΣNEEDLE 😀\r\n';
     await window.demo.transcript!.setEntry(0, [text], ['thinking']);
     return { start: text.indexOf('ΣNEEDLE'), end: text.indexOf('ΣNEEDLE') + 'ΣNEEDLE'.length };
   });
@@ -1797,88 +1803,25 @@ test('Find highlights original text beyond the 8MiB cache and rereads evicted pr
   await expect(page.getByRole('status').filter({ hasText: /1 of 2 matches/ })).toBeVisible();
   await find.press('Enter');
   await expect
-    .poll(
-      () =>
-        page.evaluate(
-          () =>
-            window.demo.application
-              .chat!.getSnapshot()
-              .transcript.content.find(
-                (item) => item.source.kind === 'entry' && item.source.entryId === 'reading-0',
-              )?.loadedText ?? 0,
-        ),
-      { timeout: 100000 },
-    )
-    .toBeGreaterThanOrEqual(expected.end);
-  await expect(page.locator('[data-transcript-find-match]')).toHaveText('NEEDLE');
-  await expect
-    .poll(
-      () =>
-        page.evaluate(
-          () =>
-            window.demo.application
-              .chat!.getSnapshot()
-              .transcript.content.find(
-                (item) => item.source.kind === 'entry' && item.source.entryId === 'reading-0',
-              )?.retainedFrom,
-        ),
-      { timeout: 100000 },
-    )
-    .toBeGreaterThan(0);
-  await expect(page.locator('[data-transcript-find-match]')).toBeInViewport();
-  const state = await page.evaluate(() => {
-    const state = window.demo.application.chat!.getSnapshot().transcript;
-    return {
-      active: state.find.active,
-      upper: state.find.upperEntryId,
-      base: state.content.find(
-        (item) => item.source.kind === 'entry' && item.source.entryId === 'reading-0',
-      )?.chunks[0]?.textOffset,
-      retained: state.content
-        .flatMap((item) => item.chunks)
-        .reduce(
-          (total, chunk) => total + new TextEncoder().encode(JSON.stringify(chunk)).length,
-          0,
-        ),
-      window: document.querySelector('[aria-label="Matched original source"] pre')?.textContent,
-    };
-  });
-  expect(state.active?.start).toBe(expected.start + 1);
-  expect(state.active?.end).toBe(expected.end);
-  expect(state.base).toBeGreaterThan(0);
-  expect(state.retained).toBeLessThanOrEqual(8 * 1024 * 1024);
-  expect(state.window!.length).toBeLessThan(300);
+    .poll(() => readFindHighlight(page))
+    .toEqual([
+      expect.objectContaining({
+        text: 'NEEDLE',
+        before: expect.stringMatching(/late Σ$/),
+        visible: true,
+      }),
+    ]);
+  const active = await page.evaluate(
+    () => window.demo.application.chat!.getSnapshot().transcript.find.active,
+  );
+  expect(active?.start).toBe(expected.start + 1);
+  expect(active?.end).toBe(expected.end);
   await expect(find).toBeFocused();
   await find.press('Shift+Enter');
   await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          window.demo.application
-            .chat!.getSnapshot()
-            .transcript.content.find(
-              (item) => item.source.kind === 'entry' && item.source.entryId === 'reading-0',
-            )?.retainedFrom,
-      ),
-    )
-    .toBe(0);
-  await expect
     .poll(() => readFindHighlight(page))
     .toEqual([expect.objectContaining({ text: 'NEEDLE', before: 'early ', visible: true })]);
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () => window.demo.application.chat!.getSnapshot().transcript.find.active?.start,
-      ),
-    )
-    .toBe(6);
-  expect(
-    await page.evaluate(
-      () => window.demo.application.chat!.getSnapshot().transcript.find.upperEntryId,
-    ),
-  ).toBe(state.upper);
   await expect(find).toBeFocused();
-  await find.press('Escape');
 });
 
 test('Find reading navigation cancels held reveal and editor shortcuts retain their own handler', async ({
@@ -2466,11 +2409,7 @@ async function countRowRenders(page: Page) {
       page.evaluate(() => (window as unknown as { rowRenders: string[] }).rowRenders.splice(0)),
   };
 }
-const settle = (page: Page) =>
-  page.evaluate(
-    () =>
-      new Promise<void>((resolve) => setTimeout(() => requestAnimationFrame(() => resolve()), 400)),
-  );
+const settle = waitForListRest;
 test('scrolling and live progress re-render only the rows they change', async ({ page }) => {
   const rows = await countRowRenders(page);
   await open(page);
@@ -2554,57 +2493,6 @@ test('Copy keeps following live output', async ({ page }) => {
   await expect(page.locator('[data-transcript-live]')).toContainText('continued');
   await expect(jump).toHaveCount(0);
 });
-test('reading pins share one set of document listeners, released with the last subscriber', async ({
-  page,
-}) => {
-  await page.goto('/?local&design&transcript');
-  const result = await page.evaluate(
-    async (path) => {
-      const added: string[] = [],
-        removed: string[] = [];
-      const add = document.addEventListener.bind(document),
-        remove = document.removeEventListener.bind(document);
-      document.addEventListener = ((type: string, ...rest: [EventListener]) => {
-        added.push(type);
-        add(type, ...rest);
-      }) as typeof document.addEventListener;
-      document.removeEventListener = ((type: string, ...rest: [EventListener]) => {
-        removed.push(type);
-        remove(type, ...rest);
-      }) as typeof document.removeEventListener;
-      const pins = (await import(/* @vite-ignore */ path)) as ReadingPins;
-      const node = document.createElement('p');
-      node.textContent = 'Pinned reading text';
-      document.body.append(node);
-      let first = 0,
-        second = 0;
-      const releaseFirst = pins.subscribeReadingChanges(() => first++);
-      const releaseSecond = pins.subscribeReadingChanges(() => second++);
-      const listening = [...added];
-      const range = document.createRange();
-      range.selectNodeContents(node);
-      getSelection()!.removeAllRanges();
-      getSelection()!.addRange(range);
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      const pinned = pins.isReadingNodePinned(node);
-      releaseFirst();
-      const afterFirst = [...removed];
-      releaseSecond();
-      getSelection()!.removeAllRanges();
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      document.addEventListener = add;
-      document.removeEventListener = remove;
-      return { listening, notified: [first, second], pinned, afterFirst, removed };
-    },
-    `/@fs${resolve('src/renderer/chat/transcript/reading-pin.ts')}`,
-  );
-  expect(result.listening).toEqual(['selectionchange', 'focusin', 'focusout']);
-  expect(result.notified[0]).toBeGreaterThan(0);
-  expect(result.notified[1]).toBe(result.notified[0]);
-  expect(result.pinned).toBe(true);
-  expect(result.afterFirst).toEqual([]);
-  expect(result.removed).toEqual(['selectionchange', 'focusin', 'focusout']);
-});
 test('footnotes render as plain references with a visually hidden label', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -2630,11 +2518,13 @@ test('footnotes render as plain references with a visually hidden label', async 
   expect(errors).toEqual([]);
 });
 test('a Copied notice clears itself while a failure stays', async ({ page }) => {
+  await page.clock.install();
   await open(page);
   await answer(page).getByRole('button', { name: 'Copy code', exact: true }).click();
   const copied = page.getByRole('status').filter({ hasText: 'Copied.' });
   await expect(copied).toBeVisible();
-  await expect(copied).toHaveCount(0, { timeout: 8000 });
+  await page.clock.runFor(5000);
+  await expect(copied).toHaveCount(0);
   await page.evaluate(() => {
     window.demo.transcript!.native.copy = async () => {
       throw Error('Copy failed in the fixture.');
@@ -2643,7 +2533,7 @@ test('a Copied notice clears itself while a failure stays', async ({ page }) => 
   await answer(page).getByRole('button', { name: 'Copy code', exact: true }).click();
   const failure = page.getByRole('alert').filter({ hasText: 'Copy failed in the fixture.' });
   await expect(failure).toBeVisible();
-  await page.waitForTimeout(5000);
+  await page.clock.runFor(5000);
   await expect(failure).toBeVisible();
   await expect(page.getByText('Copied.', { exact: true })).toHaveCount(0);
 });

@@ -243,9 +243,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       )
     ) {
       controller.report(
-        new Error(
-          'File action unavailable. Check the selection and finish the current editor dialog or preservation.',
-        ),
+        'File action unavailable. Check the selection and finish the current editor dialog or preservation.',
       );
       return;
     }
@@ -376,7 +374,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       const snapshot = controller.getSnapshot();
       if (snapshot.preserving || actionRef.current || snapshot.closePrompt || lookupRef.current) {
         controller.report(
-          new Error('Finish the current editor dialog or preservation before importing files.'),
+          'Finish the current editor dialog or preservation before importing files.',
         );
         return;
       }
@@ -384,7 +382,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         !snapshot.recovery.openCheckoutIds.includes(checkout.checkoutId) ||
         !snapshot.recovery.checkouts.some((item) => checkoutKey(item) === checkoutKey(checkout))
       ) {
-        controller.report(new Error('Open the exact import checkout before importing files.'));
+        controller.report('Open the exact import checkout before importing files.');
         return;
       }
       setAction({

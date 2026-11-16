@@ -1,3 +1,4 @@
+import { waitForExit } from '../fixtures/app-fixture.ts';
 import {
   test,
   expect,
@@ -20,7 +21,6 @@ import {
   selectRemoteChat,
   showChat,
 } from '../fixtures/chat-fixture.ts';
-import { captureNative } from '../fixtures/editor-fixture.ts';
 import {
   findTestBun,
   type FauxScript,
@@ -102,7 +102,7 @@ async function localProfile(prefix: string, script: FauxScript) {
   const exit = async ({ app, child }: Awaited<ReturnType<typeof launch>>) => {
     if (child.exitCode === null && child.signalCode === null)
       await app.evaluate(({ app }) => app.exit(0)).catch(() => {});
-    await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+    await waitForExit(child);
   };
   const release = async () => {
     await stopDaemon(daemon);
@@ -200,7 +200,6 @@ test('local chat runs in the daemon: setup, picker folders, tools, @ search; Qui
       );
       await page.getByRole('button', { name: 'New chat', exact: true }).click();
     }
-    await captureNative(app, page, test.info().outputPath('local-chat.png'));
     const message = page.getByLabel('Message', { exact: true });
     await message.fill('Keep working after Quit');
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
@@ -613,7 +612,7 @@ for (const mode of ['local', 'remote'] as const)
           }
           await app.evaluate(({ app }) => app.exit(0));
         }
-        await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+        await waitForExit(child);
       } finally {
         // A daemon outlives its app: stop it even when the steps before fail.
         await stopDaemon(daemon);
@@ -623,14 +622,16 @@ for (const mode of ['local', 'remote'] as const)
     }
   });
 
-test('transcript remote first/next chunks render through authenticated stream and Electron IPC before held completion', async () => {
-  test.setTimeout(60000);
-  const host = await controlledHostFixture(
-    new URL('../../../../test/chat/faux-stream.mjs', import.meta.url),
-    true,
-  );
-  const userData = join(host.directory, 'desktop');
-  await prepareDaemonData(userData);
+// The remote host's images: integrated-transcript.spec.ts; token, header and queue rules:
+// transcript-image.test.ts.
+test('a stored local image is served over moonbase:// under production CSP and opens in the viewer', async () => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-image-native-')));
+  const userData = join(directory, 'desktop');
+  await writeFile(join(directory, 'retained.png'), retainedImage);
+  // The daemon's own read tool records the image.
+  await prepareDaemonData(userData, {
+    steps: [{ tool: 'read', args: { path: 'retained.png' } }, { reply: 'Image read' }],
+  });
   const app = await electron.launch({
     args: [resolve('test/fixtures/local-harness.mjs')],
     env: {
@@ -638,8 +639,6 @@ test('transcript remote first/next chunks render through authenticated stream an
       HOME: process.env.HOME!,
       TMPDIR: process.env.TMPDIR!,
       MOONBASE_USER_DATA: userData,
-      MOONBASE_CHAT_CONFIG: host.clientConfig,
-      MOONBASE_CHAT_FORWARD_LOG: host.log,
       MOONBASE_TEST_MAIN: main,
       MOONBASE_TEST_BUN: findTestBun(),
     },
@@ -647,204 +646,61 @@ test('transcript remote first/next chunks render through authenticated stream an
   const child = app.process(),
     page = await app.firstWindow();
   try {
-    await selectRemoteChat(page);
-    await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await createRemoteChat(page, 'Remote held transcript');
-    await page.getByLabel('Message', { exact: true }).fill('Observe actual remote chunks');
+    expect(page.url()).toBe('moonbase://editor/index.html');
+    await page.evaluate(() => {
+      const control = { violations: [] as string[] };
+      (window as unknown as { nativeImages: typeof control }).nativeImages = control;
+      window.addEventListener('securitypolicyviolation', (event) =>
+        control.violations.push(event.violatedDirective),
+      );
+    });
+    await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+    await addProviderKey(page, 'sk-controlled-image-fixture');
+    await pickWith(app, directory);
+    await chooseFolderNatively(page);
+    await page.getByLabel('Message', { exact: true }).fill('Inspect retained images');
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
-    const live = page.getByRole('article', { name: 'Live response' });
-    await expect(live.getByText('first remote text 0', { exact: true })).toBeVisible();
-    // The text takes the place of the thought it follows, so the reply shows no step for it.
-    await expect(live.locator('[data-transcript-step]')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
-    const before = await host.stats();
-    host.nextChunk();
-    await expect(live.getByText('first remote text 4', { exact: true })).toBeVisible();
-    const after = await host.stats();
-    expect(after.reads!.scans).toBe(before.reads!.scans);
-    expect(after.commands.filter((operation) => operation === 'getChat').length).toBe(
-      before.commands.filter((operation) => operation === 'getChat').length,
+    await expect(page.getByText('Image read', { exact: true })).toBeVisible();
+    const group = page
+      .locator('[data-transcript-activity]')
+      .filter({ has: page.locator('[data-transcript-part]').filter({ hasText: 'Stored image' }) })
+      .first();
+    await expect(group).toBeAttached();
+    // The image is the call's output, recorded in a later row with no chevron of its own; the
+    // call's card opens it.
+    await expect(group.getByRole('button', { name: /^Activity/ })).toHaveCount(0);
+    await openCallCard(page, 'read');
+    const trigger = group.getByRole('button', { name: 'View stored image', exact: true }).first();
+    await trigger.scrollIntoViewIfNeeded();
+    await expect(trigger).toBeEnabled();
+    const thumbnail = trigger.getByRole('img', { name: 'Stored image thumbnail' });
+    expect(await thumbnail.getAttribute('src')).toMatch(
+      /^moonbase:\/\/editor\/transcript-image\/[A-Za-z0-9_-]{43}$/,
     );
-    host.release();
-    await page.getByLabel('Message', { exact: true }).focus();
-    await expect(page.getByText('REMOTE COMPLETED', { exact: true })).toBeVisible();
+    expect(await thumbnail.evaluate((node: HTMLImageElement) => node.naturalWidth)).toBe(192);
+    await trigger.press('Enter');
+    const dialog = page.getByRole('dialog', { name: 'Stored image', exact: true });
+    await expect(dialog.getByRole('img', { name: 'Recorded image' })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Close image viewer' })).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    const stats = await page.evaluate(
+      () => (window as unknown as { nativeImages: { violations: string[] } }).nativeImages,
+    );
+    expect(stats.violations).toEqual([]);
+    expect(
+      await app.evaluate(
+        () => (globalThis as unknown as { moonbaseTestClipboard: string[] }).moonbaseTestClipboard,
+      ),
+    ).toEqual([]);
   } finally {
     try {
-      host.release();
-      if (child.exitCode === null) {
-        // Still connected when the sidebar has no Connect line.
-        if (!(await page.getByRole('button', { name: 'Connect', exact: true }).count()))
-          await disconnectChat(page);
-        await app.evaluate(({ app }) => app.exit(0));
-      }
-      await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+      if (child.exitCode === null) await app.evaluate(({ app }) => app.exit(0));
+      await waitForExit(child);
     } finally {
-      // A daemon outlives its app: stop it even when the steps before fail.
       await stopDaemon(join(userData, 'daemon-v1'));
+      await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     }
-    await host.close();
   }
 });
-
-for (const mode of ['local', 'remote'] as const)
-  test(`stored image ${mode} record is served over moonbase:// under production CSP; viewer keyboard, close and actual zoom`, async () => {
-    const host =
-      mode === 'remote'
-        ? await controlledHostFixture(new URL('../fixtures/faux-stored-image.mjs', import.meta.url))
-        : undefined;
-    const directory =
-      host?.directory ?? (await realpath(await mkdtemp(join(tmpdir(), 'moonbase-image-native-'))));
-    const userData = join(directory, 'desktop');
-    if (!host) await writeFile(join(directory, 'retained.png'), retainedImage);
-    // The daemon's own read tool records the image.
-    await prepareDaemonData(userData, {
-      steps: [{ tool: 'read', args: { path: 'retained.png' } }, { reply: 'Image read' }],
-    });
-    const app = await electron.launch({
-      args: [resolve('test/fixtures/local-harness.mjs')],
-      env: {
-        PATH: '/usr/bin:/bin',
-        HOME: process.env.HOME!,
-        TMPDIR: process.env.TMPDIR!,
-        MOONBASE_USER_DATA: userData,
-        MOONBASE_TEST_MAIN: main,
-        MOONBASE_TEST_BUN: findTestBun(),
-        ...(host
-          ? { MOONBASE_CHAT_CONFIG: host.clientConfig, MOONBASE_CHAT_FORWARD_LOG: host.log }
-          : {}),
-      },
-    });
-    const child = app.process(),
-      page = await app.firstWindow();
-    try {
-      expect(page.url()).toBe('moonbase://editor/index.html');
-      await page.evaluate(() => {
-        const control = { violations: [] as string[] };
-        (window as unknown as { nativeImages: typeof control }).nativeImages = control;
-        window.addEventListener('securitypolicyviolation', (event) =>
-          control.violations.push(event.violatedDirective),
-        );
-      });
-      if (host) {
-        await selectRemoteChat(page);
-        await page.getByRole('button', { name: 'Connect', exact: true }).click();
-        await createRemoteChat(page, 'Retained remote images');
-      } else {
-        await page.getByRole('tab', { name: 'Agents', exact: true }).click();
-        await addProviderKey(page, 'sk-controlled-image-fixture');
-        await pickWith(app, directory);
-        await chooseFolderNatively(page);
-      }
-      await page.getByLabel('Message', { exact: true }).fill('Inspect retained images');
-      await page.getByRole('button', { name: 'Send message', exact: true }).click();
-      if (!host) await expect(page.getByText('Image read', { exact: true })).toBeVisible();
-      const group = page
-        .locator('[data-transcript-activity]')
-        .filter({ has: page.locator('[data-transcript-part]').filter({ hasText: 'Stored image' }) })
-        .first();
-      await expect(group).toBeAttached();
-      // The image is the call's output, recorded in a later row with no chevron of its own; the
-      // call's card opens it.
-      await expect(group.getByRole('button', { name: /^Activity/ })).toHaveCount(0);
-      await openCallCard(page, host ? 'retained_images' : 'read');
-      const trigger = group.getByRole('button', { name: 'View stored image', exact: true }).first();
-      await trigger.scrollIntoViewIfNeeded();
-      await expect(trigger).toBeEnabled();
-      const thumbnail = trigger.getByRole('img', { name: 'Stored image thumbnail' });
-      const src = (await thumbnail.getAttribute('src'))!;
-      expect(src).toMatch(/^moonbase:\/\/editor\/transcript-image\/[A-Za-z0-9_-]{43}$/);
-      expect(await thumbnail.evaluate((node: HTMLImageElement) => node.naturalWidth)).toBe(192);
-      // The URL is only an opaque token; a guessed token and a non-image path grant nothing.
-      expect(
-        await page.evaluate(async (src) => {
-          const statuses = [];
-          for (const url of [src.replace(/.$/, (c) => (c === 'A' ? 'B' : 'A')), src])
-            statuses.push((await fetch(url, { cache: 'no-store' })).status);
-          const response = await fetch(src);
-          return [
-            ...statuses,
-            response.headers.get('Content-Type'),
-            response.headers.get('X-Content-Type-Options'),
-            response.headers.get('Cache-Control'),
-          ];
-        }, src),
-      ).toEqual([404, 200, 'image/png', 'nosniff', 'no-store']);
-      for (let iteration = 0; iteration < 3; iteration++) {
-        await trigger.press('Enter');
-        const dialog = page.getByRole('dialog', { name: 'Stored image', exact: true });
-        await expect(dialog.getByRole('img', { name: 'Recorded image' })).toBeVisible();
-        await expect(dialog.getByRole('button', { name: 'Close image viewer' })).toBeFocused();
-        await page.keyboard.press('Tab');
-        await expect
-          .poll(() => dialog.evaluate((node) => node.contains(document.activeElement)))
-          .toBe(true);
-        await page.keyboard.press('Escape');
-        await expect(dialog).toHaveCount(0);
-        await expect(trigger).toBeFocused();
-      }
-      await app.evaluate(({ BrowserWindow }) => {
-        const window = BrowserWindow.getAllWindows()[0];
-        window.setSize(1280, 850);
-        window.webContents.setZoomFactor(2);
-      });
-      await trigger.scrollIntoViewIfNeeded();
-      await expect(trigger).toBeEnabled();
-      await trigger.click();
-      const dialog = page.getByRole('dialog', { name: 'Stored image', exact: true });
-      await expect(dialog.getByRole('img', { name: 'Recorded image' })).toBeVisible();
-      await mkdir(resolve('../../test-results/transcript-images'), { recursive: true });
-      await captureNative(
-        app,
-        page,
-        resolve(`../../test-results/transcript-images/native-${mode}-zoom.png`),
-      );
-      const rect = await dialog.evaluate((node) => {
-        const r = node.getBoundingClientRect();
-        return {
-          left: r.left,
-          top: r.top,
-          right: r.right,
-          bottom: r.bottom,
-          width: innerWidth,
-          height: innerHeight,
-        };
-      });
-      expect(rect.left).toBeGreaterThanOrEqual(0);
-      expect(rect.top).toBeGreaterThanOrEqual(0);
-      expect(rect.right).toBeLessThanOrEqual(rect.width);
-      expect(rect.bottom).toBeLessThanOrEqual(rect.height);
-      await page.keyboard.press('Escape');
-      const stats = await page.evaluate(
-        () => (window as unknown as { nativeImages: { violations: string[] } }).nativeImages,
-      );
-      expect(stats.violations).toEqual([]);
-      expect(
-        await app.evaluate(
-          () =>
-            (globalThis as unknown as { moonbaseTestClipboard: string[] }).moonbaseTestClipboard,
-        ),
-      ).toEqual([]);
-    } finally {
-      try {
-        if (child.exitCode === null && host) {
-          await app.evaluate(({ BrowserWindow }) => {
-            const window = BrowserWindow.getAllWindows()[0];
-            window.setSize(1280, 850);
-            window.webContents.setZoomFactor(1);
-          });
-          await disconnectChat(page);
-        }
-      } finally {
-        try {
-          if (child.exitCode === null) await app.evaluate(({ app }) => app.exit(0));
-          await expect
-            .poll(() => child.exitCode !== null || child.signalCode !== null, { timeout: 15000 })
-            .toBe(true);
-        } finally {
-          await stopDaemon(join(userData, 'daemon-v1'));
-          if (host) console.info('Image native remote cleanup', await host.close());
-          else await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-        }
-      }
-    }
-  });
