@@ -29,4 +29,3 @@ export const safeError = (error: unknown, uncertain = false): ChatError => {
  */
 export const watchError = (error: unknown): ChatError =>
   isChatError(error) ? error : new ChatUnavailableError({ reason: 'watch-failed' });
-/** What one commit means for a watched conversation's projection and its caches. */

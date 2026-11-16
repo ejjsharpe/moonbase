@@ -34,7 +34,7 @@ async function seed(t: TestContext) {
           (
             await tx.appendEntry(Number(target.conversationId) as ConversationId, {
               kind: 'pi.user',
-              model: [{ role: 'user', content: 'needle ' + i, timestamp: 1 }],
+              model: [{ role: 'user', content: (i ? '' : '😀') + 'needle ' + i, timestamp: 1 }],
             })
           ).id,
         ),
@@ -177,7 +177,7 @@ test('a transcript cursor opens only for the read and kind it continues', async 
 });
 
 test('a position forged inside a well-formed cursor fails in its read', async (t) => {
-  const { read, cursors, selection } = await seed(t);
+  const { read, cursors, selection, entries } = await seed(t);
   const manifest = decode(cursors.manifest);
   for (const change of [{ position: manifest.position + 1 }, { revision: 'a'.repeat(64) }])
     await assert.rejects(read.manifest(encode({ ...manifest, ...change })), {
@@ -204,6 +204,18 @@ test('a position forged inside a well-formed cursor fails in its read', async (t
   const find = decode(cursors.find);
   const finished = await read.find(encode({ ...find, position: Number(find.upper) + 1 }));
   assert.deepEqual([finished.matches, finished.nextCursor], [[], null]);
+  // Resuming inside the first entry's leading surrogate pair.
+  const split = { position: Number(entries[0]), part: { message: 1, block: 0, auxiliary: 0 } };
+  await assert.rejects(read.find(encode({ ...find, ...split, path: [], offset: 1 })), refused);
+  // Counters past the cursor's bound could overflow the reply's safe integers.
+  for (const counter of ['entries', 'bytes', 'textOffset'])
+    await assert.rejects(
+      read.find(encode({ ...find, [counter]: Number.MAX_SAFE_INTEGER })),
+      refused,
+      counter,
+    );
+  const counted = await read.find(encode({ ...find, entries: 2 ** 40, bytes: 2 ** 40 }));
+  assert(counted.progress.entries > 2 ** 40 && Number.isSafeInteger(counted.progress.bytes));
 });
 
 test('cursors keep working across a restart', async (t) => {

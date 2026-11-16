@@ -148,6 +148,12 @@ async function readWindow(
     if (++count % tokensPerTurn === 0) await setImmediate();
     const offset =
       JSON.stringify(token.path) === JSON.stringify(position.path) ? position.offset : 0;
+    // Find only resumes between characters; an offset inside a surrogate pair is forged.
+    if (
+      /[\ud800-\udbff]/.test(token.text[offset - 1] ?? '') &&
+      /[\udc00-\udfff]/.test(token.text[offset] ?? '')
+    )
+      throw new InvalidChatRequestError({ problem: 'transcript-cursor' });
     const end = alignBoundary(
       token.text,
       Math.min(token.text.length, offset + limit - text.length),

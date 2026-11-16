@@ -6,6 +6,7 @@ import {
 } from '@earendil-works/pi-durable';
 import { Metadata, Store } from '../documents.ts';
 
+/** What one commit means for a watched conversation's projection and its caches. */
 export type PublicationEffect = {
   /** The watched view must be read again. */
   relevant: boolean;

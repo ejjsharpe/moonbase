@@ -99,6 +99,11 @@ export type FindPartPosition = typeof findPartPositionSchema.Type;
  */
 export const maximumFindPathDepth = 32;
 export const maximumFindPathChars = 360;
+/**
+ * Find's counters and text offsets stay far below 2^53, so a forged cursor's next page cannot
+ * overflow a safe integer: one page adds at most a slice's bytes and rows to them.
+ */
+const findCount = naturalNumber.check(Schema.makeFilter((value) => value <= 2 ** 40));
 const digest = Schema.String.check(Schema.makeFilter((value) => /^[a-f0-9]{64}$/.test(value)));
 const transcriptCursorSchema = Schema.Struct({
   kind: Schema.Literals(['manifest', 'content', 'around', 'find']),
@@ -107,8 +112,8 @@ const transcriptCursorSchema = Schema.Struct({
   position: naturalNumber,
   revision: Schema.optional(digest),
   upper: Schema.optional(recordId),
-  entries: Schema.optional(naturalNumber),
-  bytes: Schema.optional(naturalNumber),
+  entries: Schema.optional(findCount),
+  bytes: Schema.optional(findCount),
   part: Schema.optional(findPartPositionSchema),
   path: Schema.optional(
     Schema.Array(naturalNumber).check(
@@ -116,8 +121,8 @@ const transcriptCursorSchema = Schema.Struct({
       Schema.makeFilter((value) => JSON.stringify(value).length <= maximumFindPathChars),
     ),
   ),
-  offset: Schema.optional(naturalNumber),
-  textOffset: Schema.optional(naturalNumber),
+  offset: Schema.optional(findCount),
+  textOffset: Schema.optional(findCount),
   direction: Schema.optional(Schema.Literals(['older', 'newer'])),
 });
 /** A transcript read's position: which read it continues and where. */
