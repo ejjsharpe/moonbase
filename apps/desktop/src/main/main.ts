@@ -1,6 +1,6 @@
 import { normalizeApplicationError } from '@moonbase/effect';
 import { toWireError } from '@moonbase/contracts/workspace-host-errors';
-import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
+import { runApplicationEffect } from '@moonbase/application/chat/promises';
 import {
   app,
   BrowserWindow,
@@ -17,7 +17,6 @@ import {
 import { Cause, Effect, Exit, ManagedRuntime, PubSub, Scope } from 'effect';
 import { WorkspaceService } from '@moonbase/contracts/services';
 import { readInstallationId, WorkspaceRecoveryLive } from '@moonbase/workspace';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { acquireDaemonChat, createLocalDaemonClient } from './daemon/local-daemon-client.ts';
 import { mkdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, resolve, sep } from 'node:path';
@@ -167,8 +166,7 @@ async function main() {
       host,
     ),
   );
-  const client = makeEditorClient(runtime);
-  await runtime.runPromise(Effect.asVoid(WorkspaceService));
+  const workspace = await runtime.runPromise(Effect.map(WorkspaceService, (service) => service));
   // Local and remote chat clients are acquired in separate scopes of this root.
   const remote = chatConfiguration
     ? await acquireRemoteChat(runtime, chatConfiguration, (url) => shell.openExternal(url))
@@ -299,7 +297,7 @@ async function main() {
       makeIpcServer(
         makeDocumentHandlers({
           editor: {
-            client,
+            workspace,
             native,
             approvals,
             // Reveal in Finder applies only to files on this Mac, which are the local daemon's.

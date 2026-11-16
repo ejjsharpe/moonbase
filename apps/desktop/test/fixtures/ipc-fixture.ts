@@ -1,7 +1,11 @@
-import { Effect, Layer, ManagedRuntime, PubSub, Scope } from 'effect';
-import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
+import { Cause, Effect, Layer, ManagedRuntime, PubSub, Queue, Scope, Stream } from 'effect';
+import { runApplicationEffect } from '@moonbase/application/chat/promises';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import type { EditorClient } from '@moonbase/contracts/workspace';
+import type { ObservationClose } from '@moonbase/contracts/common';
+import type { RecoveryOutline } from '@moonbase/contracts/recovery';
+import type { WorkspaceServiceShape } from '@moonbase/contracts/services';
+import { normalizeApplicationError } from '@moonbase/effect';
+import type { WorkspaceCommand, WorkspaceEvent } from '@moonbase/contracts/workspace';
 import type { MessagePortLike } from '../../src/ipc/port-socket.ts';
 import type { WindowAction } from '../../src/ipc/window-rpcs.ts';
 import {
@@ -17,10 +21,46 @@ import type { SessionImage } from '../../src/main/chat/session.ts';
 import type { TranscriptImageReader } from '../../src/main/chat/transcript-native.ts';
 import {
   makeChatTargetClients,
-  makeEditorClient,
   makeShellClients,
 } from '../../src/renderer/ipc/application-clients.ts';
 import { makeDesktopIpcLayer, toMessagePortLike } from '../../src/renderer/ipc/desktop-ipc.ts';
+import { WorkspaceIpcLive } from '../../src/renderer/ipc/workspace-ipc.ts';
+import { makeWorkspaceClient, type FakeWorkspaceClient } from './workspace-client-fixture.ts';
+
+export type { FakeWorkspaceClient };
+
+/** A callback watch as a stream, closed (ignoring a close failure) when the stream ends. */
+const watched = <A>(
+  watch: (receive: (value: A) => void, fail: (error: ApplicationError) => void) => ObservationClose,
+) =>
+  Stream.callback<A, ApplicationError>((queue) =>
+    Effect.acquireRelease(
+      Effect.sync(() =>
+        watch(
+          (value) => void Queue.offerUnsafe(queue, value),
+          (error) => Queue.failCauseUnsafe(queue, Cause.fail(error)),
+        ),
+      ),
+      (close) => Effect.promise(() => close().catch(() => {})),
+    ),
+  );
+/** The `WorkspaceService` main serves, over a test's fake. */
+export const toWorkspaceService = (client: FakeWorkspaceClient): WorkspaceServiceShape =>
+  new Proxy({} as WorkspaceServiceShape, {
+    get: (_, name: string) => {
+      if (name === 'watch')
+        return (input: Parameters<FakeWorkspaceClient['watch']>[0]) =>
+          watched<WorkspaceEvent>((receive, fail) => client.watch(input, receive, fail));
+      if (name === 'watchRecovery')
+        return (input: { clientId: string }) =>
+          watched<RecoveryOutline>((receive, fail) => client.watchRecovery(input, receive, fail));
+      return (input: never) =>
+        Effect.tryPromise({
+          try: (signal) => client.command(name as WorkspaceCommand, input, { signal }),
+          catch: (error) => normalizeApplicationError(error),
+        });
+    },
+  });
 
 /** Node's port as main's: Node reports the other end closing as a `close` event, as Electron does. */
 const toMainPortLike = (port: MessagePort): MessagePortLike => {
@@ -41,7 +81,7 @@ const toMainPortLike = (port: MessagePort): MessagePortLike => {
 const unused = (name: string) => () => {
   throw new ApplicationError({ code: 'Unavailable', message: `${name} is not part of this test.` });
 };
-export const unusedEditorClient: EditorClient = {
+export const unusedEditorClient: FakeWorkspaceClient = {
   command: unused('The workspace') as never,
   watch: unused('The workspace watch') as never,
   watchRecovery: unused('The recovery watch') as never,
@@ -101,7 +141,7 @@ export type RawConnection = {
  */
 export async function makeIpcFixture(
   options: {
-    editor?: Partial<EditorIpcOptions>;
+    editor?: Partial<Omit<EditorIpcOptions, 'workspace'>> & { client?: FakeWorkspaceClient };
     chat?: Partial<ChatIpcOptions>;
     lifecycle?: DocumentHandlersOptions['lifecycle'];
     intercept?: DocumentHandlersOptions['intercept'];
@@ -118,11 +158,11 @@ export async function makeIpcFixture(
       makeIpcServer(
         makeDocumentHandlers({
           editor: {
-            client: unusedEditorClient,
             native: unusedNative,
             localHostId: async () => 'local-host',
             reportCleanup,
             ...options.editor,
+            workspace: toWorkspaceService(options.editor?.client ?? unusedEditorClient),
             approvals,
           },
           chat: { backends: noChat, isQuitting: () => false, reportCleanup, ...options.chat },
@@ -151,13 +191,16 @@ export async function makeIpcFixture(
   /** The renderer's runtime, a fresh one for each document as a reload would make. */
   const makeRenderer = () =>
     ManagedRuntime.make(
-      makeDesktopIpcLayer(
-        Effect.suspend(() => {
-          const port = openPort();
-          return port
-            ? Effect.succeed<MessagePortLike>(toMessagePortLike(port))
-            : Effect.fail('refused');
-        }),
+      Layer.provideMerge(
+        WorkspaceIpcLive,
+        makeDesktopIpcLayer(
+          Effect.suspend(() => {
+            const port = openPort();
+            return port
+              ? Effect.succeed<MessagePortLike>(toMessagePortLike(port))
+              : Effect.fail('refused');
+          }),
+        ),
       ),
     );
   let renderer = makeRenderer();
@@ -222,7 +265,7 @@ export async function makeIpcFixture(
     actions,
     cleanupFailures,
     get editor() {
-      return makeEditorClient(renderer);
+      return makeWorkspaceClient(renderer);
     },
     get shell() {
       return makeShellClients(renderer, {

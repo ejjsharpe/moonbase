@@ -9,7 +9,7 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import type { ChatSession } from '@moonbase/contracts/chat';
 import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
-import { makeChatClient } from '@moonbase/application/runtime/clients';
+import { makeChatClient } from '@moonbase/application/chat/clients';
 import { ChatIpcSession } from '../src/main/chat/session.ts';
 import { makeIpcFixture, noChat } from './fixtures/ipc-fixture.ts';
 

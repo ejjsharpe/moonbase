@@ -41,12 +41,12 @@ export function makeWorkspaceClient(
 ): WorkspaceClient {
   const service = <A>(
     f: (service: WorkspaceService['Service']) => Stream.Stream<A, ApplicationError>,
-  ) => Stream.unwrap(WorkspaceService.use((workspace) => Effect.succeed(f(workspace))));
+  ) => Stream.unwrap(Effect.flatMap(WorkspaceService, (workspace) => Effect.succeed(f(workspace))));
   return {
     command: (operation, input, options) =>
       runApplicationEffect(
         runtime,
-        WorkspaceService.use((workspace) =>
+        Effect.flatMap(WorkspaceService, (workspace) =>
           (
             workspace[operation] as (
               input: CommandInput<typeof operation>,

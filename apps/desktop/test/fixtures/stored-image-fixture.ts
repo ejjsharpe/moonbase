@@ -10,7 +10,7 @@ import { createRegistry, defineExtension, defineTool } from '@earendil-works/pi-
 import { Type } from 'typebox';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { fauxModel, fauxModelOptions, installFaux } from '../../../../test/chat/faux-model.ts';
-import { makeChatClient } from '@moonbase/application/runtime/clients';
+import { makeChatClient } from '@moonbase/application/chat/clients';
 import type { ChatSession } from '@moonbase/contracts/chat';
 
 export const retainedImage = readFileSync(new URL('./images/retained.png', import.meta.url));
