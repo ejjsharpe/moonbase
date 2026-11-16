@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { toWorkspaceClient as makeEditorClient } from '@moonbase/application/testing/editor-fixture';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 

@@ -212,9 +212,7 @@ export class EditorTree extends Context.Service<EditorTree, EditorTreeShape>()(
             const isCurrent = Effect.map(
               Effect.all([session.get, views.get]),
               ([{ closing }, { recovery }]) =>
-                !closing &&
-                isCheckoutOpen(recovery, checkout) &&
-                (options.current?.() ?? true),
+                !closing && isCheckoutOpen(recovery, checkout) && (options.current?.() ?? true),
             );
             const findListed = (path: string) =>
               SubscriptionRef.getUnsafe(discovery.state).listings[
@@ -244,7 +242,9 @@ export class EditorTree extends Context.Service<EditorTree, EditorTreeShape>()(
                     unclassified.map((path) =>
                       workspace
                         .getIgnoredPaths({ checkout, path: getParentPath(path), paths: [path] })
-                        .pipe(Effect.tapError((error) => (report ? alerts.report(error) : Effect.void))),
+                        .pipe(
+                          Effect.tapError((error) => (report ? alerts.report(error) : Effect.void)),
+                        ),
                     ),
                     { concurrency: 'unbounded' },
                   );

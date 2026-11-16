@@ -1,4 +1,4 @@
-import { Effect, Exit, Fiber, FiberHandle, Scope, SubscriptionRef } from 'effect';
+import { Effect, Exit, Fiber, FiberHandle, type Scope, SubscriptionRef } from 'effect';
 import { describeEditorFailure } from './alerts/alerts.ts';
 
 /** What every popup query shows: its message and whether an open from it is running. */
@@ -44,7 +44,8 @@ export const makeEditorQuery = <S extends QueryState>(
     let rerun: Effect.Effect<void> | undefined;
     /** Why the last open failed, shown until the next query or open the user starts. */
     let failedOpen: string | undefined;
-    const update = (patch: Partial<S>) => SubscriptionRef.update(state, (s) => ({ ...s, ...patch }));
+    const update = (patch: Partial<S>) =>
+      SubscriptionRef.update(state, (s) => ({ ...s, ...patch }));
     const settle = Effect.suspend(() => {
       settled = true;
       const next = rerun;
@@ -74,7 +75,10 @@ export const makeEditorQuery = <S extends QueryState>(
           // A superseded query never settles: the newer one does.
           Effect.onExit((exit) => (Exit.hasInterrupts(exit) ? Effect.void : settle)),
         );
-        return Effect.andThen(cancelOpen, FiberHandle.run(running)(run)).pipe(Effect.asVoid);
+        return Effect.andThen(
+          cancelOpen,
+          FiberHandle.run(running, { startImmediately: true })(run),
+        ).pipe(Effect.asVoid);
       });
     return {
       state,

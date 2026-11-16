@@ -1,4 +1,4 @@
-import { Context, Effect, Exit, Layer, Scope, Stream, SubscriptionRef } from 'effect';
+import { Context, Effect, Exit, Layer, type Scope, Stream, type SubscriptionRef } from 'effect';
 import { WorkspaceService } from '@moonbase/contracts/services';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { describeEditorFailure } from '../alerts/alerts.ts';
@@ -70,11 +70,13 @@ export class EditorLookup extends Context.Service<EditorLookup, EditorLookupShap
                   key,
                   Effect.gen(function* () {
                     const results = yield* Effect.all(
-                      captured.slice(0, lookupCheckouts).map((checkout) =>
-                        Effect.exit(
-                          Effect.map(search(checkout, query), (result) => ({ checkout, result })),
+                      captured
+                        .slice(0, lookupCheckouts)
+                        .map((checkout) =>
+                          Effect.exit(
+                            Effect.map(search(checkout, query), (result) => ({ checkout, result })),
+                          ),
                         ),
-                      ),
                       { concurrency: lookupCheckouts },
                     );
                     const errors = results.flatMap((exit) =>
@@ -97,7 +99,9 @@ export class EditorLookup extends Context.Service<EditorLookup, EditorLookupShap
                 );
               }),
             open: (open) =>
-              Effect.flatMap(admits, (admitted) => (admitted ? runner.open(open) : Effect.succeed(false))),
+              Effect.flatMap(admits, (admitted) =>
+                admitted ? runner.open(open) : Effect.succeed(false),
+              ),
             message: (message) =>
               Effect.flatMap(admits, (admitted) =>
                 admitted ? runner.update({ message }) : Effect.void,

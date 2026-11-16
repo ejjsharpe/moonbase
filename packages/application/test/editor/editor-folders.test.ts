@@ -1,3 +1,4 @@
+import { getFailureCode } from '@moonbase/application/editor';
 import { acquireEditor } from './editor-model-fixture.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -6,9 +7,11 @@ import {
   ApplicationError,
   type CheckoutTarget,
   type CommandInput,
-  type EditorClient,
 } from '@moonbase/contracts/workspace';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import {
+  toWorkspaceClient as makeEditorClient,
+  type WorkspaceClient,
+} from '@moonbase/application/testing/editor-fixture';
 import { checkoutKey } from '@moonbase/application/editor';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 import type { RecoveryState } from '@moonbase/contracts/recovery';
@@ -63,7 +66,7 @@ async function fixture(
   const commands: string[] = [];
   let initialized = false,
     failGitWatch = options.failGitWatch ?? false;
-  const client: EditorClient = {
+  const client: WorkspaceClient = {
     command: async (operation, input, options_) => {
       commands.push(operation);
       // After `git init` the workspace no longer approves the folder target, so it refuses an
@@ -98,7 +101,8 @@ async function fixture(
     },
     watchRecovery: inner.watchRecovery,
   };
-  const editor = await acquireEditor(runtime, { client, clientId: 'folders' });
+  // A watch that fails is watched again at once, so tests needn't wait out the backoff.
+  const editor = await acquireEditor(runtime, { client, clientId: 'folders', watchRetryMs: [0] });
   await editor.load();
   return {
     editor,
@@ -143,7 +147,7 @@ test('a plain-folder checkout opens and refreshes with an empty Git status', asy
     await f.editor.openCheckout(repository.root);
     await assert.rejects(
       f.editor.initializeRepository(repository),
-      (error: unknown) => ApplicationError.is(error) && error.code === 'InvalidInput',
+      (error: unknown) => getFailureCode(error) === 'InvalidInput',
     );
   } finally {
     await f.dispose();
@@ -186,7 +190,10 @@ test('initializeRepository keeps the folder’s tabs and drafts on the Git check
       (await f.inner.command('readFile', { checkout: initialized, path: 'a.ts' })).text,
       'unsaved',
     );
-    await assert.rejects(f.editor.initializeRepository(folder), ApplicationError.is);
+    await assert.rejects(
+      f.editor.initializeRepository(folder),
+      (error) => getFailureCode(error) !== undefined,
+    );
   } finally {
     await f.dispose();
   }
@@ -201,12 +208,12 @@ test('a failed initializeRepository leaves the plain folder open and observed', 
     await assert.rejects(f.editor.initializeRepository(folder), /Git could not start/);
     assert.deepEqual(f.editor.getSnapshot().recovery.checkouts, [folder]);
     // Its watch is back: a change on disk reaches the editor.
-    const revision = f.editor.getSnapshot().discoveryRevision;
+    const revision = f.editor.changes();
     f.memory.externalWrite({ checkout: folder, path: 'a.ts' }, 'changed outside');
     const deadline = Date.now() + 2000;
-    while (f.editor.getSnapshot().discoveryRevision === revision && Date.now() < deadline)
+    while (f.editor.changes() === revision && Date.now() < deadline)
       await new Promise((resolve) => setTimeout(resolve, 10));
-    assert(f.editor.getSnapshot().discoveryRevision > revision);
+    assert(f.editor.changes() > revision);
   } finally {
     await f.dispose();
   }
@@ -348,9 +355,7 @@ test('a second initializeRepository during the first is refused and leaves it to
     await assert.rejects(
       f.editor.initializeRepository(folder),
       (error: unknown) =>
-        ApplicationError.is(error) &&
-        error.code === 'Conflict' &&
-        /already being initialized/.test(error.message),
+        getFailureCode(error) === 'Conflict' && /already being initialized/.test(String(error)),
     );
     assert.equal(
       f.commands.slice(commands).filter((name) => name === 'initializeRepository').length,
@@ -365,18 +370,14 @@ test('a second initializeRepository during the first is refused and leaves it to
   }
 });
 
-test('if the rebind fails after git init, the folder’s work still moves to the repository and is watched', async () => {
+test('a repository whose first watch fails to start keeps the folder’s work and is watched again', async () => {
   const f = await fixture({ failGitWatch: true });
   try {
     await f.editor.openCheckout(folder.root);
     await f.editor.open({ checkout: folder, path: 'a.ts' }, { intent: 'keep' });
     f.editor.edit({ checkout: folder, path: 'a.ts' }, 'unsaved');
-    await assert.rejects(
-      f.editor.initializeRepository(folder),
-      /Git was initialized, but the project did not finish moving to it: Watch could not start\./,
-    );
+    const initialized = await f.editor.initializeRepository(folder);
     const { recovery, initializing } = f.editor.getSnapshot();
-    const initialized = recovery.checkouts[0];
     assert.equal(initialized.vcs, 'git');
     assert.deepEqual(recovery.checkouts, [initialized]);
     assert.equal(initializing, null);
@@ -386,13 +387,13 @@ test('if the rebind fails after git init, the folder’s work still moves to the
       draftsOf((await f.inner.command('loadRecovery', { clientId: 'folders' })).state),
       [[initialized, 'a.ts', 'unsaved']],
     );
-    // Its watch is up on the repository: a change on disk reaches the editor.
-    const revision = f.editor.getSnapshot().discoveryRevision;
+    // Its watch is up on the repository again: a change on disk reaches the editor.
+    await waitUntil(() => f.editor.changes() > 0);
+    const seen = f.editor.changes();
     f.memory.externalWrite({ checkout: initialized, path: 'b.ts' }, 'changed outside');
-    await waitUntil(() => f.editor.getSnapshot().discoveryRevision > revision);
+    await waitUntil(() => f.editor.changes() > seen);
+    assert.deepEqual(f.editor.getSnapshot().errors, []);
   } finally {
-    // Disposal reports the watch that failed to start, as it does for any such watch.
-    await assert.rejects(f.editor.dispose(), /Watch could not start/);
-    await f.runtime.dispose();
+    await f.dispose();
   }
 });

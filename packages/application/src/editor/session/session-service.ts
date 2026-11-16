@@ -1,13 +1,4 @@
-import {
-  Context,
-  Deferred,
-  Effect,
-  Fiber,
-  FiberSet,
-  Layer,
-  Ref,
-  SubscriptionRef,
-} from 'effect';
+import { Context, Deferred, Effect, Fiber, FiberSet, Layer, Ref, SubscriptionRef } from 'effect';
 import { EditorError } from '../editor-errors.ts';
 
 /** The editor's modes, which gate what every concept admits. */
@@ -95,20 +86,21 @@ export class EditorSession extends Context.Service<EditorSession, EditorSessionS
             Effect.flatMap(get, (current) =>
               current.closing
                 ? Effect.interrupt
-                : Effect.flatMap(FiberSet.run(fibers, { startImmediately: true })(effect), Fiber.join),
+                : Effect.flatMap(
+                    FiberSet.run(fibers, { startImmediately: true })(effect),
+                    Fiber.join,
+                  ),
             ),
           admit: Effect.flatMap(get, (current) =>
             current.admissionsOpen && !current.closing
               ? Effect.void
               : Effect.fail(new EditorError({ reason: 'closing' })),
           ),
-          assertReady: Effect.flatMap(get, (current) =>
-            current.closing
-              ? Effect.fail(new EditorError({ reason: 'closed' }))
-              : current.ready
-                ? Effect.void
-                : Effect.fail(new EditorError({ reason: 'not-ready' })),
-          ),
+          assertReady: Effect.flatMap(get, (current) => {
+            if (current.closing) return Effect.fail(new EditorError({ reason: 'closed' }));
+            if (!current.ready) return Effect.fail(new EditorError({ reason: 'not-ready' }));
+            return Effect.void;
+          }),
           beginInitialization: (checkoutId) =>
             Effect.gen(function* () {
               yield* Ref.set(initialization, yield* Deferred.make<void>());

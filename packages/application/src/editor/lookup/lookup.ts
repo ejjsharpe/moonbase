@@ -3,7 +3,11 @@ import { fileKey } from '../recovery/recovery-references.ts';
 
 export type LookupRow = LookupMatch & { checkout: CheckoutTarget; recent: boolean };
 export type LookupSnapshot = { rows: LookupRow[]; message: string; busy: boolean };
-export const emptyLookup: LookupSnapshot = { rows: [], message: 'Type a filename or path.', busy: false };
+export const emptyLookup: LookupSnapshot = {
+  rows: [],
+  message: 'Type a filename or path.',
+  busy: false,
+};
 
 /** The most checkouts one lookup searches. */
 export const lookupCheckouts = 8;
@@ -27,7 +31,9 @@ export function rankLookup(
     for (const match of result.matches) rows.push({ ...match, checkout, recent: false });
   }
   const unique = [
-    ...new Map(rows.map((row) => [fileKey({ checkout: row.checkout, path: row.path }), row])).values(),
+    ...new Map(
+      rows.map((row) => [fileKey({ checkout: row.checkout, path: row.path }), row]),
+    ).values(),
   ];
   unique.sort((a, b) => Number(b.recent) - Number(a.recent) || (a.recent ? 0 : b.score - a.score));
   const shown = Math.min(unique.length, 100);

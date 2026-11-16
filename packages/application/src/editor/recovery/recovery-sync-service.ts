@@ -1,12 +1,4 @@
-import {
-  Context,
-  Effect,
-  FiberHandle,
-  FiberSet,
-  Layer,
-  Semaphore,
-  Stream,
-} from 'effect';
+import { Context, Effect, FiberHandle, FiberSet, Layer, Semaphore, Stream } from 'effect';
 import { WorkspaceService } from '@moonbase/contracts/services';
 import type { RecoveryLoad, RecoveryOutline, RecoveryState } from '@moonbase/contracts/recovery';
 import type { OperationResult } from '@moonbase/contracts/workspace';
@@ -136,7 +128,11 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
             // A clean buffer the editor no longer shows (one whose close was lost) is closed, so it
             // never holds a file the editor opens again under another buffer.
             for (const buffer of state.buffers)
-              if (!buffer.draft && !shown.has(buffer.id) && !(yield* outbox.isTabPending(buffer.id)))
+              if (
+                !buffer.draft &&
+                !shown.has(buffer.id) &&
+                !(yield* outbox.isTabPending(buffer.id))
+              )
                 yield* outbox.closeTab(buffer.id);
             const current = yield* buffers.get;
             for (const [key, tab] of current.tabs) {
@@ -156,13 +152,15 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
       const watch: Effect.Effect<void> = FiberHandle.run(recoveryWatch, { onlyIfMissing: true })(
         Effect.gen(function* () {
           if (yield* closing) return;
-          yield* workspace.watchRecovery({ clientId }).pipe(
-            Stream.runForEach((outline) =>
-              Effect.flatMap(closing, (closed) =>
-                closed ? Effect.void : Effect.catch(follow(outline, false), alerts.report),
+          yield* workspace
+            .watchRecovery({ clientId })
+            .pipe(
+              Stream.runForEach((outline) =>
+                Effect.flatMap(closing, (closed) =>
+                  closed ? Effect.void : Effect.catch(follow(outline, false), alerts.report),
+                ),
               ),
-            ),
-          );
+            );
         }).pipe(Effect.catch(alerts.report)),
       ).pipe(Effect.asVoid);
 
@@ -232,9 +230,11 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
           toRecoveryLayout(recovery, tabs),
         ),
         send: (kind, input) =>
-          session.run(
-            (workspace[kind] as (input: unknown) => Effect.Effect<unknown, EditorFailure>)(input),
-          ).pipe(Effect.asVoid),
+          session
+            .run(
+              (workspace[kind] as (input: unknown) => Effect.Effect<unknown, EditorFailure>)(input),
+            )
+            .pipe(Effect.asVoid),
         resync: (edit, error) =>
           Effect.gen(function* () {
             // A tab the store would not close (it holds a draft the editor did not know) stays.
@@ -287,4 +287,3 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
     }),
   );
 }
-

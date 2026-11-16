@@ -219,10 +219,7 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
         Effect.map(
           Effect.all([session.get, views.get, SubscriptionRef.get(state)]),
           ([modes, { recovery }, { mutating }]) =>
-            admitsMutation(
-              { ...modes, prompting: false, mutating, recovery },
-              action,
-            ),
+            admitsMutation({ ...modes, prompting: false, mutating, recovery }, action),
         );
 
       /** Publishes the replace prompt and waits for `answer`. */
@@ -317,7 +314,10 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
             items = structuredClone(result.items);
             // The host's own note on it is not shown: no host text reaches the UI.
             if (result.outcome !== 'completed')
-              return done(false, 'Operation incomplete. Review the recorded outcome before continuing.');
+              return done(
+                false,
+                'Operation incomplete. Review the recorded outcome before continuing.',
+              );
             return done(true);
           });
           const exit = yield* Effect.exit(body);
@@ -340,14 +340,10 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
               }),
             );
             if (!reserved) return { completed: false, error: mutationUnavailable, items: [] };
-            return yield* session
-              .run(apply(action, options))
-              .pipe(
-                Effect.catchCause(() => Effect.succeed({ completed: false, error: '', items: [] })),
-                Effect.ensuring(
-                  SubscriptionRef.update(state, (s) => ({ ...s, mutating: false })),
-                ),
-              );
+            return yield* session.run(apply(action, options)).pipe(
+              Effect.catchCause(() => Effect.succeed({ completed: false, error: '', items: [] })),
+              Effect.ensuring(SubscriptionRef.update(state, (s) => ({ ...s, mutating: false }))),
+            );
           }),
         answer: (promptId, replace) =>
           Effect.gen(function* () {

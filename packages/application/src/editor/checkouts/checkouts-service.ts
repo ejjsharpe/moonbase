@@ -110,12 +110,14 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
             draft.closed = rebindClosed(draft.closed, previous, next);
           });
           yield* buffers.modify((d) => {
+            // oxlint-disable-next-line no-useless-spread -- Rebinding reinserts tabs; visit each once.
             for (const [key, tab] of [...d.tabs])
               if (sameCheckout(tab.target.checkout, previous)) {
                 d.tabs.delete(key);
                 tab.target = rebind(tab.target);
                 d.tabs.set(fileKey(tab.target), tab);
               }
+            // oxlint-disable-next-line no-useless-spread -- Rebinding reinserts buffers; visit each once.
             for (const [key, buffer] of [...d.buffers])
               if (sameCheckout(buffer.target.checkout, previous)) {
                 d.buffers.delete(key);

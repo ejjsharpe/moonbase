@@ -23,3 +23,7 @@ export const appendAlert = (alerts: readonly string[], message: string): readonl
   ...alerts.slice(-19),
   message,
 ];
+
+/** Whether the failure is work its caller cancelled, the shared `CancelledError`. */
+export const isCancelled = (error: unknown) =>
+  error instanceof Error && (error as { _tag?: unknown })._tag === 'CancelledError';

@@ -29,7 +29,11 @@ export type BuffersDraft = {
   tabs: Map<string, EditorTab>;
   closed: Set<string>;
 };
-export const emptyBuffers: BuffersState = { buffers: new Map(), tabs: new Map(), closed: new Set() };
+export const emptyBuffers: BuffersState = {
+  buffers: new Map(),
+  tabs: new Map(),
+  closed: new Set(),
+};
 
 export const isDirty = (buffer: EditorBuffer) => buffer.text !== buffer.disk.text;
 /** Whether a Save of the buffer is running or awaits its outcome. */
@@ -46,7 +50,11 @@ export const draftBuffers = (state: BuffersState): BuffersDraft => ({
 export const findBufferById = (state: BuffersState, id: string) =>
   [...state.buffers].find(([, buffer]) => buffer.id === id);
 
-export const newBuffer = (target: FileTarget, disk: FileDocument, text = disk.text): EditorBuffer => ({
+export const newBuffer = (
+  target: FileTarget,
+  disk: FileDocument,
+  text = disk.text,
+): EditorBuffer => ({
   id: crypto.randomUUID(),
   target: structuredClone(target),
   text,

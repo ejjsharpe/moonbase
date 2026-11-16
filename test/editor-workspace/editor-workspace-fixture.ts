@@ -3,34 +3,19 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
-import { Effect, ManagedRuntime, Scope } from 'effect';
+import { ManagedRuntime } from 'effect';
 import type { RecoveryState } from '@moonbase/contracts/recovery';
-import { ApplicationError, type EditorClient } from '@moonbase/contracts/workspace';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { type ApplicationError } from '@moonbase/contracts/workspace';
 import {
-  makeEditorModel,
-  makeEditorController,
-  type EditorController,
-  type EditorBuffer,
-  type CloseChoice,
-} from '@moonbase/application/editor';
+  acquireEditorDriver,
+  toWorkspaceClient,
+  type EditorDriver,
+  type WorkspaceClient,
+} from '@moonbase/application/testing/editor-fixture';
 import { WorkspaceLocalLive } from '@moonbase/workspace';
+import { getFailureCode } from '@moonbase/application/editor';
 
-/** Runs `action`, answering each close prompt it raises with `choose`. */
-export function answering<A>(
-  controller: EditorController,
-  action: () => Promise<A>,
-  choose: (buffer: Readonly<EditorBuffer>) => Promise<CloseChoice>,
-) {
-  const answered = new Set<string>();
-  const off = controller.subscribe(() => {
-    const prompt = controller.getSnapshot().closePrompt;
-    if (!prompt || answered.has(prompt.id)) return;
-    answered.add(prompt.id);
-    void choose(prompt.buffer).then((choice) => controller.answerClose(prompt.id, choice));
-  });
-  return action().finally(off);
-}
+export { answering } from '@moonbase/application/testing/editor-fixture';
 
 export function deferred() {
   let resolve!: () => void;
@@ -56,7 +41,7 @@ export async function until<T>(
 }
 
 export const code = (expected: ApplicationError['code']) => (error: unknown) =>
-  ApplicationError.is(error) && error.code === expected;
+  getFailureCode(error) === expected;
 
 /** The drafts a stored recovery holds, by path. */
 export const listDrafts = (state: RecoveryState) =>
@@ -104,7 +89,7 @@ export function fixture() {
     writeFileSync(join(root, 'a.ts'), 'WORKING\n');
   }
   const runtimes: ReturnType<typeof start>[] = [],
-    editors: EditorController[] = [];
+    editors: EditorDriver[] = [];
   function start() {
     const runtime = ManagedRuntime.make(
       WorkspaceLocalLive({
@@ -115,7 +100,7 @@ export function fixture() {
         ripgrepExecutable: process.env.MOONBASE_TEST_RIPGREP ?? resolve('dist/tools/ripgrep/rg'),
       }),
     );
-    return { runtime, client: makeEditorClient(runtime) };
+    return { runtime, client: toWorkspaceClient(runtime) };
   }
   const launch = () => {
     const value = start();
@@ -124,14 +109,9 @@ export function fixture() {
   };
   const current = launch();
   /** A loaded editor on the latest runtime; `client` defaults to that runtime's. */
-  async function editor(clientId: string, client?: EditorClient) {
+  async function editor(clientId: string, client?: WorkspaceClient) {
     const latest = runtimes.at(-1)!;
-    const model = await latest.runtime.runPromise(
-      makeEditorModel({ client: client ?? latest.client, clientId }).pipe(
-        Effect.provideService(Scope.Scope, latest.runtime.scope),
-      ),
-    );
-    const value = makeEditorController(latest.runtime, model);
+    const value = await acquireEditorDriver({ client: client ?? latest.client, clientId });
     editors.push(value);
     await value.load();
     return value;

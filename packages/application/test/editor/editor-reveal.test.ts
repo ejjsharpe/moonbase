@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { acquireEditor } from './editor-model-fixture.ts';
 import { checkout, fixture, held, target } from './editor-fixture.ts';
-import { fileKey, type EditorController } from '@moonbase/application/editor';
+import { fileKey } from '@moonbase/application/editor';
+import type { EditorDriver } from './editor-model-fixture.ts';
 
-const treeOf = (editor: EditorController) =>
+const treeOf = (editor: EditorDriver) =>
   editor.getSnapshot().recovery.views[checkout.checkoutId].tree;
 
 test('reveal shows an ignored file by turning Hide Ignored Files off, unless told to skip it', async () => {
@@ -97,7 +98,7 @@ async function countedEditor(f: Awaited<ReturnType<typeof fixture>>, clientId: s
   return { editor, counts, hold };
 }
 /** Waits until every listed entry under these folders has Git's classification. */
-async function waitForClassification(editor: EditorController, folders: string[]) {
+async function waitForClassification(editor: EditorDriver, folders: string[]) {
   for (let turn = 0; turn < 200; turn++) {
     const listings = editor.getSnapshot().listings;
     if (

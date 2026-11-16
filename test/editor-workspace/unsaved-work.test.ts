@@ -2,11 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-  ApplicationError,
-  type EditorClient,
-  type FileTarget,
-} from '@moonbase/contracts/workspace';
+import { ApplicationError, type FileTarget } from '@moonbase/contracts/workspace';
+import type { WorkspaceClient as EditorClient } from '@moonbase/application/testing/editor-fixture';
 import {
   answering,
   deferred,

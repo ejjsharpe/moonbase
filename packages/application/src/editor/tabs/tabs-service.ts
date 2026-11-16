@@ -32,7 +32,10 @@ export type EditorTabsShape = {
    * 'preview'` in the checkout's one preview tab. Succeeds false when it was superseded by a newer
    * open or selection, when `current` turned false, or when the file couldn't be read.
    */
-  readonly open: (target: FileTarget, options?: OpenOptions) => Effect.Effect<boolean, EditorFailure>;
+  readonly open: (
+    target: FileTarget,
+    options?: OpenOptions,
+  ) => Effect.Effect<boolean, EditorFailure>;
   /** `open` for an action already admitted. */
   readonly openFile: (
     target: FileTarget,
@@ -119,7 +122,8 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
             );
             if (Exit.isSuccess(disk))
               return { disk: disk.value as FileDocument | null, comparison: undefined };
-            if (!(yield* isCurrent) || !(yield* hasBuffer)) return yield* Effect.failCause(disk.cause);
+            if (!(yield* isCurrent) || !(yield* hasBuffer))
+              return yield* Effect.failCause(disk.cause);
             yield* alerts.report(new EditorError({ reason: 'file-unavailable' }));
             // A missing file is created by its Save, which never replaces one that exists after
             // all. One there but unreadable now (permissions, a passing failure) saves over.
@@ -167,8 +171,8 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
             if (buffer && disk && buffer.disk.version !== disk.version) buffer.conflict = disk;
           });
           const known = (yield* discovery.get).comparisons[key];
-          const shown =
-            mode === 'conflict' ? (disk ? conflictComparison(disk) : known) : comparison;
+          let shown = comparison;
+          if (mode === 'conflict') shown = disk ? conflictComparison(disk) : known;
           yield* discovery.update((s) => {
             const comparisons = { ...s.comparisons },
               comparisonAttempts = { ...s.comparisonAttempts };
@@ -214,7 +218,8 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
       const openFile: EditorTabsShape['openFile'] = (target, options = {}) =>
         Effect.gen(function* () {
           const selected = yield* views.view(target.checkout);
-          if (!isRelativePath(target.path)) return yield* new EditorError({ reason: 'invalid-path' });
+          if (!isRelativePath(target.path))
+            return yield* new EditorError({ reason: 'invalid-path' });
           if ((yield* session.get).preserving) return false;
           const key = fileKey(target),
             mode = options.view ?? readOwn(selected.fileViews, target.path) ?? 'file';
@@ -327,7 +332,8 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
               const selected = yield* views.view(checkout),
                 paths = selected.openFiles;
               if (!paths.length) return false;
-              const next = (paths.indexOf(selected.active) + direction + paths.length) % paths.length;
+              const next =
+                (paths.indexOf(selected.active) + direction + paths.length) % paths.length;
               return yield* openFile({ checkout, path: paths[next] });
             }),
           ),

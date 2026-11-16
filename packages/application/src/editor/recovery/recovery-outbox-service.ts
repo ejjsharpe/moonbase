@@ -42,7 +42,10 @@ export type OutboxSender = {
    * Finishes, in the editor, a close whose lost reply was settled only later, as committed: its
    * tab closes, or (`reopen`, a Discard that keeps the tab) its text goes back to disk.
    */
-  readonly finishClose: (edit: CloseRequest, reopen: OpenRequest | undefined) => Effect.Effect<void>;
+  readonly finishClose: (
+    edit: CloseRequest,
+    reopen: OpenRequest | undefined,
+  ) => Effect.Effect<void>;
   /** Where the editor shows the buffer's tab, if it does. */
   readonly shownTab: (bufferId: string) => Effect.Effect<FileTarget | undefined>;
 };
@@ -127,7 +130,10 @@ export class RecoveryOutbox extends Context.Service<RecoveryOutbox, RecoveryOutb
                 isDraftPending(yield* get, edit.bufferId) &&
                 (yield* sender.shownTab(edit.bufferId));
               if (shown) {
-                yield* queue((q) => [{ kind: 'openTab', bufferId: edit.bufferId, target: shown }, ...q]);
+                yield* queue((q) => [
+                  { kind: 'openTab', bufferId: edit.bufferId, target: shown },
+                  ...q,
+                ]);
                 yield* updateLayout;
               } else yield* sender.finishClose(edit, reopen);
             }
@@ -243,4 +249,3 @@ export class RecoveryOutbox extends Context.Service<RecoveryOutbox, RecoveryOutb
     }),
   );
 }
-

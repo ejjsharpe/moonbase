@@ -64,8 +64,9 @@ export class EditorSaves extends Context.Service<EditorSaves, EditorSavesShape>(
               }),
         );
       const textOf = (buffer: EditorBuffer) =>
-        Effect.map(buffers.get, ({ buffers }) =>
-          [...buffers.values()].find((b) => b.id === buffer.id)?.text,
+        Effect.map(
+          buffers.get,
+          ({ buffers }) => [...buffers.values()].find((b) => b.id === buffer.id)?.text,
         );
 
       /**

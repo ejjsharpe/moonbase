@@ -2,12 +2,12 @@ import { acquireEditor, answering } from './editor-model-fixture.ts';
 import * as controllerFixture from './editor-fixture.ts';
 import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
-import { type EditorController } from '@moonbase/application/editor';
+import type { EditorDriver } from './editor-model-fixture.ts';
 
 describe('captured preservation races', () => {
   const { checkout, second, target, fixture, held, holding, observedFixture, storedRecovery } =
     controllerFixture;
-  const closeAs = (editor: EditorController, kind: 'files' | 'checkout' | 'quit', path: string) =>
+  const closeAs = (editor: EditorDriver, kind: 'files' | 'checkout' | 'quit', path: string) =>
     answering(
       editor,
       () => {
@@ -230,7 +230,7 @@ describe('captured preservation races', () => {
       assert.equal(await closing, true);
       await f.editor.reconcileRecovery();
       await f.editor.flush();
-      const hasDraft = (editor: EditorController) =>
+      const hasDraft = (editor: EditorDriver) =>
         editor.getSnapshot().buffers.some((buffer) => buffer.text === 'consented captured draft');
       assert.equal(hasDraft(f.editor), false);
       assert.equal(

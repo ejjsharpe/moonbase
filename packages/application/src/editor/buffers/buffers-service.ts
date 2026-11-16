@@ -34,7 +34,10 @@ export type EditorBuffersShape = {
   /** Closes a clean tab in the recovery store; the editor no longer shows it. */
   readonly closeTab: (target: FileTarget) => Effect.Effect<void>;
   /** Shows a buffer the store holds with a draft as an open tab with that text. */
-  readonly showDraft: (tab: EditorTab, draft: { text: string; disk: FileDocument }) => Effect.Effect<void>;
+  readonly showDraft: (
+    tab: EditorTab,
+    draft: { text: string; disk: FileDocument },
+  ) => Effect.Effect<void>;
   /**
    * Keeps text the store has no place for (its buffer was replaced) as a draft at a new path
    * beside its file, with the file text it was edited from, and says where.

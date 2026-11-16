@@ -227,9 +227,8 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
             // per folder: refreshes that come faster than Git answers would otherwise keep every
             // entry on its last classification, so a file un-ignored by a .gitignore edit would
             // stay dimmed.
-            if (pending?.scope === scope && pending.classifying && !kept.has(key))
-              kept.set(key, pending.classificationScope);
-            else if (pending) yield* Scope.close(pending.classificationScope, Exit.void);
+            const keep = pending?.scope === scope && pending.classifying && !kept.has(key);
+            if (keep) kept.set(key, pending.classificationScope);
             const read: ListingRead = {
               scope,
               classificationScope: yield* Scope.fork(scope),
@@ -241,6 +240,8 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
             };
             if (pending) pending.successor = read;
             reads.set(key, read);
+            // Closed only once this read replaced it, so its end can't take it for the current.
+            if (pending && !keep) yield* Scope.close(pending.classificationScope, Exit.void);
             const isOpen = Effect.map(
               Effect.all([closing, views.get]),
               ([closed, { recovery }]) =>
@@ -300,7 +301,10 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
                 if ((yield* isCurrent) && classified.get(key) === read.shownClassification)
                   yield* update((s) => ({
                     ...s,
-                    listings: { ...s.listings, [key]: { ...s.listings[key], entries: listing.entries } },
+                    listings: {
+                      ...s.listings,
+                      [key]: { ...s.listings[key], entries: listing.entries },
+                    },
                   }));
                 return;
               }
@@ -331,9 +335,7 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
                   return Scope.close(read.classificationScope, Exit.void);
                 }),
               ),
-              Effect.onInterrupt(() =>
-                Deferred.interrupt(read.done).pipe(Effect.asVoid),
-              ),
+              Effect.onInterrupt(() => Deferred.interrupt(read.done).pipe(Effect.asVoid)),
             );
             yield* Effect.forkIn(work, scope, { startImmediately: true });
             return yield* Deferred.await(read.done);
@@ -397,4 +399,3 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
       }),
     );
 }
-
