@@ -10,14 +10,10 @@ import { workbench } from '@moonbase/ui/workbench';
 import { Icon } from '@moonbase/ui/icons';
 import { FileIcon } from '@moonbase/ui/file-icons';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import {
-  fileKey,
-  readOwn,
-  type EditorController,
-  type EditorSnapshot,
-} from '@moonbase/application/editor';
+import { fileKey, readOwn, type EditorSnapshot } from '@moonbase/application/editor';
 import type { FocusReturn } from '../focus-return.ts';
 import { EditorTabMenu } from './editor-tab-menu.tsx';
+import type { EditorActions } from '../editor-actions.ts';
 
 type CheckoutView = EditorSnapshot['recovery']['views'][string];
 
@@ -51,7 +47,7 @@ export function findTabHint(path: string, openFiles: readonly string[]) {
  * and its right-click menu. Tabs drag to reorder; a drag from elsewhere passes through to the app.
  */
 export function EditorTab({
-  controller,
+  actions,
   state,
   checkout,
   view,
@@ -64,7 +60,7 @@ export function EditorTab({
   closeFiles,
   withFocus,
 }: {
-  controller: EditorController;
+  actions: EditorActions;
   state: EditorSnapshot;
   checkout: CheckoutTarget;
   view: CheckoutView;
@@ -149,7 +145,7 @@ export function EditorTab({
             event.dataTransfer.setData('text/plain', path);
           }}
           onDragEnd={drag.end}
-          onDoubleClick={() => controller.keepOpen(file)}
+          onDoubleClick={() => actions.keepOpen(file)}
           {...stylex.props(
             controls.button,
             workbench.tabButton,
@@ -197,7 +193,7 @@ export function EditorTab({
         </Button>
       </Menu.Trigger>
       <EditorTabMenu
-        controller={controller}
+        actions={actions}
         preserving={state.preserving}
         file={file}
         buffer={current}

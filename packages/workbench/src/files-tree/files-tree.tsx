@@ -14,12 +14,11 @@ import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
   checkoutKey,
   readOwn,
-  type EditorController,
   type EditorSnapshot,
   type MutationAction,
 } from '@moonbase/application/editor';
 import { listFileCommands } from './file-commands.ts';
-import type { FileClipboard } from './file-clipboard.ts';
+import type { FileClipboard } from './paste-plan.ts';
 import { isInDropRegion, type MoveRecord } from './files-tree-drop.ts';
 import { handleRowClick, handleTreeKeyDown, type TreeNavigation } from './files-tree-keyboard.ts';
 import { FilesTreeMenu } from './files-tree-menu.tsx';
@@ -37,11 +36,12 @@ import { isNameField, useTreeFocus } from './use-tree-focus.ts';
 import { useTreeMenu } from './use-tree-menu.ts';
 import { useTreeVirtualizer } from './use-tree-virtualizer.ts';
 import type { RunMutation } from '../mutation-runner.tsx';
+import type { EditorActions } from '../editor-actions.ts';
 
 /** A checkout's files as a tree of `treeitem` rows, with its menu, name editing and drops. */
 export function FilesTree({
   ref,
-  controller,
+  actions,
   state,
   checkout,
   active,
@@ -70,7 +70,7 @@ export function FilesTree({
 }: {
   /** The tree element, where focus returns to the tree. */
   ref?: Ref<HTMLDivElement>;
-  controller: EditorController;
+  actions: EditorActions;
   state: EditorSnapshot;
   checkout: CheckoutTarget;
   active: string;
@@ -155,9 +155,9 @@ export function FilesTree({
         )
         .map((buffer) => buffer.target.path),
     );
-  const focus = useTreeFocus({ controller, checkout, treeElement, visible });
+  const focus = useTreeFocus({ actions, checkout, treeElement, visible });
   const { edit, rows, treeRows, editPath, startEdit, endEdit, commitEdit } = useTreeEdit({
-    controller,
+    actions,
     checkout,
     listings: state.listings,
     expanded,
@@ -181,7 +181,7 @@ export function FilesTree({
     return row && !row.placeholder ? row : undefined;
   }
   const menu = useTreeMenu({
-    controller,
+    actions,
     checkout,
     treeElement,
     setAnchor,
@@ -193,9 +193,9 @@ export function FilesTree({
     dialogOpen,
     disposed: state.disposed,
   });
-  const target = useDropTarget({ controller, checkout, treeElement, expanded });
+  const target = useDropTarget({ actions, checkout, treeElement, expanded });
   const dropInputs = {
-    controller,
+    actions,
     checkout,
     editing: !!edit,
     dialogOpen,
@@ -234,14 +234,14 @@ export function FilesTree({
     const [focus, selected] = JSON.parse(hiddenSelection) as [string, string[]];
     anchor.current = null;
     try {
-      controller.tree(checkout, { focus, selected });
+      actions.tree(checkout, { focus, selected });
     } catch (error) {
-      controller.report(error);
+      actions.report(error);
     }
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- Move each hidden selection once.
   }, [hiddenSelection]);
   useFollowActiveFile({
-    controller,
+    actions,
     checkout,
     treeElement,
     setAnchor,
@@ -260,10 +260,10 @@ export function FilesTree({
     editId: edit?.id,
     pinnedPaths: entryDrag.dragged,
     initialScroll: tree.scroll,
-    onScrollRest: (scroll) => controller.tree(checkout, { scroll }),
+    onScrollRest: (scroll) => actions.tree(checkout, { scroll }),
   });
   const commandContext = {
-    controller,
+    actions,
     checkout,
     listings: state.listings,
     canRequestMutation,
@@ -283,20 +283,20 @@ export function FilesTree({
       : [];
   function toggle(path: string, select = false) {
     const wasExpanded = expanded.has(path);
-    controller.tree(checkout, {
+    actions.tree(checkout, {
       ...(select ? { focus: path, selected: [path] } : {}),
       expanded: wasExpanded
         ? tree.expanded.filter((value) => value !== path)
         : [...tree.expanded, path],
     });
-    if (!wasExpanded) void controller.list(checkout, path).catch(controller.report);
+    if (!wasExpanded) void actions.list(checkout, path).catch(actions.report);
   }
   const treeFocusIndex = Math.max(
     0,
     treeRows.findIndex((row) => row.path === tree.focus),
   );
   const navigation: TreeNavigation = {
-    controller,
+    actions,
     checkout,
     rows: treeRows,
     focusIndex: treeFocusIndex,
@@ -420,7 +420,7 @@ export function FilesTree({
                 }}
                 onOpen={(path) => {
                   if (path === editPath) return;
-                  void controller.open({ checkout, path }, { view: 'file', intent: 'keep' });
+                  void actions.open({ checkout, path }, { view: 'file', intent: 'keep' });
                 }}
               />
             );

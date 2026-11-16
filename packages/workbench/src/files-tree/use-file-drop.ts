@@ -1,17 +1,14 @@
 import { useLayoutEffect, useRef, type DragEvent, type RefObject } from 'react';
 import { joinPath } from '@moonbase/contracts/paths';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import {
-  checkoutKey,
-  type EditorController,
-  type MutationAction,
-} from '@moonbase/application/editor';
+import { checkoutKey, type MutationAction } from '@moonbase/application/editor';
 import { entriesType, findCollidingName, findDropFolder, takeFileDrop } from './files-tree-drop.ts';
 import type { VisibleRow } from './files-tree-rows.ts';
-import { selectEntries } from './move-undo.ts';
+import { selectEntries } from './select-entries.ts';
 import type { DropTarget } from './use-drop-target.ts';
 import type { TreeFocus } from './use-tree-focus.ts';
 import type { RunMutation } from '../mutation-runner.tsx';
+import type { EditorActions } from '../editor-actions.ts';
 
 /** Whether a drag carries files from the OS, such as Finder's, rather than the tree's entries. */
 const isFileDrag = (dataTransfer: DataTransfer) =>
@@ -23,7 +20,7 @@ const isFileDrag = (dataTransfer: DataTransfer) =>
  * the drag to the app.
  */
 export function useFileDrop({
-  controller,
+  actions,
   checkout,
   treeElement,
   selectDroppedImports,
@@ -37,7 +34,7 @@ export function useFileDrop({
   target,
   findRowAt,
 }: {
-  controller: EditorController;
+  actions: EditorActions;
   checkout: CheckoutTarget;
   treeElement: RefObject<HTMLDivElement | null>;
   selectDroppedImports?: (checkout: CheckoutTarget, files: File[]) => Promise<string[]>;
@@ -82,7 +79,7 @@ export function useFileDrop({
       colliding = findCollidingName(names);
     // The workspace would refuse them after the replace prompt; say why before asking anything.
     if (colliding) {
-      controller.report(
+      actions.report(
         `More than one dropped item is named “${colliding}”. Drop them into different folders.`,
       );
       return;
@@ -101,27 +98,27 @@ export function useFileDrop({
     // has no release from here: its references expire unused, or go with the document.
     const references = await selectDroppedImports!(captured, files);
     if (!references.length) return;
-    const recovery = controller.getSnapshot().recovery;
+    const recovery = actions.getSnapshot().recovery;
     if (
       !mounted.current ||
       latest.current.checkoutIdentity !== checkoutIdentity ||
       !recovery.openCheckoutIds.includes(captured.checkoutId) ||
       !recovery.checkouts.some((target) => checkoutKey(target) === checkoutIdentity)
     ) {
-      controller.report('Open the exact import checkout before importing files.');
+      actions.report('Open the exact import checkout before importing files.');
       return;
     }
     if (latest.current.editing) {
-      controller.report('Finish naming the entry before importing files.');
+      actions.report('Finish naming the entry before importing files.');
       return;
     }
     if (latest.current.dialogOpen) {
-      controller.report('Finish the current editor dialog or preservation before importing files.');
+      actions.report('Finish the current editor dialog or preservation before importing files.');
       return;
     }
     // Each reference stands for its file, so the files' names are where they land.
     if (references.length !== names.length) {
-      controller.report('Only files and folders can be imported.');
+      actions.report('Only files and folders can be imported.');
       return;
     }
     const result = await runMutation(
@@ -142,10 +139,10 @@ export function useFileDrop({
     // A name typed meanwhile keeps its field, and another checkout's tree isn't this import's.
     if (latest.current.editing || latest.current.checkoutIdentity !== checkoutIdentity) return;
     try {
-      if (landed.length) selectEntries(controller, captured, landed);
+      if (landed.length) selectEntries(actions, captured, landed);
       else if (folder) target.expandForDrag(folder);
     } catch (error) {
-      controller.report(error);
+      actions.report(error);
     }
     if (landed.length) setAnchor(landed[0]);
     // Focus the user moved elsewhere meanwhile stays there.
@@ -184,8 +181,8 @@ export function useFileDrop({
         problem = findFileDropProblem();
       target.leaveDrag();
       if (!files.length) return;
-      if (problem) controller.report(problem);
-      else void importDropped(files, folder).catch(controller.report);
+      if (problem) actions.report(problem);
+      else void importDropped(files, folder).catch(actions.report);
     },
   };
 }

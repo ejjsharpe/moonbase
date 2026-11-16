@@ -7,7 +7,8 @@ import {
   type RefObject,
 } from 'react';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { checkoutKey, readOwn, type EditorController } from '@moonbase/application/editor';
+import { checkoutKey, readOwn } from '@moonbase/application/editor';
+import type { EditorActions } from './editor-actions.ts';
 
 /** Where a keyboard command started, and so where focus returns once the file it opens shows. */
 export type FocusOrigin = 'editor' | 'strip' | 'tree';
@@ -34,7 +35,7 @@ type FocusRequest = {
  * return waits while `blocked`, as it is while a dialog is open.
  */
 export function useFocusReturn({
-  controller,
+  actions,
   root,
   checkout,
   active,
@@ -42,7 +43,7 @@ export function useFocusReturn({
   findTarget,
   fallback,
 }: {
-  controller: EditorController;
+  actions: EditorActions;
   root: RefObject<HTMLElement | null>;
   checkout: CheckoutTarget | undefined;
   /** The checkout's active file. */
@@ -80,7 +81,7 @@ export function useFocusReturn({
   }, [request, blocked]);
   /** Counts newer input, which cancels a pending return; a close prompt's answer doesn't count. */
   function captureInteraction() {
-    if (!controller.getSnapshot().closePrompt) interaction.current++;
+    if (!actions.getSnapshot().closePrompt) interaction.current++;
   }
   useEffect(() => {
     const document = root.current?.ownerDocument;
@@ -88,13 +89,13 @@ export function useFocusReturn({
       if (
         event.key === 'Tab' &&
         !root.current?.contains(event.target as Node) &&
-        !controller.getSnapshot().closePrompt
+        !actions.getSnapshot().closePrompt
       )
         interaction.current++;
     };
     document?.addEventListener('keydown', onExternalTab, true);
     return () => document?.removeEventListener('keydown', onExternalTab, true);
-  }, [controller, root]);
+  }, [actions, root]);
   /**
    * Returns focus to `origin` once `opening` settles with the file open, or with `restore`
    * whatever its outcome.
@@ -103,7 +104,7 @@ export function useFocusReturn({
     const from = document.activeElement;
     const started = interaction.current;
     const focus = () => {
-      const next = controller.getSnapshot().recovery;
+      const next = actions.getSnapshot().recovery;
       if (checkout && next.openCheckoutIds.includes(checkout.checkoutId))
         setRequest({
           checkout,

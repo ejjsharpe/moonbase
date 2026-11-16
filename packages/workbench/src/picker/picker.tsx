@@ -2,14 +2,17 @@ import * as stylex from '@stylexjs/stylex';
 import { Autocomplete } from '@base-ui/react/autocomplete';
 import { Dialog } from '@base-ui/react/dialog';
 import { Tabs } from '@base-ui/react/tabs';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useAtomValue } from '@effect/atom-react';
+import { Effect } from 'effect';
+import * as AsyncResult from 'effect/reactivity/AsyncResult';
+import * as Atom from 'effect/reactivity/Atom';
 import type { CheckoutTarget, FileTarget } from '@moonbase/contracts/workspace';
 import {
   checkoutKey,
-  type EditorController,
-  type EditorLookup,
-  type EditorTextSearch,
+  type Lookup,
   type LookupSnapshot,
+  type TextSearch,
   type TextSearchOptions,
   type TextSearchSnapshot,
 } from '@moonbase/application/editor';
@@ -30,8 +33,8 @@ import {
   type PickerMode,
   type PickerRequest,
 } from './picker-shortcuts.ts';
-import { useQueryModel } from './use-query-model.ts';
 import { styles } from './picker-styles.ts';
+import type { EditorActions } from '../editor-actions.ts';
 
 /** Opens a file, at a line when Find picked a match; resolves false when it was not opened. */
 export type PickerOpenFile = (
@@ -40,9 +43,10 @@ export type PickerOpenFile = (
   current: () => boolean,
 ) => Promise<boolean>;
 
-const emptyLookup: LookupSnapshot = { rows: [], message: '', busy: false };
-const emptySearch: TextSearchSnapshot = { files: [], message: '', busy: false };
-const noSubscription = () => () => {};
+const emptyLookup = Atom.make<LookupSnapshot>({ rows: [], message: '', busy: false });
+const emptySearch = Atom.make<TextSearchSnapshot>({ files: [], message: '', busy: false });
+const valueOf = <A,>(result: AsyncResult.AsyncResult<A, unknown>) =>
+  AsyncResult.isSuccess(result) ? result.value : null;
 
 /**
  * ⌘P: Go to a file, chat, project or (after `>`) a command; ⇥ switches to Find, which searches
@@ -52,18 +56,16 @@ const noSubscription = () => () => {};
  * picker decides what Enter opens, since it can wait for a query that is still running.
  */
 export function Picker({
-  controller,
+  actions,
   checkout,
-  discoveryRevision,
   entries: readEntries,
   request,
   openFile,
   close,
   editorFocus,
 }: {
-  controller: EditorController;
+  actions: EditorActions;
   checkout: CheckoutTarget | undefined;
-  discoveryRevision: number;
   entries: () => PickerEntry[];
   request: PickerRequest;
   openFile: PickerOpenFile;
@@ -93,28 +95,25 @@ export function Picker({
   // row, which can still belong to the previous query's results, is not a choice, and a new query,
   // mode or options forget it.
   const chosen = useRef<string>(undefined);
-  const lookup = useQueryModel(() => controller.createLookup(), controller.report);
-  const search = useQueryModel(() => controller.createTextSearch(), controller.report);
-  const files = useSyncExternalStore(
-    lookup?.subscribe ?? noSubscription,
-    lookup?.getSnapshot ?? (() => emptyLookup),
-  );
-  const found = useSyncExternalStore(
-    search?.subscribe ?? noSubscription,
-    search?.getSnapshot ?? (() => emptySearch),
-  );
+  // The popup's own queries, for as long as it is open; each refreshes its last query when the
+  // checkout changes on disk.
+  const { atoms } = actions.editor;
+  const lookup = valueOf(useAtomValue(atoms.lookup.lookup));
+  const search = valueOf(useAtomValue(atoms.textSearch.search));
+  const files = useAtomValue(lookup ? atoms.lookup.state(lookup) : emptyLookup);
+  const found = useAtomValue(search ? atoms.textSearch.state(search) : emptySearch);
   const commands = mode === 'goto' && query.startsWith('>');
   const scope = checkout ? checkoutKey(checkout) : '';
   useEffect(() => {
     if (!lookup || !checkout || mode !== 'goto' || commands) return;
-    lookup.query(query, [checkout]);
+    void actions.call(lookup.query(query, [checkout]));
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- the checkout is keyed by `scope`.
-  }, [lookup, scope, mode, commands, query, discoveryRevision]);
+  }, [lookup, scope, mode, commands, query]);
   useEffect(() => {
     if (!search || !checkout || mode !== 'find') return;
-    search.query(query, options, checkout);
+    void actions.call(search.query(query, options, checkout));
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- the checkout is keyed by `scope`.
-  }, [search, scope, mode, query, options, discoveryRevision]);
+  }, [search, scope, mode, query, options]);
 
   // Cheap enough per render: a few dozen rows at most.
   const goTo =
@@ -132,17 +131,28 @@ export function Picker({
 
   /** Opens through the query model, which serializes opens and reports a file that is gone. */
   function pickFile(
-    model: EditorLookup | EditorTextSearch | null,
+    model: Lookup | TextSearch | null,
     target: FileTarget,
     at?: Parameters<PickerOpenFile>[1],
   ) {
-    void model
-      ?.open((current) => openFile(target, at, current))
+    if (!model) return;
+    // A newer query or closing the picker cancels the open: it is then no longer wanted.
+    let wanted = true;
+    const open = Effect.promise(() => openFile(target, at, () => wanted)).pipe(
+      Effect.onInterrupt(() =>
+        Effect.sync(() => {
+          wanted = false;
+        }),
+      ),
+    );
+    void actions
+      .call(model.open(open))
       .then((opened) => {
         if (!opened) return;
         openedFile.current = true;
         close();
-      });
+      })
+      .catch(actions.report);
   }
   function activateGoTo(row: GoToRow) {
     if (row.file) return pickFile(lookup, row.file);

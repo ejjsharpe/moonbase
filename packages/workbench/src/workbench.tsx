@@ -2,10 +2,8 @@ import {
   forwardRef,
   useEffect,
   useImperativeHandle,
-  useLayoutEffect,
   useRef,
   useState,
-  useSyncExternalStore,
   type KeyboardEvent,
   type ReactNode,
 } from 'react';
@@ -13,7 +11,10 @@ import * as stylex from '@stylexjs/stylex';
 import { workbench } from '@moonbase/ui/workbench';
 import { colors, space, type } from '@moonbase/ui/tokens.stylex';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { checkoutKey, fileKey, readOwn, type EditorController } from '@moonbase/application/editor';
+import { useAtomValue } from '@effect/atom-react';
+import { checkoutKey, fileKey, readOwn } from '@moonbase/application/editor';
+import { useEditorActions } from './editor-actions.ts';
+import type { WorkbenchEditor } from './workbench-editor.ts';
 import { ClosePrompt } from './close-prompt.tsx';
 import { EditorArea } from './editor-area/editor-area.tsx';
 import type { EditorTabsHandle } from './editor-tabs/editor-tabs.tsx';
@@ -46,7 +47,8 @@ export type WorkbenchHandle = {
   keyUp(event: KeyboardEvent): void;
 };
 export type WorkbenchProps = {
-  controller: EditorController;
+  /** The editor this workbench shows: its services, atoms and the app root's runner. */
+  editor: WorkbenchEditor;
   checkout: CheckoutTarget | undefined;
   visible?: boolean;
   renderLayout?: (views: { explorer: ReactNode; editor: ReactNode }) => ReactNode;
@@ -87,7 +89,7 @@ export type WorkbenchProps = {
 /** One checkout's explorer beside its editor, with the dialogs and keys they share. */
 export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Workbench(
   {
-    controller,
+    editor: workbenchEditor,
     checkout: project,
     visible = true,
     renderLayout,
@@ -107,11 +109,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   },
   ref,
 ) {
-  const state = useSyncExternalStore(
-    controller.subscribe,
-    controller.getSnapshot,
-    controller.getSnapshot,
-  );
+  const actions = useEditorActions(workbenchEditor);
+  const state = useAtomValue(workbenchEditor.atoms.snapshot);
   const openCheckouts = state.recovery.checkouts.filter((target) =>
     state.recovery.openCheckoutIds.includes(target.checkoutId),
   );
@@ -147,22 +146,12 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     treeElement = useRef<HTMLDivElement>(null),
     tabs = useRef<EditorTabsHandle>(null),
     monaco = useRef<MonacoViewHandle>(null);
-  // The checkout this workbench shows, for a close that settles after its prompt; null once
-  // unmounted. It must not open a file of a checkout the app has since switched away from.
-  const shownCheckout = useRef<string | null>(null),
-    projectIdentity = project ? checkoutKey(project) : null;
-  useLayoutEffect(() => {
-    shownCheckout.current = projectIdentity;
-    return () => {
-      shownCheckout.current = null;
-    };
-  }, [projectIdentity]);
   const run = (work: Promise<unknown>) => {
-    void work.catch(controller.report);
+    void work.catch(actions.report);
   };
 
   const mutations = useWorkbenchMutations({
-    controller,
+    actions,
     state,
     openCheckouts,
     pickerOpen: !!picker,
@@ -172,7 +161,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     mutations;
 
   const focus = useFocusReturn({
-    controller,
+    actions,
     root,
     checkout,
     active: view?.active,
@@ -188,20 +177,22 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   });
   useEffect(
     () => () => {
-      const prompt = controller.getSnapshot().closePrompt;
-      if (prompt) controller.answerClose(prompt.id, 'cancel');
+      const prompt = actions.getSnapshot().closePrompt;
+      if (prompt) actions.answerClose(prompt.id, 'cancel');
     },
-    [controller],
+    [actions],
   );
   /** Closes a checkout's tabs, then opens the file left active, unless the app moved on. */
   const closeFiles = async (paths: string[]) => {
     if (!checkout) return false;
-    const closed = await controller.close(paths.map((path) => ({ checkout, path })));
-    const next = controller.getSnapshot().recovery;
+    const closed = await actions.close(paths.map((path) => ({ checkout, path })));
+    const next = actions.getSnapshot().recovery;
     const path = readOwn(next.views, checkout.checkoutId)?.active;
-    const current = () => shownCheckout.current === checkoutKey(checkout);
+    // A close that settles after its prompt must not open a file of a checkout the app has since
+    // switched the editor away from.
+    const current = () => actions.getSnapshot().recovery.selectedCheckoutId === checkout.checkoutId;
     if (closed && path && next.openCheckoutIds.includes(checkout.checkoutId) && current())
-      await controller.open({ checkout, path }, { current });
+      await actions.open({ checkout, path }, { current });
     return closed;
   };
   function openPicker(mode: PickerMode) {
@@ -210,13 +201,13 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   }
   const openPickedFile: PickerOpenFile = async (target, at, current) => {
     const isOpen = () => {
-      const recovery = controller.getSnapshot().recovery;
+      const recovery = actions.getSnapshot().recovery;
       return (
         recovery.openCheckoutIds.includes(target.checkout.checkoutId) &&
         recovery.checkouts.some((item) => checkoutKey(item) === checkoutKey(target.checkout))
       );
     };
-    const opened = await controller.open(target, {
+    const opened = await actions.open(target, {
       view: 'file',
       intent: 'keep',
       current: () => current() && isOpen(),
@@ -236,8 +227,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     if (!checkout || !target) return;
     showPanel('files');
     run(
-      controller.reveal(target).then(() => {
-        const current = controller.getSnapshot().recovery;
+      actions.reveal(target).then(() => {
+        const current = actions.getSnapshot().recovery;
         if (
           current.openCheckoutIds.includes(checkout.checkoutId) &&
           current.checkouts.some((item) => checkoutKey(item) === checkoutKey(checkout))
@@ -267,13 +258,13 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           showFiles: () => showPanel('files'),
           showChanges: () => showPanel('git'),
           revealActive,
-          reopen: () => run(controller.reopen(checkout)),
-          refresh: () => run(controller.refresh(checkout)),
+          reopen: () => run(actions.reopen(checkout)),
+          refresh: () => run(actions.refresh(checkout)),
         })
       : []),
   ];
   const keys = useWorkbenchKeys({
-    controller,
+    actions,
     state,
     checkout,
     view,
@@ -309,10 +300,10 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       <Explorer
         ref={explorerElement}
         actionsButtonRef={explorerActionsButton}
-        controller={controller}
+        actions={actions}
         checkout={checkout}
-        actions={{
-          controller,
+        menu={{
+          actions,
           checkout,
           preserving: state.preserving,
           hasActiveFile: !!target,
@@ -339,7 +330,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           <FilesTree
             ref={treeElement}
             key={checkoutKey(checkout)}
-            controller={controller}
+            actions={actions}
             state={state}
             checkout={checkout}
             active={view.active}
@@ -368,7 +359,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           />
         ) : (
           <ChangesView
-            controller={controller}
+            actions={actions}
             state={state}
             checkout={checkout}
             target={target}
@@ -381,7 +372,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const editor =
     checkout && view ? (
       <EditorArea
-        controller={controller}
+        actions={actions}
         state={state}
         checkout={checkout}
         view={view}
@@ -445,7 +436,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
             <SidebarLayout
               width={state.recovery.sidebarWidth}
               hidden={sidebarHidden}
-              resize={(width) => controller.resizeSidebar(width)}
+              resize={(width) => actions.resizeSidebar(width)}
               // Hiding the explorer while focus is in it hands focus to the editor.
               onHiddenWithFocus={() => (monaco.current?.focusTarget() ?? root.current)?.focus()}
               explorer={explorer}
@@ -455,12 +446,12 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           ))}
       </div>
       <StatusMessages
-        controller={controller}
+        actions={actions}
         state={state}
         retryRecovery={() =>
           run(
             focus.withFocus(
-              controller.flush().then(() => true),
+              actions.flush().then(() => true),
               focus.pendingOrigin ?? 'editor',
               true,
             ),
@@ -470,9 +461,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       />
       {picker && (
         <Picker
-          controller={controller}
+          actions={actions}
           checkout={checkout}
-          discoveryRevision={state.discoveryRevision}
           entries={entries}
           request={picker}
           openFile={openPickedFile}
@@ -482,7 +472,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       )}
       {dialog && (
         <Mutation
-          controller={controller}
+          actions={actions}
           action={dialog.action}
           close={mutations.closeDialog}
           finalFocus={dialog.finalFocus}
@@ -491,7 +481,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       )}
       {mutations.confirmation}
       {choice && (
-        <ClosePrompt prompt={choice} answer={(value) => controller.answerClose(choice.id, value)} />
+        <ClosePrompt prompt={choice} answer={(value) => actions.answerClose(choice.id, value)} />
       )}
       {keys.recent && <RecentTabsList recent={keys.recent} />}
     </div>

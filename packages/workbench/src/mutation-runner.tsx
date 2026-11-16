@@ -5,12 +5,12 @@ import { Dialog } from '@base-ui/react/dialog';
 import { controls } from '@moonbase/ui/controls';
 import {
   mutationUnavailable,
-  type EditorController,
   type EditorSnapshot,
   type MutationAction,
   type MutationRunResult,
 } from '@moonbase/application/editor';
 import { Popup, popupStyles } from './popup.tsx';
+import type { EditorActions } from './editor-actions.ts';
 
 /**
  * Runs a file operation without its dialog, asking only before replacing existing entries.
@@ -29,13 +29,13 @@ export type RunMutation = (
 ) => Promise<MutationRunResult>;
 
 /**
- * One workbench's direct mutations, run by the editor controller, whose gate admits one at a
+ * One workbench's direct mutations, run by the editor's mutations, whose gate admits one at a
  * time. The workbench adds its own part of the gate: none run while `dialogOpen`, one of its own
- * dialogs being open. `confirmation` renders the controller's replace prompt. Unmounting declines a
+ * dialogs being open. `confirmation` renders the editor's replace prompt. Unmounting declines a
  * pending prompt.
  */
 export function useMutationRunner(
-  controller: EditorController,
+  actions: EditorActions,
   state: EditorSnapshot,
   dialogOpen: () => boolean,
 ) {
@@ -43,10 +43,10 @@ export function useMutationRunner(
   const [promptFocus, setPromptFocus] = useState<{ finalFocus?: () => HTMLElement | false }>({});
   useEffect(
     () => () => {
-      const prompt = controller.getSnapshot().replacePrompt;
-      if (prompt) controller.mutations.answer(prompt.id, false);
+      const prompt = actions.getSnapshot().replacePrompt;
+      if (prompt) actions.answerMutation(prompt.id, false);
     },
-    [controller],
+    [actions],
   );
   const runMutation: RunMutation = async (
     action,
@@ -55,16 +55,16 @@ export function useMutationRunner(
   ) => {
     const fail = (message: string) => {
       if (inlineError) inlineError(message);
-      else controller.report(message);
+      else actions.report(message);
     };
     if (dialogOpen()) {
       fail(mutationUnavailable);
       return { completed: false, error: mutationUnavailable, items: [] };
     }
-    // The controller applies the rest of the gate, refusing with `mutationUnavailable`. Only an
+    // The editor applies the rest of the gate, refusing with `mutationUnavailable`. Only an
     // admitted run takes the prompt's focus, so a refused one never redirects a running one's.
-    if (controller.mutations.admits(action)) setPromptFocus({ finalFocus });
-    const result = await controller.mutations.run(action, destination);
+    if (actions.admitsMutation(action)) setPromptFocus({ finalFocus });
+    const result = await actions.mutate(action, { destination });
     if (result.error) fail(result.error);
     return result;
   };
@@ -73,7 +73,7 @@ export function useMutationRunner(
     <ReplacePrompt
       key={prompt.id}
       paths={prompt.paths}
-      answer={(replace) => controller.mutations.answer(prompt.id, replace)}
+      answer={(replace) => actions.answerMutation(prompt.id, replace)}
       finalFocus={promptFocus.finalFocus}
     />
   );

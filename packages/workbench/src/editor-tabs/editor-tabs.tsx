@@ -4,14 +4,10 @@ import { Tabs } from '@base-ui/react/tabs';
 import { AnimatePresence, useReducedMotion } from 'motion/react';
 import { workbench } from '@moonbase/ui/workbench';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import {
-  checkoutKey,
-  fileKey,
-  type EditorController,
-  type EditorSnapshot,
-} from '@moonbase/application/editor';
+import { checkoutKey, fileKey, type EditorSnapshot } from '@moonbase/application/editor';
 import type { FocusReturn } from '../focus-return.ts';
 import { EditorTab, type TabDrag } from './editor-tab.tsx';
+import type { EditorActions } from '../editor-actions.ts';
 
 /** What the tab strip offers its workbench, to tell where focus was and to return it. */
 export type EditorTabsHandle = {
@@ -24,7 +20,7 @@ export type EditorTabsHandle = {
 /** A checkout's open files as a strip of tabs, inside the editor's `Tabs.Root`. */
 export function EditorTabs({
   ref,
-  controller,
+  actions,
   state,
   checkout,
   view,
@@ -34,7 +30,7 @@ export function EditorTabs({
   withFocus,
 }: {
   ref?: Ref<EditorTabsHandle>;
-  controller: EditorController;
+  actions: EditorActions;
   state: EditorSnapshot;
   checkout: CheckoutTarget;
   view: EditorSnapshot['recovery']['views'][string];
@@ -63,8 +59,7 @@ export function EditorTabs({
     },
     dragging: () => dragged.current !== null,
     drop: (path) => {
-      if (dragged.current)
-        controller.reorder(checkout, dragged.current, view.openFiles.indexOf(path));
+      if (dragged.current) actions.reorder(checkout, dragged.current, view.openFiles.indexOf(path));
       dragged.current = null;
     },
   };
@@ -79,7 +74,7 @@ export function EditorTabs({
         {view.openFiles.map((path) => (
           <EditorTab
             key={fileKey({ checkout, path })}
-            controller={controller}
+            actions={actions}
             state={state}
             checkout={checkout}
             view={view}

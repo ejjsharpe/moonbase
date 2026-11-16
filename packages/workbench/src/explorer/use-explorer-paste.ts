@@ -2,7 +2,7 @@ import type { ClipboardEvent, KeyboardEvent, RefObject } from 'react';
 import type { CheckoutTarget, DirectoryListing } from '@moonbase/contracts/workspace';
 import { checkoutKey } from '@moonbase/application/editor';
 import { findCreateFolder } from '../files-tree/files-tree-rows.ts';
-import type { useFileClipboard } from '../files-tree/file-clipboard.ts';
+import type { useFileClipboard } from '../files-tree/use-file-clipboard.ts';
 import type { ExplorerPanel } from './explorer.tsx';
 
 /**

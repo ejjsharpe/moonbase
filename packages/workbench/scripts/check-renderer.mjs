@@ -16,17 +16,19 @@ const result = await build({
   logLevel: 'silent',
 });
 const inputs = Object.keys(result.metafile.inputs);
+// The editor's services take the `WorkspaceService` port from `contracts/services`; the module
+// holds service tags and types, and no implementation or endpoint data reaches the bundle.
 const prohibited = inputs.filter((path) =>
-  /node_modules[/\\](?:electron|@moonbase[/\\](?:workspace|chat-runtime|daemon-protocol|ssh))[/\\]|packages[/\\](?:workspace|chat-runtime|daemon-protocol|ssh)[/\\]|workbench[/\\](?:demo|test)[/\\]|apps[/\\]desktop[/\\]|contracts[/\\]src[/\\]services\.ts|application[/\\]src[/\\]testing[/\\]|@earendil-works|source-snapshot|(?:^|[/\\])host[/\\]|node:/.test(
+  /node_modules[/\\](?:electron|@moonbase[/\\](?:workspace|chat-runtime|daemon-protocol|ssh))[/\\]|packages[/\\](?:workspace|chat-runtime|daemon-protocol|ssh)[/\\]|workbench[/\\](?:demo|test)[/\\]|apps[/\\]desktop[/\\]|application[/\\]src[/\\]testing[/\\]|@earendil-works|source-snapshot|(?:^|[/\\])host[/\\]|node:/.test(
     path,
   ),
 );
 assert.deepEqual(prohibited, [], 'Privileged or reference application code reached renderer entry');
-assert(inputs.some((path) => path.endsWith('application/src/editor/editor.ts')));
+assert(inputs.some((path) => path.endsWith('application/src/editor/editor-layer.ts')));
 assert(inputs.some((path) => path.endsWith('contracts/src/errors.ts')));
 assert.deepEqual(
   inputs.filter((path) =>
-    /application[/\\]src[/\\]runtime[/\\](?:handlers|clients)\.ts$/.test(path),
+    /application[/\\]src[/\\](?:runtime[/\\]|chat[/\\]chat-(?:handlers|clients|promises)\.ts$)/.test(path),
   ),
   [],
 );
