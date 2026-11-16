@@ -2,10 +2,10 @@ import { normalizeApplicationError } from '@moonbase/effect';
 import { Deferred, Effect } from 'effect';
 import type {
   ApplicationError,
-  EditorRecovery,
   EntryReference,
   OperationResult,
 } from '@moonbase/contracts/workspace';
+import type { EditorRecovery } from './recovery-layout.ts';
 import { checkoutKey } from './references.ts';
 import type { EditorMutation, MutationAction } from './workflows.ts';
 

@@ -220,7 +220,8 @@ export class EditorDiscovery {
                     !isCurrent()
                   )
                     return;
-                  if (event.error) this.dependencies.report(event.error);
+                  // The host's text reaches the UI only as fixed text.
+                  if (event.error) this.dependencies.report(normalizeApplicationError(event.error));
                   if (event.ready) {
                     const first = upSince === undefined;
                     upSince ??= performance.now();

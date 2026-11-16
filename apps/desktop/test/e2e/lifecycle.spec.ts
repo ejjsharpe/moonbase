@@ -4,6 +4,7 @@ import {
   saveFile,
   prepareCrashRecovery,
   recoverCrashedWorkbench,
+  draftsOf,
 } from '../fixtures/editor-fixture.ts';
 import { createRemoteChat, selectRemoteChat } from '../fixtures/chat-fixture.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
@@ -176,7 +177,9 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
           saved: { drafts: { text: string }[] };
           connection: unknown;
         };
-        expect(restored.recovery.value.state.drafts[0].text).toBe('retained local draft at reload');
+        expect(draftsOf(restored.recovery.value.state)[0]?.text).toBe(
+          'retained local draft at reload',
+        );
         expect(restored.saved.drafts[0].text).toBe('newer chat draft across reload');
         expect(restored.connection).toEqual(connection);
         await f.releaseReply();
@@ -207,14 +210,12 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
             readiness = value;
             return (
               value.reply.ok &&
-              value.reply.value.state.drafts.length === 0 &&
+              draftsOf(value.reply.value.state).length === 0 &&
               value.reply.value.errors.length === 0 &&
               value.reply.value.operations.length === 0 &&
               value.alerts.length === 0 &&
               !value.statuses.some((status: string) =>
-                /Recovery confirmation pending|Recovery publication PENDING|Preserving edits/.test(
-                  status,
-                ),
+                /not yet kept for recovery|Preserving edits/.test(status),
               )
             );
           },

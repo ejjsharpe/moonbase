@@ -9,6 +9,12 @@ import {
   workspaceInputSchemas,
   workspaceOutputSchemas,
 } from '@moonbase/contracts/workspace-schema';
+import {
+  RecoveryOutlineSchema,
+  WatchRecoveryInputSchema,
+  recoveryInputSchemas,
+  recoveryOutputSchemas,
+} from '@moonbase/contracts/recovery-schema';
 import { IpcAdmission } from './ipc-admission.ts';
 import {
   IpcApplicationErrorSchema,
@@ -36,12 +42,21 @@ const command = <const K extends keyof typeof workspaceInputSchemas>(operation: 
     success: wire(workspaceOutputSchemas[operation]),
     error,
   });
+const recovery = <const K extends keyof typeof recoveryInputSchemas>(operation: K) =>
+  Rpc.make(operation, {
+    payload: exact(recoveryInputSchemas[operation]),
+    success: wire(recoveryOutputSchemas[operation]),
+    error,
+  });
 const checkout = exact(Schema.Struct({ checkout: CheckoutTargetSchema }));
 const checkoutField = { checkout: CheckoutTargetSchema };
 /** Captured import references; none when there was nothing to import, null for a declined prompt. */
 const imports = Schema.NullOr(array(Schema.String));
 
-/** The workspace commands and watch, and the native actions on an approved checkout. */
+/**
+ * The workspace commands and watch, the recovery store's load, edits and watch, and the native
+ * actions on an approved checkout.
+ */
 export class EditorRpcs extends RpcGroup.make(
   command('openCheckout'),
   command('readFile'),
@@ -59,9 +74,18 @@ export class EditorRpcs extends RpcGroup.make(
   command('mutate'),
   command('operationStatus'),
   command('acknowledgeOperation'),
-  command('loadRecovery'),
-  command('persistRecovery'),
-  command('getRecoveryPublication'),
+  recovery('loadRecovery'),
+  recovery('openTab'),
+  recovery('closeTab'),
+  recovery('updateDraft'),
+  recovery('updateLayout'),
+  /** The editor's recovery without draft text, then again each time that changes. */
+  Rpc.make('watchRecovery', {
+    payload: exact(WatchRecoveryInputSchema),
+    success: RecoveryOutlineSchema,
+    error,
+    stream: true,
+  }),
   Rpc.make('watchWorkspace', {
     payload: exact(WorkspaceWatchInputSchema),
     success: WorkspaceEventSchema,

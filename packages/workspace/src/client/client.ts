@@ -45,7 +45,6 @@ import { RecoveryContext, type HostPorts, type Recoveries } from './recovery-con
 import { makeRecoveryEdits } from './recovery-edits.ts';
 import { loadRecovery } from './recovery-load.ts';
 import { makeRecoveryOutlines } from './recovery-outlines.ts';
-import { persistRecovery } from './recovery-publication.ts';
 import { acknowledgeSaves, getBaseline, publishSaves, replaySave } from './save-recovery.ts';
 
 /**
@@ -268,13 +267,21 @@ export const makeClientWorkspace = ({
         return Effect.fail(
           new UnreadableRecoveryError({ client: recoveries.unreadable[0].client }),
         );
-      for (const { state } of recoveries.readable)
+      // A file created with the creating client's own draft text saves that draft; it
+      // orphans nothing.
+      const saves = (client: string, path: string, text: string) =>
+        input.kind === 'create-file' &&
+        client === input.clientId &&
+        path === input.destination &&
+        text === input.text;
+      for (const { client, state } of recoveries.readable)
         if (
           state.buffers.some(
             ({ draft, target }) =>
               draft &&
               target.checkout.checkoutId === input.checkout.checkoutId &&
-              conflicts(target.path),
+              conflicts(target.path) &&
+              !saves(client, target.path, draft.text),
           )
         )
           return Effect.fail(new InvalidRecoveryRequestError({ problem: 'destination-drafts' }));
@@ -407,14 +414,6 @@ export const makeClientWorkspace = ({
         (input) => loadRecovery(context, input.clientId, hostWaitMs),
         true,
       ),
-      getRecoveryPublication: call<'getRecoveryPublication'>(
-        (input) =>
-          attempt(
-            () => store.recoveryPublication(input.clientId, input.requestId)?.receipt ?? null,
-          ),
-        true,
-      ),
-      persistRecovery: call<'persistRecovery'>((input) => persistRecovery(context, input), true),
       openTab: publishing(edits.openTab, true),
       closeTab: publishing(edits.closeTab, true),
       updateDraft: publishing(edits.updateDraft, true),

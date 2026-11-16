@@ -22,7 +22,7 @@ for (const entry of ['', '/editor', '/runtime/clients', '/runtime/effect-client'
       [],
     );
     if (entry === '' || entry === '/editor')
-      for (const owner of ['recovery-publications', 'preservation', 'discovery'])
+      for (const owner of ['recovery-outbox', 'preservation', 'discovery'])
         assert(
           `packages/application/src/editor/${owner}.ts` in bundle.metafile.inputs,
           `The actual browser graph must include the private ${owner} owner`,

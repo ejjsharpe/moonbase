@@ -73,8 +73,8 @@ export class EditorApprovals {
       this.isOwnOperation(clientId, id) ? undefined : 'foreign-client',
     acknowledgeOperation: ({ operationClientId, id }) =>
       this.isOwnOperation(operationClientId, id) ? undefined : 'foreign-client',
-    persistRecovery: ({ state }) =>
-      state.checkouts.every((target) => this.isApproved(target)) ? undefined : 'checkout',
+    updateLayout: ({ layout }) =>
+      layout.checkouts.every((target) => this.isApproved(target)) ? undefined : 'checkout',
     // A picked root opens once; a listed worktree or a known checkout's root opens again.
     openCheckout: ({ root }, grants) =>
       grants.roots.delete(root) ||

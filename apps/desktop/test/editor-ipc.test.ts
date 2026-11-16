@@ -5,11 +5,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   ApplicationError,
-  emptyRecovery,
   type CheckoutTarget,
   type EditorClient,
   type WorkspaceEvent,
 } from '@moonbase/contracts/workspace';
+import {
+  emptyBufferView,
+  emptyRecoveryState,
+  type RecoveryLayout,
+  type RecoveryOutline,
+} from '@moonbase/contracts/recovery';
 import type { NativeActions } from '../src/main/native-actions.ts';
 import { makeIpcFixture, unusedNative, waitFor } from './fixtures/ipc-fixture.ts';
 
@@ -42,8 +47,7 @@ function fakeWorkspace(overrides: Partial<Record<string, (input: never) => unkno
         return { worktrees: [worktree('/approved-topic')] } as never;
       if (operation === 'loadRecovery')
         return {
-          revision: 0,
-          state: { ...emptyRecovery('desktop-primary'), checkouts: [target] },
+          state: { ...emptyRecoveryState('desktop-primary'), checkouts: [target] },
           operations: [
             {
               id: 'earlier-operation',
@@ -61,9 +65,28 @@ function fakeWorkspace(overrides: Partial<Record<string, (input: never) => unkno
       return { paths: [] } as never;
     },
     watch: () => async () => {},
+    watchRecovery: (input, receive) => {
+      dispatched.push('watchRecovery');
+      receive({ ...emptyRecoveryState(input.clientId), buffers: [] });
+      return async () => {};
+    },
   };
   return { client, dispatched };
 }
+/** A layout with `checkouts` open and nothing else. */
+const layout = (checkouts: CheckoutTarget[]): RecoveryLayout => {
+  const {
+    version: _version,
+    clientId: _clientId,
+    buffers: _buffers,
+    ...rest
+  } = emptyRecoveryState('desktop-primary');
+  return {
+    ...rest,
+    checkouts,
+    views: Object.fromEntries(checkouts.map((c) => [c.checkoutId, emptyBufferView()])),
+  };
+};
 const native = (overrides: Partial<NativeActions> = {}): NativeActions => ({
   ...unusedNative,
   chooseCheckout: async () => '/approved',
@@ -97,19 +120,53 @@ test('a command reaches the workspace only for what main approved for this windo
       { checkout: { ...target, hostId: 'other' }, path: 'a.ts' },
       'checkout',
     );
+    // Recovery edits: only this window's client, and only approved checkouts.
+    const other = { ...target, checkoutId: 'other' };
     await refused(
-      'persistRecovery',
-      {
-        clientId: 'desktop-primary',
-        requestId: 'publish',
-        expectedRevision: 0,
-        state: {
-          ...emptyRecovery('desktop-primary'),
-          checkouts: [{ ...target, checkoutId: 'other' }],
-        },
-      },
+      'updateLayout',
+      { clientId: 'desktop-primary', layout: layout([other]) },
       'checkout',
     );
+    await refused(
+      'openTab',
+      { clientId: 'desktop-primary', bufferId: 'b1', target: { checkout: other, path: 'a.ts' } },
+      'checkout',
+    );
+    await refused(
+      'updateDraft',
+      {
+        clientId: 'foreign',
+        bufferId: 'b1',
+        text: 'x',
+        disk: { text: '', version: 'v' },
+      },
+      'foreign-client',
+    );
+    await refused('watchRecovery', { clientId: 'foreign' }, 'foreign-client');
+    await f.editor.command('openTab', {
+      clientId: 'desktop-primary',
+      bufferId: 'b1',
+      target: { checkout: target, path: 'a.ts' },
+    });
+    await f.editor.command('updateDraft', {
+      clientId: 'desktop-primary',
+      bufferId: 'b1',
+      text: 'draft',
+      disk: { text: 'A', version: 'v' },
+    });
+    await f.editor.command('updateLayout', {
+      clientId: 'desktop-primary',
+      layout: layout([target]),
+    });
+    await f.editor.command('closeTab', { clientId: 'desktop-primary', bufferId: 'b1' });
+    const outlines: RecoveryOutline[] = [];
+    const close = f.editor.watchRecovery(
+      { clientId: 'desktop-primary' },
+      (outline) => outlines.push(outline),
+      () => {},
+    );
+    await waitFor(() => outlines.length === 1);
+    await close();
     // Git's listed worktrees of an approved checkout may open; a renderer location never makes one.
     await refused('openCheckout', { root: '/approved-topic' }, 'root');
     await f.editor.command('listWorktrees', { checkout: target });
@@ -138,6 +195,11 @@ test('a command reaches the workspace only for what main approved for this windo
     assert.deepEqual(workspace.dispatched, [
       'openCheckout',
       'openCheckout',
+      'openTab',
+      'updateDraft',
+      'updateLayout',
+      'closeTab',
+      'watchRecovery',
       'listWorktrees',
       'openCheckout',
       'loadRecovery',

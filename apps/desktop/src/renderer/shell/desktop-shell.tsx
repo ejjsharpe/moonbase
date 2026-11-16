@@ -659,7 +659,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   };
   let status = view === 'chat' ? 'Agents · Explicit Send' : 'Explicit Save · Local workspace';
   if (closing || lifecycle.phase === 'prepared') status = 'Closing workbench…';
-  else if (state?.publication) status = 'Recovery confirmation pending';
+  else if (state?.recoveryFailed) status = 'Edits not yet kept for recovery';
   let chatHeading = 'Chat is unavailable';
   if (lifecycle.chat.state === 'initialization-failed') chatHeading = 'Chat could not initialize';
   else if (lifecycle.chat.state === 'cleanup-blocked') chatHeading = 'Chat cleanup is blocked';
@@ -828,7 +828,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       />
       {(closing ||
         lifecycle.phase === 'prepared' ||
-        state?.publication ||
+        state?.recoveryFailed ||
         lifecycle.cleanup.pending.length > 0) && (
         <div role="status" {...stylex.props(styles.status)}>
           {lifecycle.cleanup.pending.length ? 'Finishing panel cleanup…' : status}

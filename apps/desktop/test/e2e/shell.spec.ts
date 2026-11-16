@@ -293,7 +293,8 @@ for (const selected of ['other · main', 'moonbase · main', 'Agents']) {
     const frames = await page.evaluate(async () => {
       const command = window.demo.client.command;
       window.demo.client.command = async (...args) => {
-        if (args[0] === 'persistRecovery') await new Promise((resolve) => setTimeout(resolve, 50));
+        if (['openTab', 'closeTab', 'updateDraft', 'updateLayout'].includes(args[0]))
+          await new Promise((resolve) => setTimeout(resolve, 50));
         return command(...args);
       };
       const frames: { selected: string | null; editors: string[]; top: number }[] = [];
@@ -494,9 +495,7 @@ test('failed project close from Chat reveals recovery errors and retains the pro
   page,
 }) => {
   await page.goto('/?chat');
-  await page.evaluate(() =>
-    window.demo.memory.failNext('persistRecovery', 'Controlled close failure'),
-  );
+  await page.evaluate(() => window.demo.memory.failNext('closeTab', 'Controlled close failure'));
   await project(page).hover();
   await tabs(page)
     .getByRole('button', { name: 'Close checkout /demo/moonbase', exact: true })

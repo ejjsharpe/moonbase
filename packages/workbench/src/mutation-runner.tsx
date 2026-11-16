@@ -55,7 +55,7 @@ export function useMutationRunner(
   ) => {
     const fail = (message: string) => {
       if (inlineError) inlineError(message);
-      else controller.reportMessage(message);
+      else controller.report(message);
     };
     if (dialogOpen()) {
       fail(mutationUnavailable);

@@ -457,10 +457,10 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       <StatusMessages
         controller={controller}
         state={state}
-        resolvePublication={() =>
+        retryRecovery={() =>
           run(
             focus.withFocus(
-              controller.resolveRecoveryPublication(),
+              controller.flush().then(() => true),
               focus.pendingOrigin ?? 'editor',
               true,
             ),

@@ -2,51 +2,44 @@ import { Deferred, Effect } from 'effect';
 import {
   ApplicationError,
   type CheckoutTarget,
-  type EditorRecovery,
   type FileDocument,
   type FileTarget,
 } from '@moonbase/contracts/workspace';
 import type { CloseChoice, ClosePrompt, EditorBuffer } from './editor.ts';
-import { checkoutKey, fileKey, closeRecoveryReferences, type ClosedAction } from './references.ts';
-import type { PublicationOptions } from './recovery-publications.ts';
+import { checkoutKey, fileKey, type ClosedAction } from './references.ts';
 
 type PreservationDependencies = {
   run<A>(effect: Effect.Effect<A, ApplicationError>): Promise<A>;
   isClosing(): boolean;
-  retainsConfirmation(): boolean;
-  invalidateReads(kind: 'close' | 'reload'): void;
+  invalidateReads(): void;
   notify(): void;
   report(error: unknown): void;
   afterRelease(): Promise<void>;
 };
-type RecoveryCapture = {
-  captureRecovery(): EditorRecovery;
-  publishRecovery(state: EditorRecovery, options?: PublicationOptions): Promise<void>;
-};
+/** What a close settled: the files it closes, and those whose drafts were discarded. */
 export type ConfirmedClose = {
   targets: readonly FileTarget[];
   discarded: ReadonlySet<string>;
-  state: EditorRecovery;
   kind: 'files' | 'checkout' | 'quit';
   checkout?: CheckoutTarget;
 };
-type CloseCapabilities = RecoveryCapture & {
+type CloseCapabilities = {
   captureBuffer(target: FileTarget): EditorBuffer | undefined;
-  saveFile(target: FileTarget, generation: number): Promise<boolean>;
-  referencesCurrent(): boolean;
-  applyConfirmedClose(result: ConfirmedClose): Promise<void>;
+  saveFile(target: FileTarget): Promise<boolean>;
+  /** Closes the files in the recovery store and then in the editor; returns what was closed. */
+  closeFiles(result: ConfirmedClose): Promise<ClosedAction[]>;
 };
-type ReloadCapabilities = RecoveryCapture & {
+type ReloadCapabilities = {
   readFile(target: FileTarget): Promise<FileDocument>;
   isCurrent(): boolean;
-  applyConfirmedReload(disk: FileDocument): void;
+  /** Discards the buffer's draft in the recovery store, then shows `disk`. */
+  reloadFile(disk: FileDocument): Promise<void>;
 };
 const sameCheckout = (a: CheckoutTarget, b: CheckoutTarget) => checkoutKey(a) === checkoutKey(b);
 
-/** One captured action owns its prompt, barrier and retained final confirmation. */
+/** One captured close or reload: its prompt, and the closed files it remembers for Reopen. */
 export class EditorPreservation {
   private preserving = false;
-  private revision = 0;
   private closePrompt: ClosePrompt | null = null;
   private closeAnswer?: Deferred.Deferred<CloseChoice>;
   private history: ClosedAction[] = [];
@@ -57,20 +50,16 @@ export class EditorPreservation {
   get active() {
     return this.preserving;
   }
-  get generation() {
-    return this.revision;
-  }
   get prompt() {
     return this.closePrompt;
   }
-  private begin(kind: 'close' | 'reload') {
+  private begin() {
     this.preserving = true;
-    this.revision++;
-    this.dependencies.invalidateReads(kind);
+    this.dependencies.invalidateReads();
     this.dependencies.notify();
   }
-  async release() {
-    if (this.dependencies.isClosing() || this.dependencies.retainsConfirmation()) return;
+  private async release() {
+    if (this.dependencies.isClosing()) return;
     this.preserving = false;
     this.dependencies.notify();
     await this.dependencies.afterRelease();
@@ -104,50 +93,32 @@ export class EditorPreservation {
     return choice;
   }
   async reload(target: FileTarget, capabilities: ReloadCapabilities) {
-    this.begin('reload');
-    const guard = () => {
+    this.begin();
+    try {
+      const disk = await capabilities.readFile(target);
       if (this.dependencies.isClosing() || !capabilities.isCurrent())
         throw new ApplicationError({
           code: 'Unavailable',
-          message:
-            'Captured Reload target or recovery revision changed. Edits retained; reconcile and retry.',
+          message: 'The file changed while it was reloading. Edits retained; retry.',
         });
-    };
-    try {
-      const disk = await capabilities.readFile(target);
-      guard();
-      const state = capabilities.captureRecovery();
-      state.drafts = state.drafts.filter((item) => fileKey(item.target) !== fileKey(target));
-      await capabilities.publishRecovery(state, {
-        onConfirmed: async () => {
-          capabilities.applyConfirmedReload(disk);
-          await this.release();
-        },
-        kind: 'reload',
-        before: guard,
-      });
+      await capabilities.reloadFile(disk);
       return true;
     } finally {
-      if (this.preserving && !this.dependencies.retainsConfirmation()) await this.release();
+      if (this.preserving) await this.release();
     }
   }
+  /**
+   * Asks Save, Discard or Cancel for each file with unsaved changes, then closes the files. Their
+   * drafts are kept until the store has committed each close, so a failure loses nothing.
+   */
   async close(
     targets: FileTarget[],
     kind: ConfirmedClose['kind'],
     checkout: CheckoutTarget | undefined,
     capabilities: CloseCapabilities,
   ) {
-    this.begin('close');
-    let committed = false;
+    this.begin();
     const discarded = new Set<string>();
-    const checkReferences = () => {
-      if (!capabilities.referencesCurrent())
-        throw new ApplicationError({
-          code: 'Unavailable',
-          message:
-            'Files moved during the captured close. Edits retained; review their new paths and retry.',
-        });
-    };
     try {
       for (const target of targets) {
         const buffer = capabilities.captureBuffer(target);
@@ -155,39 +126,16 @@ export class EditorPreservation {
         const choice = await this.choose(buffer);
         if (this.dependencies.isClosing() || choice === 'cancel') return false;
         if (choice === 'discard') discarded.add(fileKey(target));
-        else if (!(await capabilities.saveFile(target, this.revision))) return false;
+        else if (!(await capabilities.saveFile(target))) return false;
       }
-      checkReferences();
-      let preflight = capabilities.captureRecovery();
-      for (;;) {
-        await capabilities.publishRecovery(preflight);
-        checkReferences();
-        const latest = capabilities.captureRecovery();
-        if (JSON.stringify(latest) === JSON.stringify(preflight)) break;
-        preflight = latest;
-      }
-      const state = capabilities.captureRecovery(),
-        keys = new Set(targets.map(fileKey));
-      state.drafts = state.drafts.filter(
-        (draft) =>
-          !discarded.has(fileKey(draft.target)) &&
-          (kind === 'quit' || !keys.has(fileKey(draft.target))),
-      );
-      const history = closeRecoveryReferences(state, targets, kind, checkout, true);
-      await capabilities.publishRecovery(state, {
-        onConfirmed: async () => {
-          committed = true; // The exact final receipt is the close outcome; later IO cannot veto it.
-          if (kind !== 'quit') this.history = [...this.history, ...history].slice(-20);
-          await capabilities.applyConfirmedClose({ targets, discarded, state, kind, checkout });
-          await this.release();
-        },
-      });
+      const closed = await capabilities.closeFiles({ targets, discarded, kind, checkout });
+      if (kind !== 'quit') this.history = [...this.history, ...closed].slice(-20);
       return true;
     } catch (error) {
       this.dependencies.report(error);
-      return committed;
+      return false;
     } finally {
-      if (this.preserving && !this.dependencies.retainsConfirmation()) await this.release();
+      if (this.preserving) await this.release();
     }
   }
   findClosedAction(checkout: CheckoutTarget) {

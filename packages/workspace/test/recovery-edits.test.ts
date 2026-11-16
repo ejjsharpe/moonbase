@@ -14,7 +14,7 @@ import type {
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { InvalidRecoveryRequestError, toWireError } from '@moonbase/contracts/workspace-errors';
 import { dropReply, dropRequest, harness, openCheckout } from './split-fixture.ts';
-import { isError } from './recovery-fixture.ts';
+import { draftsOf, isError } from './recovery-fixture.ts';
 
 type Client = ReturnType<ReturnType<typeof harness>['startClient']>;
 type Edit<K extends RecoveryEdit> = Omit<RecoveryEditInput<K>, 'clientId'>;
@@ -77,6 +77,9 @@ function editor({ runtime }: Client, clientId: string) {
 }
 const load = (client: Client, clientId: string) =>
   client.client.command('loadRecovery', { clientId });
+/** A window's drafts as loaded. */
+const drafts = async (client: Client, clientId: string) =>
+  draftsOf((await load(client, clientId)).state);
 const moveWith = async (client: Client, checkout: CheckoutTarget, from: string, to: string) =>
   client.client.command('mutate', {
     id: 'move-' + from,
@@ -120,13 +123,13 @@ test('edits apply in order by buffer, are durable once they return, and a restar
       { id: 'b1', target: at('file.txt'), draft: { baseline: disk.version } },
     ]);
     const loaded = (await load(alice, 'window')).state;
-    assert.deepEqual(loaded.drafts, [{ target: at('file.txt'), text: 'draft 19', disk }]);
-    assert.deepEqual(loaded.views[at('file.txt').checkout.checkoutId]?.openFiles, ['file.txt']);
+    assert.deepEqual(draftsOf(loaded), [{ target: at('file.txt'), text: 'draft 19', disk }]);
+    assert.deepEqual(loaded.views[at('file.txt').checkout.checkoutId]?.tabs, ['b1']);
     // A buffer with a draft closes only when told to discard it.
     await assert.rejects(restarted.closeTab({ bufferId: 'b1' }), isError('InvalidInput'));
     // Text back at its baseline is no draft.
     await restarted.updateDraft({ bufferId: 'b1', text: 'original', disk });
-    assert.deepEqual((await load(alice, 'window')).state.drafts, []);
+    assert.deepEqual(await drafts(alice, 'window'), []);
     await restarted.closeTab({ bufferId: 'b1' });
     // An edit to a buffer that is not open is refused, never recreated at a path.
     await assert.rejects(
@@ -149,10 +152,7 @@ test('edits apply in order by buffer, are durable once they return, and a restar
     await alice.runtime.dispose();
     const committed = await pending;
     alice = h.startClient('alice', host);
-    assert.equal(
-      (await load(alice, 'window')).state.drafts[0]?.text,
-      committed ? 'at quit' : 'before quit',
-    );
+    assert.equal((await drafts(alice, 'window'))[0]?.text, committed ? 'at quit' : 'before quit');
   } finally {
     await h.close();
   }
@@ -195,24 +195,24 @@ test('an edit during a save, or after its reply was lost, is never overwritten b
     const saved = await saving;
     assert.equal(saved.kind, 'saved');
     // The newer text stays, over the file text the save left.
-    assert.deepEqual((await load(alice, 'window')).state.drafts, [
+    assert.deepEqual(await drafts(alice, 'window'), [
       { target: at('file.txt'), text: 'typed during save', disk: saved.disk },
     ]);
     // A keystroke sent before the window heard of the save keeps the baseline the save left,
     // so typing back to the saved text leaves no draft.
     await window.updateDraft({ bufferId: 'b1', text: 'typed after save', disk });
-    assert.deepEqual((await load(alice, 'window')).state.drafts, [
+    assert.deepEqual(await drafts(alice, 'window'), [
       { target: at('file.txt'), text: 'typed after save', disk: saved.disk },
     ]);
     await window.updateDraft({ bufferId: 'b1', text: 'saving', disk: saved.disk });
-    assert.deepEqual((await load(alice, 'window')).state.drafts, []);
+    assert.deepEqual(await drafts(alice, 'window'), []);
     // The file changes outside the editor; the window reloads it, keeps its edit over the new
     // text, and undoes back to the saved text. That text is now unsaved, so it stays a draft.
     await window.updateDraft({ bufferId: 'b1', text: 'local edit', disk: saved.disk });
     writeFileSync(join(h.root, 'file.txt'), 'changed outside');
     const outside = await read('file.txt');
     await window.updateDraft({ bufferId: 'b1', text: 'saving', disk: outside });
-    assert.equal((await load(alice, 'window')).state.drafts[0]?.text, 'saving');
+    assert.equal((await drafts(alice, 'window'))[0]?.text, 'saving');
     await alice.runtime.dispose();
 
     // The host saves, then the reply and every status question are lost; the next edit lands.
@@ -238,7 +238,7 @@ test('an edit during a save, or after its reply was lost, is never overwritten b
       await tab.updateDraft({ bufferId: 'b1', text: 'newer than the save', disk });
       await carol.runtime.dispose();
       carol = h.startClient('carol-' + name, host);
-      const [draft] = (await load(carol, 'window')).state.drafts;
+      const [draft] = await drafts(carol, 'window');
       assert.equal(draft?.text, 'newer than the save');
       // A lost reply's save settles from the host: the newer draft is over the text it saved.
       assert.equal(draft?.disk.text, name === 'lost-reply' ? 'sent text' : disk.text);
@@ -324,12 +324,12 @@ test('a move takes its buffers along, and a clean buffer at the destination give
     );
     const state = (await load(alice, 'window')).state;
     const view = state.views[checkout.checkoutId]!;
-    assert.deepEqual(view.openFiles, ['moved.txt', 'second.txt', 'taken.txt', 'q.txt']);
-    assert.equal(view.active, 'q.txt');
-    assert.equal(view.preview, 'moved.txt');
-    assert.deepEqual(view.positions, { 'moved.txt': position, 'q.txt': position });
+    assert.deepEqual(view.tabs, ['clean', 'dirty', 'holder', 'own']);
+    assert.equal(view.active, 'own');
+    assert.equal(view.preview, 'clean');
+    assert.deepEqual(view.positions, { clean: position, own: position });
     assert.deepEqual(
-      state.drafts.map((d) => [d.target.path, d.text]),
+      draftsOf(state).map((d) => [d.target.path, d.text]),
       [
         ['moved.txt', 'typed after move'],
         ['second.txt', 'dirty text'],
@@ -337,6 +337,13 @@ test('a move takes its buffers along, and a clean buffer at the destination give
         ['q.txt', 'own text'],
       ],
     );
+    // A layout written before the window heard of the replacement still commits, without the
+    // buffer that gave way.
+    await window.updateLayout({ layout });
+    const stale = (await load(alice, 'window')).state.views[checkout.checkoutId]!;
+    assert.deepEqual(stale.tabs, ['clean', 'dirty', 'holder', 'own']);
+    assert.equal(stale.active, null);
+    assert.deepEqual(stale.positions, { clean: position });
   } finally {
     await h.close();
   }
@@ -364,7 +371,7 @@ test('Trash keeps an open buffer and its draft, and an uncertain Trash keeps its
     });
     await load(alice, 'window');
     await window.updateDraft({ bufferId: 'b1', text: 'edited after trash', disk });
-    assert.deepEqual((await load(alice, 'window')).state.drafts, [
+    assert.deepEqual(await drafts(alice, 'window'), [
       { target: at('file.txt'), text: 'edited after trash', disk },
     ]);
     await assert.rejects(window.closeTab({ bufferId: 'b1' }), isError('InvalidInput'));
@@ -389,7 +396,7 @@ test('Trash keeps an open buffer and its draft, and an uncertain Trash keeps its
       isError('Persistence'),
     );
     await assert.rejects(tab.closeTab({ bufferId: 'b2', discard: true }), isError('Persistence'));
-    assert.equal((await load(carol, 'window')).state.drafts[0]?.text, 'unsaved');
+    assert.equal((await drafts(carol, 'window'))[0]?.text, 'unsaved');
     // Once the host says what happened, the user may discard it.
     await carol.runtime.dispose();
     carol = h.startClient('carol', host);
@@ -400,7 +407,7 @@ test('Trash keeps an open buffer and its draft, and an uncertain Trash keeps its
       'completed',
     );
     await tab.closeTab({ bufferId: 'b2', discard: true });
-    assert.deepEqual((await load(carol, 'window')).state.drafts, []);
+    assert.deepEqual(await drafts(carol, 'window'), []);
   } finally {
     await h.close();
   }
@@ -441,7 +448,7 @@ test('two windows edit their own recoveries in one store, and each outline chang
       ['two', 'two c'],
     ])
       assert.deepEqual(
-        (await load(alice, window)).state.drafts.map((d) => [d.target.path, d.text]),
+        (await drafts(alice, window)).map((d) => [d.target.path, d.text]),
         [['moved.txt', text]],
       );
   } finally {
@@ -449,56 +456,22 @@ test('two windows edit their own recoveries in one store, and each outline chang
   }
 });
 
-test('the renderer snapshot keeps buffer IDs by path, edits fence older snapshots, and an unreadable recovery is never written', async () => {
+test('an edit naming a checkout the host never opened, or to an unreadable recovery, is refused with the row unchanged', async () => {
   const h = harness();
   try {
     const { host, checkout, at, read } = await setup(h, { 'file.txt': 'original' });
     const disk = await read('file.txt');
     const alice = h.startClient('alice', host);
-    const snapshot = (revision: number, text: string) =>
-      alice.client.command('persistRecovery', {
-        clientId: 'window',
-        requestId: 'snapshot-' + revision,
-        expectedRevision: revision,
-        state: {
-          version: 1,
-          clientId: 'window',
-          checkouts: [checkout],
-          openCheckoutIds: [checkout.checkoutId],
-          selectedCheckoutId: checkout.checkoutId,
-          views: {
-            [checkout.checkoutId]: {
-              openFiles: ['file.txt'],
-              active: 'file.txt',
-              preview: null,
-              fileViews: { 'file.txt': 'file', 'closed.txt': 'unstaged' },
-              positions: {},
-              tree: { expanded: [], selected: [], focus: '', scroll: 0 },
-            },
-          },
-          drafts: [{ target: at('file.txt'), text, disk }],
-          recentFiles: [],
-          sidebarWidth: 270,
-        },
-      });
-    await snapshot(0, 'from snapshot');
     const window = editor(alice, 'window');
-    const outlines = window.watch();
-    await outlines.until(1);
-    const [buffer] = outlines.seen[0].buffers;
-    assert.deepEqual(outlines.seen[0].views[checkout.checkoutId]?.remembered, {
-      'closed.txt': { view: 'unstaged' },
-    });
-    await outlines.stop();
-    // The same path keeps its buffer across snapshots, so an edit by ID still finds it.
-    await snapshot(1, 'second snapshot');
-    await window.updateDraft({ bufferId: buffer!.id, text: 'edited by id', disk });
-    const loaded = await load(alice, 'window');
-    assert.equal(loaded.state.drafts[0]?.text, 'edited by id');
-    assert.equal(loaded.state.views[checkout.checkoutId]?.fileViews['closed.txt'], 'unstaged');
-    // The edit was the window's own word: a snapshot made before it is refused.
-    await assert.rejects(snapshot(2, 'stale snapshot'), isError('Conflict'));
-    await snapshot(loaded.revision, 'current snapshot');
+    await assert.rejects(
+      window.openTab({
+        bufferId: 'foreign',
+        target: { checkout: { ...checkout, hostId: 'unapproved-host' }, path: 'file.txt' },
+      }),
+      isError('Unauthorized'),
+    );
+    await window.openTab({ bufferId: 'b1', target: at('file.txt') });
+    await window.updateDraft({ bufferId: 'b1', text: 'unsaved', disk });
     await alice.runtime.dispose();
     const database = new DatabaseSync(join(h.base, 'alice', 'moonbase-workspace-v1.sqlite'));
     try {
@@ -506,7 +479,7 @@ test('the renderer snapshot keeps buffer IDs by path, edits fence older snapshot
       const before = database.prepare('SELECT revision, body FROM recovery').all();
       const restarted = h.startClient('alice', host);
       await assert.rejects(
-        editor(restarted, 'window').updateDraft({ bufferId: buffer!.id, text: 'lost?', disk }),
+        editor(restarted, 'window').updateDraft({ bufferId: 'b1', text: 'lost?', disk }),
         isError('Persistence'),
       );
       assert.deepEqual(database.prepare('SELECT revision, body FROM recovery').all(), before);

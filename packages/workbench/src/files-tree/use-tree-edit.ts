@@ -174,7 +174,7 @@ export function useTreeEdit({
     };
     const invalid = (message: string) => {
       if (enter) return message;
-      controller.reportMessage(message);
+      controller.report(message);
       return end();
     };
     // Names are taken as typed, spaces included, but one of only spaces is no name.

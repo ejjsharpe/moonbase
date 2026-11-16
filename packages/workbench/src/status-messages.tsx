@@ -4,18 +4,18 @@ import { controls } from '@moonbase/ui/controls';
 import type { EditorController, EditorSnapshot } from '@moonbase/application/editor';
 
 /**
- * The editor's alerts: its latest error, a recovery publication whose outcome is unknown, and
- * file operations whose outcome needs resolving.
+ * The editor's alerts: its latest error, recent edits not yet kept for recovery, and file
+ * operations whose outcome needs resolving.
  */
 export function StatusMessages({
   controller,
   state,
-  resolvePublication,
+  retryRecovery,
   run,
 }: {
   controller: EditorController;
   state: EditorSnapshot;
-  resolvePublication: () => void;
+  retryRecovery: () => void;
   run: (work: Promise<unknown>) => void;
 }) {
   return (
@@ -28,12 +28,11 @@ export function StatusMessages({
           </Button>
         </div>
       )}
-      {state.publication && (
+      {state.recoveryFailed && (
         <p role="status" {...stylex.props(controls.status)}>
-          Recovery publication PENDING/UNCERTAIN ({state.publication.kind}):{' '}
-          {state.publication.requestId}. Live work is retained.
-          <Button {...stylex.props(controls.button)} onClick={resolvePublication}>
-            Resolve recovery publication
+          Recent edits are not yet kept for recovery. They stay open here.
+          <Button {...stylex.props(controls.button)} onClick={retryRecovery}>
+            Retry keeping edits
           </Button>
         </p>
       )}

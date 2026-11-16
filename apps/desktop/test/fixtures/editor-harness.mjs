@@ -16,7 +16,6 @@ const control = {
   sequence: 0,
   results: [],
   fault: null,
-  noStatus: false,
   outage: null,
   restoreOn: null,
   held: null,
@@ -58,19 +57,10 @@ globalThis.moonbaseTestIpc = async (request, proceed) => {
       control.released = resolve;
     });
   }
-  if (
-    (control.fault === tag ||
-      (control.fault === 'final-publication' &&
-        tag === 'persistRecovery' &&
-        payload.state.drafts.length === 0)) &&
-    reply.ok
-  ) {
-    if (control.fault === 'final-publication') control.noStatus = true;
+  if (control.fault === tag && reply.ok) {
     control.fault = null;
     return failure('Uncertain', 'Controlled committed reply loss');
   }
-  if (control.noStatus && tag === 'getRecoveryPublication')
-    return failure('Unavailable', 'Controlled exact-status outage');
   return reply;
 };
 app.on('will-quit', () => {

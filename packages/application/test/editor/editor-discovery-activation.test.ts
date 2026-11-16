@@ -8,10 +8,18 @@ import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import {
   ApplicationError,
   type EditorClient,
-  type CommandInput,
+  type WorkspaceCommand,
 } from '@moonbase/contracts/workspace';
 import { fileKey } from '@moonbase/application/editor';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
+
+const recoveryEdits: readonly WorkspaceCommand[] = [
+  'openTab',
+  'closeTab',
+  'updateDraft',
+  'updateLayout',
+];
+const isRecoveryEdit = (name: WorkspaceCommand) => recoveryEdits.includes(name);
 
 describe('checkout discovery and activation', () => {
   const { checkout, second, target, fixture, held, observedFixture } = controllerFixture;
@@ -42,7 +50,7 @@ describe('checkout discovery and activation', () => {
         ...f.client,
         watch: () => async () => {},
         async command(name, input, options) {
-          if (hold && name === 'persistRecovery') {
+          if (hold && isRecoveryEdit(name)) {
             admit();
             await wait;
           }
@@ -66,7 +74,7 @@ describe('checkout discovery and activation', () => {
           ...f.client,
           watch: () => async () => {},
           async command(name, input, options) {
-            if (hold && name === 'persistRecovery') {
+            if (hold && isRecoveryEdit(name)) {
               admit();
               await wait;
             }
@@ -118,39 +126,24 @@ describe('checkout discovery and activation', () => {
     }
   });
 
-  for (const outcome of ['success', 'cancel', 'failure', 'unknown'] as const)
+  for (const outcome of ['success', 'cancel', 'failure'] as const)
     test(`a selected absent survivor activates after another preservation releases (${outcome})`, async () => {
       const f = await observedFixture('r5-selected-' + outcome);
       let entered = held(),
         release = held(),
         delay = true,
-        phase = 1,
-        lost = false;
+        phase = 1;
       try {
         f.transport.command = async (name, input, options) => {
-          if (name === 'persistRecovery' && delay) {
+          if (isRecoveryEdit(name) && delay) {
             delay = false;
             entered.release();
             await release.promise;
             if (phase === 2 && outcome === 'failure')
               throw new ApplicationError({
-                code: 'Conflict',
-                message: 'Definitive preflight conflict',
+                code: 'Persistence',
+                message: 'Controlled recovery failure',
               });
-          }
-          if (
-            name === 'persistRecovery' &&
-            phase === 2 &&
-            outcome === 'unknown' &&
-            !(input as CommandInput<'persistRecovery'>).state.views[
-              second.checkoutId
-            ].openFiles.includes('b.ts') &&
-            !lost
-          ) {
-            lost = true;
-            await f.clientCommand(name, input, options);
-            f.memory.failNext('getRecoveryPublication');
-            throw new ApplicationError({ code: 'Uncertain', message: 'Lost final reply' });
           }
           return f.clientCommand(name, input, options);
         };
@@ -189,10 +182,6 @@ describe('checkout discovery and activation', () => {
         f.memory.externalWrite(target('a.ts'), 'latest selected source');
         release.release();
         assert.equal(await secondClose, outcome === 'success');
-        if (outcome === 'unknown') {
-          assert.equal(f.editor.buffer(target('a.ts')), undefined);
-          assert.equal(await f.editor.resolveRecoveryPublication(), true);
-        }
         assert.equal(f.editor.getSnapshot().recovery.selectedCheckoutId, checkout.checkoutId);
         assert.equal(f.editor.buffer(target('a.ts'))?.text, 'latest selected source');
         assert.equal(

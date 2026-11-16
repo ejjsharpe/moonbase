@@ -64,7 +64,7 @@ export function useWorkbenchMutations({
   /** Opens a file operation's dialog, Move to Trash, if the gate admits it. */
   function requestMutation(action: MutationAction, finalFocus?: MutationDialog['finalFocus']) {
     if (!canRequestMutation(action)) {
-      controller.reportMessage(mutationUnavailable);
+      controller.report(mutationUnavailable);
       return;
     }
     setDialog({
@@ -77,16 +77,14 @@ export function useWorkbenchMutations({
     if (!references.length) return;
     const snapshot = controller.getSnapshot();
     if (snapshot.preserving || isDialogOpen() || snapshot.closePrompt) {
-      controller.reportMessage(
-        'Finish the current editor dialog or preservation before importing files.',
-      );
+      controller.report('Finish the current editor dialog or preservation before importing files.');
       return;
     }
     if (
       !snapshot.recovery.openCheckoutIds.includes(checkout.checkoutId) ||
       !snapshot.recovery.checkouts.some((item) => checkoutKey(item) === checkoutKey(checkout))
     ) {
-      controller.reportMessage('Open the exact import checkout before importing files.');
+      controller.report('Open the exact import checkout before importing files.');
       return;
     }
     setDialog({

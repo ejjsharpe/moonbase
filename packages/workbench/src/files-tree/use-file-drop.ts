@@ -82,7 +82,7 @@ export function useFileDrop({
       colliding = findCollidingName(names);
     // The workspace would refuse them after the replace prompt; say why before asking anything.
     if (colliding) {
-      controller.reportMessage(
+      controller.report(
         `More than one dropped item is named “${colliding}”. Drop them into different folders.`,
       );
       return;
@@ -108,22 +108,20 @@ export function useFileDrop({
       !recovery.openCheckoutIds.includes(captured.checkoutId) ||
       !recovery.checkouts.some((target) => checkoutKey(target) === checkoutIdentity)
     ) {
-      controller.reportMessage('Open the exact import checkout before importing files.');
+      controller.report('Open the exact import checkout before importing files.');
       return;
     }
     if (latest.current.editing) {
-      controller.reportMessage('Finish naming the entry before importing files.');
+      controller.report('Finish naming the entry before importing files.');
       return;
     }
     if (latest.current.dialogOpen) {
-      controller.reportMessage(
-        'Finish the current editor dialog or preservation before importing files.',
-      );
+      controller.report('Finish the current editor dialog or preservation before importing files.');
       return;
     }
     // Each reference stands for its file, so the files' names are where they land.
     if (references.length !== names.length) {
-      controller.reportMessage('Only files and folders can be imported.');
+      controller.report('Only files and folders can be imported.');
       return;
     }
     const result = await runMutation(
@@ -186,7 +184,7 @@ export function useFileDrop({
         problem = findFileDropProblem();
       target.leaveDrag();
       if (!files.length) return;
-      if (problem) controller.reportMessage(problem);
+      if (problem) controller.report(problem);
       else void importDropped(files, folder).catch(controller.report);
     },
   };

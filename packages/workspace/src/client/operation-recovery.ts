@@ -102,7 +102,9 @@ export const getOperationStatus = (
   });
 
 /**
- * Records that a client has taken in an operation's effect on its recovery. Returns whether the
+ * Records that a client has taken in an operation's effect on its recovery. The store applied
+ * that effect itself when it published the operation, and edits name buffers, so a client's
+ * later edits cannot undo it: only the publication has to have happened. Returns whether the
  * host should now be told this client's own operation is settled.
  */
 export const acknowledgeOperation = (
@@ -130,11 +132,6 @@ export const acknowledgeOperation = (
       return yield* new RecoveryPublicationError({ pending: 'operation-acknowledgement' });
     if (record.result.outcome === 'uncertain')
       return yield* new UnresolvedWorkError({ state: 'operation-unacknowledgeable' });
-    if (
-      (yield* attempt(() => store.publication(input.clientId))) <=
-      (record.publicationRevisions[input.clientId] ?? observation?.revision ?? 0)
-    )
-      return yield* new RecoveryPublicationError({ pending: 'reconcile-first' });
     yield* attempt(() =>
       context.putOperation(id, {
         ...record,

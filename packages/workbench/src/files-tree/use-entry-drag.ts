@@ -193,7 +193,7 @@ export function useEntryDrag({
       const paths = selectDraggedPaths(row.path, selection);
       if (paths.length > maxDraggedEntries) {
         event.preventDefault();
-        controller.reportMessage(`Drag at most ${maxDraggedEntries} items at a time.`);
+        controller.report(`Drag at most ${maxDraggedEntries} items at a time.`);
         return;
       }
       if (editing || dialogOpen || !canRequestMutation({ checkout, kind: 'move', paths })) {

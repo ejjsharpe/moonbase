@@ -6,12 +6,7 @@ import { Effect, ManagedRuntime } from 'effect';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
 import { isWorkspaceHostError, toWireError } from '@moonbase/contracts/workspace-host-errors';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import {
-  ApplicationError,
-  emptyRecovery,
-  type CheckoutTarget,
-  type EditorRecovery,
-} from '@moonbase/contracts/workspace';
+import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 
 export function fixture() {
@@ -68,17 +63,3 @@ export const releaseNative = (input: {
   Effect.flatMap(WorkspaceHostService, (host) => host.releaseImports(input)).pipe(
     Effect.mapError(toWireError),
   );
-export function draft(
-  clientId: string,
-  checkout: CheckoutTarget,
-  text: string,
-  disk: { text: string; version: string },
-): EditorRecovery {
-  return {
-    ...emptyRecovery(clientId),
-    checkouts: [checkout],
-    openCheckoutIds: [checkout.checkoutId],
-    selectedCheckoutId: checkout.checkoutId,
-    drafts: [{ target: { checkout, path: 'file.txt' }, text, disk }],
-  };
-}

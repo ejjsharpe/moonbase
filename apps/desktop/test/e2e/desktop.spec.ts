@@ -11,6 +11,9 @@ import {
   checkTabMenu,
   explorerAction,
   recoveryState,
+  draftsOf,
+  openFilesOf,
+  byPath,
 } from '../fixtures/editor-fixture.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { callMain, callMainScript, editorClientId } from '../fixtures/window-ipc-fixture.ts';
@@ -50,7 +53,6 @@ declare global {
       reply: { ok: boolean; value?: { items: { message?: string }[] } };
     }[];
     fault: string | null;
-    noStatus: boolean;
     outage: string | null;
     restoreOn: string | null;
     held: string | null;
@@ -489,34 +491,51 @@ test('window close hides mounted Monaco; Quit Cancel preserves undo, then Save q
   db.close();
 });
 
-test('SQLite contention vetoes Quit Discard; exact resolution and fresh choice keep window usable', async () => {
+test('SQLite contention vetoes Quit Discard; the draft stays and the window stays usable', async () => {
   await open();
   await edit('draft survives contention');
   await expect
-    .poll(async () => (await recovery()).state.drafts[0]?.text)
+    .poll(async () => draftsOf((await recovery()).state)[0]?.text)
     .toBe('draft survives contention');
+  const retry = page.getByRole('button', { name: 'Retry keeping edits', exact: true });
+  const failedDrafts = () =>
+    app.evaluate(
+      () =>
+        globalThis.desktopTest.results.filter(
+          (result) => result.operation === 'updateDraft' && !result.reply.ok,
+        ).length,
+    );
   const db = new DatabaseSync(join(base, 'user-data/workspace-v1/moonbase-workspace-v1.sqlite'));
   db.exec('BEGIN IMMEDIATE');
   try {
     await quit();
     await page.getByRole('button', { name: 'Discard', exact: true }).click();
-    await expect(
-      page.getByRole('button', { name: 'Resolve recovery publication', exact: true }),
-    ).toBeVisible();
+    await expect(retry).toBeVisible();
+    // Text typed while the store is still locked: the window's own send of it fails too.
+    const input = page.getByRole('textbox', { name: 'a.ts editor', exact: true });
+    await input.focus();
+    await input.press('End');
+    await input.pressSequentially(' while locked');
+    await expect.poll(failedDrafts).toBeGreaterThan(0);
   } finally {
     db.exec('ROLLBACK');
     db.close();
   }
-  await page.getByRole('button', { name: 'Resolve recovery publication', exact: true }).click();
-  await expect(
-    page.getByRole('button', { name: 'Resolve recovery publication', exact: true }),
-  ).toHaveCount(0);
+  // The Discard did not commit, so the draft stays. The failed edit is not sent again on its own:
+  // the failure stays shown with the store free, and only Retry sends the text and clears it.
+  await expect(retry).toBeVisible();
+  expect(draftsOf((await recovery()).state)[0]?.text).toBe('draft survives contention');
+  await retry.click();
+  await expect(retry).toHaveCount(0);
+  await expect
+    .poll(async () => draftsOf((await recovery()).state)[0]?.text)
+    .toBe('draft survives contention while locked');
   await expect(page.getByRole('tab', { name: 'a.ts', exact: true })).toBeVisible();
   const input = page.getByRole('textbox', { name: 'a.ts editor', exact: true });
   await input.focus();
   await input.press('End');
   await input.pressSequentially(' still editable');
-  expect((await recovery()).state.drafts.length).toBeGreaterThan(0);
+  expect(draftsOf((await recovery()).state).length).toBeGreaterThan(0);
   const exited = app.waitForEvent('close');
   await quit();
   await page.getByRole('button', { name: 'Discard', exact: true }).click();
@@ -530,7 +549,9 @@ test('dirty recovery and comparison metadata restore across actual process resta
   await expect(page.getByRole('textbox', { name: / original$/ })).toHaveCount(1);
   await edit('dirty restored staged');
   await expect
-    .poll(async () => (await recovery()).state.drafts.find((d) => d.target.path === 'a.ts')?.text)
+    .poll(
+      async () => draftsOf((await recovery()).state).find((d) => d.target.path === 'a.ts')?.text,
+    )
     .toBe('dirty restored staged');
   await forceStop();
   await launch();
@@ -540,11 +561,13 @@ test('dirty recovery and comparison metadata restore across actual process resta
     page.getByRole('textbox', { name: 'HEAD ↔ working buffer original', exact: true }),
   ).toBeVisible();
   const restored = (await recovery()).state;
-  expect(restored.views[restored.selectedCheckoutId!].fileViews['a.ts']).toBe('staged');
+  expect(byPath(restored, restored.views[restored.selectedCheckoutId!].fileViews)['a.ts']).toBe(
+    'staged',
+  );
   await expect(
     page.locator('.view-line').filter({ hasText: 'dirty restored staged' }).first(),
   ).toBeVisible();
-  expect((await recovery()).state.drafts[0].disk.text).toContain('WORKING');
+  expect(draftsOf((await recovery()).state)[0].disk.text).toContain('WORKING');
   await capture('desktop-restored-diff');
   expect(errors).toEqual([]);
 });
@@ -552,7 +575,7 @@ test('dirty recovery and comparison metadata restore across actual process resta
 test('lost real Save reply retries original identity without replacing the native file again', async () => {
   await open();
   await edit('captured Save');
-  await expect.poll(async () => (await recovery()).state.drafts[0]?.text).toBe('captured Save');
+  await expect.poll(async () => draftsOf((await recovery()).state)[0]?.text).toBe('captured Save');
   await app.evaluate(() => {
     globalThis.desktopTest.fault = 'saveFile';
   });
@@ -565,7 +588,7 @@ test('lost real Save reply retries original identity without replacing the nativ
   await page.getByRole('button', { name: 'Retry Save', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Retry Save', exact: true })).toHaveCount(0);
   await expect
-    .poll(async () => (await recovery()).state.drafts[0]?.text)
+    .poll(async () => draftsOf((await recovery()).state)[0]?.text)
     .toBe('newer after lost reply');
   const saves = await app.evaluate(() =>
     globalThis.desktopTest.calls.filter((call) => call.tag === 'saveFile'),
@@ -959,61 +982,28 @@ test('native Trash moves only a captured temporary fixture and leaves its dirty 
     page.locator('.view-line').filter({ hasText: 'retained after native Trash' }).first(),
   ).toBeVisible();
   await expect
-    .poll(async () => (await recovery()).state.drafts.find((d) => d.target.path === name)?.text)
+    .poll(async () => draftsOf((await recovery()).state).find((d) => d.target.path === name)?.text)
     .toBe('retained after native Trash');
 });
 
-test('unknown final Quit publication retains the window and resolves only the exact committed receipt', async () => {
+test('a Quit Discard whose reply is lost stands once the store shows it committed, and Quit ends', async () => {
   await open();
   await edit('consented pending discard');
   await expect
-    .poll(async () => (await recovery()).state.drafts[0]?.text)
+    .poll(async () => draftsOf((await recovery()).state)[0]?.text)
     .toBe('consented pending discard');
   await app.evaluate(() => {
-    globalThis.desktopTest.fault = 'final-publication';
+    globalThis.desktopTest.fault = 'closeTab';
   });
-  await quit();
-  await page.getByRole('button', { name: 'Discard', exact: true }).click();
-  await expect(
-    page.getByRole('button', { name: 'Resolve recovery publication', exact: true }),
-  ).toBeVisible();
-  expect((await recovery()).state.drafts).toEqual([]); // The consented final publication actually committed.
-  await page.evaluate(() =>
-    Object.assign(window, { pendingDocumentIdentity: crypto.randomUUID() }),
-  );
-  const pendingDocument = await page.evaluate(
-    () => (window as unknown as { pendingDocumentIdentity: string }).pendingDocumentIdentity,
-  );
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload());
-  await page.evaluate(
-    () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
-  );
-  expect(
-    await page.evaluate(
-      () => (window as unknown as { pendingDocumentIdentity: string }).pendingDocumentIdentity,
-    ),
-  ).toBe(pendingDocument);
-  await expect(
-    page.getByRole('button', { name: 'Resolve recovery publication', exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.locator('.view-line').filter({ hasText: 'consented pending discard' }).first(),
-  ).toBeVisible();
-  expect(
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()),
-  ).toBe(true);
-  await app.evaluate(() => {
-    globalThis.desktopTest.noStatus = false;
-  });
-  await page.getByRole('button', { name: 'Resolve recovery publication', exact: true }).click();
-  await expect(
-    page.getByRole('button', { name: 'Resolve recovery publication', exact: true }),
-  ).toHaveCount(0);
-  await expect(page.locator('.view-line').filter({ hasText: 'WORKING' }).first()).toBeVisible();
   const exited = app.waitForEvent('close');
   await quit();
+  await page.getByRole('button', { name: 'Discard', exact: true }).click();
+  // The discard committed in the store and only its reply was lost: the editor reads the store,
+  // the Discard stands, and Quit goes on.
   await exited;
   expect(readFileSync(join(checkout, 'a.ts'), 'utf8')).toContain('WORKING');
+  await launch();
+  expect(draftsOf((await recovery()).state)).toEqual([]);
 });
 
 test('a command cancelled over real IPC is interrupted in main and leaves unrelated IO usable', async () => {
@@ -1051,7 +1041,7 @@ test('exact checkout tabs preserve independent dirty paths, views and closed met
   ).toHaveAttribute('aria-selected', 'true');
   await open();
   await edit('beta dirty a');
-  await expect.poll(async () => (await recovery()).state.drafts.length).toBe(2);
+  await expect.poll(async () => draftsOf((await recovery()).state).length).toBe(2);
   // Worktrees of one repository share a rail tile; the sidebar header switches between them.
   const first = page.getByRole('tab', { name: 'checkout · main', exact: true });
   await expect(first).toHaveCount(0);
@@ -1080,7 +1070,9 @@ test('exact checkout tabs preserve independent dirty paths, views and closed met
   const closed = await recovery();
   expect(closed.state.checkouts).toHaveLength(2);
   expect(closed.state.openCheckoutIds).toHaveLength(1);
-  expect(Object.values(closed.state.views).some((v) => v.openFiles.includes('a.ts'))).toBe(true);
+  expect(
+    Object.keys(closed.state.views).some((id) => openFilesOf(closed.state, id).includes('a.ts')),
+  ).toBe(true);
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = (async () => ({
       canceled: false,
@@ -1093,7 +1085,7 @@ test('exact checkout tabs preserve independent dirty paths, views and closed met
   await expect
     .poll(
       async () =>
-        (await recovery()).state.drafts.find((d) => d.target.checkout.root === beta)?.text,
+        draftsOf((await recovery()).state).find((d) => d.target.checkout.root === beta)?.text,
     )
     .toBe('beta dirty a');
 });
@@ -1138,7 +1130,7 @@ test('unacknowledged real move evidence restores dirty text on process restart w
   await open();
   await edit('draft before uncertain move');
   await expect
-    .poll(async () => (await recovery()).state.drafts[0]?.text)
+    .poll(async () => draftsOf((await recovery()).state)[0]?.text)
     .toBe('draft before uncertain move');
   const inode = statSync(join(checkout, 'a.ts')).ino;
   await page.getByRole('treeitem', { name: 'a.ts, unsaved, modified', exact: true }).click();
@@ -1166,7 +1158,7 @@ test('unacknowledged real move evidence restores dirty text on process restart w
     ),
   ).toBe(0);
   await expect.poll(async () => (await recovery()).operations.length).toBe(0);
-  const draft = (await recovery()).state.drafts.find((d) => d.target.path === 'moved.ts');
+  const draft = draftsOf((await recovery()).state).find((d) => d.target.path === 'moved.ts');
   expect(draft?.text).toBe('draft before uncertain move');
   expect(draft?.disk.text).toContain('WORKING');
 });
@@ -1176,7 +1168,7 @@ test('replacement consent cannot overwrite another open dirty draft or admit a n
   await edit('SOURCE DRAFT');
   await open('b.ts');
   await edit('DESTINATION DRAFT', 'b.ts');
-  await expect.poll(async () => (await recovery()).state.drafts.length).toBe(2);
+  await expect.poll(async () => draftsOf((await recovery()).state).length).toBe(2);
   await page.getByRole('treeitem', { name: 'a.ts, unsaved, modified', exact: true }).click();
   await page.getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
   await page.getByRole('menuitem', { name: 'Rename…', exact: true }).click();
@@ -1198,7 +1190,7 @@ test('replacement consent cannot overwrite another open dirty draft or admit a n
   ).toBe(0);
   expect(readFileSync(join(checkout, 'a.ts'), 'utf8')).toContain('WORKING');
   expect(readFileSync(join(checkout, 'b.ts'), 'utf8')).toContain('b = 2');
-  const drafts = (await recovery()).state.drafts;
+  const drafts = draftsOf((await recovery()).state);
   expect(drafts.find((d) => d.target.path === 'a.ts')?.text).toBe('SOURCE DRAFT');
   expect(drafts.find((d) => d.target.path === 'b.ts')?.text).toBe('DESTINATION DRAFT');
   await capture('desktop-collision');
@@ -1210,7 +1202,8 @@ test('a file named checkout remains data when its view and draft cross the autho
   await edit('retained reserved-looking filename', 'checkout');
   await expect
     .poll(
-      async () => (await recovery()).state.drafts.find((d) => d.target.path === 'checkout')?.text,
+      async () =>
+        draftsOf((await recovery()).state).find((d) => d.target.path === 'checkout')?.text,
     )
     .toBe('retained reserved-looking filename');
   await saveFile(page);

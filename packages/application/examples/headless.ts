@@ -1,18 +1,15 @@
+import { ManagedRuntime } from 'effect';
 import { createMoonbaseApplication } from '@moonbase/application';
-import { ApplicationError } from '@moonbase/contracts/errors';
-import {
-  emptyRecovery,
-  type CommandInput,
-  type EditorClient,
-  type RecoveryPublication,
-} from '@moonbase/contracts/workspace';
+import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { fauxChat } from '@moonbase/application/testing/faux-chat';
+import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
+import { ApplicationError } from '@moonbase/contracts/errors';
 
 function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) throw Error(message);
 }
 
-// Controlled capability for the commands exercised below.
+// An in-memory workspace for the commands exercised below.
 function editorCapabilities() {
   const checkout = {
     hostId: 'local',
@@ -23,57 +20,14 @@ function editorCapabilities() {
     branch: 'main',
     worktree: 'main' as 'main' | 'linked',
   };
-  const target = { checkout, path: 'example.txt' };
-  let disk = { text: 'original', version: '0' };
-  const publications = new Map<string, RecoveryPublication>();
-  const client: EditorClient = {
-    async command(operation, input) {
-      switch (operation) {
-        case 'loadRecovery':
-          return {
-            revision: 0,
-            state: emptyRecovery((input as CommandInput<'loadRecovery'>).clientId),
-            errors: [],
-            operations: [],
-          } as never;
-        case 'persistRecovery': {
-          const { clientId, requestId, expectedRevision } =
-            input as CommandInput<'persistRecovery'>;
-          const receipt = {
-            clientId,
-            requestId,
-            previousRevision: expectedRevision,
-            revision: expectedRevision + 1,
-          };
-          publications.set(requestId, receipt);
-          return receipt as never;
-        }
-        case 'getRecoveryPublication':
-          return (publications.get((input as CommandInput<'getRecoveryPublication'>).requestId) ??
-            null) as never;
-        case 'openCheckout':
-          return checkout as never;
-        case 'readFile':
-          return disk as never;
-        case 'saveFile':
-          disk = {
-            text: (input as CommandInput<'saveFile'>).text,
-            version: String(Number(disk.version) + 1),
-          };
-          return { kind: 'saved', disk, recoveryChanges: [] } as never;
-        case 'listDirectory':
-          return { entries: [{ path: target.path, directory: false }], partial: false } as never;
-        case 'getIgnoredPaths':
-          return { paths: [] } as never;
-        case 'gitStatus':
-          return { branch: checkout.branch, changes: [] } as never;
-        default:
-          throw Error(`Unexpected example operation: ${operation}`);
-      }
-    },
-    watch: () => async () => {},
+  const runtime = ManagedRuntime.make(
+    fauxWorkspace([{ checkout, files: { 'example.txt': 'original' } }]).layer,
+  );
+  return {
+    client: makeEditorClient(runtime),
+    target: { checkout, path: 'example.txt' },
+    dispose: () => runtime.dispose(),
   };
-  return { client, target };
 }
 
 /** Direct public API consumer; the same code runs from source and emitted browser-targeted JS. */
@@ -166,6 +120,7 @@ export async function checkHeadlessApplication() {
     } finally {
       for (const off of unsubscribe) off?.();
       await application.dispose();
+      await editor.dispose();
     }
   }
   return completed;

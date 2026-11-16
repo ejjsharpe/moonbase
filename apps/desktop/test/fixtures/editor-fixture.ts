@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { test, expect, type Page, type ElectronApplication } from '@playwright/test';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
+import type { RecoveryState } from '@moonbase/contracts/recovery';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { callMain, editorClientId } from './window-ipc-fixture.ts';
 
@@ -42,6 +43,19 @@ export async function expectSaveEnabled(editor: Page | Locator, enabled: boolean
 }
 
 export const filenameCases = ['__proto__', 'constructor', 'toString', 'hasOwnProperty'];
+/** The drafts a recovery keeps, each with its buffer's file. */
+export const draftsOf = (state: RecoveryState) =>
+  state.buffers.flatMap((b) => (b.draft ? [{ target: b.target, ...b.draft }] : []));
+/** The paths of a checkout's open tabs, in tab order. */
+export const openFilesOf = (state: RecoveryState, checkoutId: string) =>
+  (state.views[checkoutId]?.tabs ?? []).map(
+    (id) => state.buffers.find((b) => b.id === id)!.target.path,
+  );
+/** A checkout view's per-file memory (`fileViews` or `positions`) keyed by its open files' paths. */
+export const byPath = <T>(state: RecoveryState, memory: Record<string, T>) =>
+  Object.fromEntries(
+    state.buffers.flatMap((b) => (b.id in memory ? [[b.target.path, memory[b.id]!]] : [])),
+  ) as Record<string, T>;
 export const recoveryState = async (page: Page): Promise<RecoveryLoad> => {
   const reply = await callMain(page, 'loadRecovery', { clientId: editorClientId });
   if (!reply.ok) throw Error(JSON.stringify(reply.error));
@@ -93,23 +107,22 @@ export async function checkFilenameMaps(
     await edit(path, 'dirty ' + path);
     await input.press('ArrowLeft');
   }
-  await expect.poll(async () => (await recoveryState(page)).state.drafts.length).toBe(5);
+  await expect.poll(async () => draftsOf((await recoveryState(page)).state).length).toBe(5);
+  const positionsOf = (state: RecoveryState) =>
+    byPath(state, state.views[state.selectedCheckoutId!].positions);
   for (const path of filenameCases) {
     await expect
-      .poll(
-        async () =>
-          (await recoveryState(page)).state.views[
-            (await recoveryState(page)).state.selectedCheckoutId!
-          ].positions[path]?.staged?.column,
-      )
+      .poll(async () => positionsOf((await recoveryState(page)).state)[path]?.staged?.column)
       .toBeGreaterThan(1);
   }
   const persisted = (await recoveryState(page)).state,
-    view = persisted.views[persisted.selectedCheckoutId!];
+    view = persisted.views[persisted.selectedCheckoutId!],
+    fileViews = byPath(persisted, view.fileViews),
+    positions = byPath(persisted, view.positions);
   for (const path of filenameCases) {
-    expect(Object.hasOwn(view.fileViews, path)).toBe(true);
-    expect(view.fileViews[path]).toBe('staged');
-    expect(Object.hasOwn(view.positions, path)).toBe(true);
+    expect(Object.hasOwn(fileViews, path)).toBe(true);
+    expect(fileViews[path]).toBe('staged');
+    expect(Object.hasOwn(positions, path)).toBe(true);
   }
   expect(await prototypes(page)).toBe(before);
   page = await restart();
@@ -117,13 +130,15 @@ export async function checkFilenameMaps(
     page.getByRole('textbox', { name: 'hasOwnProperty editor', exact: true }),
   ).toBeVisible();
   const restarted = (await recoveryState(page)).state,
-    restored = restarted.views[restarted.selectedCheckoutId!];
+    restoredView = restarted.views[restarted.selectedCheckoutId!],
+    restoredFileViews = byPath(restarted, restoredView.fileViews),
+    restoredPositions = byPath(restarted, restoredView.positions);
   for (const path of filenameCases) {
     await page.getByRole('tab', { name: path, exact: true }).click();
     await expect(
       page.getByRole('textbox', { name: 'HEAD ↔ working buffer original', exact: true }),
     ).toBeVisible();
-    expect(restored.fileViews[path]).toBe('staged');
+    expect(restoredFileViews[path]).toBe('staged');
     await expect(page.getByRole('textbox', { name: / original$/ })).toHaveJSProperty(
       'readOnly',
       true,
@@ -134,10 +149,10 @@ export async function checkFilenameMaps(
         .filter({ hasText: 'dirty ' + path })
         .first(),
     ).toBeVisible();
-    expect(restarted.drafts.find((draft) => draft.target.path === path)?.disk.text).toBe(
+    expect(draftsOf(restarted).find((draft) => draft.target.path === path)?.disk.text).toBe(
       'saved ' + path,
     );
-    expect(restored.positions[path].staged).toEqual(view.positions[path].staged);
+    expect(restoredPositions[path].staged).toEqual(positions[path].staged);
   }
   expect(await prototypes(page)).toBe(before);
   await page.getByRole('tab', { name: sibling, exact: true }).click();
@@ -150,7 +165,7 @@ export async function checkFilenameMaps(
   await expect(page.getByRole('textbox', { name: '__proto__ editor', exact: true })).toBeVisible();
   await saveFile(page);
   await expect.poll(() => readFileSync(checkout + '/__proto__', 'utf8')).toBe('dirty __proto__');
-  await expect.poll(async () => (await recoveryState(page)).state.drafts.length).toBe(4);
+  await expect.poll(async () => draftsOf((await recoveryState(page)).state).length).toBe(4);
   return {
     unchangedPrototypes: true,
     persisted,
