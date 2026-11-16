@@ -11,14 +11,17 @@ import type { makeChatTargetClients } from './ipc/application-clients.ts';
 
 const chatStorageKeys = { local: 'moonbase.chat.local.v1', remote: 'moonbase.chat.remote.v2' };
 
+/** The renderer's root runtime: main's procedures over this document's IPC port, and the workspace. */
+export const makeIpcLayer = (bridge: DesktopBridge) =>
+  Layer.provideMerge(WorkspaceIpcLive, DesktopIpcLive(bridge));
+
 /**
- * Everything the renderer runs, as the one layer its root runtime builds: main's procedures over
- * this document's IPC port, the workspace over them, the editor, and the application with the
- * chat targets main names. `runtime` is that root runtime, which the chat's clients and
- * controller run on until CL-22.
+ * The document's editor and application, with the chat targets main names, built on the root
+ * runtime in a scope of their own: closing it releases them while the IPC port stays up to tell
+ * main. `runtime` is that root runtime, which the chat's clients and controller run on until
+ * CL-22.
  */
-export function makeRendererLayer(
-  bridge: DesktopBridge,
+export function makeDocumentLayer(
   runtime: ChatRunner,
   getTargetClients: (target: 'local' | 'remote') => ReturnType<typeof makeChatTargetClients>,
 ) {
@@ -58,11 +61,5 @@ export function makeRendererLayer(
       });
     }),
   );
-  return Layer.provideMerge(
-    application,
-    Layer.provideMerge(
-      editorLayer({ clientId: editorClientId }),
-      Layer.provideMerge(WorkspaceIpcLive, DesktopIpcLive(bridge)),
-    ),
-  );
+  return Layer.provideMerge(application, editorLayer({ clientId: editorClientId }));
 }

@@ -1,7 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { useEffect, useRef, useState } from 'react';
-import { Context, Effect, Exit, ManagedRuntime, SubscriptionRef } from 'effect';
+import { Context, Effect, Exit, Layer, ManagedRuntime, Scope, SubscriptionRef } from 'effect';
 import { RegistryProvider } from '@effect/atom-react';
 import {
   MoonbaseApplication,
@@ -20,7 +20,7 @@ import { WorkbenchStartupFailure } from './shell/startup-failure.tsx';
 import type { DesktopBridge } from '../ipc/desktop-bridge.ts';
 import { boundApplicationError } from '../ipc/ipc-errors.ts';
 import { makeChatTargetClients, makeShellClients } from './ipc/application-clients.ts';
-import { makeRendererLayer } from './renderer-layer.ts';
+import { makeDocumentLayer, makeIpcLayer } from './renderer-layer.ts';
 import * as stylex from '@stylexjs/stylex';
 import { workbench } from '@moonbase/ui/workbench';
 import '@moonbase/ui/reset.css';
@@ -45,7 +45,9 @@ function getTargetClients(target: 'local' | 'remote'): ReturnType<typeof makeCha
 const runner: ChatRunner = {
   runPromiseExit: (effect, options) => runtime.runPromiseExit(effect, options),
 };
-const runtime = ManagedRuntime.make(makeRendererLayer(window.moonbase, runner, getTargetClients));
+const runtime = ManagedRuntime.make(makeIpcLayer(window.moonbase));
+/** Where the editor and application live, closed as the document goes, before main is told. */
+const documentScope = Scope.makeUnsafe();
 /** A failure as the window's lifecycle reports it to main: the legacy error, Moonbase's text. */
 const toWindowError = (error: unknown) =>
   ApplicationError.is(error)
@@ -159,18 +161,25 @@ function StartupFailure({ error }: { error: ApplicationError }) {
 }
 
 const cancelled = () => new CancelledError({ operation: 'The action' });
-/** Releases the application, then the runtime with the editor; joins a release running. */
+/**
+ * Releases the application, then the editor with the document's scope; the IPC runtime stays to
+ * answer main. Joins a release running.
+ */
 let released: Promise<void> | undefined;
+let releaseApplication: Effect.Effect<void, unknown> = Effect.void;
 const release = () =>
   (released ??= runtime
-    .runPromise(Effect.flatMap(MoonbaseApplication, (app) => app.release))
-    .finally(() => runtime.dispose()));
+    .runPromise(releaseApplication)
+    .finally(() => runtime.runPromise(Scope.close(documentScope, Exit.void))));
 let isLive = () => false;
 
 try {
   configureMonacoWorkers();
-  const context = await runtime.context();
+  const context = await runtime.runPromise(
+    Layer.buildWithScope(makeDocumentLayer(runner, getTargetClients), documentScope),
+  );
   const service = Context.get(context, MoonbaseApplication);
+  releaseApplication = service.release;
   await runtime.runPromise(service.start);
   /**
    * Runs an action on the root runtime. One interrupted, or run once the runtime has gone (the
@@ -206,7 +215,9 @@ try {
     }
   });
   window.addEventListener('unload', () => {
-    void release().catch((error: unknown) => console.error(describeApplicationFailure(error)));
+    void release()
+      .catch((error: unknown) => console.error(describeApplicationFailure(error)))
+      .finally(() => runtime.dispose());
   });
   root.render(
     <RegistryProvider>
