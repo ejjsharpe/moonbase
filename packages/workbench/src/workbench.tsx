@@ -200,7 +200,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
    */
   function canRequestMutation(value: Action, now = false) {
     const dialogOpen = now ? actionRef.current || lookupRef.current : action || lookup;
-    return !dialogOpen && controller.canMutate(value);
+    return !dialogOpen && controller.mutations.admits(value);
   }
   // Rename, Duplicate and New File/Folder run directly from the tree, asking only to replace.
   const mutations = useMutationRunner(controller, state, (value) =>

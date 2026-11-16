@@ -28,14 +28,39 @@ export const maxMutationEntries = 128;
 export const mutationUnavailable =
   'File action unavailable. Check the selection and finish the current editor dialog or preservation.';
 
-type DirectMutationDependencies = {
-  /** The editor's state the gate reads: whether it is ready and not closing or preserving. */
-  state(): { ready: boolean; closing: boolean; preserving: boolean; recovery: EditorRecovery };
+/** The direct-mutation fields of the editor's snapshot. */
+export type DirectMutationState = {
+  /** Whether a direct mutation (`mutations.run`) is running, including while it asks. */
+  mutating: boolean;
+  replacePrompt: ReplacePrompt | null;
+};
+
+/**
+ * What the editor controller offers clients as `mutations`:
+ * - `admits(action)`: whether `run` would admit `action` now, the one mutation gate;
+ * - `run(action, destination)`: runs one file operation without a dialog, one at a time,
+ *   publishing `replacePrompt` before it replaces existing entries. It never rejects; a refusal
+ *   or failure is the result's `error`;
+ * - `answer(promptId, replace)`: answers the replace prompt.
+ */
+export type DirectMutationControls = Pick<DirectMutations, 'admits' | 'run' | 'answer'>;
+
+/** The editor the mutations run in: its published state, its mutations and its alerts. */
+type DirectMutationEditor = {
+  getSnapshot(): {
+    ready: boolean;
+    preserving: boolean;
+    closePrompt: unknown;
+    recovery: EditorRecovery;
+  };
   createMutation(action: MutationAction): EditorMutation;
+  report(error: unknown): void;
+};
+type DirectMutationRuntime = {
   /** Runs in the editor's scope, so disposing the editor interrupts it. */
   run<A>(effect: Effect.Effect<A, ApplicationError>): Promise<A>;
+  /** Publishes a new snapshot after `running` or `prompt` change. */
   notify(): void;
-  report(error: unknown): void;
 };
 
 /**
@@ -43,26 +68,26 @@ type DirectMutationDependencies = {
  * `prompt` only before replacing existing entries.
  */
 export class DirectMutations {
-  private dependencies: DirectMutationDependencies;
+  private editor: DirectMutationEditor;
+  private runtime: DirectMutationRuntime;
   private active = false;
+  private closed = false;
   private replacement?: { prompt: ReplacePrompt; answer: Deferred.Deferred<boolean> };
-  constructor(dependencies: DirectMutationDependencies) {
-    this.dependencies = dependencies;
+  constructor(editor: DirectMutationEditor, runtime: DirectMutationRuntime) {
+    this.editor = editor;
+    this.runtime = runtime;
   }
-  /** Whether a direct mutation is running, including while it asks. */
-  get running() {
-    return this.active;
-  }
-  get prompt() {
-    return this.replacement?.prompt ?? null;
+  snapshot(): DirectMutationState {
+    return { mutating: this.active, replacePrompt: this.replacement?.prompt ?? null };
   }
   /** The mutation gate: the editor is ready and idle, the checkout is open and the action fits. */
-  admits(action: MutationAction) {
-    const { ready, closing, preserving, recovery } = this.dependencies.state();
+  admits = (action: MutationAction) => {
+    const { ready, preserving, closePrompt, recovery } = this.editor.getSnapshot();
     return (
       ready &&
-      !closing &&
+      !this.closed &&
       !preserving &&
+      !closePrompt &&
       !this.active &&
       recovery.openCheckoutIds.includes(action.checkout.checkoutId) &&
       recovery.checkouts.some((target) => checkoutKey(target) === checkoutKey(action.checkout)) &&
@@ -71,50 +96,51 @@ export class DirectMutations {
         (action.paths.length >= 1 && action.paths.length <= maxMutationEntries)) &&
       (action.kind !== 'trash' || action.paths.length > 0)
     );
-  }
+  };
   /**
    * Applies `action` to `destination` if the gate admits it, asking before it replaces anything.
    * It never rejects: a refusal or failure is the result's `error`. The mutation is disposed
    * exactly once; disposing the editor ends it as declined.
    */
-  run(action: MutationAction, destination: string): Promise<MutationRunResult> {
+  run = (action: MutationAction, destination: string): Promise<MutationRunResult> => {
     if (!this.admits(action))
       return Promise.resolve({ completed: false, error: mutationUnavailable, items: [] });
     this.active = true;
-    this.dependencies.notify();
-    return this.dependencies.run(this.apply(action, destination)).catch((error: unknown) => ({
+    this.runtime.notify();
+    return this.runtime.run(this.apply(action, destination)).catch((error: unknown) => ({
       completed: false,
-      error: this.dependencies.state().closing ? '' : normalizeApplicationError(error).message,
+      error: this.closed ? '' : normalizeApplicationError(error).message,
       items: [],
     }));
-  }
-  answer(promptId: string, replace: boolean) {
+  };
+  answer = (promptId: string, replace: boolean) => {
     const replacement = this.replacement;
     if (replacement?.prompt.id !== promptId) return;
     this.replacement = undefined;
     Deferred.doneUnsafe(replacement.answer, Effect.succeed(replace === true));
-    this.dependencies.notify();
-  }
-  /** Declines a pending prompt as the editor closes. */
-  cancel() {
+    this.runtime.notify();
+  };
+  /** Refuses further mutations and declines a pending prompt as the editor closes. */
+  close() {
+    this.closed = true;
     const replacement = this.replacement;
     this.replacement = undefined;
     if (replacement) Deferred.doneUnsafe(replacement.answer, Effect.succeed(false));
   }
   private apply(action: MutationAction, destination: string) {
-    const { createMutation, report } = this.dependencies;
+    const editor = this.editor;
     return Effect.acquireUseRelease(
-      Effect.try({ try: () => createMutation(action), catch: normalizeApplicationError }),
+      Effect.try({ try: () => editor.createMutation(action), catch: normalizeApplicationError }),
       (mutation) => this.complete(mutation, destination),
       (mutation) =>
         Effect.tryPromise({ try: () => mutation.dispose(), catch: normalizeApplicationError }).pipe(
-          Effect.catch((error) => Effect.sync(() => report(error))),
+          Effect.catch((error) => Effect.sync(() => editor.report(error))),
         ),
     ).pipe(
       Effect.ensuring(
         Effect.sync(() => {
           this.active = false;
-          this.dependencies.notify();
+          this.runtime.notify();
         }),
       ),
     );
@@ -134,8 +160,7 @@ export class DirectMutations {
           return { completed: false, error: '', items: items() };
         completed = yield* apply(true);
       }
-      if (completed || this.dependencies.state().closing)
-        return { completed, error: '', items: items() };
+      if (completed || this.closed) return { completed, error: '', items: items() };
       return {
         completed: false,
         error: mutation.getSnapshot().error || 'File action unavailable. Try again.',
@@ -146,20 +171,20 @@ export class DirectMutations {
   /** Publishes the replace prompt and waits for `answer`, or for `cancel` as the editor closes. */
   private ask(replacements: EntryReference[]) {
     return Effect.gen({ self: this }, function* () {
-      if (this.dependencies.state().closing) return false;
+      if (this.closed) return false;
       const answer = yield* Deferred.make<boolean>();
       const prompt = {
         id: crypto.randomUUID(),
         paths: replacements.map((item) => item.target.path),
       };
       this.replacement = { prompt, answer };
-      this.dependencies.notify();
+      this.runtime.notify();
       return yield* Deferred.await(answer).pipe(
         Effect.ensuring(
           Effect.sync(() => {
             if (this.replacement?.prompt.id !== prompt.id) return;
             this.replacement = undefined;
-            this.dependencies.notify();
+            this.runtime.notify();
           }),
         ),
       );

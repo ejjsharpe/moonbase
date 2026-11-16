@@ -27,6 +27,8 @@ export { readOwn } from './record.ts';
 export {
   maxMutationEntries,
   mutationUnavailable,
+  type DirectMutationControls,
+  type DirectMutationState,
   type MutationRunResult,
   type ReplacePrompt,
 } from './direct-mutation.ts';

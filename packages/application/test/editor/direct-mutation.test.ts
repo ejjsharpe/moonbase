@@ -18,7 +18,7 @@ async function counted() {
     seen.add(prompt.id);
     replies.asked.push(prompt.paths);
     const reply = replies.reply;
-    if (reply !== null) queueMicrotask(() => f.editor.answerReplace(prompt.id, reply));
+    if (reply !== null) queueMicrotask(() => f.editor.mutations.answer(prompt.id, reply));
   });
   const disposals: number[] = [];
   const createMutation = f.editor.createMutation.bind(f.editor);
@@ -68,7 +68,7 @@ test('a direct mutation completes without consent when nothing is replaced', asy
   const f = await counted();
   try {
     assert.deepEqual(
-      await f.editor.runMutation({ checkout, kind: 'move', paths: ['a.ts'] }, 'moved.ts'),
+      await f.editor.mutations.run({ checkout, kind: 'move', paths: ['a.ts'] }, 'moved.ts'),
       done(['a.ts', 'moved.ts']),
     );
     assert.equal(await f.read('moved.ts'), 'const a = 1;');
@@ -85,7 +85,7 @@ test('several entries move into a folder and back to the root as one batch each'
     await f.editor.open(target('a.ts'));
     f.editor.edit(target('a.ts'), 'unsaved');
     const move = (paths: string[], destination: string) =>
-      f.editor.runMutation({ checkout, kind: 'move', paths }, destination);
+      f.editor.mutations.run({ checkout, kind: 'move', paths }, destination);
     assert.deepEqual(
       await move(['a.ts', 'c.ts'], 'folder'),
       done(['a.ts', 'folder/a.ts'], ['c.ts', 'folder/c.ts']),
@@ -110,10 +110,10 @@ test('a direct mutation asks before replacing and applies only with consent', as
   const f = await counted();
   try {
     const copy = { checkout, kind: 'copy' as const, paths: ['a.ts'] };
-    assert.deepEqual(await f.editor.runMutation(copy, 'b.ts'), declined);
+    assert.deepEqual(await f.editor.mutations.run(copy, 'b.ts'), declined);
     assert.equal(await f.read('b.ts'), 'second');
     f.reply = true;
-    assert.deepEqual(await f.editor.runMutation(copy, 'b.ts'), done(['a.ts', 'b.ts']));
+    assert.deepEqual(await f.editor.mutations.run(copy, 'b.ts'), done(['a.ts', 'b.ts']));
     assert.equal(await f.read('b.ts'), 'const a = 1;');
     assert.deepEqual(f.asked, [['b.ts'], ['b.ts']]);
     assert.equal(f.editor.getSnapshot().replacePrompt, null);
@@ -127,7 +127,7 @@ test('a direct mutation asks before replacing and applies only with consent', as
 test('a direct mutation returns its failure instead of throwing', async () => {
   const f = await counted();
   try {
-    const result = await f.editor.runMutation(
+    const result = await f.editor.mutations.run(
       { checkout, kind: 'create-file', paths: [] },
       'missing/new.ts',
     );
@@ -137,7 +137,7 @@ test('a direct mutation returns its failure instead of throwing', async () => {
     // A checkout that isn't open is refused before anything is created.
     const closed = { ...checkout, checkoutId: 'closed', root: '/memory/closed' };
     assert.deepEqual(
-      await f.editor.runMutation({ checkout: closed, kind: 'create-file', paths: [] }, 'new.ts'),
+      await f.editor.mutations.run({ checkout: closed, kind: 'create-file', paths: [] }, 'new.ts'),
       unavailable,
     );
     assert.deepEqual(f.disposals, [1]);
@@ -151,15 +151,15 @@ test('one direct mutation runs at a time; another is refused until it ends', asy
   try {
     f.reply = null;
     const copy = { checkout, kind: 'copy' as const, paths: ['a.ts'] };
-    const running = f.editor.runMutation(copy, 'b.ts');
+    const running = f.editor.mutations.run(copy, 'b.ts');
     assert.equal(f.editor.getSnapshot().mutating, true);
-    assert.equal(f.editor.canMutate(copy), false);
+    assert.equal(f.editor.mutations.admits(copy), false);
     const prompt = await nextPrompt(f.editor);
     assert.deepEqual(prompt.paths, ['b.ts']);
-    assert.deepEqual(await f.editor.runMutation(copy, 'other.ts'), unavailable);
-    f.editor.answerReplace(prompt.id, false);
+    assert.deepEqual(await f.editor.mutations.run(copy, 'other.ts'), unavailable);
+    f.editor.mutations.answer(prompt.id, false);
     assert.deepEqual(await running, declined);
-    assert.equal(f.editor.canMutate(copy), true);
+    assert.equal(f.editor.mutations.admits(copy), true);
     assert.deepEqual(f.disposals, [1]);
   } finally {
     await f.dispose();
@@ -170,7 +170,7 @@ test('disposing the editor while it asks declines the mutation and disposes it o
   const f = await counted();
   try {
     f.reply = null;
-    const running = f.editor.runMutation({ checkout, kind: 'copy', paths: ['a.ts'] }, 'b.ts');
+    const running = f.editor.mutations.run({ checkout, kind: 'copy', paths: ['a.ts'] }, 'b.ts');
     await nextPrompt(f.editor);
     await f.editor.dispose();
     assert.deepEqual(await running, declined);
@@ -185,7 +185,7 @@ test('a move may change only its name’s case, and a copy onto its source is re
   const f = await counted();
   try {
     assert.deepEqual(
-      await f.editor.runMutation({ checkout, kind: 'move', paths: ['a.ts'] }, 'A.ts'),
+      await f.editor.mutations.run({ checkout, kind: 'move', paths: ['a.ts'] }, 'A.ts'),
       done(['a.ts', 'A.ts']),
     );
     assert.equal(await f.read('A.ts'), 'const a = 1;');
@@ -196,7 +196,7 @@ test('a move may change only its name’s case, and a copy onto its source is re
     );
     for (const destination of ['b.ts', 'B.ts'])
       assert.deepEqual(
-        await f.editor.runMutation({ checkout, kind: 'copy', paths: ['b.ts'] }, destination),
+        await f.editor.mutations.run({ checkout, kind: 'copy', paths: ['b.ts'] }, destination),
         { completed: false, error: 'Choose a different name from the original.', items: [] },
       );
     assert.equal(await f.read('b.ts'), 'second');
@@ -231,10 +231,10 @@ test('a batch import with known names asks before replacing what they would land
       // Names match as the workspace folds them.
       nativeNames: ['NESTED.ts', 'new.ts'],
     };
-    assert.deepEqual(await f.editor.runMutation(action, 'folder'), declined);
+    assert.deepEqual(await f.editor.mutations.run(action, 'folder'), declined);
     assert.equal(dispatched.length, 0);
     f.reply = true;
-    const result = await f.editor.runMutation(action, 'folder');
+    const result = await f.editor.mutations.run(action, 'folder');
     assert.equal(result.completed, true);
     assert.deepEqual(f.asked, [['folder/nested.ts'], ['folder/nested.ts']]);
     assert.equal(dispatched.length, 1);
@@ -246,12 +246,12 @@ test('a batch import with known names asks before replacing what they would land
     );
     // Into the root with nothing in the way, it imports without asking.
     assert.equal(
-      (await f.editor.runMutation({ ...action, nativeNames: ['x.ts', 'y.ts'] }, '')).completed,
+      (await f.editor.mutations.run({ ...action, nativeNames: ['x.ts', 'y.ts'] }, '')).completed,
       true,
     );
     assert.deepEqual(dispatched[1].replacements, []);
     // Names that don't match the references are refused before anything is dispatched.
-    assert.deepEqual(await f.editor.runMutation({ ...action, nativeNames: ['only.ts'] }, ''), {
+    assert.deepEqual(await f.editor.mutations.run({ ...action, nativeNames: ['only.ts'] }, ''), {
       completed: false,
       error: 'Imported names don’t match the selection.',
       items: [],

@@ -44,7 +44,7 @@ export function useMutationRunner(
   useEffect(
     () => () => {
       const prompt = controller.getSnapshot().replacePrompt;
-      if (prompt) controller.answerReplace(prompt.id, false);
+      if (prompt) controller.mutations.answer(prompt.id, false);
     },
     [controller],
   );
@@ -63,7 +63,7 @@ export function useMutationRunner(
     }
     // `admits` includes the controller's gate, so the controller admits this run at once.
     setPromptFocus({ finalFocus });
-    const result = await controller.runMutation(action, destination);
+    const result = await controller.mutations.run(action, destination);
     if (result.error) fail(result.error);
     return result;
   };
@@ -72,7 +72,7 @@ export function useMutationRunner(
     <ReplacePrompt
       key={prompt.id}
       paths={prompt.paths}
-      answer={(replace) => controller.answerReplace(prompt.id, replace)}
+      answer={(replace) => controller.mutations.answer(prompt.id, replace)}
       finalFocus={promptFocus.finalFocus}
     />
   );
