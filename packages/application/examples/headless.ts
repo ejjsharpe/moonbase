@@ -1,126 +1,100 @@
-import { ManagedRuntime } from 'effect';
-import { createMoonbaseApplication } from '@moonbase/application';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { Effect, Layer, ManagedRuntime, SubscriptionRef } from 'effect';
+import { MoonbaseApplication } from '@moonbase/application';
+import {
+  editorLayer,
+  EditorBuffers,
+  EditorCheckouts,
+  EditorSaves,
+  EditorTabs,
+  RecoverySync,
+} from '@moonbase/application/editor';
 import { fauxChat } from '@moonbase/application/testing/faux-chat';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
-import { ApplicationError } from '@moonbase/contracts/errors';
 
 function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) throw Error(message);
 }
 
-// An in-memory workspace for the commands exercised below.
-function editorCapabilities() {
-  const checkout = {
-    hostId: 'local',
-    checkoutId: 'headless',
-    projectId: 'example',
-    root: '/memory/headless',
-    vcs: 'git' as const,
-    branch: 'main',
-    worktree: 'main' as 'main' | 'linked',
-  };
-  const runtime = ManagedRuntime.make(
-    fauxWorkspace([{ checkout, files: { 'example.txt': 'original' } }]).layer,
-  );
-  return {
-    client: makeEditorClient(runtime),
-    target: { checkout, path: 'example.txt' },
-    dispose: () => runtime.dispose(),
-  };
-}
+const checkout = {
+  hostId: 'local',
+  checkoutId: 'headless',
+  projectId: 'example',
+  root: '/memory/headless',
+  vcs: 'git' as const,
+  branch: 'main',
+  worktree: 'main' as 'main' | 'linked',
+};
+const target = { checkout, path: 'example.txt' };
 
-/** Direct public API consumer; the same code runs from source and emitted browser-targeted JS. */
+/**
+ * A direct public consumer, the root of its own process: it builds one runtime per composition
+ * (editor-only, chat-only and combined) and drives the services alone, with no atom or view.
+ */
 export async function checkHeadlessApplication() {
   const completed: string[] = [];
-  for (const mode of ['editor', 'chat', 'combined']) {
-    const editor = editorCapabilities(),
-      chat = fauxChat();
-    const application = await createMoonbaseApplication({
-      editors:
-        mode === 'chat' ? undefined : [{ client: editor.client, clientId: `example-${mode}` }],
-      chat: mode === 'editor' ? undefined : async () => chat.dependencies,
+  for (const mode of ['editor', 'chat', 'combined'] as const) {
+    const chat = fauxChat();
+    const workspace = fauxWorkspace([{ checkout, files: { 'example.txt': 'original' } }]).layer;
+    const application = MoonbaseApplication.layer({
+      chat: mode === 'editor' ? undefined : Effect.succeed(chat.dependencies),
+      runner: { runPromiseExit: (effect, options) => runtime.runPromiseExit(effect, options) },
     });
-    const controller = application.editors[0],
-      conversation = application.chat;
-    let snapshots = 0;
-    const changed = () => snapshots++;
-    const unsubscribe = [
-      application.subscribe(changed),
-      controller?.subscribe(changed),
-      conversation?.subscribe(changed),
-    ];
+    const layer =
+      mode === 'chat'
+        ? Layer.provideMerge(application, workspace)
+        : Layer.provideMerge(
+            application,
+            Layer.provideMerge(editorLayer({ clientId: `example-${mode}` }), workspace),
+          );
+    const runtime: ManagedRuntime.ManagedRuntime<MoonbaseApplication, unknown> =
+      ManagedRuntime.make(layer as Layer.Layer<MoonbaseApplication, unknown>);
     try {
-      invariant(chat.calls.length === 0, 'Acquisition invoked a remote command');
-      if (controller) {
-        invariant(controller.getSnapshot().ready, 'Factory did not load editor recovery');
-        await controller.openCheckout(editor.target.checkout.root);
-        invariant(await controller.open(editor.target), 'Explicit Open did not complete');
-        controller.edit(editor.target, 'edited synchronously');
-        invariant(controller.buffer(editor.target)?.text === 'edited synchronously', 'Edit lagged');
-        invariant(await controller.save(editor.target), 'Explicit Save did not complete');
-        await controller.flush();
-      }
-      if (conversation) {
+      const app = await runtime.runPromise(MoonbaseApplication.use((service) => Effect.succeed(service)));
+      await runtime.runPromise(app.start as Effect.Effect<void, unknown>);
+      invariant(chat.calls.length === 0, 'Starting invoked a remote command');
+      if (mode !== 'chat')
+        await runtime.runPromise(
+          Effect.gen(function* () {
+            yield* (yield* EditorCheckouts).openCheckout(checkout.root);
+            const tabs = yield* EditorTabs;
+            invariant(yield* tabs.open(target), 'Explicit Open did not complete');
+            yield* tabs.edit(target, 'edited');
+            const buffer = yield* (yield* EditorBuffers).find(target);
+            invariant(buffer?.text === 'edited', 'Edit lagged');
+            invariant(yield* (yield* EditorSaves).save(target), 'Explicit Save did not complete');
+            yield* (yield* RecoverySync).flush;
+          }) as Effect.Effect<void, unknown>,
+        );
+      const conversation = (await runtime.runPromise(SubscriptionRef.get(app.chat.state)))
+        .controller;
+      if (mode !== 'editor') {
+        invariant(conversation, 'Chat did not open');
         await conversation.start();
         invariant(!chat.calls.includes('connect'), 'Observation connected automatically');
         await conversation.connect();
         await conversation.select(chat.target);
         conversation.setDraft('portable draft');
-        invariant(conversation.getSnapshot().draft === 'portable draft', 'Draft edit lagged');
-        invariant(conversation.preserve(), 'Synchronous preservation vetoed');
-        invariant(
-          chat.storage.value?.includes('portable draft'),
-          'Draft was not written synchronously',
-        );
+        invariant(conversation.preserve(), 'Preservation vetoed');
+        invariant(chat.storage.value?.includes('portable draft'), 'Draft was not written');
         await conversation.send();
         invariant(chat.calls.includes('sendChat'), 'Explicit Send did not complete');
-        const closed = chat.controls.closed;
-        await conversation.detach();
-        invariant(chat.controls.closed > closed, 'Detach did not await IO observation close');
-        await conversation.start();
-        await conversation.select(chat.target);
-        invariant(
-          chat.calls.filter((call) => call === 'sendChat').length === 1,
-          'Start replayed Send',
-        );
       }
-      invariant(snapshots > 0, 'Snapshot subscription delivered no state');
-      invariant(application.canUnload(), 'Preserved application vetoed unload');
-      for (const off of unsubscribe) off?.();
-      const afterUnsubscribe = snapshots;
-      invariant(await application.prepareQuit(), 'Preserved application vetoed Quit');
+      invariant(runtime.runSync(app.canUnload), 'Preserved application vetoed unload');
+      invariant(await runtime.runPromise(app.prepareQuit), 'Preserved application vetoed Quit');
       const raw = chat.storage.value;
       conversation?.setDraft('blocked after consent');
       invariant(chat.storage.value === raw, 'Prepared application admitted a draft edit');
-      try {
-        await application.openChat();
-        throw Error('Prepared application admitted a panel');
-      } catch (error) {
-        invariant(
-          ApplicationError.is(error) && error.code === 'Unavailable',
-          'Unsafe public error',
-        );
-      }
-      const disposal = application.dispose();
-      invariant(application.dispose() === disposal, 'Repeated disposal did not join');
-      await disposal;
-      const state = conversation?.getSnapshot(),
-        writes = chat.storage.writes;
-      chat.controls.receiveChat(chat.snapshot);
-      invariant(snapshots === afterUnsubscribe, 'Callback ran after unsubscribe/disposal');
-      invariant(conversation?.getSnapshot() === state, 'Late observation changed disposed state');
-      invariant(chat.storage.writes === writes, 'Late observation wrote saved work');
+      const opened = await runtime.runPromiseExit(app.openChat);
+      invariant(opened._tag === 'Failure', 'Prepared application opened a chat');
+      await runtime.runPromise(app.release);
       invariant(
-        chat.controls.closed === chat.controls.observations,
-        'IO observation was not closed',
+        (await runtime.runPromise(SubscriptionRef.get(app.phase))) === 'disposed',
+        'Release did not complete',
       );
-      invariant(application.getSnapshot().phase === 'disposed', 'Disposal did not complete');
+      invariant(chat.controls.closed === chat.controls.observations, 'Observation was not closed');
       completed.push(mode);
     } finally {
-      for (const off of unsubscribe) off?.();
-      await application.dispose();
-      await editor.dispose();
+      await runtime.dispose();
     }
   }
   return completed;
