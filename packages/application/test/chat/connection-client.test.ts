@@ -4,7 +4,7 @@ import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { chatHostVersion, chatProtocolVersion } from '@moonbase/contracts/host';
-import { makeConnectionClient } from '@moonbase/application/runtime/clients';
+import { makeConnectionClient } from '@moonbase/application/chat/clients';
 import { ConnectionService, type ConnectionServiceShape } from '@moonbase/contracts/services';
 import { releaseResource } from '@moonbase/effect';
 

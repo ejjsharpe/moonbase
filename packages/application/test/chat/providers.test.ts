@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createMoonbaseApplication } from '@moonbase/application';
+import { Effect } from 'effect';
+import { makeApplication } from '../runtime/application-fixture.ts';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ProviderSetupClient, ProviderState } from '@moonbase/contracts/providers';
 import { fauxChat } from '@moonbase/application/testing/faux-chat';
@@ -28,10 +29,11 @@ test('setup rejects stale status replies and keeps transient answers out of snap
     },
     watch: () => async () => {},
   };
-  const application = await createMoonbaseApplication({
-    chat: async () => ({ ...fixture.dependencies, providers }),
+  const application = makeApplication({
+    chat: Effect.succeed(({ ...fixture.dependencies, providers })),
   });
-  const controller = application.chat!.providers!;
+  await application.start();
+  const controller = (await application.chat())!.providers!;
   try {
     const refresh = controller.refresh();
     await controller.login('openai');
@@ -56,12 +58,17 @@ test('provider setup cleanup failure remains part of the root disposal outcome',
     },
     watch: () => async () => {},
   };
-  const application = await createMoonbaseApplication({
-    chat: async () => ({ ...fixture.dependencies, providers }),
+  const application = makeApplication({
+    chat: Effect.succeed(({ ...fixture.dependencies, providers })),
   });
-  await application.chat!.providers!.login('openai');
-  await assert.rejects(application.dispose(), /Setup cleanup failed/);
-  assert.equal(application.getSnapshot().phase, 'failed');
+  await application.start();
+  await (await application.chat())!.providers!.login('openai');
+  await assert.rejects(
+    application.app((a) => a.release),
+    /Setup cleanup failed/,
+  );
+  assert.equal((await application.snapshot()).phase, 'failed');
+  await application.dispose();
 });
 test('sign-in progress comes from the watch, never from polling, and a failed watch reopens', async () => {
   const fixture = fauxChat(),
@@ -84,14 +91,15 @@ test('sign-in progress comes from the watch, never from polling, and a failed wa
       };
     },
   };
-  const application = await createMoonbaseApplication({
-    chat: async () => ({
+  const application = makeApplication({
+    chat: Effect.succeed(({
       ...fixture.dependencies,
       providers,
       transcriptLimits: { watchRetryMs: [0] },
-    }),
+    })),
   });
-  const controller = application.chat!.providers!;
+  await application.start();
+  const controller = (await application.chat())!.providers!;
   try {
     await controller.refresh();
     assert.equal(watches, 1);

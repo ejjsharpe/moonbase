@@ -228,7 +228,7 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
             if (!kept || now.releasing || now.current !== taken) return false;
             yield* step((s) => ({ ...s, current: null }));
             yield* update((s) => ({ ...s, status: 'closed', controller: null }));
-            yield* Effect.forkIn(Effect.exit(ownCleanup(taken)), root);
+            yield* Effect.forkIn(Effect.exit(ownCleanup(taken)), root, { startImmediately: true });
             return true;
           }).pipe(
             Effect.ensuring(
@@ -294,6 +294,7 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
             yield* stopAll;
             const taken = yield* Ref.modify(steps, (s) => [s, { ...s, current: null }]);
             taken.current?.model.setAdmissionsOpen(false);
+            yield* update((s) => ({ ...s, controller: null }));
             if (taken.opening) yield* Effect.exit(Deferred.await(taken.opening));
             if (taken.switching) yield* Effect.exit(Deferred.await(taken.switching));
             // An acquisition that finished meanwhile released its own instance.

@@ -3,6 +3,7 @@ import { EditorPreservation } from '../editor/preservation/preservation-service.
 import { EditorSession } from '../editor/session/session-service.ts';
 import { EditorLoader } from '../editor/editor-loader.ts';
 import type { EditorFailure } from '../editor/editor-errors.ts';
+import type { ChatController } from '../chat/index.ts';
 import { ChatHost, type ChatHostOptions, type ChatHostState } from './chat-host-service.ts';
 import {
   ApplicationLifecycleError,
@@ -33,6 +34,14 @@ export type MoonbaseApplicationShape = {
   /** Releases the chat and fences the editor, as the document goes; the editor closes after. */
   readonly release: Effect.Effect<void, ApplicationLifecycleError>;
   readonly reportCleanup: (error: unknown) => Effect.Effect<void>;
+  /** Opens the chat while the application is live. */
+  readonly openChat: Effect.Effect<ChatController | null, ApplicationLifecycleError>;
+  /** Closes the chat, keeping its drafts, while the application is live. */
+  readonly closeChat: Effect.Effect<boolean>;
+  /** Switches chat targets while the application is live. */
+  readonly selectChatTarget: (
+    id: string,
+  ) => Effect.Effect<ChatController | null, ApplicationLifecycleError>;
 };
 
 /** Reads the application's snapshot from its phase and the chat it shows. */
@@ -90,6 +99,11 @@ export class MoonbaseApplication extends Context.Service<
           yield* SubscriptionRef.set(phase, 'live');
         });
         const vetoed = Effect.as(restore, false);
+        /** Whether chat may open, close or switch: the application is live and not checking. */
+        const live = Effect.map(
+          Effect.all([getPhase, Ref.get(quit)]),
+          ([current, { checkingUnload }]) => current === 'live' && !checkingUnload,
+        );
 
         const prepare = Effect.gen(function* () {
           yield* chat.settle;
@@ -183,6 +197,16 @@ export class MoonbaseApplication extends Context.Service<
             return yield* released;
           }),
           reportCleanup: chat.reportCleanup,
+          openChat: Effect.flatMap(live, (open) =>
+            open ? chat.open : Effect.fail(new ApplicationLifecycleError({ reason: 'closing' })),
+          ),
+          closeChat: Effect.flatMap(live, (open) => (open ? chat.close : Effect.succeed(false))),
+          selectChatTarget: (id) =>
+            Effect.flatMap(live, (open) =>
+              open
+                ? chat.select(id)
+                : Effect.fail(new ApplicationLifecycleError({ reason: 'target-unavailable' })),
+            ),
         } satisfies MoonbaseApplicationShape;
       }),
     );
