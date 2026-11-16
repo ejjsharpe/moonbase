@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatSnapshot, ChatTarget } from '@moonbase/contracts/chat';
-import { makeChatClient } from '@moonbase/application/runtime/clients';
+import { makeChatClient } from '@moonbase/application/chat/clients';
 import { ChatService, type ChatServiceShape } from '@moonbase/contracts/services';
 import { releaseResource } from '@moonbase/effect';
 

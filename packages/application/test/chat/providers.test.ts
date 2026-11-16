@@ -30,7 +30,7 @@ test('setup rejects stale status replies and keeps transient answers out of snap
     watch: () => async () => {},
   };
   const application = makeApplication({
-    chat: Effect.succeed(({ ...fixture.dependencies, providers })),
+    chat: Effect.succeed({ ...fixture.dependencies, providers }),
   });
   await application.start();
   const controller = (await application.chat())!.providers!;
@@ -59,7 +59,7 @@ test('provider setup cleanup failure remains part of the root disposal outcome',
     watch: () => async () => {},
   };
   const application = makeApplication({
-    chat: Effect.succeed(({ ...fixture.dependencies, providers })),
+    chat: Effect.succeed({ ...fixture.dependencies, providers }),
   });
   await application.start();
   await (await application.chat())!.providers!.login('openai');
@@ -92,11 +92,11 @@ test('sign-in progress comes from the watch, never from polling, and a failed wa
     },
   };
   const application = makeApplication({
-    chat: Effect.succeed(({
+    chat: Effect.succeed({
       ...fixture.dependencies,
       providers,
       transcriptLimits: { watchRetryMs: [0] },
-    })),
+    }),
   });
   await application.start();
   const controller = (await application.chat())!.providers!;
