@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, FiberSet, Layer, type Scope, Stream } from 'effect';
+import { Cause, Clock, Context, Effect, FiberSet, Layer, type Scope, Stream } from 'effect';
 import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import type { HostInput } from '@moonbase/contracts/workspace-host';
 import {
@@ -75,7 +75,9 @@ const makeFileHost = Effect.gen(function* () {
   const worktrees = yield* WorkspaceWorktrees;
   const references = yield* NativeReferences;
   const observations = yield* WorkspaceObservations;
-  const services = yield* Effect.context<HostServices>();
+  // Operations keep their caller's `Clock`: the composed one times only the journal, so a test
+  // clock that holds the journal still never freezes a helper's limits or its stop.
+  const services = Context.omit(Clock.Clock)(yield* Effect.context<HostServices>());
   // Every operation runs here, so closing the host stops each and waits for it to end before
   // anything it may use is released.
   const operations = yield* FiberSet.make<unknown, WorkspaceHostError>();
