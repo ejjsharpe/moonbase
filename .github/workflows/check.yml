@@ -120,8 +120,6 @@ jobs:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
       - run: bun install --frozen-lockfile
-      # First: the daemon and desktop suites run the helper while the workspace suite would build it.
-      - run: node packages/workspace/scripts/build-native.mjs
       - run: node scripts/prepare-ripgrep.mjs
       - run: echo "MOONBASE_TEST_RIPGREP=$PWD/dist/tools/ripgrep/rg" >> "$GITHUB_ENV"
       # The runner is ephemeral, so the chat-runtime suite may create and delete a temporary keychain.

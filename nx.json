@@ -1,5 +1,6 @@
 {
   "analytics": false,
+  "defaultBase": "origin/main",
   "targetDefaults": {
     "typecheck": {
       "cache": true,
