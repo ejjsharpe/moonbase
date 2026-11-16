@@ -1,0 +1,145 @@
+import type { RefObject } from 'react';
+import * as stylex from '@stylexjs/stylex';
+import { ContextMenu as Menu } from '@base-ui/react/context-menu';
+import { overlays } from '@moonbase/ui/overlays';
+import { workbench } from '@moonbase/ui/workbench';
+import { Icon } from '@moonbase/ui/icons';
+import type { FileTarget, FileView } from '@moonbase/contracts/workspace';
+import type { EditorController, EditorSnapshot } from '@moonbase/application/editor';
+
+type Buffer = EditorSnapshot['buffers'][number];
+import type { FocusReturn } from '../focus-return.ts';
+
+const closeLabels = ['Close', 'Close Others', 'Close to the Right', 'Close All'] as const;
+
+/**
+ * A tab's right-click menu: Keep Open, the Close commands, moving the tab, Save, its file view and
+ * Reopen. The Close commands act on the tabs open when the menu opened, `captured`, and return
+ * focus to the tab strip.
+ */
+export function EditorTabMenu({
+  controller,
+  preserving,
+  file,
+  buffer: current,
+  openFiles,
+  captured,
+  fileView,
+  git,
+  openedByKeyboard,
+  run,
+  closeFiles,
+  withFocus,
+}: {
+  controller: EditorController;
+  preserving: boolean;
+  file: FileTarget;
+  buffer: Buffer | undefined;
+  /** The checkout's open tabs, in order. */
+  openFiles: readonly string[];
+  captured: RefObject<string[]>;
+  fileView: FileView;
+  /** Whether the checkout has Git's comparisons. */
+  git: boolean;
+  /** Whether the menu was just opened from the keyboard, so its first item takes focus; asking clears it. */
+  openedByKeyboard: () => boolean;
+  run: (work: Promise<unknown>) => void;
+  closeFiles: (paths: string[]) => Promise<boolean>;
+  withFocus: FocusReturn['withFocus'];
+}) {
+  const { checkout, path } = file;
+  function closeFor(label: (typeof closeLabels)[number]) {
+    const paths = captured.current;
+    if (label === 'Close') return [path];
+    if (label === 'Close Others') return paths.filter((other) => other !== path);
+    if (label === 'Close to the Right') return paths.slice(paths.indexOf(path) + 1);
+    return paths;
+  }
+  return (
+    <Menu.Portal>
+      <Menu.Positioner {...stylex.props(overlays.positioner)}>
+        <Menu.Popup
+          onFocus={(event) => {
+            if (openedByKeyboard())
+              event.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+          }}
+          {...stylex.props(overlays.popup, overlays.options)}>
+          <Menu.Item {...stylex.props(overlays.option)} onClick={() => controller.keepOpen(file)}>
+            Keep Open
+          </Menu.Item>
+          {closeLabels.map((label) => (
+            <Menu.Item
+              key={label}
+              {...stylex.props(overlays.option)}
+              onClick={() => run(withFocus(closeFiles(closeFor(label)), 'strip', true))}>
+              {label}
+            </Menu.Item>
+          ))}
+          <Menu.Item
+            {...stylex.props(overlays.option)}
+            onClick={() => controller.reorder(checkout, path, openFiles.indexOf(path) - 1)}>
+            Move tab left
+          </Menu.Item>
+          <Menu.Item
+            {...stylex.props(overlays.option)}
+            onClick={() => controller.reorder(checkout, path, openFiles.indexOf(path) + 1)}>
+            Move tab right
+          </Menu.Item>
+          <Menu.Item
+            {...stylex.props(overlays.option)}
+            disabled={!current || current.saving || preserving}
+            onClick={() => run(controller.save(file))}>
+            {current?.pendingSave ? 'Retry Save' : 'Save'}
+          </Menu.Item>
+          <Menu.SubmenuRoot>
+            <Menu.SubmenuTrigger {...stylex.props(overlays.option)}>
+              File view <Icon name="chevronRight" />
+            </Menu.SubmenuTrigger>
+            <Menu.Portal>
+              <Menu.Positioner {...stylex.props(overlays.positioner)}>
+                <Menu.Popup {...stylex.props(overlays.popup, overlays.options)}>
+                  <Menu.RadioGroup
+                    aria-label="File view"
+                    value={fileView}
+                    onValueChange={(view: FileView) => run(controller.open(file, { view }))}>
+                    {(git
+                      ? (['file', 'staged', 'unstaged', 'untracked'] as const)
+                      : (['file'] as const)
+                    ).map((view) => (
+                      <Menu.RadioItem
+                        key={view}
+                        value={view}
+                        closeOnClick
+                        {...stylex.props(
+                          overlays.option,
+                          fileView === view && workbench.fileSelected,
+                        )}>
+                        {view === 'file' ? 'File' : view}
+                      </Menu.RadioItem>
+                    ))}
+                    {(current?.conflict || fileView === 'conflict') && (
+                      <Menu.RadioItem
+                        value="conflict"
+                        closeOnClick
+                        {...stylex.props(
+                          overlays.option,
+                          fileView === 'conflict' && workbench.fileSelected,
+                        )}>
+                        Save conflict
+                      </Menu.RadioItem>
+                    )}
+                  </Menu.RadioGroup>
+                </Menu.Popup>
+              </Menu.Positioner>
+            </Menu.Portal>
+          </Menu.SubmenuRoot>
+          <Menu.Item
+            {...stylex.props(overlays.option)}
+            onClick={() => run(controller.reopen(checkout))}>
+            Reopen Closed Files
+          </Menu.Item>
+        </Menu.Popup>
+      </Menu.Positioner>
+    </Menu.Portal>
+  );
+}

@@ -1,5 +1,13 @@
 import * as stylex from '@stylexjs/stylex';
-import { useEffect, useId, useLayoutEffect, useMemo, useRef } from 'react';
+import {
+  useEffect,
+  useId,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  type Ref,
+} from 'react';
 import { controls } from '@moonbase/ui/controls';
 import { filesUI } from '@moonbase/ui/files';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
@@ -32,6 +40,7 @@ import type { RunMutation } from '../mutation-runner.tsx';
 
 /** A checkout's files as a tree of `treeitem` rows, with its menu, name editing and drops. */
 export function FilesTree({
+  ref,
   controller,
   state,
   checkout,
@@ -59,6 +68,8 @@ export function FilesTree({
   canPasteInto,
   onPaste,
 }: {
+  /** The tree element, where focus returns to the tree. */
+  ref?: Ref<HTMLDivElement>;
   controller: EditorController;
   state: EditorSnapshot;
   checkout: CheckoutTarget;
@@ -119,6 +130,7 @@ export function FilesTree({
     anchor = useRef<string | null>(null),
     mounted = useRef(true),
     id = useId();
+  useImperativeHandle(ref, () => treeElement.current!, []);
   useEffect(() => {
     mounted.current = true;
     return () => {

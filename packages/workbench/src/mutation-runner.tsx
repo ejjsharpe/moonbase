@@ -10,8 +10,7 @@ import {
   type MutationAction,
   type MutationRunResult,
 } from '@moonbase/application/editor';
-import { Popup } from './popup.tsx';
-import { styles } from './workbench-styles.ts';
+import { Popup, popupStyles } from './popup.tsx';
 
 /**
  * Runs a file operation without its dialog, asking only before replacing existing entries.
@@ -30,14 +29,15 @@ export type RunMutation = (
 ) => Promise<MutationRunResult>;
 
 /**
- * One workbench's direct mutations, run by the editor controller, which admits one at a time.
- * `admits` adds the workbench's own part of the gate (no dialog of its own is open); `confirmation`
- * renders the controller's replace prompt. Unmounting declines a pending prompt.
+ * One workbench's direct mutations, run by the editor controller, whose gate admits one at a
+ * time. The workbench adds its own part of the gate: none run while `dialogOpen`, one of its own
+ * dialogs being open. `confirmation` renders the controller's replace prompt. Unmounting declines a
+ * pending prompt.
  */
 export function useMutationRunner(
   controller: EditorController,
   state: EditorSnapshot,
-  admits: (action: MutationAction) => boolean,
+  dialogOpen: () => boolean,
 ) {
   // Where the running mutation's replace prompt returns focus as it closes.
   const [promptFocus, setPromptFocus] = useState<{ finalFocus?: () => HTMLElement | false }>({});
@@ -57,11 +57,11 @@ export function useMutationRunner(
       if (inlineError) inlineError(message);
       else controller.reportMessage(message);
     };
-    if (!admits(action)) {
+    if (dialogOpen()) {
       fail(mutationUnavailable);
       return { completed: false, error: mutationUnavailable, items: [] };
     }
-    // `admits` includes the controller's gate, so the controller admits this run at once.
+    // The controller applies the rest of the gate, refusing with `mutationUnavailable`.
     setPromptFocus({ finalFocus });
     const result = await controller.mutations.run(action, destination);
     if (result.error) fail(result.error);
@@ -101,11 +101,11 @@ function ReplacePrompt({
       initialFocus={cancel}
       finalFocus={finalFocus}
       onClose={() => answer(false)}>
-      <Dialog.Description {...stylex.props(styles.path)}>
+      <Dialog.Description {...stylex.props(popupStyles.path)}>
         {paths.join(', ')} {paths.length === 1 ? 'already exists' : 'already exist'} and will be
         replaced.
       </Dialog.Description>
-      <div {...stylex.props(styles.dialogActions)}>
+      <div {...stylex.props(popupStyles.actions)}>
         <Button {...stylex.props(controls.button)} onClick={() => answer(true)}>
           Replace
         </Button>
