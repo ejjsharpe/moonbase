@@ -375,3 +375,42 @@ test('a lost Discard reply the store cannot be asked about is settled by the nex
     await f.dispose();
   }
 });
+
+for (const kind of ['close', 'quit', 'reload'] as const)
+  test(`text typed after a vetoed ${kind} Discard survives the Discard settling later`, async () => {
+    const f = await fixture();
+    try {
+      f.editor.edit(target, 'discarded later');
+      await f.editor.flush();
+      // The close commits but its reply is lost, and the store can't be asked about it yet.
+      f.memory.failNext('closeTab', 'Reply lost', true, 'Uncertain');
+      f.memory.failNext('loadRecovery', 'Store unavailable', false, 'Unavailable');
+      let done: boolean;
+      if (kind === 'reload') {
+        f.memory.externalWrite(target, 'reloaded');
+        done = await f.editor.reload(target).catch(() => false);
+      } else
+        done = await answering(
+          f.editor,
+          () => (kind === 'close' ? f.editor.close([target]) : f.editor.prepareQuit()),
+          async () => 'discard',
+        );
+      assert.equal(done, false);
+      f.editor.edit(target, 'TYPED AFTER VETO');
+      await f.editor.flush();
+      // The store showed the close committed; the newer text stays, shown and stored.
+      assert.equal(f.editor.buffer(target)?.text, 'TYPED AFTER VETO');
+      assert.equal(f.editor.getSnapshot().recoveryReady, true);
+      const stored = await f.stored();
+      assert.deepEqual(
+        stored.drafts.map((draft) => draft.text),
+        ['TYPED AFTER VETO'],
+      );
+      assert.deepEqual(stored.tabs(checkout.checkoutId), ['a.ts']);
+      const next = await f.restart();
+      assert.equal(next.buffer(target)?.text, 'TYPED AFTER VETO');
+      await next.dispose();
+    } finally {
+      await f.dispose();
+    }
+  });

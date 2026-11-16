@@ -271,6 +271,10 @@ class EditorModelState {
         return !loaded.state.buffers.some((buffer) => buffer.id === bufferId);
       },
       finishClose: (edit, reopen) => this.finishClose(edit.bufferId, reopen),
+      shownTab: (bufferId) => {
+        const tab = [...this.tabs.values()].find((shown) => shown.id === bufferId);
+        return tab && structuredClone(tab.target);
+      },
       notify: () => this.emit(),
       report: (error) => this.report(error),
     });

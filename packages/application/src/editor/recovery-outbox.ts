@@ -39,6 +39,8 @@ type OutboxDependencies = {
    * its tab closes, or (`reopen`, a Discard that keeps the tab) its text goes back to disk.
    */
   finishClose(edit: CloseRequest, reopen: OpenRequest | undefined): void;
+  /** Where the editor shows the buffer's tab, if it does. */
+  shownTab(bufferId: string): FileTarget | undefined;
   notify(): void;
   report(error: unknown): void;
 };
@@ -147,7 +149,8 @@ export class RecoveryOutbox {
     );
   }
   private async drain() {
-    const { clientId, send, ready, resync, settleClose, finishClose, notify } = this.dependencies;
+    const { clientId, send, ready, resync, settleClose, finishClose, shownTab, notify } =
+      this.dependencies;
     let resyncs = 0;
     const refuse = (error: ApplicationError) => {
       // A refusal that a resync can't resolve ends here, with the failure shown.
@@ -158,7 +161,15 @@ export class RecoveryOutbox {
       // A close whose outcome is unknown: the store says whether it committed.
       await ready();
       const { edit, reopen } = this.unsettled;
-      if (await settleClose(edit.bufferId)) finishClose(edit, reopen);
+      if (await settleClose(edit.bufferId)) {
+        // The close was vetoed and its draft stayed shown, so text typed since is newer than the
+        // Discard: the buffer opens again in the store ahead of that text, rather than losing it.
+        const shown = this.isDraftPending(edit.bufferId) && shownTab(edit.bufferId);
+        if (shown) {
+          this.queue.unshift({ kind: 'openTab', bufferId: edit.bufferId, target: shown });
+          this.updateLayout();
+        } else finishClose(edit, reopen);
+      }
       this.unsettled = undefined;
       this.failure = undefined;
       notify();
