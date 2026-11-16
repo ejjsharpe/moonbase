@@ -115,6 +115,14 @@ export async function checkFilenameMaps(
     await expect
       .poll(async () => positionsOf((await recoveryState(page)).state)[path]?.staged?.column)
       .toBeGreaterThan(1);
+    // Each draft is kept over the text its Save wrote.
+    await expect
+      .poll(
+        async () =>
+          draftsOf((await recoveryState(page)).state).find((draft) => draft.target.path === path)
+            ?.disk.text,
+      )
+      .toBe('saved ' + path);
   }
   const persisted = (await recoveryState(page)).state,
     view = persisted.views[persisted.selectedCheckoutId!],
