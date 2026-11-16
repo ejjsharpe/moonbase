@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { setImmediate } from 'node:timers/promises';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import {
@@ -35,8 +35,8 @@ import {
   TranscriptChangedError,
 } from '@moonbase/contracts/chat-errors';
 import { cid, eid } from './documents.ts';
-import { checkCursor, previewText } from './text.ts';
-import { decodeTranscriptCursor, type FindPartPosition, type TranscriptCursor } from './cursors.ts';
+import { previewText } from './text.ts';
+import { openTranscriptCursor, writeCursor, type FindPartPosition } from './cursors.ts';
 
 /** Long reads yield to other work after this many parts. */
 const partsPerTurn = 32;
@@ -46,15 +46,6 @@ const partOverheadBytes = 512;
 /** History and live snapshots embed only the first manifest page of each transcript. */
 const embeddedManifestParts = 4;
 
-const keys = new WeakMap<Harness, Buffer>();
-function getKey(harness: Harness) {
-  let key = keys.get(harness);
-  if (!key) {
-    key = randomBytes(32);
-    keys.set(harness, key);
-  }
-  return key;
-}
 export const hashJson = (value: unknown) =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const getLabel = (value: string, fallback = 'Tool') =>
@@ -62,37 +53,6 @@ const getLabel = (value: string, fallback = 'Tool') =>
 /** Whether a read failed because a nested tool's source ended under it; reading again may pass. */
 export const isNestedSourceEnded = (error: unknown) =>
   error instanceof TranscriptChangedError && error.change === 'nested-ended';
-export function sealCursor(harness: Harness, value: TranscriptCursor) {
-  const body = Buffer.from(JSON.stringify(value)).toString('base64url');
-  const mac = createHmac('sha256', getKey(harness)).update(body).digest('base64url');
-  return checkCursor(body + '.' + mac);
-}
-export function openCursor(
-  harness: Harness,
-  encoded: string,
-  kind: TranscriptCursor['kind'],
-  binding: string,
-) {
-  try {
-    const [body, mac, extra] = encoded.split('.');
-    const expected = createHmac('sha256', getKey(harness)).update(body).digest();
-    const actual = Buffer.from(mac, 'base64url');
-    if (
-      extra !== undefined ||
-      actual.toString('base64url') !== mac ||
-      actual.length !== expected.length ||
-      !timingSafeEqual(actual, expected)
-    )
-      throw Error();
-    const value = decodeTranscriptCursor(
-      JSON.parse(Buffer.from(body, 'base64url').toString('utf8')),
-    );
-    if (value.kind !== kind || value.binding !== binding) throw Error();
-    return value;
-  } catch {
-    throw new InvalidChatRequestError({ problem: 'transcript-cursor' });
-  }
-}
 export async function readEntry(harness: Harness, target: ChatTarget, id: string) {
   const entry = await harness.commit((tx) => tx.entry(eid(id)), context);
   if (!entry || entry.conversationId !== cid(target.conversationId))
@@ -179,7 +139,6 @@ export async function captureTranscript(
 }
 type TranscriptCapture = Awaited<ReturnType<typeof captureTranscript>>;
 export function getLiveSource(
-  harness: Harness,
   target: ChatTarget,
   capture: TranscriptCapture,
 ): ChatTranscriptSource | undefined {
@@ -196,25 +155,21 @@ export function getLiveSource(
   if (task.conversationId !== cid(target.conversationId))
     throw new ChatStoreError({ problem: 'live-task' });
   const attempt = live.generation?.attempt ?? 0;
-  const incarnation = createHmac('sha256', getKey(harness))
-    .update(
-      JSON.stringify({
-        target,
-        boundary: String(boundary ?? ''),
-        task: String(task.id),
-        attempt,
-        phase:
-          task.state.checkpoint &&
-          typeof task.state.checkpoint === 'object' &&
-          !Array.isArray(task.state.checkpoint)
-            ? task.state.checkpoint.phase
-            : null,
-        restarts: task.restarts ?? 0,
-        tools: live.tools?.map((tool) => [tool.taskId ?? null, tool.entry ?? null, tool.status]),
-        nestedTools: live.nestedTools?.map((tool) => [tool.taskId, tool.status]),
-      }),
-    )
-    .digest('hex');
+  const incarnation = hashJson({
+    target,
+    boundary: String(boundary ?? ''),
+    task: String(task.id),
+    attempt,
+    phase:
+      task.state.checkpoint &&
+      typeof task.state.checkpoint === 'object' &&
+      !Array.isArray(task.state.checkpoint)
+        ? task.state.checkpoint.phase
+        : null,
+    restarts: task.restarts ?? 0,
+    tools: live.tools?.map((tool) => [tool.taskId ?? null, tool.entry ?? null, tool.status]),
+    nestedTools: live.nestedTools?.map((tool) => [tool.taskId, tool.status]),
+  });
   return {
     kind: 'live',
     target,
@@ -788,7 +743,7 @@ async function getLiveTranscript(
 ): Promise<TranscriptParts> {
   const capture = captured ?? (await captureTranscript(harness, source.target));
   signal?.throwIfAborted();
-  const actual = getLiveSource(harness, source.target, capture);
+  const actual = getLiveSource(source.target, capture);
   if (!actual || hashJson(actual) !== hashJson(source))
     throw new TranscriptChangedError({ change: 'view' });
   const message = capture.live.generation?.message as Message | undefined;
@@ -996,7 +951,7 @@ async function projectManifest(
     source,
     parts: page,
     nextCursor: more
-      ? sealCursor(harness, {
+      ? writeCursor({
           kind: 'manifest',
           binding: hashJson(source),
           revision: hashJson(seen),
@@ -1086,7 +1041,7 @@ export async function readTranscriptContent(
   signal?.throwIfAborted();
   if (!selection) {
     const cursor = input.cursor
-      ? openCursor(harness, input.cursor, 'manifest', hashJson(source))
+      ? openTranscriptCursor(input.cursor, 'manifest', hashJson(source))
       : undefined;
     const transcript =
       source.kind === 'entry'
@@ -1107,7 +1062,7 @@ export async function readTranscriptContent(
     };
   }
   const binding = hashJson({ source, selection });
-  const offset = input.cursor ? openCursor(harness, input.cursor, 'content', binding).position : 0;
+  const offset = input.cursor ? openTranscriptCursor(input.cursor, 'content', binding).position : 0;
   const part = await readSelectedPart(harness, source, selection, signal);
   signal?.throwIfAborted();
   if (offset > selection.bytes) throw new InvalidChatRequestError({ problem: 'content-position' });
@@ -1130,8 +1085,6 @@ export async function readTranscriptContent(
     encoding: part.encoding,
     data: bytes.subarray(offset, end).toString(part.encoding),
     nextCursor:
-      end < selection.bytes
-        ? sealCursor(harness, { kind: 'content', binding, position: end })
-        : null,
+      end < selection.bytes ? writeCursor({ kind: 'content', binding, position: end }) : null,
   };
 }

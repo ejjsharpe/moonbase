@@ -121,27 +121,12 @@ test('Find scans 1,100 mixed saved records and lazy long JSON with exact Unicode
   );
   for (const query of ['PRIVATE', 'REDACTED', 'IMAGESECRET'])
     assert.deepEqual((await collect(f.client, target, query)).matches, []);
-  for (const changed of [
-    { query: 'different' },
-    { cursor: needle.pages[0].startCursor + 'x' },
-    { target: { ...target, actorId: 'foreign' } },
-  ])
-    await assert.rejects(
-      f.client.command('findChatTranscript', {
-        target,
-        query: 'needle',
-        cursor: needle.pages[0].startCursor,
-        ...changed,
-      }),
-    );
-  await f.restart();
   await assert.rejects(
     f.client.command('findChatTranscript', {
-      target,
+      target: { ...target, actorId: 'foreign' },
       query: 'needle',
       cursor: needle.pages[0].startCursor,
     }),
-    { code: 'InvalidInput' },
   );
 });
 

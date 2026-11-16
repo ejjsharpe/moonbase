@@ -8,14 +8,14 @@ import {
   type ChatInput,
   type ChatOutput,
 } from '@moonbase/contracts/chat';
+import { getEntryTextValues, hashJson, scanAdjacentEntry } from './transcript.ts';
 import {
-  getEntryTextValues,
-  hashJson,
-  openCursor,
-  scanAdjacentEntry,
-  sealCursor,
-} from './transcript.ts';
-import { maximumFindPathChars, maximumFindPathDepth, type TranscriptCursor } from './cursors.ts';
+  maximumFindPathChars,
+  maximumFindPathDepth,
+  openTranscriptCursor,
+  writeCursor,
+  type TranscriptCursor,
+} from './cursors.ts';
 import { checkChatReplySize } from '@moonbase/contracts/chat-validation';
 import { InvalidChatRequestError } from '@moonbase/contracts/chat-errors';
 
@@ -182,7 +182,7 @@ export async function findTranscript(
 ): Promise<ChatOutput<'findChatTranscript'>> {
   const { target, query } = input;
   const binding = hashJson({ operation: 'findChatTranscript', target, query });
-  const cursor = input.cursor ? openCursor(harness, input.cursor, 'find', binding) : undefined;
+  const cursor = input.cursor ? openTranscriptCursor(input.cursor, 'find', binding) : undefined;
   const upper = cursor
     ? (cursor.upper ?? null)
     : String((await scanAdjacentEntry(harness, target, 'older'))?.id ?? '') || null;
@@ -200,7 +200,7 @@ export async function findTranscript(
     bytes: 0,
   };
   let next = cursor ?? start;
-  const startCursor = sealCursor(harness, start);
+  const startCursor = writeCursor(start);
   const matches: ChatOutput<'findChatTranscript'>['matches'] = [];
   const expression = getChatFindExpression(query);
   const subtrees = getSubtreeCache(harness);
@@ -216,7 +216,7 @@ export async function findTranscript(
       upperEntryId: upper,
       matches,
       progress: { entries: next.entries ?? 0, bytes: next.bytes ?? 0 },
-      nextCursor: complete ? null : sealCursor(harness, next),
+      nextCursor: complete ? null : writeCursor(next),
     });
   while (
     upper &&

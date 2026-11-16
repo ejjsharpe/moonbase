@@ -22,10 +22,10 @@ import type {
   ChatRun,
 } from '@moonbase/contracts/chat';
 import { Metadata, cid, eid, getSettings, type ChatSettings } from './documents.ts';
-import { checkCursor, previewText } from './text.ts';
+import { previewText } from './text.ts';
 import { readObject } from '@moonbase/contracts/common';
 import { InvalidChatRequestError } from '@moonbase/contracts/chat-errors';
-import { decodeHistoryCursor } from './cursors.ts';
+import { openHistoryCursor, openTranscriptCursor, writeCursor } from './cursors.ts';
 import { decodeStoredMetadata } from './stored-records.ts';
 import {
   isNestedSourceEnded,
@@ -34,8 +34,6 @@ import {
   hashJson,
   projectEntryTranscript,
   projectLiveTranscript,
-  sealCursor,
-  openCursor,
   readEntry,
   scanAdjacentEntry,
 } from './transcript.ts';
@@ -69,13 +67,7 @@ const readCursor = (
 ): Cursor | undefined => {
   if (value === undefined) return undefined;
   try {
-    const decoded = decodeHistoryCursor(
-      JSON.parse(
-        new TextDecoder('utf8', { fatal: true }).decode(
-          Buffer.from(checkCursor(value), 'base64url'),
-        ),
-      ),
-    );
+    const decoded = openHistoryCursor(value);
     if (decoded.kind !== kind || decoded.conversationId !== conversationId) throw Error();
     return decoded.scan === null || decoded.scan?.start === true
       ? undefined
@@ -84,12 +76,8 @@ const readCursor = (
     throw new InvalidChatRequestError({ problem: 'history-cursor' });
   }
 };
-const writeCursor = (scan: Cursor | undefined, kind: string, conversationId?: string) =>
-  scan === undefined
-    ? null
-    : checkCursor(
-        Buffer.from(JSON.stringify({ kind, conversationId, scan })).toString('base64url'),
-      );
+const writeScanCursor = (scan: Cursor | undefined, kind: string, conversationId?: string) =>
+  scan === undefined ? null : writeCursor({ kind, conversationId, scan });
 
 export function summarizeConversation(
   session: ChatSession,
@@ -177,7 +165,7 @@ export async function listConversations(
     }
     scan = page.next;
   } while (scan && ++scanned < rowsPerPage);
-  return { conversations, nextCursor: writeCursor(scan, 'list', getCursorIdentity(identity)) };
+  return { conversations, nextCursor: writeScanCursor(scan, 'list', getCursorIdentity(identity)) };
 }
 export async function readHistory(
   harness: Harness,
@@ -230,7 +218,7 @@ export async function readHistory(
     const entry = await projectEntry(harness, target, row, signal);
     const candidate = {
       entries: [...entries, entry],
-      olderCursor: writeCursor(
+      olderCursor: writeScanCursor(
         page.next,
         'history',
         getCursorIdentity(identity) + ':' + target.conversationId,
@@ -239,7 +227,7 @@ export async function readHistory(
     if (Buffer.byteLength(JSON.stringify(candidate)) > historyPageBytes) {
       return {
         entries,
-        olderCursor: writeCursor(
+        olderCursor: writeScanCursor(
           scan ?? { start: true },
           'history',
           getCursorIdentity(identity) + ':' + target.conversationId,
@@ -252,7 +240,7 @@ export async function readHistory(
   } while (scan && ++scanned < rowsPerPage);
   return {
     entries,
-    olderCursor: writeCursor(
+    olderCursor: writeScanCursor(
       scan ?? undefined,
       'history',
       getCursorIdentity(identity) + ':' + target.conversationId,
@@ -367,7 +355,7 @@ async function projectSnapshotOnce(
     ]
       .filter(Boolean)
       .join(' ');
-  const source = getLiveSource(harness, target, captured);
+  const source = getLiveSource(target, captured);
   if (run && source) run.transcript = await projectLiveTranscript(harness, source, captured);
   const base = {
     transcriptBoundary: captured.boundary ? String(captured.boundary) : null,
@@ -400,7 +388,7 @@ async function projectSnapshotOnce(
     page.entries.pop();
     page.olderCursor = page.entries.length
       ? history.continuations[page.entries.length - 1]
-      : writeCursor(
+      : writeScanCursor(
           { start: true },
           'history',
           getCursorIdentity(identity) + ':' + target.conversationId,
@@ -464,7 +452,7 @@ export async function readHistoryAround(
   await readEntry(harness, target, input.entryId);
   signal?.throwIfAborted();
   const binding = hashJson({ target, entryId: input.entryId });
-  const cursor = input.cursor ? openCursor(harness, input.cursor, 'around', binding) : undefined;
+  const cursor = input.cursor ? openTranscriptCursor(input.cursor, 'around', binding) : undefined;
   const upper = cursor?.upper ?? String((await scanAdjacentEntry(harness, target, 'older'))!.id);
   const entries: ChatHistoryPage['entries'] = [];
   async function scanNearby(direction: 'older' | 'newer', position: number) {
@@ -497,7 +485,7 @@ export async function readHistoryAround(
     last = Number(entries[0]?.id ?? input.entryId);
   async function sealContinuation(direction: 'older' | 'newer', position: number) {
     return (await scanNearby(direction, position))
-      ? sealCursor(harness, { kind: 'around', binding, position, upper, direction })
+      ? writeCursor({ kind: 'around', binding, position, upper, direction })
       : null;
   }
   return {

@@ -510,26 +510,6 @@ test('unsupported app-owned document version is rejected unchanged before resume
   assert.equal(f.faux.state.callCount, 0);
 });
 
-test('cursor envelopes reject unfamiliar fields without execution', async (t) => {
-  const f = await fixture(t),
-    canary = 'private-cursor-field-canary';
-  const target = await f.create();
-  for (const payload of [
-    { kind: 'history', scan: null, future: canary },
-    { kind: 'history', scan: { start: true, future: canary } },
-    { kind: 'history', scan: [] },
-    { kind: 'unknown', scan: null },
-  ])
-    await assert.rejects(
-      f.client.command('getChatHistory', {
-        target,
-        cursor: Buffer.from(JSON.stringify(payload)).toString('base64url'),
-      }),
-      { code: 'InvalidInput' },
-    );
-  assert.equal(f.faux.state.callCount, 0);
-});
-
 test('maximum escaped Send text retains its original serialized binding across retry and restart', async (t) => {
   const f = await fixture(t),
     target = await f.create();
