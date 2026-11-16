@@ -61,8 +61,9 @@ export function useMutationRunner(
       fail(mutationUnavailable);
       return { completed: false, error: mutationUnavailable, items: [] };
     }
-    // The controller applies the rest of the gate, refusing with `mutationUnavailable`.
-    setPromptFocus({ finalFocus });
+    // The controller applies the rest of the gate, refusing with `mutationUnavailable`. Only an
+    // admitted run takes the prompt's focus, so a refused one never redirects a running one's.
+    if (controller.mutations.admits(action)) setPromptFocus({ finalFocus });
     const result = await controller.mutations.run(action, destination);
     if (result.error) fail(result.error);
     return result;
