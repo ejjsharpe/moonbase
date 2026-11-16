@@ -2,7 +2,8 @@ import { acquireEditor, answering } from './editor-model-fixture.ts';
 import { holding, storedRecovery } from './editor-fixture.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ManagedRuntime } from 'effect';
+import { Effect, Layer, ManagedRuntime } from 'effect';
+import { TestClock } from 'effect/testing';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
@@ -20,12 +21,14 @@ const target = { checkout, path: 'a.ts' };
 const other = { checkout, path: 'b.ts' };
 const third = { checkout, path: 'c.ts' };
 
-/** An editor whose commands the test can hold, with a.ts open. */
-async function fixture() {
+/** An editor whose commands the test can hold, with a.ts open; `testClock` runs its debounce. */
+async function fixture(testClock = false) {
   const memory = fauxWorkspace([
       { checkout, files: { 'a.ts': 'disk', 'b.ts': 'other', 'c.ts': 'third' } },
     ]),
-    runtime = ManagedRuntime.make(memory.layer),
+    runtime = ManagedRuntime.make(
+      testClock ? Layer.merge(memory.layer, TestClock.layer()) : memory.layer,
+    ),
     raw = makeEditorClient(runtime);
   const { client, sent, hold } = holding(raw);
   const editor = await acquireEditor(runtime, { client, clientId: 'outbox' });
@@ -35,6 +38,7 @@ async function fixture() {
   await editor.flush();
   return {
     memory,
+    runtime,
     raw,
     editor,
     sent,
@@ -326,7 +330,7 @@ for (const kind of ['close', 'quit', 'reload'] as const)
   });
 
 test('a Discard whose reply is lost, and not committed, keeps the draft shown and stored', async () => {
-  const f = await fixture();
+  const f = await fixture(true);
   try {
     f.editor.edit(target, 'kept');
     await f.editor.flush();
@@ -338,6 +342,9 @@ test('a Discard whose reply is lost, and not committed, keeps the draft shown an
     );
     assert.equal(done, false);
     assert.equal(f.editor.buffer(target)?.text, 'kept');
+    // The debounce's send after the veto has nothing to send, and leaves the failure shown.
+    await f.runtime.runPromise(TestClock.adjust('1 second'));
+    for (let turn = 0; turn < 10; turn++) await f.runtime.runPromise(Effect.yieldNow).then(tick);
     assert.equal(f.editor.getSnapshot().recoveryFailed, true);
     assert.equal((await f.stored()).drafts[0]?.text, 'kept');
     // Nothing sends the Discard again: the user's retry leaves the draft where it is.

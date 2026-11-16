@@ -497,28 +497,39 @@ test('SQLite contention vetoes Quit Discard; the draft stays and the window stay
   await expect
     .poll(async () => draftsOf((await recovery()).state)[0]?.text)
     .toBe('draft survives contention');
+  const retry = page.getByRole('button', { name: 'Retry keeping edits', exact: true });
+  const failedDrafts = () =>
+    app.evaluate(
+      () =>
+        globalThis.desktopTest.results.filter(
+          (result) => result.operation === 'updateDraft' && !result.reply.ok,
+        ).length,
+    );
   const db = new DatabaseSync(join(base, 'user-data/workspace-v1/moonbase-workspace-v1.sqlite'));
   db.exec('BEGIN IMMEDIATE');
   try {
     await quit();
     await page.getByRole('button', { name: 'Discard', exact: true }).click();
-    await expect(
-      page.getByRole('button', { name: 'Retry keeping edits', exact: true }),
-    ).toBeVisible();
+    await expect(retry).toBeVisible();
+    // Text typed while the store is still locked: the window's own send of it fails too.
+    const input = page.getByRole('textbox', { name: 'a.ts editor', exact: true });
+    await input.focus();
+    await input.press('End');
+    await input.pressSequentially(' while locked');
+    await expect.poll(failedDrafts).toBeGreaterThan(0);
   } finally {
     db.exec('ROLLBACK');
     db.close();
   }
-  // The Discard did not commit, so the draft stays. Once the store is free, Retry (or the next
-  // flush the window makes on its own path) clears the failure without sending the Discard again.
-  await page
-    .getByRole('button', { name: 'Retry keeping edits', exact: true })
-    .click({ timeout: 2000 })
-    .catch(() => {});
-  await expect(page.getByRole('button', { name: 'Retry keeping edits', exact: true })).toHaveCount(
-    0,
-  );
+  // The Discard did not commit, so the draft stays. The failed edit is not sent again on its own:
+  // the failure stays shown with the store free, and only Retry sends the text and clears it.
+  await expect(retry).toBeVisible();
   expect(draftsOf((await recovery()).state)[0]?.text).toBe('draft survives contention');
+  await retry.click();
+  await expect(retry).toHaveCount(0);
+  await expect
+    .poll(async () => draftsOf((await recovery()).state)[0]?.text)
+    .toBe('draft survives contention while locked');
   await expect(page.getByRole('tab', { name: 'a.ts', exact: true })).toBeVisible();
   const input = page.getByRole('textbox', { name: 'a.ts editor', exact: true });
   await input.focus();

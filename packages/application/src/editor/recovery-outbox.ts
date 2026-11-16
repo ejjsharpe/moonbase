@@ -132,7 +132,9 @@ export class RecoveryOutbox {
     // The debounce fiber belongs to the editor's scope; a newer change replaces it.
     this.debounce(
       Effect.sleep('150 millis').pipe(
-        Effect.andThen(Effect.tryPromise({ try: () => this.flush(), catch: (error) => error })),
+        Effect.andThen(
+          Effect.tryPromise({ try: () => this.sendQueued(true), catch: (error) => error }),
+        ),
         Effect.catch((error) => Effect.sync(() => report(error))),
       ),
     );
@@ -142,16 +144,27 @@ export class RecoveryOutbox {
    * again on its own: the next change, flush or Retry sends it.
    */
   flush(): Promise<void> {
+    return this.sendQueued(false);
+  }
+  /**
+   * A `scheduled` send (the debounce's, not a flush or a Retry) clears a failure only by
+   * committing an edit made since: with nothing to send, the failure stays shown.
+   */
+  private sendQueued(scheduled: boolean): Promise<void> {
     return this.dependencies.execute(
       this.lock.withPermits(1)(
-        Effect.tryPromise({ try: () => this.drain(), catch: (error) => error as ApplicationError }),
+        Effect.tryPromise({
+          try: () => this.drain(scheduled),
+          catch: (error) => error as ApplicationError,
+        }),
       ),
     );
   }
-  private async drain() {
+  private async drain(scheduled: boolean) {
     const { clientId, send, ready, resync, settleClose, finishClose, shownTab, notify } =
       this.dependencies;
-    let resyncs = 0;
+    let resyncs = 0,
+      sent = false;
     const refuse = (error: ApplicationError) => {
       // A refusal that a resync can't resolve ends here, with the failure shown.
       this.failure = error;
@@ -171,7 +184,7 @@ export class RecoveryOutbox {
         } else finishClose(edit, reopen);
       }
       this.unsettled = undefined;
-      this.failure = undefined;
+      if (!scheduled) this.failure = undefined;
       notify();
     }
     while (this.queue.length) {
@@ -186,14 +199,16 @@ export class RecoveryOutbox {
           if (written !== this.committedLayout) {
             await send('updateLayout', { clientId, layout });
             this.committedLayout = written;
+            sent = true;
           }
         } else {
           const { kind: _kind, ...input } = edit;
           await send(edit.kind, { clientId, ...input } as RecoveryEditInput<typeof edit.kind>);
           // The store moved the tab (a reopened one goes last): the next layout is sent again.
           if (edit.kind !== 'updateDraft') this.committedLayout = undefined;
+          sent = true;
         }
-        this.failure = undefined;
+        if (sent || !scheduled) this.failure = undefined;
       } catch (caught) {
         const error = caught as ApplicationError;
         this.sending = undefined;
@@ -233,7 +248,7 @@ export class RecoveryOutbox {
       }
     }
     // Everything made so far has committed, or was abandoned with the action that made it.
-    this.failure = undefined;
+    if (sent || !scheduled) this.failure = undefined;
     notify();
   }
   /** Forgets what is queued; for an editor that is closing. */
