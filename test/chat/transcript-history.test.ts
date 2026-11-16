@@ -4,7 +4,7 @@ import { Harness } from '@earendil-works/pi-durable';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { ManagedRuntime } from 'effect';
-import { createMoonbaseApplication } from '@moonbase/application';
+import { openChatApplication } from './chat-application-fixture.ts';
 import { makeChatClient } from '@moonbase/application/chat/clients';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
@@ -60,23 +60,21 @@ for (const mode of ['local', 'remote'] as const)
     const root = remote?.root(),
       chat = root?.chat ?? makeChatClient(local!);
     let saved: string | null = null;
-    const app = await createMoonbaseApplication({
-      chat: async () => ({
-        chat,
-        context: session,
-        // The remote host is the daemon in host mode: local-mode chats over a connection.
-        mode: 'local',
-        transcriptLimits: limits,
-        ...(root ? { connection: root.connection } : {}),
-        storage: {
-          read: () => saved,
-          write: (value: string) => {
-            saved = value;
-          },
+    const app = await openChatApplication(() => ({
+      chat,
+      context: session,
+      // The remote host is the daemon in host mode: local-mode chats over a connection.
+      mode: 'local',
+      transcriptLimits: limits,
+      ...(root ? { connection: root.connection } : {}),
+      storage: {
+        read: () => saved,
+        write: (value: string) => {
+          saved = value;
         },
-      }),
-    });
-    const controller = app.chat!;
+      },
+    }));
+    const controller = app.chat;
     t.after(async () => {
       try {
         await app.dispose();
