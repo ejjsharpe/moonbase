@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from 'effect';
+import { Context, Effect, Layer, Stream } from 'effect';
 import { accessSync, constants } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import type { CheckoutTarget, CommandInput, CommandOutput } from '@moonbase/contracts/workspace';
@@ -158,7 +158,7 @@ export class Discovery {
       if (input.checkout.vcs === 'none') return { paths: [] };
       return yield* Effect.gen({ self: this }, function* () {
         yield* this.checkouts.policy(input.checkout);
-        yield* directory.gitReady();
+        yield* directory.gitReady;
         const output = yield* directory
           .io(
             [
@@ -444,12 +444,12 @@ export class Discovery {
       >();
       let total = 0;
       // Parsed as ripgrep writes, so a broad query stops it once the result is full.
-      const accept = (row: Buffer): 'stop' | void => {
+      const accept = (row: string): 'stop' | void => {
         received = true;
         if (!row.length) return;
         let event: RipgrepEvent;
         try {
-          event = JSON.parse(row.toString());
+          event = JSON.parse(row);
         } catch {
           partial = true;
           return;
@@ -504,7 +504,9 @@ export class Discovery {
         });
       };
       const ripgrep = yield* this.requireRipgrep();
-      yield* directory.lines(['lookup', ripgrep, ...args], accept).pipe(
+      yield* directory.lines(['lookup', ripgrep, ...args]).pipe(
+        Stream.takeWhile((row) => accept(row) !== 'stop'),
+        Stream.runDrain,
         Effect.catch((cause) => {
           const failure = helperFailure(cause);
           // Exit 1 is "no matches".

@@ -15,9 +15,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Effect, ManagedRuntime } from 'effect';
+import { TestClock } from 'effect/testing';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
 import { WorkspaceHostLive, type RootPredicate } from '../src/index.ts';
-import { createGitGate } from '../src/filesystem.ts';
+import { makeGitGate } from '../src/git-gate.ts';
 
 /** A file host over a temporary folder; `reserved` is given that folder to name paths in. */
 function setup({
@@ -184,23 +185,26 @@ test('a worktree location is made only inside a folder the predicate allows, and
 
 test('a missing command-line tools install is Unavailable, is looked for again after a delay, and is remembered once found', async () => {
   let installed = false,
-    probes = 0,
-    clock = 0;
-  const gate = createGitGate('/usr/bin/git', async () => (probes++, installed), {
-    retryMs: 1000,
-    now: () => clock,
-  });
-  const missing = { _tag: 'WorkspaceUnavailableError' };
-  await assert.rejects(Effect.runPromise(gate()), missing);
-  await assert.rejects(Effect.runPromise(gate()), missing);
-  assert.equal(probes, 1);
-  installed = true;
-  clock = 1000;
-  await Effect.runPromise(gate());
-  await Effect.runPromise(gate());
-  assert.equal(probes, 2);
-  // Only the system Git stub offers an installer; any other executable is run as given.
+    probes = 0;
+  const probe = Effect.sync(() => (probes++, installed));
   await Effect.runPromise(
-    createGitGate('/opt/homebrew/bin/git', async () => assert.fail('probed'))(),
+    Effect.gen(function* () {
+      const gate = yield* makeGitGate('/usr/bin/git', probe);
+      const missing = Effect.map(Effect.flip(gate), (error) => error._tag);
+      assert.equal(yield* missing, 'WorkspaceUnavailableError');
+      assert.equal(yield* missing, 'WorkspaceUnavailableError');
+      assert.equal(probes, 1);
+      installed = true;
+      yield* TestClock.adjust('3 seconds');
+      yield* gate;
+      yield* TestClock.adjust('1 hour');
+      yield* gate;
+      assert.equal(probes, 2);
+      // Only the system Git stub offers an installer; any other executable is run as given.
+      yield* yield* makeGitGate(
+        '/opt/homebrew/bin/git',
+        Effect.sync(() => assert.fail('probed')),
+      );
+    }).pipe(Effect.provide(TestClock.layer())),
   );
 });
