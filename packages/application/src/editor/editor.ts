@@ -362,7 +362,8 @@ class EditorModelState {
   }
   report = (error: unknown) => {
     if (this.closing || this.discovery.isObsoleteReadError(error)) return;
-    // The editor's own notes are text; anything else is a failure with its message.
+    // A string is a note of the editor's or its view's own; any other failure shows only an
+    // `ApplicationError`'s message. Host text is never passed as a string, so it never shows.
     const message = typeof error === 'string' ? error : normalizeApplicationError(error).message;
     this.errors = [...this.errors.slice(-19), message];
     this.emit();
@@ -907,7 +908,8 @@ class EditorModelState {
           : this.comparisons[key];
       if (comparison) this.comparisons[key] = comparison;
       else delete this.comparisons[key];
-      if (comparison?.error) this.report(comparison.error);
+      // The host's text says why; it reaches the UI only as fixed text.
+      if (comparison?.error) this.report(normalizeApplicationError(comparison.error));
       if (!selected.openFiles.includes(target.path)) {
         const previous = selected.preview;
         if (options.intent === 'preview' && previous && previous !== target.path) {
@@ -988,9 +990,9 @@ class EditorModelState {
         return false;
       }
       if (result.persistencePending) {
+        // The host's own note on it is not shown: no host text reaches the UI.
         this.report(
-          result.message ??
-            'Saved on disk; recovery is uncertain. Edits retained. Retry the same Save before closing.',
+          'Saved on disk; recovery is uncertain. Edits retained. Retry the same Save before closing.',
         );
         return false;
       }
