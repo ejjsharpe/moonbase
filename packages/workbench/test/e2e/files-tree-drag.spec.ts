@@ -285,7 +285,8 @@ test('⌘Z in the tree undoes a move, and the … menu names what it undoes', as
     'aria-disabled',
   );
   await page.keyboard.press('Escape');
-  await tree(page).focus();
+  // The menu returns focus to its button as it closes.
+  await expect(menu).toHaveCount(0);
   await tree(page).press('ControlOrMeta+z');
   await expect(row(page, 'README.md')).toBeVisible();
   await expect(row(page, 'welcome.ts')).toBeVisible();
@@ -452,7 +453,8 @@ test('a batch that fails partway selects and undoes what moved', async ({ page }
     'aria-disabled',
   );
   await page.keyboard.press('Escape');
-  await tree(page).focus();
+  // The menu returns focus to its button as it closes.
+  await expect(menu).toHaveCount(0);
   await tree(page).press('ControlOrMeta+z');
   await expect(row(page, 'README.md')).toBeVisible();
   expect(await exists(page, 'dest/README.md')).toBe(false);

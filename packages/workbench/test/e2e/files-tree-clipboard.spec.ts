@@ -303,7 +303,8 @@ test('the menu cuts, copies and pastes, enabling Paste only with something to pa
   // Where the cut already is, there's nothing to paste.
   await row(page, 'README.md').click({ button: 'right' });
   await expect(item(page, 'Paste')).toHaveAttribute('aria-disabled', 'true');
-  await page.keyboard.press('Escape');
+  // Escape goes to the menu, which closes; Escape in the tree would cancel the cut.
+  await page.getByRole('menu', { name: 'File actions', exact: true }).press('Escape');
   await row(page, 'src').click({ button: 'right' });
   await item(page, 'Paste').click();
   await expect(row(page, 'src/welcome.ts')).toBeVisible();

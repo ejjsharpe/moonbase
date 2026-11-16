@@ -264,7 +264,7 @@ test('replacing an existing entry asks first; Cancel returns to the name', async
   expect(await mutations(page)).toBe(0);
   // Escape answers Cancel too.
   await input.press('Enter');
-  await expect(prompt).toBeVisible();
+  await expect(prompt.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(prompt).toHaveCount(0);
   await expect(input).toBeFocused();
