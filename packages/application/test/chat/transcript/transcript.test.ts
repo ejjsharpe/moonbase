@@ -4,14 +4,15 @@ import { ApplicationError } from '@moonbase/contracts/errors';
 import {
   iterateTranscriptSource,
   makeTranscriptReader,
-  transcriptLimits,
+  defaultTranscriptLimits,
 } from '@moonbase/application/chat';
 import { maximumChatReplyBytes } from '@moonbase/contracts/chat';
 import type { ChatSnapshot, ChatTranscriptSource } from '@moonbase/contracts/chat';
-import type { TranscriptState } from '@moonbase/application/chat';
+import type { TranscriptLimits, TranscriptState } from '@moonbase/application/chat';
 import {
   digest,
   part,
+  scaledTranscriptLimits,
   tick,
   transcriptController,
   transcriptFixture,
@@ -30,17 +31,11 @@ async function collect(iterator: AsyncIterable<{ data: string }>) {
 }
 const serialized = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 /** Published summaries and content stay within their budgets. */
-function assertBounds(state: TranscriptState) {
+function assertBounds(state: TranscriptState, limits: TranscriptLimits = defaultTranscriptLimits) {
+  assert(state.entries.length + (state.manifest?.parts.length ?? 0) <= limits.summaryRecords);
+  assert(serialized({ entries: state.entries, manifest: state.manifest }) <= limits.summaryBytes);
   assert(
-    state.entries.length + (state.manifest?.parts.length ?? 0) <= transcriptLimits.summaryRecords,
-  );
-  assert(
-    serialized({ entries: state.entries, manifest: state.manifest }) <=
-      transcriptLimits.summaryBytes,
-  );
-  assert(
-    state.content.reduce((total, content) => total + serialized(content), 0) <=
-      transcriptLimits.contentBytes,
+    state.content.reduce((total, content) => total + serialized(content), 0) <= limits.contentBytes,
   );
 }
 function live(
@@ -76,12 +71,12 @@ function live(
 }
 
 test('canonical history traverses >2 overlapping pages, both continuations, eviction and around restoration without text deduplication', async (t) => {
-  const f = await transcriptController(t, 2400);
+  const f = await transcriptController(t, 300, true, { transcriptLimits: scaledTranscriptLimits });
   const seen = new Set<string>();
   for (let page = 0; page < 100; page++) {
     const state = f.controller.getSnapshot().transcript;
     state.entries.forEach((entry) => seen.add(entry.id));
-    assertBounds(state);
+    assertBounds(state, f.limits);
     assert.deepEqual(
       state.entries.map((entry) => Number(entry.id.slice(1))),
       state.entries.map((entry) => Number(entry.id.slice(1))).sort((a, b) => a - b),
@@ -90,22 +85,22 @@ test('canonical history traverses >2 overlapping pages, both continuations, evic
     await f.controller.showEarlier();
     assert.equal(f.controller.getSnapshot().transcript.error, null);
   }
-  assert.equal(seen.size, 2400);
+  assert.equal(seen.size, 300);
   assert.equal(f.controller.getSnapshot().transcript.entries[0].id, 'e0');
   // Retained history needs no read to show an entry; evicted history reads around it.
   const arounds = () => f.calls.filter((call) => call.operation === 'getChatHistoryAround').length;
   let reads = arounds();
-  await f.controller.jumpToEntry('e320');
+  await f.controller.jumpToEntry('e40');
   assert.equal(arounds(), reads);
-  await f.controller.jumpToEntry('e1600');
+  await f.controller.jumpToEntry('e200');
   assert.equal(arounds(), reads + 1);
   let state = f.controller.getSnapshot().transcript;
-  assert(state.entries.some((entry) => entry.id === 'e1600'));
+  assert(state.entries.some((entry) => entry.id === 'e200'));
   assert(state.earlier && state.later);
   await f.controller.showEarlier();
   await f.controller.showLater();
   state = f.controller.getSnapshot().transcript;
-  assert(state.entries.some((entry) => entry.id === 'e1600'));
+  assert(state.entries.some((entry) => entry.id === 'e200'));
   f.publish({ ...f.snapshot, state: 'running', message: 'latest changed' });
   assert.equal(
     f.controller.getSnapshot().transcript.entries,
@@ -113,7 +108,7 @@ test('canonical history traverses >2 overlapping pages, both continuations, evic
     'live state does not replace historical window',
   );
   await f.controller.jumpToLatest();
-  assert.equal(f.controller.getSnapshot().transcript.entries.at(-1)?.id, 'e2399');
+  assert.equal(f.controller.getSnapshot().transcript.entries.at(-1)?.id, 'e299');
   reads = arounds();
   assert(reads > 2);
 });
@@ -208,15 +203,15 @@ test('selected manifest hydration advances and retries errors; content validates
 });
 
 test('one oversized part stays incrementally readable within the LRU; complete-source iteration is independent of cache', async (t) => {
-  const f = await transcriptController(t, 1);
+  const f = await transcriptController(t, 1, true, { transcriptLimits: scaledTranscriptLimits });
   const source = f.entries[0].transcript!.source,
-    data = 'a'.repeat(9 * 1024 * 1024),
+    data = 'a'.repeat((9 * 1024 * 1024) / 8),
     chosen = selection(part('m0.b0', data));
   f.fixture.sources.set(JSON.stringify(source), { source, data: [data] });
   for (let i = 0; i < Math.ceil(data.length / 32768); i++)
     await f.controller.loadTranscriptPart(source, chosen);
   const view = f.controller.getSnapshot().transcript;
-  assertBounds(view);
+  assertBounds(view, f.limits);
   assert(view.content[0].retainedFrom > 0, 'oversized active selection is not exempt from budget');
   assert.equal(view.content[0].loadedBytes, data.length);
   assert.equal(
@@ -228,13 +223,13 @@ test('one oversized part stays incrementally readable within the LRU; complete-s
 });
 
 test('summary byte and record budgets include hydrated descriptors and envelopes; complete iteration passes descriptor eviction', async (t) => {
-  const f = await transcriptController(t, 1);
+  const f = await transcriptController(t, 1, true, { transcriptLimits: scaledTranscriptLimits });
   const source = f.entries[0].transcript!.source,
-    data = Array.from({ length: transcriptLimits.summaryRecords + 64 }, () => 'b'.repeat(256));
+    data = Array.from({ length: f.limits.summaryRecords + 8 }, () => 'b'.repeat(256));
   f.fixture.sources.set(JSON.stringify(source), { source, data });
   for (let i = 0; i < data.length / 32 + 1; i++) await f.controller.loadTranscriptManifest(source);
   const state = f.controller.getSnapshot().transcript;
-  assertBounds(state);
+  assertBounds(state, f.limits);
   assert(state.manifest!.omittedParts > 0);
   assert.equal(
     await collect(iterateTranscriptSource({ read: makeTranscriptReader(f.chat), source })),
@@ -406,8 +401,8 @@ test('trusted ChatClient replies and snapshots are not decoded or size-bounded a
   );
 });
 
-test('escaped summary data evicts at four MiB before the row limit without losing earlier/later navigation', async (t) => {
-  const f = await transcriptController(t, 400);
+test('escaped summary data evicts at the byte budget before the row limit without losing earlier/later navigation', async (t) => {
+  const f = await transcriptController(t, 50, true, { transcriptLimits: scaledTranscriptLimits });
   for (const entry of f.entries) entry.text = '\u0001'.repeat(4096);
   f.publish({ ...f.snapshot, entries: f.entries.slice(-8).reverse() });
   f.handlers.set('getChatHistoryAround', async (raw) => {
@@ -421,25 +416,28 @@ test('escaped summary data evicts at four MiB before the row limit without losin
       target: f.target,
       entryId: input.entryId,
       cursor: input.cursor ?? null,
-      upperEntryId: 'e399',
+      upperEntryId: 'e49',
       entries: f.entries.slice(lo, hi).reverse(),
       olderCursor: lo ? JSON.stringify({ lo: Math.max(0, lo - 8), hi: lo }) : null,
-      newerCursor: hi < 400 ? JSON.stringify({ lo: hi, hi: Math.min(400, hi + 8) }) : null,
+      newerCursor: hi < 50 ? JSON.stringify({ lo: hi, hi: Math.min(50, hi + 8) }) : null,
     };
   });
-  for (let i = 0; i < 60 && f.controller.getSnapshot().transcript.earlier; i++) {
+  for (let i = 0; i < 20 && f.controller.getSnapshot().transcript.earlier; i++) {
     await f.controller.showEarlier();
     const state = f.controller.getSnapshot().transcript;
     assert.equal(state.error, null);
-    assertBounds(state);
+    assertBounds(state, f.limits);
   }
   const state = f.controller.getSnapshot().transcript;
   assert.equal(state.entries[0].id, 'e0');
   // Each entry serializes to about 24 KiB, so bytes, not the row count, bound retention.
-  assert(state.entries.length < 200, 'escaped bytes, not only row count, enforce retention');
+  assert(
+    state.entries.length < f.limits.summaryRecords / 5,
+    'escaped bytes, not only row count, enforce retention',
+  );
   assert(state.later);
-  await f.controller.jumpToEntry('e320');
-  assert(f.controller.getSnapshot().transcript.entries.some((entry) => entry.id === 'e320'));
+  await f.controller.jumpToEntry('e40');
+  assert(f.controller.getSnapshot().transcript.entries.some((entry) => entry.id === 'e40'));
 });
 
 test('manifest and content LRU are bounded; view and expansion ID memory has finite retention', async (t) => {
@@ -501,7 +499,7 @@ test('complete iteration rejects a manifest continuation cycle', async (t) => {
 });
 
 test('changed entry descriptors invalidate relevant hydration; explicit refresh reattaches a failed observation', async (t) => {
-  const f = await transcriptController(t, 1, true, { transcriptWatchRetryMs: [] });
+  const f = await transcriptController(t, 1, true, { transcriptLimits: { watchRetryMs: [] } });
   const entry = f.entries[0],
     source = entry.transcript!.source;
   await f.controller.loadTranscriptPart(source, selection(entry.transcript!.parts[0]));
@@ -704,14 +702,14 @@ test('terminal onError invalidates completed live hydration even when a local wa
 });
 
 test('history traverses every entry backward and forward across summary eviction', async (t) => {
-  const f = await transcriptController(t, 2400);
+  const f = await transcriptController(t, 300, true, { transcriptLimits: scaledTranscriptLimits });
   for (const direction of ['earlier', 'later'] as const) {
     const seen = new Set<string>();
     for (let step = 0; step < 100; step++) {
       const state = f.controller.getSnapshot().transcript;
       for (const entry of state.entries) seen.add(entry.id);
       assert.equal(state.error, null);
-      assertBounds(state);
+      assertBounds(state, f.limits);
       assert.deepEqual(
         state.entries.map((entry) => entry.id),
         f.entries
@@ -721,12 +719,12 @@ test('history traverses every entry backward and forward across summary eviction
       if (!state[direction]) break;
       await (direction === 'earlier' ? f.controller.showEarlier() : f.controller.showLater());
     }
-    assert.equal(seen.size, 2400, direction);
+    assert.equal(seen.size, 300, direction);
     const state = f.controller.getSnapshot().transcript;
     assert.equal(state[direction], false);
     assert.equal(state[direction === 'earlier' ? 'later' : 'earlier'], true);
   }
-  assert.equal(f.controller.getSnapshot().transcript.entries.at(-1)!.id, 'e2399');
+  assert.equal(f.controller.getSnapshot().transcript.entries.at(-1)!.id, 'e299');
 });
 
 function appendTranscriptEntries(
@@ -1074,7 +1072,7 @@ test('a delayed initial read must not supersede a newer explicit Latest navigati
 });
 
 test('later navigation at the newer edge always advances the retained history', async (t) => {
-  const f = await transcriptController(t, 2400);
+  const f = await transcriptController(t, 300, true, { transcriptLimits: scaledTranscriptLimits });
   for (let i = 0; i < 100 && f.controller.getSnapshot().transcript.earlier; i++)
     await f.controller.showEarlier();
   for (let i = 0; i < 100 && f.controller.getSnapshot().transcript.later; i++) {

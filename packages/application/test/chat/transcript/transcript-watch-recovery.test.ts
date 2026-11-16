@@ -2,17 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ChatClient, ChatSnapshot, ChatTarget } from '@moonbase/contracts/chat';
 import { ApplicationError } from '@moonbase/contracts/errors';
+import { TestClock } from 'effect/testing';
 import { modelRoot } from '../chat-model-fixture.ts';
 import { tick, transcriptFixture } from './transcript-fixture.ts';
 
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-async function until(check: () => boolean) {
-  for (let i = 0; i < 200; i++) {
-    if (check()) return;
-    await tick();
-  }
-  assert(check());
-}
 const unavailable = () =>
   new ApplicationError({ code: 'Unavailable', message: 'Stream reconnect budget exhausted.' });
 const mutations = ['sendChat', 'createChat', 'stopChat'];
@@ -25,7 +18,17 @@ async function recoveryController(
 ) {
   const { local = true, healthyMs = 60_000, throwOnWatch } = options;
   const fixture = transcriptFixture(4, local),
-    root = modelRoot();
+    root = modelRoot(TestClock.layer());
+  /** Moves the controller's clock, running the backoffs and health periods it passes. */
+  const advance = (millis: number) => root.runtime.runPromise(TestClock.adjust(millis));
+  /** Advances the clock a millisecond at a time until `check` holds. */
+  const until = async (check: () => boolean) => {
+    for (let i = 0; i < 200 && !check(); i++) {
+      await advance(1);
+      await tick();
+    }
+    assert(check());
+  };
   t.after(() => root.close());
   const watches: {
     target: ChatTarget;
@@ -64,19 +67,20 @@ async function recoveryController(
   const controller = await root.make({
     ...fixture.dependencies,
     chat,
-    transcriptWatchRetryMs: retry,
-    transcriptWatchHealthyMs: healthyMs,
+    transcriptLimits: { watchRetryMs: retry, watchHealthyMs: healthyMs },
   });
   await controller.start();
   if (!local) await controller.connect();
   await controller.select(fixture.target);
   const watchesOf = (target: ChatTarget) =>
     watches.filter((watch) => watch.target.conversationId === target.conversationId);
-  return { fixture, controller, watches, watchesOf };
+  return { fixture, controller, watches, watchesOf, advance, until };
 }
 
 test('a retryable stream failure re-watches the selected chat without resending, fencing the old watch', async (t) => {
-  const { fixture, controller, watches } = await recoveryController(t, [5], { healthyMs: 10 });
+  const { fixture, controller, watches, advance, until } = await recoveryController(t, [5], {
+    healthyMs: 10,
+  });
   assert.equal(watches.length, 1);
   const snapshot = controller.getSnapshot().snapshot!;
   watches[0].fail(unavailable());
@@ -104,7 +108,7 @@ test('a retryable stream failure re-watches the selected chat without resending,
   assert.equal(controller.getSnapshot().snapshot?.conversation.title, 'Fresh');
 
   // A watch that stayed up for the healthy period after its first snapshot renews the cap.
-  await delay(30);
+  await advance(30);
   watches[1].fail(unavailable());
   await until(
     () => watches.length === 3 && controller.getSnapshot().transcript.observation === 'local',
@@ -117,7 +121,7 @@ test('a retryable stream failure re-watches the selected chat without resending,
 });
 
 test('consecutive stream failures stop at the cap with a clear error and a manual retry', async (t) => {
-  const { controller, watches } = await recoveryController(t, [1]);
+  const { controller, watches, advance, until } = await recoveryController(t, [1]);
   watches[0].fail(unavailable());
   await until(() => watches.length === 2);
   watches[1].fail(unavailable());
@@ -125,7 +129,7 @@ test('consecutive stream failures stop at the cap with a clear error and a manua
   assert.equal(state.transcript.observation, 'failed');
   assert.match(state.error!, /Live updates stopped and could not reconnect/);
   assert.match(state.transcript.error!, /Refresh or reopen the conversation/);
-  await delay(20);
+  await advance(20);
   assert.equal(watches.length, 2, 'no re-watch after the cap');
   assert.equal(watches[1].closed, true, 'giving up releases the failed subscription');
 
@@ -137,12 +141,12 @@ test('consecutive stream failures stop at the cap with a clear error and a manua
   // A failure that is not retryable stops at once.
   watches[2].fail(new ApplicationError({ code: 'Incompatible', message: 'Bad stream frame.' }));
   assert.equal(controller.getSnapshot().transcript.observation, 'failed');
-  await delay(20);
+  await advance(20);
   assert.equal(watches.length, 3);
 });
 
 test('a host that sends one snapshot per watch and then drops still reaches the cap', async (t) => {
-  const { controller, watches } = await recoveryController(t, [1, 1]);
+  const { controller, watches, advance, until } = await recoveryController(t, [1, 1]);
   const snapshot = controller.getSnapshot().snapshot!;
   for (let attempt = 0; attempt < 3; attempt++) {
     await until(() => watches.length === attempt + 1);
@@ -152,19 +156,19 @@ test('a host that sends one snapshot per watch and then drops still reaches the 
   const state = controller.getSnapshot();
   assert.equal(state.transcript.observation, 'failed');
   assert.match(state.error!, /could not reconnect/);
-  await delay(20);
+  await advance(20);
   assert.equal(watches.length, 3);
 });
 
 test('a transcript that already failed is not re-watched after the stream drops', async (t) => {
-  const { fixture, controller, watches } = await recoveryController(t, [1]);
+  const { fixture, controller, watches, advance } = await recoveryController(t, [1]);
   const snapshot = controller.getSnapshot().snapshot!;
   const other = { ...snapshot.conversation, target: { ...fixture.target, conversationId: 'x' } };
   watches[0].receive({ ...snapshot, conversation: other });
   assert.equal(controller.getSnapshot().transcript.observation, 'failed');
   const failed = controller.getSnapshot();
   watches[0].fail(unavailable());
-  await delay(20);
+  await advance(20);
   assert.equal(watches.length, 1);
   assert.equal(watches[0].closed, true);
   assert.equal(controller.getSnapshot().transcript.observation, 'failed');
@@ -181,7 +185,7 @@ test('a re-watch that throws while subscribing counts as a failed attempt', asyn
   t.after(async () => {
     for (const close of cleanup) await assert.rejects(close(), { code: 'Unavailable' });
   });
-  const { controller, watches } = await recoveryController(
+  const { controller, watches, until } = await recoveryController(
     { after: (close) => void cleanup.push(close) },
     [1, 1],
     { throwOnWatch: (count) => (count === 2 ? unavailable() : undefined) },
@@ -195,7 +199,7 @@ test('a re-watch that throws while subscribing counts as a failed attempt', asyn
 
 for (const action of ['close', 'switch', 'detach', 'dispose'] as const)
   test(`no re-watch after ${action} during the backoff`, async (t) => {
-    const { fixture, controller, watchesOf } = await recoveryController(t, [10]);
+    const { fixture, controller, watchesOf, advance } = await recoveryController(t, [10]);
     watchesOf(fixture.target)[0].fail(unavailable());
     assert.equal(controller.getSnapshot().transcript.observation, 'reconnecting');
     const other = { ...fixture.target, conversationId: 'other' };
@@ -203,7 +207,7 @@ for (const action of ['close', 'switch', 'detach', 'dispose'] as const)
     else if (action === 'switch') await controller.select(other);
     else if (action === 'detach') await controller.detach();
     else await controller.dispose();
-    await delay(40);
+    await advance(40);
     assert.equal(watchesOf(fixture.target).length, 1);
     if (action === 'switch') {
       assert.equal(watchesOf(other).length, 1);
@@ -212,10 +216,12 @@ for (const action of ['close', 'switch', 'detach', 'dispose'] as const)
   });
 
 test('no re-watch after disconnect during the backoff', async (t) => {
-  const { fixture, controller, watchesOf } = await recoveryController(t, [10], { local: false });
+  const { fixture, controller, watchesOf, advance } = await recoveryController(t, [10], {
+    local: false,
+  });
   watchesOf(fixture.target)[0].fail(unavailable());
   await controller.disconnect();
-  await delay(40);
+  await advance(40);
   assert.equal(watchesOf(fixture.target).length, 1);
   assert.equal(controller.getSnapshot().transcript.observation, 'inactive');
 });

@@ -2,8 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { transcriptLimits } from '@moonbase/application/chat';
-import { digest, transcriptController } from './transcript-fixture.ts';
+import { digest, scaledTranscriptLimits, transcriptController } from './transcript-fixture.ts';
 
 type Fixture = Awaited<ReturnType<typeof transcriptController>>;
 
@@ -105,26 +104,25 @@ test('a failed page read leaves following as it was', async (t) => {
 });
 
 test('budget eviction outside a page read keeps the rows around a reader near the newest end', async (t) => {
-  const f = await transcriptController(t, 2400);
-  f.controller.setTranscriptView({ anchor: { key: 'entry:e2390', offset: 0 }, expanded: [] });
+  const f = await transcriptController(t, 300, true, {
+    transcriptLimits: scaledTranscriptLimits,
+  });
+  f.controller.setTranscriptView({ anchor: { key: 'entry:e290', offset: 0 }, expanded: [] });
   // Page earlier up to just below the record budget, so nothing has been evicted yet.
-  while (
-    f.controller.getSnapshot().transcript.entries.length + 32 <=
-    transcriptLimits.summaryRecords
-  )
+  while (f.controller.getSnapshot().transcript.entries.length + 32 <= f.limits.summaryRecords)
     await f.controller.showEarlier();
   let state = f.controller.getSnapshot().transcript;
-  assert.equal(state.entries.at(-1)!.id, 'e2399');
+  assert.equal(state.entries.at(-1)!.id, 'e299');
   assert.equal(state.atLatest, false);
   const oldest = state.entries[0]!.id;
   // New snapshot entries the records don't hold push the summaries past the budget.
-  publishDisjointLatest(f, 2464);
+  publishDisjointLatest(f, 364);
   state = f.controller.getSnapshot().transcript;
   assert.equal(state.error, null);
-  assert(state.entries.length <= transcriptLimits.summaryRecords);
+  assert(state.entries.length <= f.limits.summaryRecords);
   assert.deepEqual(
     state.entries.slice(-10).map((entry) => entry.id),
-    Array.from({ length: 10 }, (_, index) => `e${2390 + index}`),
+    Array.from({ length: 10 }, (_, index) => `e${290 + index}`),
     'the rows from the anchor to the newest retained entry stay',
   );
   assert.notEqual(state.entries[0]!.id, oldest, 'the far, older end is evicted');
@@ -132,23 +130,22 @@ test('budget eviction outside a page read keeps the rows around a reader near th
 });
 
 test('budget eviction outside a page read keeps the rows around a reader near the oldest end', async (t) => {
-  const f = await transcriptController(t, 2400);
-  while (
-    f.controller.getSnapshot().transcript.entries.length + 32 <=
-    transcriptLimits.summaryRecords
-  )
+  const f = await transcriptController(t, 300, true, {
+    transcriptLimits: scaledTranscriptLimits,
+  });
+  while (f.controller.getSnapshot().transcript.entries.length + 32 <= f.limits.summaryRecords)
     await f.controller.showEarlier();
   const oldest = f.controller.getSnapshot().transcript.entries.slice(0, 10);
   f.controller.setTranscriptView({
     anchor: { key: `entry:${oldest[0]!.id}`, offset: 0 },
     expanded: [],
   });
-  publishDisjointLatest(f, 2464);
+  publishDisjointLatest(f, 364);
   const state = f.controller.getSnapshot().transcript;
   assert.equal(state.error, null);
-  assert(state.entries.length <= transcriptLimits.summaryRecords);
+  assert(state.entries.length <= f.limits.summaryRecords);
   assert.deepEqual(state.entries.slice(0, 10), oldest, 'the rows the reader is in stay');
-  assert.notEqual(state.entries.at(-1)!.id, 'e2399', 'the far, newer end is evicted');
+  assert.notEqual(state.entries.at(-1)!.id, 'e299', 'the far, newer end is evicted');
   assert(state.later);
 });
 
@@ -185,18 +182,20 @@ test('a live response anchor is at the live edge', async (t) => {
 });
 
 test('an earlier page that evicts the newest records stops following', async (t) => {
-  const f = await transcriptController(t, 2400);
+  const f = await transcriptController(t, 300, true, {
+    transcriptLimits: scaledTranscriptLimits,
+  });
   // The reader flings up from the live edge faster than scrolling saves an anchor.
   for (let step = 0; step < 100 && !f.controller.getSnapshot().transcript.later; step++)
     await f.controller.showEarlier();
   let state = f.controller.getSnapshot().transcript;
   assert(state.later, 'the newest records were evicted');
   assert.equal(state.atLatest, false);
-  assert(state.entries.length <= transcriptLimits.summaryRecords);
+  assert(state.entries.length <= f.limits.summaryRecords);
   const { dataset } = state,
     oldest = state.entries[0]!.id;
   // A newer snapshot leaves the history the reader paged to rather than jumping to it.
-  publishDisjointLatest(f, 2401);
+  publishDisjointLatest(f, 301);
   state = f.controller.getSnapshot().transcript;
   assert.equal(state.dataset, dataset);
   assert.equal(state.entries[0]!.id, oldest);

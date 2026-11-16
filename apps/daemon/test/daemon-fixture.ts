@@ -238,11 +238,14 @@ export async function findFreePort() {
 
 export const readJson = async (path: string) => JSON.parse(await readFile(path, 'utf8'));
 
-/** A clock whose time moves only when the test advances it; due timers then fire in order. */
+/**
+ * A clock whose time moves only when the test advances it; due timers then fire in order, each
+ * once the check the previous one ran has ended.
+ */
 export function createControlledClock() {
   let now = 0,
     next = 0;
-  const timers = new Map<number, { at: number; callback: () => void }>();
+  const timers = new Map<number, { at: number; callback: () => Promise<void> }>();
   const clock: IdleClock = {
     now: () => now,
     setTimeout: (callback, ms) => {
@@ -265,12 +268,10 @@ export function createControlledClock() {
         if (!due) break;
         timers.delete(due[0]);
         now = due[1].at;
-        due[1].callback();
         // The check reads active work from the real store before it decides.
-        await delay(40);
+        await due[1].callback();
       }
       now = end;
-      await delay(40);
     },
   };
 }

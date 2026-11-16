@@ -12,9 +12,9 @@ import {
   chmodSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { Effect } from 'effect';
 
 import { fixture, rejects } from './workspace-fixture.ts';
+import { recordWatchDeliveries, startOnTestClock } from './watch-fixture.ts';
 
 test('entries-only listings bypass Git ignore policy and leave classification unknown', async () => {
   const f = fixture();
@@ -296,55 +296,74 @@ test('Git staged and unstaged originals both compare against the current working
 });
 
 test('watch notifies external changes, coalesces and disposes independently of file commands', async () => {
-  const f = fixture();
-  let stop = async () => {};
+  const f = fixture(),
+    deliveries = recordWatchDeliveries(),
+    { client, runtime, advance } = startOnTestClock(join(f.base, 'clocked-state'));
+  const file = join(f.root, 'file.txt');
+  // Writes the file until a watcher reported it, then closes the watches' windows.
+  const change = async (text: string) => {
+    await deliveries.write(file, text);
+    await advance('100 millis');
+  };
+  const stops: (() => Promise<void>)[] = [];
+  const watch = (receive: (event: { ready?: boolean }) => void) =>
+    new Promise<void>((ready) => {
+      stops.push(
+        client.watch(
+          { checkout, paths: [''] },
+          (event) => {
+            receive(event);
+            if (event.ready) ready();
+          },
+          (error) => {
+            throw error;
+          },
+        ),
+      );
+    });
+  let checkout!: Awaited<ReturnType<typeof client.command<'openCheckout'>>>;
   try {
-    writeFileSync(join(f.root, 'file.txt'), 'before');
-    const checkout = await f.client.command('openCheckout', { root: f.root });
-    let ready!: () => void,
-      changed!: () => void,
-      count = 0;
-    const readyPromise = new Promise<void>((r) => (ready = r)),
-      changedPromise = new Promise<void>((r) => (changed = r));
-    stop = f.client.watch(
-      { checkout, paths: [''] },
-      (event) => {
-        count++;
-        if (event.ready) ready();
-        else changed();
-      },
-      (error) => {
-        throw error;
-      },
-    );
-    await readyPromise;
-    writeFileSync(join(f.root, 'file.txt'), 'external');
-    await Promise.race([
-      changedPromise,
-      new Promise((_, reject) => setTimeout(() => reject(Error('watch timeout')), 2000)),
-    ]);
-    await stop();
-    await f.runtime.runPromise(Effect.yieldNow);
-    const before = count;
-    writeFileSync(join(f.root, 'file.txt'), 'after disposal');
-    await new Promise((r) => setTimeout(r, 250));
-    assert.equal(count, before);
+    writeFileSync(file, 'before');
+    checkout = await client.command('openCheckout', { root: f.root });
+    let count = 0;
+    await watch(() => count++);
+    await change('external');
+    assert.equal(count, 2);
+    await stops[0]();
+    // A second watch shows the next change is reported, and closes its window with the first's.
+    let probed = 0;
+    await watch((event) => {
+      if (!event.ready) probed++;
+    });
+    await change('after disposal');
+    assert.equal(probed, 1);
+    assert.equal(count, 2);
     assert.equal(
-      (await f.client.command('readFile', { checkout, path: 'file.txt' })).text,
+      (await client.command('readFile', { checkout, path: 'file.txt' })).text,
       'after disposal',
     );
   } finally {
-    await stop();
+    for (const stop of stops) await stop();
+    deliveries.restore();
+    await runtime.dispose();
     await f.close();
   }
 });
 
 test('watch skips activity that belongs to other worktrees of the repository', async () => {
-  const f = fixture();
+  const f = fixture(),
+    deliveries = recordWatchDeliveries(),
+    { client, runtime, advance } = startOnTestClock(join(f.base, 'clocked-state'));
   const stops: (() => Promise<void>)[] = [];
   const git = (cwd: string, ...args: string[]) =>
     execFileSync('/usr/bin/git', ['-C', cwd, '-c', 'user.name=T', '-c', 'user.email=t@t', ...args]);
-  const settle = () => new Promise((r) => setTimeout(r, 400));
+  // Once a barrier in the shared Git folder reached the main watch and the linked one's Git folder
+  // watch, every earlier change is in their windows; closing the windows then publishes or skips
+  // each of them.
+  const settle = async () => {
+    await deliveries.barrier(join(f.root, '.git'), 2);
+    await advance('100 millis');
+  };
   try {
     writeFileSync(join(f.root, 'file.txt'), 'main');
     writeFileSync(join(f.root, '.gitignore'), '.agents/\n');
@@ -356,12 +375,12 @@ test('watch skips activity that belongs to other worktrees of the repository', a
     git(f.root, 'worktree', 'add', '-q', '-b', 'nested', nested);
     git(f.root, 'worktree', 'add', '-q', '-b', 'beside', beside);
     const watchEvents = async (root: string) => {
-      const checkout = await f.client.command('openCheckout', { root });
+      const checkout = await client.command('openCheckout', { root });
       const events: string[] = [];
       let ready!: () => void;
       const isReady = new Promise<void>((r) => (ready = r));
       stops.push(
-        f.client.watch(
+        client.watch(
           { checkout, paths: [''] },
           (event) => (event.ready ? ready() : events.push(event.error ?? 'changed')),
           (error) => {
@@ -405,6 +424,8 @@ test('watch skips activity that belongs to other worktrees of the repository', a
     assert(main.length > 0 && linked.length > 0, 'A new commit moves a shared ref');
   } finally {
     for (const stop of stops) await stop();
+    deliveries.restore();
+    await runtime.dispose();
     await f.close();
   }
 });
@@ -621,7 +642,8 @@ test('lookup honors nested ignore policies, ranks and highlights all pieces, quo
 });
 
 test('unsubscribe during pending workspace/watch acquisition and concurrent runtime disposal release all native watchers', async () => {
-  const f = fixture();
+  const f = fixture(),
+    deliveries = recordWatchDeliveries();
   try {
     const checkout = await f.client.command('openCheckout', { root: f.root });
     const before = process.getActiveResourcesInfo().filter((name) => name === 'FSEventWrap').length;
@@ -636,7 +658,8 @@ test('unsubscribe during pending workspace/watch acquisition and concurrent runt
     );
     await Promise.all(stops.map((stop) => stop()));
     await f.runtime.dispose();
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Every native watcher is closed, so nothing can be delivered later.
+    assert.equal(deliveries.open(), 0);
     assert.equal(delivered, 0);
     assert.equal(errors.length, 0);
     assert.equal(
@@ -644,6 +667,7 @@ test('unsubscribe during pending workspace/watch acquisition and concurrent runt
       before,
     );
   } finally {
+    deliveries.restore();
     await f.close();
   }
 });

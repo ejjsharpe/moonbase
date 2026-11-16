@@ -13,6 +13,7 @@ import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import { reconcile } from '../src/client/reconcile.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
+import { recordWatchDeliveries, startOnTestClock } from './watch-fixture.ts';
 import { fixture, isError, quote, seed, waitFor } from './recovery-fixture.ts';
 import { captureNative, releaseNative } from './workspace-fixture.ts';
 import { settledDescriptorCount } from './descriptor-count.ts';
@@ -775,49 +776,45 @@ test('saved recovery naming a foreign checkout, an escaping path or a wrong base
   }
 });
 
-test(
-  'continuous filesystem writes still deliver a coalesced watch event before the writer becomes quiet',
-  { timeout: 5000 },
-  async () => {
-    const f = fixture(),
-      { runtime, client } = f.start();
-    let close = async () => {};
-    try {
-      const checkout = await client.command('openCheckout', { root: f.root });
-      let ready!: () => void,
-        writing = true,
-        deliveredDuringWrites = 0;
-      const initial = new Promise<void>((done) => {
-        ready = done;
-      });
-      const failures: unknown[] = [];
-      close = client.watch(
-        { checkout, paths: [''] },
-        (event) => {
-          if (event.ready) ready();
-          else if (writing) deliveredDuringWrites++;
-        },
-        (error) => failures.push(error),
-      );
-      await initial;
-      for (let i = 0; i < 50; i++) {
-        writeFileSync(join(f.root, 'burst-' + i), 'changed');
-        await new Promise<void>((done) => setTimeout(done, 25));
-      }
-      writing = false;
-      assert(
-        deliveredDuringWrites > 0,
-        '100ms coalescing must not wait indefinitely for a quiet filesystem',
-      );
-      await close();
-      assert.deepEqual(failures, []);
-    } finally {
-      await close();
-      await runtime.dispose();
-      f.cleanup();
+test('continuous filesystem writes still deliver a coalesced watch event before the writer becomes quiet', async () => {
+  const f = fixture(),
+    deliveries = recordWatchDeliveries(),
+    { runtime, client, advance } = startOnTestClock(join(f.base, 'clocked-state'));
+  let close = async () => {};
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    let ready!: () => void,
+      delivered = 0;
+    const initial = new Promise<void>((done) => {
+      ready = done;
+    });
+    const failures: unknown[] = [];
+    close = client.watch(
+      { checkout, paths: [''] },
+      (event) => {
+        if (event.ready) ready();
+        else delivered++;
+      },
+      (error) => failures.push(error),
+    );
+    await initial;
+    // A write every 25 ms never leaves the filesystem quiet for the 100 ms window.
+    let writes = 0;
+    while (!delivered && writes < 8) {
+      await deliveries.write(join(f.root, 'burst-' + writes++), 'changed');
+      await advance('25 millis');
     }
-  },
-);
+    assert(delivered > 0, '100ms coalescing must not wait indefinitely for a quiet filesystem');
+    assert(writes <= 5, `the window closed only after ${writes} writes`);
+    await close();
+    assert.deepEqual(failures, []);
+  } finally {
+    await close();
+    deliveries.restore();
+    await runtime.dispose();
+    f.cleanup();
+  }
+});
 
 test('mutation cancellation during preflight reserves no ID and consumes no native reference', async () => {
   const f = fixture(),

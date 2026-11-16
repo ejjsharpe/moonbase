@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { transcriptController, tick } from './transcript-fixture.ts';
+import { scaledTranscriptLimits, transcriptController, tick } from './transcript-fixture.ts';
 async function until(check: () => boolean) {
   for (let i = 0; i < 300; i++) {
     if (check()) return;
@@ -10,7 +10,9 @@ async function until(check: () => boolean) {
 }
 for (const late of ['success', 'error'])
   test(`manual navigation wins an evicted-match replay with late ${late}`, async (t) => {
-    const f = await transcriptController(t, 1100);
+    const f = await transcriptController(t, 138, true, {
+      transcriptLimits: scaledTranscriptLimits,
+    });
     await f.controller.findTranscript('same');
     await until(() => f.controller.getSnapshot().transcript.view.anchor?.key === 'entry:e0');
     f.controller.cancelFindReveal();

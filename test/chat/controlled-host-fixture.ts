@@ -330,8 +330,8 @@ export async function controlledHostFixture(behaviour: URL, hold = false) {
     close,
     release: () => host!.send({ type: 'release' }),
     nextChunk: () => host!.send({ type: 'next-chunk' }),
-    seedHistory: async (target: ChatTarget) => {
-      host!.send({ type: 'seed-history', target });
+    seedHistory: async (target: ChatTarget, count?: number) => {
+      host!.send({ type: 'seed-history', target, count });
       const result = await until(
         stats,
         (value) =>
@@ -340,8 +340,8 @@ export async function controlledHostFixture(behaviour: URL, hold = false) {
       if (result.seedError) throw Error(result.seedError);
       return result.seeded!.ids;
     },
-    seedLongText: async (target: ChatTarget) => {
-      host!.send({ type: 'seed-long-text', target });
+    seedLongText: async (target: ChatTarget, repeats?: number) => {
+      host!.send({ type: 'seed-long-text', target, repeats });
       const result = await until(
         stats,
         (value) =>

@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
-import { transcriptLimits } from '@moonbase/application/chat';
-import { part, transcriptController } from './transcript-fixture.ts';
+import { part, scaledTranscriptLimits, transcriptController } from './transcript-fixture.ts';
 
 function running(snapshot: ChatSnapshot, text: string, transcript = true): ChatSnapshot {
   const target = snapshot.conversation.target;
@@ -114,25 +113,25 @@ test('reading history around an entry hides the live row until later history ret
 });
 
 test('earlier pages past the record budget evict from the newer end but never the anchor row', async (t) => {
-  const f = await transcriptController(t, 2400);
-  f.controller.setTranscriptView({ anchor: { key: 'entry:e2399', offset: -8 }, expanded: [] });
+  const f = await transcriptController(t, 300, true, { transcriptLimits: scaledTranscriptLimits });
+  f.controller.setTranscriptView({ anchor: { key: 'entry:e299', offset: -8 }, expanded: [] });
   let state = f.controller.getSnapshot().transcript;
   assert(state.earlier && !state.later);
   for (let step = 0; step < 100 && f.controller.getSnapshot().transcript.earlier; step++) {
     await f.controller.showEarlier();
     state = f.controller.getSnapshot().transcript;
     assert.equal(state.error, null);
-    assert(state.entries.length <= transcriptLimits.summaryRecords);
+    assert(state.entries.length <= f.limits.summaryRecords);
     assert(
-      state.entries.some((entry) => entry.id === 'e2399'),
+      state.entries.some((entry) => entry.id === 'e299'),
       'the anchor row stays',
     );
   }
   assert.equal(state.earlier, false);
   assert.equal(state.entries[0]!.id, 'e0');
   assert.equal(state.later, true, 'evicted newer history reads again later');
-  assert(!state.entries.some((entry) => entry.id === 'e2398'));
-  assert.equal(state.view.anchor?.key, 'entry:e2399');
+  assert(!state.entries.some((entry) => entry.id === 'e298'));
+  assert.equal(state.view.anchor?.key, 'entry:e299');
 });
 
 test('a jump to a retained entry reads nothing and places the same rows afresh', async (t) => {

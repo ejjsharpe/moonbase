@@ -515,7 +515,7 @@ test('cross-process capable observation streams thinking/text before completion,
     ),
   );
   const before = (await f.stats()).reads;
-  await new Promise((r) => setTimeout(r, 200));
+  // The provider holds its next steps until the test advances it.
   assert.equal(views.at(-1)!.run!.text, 'first remote text 0');
   f.nextChunk();
   await until(

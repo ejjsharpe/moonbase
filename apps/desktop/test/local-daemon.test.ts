@@ -17,6 +17,7 @@ import {
   findDaemonDirectory,
   LocalDaemonConnectionLive,
   readDaemonSession,
+  type LocalDaemon,
 } from '../src/main/daemon/local-daemon.ts';
 import {
   makeFauxDaemonCommand,
@@ -127,7 +128,23 @@ test('a crashed or unanswering daemon is replaced on the next request, in a new 
   assert(isAlive(restarted));
 });
 
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * The daemon as the connection sees it, counting the replacement checks it starts: each asks
+ * `isOutdated` first, and starts only once the one before it has ended.
+ */
+function countChecks(daemon: LocalDaemon) {
+  const counted = {
+    checks: 0,
+    daemon: {
+      ...daemon,
+      isOutdated: () => {
+        counted.checks++;
+        return daemon.isOutdated();
+      },
+    },
+  };
+  return counted;
+}
 const fauxModel = { provider: 'moonbase-faux', modelId: 'faux-model' };
 
 test('a daemon of another build is used while it has work, then replaced in a new generation', async (t) => {
@@ -184,12 +201,14 @@ test('a daemon of another build is used while it has work, then replaced in a ne
     command: makeFauxDaemonCommand(directory),
     replaceMs: 50,
   });
-  const { runtime, chat, connection } = await chatOver(LocalDaemonConnectionLive(daemon));
+  const counted = countChecks(daemon);
+  const { runtime, chat, connection } = await chatOver(LocalDaemonConnectionLive(counted.daemon));
   const before = await runtime.runPromise(connection.endpoint({ host: session.host }));
   assert.equal(await readDaemonPid(directory), older, 'the app works with the older daemon');
   assert.equal(daemon.isOutdated(), true);
-  // Many checks pass while the run goes on; the older daemon keeps it.
-  await delay(500);
+  // Several checks pass while the run goes on; the older daemon keeps it.
+  const checked = counted.checks;
+  await until(() => counted.checks >= checked + 4);
   assert(isAlive(older));
   assert.equal(await readDaemonPid(directory), older);
   await runtime.runPromise(chat.stopChat({ stop: running!.run!.stop, requestId: 'stop' }));
@@ -210,13 +229,15 @@ test('a daemon of another build is used while it has work, then replaced in a ne
     ['Held'],
   );
   // The current daemon is never replaced.
-  await delay(200);
+  const replaced = counted.checks;
+  await until(() => counted.checks >= replaced + 4);
   assert.equal(await readDaemonPid(directory), current);
 });
 
 /**
  * Starts a process that notes any SIGTERM in `marker` rather than stopping, its command line
- * ending with `args`, and waits until it handles the signal.
+ * ending with `args`, and waits until it handles the signal. It answers SIGUSR2 by writing
+ * `<marker>.checked`, which `assertNotSignalled` uses as a sentinel.
  */
 async function spawnStandIn(t: TestContext, marker: string, args: string[]) {
   const standIn = spawn(
@@ -226,7 +247,7 @@ async function spawnStandIn(t: TestContext, marker: string, args: string[]) {
         ? []
         : [
             '-e',
-            `process.on('SIGTERM', () => require('node:fs').writeFileSync(process.env.STAND_IN_MARKER, '')); setInterval(() => {}, 1000); process.stdout.write('ready')`,
+            `process.on('SIGTERM', () => require('node:fs').writeFileSync(process.env.STAND_IN_MARKER, '')); process.on('SIGUSR2', () => require('node:fs').writeFileSync(process.env.STAND_IN_MARKER + '.checked', '')); setInterval(() => {}, 1000); process.stdout.write('ready')`,
           ]),
       ...args,
     ],
@@ -236,6 +257,23 @@ async function spawnStandIn(t: TestContext, marker: string, args: string[]) {
   await once(standIn.stdout!, 'data');
   standIn.stdout!.destroy();
   return standIn;
+}
+
+/**
+ * Asserts the stand-in noted no SIGTERM. Its handlers run in the order the signals arrived, so
+ * once it has answered a SIGUSR2 sent now, a SIGTERM sent before would already have been noted.
+ */
+async function assertNotSignalled(standIn: ReturnType<typeof spawn>, marker: string) {
+  const checked = marker + '.checked';
+  await rm(checked, { force: true });
+  standIn.kill('SIGUSR2');
+  await until(() =>
+    stat(checked).then(
+      () => true,
+      () => false,
+    ),
+  );
+  await assert.rejects(stat(marker), { code: 'ENOENT' });
 }
 
 test('a daemon speaking another protocol is never signalled; local chat waits for it to exit', async (t) => {
@@ -249,6 +287,7 @@ test('a daemon speaking another protocol is never signalled; local chat waits fo
     entry,
     `import { writeFileSync } from 'node:fs';
 process.on('SIGTERM', () => writeFileSync(process.env.STAND_IN_MARKER, ''));
+process.on('SIGUSR2', () => writeFileSync(process.env.STAND_IN_MARKER + '.checked', ''));
 setInterval(() => {}, 1000);
 process.stdout.write('ready');
 `,
@@ -270,10 +309,9 @@ process.stdout.write('ready');
   await assert.rejects(daemon.ensure(), busy);
   const session = await readDaemonSession(directory).catch(() => undefined);
   assert.equal(session, undefined, 'nothing was started on its directory');
-  await delay(200);
   await assert.rejects(daemon.ensure(), busy);
   assert.equal(older.exitCode, null);
-  await assert.rejects(stat(marker), { code: 'ENOENT' });
+  await assertNotSignalled(older, marker);
   // Once it exits (idle, with nobody connected), the next request starts this app's daemon.
   older.kill('SIGKILL');
   await once(older, 'exit');
@@ -323,8 +361,7 @@ test('an outdated daemon whose process ID now runs something else is never signa
   await daemon.ensure();
   assert.equal(daemon.isOutdated(), true);
   await daemon.replace();
-  await delay(100);
-  await assert.rejects(stat(marker), { code: 'ENOENT' });
+  await assertNotSignalled(other, marker);
   assert.equal(other.exitCode, null);
   // This app's daemon runs in its place.
   const current = (await readDaemonPid(directory))!;

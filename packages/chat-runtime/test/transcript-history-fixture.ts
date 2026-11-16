@@ -3,10 +3,14 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
 import type { ChatTarget } from '@moonbase/contracts/chat';
 
-export async function seedTranscriptHistory(harness: Harness, target: ChatTarget) {
+/**
+ * Appends `count` mixed records. The default passes production's 1,024-record transcript budget; a
+ * client with scaled limits needs fewer.
+ */
+export async function seedTranscriptHistory(harness: Harness, target: ChatTarget, count = 1121) {
   return harness.commit(async (tx) => {
     const ids: string[] = [];
-    for (let index = 0; index < 1121; index++) {
+    for (let index = 0; index < count; index++) {
       const text = `qualification record ${index} 🌔`;
       let draft: EntryDraft;
       if (index % 20 === 0) draft = { kind: 'pi.reset', head: 'self' };
@@ -29,8 +33,16 @@ export async function seedTranscriptHistory(harness: Harness, target: ChatTarget
   }, BACKGROUND_CONTEXT);
 }
 
-export async function seedTranscriptLongText(harness: Harness, target: ChatTarget) {
-  const text = 'early NEEDLE 😀\r\n' + '😀α'.repeat(1600000) + 'late ΣNEEDLE 😀\r\n';
+/**
+ * Appends one thinking part of `repeats` six-byte pieces between two needles. The default passes
+ * production's 8 MiB content budget.
+ */
+export async function seedTranscriptLongText(
+  harness: Harness,
+  target: ChatTarget,
+  repeats = 1600000,
+) {
+  const text = 'early NEEDLE 😀\r\n' + '😀α'.repeat(repeats) + 'late ΣNEEDLE 😀\r\n';
   const entry = await harness.commit(
     (tx) =>
       tx.appendEntry(Number(target.conversationId) as ConversationId, {
