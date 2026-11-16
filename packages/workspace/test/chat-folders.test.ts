@@ -27,6 +27,7 @@ import {
   type RootPredicate,
 } from '../src/index.ts';
 import { findNewDescriptors, readOpenDescriptors } from './open-descriptors.ts';
+import { initRepository } from './repository-fixture.ts';
 
 const chat: ChatTarget = {
   host: { hostId: 'chat-folders-host', storeId: 'store' },
@@ -68,7 +69,7 @@ function setup(
     repository(name: string, commit = true) {
       const root = join(base, ...name.split('/'));
       mkdirSync(root, { recursive: true });
-      git(root, 'init', '-q', '-b', 'main');
+      initRepository(root);
       if (commit) {
         writeFileSync(join(root, 'file.txt'), 'x');
         git(root, 'add', '.');

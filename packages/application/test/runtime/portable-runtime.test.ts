@@ -1,20 +1,44 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { build } from 'esbuild';
+import { build, type Metafile } from 'esbuild';
 
-for (const entry of ['', '/editor', '/runtime/clients', '/runtime/effect-client'])
-  test(`application${entry} bundles without privileged or UI implementations`, async () => {
-    const bundle = await build({
-      absWorkingDir: fileURLToPath(new URL('../../../../', import.meta.url)),
-      entryPoints: [`@moonbase/application${entry}`],
-      bundle: true,
-      platform: 'browser',
-      write: false,
-      metafile: true,
-    });
+const entries = {
+  index: '',
+  editor: '/editor',
+  'runtime-clients': '/runtime/clients',
+  'runtime-effect-client': '/runtime/effect-client',
+};
+// One build of every entry; each entry's graph is the files reachable from it.
+let metafile: Metafile;
+before(async () => {
+  ({ metafile } = await build({
+    absWorkingDir: fileURLToPath(new URL('../../../../', import.meta.url)),
+    entryPoints: Object.fromEntries(
+      Object.entries(entries).map(([name, entry]) => [name, `@moonbase/application${entry}`]),
+    ),
+    bundle: true,
+    platform: 'browser',
+    write: false,
+    outdir: 'out',
+    metafile: true,
+  }));
+});
+function readGraph(name: string) {
+  const entryPoint = metafile.outputs[`out/${name}.js`]?.entryPoint;
+  assert(entryPoint);
+  const graph = new Set([entryPoint]);
+  for (const path of graph)
+    for (const { path: next, external } of metafile.inputs[path]?.imports ?? [])
+      if (!external) graph.add(next);
+  return graph;
+}
+
+for (const [name, entry] of Object.entries(entries))
+  test(`application${entry} bundles without privileged or UI implementations`, () => {
+    const graph = readGraph(name);
     assert.deepEqual(
-      Object.keys(bundle.metafile.inputs).filter((path) =>
+      [...graph].filter((path) =>
         /packages\/(?:chat-runtime|daemon-protocol|ssh|workspace)\/|node_modules\/(?:\.bun\/[^/]+\/node_modules\/)?(?:react(?:-dom)?|monaco-editor)\/|electron|@earendil-works|node:/.test(
           path,
         ),
@@ -24,7 +48,7 @@ for (const entry of ['', '/editor', '/runtime/clients', '/runtime/effect-client'
     if (entry === '' || entry === '/editor')
       for (const owner of ['recovery-outbox', 'preservation', 'discovery'])
         assert(
-          `packages/application/src/editor/${owner}.ts` in bundle.metafile.inputs,
+          graph.has(`packages/application/src/editor/${owner}.ts`),
           `The actual browser graph must include the private ${owner} owner`,
         );
   });
