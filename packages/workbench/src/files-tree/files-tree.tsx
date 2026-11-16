@@ -248,6 +248,7 @@ export function FilesTree({
     editId: edit?.id,
     pinnedPaths: entryDrag.dragged,
     initialScroll: tree.scroll,
+    onScrollRest: (scroll) => controller.tree(checkout, { scroll }),
   });
   const commandContext = {
     controller,
@@ -355,10 +356,8 @@ export function FilesTree({
         onPointerDown={focus.onPointerDown}
         onFocus={focus.onFocus}
         onScroll={(event) => {
-          if (event.target !== event.currentTarget) return;
-          const top = event.currentTarget.scrollTop;
-          menu.closeForScroll(top);
-          controller.tree(checkout, { scroll: top });
+          if (event.target === event.currentTarget)
+            menu.closeForScroll(event.currentTarget.scrollTop);
         }}
         onKeyDown={(event) => {
           if (!isNameField(event.target)) handleTreeKeyDown(event, navigation);

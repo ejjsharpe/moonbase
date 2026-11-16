@@ -99,7 +99,8 @@ export function useTreeMenu({
     },
     /** Closes the menu once the tree has scrolled from where it opened. */
     closeForScroll(top: number) {
-      setMenu((current) => (current?.scroll === top ? current : null));
+      // Set only as it closes, so scrolling renders the tree once a step.
+      if (menu && menu.scroll !== top) setMenu(null);
     },
   };
 }

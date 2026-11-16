@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
 import { defaultRangeExtractor, useVirtualizer } from '@tanstack/react-virtual';
 import { addPinnedIndexes, overscan, rowHeight, type VisibleRow } from './files-tree-rows.ts';
 
@@ -6,7 +6,8 @@ import { addPinnedIndexes, overscan, rowHeight, type VisibleRow } from './files-
  * Mounts the files tree's rows in or near its scrolled window, at a fixed height each, and keeps
  * the focused row and each new edit in view. The focused row and `pinnedPaths` stay mounted
  * wherever they are: Chromium stops a drag whose source row unmounts. The tree starts at
- * `initialScroll`.
+ * `initialScroll`, and tells `onScrollRest` where it comes to rest after scrolling, or where it
+ * was if it unmounts first.
  */
 export function useTreeVirtualizer({
   treeElement,
@@ -16,6 +17,7 @@ export function useTreeVirtualizer({
   editId,
   pinnedPaths,
   initialScroll,
+  onScrollRest,
 }: {
   treeElement: RefObject<HTMLDivElement | null>;
   /** The rows as shown, placeholder included. */
@@ -26,7 +28,10 @@ export function useTreeVirtualizer({
   editId: number | undefined;
   pinnedPaths: readonly string[];
   initialScroll: number;
+  onScrollRest: (scroll: number) => void;
 }) {
+  // Whether the tree has scrolled since it last came to rest, and where to.
+  const scrolled = useRef<number | null>(null);
   const focusIndex = Math.max(
       0,
       rows.findIndex((row) => row.path === focus),
@@ -37,6 +42,15 @@ export function useTreeVirtualizer({
     getScrollElement: () => treeElement.current,
     estimateSize: () => rowHeight,
     overscan,
+    // Saving each scroll would publish the recovery and render the workbench for each.
+    onChange(instance) {
+      const offset = instance.scrollOffset ?? 0;
+      if (instance.isScrolling) scrolled.current = offset;
+      else if (scrolled.current !== null) {
+        scrolled.current = null;
+        onScrollRest(offset);
+      }
+    },
     rangeExtractor: (range) =>
       addPinnedIndexes(
         defaultRangeExtractor(range),
@@ -49,6 +63,14 @@ export function useTreeVirtualizer({
     const element = treeElement.current;
     // The scroll event that follows tells the virtualizer, which reads where the browser clamped.
     if (element) element.scrollTop = initialScroll;
+    return () => {
+      if (scrolled.current === null) return;
+      try {
+        onScrollRest(scrolled.current);
+      } catch {
+        // The checkout or the editor has gone, and its scroll with it.
+      }
+    };
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- Restore the scroll once; the tree is keyed by checkout.
   }, []);
   function scrollToRow(index: number) {
