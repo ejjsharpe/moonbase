@@ -2,7 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { createRef, StrictMode, useState } from 'react';
 import { Effect, ManagedRuntime } from 'effect';
 import { RegistryContext } from '@effect/atom-react';
-import { WorkspaceService } from '@moonbase/contracts/services';
+import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import type { OperationResult, WorkspaceOperation } from '@moonbase/contracts/workspace';
 import { isFileDropTaken, Workbench, type WorkbenchHandle } from '../src/index.ts';
 import {

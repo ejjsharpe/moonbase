@@ -8,6 +8,7 @@ import {
   type ChatModel,
   type ChatRunner,
 } from '../chat/index.ts';
+import { getFailureCode } from '../editor/editor-errors.ts';
 import {
   ApplicationLifecycleError,
   describeApplicationFailure,
@@ -110,8 +111,11 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
           Effect.sync(() => transcriptMemory.clear()),
         );
         yield* Effect.addFinalizer(() => stopAll);
-        const fail = (reason: ApplicationLifecycleError['reason'], detail?: string) =>
-          Effect.fail(new ApplicationLifecycleError({ reason, detail }));
+        const fail = (
+          reason: ApplicationLifecycleError['reason'],
+          detail?: string,
+          code?: ApplicationLifecycleError['code'],
+        ) => Effect.fail(new ApplicationLifecycleError({ reason, detail, code }));
         const recordCleanupError = (error: unknown) =>
           update((s) => ({
             ...s,
@@ -308,8 +312,15 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
             const released: Exit.Exit<unknown, unknown> = pending
               ? yield* Effect.exit(pending)
               : Exit.void;
-            if (Exit.isFailure(released))
-              return yield* fail('cleanup-failed', joinFailures([failureOf(released)]));
+            if (Exit.isFailure(released)) {
+              const failure = failureOf(released);
+              // Main reads the code its cleanup failed with, as it always has (until CL-22).
+              return yield* fail(
+                'cleanup-failed',
+                joinFailures([failure]),
+                getFailureCode(failure) ?? 'Unavailable',
+              );
+            }
           }),
           reportCleanup: recordCleanupError,
         } satisfies ChatHostShape;

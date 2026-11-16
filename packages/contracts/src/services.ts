@@ -7,10 +7,14 @@ import {
   type WorkspaceEvent,
   type CheckoutTarget,
 } from './workspace.ts';
+export {
+  WorkspaceService,
+  type WorkspaceHandler,
+  type WorkspaceHandlers,
+  type WorkspaceServiceShape,
+} from './workspace-service.ts';
 import type { HostCommand, HostInput, HostOutput } from './workspace-host.ts';
 import type { WorkspaceHostError } from './workspace-host-errors.ts';
-import type { WorkspaceError } from './workspace-errors.ts';
-import type { RecoveryOutline } from './recovery.ts';
 import type {
   ConnectionCommand,
   ConnectionInput,
@@ -34,19 +38,6 @@ import type { FolderError } from './folder-errors.ts';
 import type { DaemonLinkError } from './host-errors.ts';
 import type { ProviderSetupError } from './provider-errors.ts';
 
-export type WorkspaceHandler<K extends WorkspaceCommand> = (
-  input: CommandInput<K>,
-) => Effect.Effect<CommandOutput<K>, WorkspaceError>;
-export type WorkspaceHandlers = { [K in WorkspaceCommand]: WorkspaceHandler<K> };
-/** The file commands and the recovery store's (each of its edits returns once committed). */
-export type WorkspaceServiceShape = WorkspaceHandlers & {
-  watch(input: {
-    checkout: CheckoutTarget;
-    paths: string[];
-  }): Stream.Stream<WorkspaceEvent, WorkspaceError>;
-  /** A client's recovery without draft text, then again each time that changes. */
-  watchRecovery(input: { clientId: string }): Stream.Stream<RecoveryOutline, WorkspaceError>;
-};
 export type WorkspaceHostHandlers = {
   [K in HostCommand]: (input: HostInput<K>) => Effect.Effect<HostOutput<K>, WorkspaceHostError>;
 };
@@ -61,9 +52,6 @@ export class WorkspaceHostService extends Context.Service<
   WorkspaceHostService,
   WorkspaceHostServiceShape
 >()('moonbase/WorkspaceHost') {}
-export class WorkspaceService extends Context.Service<WorkspaceService, WorkspaceServiceShape>()(
-  'moonbase/Workspace',
-) {}
 
 export type ConnectionHandlers = {
   [K in ConnectionCommand]: (

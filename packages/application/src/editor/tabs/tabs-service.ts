@@ -1,5 +1,5 @@
 import { Context, Effect, Exit, Fiber, FiberHandle, Layer, Option, SubscriptionRef } from 'effect';
-import { WorkspaceService } from '@moonbase/contracts/services';
+import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import { getParentPath } from '@moonbase/contracts/paths';
 import {
   maximumFileBytes,

@@ -10,7 +10,7 @@ import {
   Stream,
   SubscriptionRef,
 } from 'effect';
-import { WorkspaceService } from '@moonbase/contracts/services';
+import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
 import type {
   CheckoutTarget,

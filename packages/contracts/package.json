@@ -42,7 +42,8 @@
     "./host-errors": "./src/host-errors.ts",
     "./watch": "./src/watch.ts",
     "./watch-schema": "./src/watch-schema.ts",
-    "./workspace-rpc": "./src/workspace-rpc.ts"
+    "./workspace-rpc": "./src/workspace-rpc.ts",
+    "./workspace-service": "./src/workspace-service.ts"
   },
   "scripts": {
     "typecheck": "bun check --no-script -p tsconfig.json",

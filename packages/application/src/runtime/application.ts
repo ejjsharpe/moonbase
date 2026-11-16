@@ -1,6 +1,6 @@
 import * as Schema from 'effect/Schema';
 import type { Effect } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { ApplicationError, ApplicationErrorCodeSchema } from '@moonbase/contracts/errors';
 import type { ChatDependencies } from '../chat/index.ts';
 
 /** A chat host the user can switch to, acquired when it is opened. */
@@ -50,6 +50,8 @@ export class ApplicationLifecycleError extends Schema.TaggedError<ApplicationLif
     reason: Schema.Literals(Object.keys(reasons) as (keyof typeof reasons)[]),
     /** Moonbase's own text of what failed (an acquisition's), shown instead of the reason. */
     detail: Schema.optional(Schema.String),
+    /** The legacy code (D14) of the failure it carries, for consumers still reading codes. */
+    code: Schema.optional(ApplicationErrorCodeSchema),
   },
 ) {
   override get message(): string {

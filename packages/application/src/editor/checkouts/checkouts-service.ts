@@ -1,5 +1,5 @@
 import { Context, Effect, Exit, Layer } from 'effect';
-import { WorkspaceService } from '@moonbase/contracts/services';
+import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import type { CheckoutTarget, CommandInput, CommandOutput } from '@moonbase/contracts/workspace';
 import { writeOwn } from '../record.ts';
 import { EditorError, type EditorFailure } from '../editor-errors.ts';

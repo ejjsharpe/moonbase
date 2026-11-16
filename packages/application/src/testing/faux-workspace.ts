@@ -1,7 +1,7 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { checkoutKey, readOwn } from '../editor/index.ts';
 import { Effect, Layer, Queue, Stream } from 'effect';
-import { WorkspaceService, type WorkspaceServiceShape } from '@moonbase/contracts/services';
+import { WorkspaceService, type WorkspaceServiceShape } from '@moonbase/contracts/workspace-service';
 import { fauxRecovery } from './faux-recovery.ts';
 import {
   ApplicationError,

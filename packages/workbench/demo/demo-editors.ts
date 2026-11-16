@@ -1,6 +1,6 @@
 import { Context, Effect, Exit, Layer, Scope, type ManagedRuntime } from 'effect';
 import * as AtomRegistry from 'effect/reactivity/AtomRegistry';
-import { WorkspaceService, type WorkspaceServiceShape } from '@moonbase/contracts/services';
+import { WorkspaceService, type WorkspaceServiceShape } from '@moonbase/contracts/workspace-service';
 import type {
   CheckoutTarget,
   CommandInput,

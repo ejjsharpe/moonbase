@@ -1,5 +1,5 @@
 import { Context, Effect, Exit, Fiber, FiberMap, FiberSet, Layer, SubscriptionRef } from 'effect';
-import { WorkspaceService } from '@moonbase/contracts/services';
+import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import { getParentPath } from '@moonbase/contracts/paths';
 import type {
   CheckoutTarget,

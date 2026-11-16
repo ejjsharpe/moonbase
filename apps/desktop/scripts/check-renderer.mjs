@@ -7,15 +7,15 @@ assert.deepEqual(
   inputs.filter(
     (p) =>
       isPrivilegedDesktopInput(p) ||
-      /(?:^|\/)node_modules\/(?:electron|@moonbase\/(?:workspace|chat-runtime|daemon-protocol|ssh|connection))\/|packages\/(?:workspace|chat-runtime|daemon-protocol|ssh|connection)\/|packages\/workbench\/(?:demo|test)\/|packages\/contracts\/src\/services\.ts|packages\/application\/src\/testing\/|packages\/application\/src\/runtime\/(?:handlers|clients)\.ts|apps\/desktop\/src\/(?:main|preload)\/|@earendil-works|pi-ai|pi-durable|node:sqlite|source-snapshot|node:/.test(
+      /(?:^|\/)node_modules\/(?:electron|@moonbase\/(?:workspace|chat-runtime|daemon-protocol|ssh|connection))\/|packages\/(?:workspace|chat-runtime|daemon-protocol|ssh|connection)\/|packages\/workbench\/(?:demo|test)\/|packages\/contracts\/src\/services\.ts|packages\/application\/src\/testing\/|packages\/application\/src\/chat\/chat-(?:handlers|clients)\.ts|apps\/desktop\/src\/(?:main|preload)\/|@earendil-works|pi-ai|pi-durable|node:sqlite|source-snapshot|node:/.test(
         p,
       ),
   ),
   [],
   'Privileged implementation reached the actual Vite renderer graph',
 );
-assert(inputs.some((p) => p.endsWith('application/src/runtime/composition.ts')));
-assert(inputs.some((p) => p.endsWith('application/src/editor/editor.ts')));
+assert(inputs.some((p) => p.endsWith('application/src/runtime/application-service.ts')));
+assert(inputs.some((p) => p.endsWith('application/src/editor/editor-layer.ts')));
 assert(!inputs.some((p) => p.endsWith('desktop/src/renderer/cleanup.ts')));
 assert(inputs.some((p) => p.endsWith('contracts/src/errors.ts')));
 assert(inputs.some((p) => p.includes('monaco-editor')));

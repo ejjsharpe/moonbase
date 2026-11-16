@@ -1,5 +1,5 @@
 import { Context, Deferred, Effect, Exit, Layer, SubscriptionRef } from 'effect';
-import { WorkspaceService } from '@moonbase/contracts/services';
+import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import type {
   CheckoutTarget,

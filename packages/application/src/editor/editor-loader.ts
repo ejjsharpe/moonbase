@@ -1,5 +1,5 @@
 import { Context, Effect, Layer } from 'effect';
-import { WorkspaceService } from '@moonbase/contracts/services';
+import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import { readOwn } from './record.ts';
 import { EditorError, type EditorFailure } from './editor-errors.ts';
 import { EditorSession } from './session/session-service.ts';

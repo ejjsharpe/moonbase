@@ -1,5 +1,5 @@
 import { Context, Effect, Exit, Layer, type Scope, Stream, type SubscriptionRef } from 'effect';
-import { WorkspaceService } from '@moonbase/contracts/services';
+import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { describeEditorFailure } from '../alerts/alerts.ts';
 import { EditorSession } from '../session/session-service.ts';

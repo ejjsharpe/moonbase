@@ -1,10 +1,11 @@
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { useEffect, useRef, useState } from 'react';
-import { Context, Effect, ManagedRuntime, SubscriptionRef } from 'effect';
+import { Context, Effect, Exit, ManagedRuntime, SubscriptionRef } from 'effect';
 import { RegistryProvider } from '@effect/atom-react';
 import {
   MoonbaseApplication,
+  ApplicationLifecycleError,
   describeApplicationFailure,
   makeApplicationAtoms,
 } from '@moonbase/application';
@@ -12,7 +13,7 @@ import type { ChatRunner } from '@moonbase/application/chat';
 import { EditorAlerts, getFailureCode } from '@moonbase/application/editor';
 import { makeWorkbenchEditor, type WorkbenchEditor } from '@moonbase/workbench';
 import { configureMonacoWorkers } from '@moonbase/workbench/workers';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { ApplicationError, CancelledError } from '@moonbase/contracts/errors';
 import { DesktopShell, type DesktopShellHandle } from './shell/desktop-shell.tsx';
 import type { DesktopApplication } from './shell/desktop-application.ts';
 import { WorkbenchStartupFailure } from './shell/startup-failure.tsx';
@@ -50,7 +51,10 @@ const toWindowError = (error: unknown) =>
   ApplicationError.is(error)
     ? error
     : new ApplicationError({
-        code: getFailureCode(error) ?? 'Unavailable',
+        code:
+          getFailureCode(error) ??
+          (error instanceof ApplicationLifecycleError ? error.code : undefined) ??
+          'Unavailable',
         message: describeApplicationFailure(error),
       });
 const shell = makeShellClients(runtime, window.moonbase);
@@ -154,6 +158,7 @@ function StartupFailure({ error }: { error: ApplicationError }) {
   return <WorkbenchStartupFailure message={error.message} />;
 }
 
+const cancelled = () => new CancelledError({ operation: 'The action' });
 /** Releases the application, then the runtime with the editor; joins a release running. */
 let released: Promise<void> | undefined;
 const release = () =>
@@ -167,7 +172,25 @@ try {
   const context = await runtime.context();
   const service = Context.get(context, MoonbaseApplication);
   await runtime.runPromise(service.start);
-  const run = <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect);
+  /**
+   * Runs an action on the root runtime. One interrupted, or run once the runtime has gone (the
+   * document closing), rejects as cancelled, which is never reported: no runtime text reaches
+   * the view.
+   */
+  const run = <A, E>(effect: Effect.Effect<A, E>): Promise<A> =>
+    runtime.runPromiseExit(effect).then(
+      (exit) => {
+        if (Exit.isSuccess(exit)) return exit.value;
+        const reason = exit.cause.reasons.find(
+          (item) => item._tag === 'Fail' || item._tag === 'Die',
+        );
+        if (reason?._tag === 'Fail') throw reason.error;
+        throw reason?._tag === 'Die' ? reason.defect : cancelled();
+      },
+      () => {
+        throw cancelled();
+      },
+    );
   const application: DesktopApplication = {
     service,
     atoms: makeApplicationAtoms(service),

@@ -5,7 +5,7 @@ import { RegistryContext, useAtomValue } from '@effect/atom-react';
 import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { Effect, ManagedRuntime } from 'effect';
-import { WorkspaceService } from '@moonbase/contracts/services';
+import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import { ApplicationError, type CommandOutput } from '@moonbase/contracts/workspace';
 import { Workbench } from '../src/index.ts';
 import {

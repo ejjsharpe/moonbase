@@ -50,16 +50,26 @@ export function makeEditorActions(editor: WorkbenchEditor, registry: AtomRegistr
     recovery = Context.get(context, RecoverySync),
     alerts = Context.get(context, EditorAlerts),
     session = Context.get(context, EditorSession);
-  /** Runs `effect`, rejecting with its failure, or `interrupted` when it was interrupted. */
+  /**
+   * Runs `effect`, rejecting with its failure, or `interrupted` when it was interrupted or the
+   * root runtime has gone (the document closing): no runtime text reaches the view.
+   */
   const call = <A, E>(effect: Effect.Effect<A, E>): Promise<A> =>
-    editor.run(Effect.exit(effect)).then((exit) => {
-      if (Exit.isSuccess(exit)) return exit.value;
-      const reason = exit.cause.reasons.find((item) => item._tag === 'Fail' || item._tag === 'Die');
-      if (reason?._tag === 'Fail') throw reason.error;
-      throw reason?._tag === 'Die' ? reason.defect : interrupted;
-    });
+    editor.run(Effect.exit(effect)).then(
+      (exit) => {
+        if (Exit.isSuccess(exit)) return exit.value;
+        const reason = exit.cause.reasons.find(
+          (item) => item._tag === 'Fail' || item._tag === 'Die',
+        );
+        if (reason?._tag === 'Fail') throw reason.error;
+        throw reason?._tag === 'Die' ? reason.defect : interrupted;
+      },
+      () => {
+        throw interrupted;
+      },
+    );
   const report = (error: unknown) => {
-    if (error !== interrupted) void editor.run(alerts.report(error));
+    if (error !== interrupted) editor.run(alerts.report(error)).catch(() => {});
   };
   /** Runs an action whose outcome only matters if it fails, which is reported. */
   const fire = <A, E>(effect: Effect.Effect<A, E>) => {

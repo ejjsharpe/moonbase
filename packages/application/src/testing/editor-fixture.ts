@@ -15,7 +15,7 @@ import {
   SubscriptionRef,
 } from 'effect';
 import { ApplicationError, CancelledError } from '@moonbase/contracts/errors';
-import { WorkspaceService, type WorkspaceServiceShape } from '@moonbase/contracts/services';
+import { WorkspaceService, type WorkspaceServiceShape } from '@moonbase/contracts/workspace-service';
 import {
   isWorkspaceError,
   toWireError,

@@ -1,5 +1,5 @@
 import { Context, Effect, FiberHandle, FiberSet, Layer, Semaphore, Stream } from 'effect';
-import { WorkspaceService } from '@moonbase/contracts/services';
+import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import type { RecoveryLoad, RecoveryOutline, RecoveryState } from '@moonbase/contracts/recovery';
 import type { OperationResult } from '@moonbase/contracts/workspace';
 import { EditorError, type EditorFailure } from '../editor-errors.ts';

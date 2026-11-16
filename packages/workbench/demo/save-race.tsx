@@ -2,7 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { Effect, ManagedRuntime } from 'effect';
 import * as stylex from '@stylexjs/stylex';
 import { RegistryContext } from '@effect/atom-react';
-import { WorkspaceService } from '@moonbase/contracts/services';
+import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import type { CommandInput, CommandOutput } from '@moonbase/contracts/workspace';
 import { Workbench } from '../src/index.ts';
 import {

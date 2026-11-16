@@ -53,5 +53,4 @@ After a retryable (`Unavailable`) watch failure, the chat controller shows the l
 bun run --cwd packages/application typecheck
 bun run --cwd packages/application lint
 bun run --cwd packages/application test
-node packages/application/scripts/measure-editor-snapshots.mjs   # editor snapshot timing harness
 ```
