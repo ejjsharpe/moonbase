@@ -72,7 +72,10 @@ test("two clients of one daemon share a checkout: a move re-paths the other draf
       WorkspaceRecoveryLive({ dataDirectory: join(base, name), installationId: name }, host),
     );
     disposers.push(() => runtime.dispose());
-    const editor = await acquireEditorDriver({ client: toWorkspaceClient(runtime), clientId: name });
+    const editor = await acquireEditorDriver({
+      client: toWorkspaceClient(runtime),
+      clientId: name,
+    });
     disposers.push(() => editor.dispose());
     await editor.load();
     return editor;

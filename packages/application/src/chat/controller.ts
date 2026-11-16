@@ -1674,9 +1674,6 @@ export const makeChatModel = (
     yield* Effect.addFinalizer(() => model.release());
     return model;
   });
-export function makeChatController(
-  runtime: ChatRunner,
-  model: ChatModel,
-): ChatController {
+export function makeChatController(runtime: ChatRunner, model: ChatModel): ChatController {
   return model.bind(runtime);
 }

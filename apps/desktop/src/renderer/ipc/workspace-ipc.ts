@@ -1,5 +1,8 @@
 import { Effect, Layer, Stream } from 'effect';
-import { WorkspaceService, type WorkspaceServiceShape } from '@moonbase/contracts/workspace-service';
+import {
+  WorkspaceService,
+  type WorkspaceServiceShape,
+} from '@moonbase/contracts/workspace-service';
 import { workspaceInputSchemas } from '@moonbase/contracts/workspace-schema';
 import { recoveryInputSchemas } from '@moonbase/contracts/recovery-schema';
 import type { DesktopIpc } from './desktop-ipc.ts';

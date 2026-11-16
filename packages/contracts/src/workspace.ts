@@ -1,7 +1,6 @@
 /** Browser-safe application boundary. Privileged implementations use ./services. */
 export const maximumFileBytes = 2 * 1024 * 1024;
 import type * as Contracts from './workspace-schema.ts';
-import type { ApplicationError } from './errors.ts';
 import type { RecoveryCommands } from './recovery.ts';
 export type { RecoveryLoad } from './recovery.ts';
 export { ApplicationError, type ApplicationErrorCode } from './errors.ts';

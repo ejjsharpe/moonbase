@@ -1,12 +1,6 @@
 import type { ProviderCommand, ProviderInput, ProviderOutput, ProviderState } from './providers.ts';
 import { Context, type Effect, type Stream } from 'effect';
-import {
-  type CommandInput,
-  type CommandOutput,
-  type WorkspaceCommand,
-  type WorkspaceEvent,
-  type CheckoutTarget,
-} from './workspace.ts';
+import { type WorkspaceEvent, type CheckoutTarget } from './workspace.ts';
 export {
   WorkspaceService,
   type WorkspaceHandler,

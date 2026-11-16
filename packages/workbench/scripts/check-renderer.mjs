@@ -26,7 +26,9 @@ assert(inputs.some((path) => path.endsWith('application/src/editor/editor-layer.
 assert(inputs.some((path) => path.endsWith('contracts/src/errors.ts')));
 assert.deepEqual(
   inputs.filter((path) =>
-    /application[/\\]src[/\\](?:runtime[/\\]|chat[/\\]chat-(?:handlers|clients|promises)\.ts$)/.test(path),
+    /application[/\\]src[/\\](?:runtime[/\\]|chat[/\\]chat-(?:handlers|clients|promises)\.ts$)/.test(
+      path,
+    ),
   ),
   [],
 );
