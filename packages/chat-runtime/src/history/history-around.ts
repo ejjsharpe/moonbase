@@ -47,7 +47,7 @@ export async function readHistoryAround(
   entries.sort((a, b) => Number(b.id) - Number(a.id));
   const first = Number(entries.at(-1)?.id ?? input.entryId),
     last = Number(entries[0]?.id ?? input.entryId);
-  async function sealContinuation(direction: 'older' | 'newer', position: number) {
+  async function writeContinuation(direction: 'older' | 'newer', position: number) {
     return (await scanNearby(direction, position))
       ? writeCursor({ kind: 'around', binding, position, upper, direction })
       : null;
@@ -58,7 +58,7 @@ export async function readHistoryAround(
     entryId: input.entryId,
     upperEntryId: upper,
     entries,
-    olderCursor: await sealContinuation('older', first - 1),
-    newerCursor: await sealContinuation('newer', last + 1),
+    olderCursor: await writeContinuation('older', first - 1),
+    newerCursor: await writeContinuation('newer', last + 1),
   };
 }
