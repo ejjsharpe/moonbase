@@ -16,6 +16,7 @@ import type {
   EditorTextSearch,
   EditorMutation,
   MutationAction,
+  DirectMutationControls,
   RevealOptions,
 } from '@moonbase/application/editor';
 import { Effect, Exit, Scope, type ManagedRuntime } from 'effect';
@@ -113,6 +114,7 @@ type ExpectedEditorController = {
   createLookup(): EditorLookup;
   createTextSearch(): EditorTextSearch;
   createMutation(action: MutationAction): EditorMutation;
+  readonly mutations: DirectMutationControls;
   inspect(checkout: CheckoutTarget, paths: string[]): Promise<CommandOutput<'inspectEntries'>>;
   mutate(
     input: Omit<WorkspaceOperation, 'clientId' | 'id'> & { id?: string },

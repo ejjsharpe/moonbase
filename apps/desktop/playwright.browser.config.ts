@@ -10,8 +10,13 @@ export default defineConfig({
     'activity-selection.spec.ts',
     'stored-image.spec.ts',
   ],
-  workers: 1,
-  fullyParallel: false,
+  workers: '50%',
+  // One retry on CI; a test that passes only on retry is reported as flaky.
+  retries: process.env.CI ? 1 : 0,
+  fullyParallel: true,
+  // A run empties its output folder as it starts, so native and browser runs keep their own.
+  outputDir: 'test-results/browser',
+  reporter: [['list'], ['json', { outputFile: 'test-results/browser/timings.json' }]],
   use: {
     // Moonbase targets macOS; Monaco picks its keymap from the user agent, so Linux CI runs the Mac one.
     userAgent:
@@ -20,10 +25,11 @@ export default defineConfig({
     viewport: { width: 1600, height: 1000 },
     trace: 'retain-on-failure',
   },
+  // The built demo: a dev server compiles each module on first request, which parallel tests race.
   webServer: {
-    command: `bun run demo:browser --port ${port}`,
+    command: `bun run demo:browser:build && vp preview --config vite.browser.config.ts --host 127.0.0.1 --port ${port} --strictPort`,
     url: `http://127.0.0.1:${port}`,
     reuseExistingServer: false,
-    timeout: 60000,
+    timeout: 120000,
   },
 });

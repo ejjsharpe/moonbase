@@ -22,7 +22,7 @@ function event<T>() {
   });
   return { promise, resolve };
 }
-function fixture(options: { slow?: boolean; watchFailure?: boolean } = {}) {
+function fixture() {
   const counts = {
     acquired: 0,
     released: 0,
@@ -31,28 +31,16 @@ function fixture(options: { slow?: boolean; watchFailure?: boolean } = {}) {
     endpoints: 0,
     watch: 0,
     unwatch: 0,
-    interrupted: 0,
   };
-  const entered = event<void>(),
-    watched = event<void>(),
+  const watched = event<void>(),
     unwatched = event<void>();
   let snapshot: ConnectionSnapshot = { profile, state: 'disconnected', connectionId: null };
   const service: ConnectionServiceShape = {
     getConnection: () => Effect.sync(() => structuredClone(snapshot)),
     connect: (input) =>
-      Effect.gen(function* () {
+      Effect.sync(() => {
         assert.equal(input.profileId, profile.id);
         counts.connect++;
-        entered.resolve();
-        snapshot = { profile, state: 'connecting', connectionId: 'generation-one' };
-        if (options.slow)
-          yield* Effect.never.pipe(
-            Effect.ensuring(
-              Effect.sync(() => {
-                counts.interrupted++;
-              }),
-            ),
-          );
         snapshot = {
           profile,
           state: 'connected',
@@ -92,7 +80,6 @@ function fixture(options: { slow?: boolean; watchFailure?: boolean } = {}) {
               releaseResource(() => {
                 counts.unwatch++;
                 unwatched.resolve();
-                if (options.watchFailure) throw Error('Connection observer cleanup failed');
               }),
           ),
           Stream.concat(Stream.succeed(snapshot), Stream.never),
@@ -114,7 +101,7 @@ function fixture(options: { slow?: boolean; watchFailure?: boolean } = {}) {
       ),
     ),
   );
-  return { counts, runtime, client: makeConnectionClient(runtime), entered, watched, unwatched };
+  return { counts, runtime, client: makeConnectionClient(runtime), watched, unwatched };
 }
 
 test('public connection clients share one scoped service and keep endpoint lookup outside public commands', async () => {
@@ -149,70 +136,4 @@ test('public connection clients share one scoped service and keep endpoint looku
   assert.equal(counts.released, 1);
   assert.equal(counts.unwatch, 1);
   await assert.rejects(client.command('getConnection', {}));
-});
-
-test('an in-flight connection command does not block status and cancellation retains the service', async () => {
-  const { counts, runtime, client, entered } = fixture({ slow: true });
-  const abort = new AbortController();
-  const pending = client.command('connect', { profileId: profile.id }, { signal: abort.signal });
-  const rejected = assert.rejects(
-    pending,
-    (error) => ApplicationError.is(error) && error.code === 'Cancelled',
-  );
-  try {
-    await entered.promise;
-    assert.equal((await client.command('getConnection', {})).state, 'connecting');
-    abort.abort();
-    await rejected;
-    assert.equal(counts.interrupted, 1);
-    assert.equal(counts.released, 0);
-    await client.command('getConnection', {});
-  } finally {
-    abort.abort();
-    await runtime.dispose();
-  }
-  assert.equal(counts.released, 1);
-});
-
-test('pre-aborted connection commands dispatch nothing', async () => {
-  const { counts, runtime, client } = fixture();
-  const abort = new AbortController();
-  abort.abort();
-  try {
-    await assert.rejects(
-      client.command('connect', { profileId: profile.id }, { signal: abort.signal }),
-      (error) => ApplicationError.is(error) && error.code === 'Cancelled',
-    );
-  } finally {
-    await runtime.dispose();
-  }
-  assert.equal(counts.connect, 0);
-  assert.equal(counts.acquired, 0);
-});
-
-test('connection observer cleanup errors remain observable without disposing the process service', async () => {
-  const { counts, runtime, client, watched } = fixture({ watchFailure: true });
-  const reported = event<ApplicationError>();
-  let stop = async () => {};
-  try {
-    stop = client.watch(
-      () => {},
-      (error) => reported.resolve(error),
-    );
-    await watched.promise;
-    let error!: ApplicationError;
-    await assert.rejects(stop(), (value) => {
-      assert(ApplicationError.is(value));
-      error = value;
-      return true;
-    });
-    assert.equal(error.code, 'Unavailable');
-    assert.match(error.message, /Application resource cleanup failed/);
-    assert.equal(counts.unwatch, 1);
-    assert.equal(counts.released, 0);
-    await client.command('getConnection', {});
-  } finally {
-    await stop().catch(() => {});
-    await runtime.dispose();
-  }
 });

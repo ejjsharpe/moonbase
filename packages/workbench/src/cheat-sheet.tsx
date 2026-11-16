@@ -1,10 +1,7 @@
 import { useLayoutEffect, useRef } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
-import { formatKeys } from './files-tree/file-commands.ts';
-
-/** A shortcut's keys are written the Mac way (`Shift+Meta+P`); they show per platform. */
-export type Shortcut = { label: string; keys: string };
+import { formatKeys, type Shortcut } from './shortcuts.ts';
 
 /** The editor's main shortcuts. */
 export const editorShortcuts: readonly Shortcut[] = [

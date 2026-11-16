@@ -1,10 +1,8 @@
 import type { Locator } from '@playwright/test';
-import { dirname } from 'node:path';
-import { createHash } from 'node:crypto';
-import { test, expect, type Page, type ElectronApplication } from '@playwright/test';
+import { expect, type Page, type ElectronApplication } from '@playwright/test';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import type { RecoveryState } from '@moonbase/contracts/recovery';
-import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { callMain, editorClientId } from './window-ipc-fixture.ts';
 
 /** Runs one of the explorer's "…" menu actions: New File…, Go to File…, Refresh and so on. */
@@ -42,7 +40,8 @@ export async function expectSaveEnabled(editor: Page | Locator, enabled: boolean
   await page.keyboard.press('Escape');
 }
 
-export const filenameCases = ['__proto__', 'constructor', 'toString', 'hasOwnProperty'];
+// An own-key setter and an inherited member: the two ways a name can collide with a prototype.
+export const filenameCases = ['__proto__', 'constructor'];
 /** The drafts a recovery keeps, each with its buffer's file. */
 export const draftsOf = (state: RecoveryState) =>
   state.buffers.flatMap((b) => (b.draft ? [{ target: b.target, ...b.draft }] : []));
@@ -107,13 +106,23 @@ export async function checkFilenameMaps(
     await edit(path, 'dirty ' + path);
     await input.press('ArrowLeft');
   }
-  await expect.poll(async () => draftsOf((await recoveryState(page)).state).length).toBe(5);
+  await expect
+    .poll(async () => draftsOf((await recoveryState(page)).state).length)
+    .toBe(filenameCases.length + 1);
   const positionsOf = (state: RecoveryState) =>
     byPath(state, state.views[state.selectedCheckoutId!].positions);
   for (const path of filenameCases) {
     await expect
       .poll(async () => positionsOf((await recoveryState(page)).state)[path]?.staged?.column)
       .toBeGreaterThan(1);
+    // Each draft is kept over the text its Save wrote.
+    await expect
+      .poll(
+        async () =>
+          draftsOf((await recoveryState(page)).state).find((draft) => draft.target.path === path)
+            ?.disk.text,
+      )
+      .toBe('saved ' + path);
   }
   const persisted = (await recoveryState(page)).state,
     view = persisted.views[persisted.selectedCheckoutId!],
@@ -127,7 +136,7 @@ export async function checkFilenameMaps(
   expect(await prototypes(page)).toBe(before);
   page = await restart();
   await expect(
-    page.getByRole('textbox', { name: 'hasOwnProperty editor', exact: true }),
+    page.getByRole('textbox', { name: filenameCases.at(-1) + ' editor', exact: true }),
   ).toBeVisible();
   const restarted = (await recoveryState(page)).state,
     restoredView = restarted.views[restarted.selectedCheckoutId!],
@@ -165,7 +174,9 @@ export async function checkFilenameMaps(
   await expect(page.getByRole('textbox', { name: '__proto__ editor', exact: true })).toBeVisible();
   await saveFile(page);
   await expect.poll(() => readFileSync(checkout + '/__proto__', 'utf8')).toBe('dirty __proto__');
-  await expect.poll(async () => draftsOf((await recoveryState(page)).state).length).toBe(4);
+  await expect
+    .poll(async () => draftsOf((await recoveryState(page)).state).length)
+    .toBe(filenameCases.length);
   return {
     unchangedPrototypes: true,
     persisted,
@@ -174,118 +185,54 @@ export async function checkFilenameMaps(
   };
 }
 
-export async function checkTabMenu(
-  app: ElectronApplication,
-  page: Page,
-  capture: (name: string) => Promise<void>,
-  reopened = 'b.ts',
-) {
-  const records = [];
-  for (const [name, width, height, zoom] of [
-    ['normal', 1280, 850, 1],
-    ['small', 760, 650, 1],
-    ['zoom', 760, 650, 1.4],
-  ] as const) {
-    await app.evaluate(
-      ({ BrowserWindow }, size) => {
-        const window = BrowserWindow.getAllWindows()[0];
-        window.setSize(size.width, size.height);
-        window.webContents.setZoomFactor(size.zoom);
-      },
-      { width, height, zoom },
-    );
-    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(Math.round(width / zoom));
-    const trigger = page
-      .getByRole('tablist', { name: 'Open files', exact: true })
-      .getByRole('tab', { selected: true });
-    await trigger.focus();
-    await trigger.press('Shift+F10');
-    await page.keyboard.press('Home');
-    const first = page.getByRole('menuitem', { name: 'Keep Open', exact: true });
-    await expect(first).toBeFocused();
-    expect(
-      await first.evaluate((element) => {
-        const r = element.getBoundingClientRect();
-        return r.top >= 0 && r.bottom <= innerHeight;
-      }),
-    ).toBe(true);
-    await capture('menu-first-' + name);
-    await page.keyboard.press('Enter');
-    await expect(page.getByRole('menu')).toHaveCount(0);
-    await expect(trigger).toBeFocused();
-    await trigger.press('Shift+F10');
-    await expect(first).toBeFocused();
-    await page.keyboard.press('End');
-    const last = page.getByRole('menuitem', { name: 'Reopen Closed Files', exact: true });
-    await expect(last, name).toBeFocused();
-    expect(
-      await last.evaluate((element) => {
-        const r = element.getBoundingClientRect();
-        return r.top >= 0 && r.bottom <= innerHeight;
-      }),
-    ).toBe(true);
-    await capture('menu-last-' + name);
-    const geometry = await page.getByRole('menu').evaluate((element) => ({
-      viewport: { width: innerWidth, height: innerHeight },
-      popup: element.getBoundingClientRect().toJSON(),
-      overflowY: getComputedStyle(element).overflowY,
-    }));
-    await page.keyboard.press('Enter');
-    await expect(page.getByRole('menu')).toHaveCount(0);
-    await expect(page.getByRole('tab', { name: reopened, exact: true })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
-    await expect(
-      page.getByRole('textbox', { name: reopened + ' editor', exact: true }),
-    ).toBeVisible();
-    await trigger.click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Close', exact: true }).click();
-    await expect(page.getByRole('menu')).toHaveCount(0);
-    await expect(page.getByRole('tab', { name: reopened, exact: true })).toHaveCount(0);
-    records.push({ name, width, height, zoom, geometry });
-  }
-  writeFileSync('test-results/menu-geometry.json', JSON.stringify(records, null, 2) + '\n');
-}
-
-export async function captureNative(app: ElectronApplication, page: Page, file: string) {
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-      ),
+/** The tab menu reaches its first and last items by keyboard in a small, zoomed window. */
+export async function checkTabMenu(app: ElectronApplication, page: Page, reopened = 'b.ts') {
+  const width = 760,
+    zoom = 1.4;
+  await app.evaluate(
+    ({ BrowserWindow }, size) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      window.setSize(size.width, 650);
+      window.webContents.setZoomFactor(size.zoom);
+    },
+    { width, zoom },
   );
-  const native = await app.evaluate(async ({ BrowserWindow }) => {
-    const window = BrowserWindow.getAllWindows()[0];
-    return {
-      png: (await window.webContents.capturePage()).toPNG().toString('base64'),
-      bounds: window.getBounds(),
-      content: window.getContentBounds(),
-      zoom: window.webContents.getZoomFactor(),
-    };
-  });
-  const bytes = Buffer.from(native.png, 'base64');
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, bytes);
-  writeFileSync(
-    file + '.json',
-    JSON.stringify(
-      {
-        ...native,
-        png: undefined,
-        viewport: await page.evaluate(() => ({
-          width: innerWidth,
-          height: innerHeight,
-          devicePixelRatio,
-        })),
-        size: { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) },
-        sha256: createHash('sha256').update(bytes).digest('hex'),
-        fixture: test.info().title,
-      },
-      null,
-      2,
-    ) + '\n',
+  await expect.poll(() => page.evaluate(() => innerWidth)).toBe(Math.round(width / zoom));
+  const trigger = page
+    .getByRole('tablist', { name: 'Open files', exact: true })
+    .getByRole('tab', { selected: true });
+  const inView = (element: Element) => {
+    const r = element.getBoundingClientRect();
+    return r.top >= 0 && r.bottom <= innerHeight;
+  };
+  await trigger.focus();
+  await trigger.press('Shift+F10');
+  await page.keyboard.press('Home');
+  const first = page.getByRole('menuitem', { name: 'Keep Open', exact: true });
+  await expect(first).toBeFocused();
+  expect(await first.evaluate(inView)).toBe(true);
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await trigger.press('Shift+F10');
+  await expect(first).toBeFocused();
+  await page.keyboard.press('End');
+  const last = page.getByRole('menuitem', { name: 'Reopen Closed Files', exact: true });
+  await expect(last).toBeFocused();
+  expect(await last.evaluate(inView)).toBe(true);
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  await expect(page.getByRole('tab', { name: reopened, exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
   );
+  await expect(
+    page.getByRole('textbox', { name: reopened + ' editor', exact: true }),
+  ).toBeVisible();
+  await trigger.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Close', exact: true }).click();
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  await expect(page.getByRole('tab', { name: reopened, exact: true })).toHaveCount(0);
 }
 
 export async function prepareCrashRecovery(app: ElectronApplication) {

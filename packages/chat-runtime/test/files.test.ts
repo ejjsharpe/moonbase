@@ -10,7 +10,11 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
-import { ChatFileIndex, type ChatFileListingRun } from '../src/files.ts';
+import {
+  ChatFileIndex,
+  type ChatFileListingRun,
+  type ChatFileListingTiming,
+} from '../src/files.ts';
 import { LocalPiRuntimeLive } from '../src/index.ts';
 import { fixture, isRunning, session } from './runtime-fixture.ts';
 
@@ -69,7 +73,10 @@ test('without ripgrep, Git lists tracked and unignored files, never dependencies
   assert(main.matches[0].positions.length > 0);
 });
 
-test('ripgrep lists the same files with its ignore rules', { skip: !ripgrep }, async (t) => {
+// CI provides ripgrep, so there a missing one fails rather than skips.
+const skipRipgrep = !ripgrep && !process.env.CI && 'ripgrep is not installed';
+test('ripgrep lists the same files with its ignore rules', { skip: skipRipgrep }, async (t) => {
+  assert(ripgrep, 'Set MOONBASE_TEST_RIPGREP to the ripgrep scripts/prepare-ripgrep.mjs prepares.');
   const root = await folder(t);
   const index = new ChatFileIndex({ ripgrepExecutable: ripgrep });
   assert.deepEqual(paths(await index.find(root, '')), expected);
@@ -204,12 +211,6 @@ test('a Send carries the mentions its text spells', async (t) => {
 });
 
 /**
- * Short enough to keep the stalled-listing tests quick. The budget must also outlast a loaded
- * machine: a listing stopped before its stdout is read comes back empty, not partial.
- */
-const stalledTiming = { listingMs: 1_500, stopGraceMs: 200 };
-
-/**
  * Writes a listing command that prints part of the folder, then stalls like ripgrep or Git on a
  * hung mount, with a child that ignores SIGTERM. The child holds no pipe unless `childHoldsOutput`,
  * and the listing itself ignores SIGTERM when `ignoresTerm`. It records its pid in `pids` and the
@@ -237,6 +238,37 @@ wait
 }
 const readPid = async (path: string) =>
   Number((await readFile(path, 'utf8').catch(() => '')).trim()) || undefined;
+async function waitForPid(path: string) {
+  for (let i = 0; i < 500; i++) {
+    const pid = await readPid(path);
+    if (pid) return pid;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail('The listing never started its child');
+}
+const stopGraceMs = 200;
+/**
+ * A listing time budget the test ends. `expire` ends every running budget once the stalled
+ * listing in `bin` has printed, which it does before it records its child.
+ */
+function endedBudget(bin: string) {
+  const running = new Set<() => void>();
+  const timing: ChatFileListingTiming = {
+    stopGraceMs,
+    budget: (expire) => {
+      running.add(expire);
+      return () => running.delete(expire);
+    },
+  };
+  return {
+    timing,
+    async expire() {
+      await waitForPid(join(bin, 'children'));
+      assert(running.size, 'No listing budget was running');
+      for (const expire of running) expire();
+    },
+  };
+}
 /** The listing and its child are gone once the search returns: the whole group was stopped. */
 async function assertListingStopped(bin: string) {
   const pid = await readPid(join(bin, 'pids')),
@@ -252,14 +284,15 @@ test('a cancelled search returns at once, and its stalled listing is stopped at 
   const root = await folder(t, false),
     bin = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-files-bin-')));
   const pids = join(bin, 'pids'),
-    stalled = await writeStalledListing(bin, 'rg');
+    stalled = await writeStalledListing(bin, 'rg'),
+    budget = endedBudget(bin);
   const runtime = ManagedRuntime.make(
     LocalPiRuntimeLive({
       ...session,
       databasePath: join(bin, 'chat.sqlite'),
       models: createModels(),
       ripgrepExecutable: stalled,
-      fileListingTiming: stalledTiming,
+      fileListingTiming: budget.timing,
       approveFolder: async () => {},
     }),
   );
@@ -286,7 +319,9 @@ test('a cancelled search returns at once, and its stalled listing is stopped at 
   assert(Date.now() - started < 1_000, 'Cancelling waited for the listing');
   // The listing is shared, so cancelling one search leaves it to finish for the next.
   assert(isRunning(pid));
-  const result = await client.command('findChatFiles', input);
+  const searched = client.command('findChatFiles', input);
+  await budget.expire();
+  const result = await searched;
   assert.deepEqual(paths(result), ['README.md', 'src/app/main.ts']);
   assert.equal(result.partial, true);
   await assertListingStopped(bin);
@@ -297,12 +332,15 @@ test('a stalled Git listing is stopped with its children at its time budget', as
   const root = await folder(t),
     bin = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-files-bin-')));
   t.after(() => rm(bin, { recursive: true, force: true }));
+  const budget = endedBudget(bin);
   const index = new ChatFileIndex({
     ripgrepExecutable: missing,
     gitExecutable: await writeStalledListing(bin, 'git'),
-    timing: stalledTiming,
+    timing: budget.timing,
   });
-  const result = await index.find(root, '');
+  const searched = index.find(root, '');
+  await budget.expire();
+  const result = await searched;
   assert.deepEqual(paths(result), ['README.md', 'src/app/main.ts']);
   assert.equal(result.partial, true);
   await assertListingStopped(bin);
@@ -313,17 +351,20 @@ test('a listing that ignores SIGTERM, or whose child holds its output, is killed
   const search = async (options: { ignoresTerm?: boolean; childHoldsOutput?: boolean }) => {
     const bin = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-files-bin-')));
     t.after(() => rm(bin, { recursive: true, force: true }));
+    const budget = endedBudget(bin);
     const index = new ChatFileIndex({
       ripgrepExecutable: missing,
       gitExecutable: await writeStalledListing(bin, 'git', options),
-      timing: stalledTiming,
+      timing: budget.timing,
     });
-    const result = await index.find(root, '');
+    const searched = index.find(root, '');
+    await budget.expire();
+    const result = await searched;
     assert.deepEqual(paths(result), ['README.md', 'src/app/main.ts']);
     assert.equal(result.partial, true);
     await assertListingStopped(bin);
   };
-  // Both wait out the same budget, so they run together.
+  // Both wait out the same grace, so they run together.
   await Promise.all([search({ ignoresTerm: true }), search({ childHoldsOutput: true })]);
 });
 
@@ -338,7 +379,7 @@ test('disposing the runtime stops its running listings and waits for them to exi
       databasePath: join(bin, 'chat.sqlite'),
       models: createModels(),
       ripgrepExecutable: stalled,
-      fileListingTiming: { stopGraceMs: stalledTiming.stopGraceMs },
+      fileListingTiming: { stopGraceMs },
       approveFolder: async () => {},
     }),
   );

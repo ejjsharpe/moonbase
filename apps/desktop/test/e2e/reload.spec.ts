@@ -1,6 +1,7 @@
+import { waitForExit } from '../fixtures/app-fixture.ts';
 import { callMain, disconnectHost, editorClientId } from '../fixtures/window-ipc-fixture.ts';
 import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
-import { saveFile, captureNative, draftsOf } from '../fixtures/editor-fixture.ts';
+import { saveFile, draftsOf } from '../fixtures/editor-fixture.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
@@ -67,7 +68,6 @@ test('native Reload retains text painted before ordinary recovery debounce @pack
     // while typing starts a new word; that upstream race is not what this test checks.
     if (!error.message.includes("reading 'getItemsByProvider'")) errors.push(error.message);
   });
-  await app.context().tracing.start({ screenshots: true, snapshots: true, sources: true });
   const recovery = async () => {
     const reply = await callMain(page, 'loadRecovery', { clientId: editorClientId });
     if (!reply.ok) throw Error(JSON.stringify(reply.error));
@@ -127,7 +127,7 @@ test('native Reload retains text painted before ordinary recovery debounce @pack
       text: document.querySelector('.view-lines')?.textContent?.replace(/\u00a0/g, ' '),
       elapsed: performance.now() - (window as unknown as { reloadInputAt: number }).reloadInputAt,
     }));
-    const before = { ...shown, persisted: await recovery() };
+    const before = shown;
     expect(before.text).toContain('fresh visible tail');
     expect(before.elapsed).toBeLessThan(150);
     const outcome = await reload();
@@ -141,11 +141,6 @@ test('native Reload retains text painted before ordinary recovery debounce @pack
     );
     const after = await page.evaluate(() =>
       document.querySelector('.view-lines')?.textContent?.replace(/\u00a0/g, ' '),
-    );
-    await captureNative(app, page, test.info().outputPath('fresh-reload.png'));
-    writeFileSync(
-      test.info().outputPath('fresh-reload.json'),
-      JSON.stringify({ before, outcome, after, recovery: await recovery() }, null, 2),
     );
     expect(after).toContain('fresh visible tail');
     // A durable dirty draft must eventually permit an actual reload, without Save or Discard.
@@ -174,11 +169,10 @@ test('native Reload retains text painted before ordinary recovery debounce @pack
         app.getAppMetrics().map((value) => value.pid),
       ))
         pids.add(pid);
-      await app.context().tracing.stop({ path: test.info().outputPath('trace.zip') });
       // Fault teardown releases the optional public connection before intentional exit.
       await disconnectHost(page).catch(() => {});
       await app.evaluate(({ app }) => app.exit(0));
-      await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+      await waitForExit(child);
       for (const pid of pids)
         await expect
           .poll(() => {
@@ -195,13 +189,5 @@ test('native Reload retains text painted before ordinary recovery debounce @pack
       await stopDaemon(join(base, 'user-data', 'daemon-v1'));
     }
     rmSync(base, { recursive: true });
-    writeFileSync(
-      test.info().outputPath('cleanup.json'),
-      JSON.stringify(
-        { pids: [...pids], absent: true, directory: base, removed: true, configured: false },
-        null,
-        2,
-      ),
-    );
   }
 });

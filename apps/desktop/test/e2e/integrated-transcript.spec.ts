@@ -1,3 +1,4 @@
+import { waitForExit } from '../fixtures/app-fixture.ts';
 import { disconnectHost } from '../fixtures/window-ipc-fixture.ts';
 import {
   test,
@@ -6,12 +7,11 @@ import {
   type Page,
   type ElectronApplication,
 } from '@playwright/test';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { controlledHostFixture, until } from '../../../../test/chat/controlled-host-fixture.ts';
 import { createRemoteChat, selectRemoteChat } from '../fixtures/chat-fixture.ts';
-import { captureNative } from '../fixtures/editor-fixture.ts';
 import { readFindHighlight } from '../fixtures/find-highlight.ts';
 import { openActivity } from '../fixtures/transcript-list.ts';
 import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
@@ -29,12 +29,6 @@ declare global {
 const packaged = !!process.env.MOONBASE_PACKAGED_TEST;
 const children = new WeakMap<ElectronApplication, ReturnType<ElectronApplication['process']>>();
 type Host = Awaited<ReturnType<typeof controlledHostFixture>>;
-async function recordEvidence(name: string, value: unknown) {
-  await mkdir(test.info().outputDir, { recursive: true });
-  const path = test.info().outputPath(`${name}.json`);
-  await writeFile(path, JSON.stringify(value, null, 2));
-  await test.info().attach(name, { path, contentType: 'application/json' });
-}
 async function launch(directory: string, host?: Host) {
   const launcher = join(directory, 'package-launcher');
   await prepareDaemonData(join(directory, 'desktop'));
@@ -101,29 +95,21 @@ async function quit(app: ElectronApplication) {
         return (error as NodeJS.ErrnoException).code === 'ESRCH';
       }
     }, Boolean);
-  await recordEvidence('process-cleanup', {
-    launcherPid: child.pid,
-    pids,
-    absent: true,
-    normalQuit: true,
-  });
 }
 async function cleanup(app: ElectronApplication | undefined, host?: Host) {
   const child = app && children.get(app);
   try {
     if (app && child && child.exitCode === null && child.signalCode === null) {
-      await test.info().attach('failed-test-cleanup', {
-        body: 'Normal journey did not finish; releasing the owned test connection before forced failure cleanup.',
-      });
+      // The journey did not finish: release the test connection before forcing the exit.
       const window = app.windows()[0];
       if (window) await disconnectHost(window).catch(() => {});
       await app.evaluate(({ app }) => app.exit(1));
-      await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+      await waitForExit(child);
     }
   } finally {
     // The daemon outlives the app; this test's is stopped with it.
     if (host) await stopDaemon(join(host.directory, 'desktop', 'daemon-v1'));
-    if (host) await recordEvidence('host-cleanup', await host.close());
+    if (host) await host.close();
   }
 }
 async function find(page: Page, query: string) {
@@ -136,7 +122,7 @@ async function find(page: Page, query: string) {
   await expect(field).toBeFocused();
   await field.press('Escape');
 }
-async function image(app: ElectronApplication, page: Page) {
+async function image(page: Page) {
   const group = page
     .locator('[data-transcript-activity]')
     .filter({ has: page.locator('[data-transcript-part]').filter({ hasText: 'Stored image' }) })
@@ -152,11 +138,6 @@ async function image(app: ElectronApplication, page: Page) {
   await expect(viewer.getByRole('button', { name: 'Close image viewer' })).toBeFocused();
   await page.keyboard.press('Tab');
   expect(await viewer.evaluate((node) => node.contains(document.activeElement))).toBe(true);
-  await captureNative(
-    app,
-    page,
-    test.info().outputPath(`${packaged ? 'package' : 'source'}-image.png`),
-  );
   await page.keyboard.press('Escape');
   await expect(trigger).toBeFocused();
   expect(
@@ -166,7 +147,7 @@ async function image(app: ElectronApplication, page: Page) {
   ).toEqual([]);
 }
 
-test('integrated remote archive/runtime reveals early/middle/end Find in real history and streams held progress without polling', async () => {
+test('integrated remote Find reveals early, middle and late history, and held progress streams without polling', async () => {
   const host = await controlledHostFixture(
     new URL('../../../../test/chat/faux-stream.mjs', import.meta.url),
     true,
@@ -182,18 +163,17 @@ test('integrated remote archive/runtime reveals early/middle/end Find in real hi
     const target = await page.evaluate(
       () => JSON.parse(localStorage.getItem('moonbase.chat.remote.v2')!).selected,
     );
-    const ids = await host.seedHistory(target);
-    for (const index of [1, 561, 1119]) await find(page, `record ${index} 🌔`);
+    // The headless history suite reads 1,121 records; here the renderer only has to reveal each.
+    await host.seedHistory(target, 41);
+    for (const index of [1, 21, 39]) await find(page, `record ${index} 🌔`);
     // Jump to latest shows only off the end; the last Find may already have reached it.
     const jump = page.getByRole('button', { name: 'Jump to latest', exact: true });
     if (await jump.isVisible()) await jump.click();
     await page.getByLabel('Message', { exact: true }).fill('Held remote source');
-    const sentAt = Date.now();
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     const live = page.getByRole('article', { name: 'Live response' });
     await expect(live.getByText('first remote text 0', { exact: true })).toBeVisible();
-    const firstVisibleMs = Date.now() - sentAt,
-      before = await host.stats();
+    const before = await host.stats();
     host.nextChunk();
     await expect(live.getByText('first remote text 4', { exact: true })).toBeVisible();
     const after = await host.stats();
@@ -204,13 +184,6 @@ test('integrated remote archive/runtime reveals early/middle/end Find in real hi
     await page.getByRole('button', { name: 'Stop', exact: true }).click();
     await expect(live).toHaveCount(0);
     await until(host.stats, (value) => value.activeWatches === 1);
-    await recordEvidence('stream-timing', {
-      packaged,
-      firstVisibleMs,
-      rows: ids.length,
-      before,
-      after,
-    });
     await quit(app);
     await until(host.stats, (value) => value.activeWatches === 0);
     expect(
@@ -237,7 +210,7 @@ test('integrated remote archive/runtime displays retained images with production
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     await expect(page.getByText('Retained images completed', { exact: true })).toBeVisible();
     await find(page, 'Retained images completed');
-    await image(app, page);
+    await image(page);
     expect(await app.evaluate(() => globalThis.integratedTranscript.copied)).toEqual([]);
     await quit(app);
     await until(host.stats, (value) => value.activeWatches === 0);

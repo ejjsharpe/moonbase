@@ -16,7 +16,7 @@ export type LocalPiRuntimeConfiguration = ChatSession & {
   approveFolder?: (cwd: string) => Promise<void>;
   /** Absolute ripgrep for chat file search; otherwise `rg` on PATH, then Git. */
   ripgrepExecutable?: string;
-  /** Shortens the file listing time budget and stop grace; tests only. */
+  /** Replaces the file listing time budget and shortens its stop grace; tests only. */
   fileListingTiming?: Partial<ChatFileListingTiming>;
 };
 export type RetainedWork = {

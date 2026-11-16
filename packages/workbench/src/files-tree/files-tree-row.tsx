@@ -2,14 +2,15 @@ import * as stylex from '@stylexjs/stylex';
 import type { ReactNode } from 'react';
 import type { GitChangeKind } from '@moonbase/contracts/workspace';
 import { filesUI, gitStatusHues, gitStatusUI } from '@moonbase/ui/files';
-import { styles } from '../workbench-styles.ts';
+import { treeStyles } from './files-tree-styles.ts';
 import { Icon } from '@moonbase/ui/icons';
 import { FileIcon } from '@moonbase/ui/file-icons';
 import { rowHeight, type VisibleRow } from './files-tree-rows.ts';
 import { gitStatusMarks } from './files-tree-status.ts';
+import { onMac } from '../shortcuts.ts';
 
 const isContextClick = (event: { button: number; ctrlKey: boolean }) =>
-  event.button === 2 || (event.button === 0 && event.ctrlKey && navigator.platform.includes('Mac'));
+  event.button === 2 || (event.button === 0 && event.ctrlKey && onMac);
 
 /** One `treeitem` of the files tree, placed at its index in the virtualized extent. */
 export function FilesTreeRow({
@@ -82,7 +83,7 @@ export function FilesTreeRow({
       draggable={draggable}
       data-drop-target={dropTarget || undefined}
       {...stylex.props(
-        styles.treeRow(index * rowHeight),
+        treeStyles.row(index * rowHeight),
         filesUI.row(row.level),
         row.ignored && filesUI.ignored,
         selected && filesUI.selected,
@@ -125,7 +126,7 @@ export function FilesTreeRow({
       {editor ?? (
         <span
           {...stylex.props(
-            styles.treeLabel,
+            treeStyles.label,
             active && filesUI.activeLabel,
             status && !row.directory && gitStatusHues[status],
             row.ignored && filesUI.ignored,

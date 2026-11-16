@@ -1,209 +1,24 @@
 import assert from 'node:assert/strict';
 import { test, mock } from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { createServer as httpServer } from 'node:http';
-import { createServer as tcpServer, type AddressInfo } from 'node:net';
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { randomBytes } from 'node:crypto';
-import { Effect, ManagedRuntime, Queue } from 'effect';
+import { Effect, Queue } from 'effect';
 import { ApplicationError, type ObservationClose } from '@moonbase/contracts/workspace';
 import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
-import { chatHostVersion, chatProtocolVersion } from '@moonbase/contracts/host';
-import {
-  ConnectionError,
-  HostVerificationError,
-  toConnectionApplicationError,
-} from '@moonbase/contracts/connection-errors';
-import { CancelledError } from '@moonbase/contracts/errors';
-import type { ChatHostEndpoint } from '@moonbase/contracts/services';
-import type { ChatHostHealth } from '@moonbase/contracts/host';
 import { ConnectionService } from '@moonbase/contracts/services';
 import { makeConnectionClient } from '@moonbase/application/runtime/clients';
-import { SshLive, type SshConfiguration, type SshOptions } from '@moonbase/ssh';
-/** An error with the legacy code `code`, as clients see it. */
-const failure = (code: ApplicationError['code']) => (e: unknown) => {
-  const error =
-    e instanceof ConnectionError ||
-    e instanceof HostVerificationError ||
-    e instanceof CancelledError
-      ? toConnectionApplicationError(e)
-      : e;
-  return ApplicationError.is(error) && error.code === code;
-};
-const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 10));
-async function until(
-  check: () => boolean | Promise<boolean>,
-  message = 'condition did not settle',
-  limit = 4000,
-) {
-  const end = Date.now() + limit;
-  while (!(await check())) {
-    assert(Date.now() < end, message);
-    await tick();
-  }
-}
-function rows(path: string): {
-  event: string;
-  pid: number;
-  parent: number;
-  args: string[];
-  port: number;
-  keyInEnvironment: boolean;
-}[] {
-  try {
-    return readFileSync(path, 'utf8')
-      .trim()
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
-  } catch {
-    return [];
-  }
-}
-function alive(pid: number) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-async function free(port: number) {
-  const server = tcpServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, '127.0.0.1', resolve);
-  });
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-}
-/**
- * A stand-in for the protocol's health check, which the consumer injects: it reads the forwarded
- * health route and checks only the identity, so these tests cover forwarding, not the protocol.
- */
-const verify: SshOptions['verify'] = (endpoint: ChatHostEndpoint) =>
-  Effect.tryPromise({
-    try: async (signal) => {
-      // Like the real check, each attempt has its own short deadline.
-      const attempt = AbortSignal.any([signal, AbortSignal.timeout(50)]);
-      const response = await fetch(`${endpoint.origin}/v1/health`, { signal: attempt }).catch(
-        () => {
-          throw new HostVerificationError({ reason: 'unreachable' });
-        },
-      );
-      if (response.status === 401) throw new HostVerificationError({ reason: 'rejected' });
-      const value = (await response.json().catch(() => {
-        throw new HostVerificationError({ reason: 'read-failed' });
-      })) as ChatHostHealth;
-      if (value.hostId !== endpoint.expected.hostId || value.storeId !== endpoint.expected.storeId)
-        throw new HostVerificationError({ reason: 'identity' });
-      return value;
-    },
-    catch: (error) =>
-      error instanceof HostVerificationError
-        ? error
-        : new HostVerificationError({ reason: 'unreachable' }),
-  });
-async function fixture(
-  mode = 'normal',
-  healthMode = 'valid',
-  options: Omit<SshOptions, 'verify'> = {},
-) {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-ssh-'))),
-    key = randomBytes(32).toString('base64url'),
-    log = join(base, 'children.jsonl'),
-    control = join(base, 'control.json');
-  const expected = { hostId: 'explicit-host', storeId: 'explicit-store' },
-    requests: { url: string; headers: string }[] = [];
-  const health = httpServer((req, res) => {
-    requests.push({ url: req.url!, headers: JSON.stringify(req.headers) });
-    if (healthMode === 'stall') {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.write('{');
-      return;
-    }
-    if (healthMode === 'auth') {
-      res.writeHead(401);
-      res.end();
-      return;
-    }
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(
-      JSON.stringify({
-        hostId: healthMode === 'identity' ? 'other-host' : expected.hostId,
-        storeId: expected.storeId,
-        protocol: chatProtocolVersion,
-        version: chatHostVersion,
-        capabilities: ['chat-v0'],
-      }),
-    );
-  });
-  await new Promise<void>((resolve) => health.listen(0, '127.0.0.1', resolve));
-  const remotePort = (health.address() as AddressInfo).port;
-  const executable = join(base, 'SSH resources with spaces');
-  writeFileSync(
-    executable,
-    '#!' +
-      process.execPath +
-      '\nprocess.env.MOONBASE_SSH_TEST_CONTROL=' +
-      JSON.stringify(control) +
-      ';\n' +
-      readFileSync(fileURLToPath(new URL('./faux-ssh.mjs', import.meta.url)), 'utf8'),
-  );
-  chmodSync(executable, 0o700);
-  const setMode = (value: string, diagnostic?: string, sshConfig?: string) =>
-    writeFileSync(control, JSON.stringify({ mode: value, diagnostic, sshConfig, log, key }));
-  setMode(mode);
-  const profile = {
-    id: 'configured',
-    label: 'Operator host',
-    destination: 'configured-alias',
-    remotePort,
-    expected,
-  };
-  const config = { profile, token: key, sshExecutable: executable };
-  const start = (configuration: SshConfiguration = config) => {
-    const runtime = ManagedRuntime.make(SshLive(configuration, { verify, ...options }));
-    return { runtime, client: makeConnectionClient(runtime) };
-  };
-  const current = start();
-  const spawned = () => rows(log).filter((r) => r.event === 'preflight' || r.event === 'forward');
-  const forwards = () => spawned().filter((r) => r.event === 'forward');
-  const helpers = () => rows(log).filter((r) => r.event === 'helper');
-  const ports = () => forwards().map((r) => Number(r.args[r.args.indexOf('-L') + 1].split(':')[1]));
-  const endpoint = () =>
-    current.runtime.runPromise(
-      Effect.flatMap(ConnectionService, (service) => service.endpoint({ host: expected })),
-    );
-  return {
-    ...current,
-    base,
-    key,
-    log,
-    profile,
-    config,
-    requests,
-    start,
-    spawned,
-    forwards,
-    helpers,
-    ports,
-    setMode,
-    endpoint,
-    async close() {
-      await current.runtime.dispose();
-      health.closeAllConnections();
-      await new Promise<void>((resolve) => health.close(() => resolve()));
-      for (const child of [...spawned(), ...helpers()])
-        assert(!alive(child.pid), 'owned child leaked: ' + child.pid);
-      for (const port of [...ports(), ...helpers().map((row) => row.port)])
-        if (port) await free(port);
-      rmSync(base, { recursive: true, force: true });
-    },
-  };
-}
+import {
+  alive,
+  checkSystemPolicy,
+  failure,
+  fixture,
+  free,
+  quickStop,
+  rows,
+  tick,
+  until,
+} from './ssh-fixture.ts';
 
 test('independent public client connects once, verifies health, protects privileged fields and tears down only its child', async () => {
   const f = await fixture();
@@ -453,7 +268,7 @@ test('executable spawn failure is typed and does not disclose paths or private v
 });
 
 test('root disposal kills an uncooperative owned child, releases the forward and isolates other runtimes', async () => {
-  const f = await fixture('ignore-term'),
+  const f = await fixture('ignore-term', 'valid', { stopTiming: quickStop }),
     other = f.start();
   try {
     const first = await f.client.command('connect', { profileId: 'configured' });
@@ -667,14 +482,19 @@ test('disconnect and root disposal during startup release the pending generation
 });
 
 test('a stalled forwarded health response is read again until the startup deadline, then releases the reader, child and port', async () => {
-  const f = await fixture('normal', 'stall', { startupMs: 2000 });
+  const f = await fixture('normal', 'stall', { testClock: true });
   try {
-    await assert.rejects(
+    const connecting = assert.rejects(
       f.client.command('connect', { profileId: 'configured' }),
       (e) => failure('Unavailable')(e) && /startup deadline/.test((e as ApplicationError).message),
     );
-    // Each read that timed out (`read-failed`) was tried again.
-    assert(f.requests.length > 1);
+    // Each read that timed out (`read-failed`) is tried again after the retry pause.
+    await until(async () => {
+      await f.advance('50 millis');
+      return f.requests.length > 1;
+    }, 'a stalled health read was not tried again');
+    await f.advance('20 seconds');
+    await connecting;
     assert.equal((await f.client.command('getConnection', {})).state, 'failed');
     await assert.rejects(f.endpoint(), failure('Unavailable'));
     await until(() => f.spawned().every((child) => !alive(child.pid)));
@@ -758,37 +578,10 @@ for (const action of ['disconnect', 'dispose'])
       }
     });
 
-for (const [flag, extra] of [
-  ['NoHostAuthenticationForLocalhost', 'HostName 127.0.0.1'],
-  ['NoHostAuthenticationForProxyCommand', 'ProxyCommand /usr/bin/false'],
-] as const)
-  for (const enabled of [true, false])
-    test(`actual system policy ${flag} ${enabled ? 'rejects enabled bypass' : 'preserves normal verification'}`, async () => {
-      const f = await fixture(),
-        config = join(f.base, 'test-only-ssh-config');
-      writeFileSync(
-        config,
-        `Host *\n StrictHostKeyChecking yes\n ${extra}\n ${flag} ${enabled ? 'yes' : 'no'}\n`,
-        { mode: 0o600 },
-      );
-      f.setMode('normal', undefined, config);
-      try {
-        if (enabled) {
-          await assert.rejects(
-            f.client.command('connect', { profileId: 'configured' }),
-            failure('InvalidInput'),
-          );
-          assert.equal(f.forwards().length, 0);
-          await assert.rejects(f.endpoint(), failure('Unavailable'));
-        } else
-          assert.equal(
-            (await f.client.command('connect', { profileId: 'configured' })).state,
-            'connected',
-          );
-      } finally {
-        await f.close();
-      }
-    });
+// The macOS ssh also knows NoHostAuthenticationForProxyCommand: see test/macos/ssh.test.ts.
+for (const enabled of [true, false])
+  test(`actual system policy NoHostAuthenticationForLocalhost ${enabled ? 'rejects enabled bypass' : 'preserves normal verification'}`, () =>
+    checkSystemPolicy('NoHostAuthenticationForLocalhost', 'HostName 127.0.0.1', enabled));
 
 for (const [mode, action] of [
   ['held-stderr', 'exit'],
@@ -798,7 +591,7 @@ for (const [mode, action] of [
   ['held-none', 'dispose'],
 ])
   test(`SSH ${action} invalidates the endpoint and reaps ${mode} helper group without touching a different generation`, async () => {
-    const f = await fixture(mode),
+    const f = await fixture(mode, 'valid', { stopTiming: quickStop }),
       unrelated = f.start();
     try {
       const first = await f.client.command('connect', { profileId: 'configured' });
@@ -859,7 +652,7 @@ for (const action of ['exit', 'cancel'])
     const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
     writeFileSync(
       proxy,
-      `import {appendFileSync} from 'node:fs'; import {createServer} from 'node:net';
+      `import {appendFileSync} from 'node:fs'; import { createServer } from 'node:net';
     const server=createServer(); server.listen(0,'127.0.0.1',()=>appendFileSync(${JSON.stringify(f.log)},JSON.stringify({event:'helper',pid:process.pid,parent:process.ppid,port:server.address().port})+'\\n'));
     process.on('SIGTERM',()=>appendFileSync(${JSON.stringify(f.log)},JSON.stringify({event:'helper-term',pid:process.pid})+'\\n'));
   `,
@@ -918,7 +711,7 @@ for (const action of ['exit', 'cancel'])
   });
 
 test('cancellation during admitted teardown cannot strand the owned helper group', async () => {
-  const f = await fixture('held-both'),
+  const f = await fixture('held-both', 'valid', { stopTiming: quickStop }),
     abort = new AbortController();
   try {
     const connected = await f.client.command('connect', { profileId: 'configured' });
@@ -954,7 +747,7 @@ test('cancellation during admitted teardown cannot strand the owned helper group
 
 for (const persistent of [false, true])
   test(`${persistent ? 'persistent' : 'transient'} EPERM during owned-group exit requires confirmed absence`, async () => {
-    const f = await fixture('held-both'),
+    const f = await fixture('held-both', 'valid', { stopTiming: quickStop }),
       other = f.start(),
       originalKill = process.kill.bind(process);
     let observations = 0,
@@ -994,10 +787,13 @@ for (const persistent of [false, true])
       if (persistent) {
         await assert.rejects(releasing, failure('Unavailable'));
         assert(
-          performance.now() - started >= 2400,
-          'persistent ambiguity failed before the existing cleanup budget',
+          performance.now() - started >= quickStop.deadlineMs - 100,
+          'persistent ambiguity failed before the cleanup deadline',
         );
-        assert(performance.now() - started < 3500, 'persistent ambiguity exceeded its bound');
+        assert(
+          performance.now() - started < quickStop.deadlineMs + 1000,
+          'persistent ambiguity exceeded its bound',
+        );
         assert.equal((await f.client.command('getConnection', {})).state, 'disconnecting');
         await assert.rejects(
           f.client.command('connect', { profileId: 'configured' }),

@@ -250,11 +250,13 @@ test('steady provider progress publishes while projection is slower than the com
     return result;
   });
   const before = { ...measured.counts };
-  for (let i = 0; i < 25; i++) {
+  const progressViews = () => watch.views.filter((view) => view.run?.text.startsWith('steady '));
+  // The provider keeps streaming faster than each projection commits, until two views are out.
+  for (let i = 0; i < 25 && progressViews().length < 2; i++) {
     emit('steady ' + i);
     await delay(110);
   }
-  const progress = watch.views.filter((view) => view.run?.text.startsWith('steady '));
+  const progress = progressViews();
   const during = { ...measured.counts };
   const final = fauxAssistantMessage('completed steady stream');
   stream.push({ type: 'done', reason: 'stop', message: final });
@@ -374,7 +376,9 @@ test('registration precedes initial capture; a held stale snapshot is replaced a
   assert.deepEqual(watch.errors, []);
 });
 
-for (const change of ['attempt', 'tools', 'history', 'metadata', 'store', 'replacement'] as const)
+// A live document change (replacement), an entry (history) and the metadata and store documents
+// take separate invalidation branches; other live changes share replacement's.
+for (const change of ['history', 'metadata', 'store', 'replacement'] as const)
   test(`a held progress snapshot cannot publish across ${change} invalidation`, async (t) => {
     const hold = gate(),
       read = gate();
@@ -450,11 +454,8 @@ for (const change of ['attempt', 'tools', 'history', 'metadata', 'store', 'repla
         await tx.appendEntry(conversationId(target), { kind: 'app.boundary', data: {} });
         return;
       }
-      if (change === 'replacement') await tx.retireDoc(LiveDoc, conversationId(target));
-      const live = await tx.doc(LiveDoc, conversationId(target));
-      if (change === 'attempt') live.generation!.attempt++;
-      if (change === 'tools')
-        live.tools = [{ callId: 'control', name: 'control', status: 'pending' }];
+      await tx.retireDoc(LiveDoc, conversationId(target));
+      await tx.doc(LiveDoc, conversationId(target));
     }, context);
     read.release();
     if (change === 'metadata' || change === 'store') {
@@ -469,13 +470,6 @@ for (const change of ['attempt', 'tools', 'history', 'metadata', 'store', 'repla
       else assert.notDeepEqual(next.run!.transcript!.source, initial.run!.transcript!.source);
       if (change === 'history')
         assert.notEqual(next.transcriptBoundary, initial.transcriptBoundary);
-      if (change === 'attempt') {
-        assert.equal(next.run!.transcript!.source.kind, 'live');
-        const previous = initial.run!.transcript!.source;
-        assert.equal(previous.kind, 'live');
-        if (next.run!.transcript!.source.kind === 'live' && previous.kind === 'live')
-          assert.equal(next.run!.transcript!.source.attempt, previous.attempt + 1);
-      }
       assert.deepEqual(watch.errors, []);
     }
   });

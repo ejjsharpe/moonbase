@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { after, before, test } from 'node:test';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -75,12 +76,27 @@ async function main() {
 }
 main().catch((error)=>{console.error(error);process.exitCode=1;});`;
 
-// The library ships TypeScript source, which only a bundle can load.
-async function bundleScript(contents: string, outfile: string) {
-  const esbuild = require('esbuild') as typeof Esbuild;
+const discovery = `
+import { createModels } from '@earendil-works/pi-ai/models';
+import { createClaudeCodeSubscription } from './src/claude-code.ts';
+const models = createModels();
+const subscription = createClaudeCodeSubscription();
+models.setProvider(subscription);
+const signal = new AbortController().signal;
+const configured = !!(await models.checkAuth('claude-code', { signal }));
+console.log(JSON.stringify({ configured, problem: subscription.getCheckProblem(signal) ?? null }));`;
+
+// The library ships TypeScript source, which only a bundle can load. Both scripts are bundled
+// once, beside the helper the daemon build also copies beside its bundle.
+const bundle = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-claude-bundle-')));
+before(async () => {
+  const esbuild = require('esbuild') as typeof Esbuild,
+    scripts: Record<string, string> = { 'claude-code': qualification, discovery },
+    resolveDir = new URL('..', import.meta.url).pathname;
   await esbuild.build({
-    stdin: { contents, loader: 'ts', resolveDir: new URL('..', import.meta.url).pathname },
-    outfile,
+    entryPoints: Object.fromEntries(Object.keys(scripts).map((name) => [name, `script:${name}`])),
+    outdir: bundle,
+    outExtension: { '.js': '.mjs' },
     bundle: true,
     platform: 'node',
     format: 'esm',
@@ -88,23 +104,37 @@ async function bundleScript(contents: string, outfile: string) {
     banner: {
       js: "import { createRequire as moonbaseRequire } from 'node:module';const require=moonbaseRequire(import.meta.url);",
     },
+    plugins: [
+      {
+        name: 'scripts',
+        setup(build) {
+          build.onResolve({ filter: /^script:/ }, (args) => ({
+            path: args.path.slice('script:'.length),
+            namespace: 'script',
+          }));
+          build.onLoad({ filter: /.*/, namespace: 'script' }, (args) => ({
+            contents: scripts[args.path],
+            loader: 'ts',
+            resolveDir,
+          }));
+        },
+      },
+    ],
   });
-}
+  const library = dirname(
+    createRequire(import.meta.url).resolve('@earendil-works/pi-claude-code/package.json'),
+  );
+  await cp(join(library, 'src/inert-mcp.mjs'), join(bundle, 'inert-mcp.mjs'));
+});
+after(() => rmSync(bundle, { recursive: true, force: true }));
 
 test('a Claude subscription runs through Claude Code in a bundle, with Pi executing tools', async () => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-claude-code-')));
   try {
-    const bundle = join(directory, 'bundle'),
-      file = join(bundle, 'claude-code.mjs'),
+    const file = join(bundle, 'claude-code.mjs'),
       command = await writeFakeClaude(directory);
     await mkdir(join(directory, 'broken'));
     const broken = await writeBrokenClaude(join(directory, 'broken'));
-    await bundleScript(qualification, file);
-    // The daemon build copies this helper beside its bundle in the same way.
-    const library = dirname(
-      createRequire(import.meta.url).resolve('@earendil-works/pi-claude-code/package.json'),
-    );
-    await cp(join(library, 'src/inert-mcp.mjs'), join(bundle, 'inert-mcp.mjs'));
     const result = await promisify(execFile)(process.execPath, [file, directory, command, broken], {
       env: { PATH: '/usr/bin:/bin', HOME: directory },
       timeout: 30000,
@@ -123,26 +153,15 @@ test('a Claude subscription runs through Claude Code in a bundle, with Pi execut
   }
 });
 
-const discovery = `
-import { createModels } from '@earendil-works/pi-ai/models';
-import { createClaudeCodeSubscription } from './src/claude-code.ts';
-const models = createModels();
-const subscription = createClaudeCodeSubscription();
-models.setProvider(subscription);
-const signal = new AbortController().signal;
-const configured = !!(await models.checkAuth('claude-code', { signal }));
-console.log(JSON.stringify({ configured, problem: subscription.getCheckProblem(signal) ?? null }));`;
-
 test('Claude Code is found on the caller PATH before its install locations, and runs from a bare GUI PATH', async () => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-claude-find-')));
   try {
-    const file = join(directory, 'discovery.mjs'),
+    const file = join(bundle, 'discovery.mjs'),
       home = join(directory, 'home'),
       installed = join(home, '.local/bin'),
       onPath = join(directory, 'path-bin'),
       // Finder's PATH, without any directory a real install could be in.
       bare = join(directory, 'bare-bin');
-    await bundleScript(discovery, file);
     await mkdir(installed, { recursive: true });
     await mkdir(onPath);
     await mkdir(bare);

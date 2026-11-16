@@ -85,7 +85,11 @@ test('sign-in progress comes from the watch, never from polling, and a failed wa
     },
   };
   const application = await createMoonbaseApplication({
-    chat: async () => ({ ...fixture.dependencies, providers, transcriptWatchRetryMs: [0] }),
+    chat: async () => ({
+      ...fixture.dependencies,
+      providers,
+      transcriptLimits: { watchRetryMs: [0] },
+    }),
   });
   const controller = application.chat!.providers!;
   try {

@@ -8,7 +8,7 @@ Supply `profile: {id, label, destination, remotePort, expected: {hostId, storeId
 
 Ports, proxies, keys and known hosts belong in your OpenSSH configuration. The profile must keep host-key checking on and must not add forwards or authentication bypasses; incompatible policy is rejected, not rewritten. Authentication uses your existing SSH config, agent and keys, and local commands, agent forwarding and X11 forwarding are disabled.
 
-Each connection runs one foreground OpenSSH child forwarding `127.0.0.1:ephemeral → remote 127.0.0.1:remotePort`. It reports connected only after `verify` succeeds for the exact host and store (retrying while the host is `unreachable`), within `startupMs` (20 s unless a test shortens it). Disconnect never stops remote work.
+Each connection runs one foreground OpenSSH child forwarding `127.0.0.1:ephemeral → remote 127.0.0.1:remotePort`. It reports connected only after `verify` succeeds for the exact host and store (retrying while the host is `unreachable`), within `startupMs` (20 s unless a test shortens it). Stopping a connection's process group takes at most `stopTiming.deadlineMs` (2.5 s), with `termGraceMs` (500 ms) between SIGTERM and SIGKILL; tests shorten them. Disconnect never stops remote work.
 
 The token stays in this process: OpenSSH gets neither it in its arguments nor any environment variable that contains it, and it proves itself to the host only through HMACs (health, then the daemon's WebSocket over the forward), never sending the token itself. Only privileged code may read `ConnectionService.endpoint`; keep its origin and key out of renderers, arguments and logs.
 
@@ -21,4 +21,4 @@ bun run --cwd packages/ssh test
 bun run test:chat-integration
 ```
 
-Tests use controlled child processes and TCP, never a real SSH host. Use only a host the user has named for manual checks.
+Tests use controlled child processes and TCP, never a real SSH host. The policy tests read the real `ssh -G`; the `NoHostAuthenticationForProxyCommand` case is in `test/macos/` because only macOS's OpenSSH knows that option. Use only a host the user has named for manual checks.

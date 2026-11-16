@@ -3,7 +3,7 @@ import { getChatFindExpression } from '@moonbase/contracts/chat';
 import { areJsonValuesEqual, getJsonKey } from '@moonbase/contracts/common';
 import { sameTarget } from '../saved.ts';
 import { makeTranscriptFailure, trackTranscriptCursor } from './transcript-read.ts';
-import { transcriptLimits, type TranscriptFindState } from './transcript-state.ts';
+import type { TranscriptFindState } from './transcript-state.ts';
 
 export type FindPage = ChatOutput<'findChatTranscript'>;
 /** The fixed boundary a Find reported on its first page; replay and refresh check against it. */
@@ -88,8 +88,9 @@ export function appendFindPage(
   previous: TranscriptFindState,
   page: FindPage,
   boundary: string | null | undefined,
+  findMatches: number,
 ): TranscriptFindState {
-  const matches = [...previous.matches, ...page.matches].slice(-transcriptLimits.findMatches);
+  const matches = [...previous.matches, ...page.matches].slice(-findMatches);
   const count = previous.count + page.matches.length;
   const find: TranscriptFindState = {
     ...previous,

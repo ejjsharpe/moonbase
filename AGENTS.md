@@ -21,6 +21,7 @@ Data may be lost between versions while Moonbase is prerelease: a change can sta
 - Code that runs in different processes gets a folder per process: desktop `main/`, `preload/` and `renderer/`, with the IPC contract they share in `ipc/`; workspace `host/` and `client/`, with what they share at `src/`.
 - Client state in `packages/application` is one folder per concept, with `x.ts`, `x-service.ts` and `x-atoms.ts` for its three layers (see its README).
 - Tests sit in each module's `test/`, mirroring `src/` where it has folders. Playwright specs go in `test/e2e/`; desktop's harnesses and faux processes in `test/fixtures/`. Suites that run a real daemon go in the root `test/` folder.
+- Tests that need macOS (the native helper, FSEvents, the Keychain, a daemon serving files) go in the module's `test/macos/`, keeping the name of the file they test; CI runs the rest on Linux. Such a package carries the `macos-tests` Nx tag and `test:linux` and `test:macos` scripts (`packages/workspace` runs wholly on macOS: tag and `test:macos` only). Never skip on `process.platform`; `check:foundation` enforces both.
 - Test helpers: `x-fixture.ts` for shared setup, `faux-x` for a fake process or provider, `x-process.ts` for a script a test spawns. A unit test is named after the file it tests (`editor-session.test.ts` for `editor-session.ts`).
 
 ## Effect
@@ -51,13 +52,13 @@ Atoms hold no domain logic, so a headless test or a non-React client can use the
 - Be exhaustive only at security boundaries (tokens, credentials, HMAC auth, SSH host keys, path and folder authority, supply-chain pinning) and for never losing unsaved work or duplicating a send.
 - Reviewers flag overkill tests as should-fix (delete, merge or slim) and don't ask for extra permutations outside those boundaries.
 - Tests use temporary directories, stores and repositories, faux providers and injected platform capabilities. Never read or write the real OS clipboard in tests; inject callbacks.
-- PR checks run the unit suites and the root integration suites. Browser and Electron Playwright suites run nightly (`nightly` workflow, also runnable by hand); run the ones you touch locally.
+- A PR's checks run the suites of the packages it changes and of the packages that depend on them, browser and Electron Playwright suites included, plus the root integration suites. Run the Playwright project you touch locally.
 
 ## Verifying
 
 - While iterating, run the one test file you changed (`bun test <file> -t "<name>"`, or `node --experimental-strip-types --test <file>`), not the package suite.
-- Before you push, run `bun run check:changed`: foundation check, format and lint on changed files, typecheck for every affected package, and the suites of the packages you edited (and a root integration suite you edited). Add `--full` to also test dependents, and `--integration` when you change the daemon or chat wire.
-- CI runs every suite on every PR.
+- Before you push, run `bunx nx affected -t typecheck test`, `bun run lint`, `bun run format:check` and `bun run check:foundation`. Run a root integration suite you changed, and `bun run test:chat-integration` when you change the daemon or chat wire.
+- CI runs the affected suites on a PR, and every suite on main.
 - Don't run `bun run test`, the root integration suites or the Playwright projects unless asked. Run only the Playwright project for the surface you touched.
 
 ## Safety

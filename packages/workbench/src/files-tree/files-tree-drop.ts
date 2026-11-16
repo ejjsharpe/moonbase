@@ -1,12 +1,12 @@
 import { getParentPath, getPathName, joinPath } from '@moonbase/contracts/paths';
 import type { DirectoryEntry } from '@moonbase/contracts/workspace';
-import type { MutationRunResult } from '@moonbase/application/editor';
+import { maxMutationEntries, type MutationRunResult } from '@moonbase/application/editor';
 
 /** The DataTransfer type of entries dragged from a files tree: a JSON `TreeDrag`. */
 export const entriesType = 'application/x-moonbase-entries';
 
-/** The most entries one move or copy takes, and so one drag. */
-export const maxDraggedEntries = 128;
+/** The most entries one drag takes: as many as one move or copy. */
+export const maxDraggedEntries = maxMutationEntries;
 
 /** Entries dragged from one tree: `source` is its editor instance, `checkout` its checkout key. */
 export type TreeDrag = { source: string; checkout: string; paths: string[] };

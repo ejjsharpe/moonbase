@@ -34,11 +34,11 @@ export function createBehaviour(config) {
   const advance = (message) => {
     if (message?.type === 'next-chunk') progress.resolve();
     if (message?.type === 'seed-history')
-      void seedTranscriptHistory(harness, message.target).then((ids) => {
+      void seedTranscriptHistory(harness, message.target, message.count).then((ids) => {
         seeded = { target: message.target, ids };
       }, fail);
     if (message?.type === 'seed-long-text')
-      void seedTranscriptLongText(harness, message.target).then((record) => {
+      void seedTranscriptLongText(harness, message.target, message.repeats).then((record) => {
         longSeeded = { target: message.target, ...record };
       }, fail);
   };
@@ -57,8 +57,8 @@ export function createBehaviour(config) {
       { once: true },
     );
     void (async () => {
+      // The first step streams at once; the rest follow together once the test advances.
       for (let i = 0; i < 5 && !stopped; i++) {
-        await new Promise((resolve) => setTimeout(resolve, 150));
         const text = 'first remote text ' + i;
         stream.push({
           type: 'text_delta',

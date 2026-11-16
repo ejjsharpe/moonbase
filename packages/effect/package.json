@@ -7,9 +7,9 @@
     "./changes": "./src/changes.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "bun check --no-script -p tsconfig.json",
     "lint": "oxlint .",
-    "test": "node --experimental-strip-types --test test/*.test.ts"
+    "test": "node --experimental-strip-types --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} test/*.test.ts"
   },
   "dependencies": {
     "effect": "4.1.0",

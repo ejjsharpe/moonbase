@@ -3,6 +3,7 @@ import { build } from 'esbuild';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { checkBoundaries, readRepository } from './boundaries.mjs';
+import { checkMacosTests } from './macos-tests.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 // Effect may resolve outside the checkout, as it does from the foundation test's copy.
@@ -10,6 +11,8 @@ const portableInput =
   /^packages\/contracts\/|(?:^|\/)node_modules\/(?:\.bun\/[^/]+\/node_modules\/)?effect\//;
 assert.deepEqual(checkBoundaries(readRepository(root)), []);
 console.log('Verified final source ownership, public exports and cycles; no migration exceptions.');
+assert.deepEqual(checkMacosTests(root), []);
+console.log('Verified the Linux and macOS test split: tags, scripts and no platform skips.');
 
 for (const entry of [
   'workspace',

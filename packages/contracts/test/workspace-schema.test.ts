@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
-import { build } from 'esbuild';
+import { before, test } from 'node:test';
+import { build, type Metafile } from 'esbuild';
 import * as Schema from 'effect/Schema';
 import { fileURLToPath } from 'node:url';
 import {
@@ -301,18 +301,32 @@ test('a shared outcome error round-trips and builds its message from its fields'
   assert.deepEqual(decoded.target, target);
   assert.match(decoded.message, /^Save /);
 });
-for (const entry of ['workspace-schema', 'connection-schema', 'host-schema', 'error-schema'])
-  test(`${entry} bundles without privileged implementations or application services`, async () => {
-    const bundle = await build({
-      absWorkingDir: fileURLToPath(new URL('../../../', import.meta.url)),
-      entryPoints: [`@moonbase/contracts/${entry}`],
-      bundle: true,
-      platform: 'browser',
-      write: false,
-      metafile: true,
-    });
+const bundled = ['workspace-schema', 'connection-schema', 'host-schema', 'error-schema'];
+// One build of every entry; each entry's graph is the files reachable from it.
+let metafile: Metafile;
+before(async () => {
+  ({ metafile } = await build({
+    absWorkingDir: fileURLToPath(new URL('../../../', import.meta.url)),
+    entryPoints: Object.fromEntries(
+      bundled.map((entry) => [entry, `@moonbase/contracts/${entry}`]),
+    ),
+    bundle: true,
+    platform: 'browser',
+    write: false,
+    outdir: 'out',
+    metafile: true,
+  }));
+});
+for (const entry of bundled)
+  test(`${entry} bundles without privileged implementations or application services`, () => {
+    const entryPoint = metafile.outputs[`out/${entry}.js`]?.entryPoint;
+    assert(entryPoint);
+    const graph = new Set([entryPoint]);
+    for (const path of graph)
+      for (const { path: next, external } of metafile.inputs[path]?.imports ?? [])
+        if (!external) graph.add(next);
     assert.deepEqual(
-      Object.keys(bundle.metafile.inputs).filter((path) =>
+      [...graph].filter((path) =>
         /packages\/(?:application|chat-runtime|daemon-protocol|ssh|workspace)\/|node_modules\/(?:\.bun\/[^/]+\/node_modules\/)?react(?:-dom)?\/|electron|@earendil-works|node:/.test(
           path,
         ),

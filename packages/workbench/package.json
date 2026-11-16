@@ -7,10 +7,10 @@
     "./workers": "./src/workers.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "bun check --no-script -p tsconfig.json",
     "lint": "oxlint .",
     "build": "vp build --config vite.config.ts",
-    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test": "node --experimental-strip-types --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} test/*.test.ts",
     "demo": "vp dev --config vite.config.ts --host 127.0.0.1",
     "test:ui": "playwright test --config playwright.config.ts",
     "check:renderer": "node scripts/check-renderer.mjs"
@@ -21,6 +21,7 @@
     "@moonbase/ui": "workspace:*",
     "@base-ui/react": "1.9.0",
     "@stylexjs/stylex": "0.19.1",
+    "@tanstack/react-virtual": "3.14.26",
     "react": "19.3.1",
     "monaco-editor": "0.57.0",
     "motion": "14.9.0",

@@ -19,8 +19,9 @@ export { TranscriptViewMemory } from './transcript/transcript-view-memory.ts';
 export type { TranscriptView, TranscriptViewAnchor } from './transcript/transcript-view-memory.ts';
 export { findRowEntryId, getEntryRowKey, isLiveRowKey } from './transcript/transcript-rows.ts';
 export type { LiveEntry, TranscriptRow } from './transcript/transcript-rows.ts';
-export { transcriptLimits } from './transcript/transcript-state.ts';
+export { defaultTranscriptLimits } from './transcript/transcript-state.ts';
 export type {
+  TranscriptLimits,
   TranscriptState,
   TranscriptFindState,
   TranscriptManifestState,

@@ -60,21 +60,54 @@ export async function waitForRowOrder(page: Page) {
     .toBe(true);
 }
 
-/** Scrolls up with the wheel until the row with `key` is in view. */
+/**
+ * Waits until the list rests: its scroll position, height and mounted rows' places unchanged for
+ * several frames in a row, as they are once it has laid out and scrolled what it shows.
+ */
+export async function waitForListRest(page: Page) {
+  await transcriptList(page).evaluate(
+    (node) =>
+      new Promise<void>((resolve) => {
+        const read = () =>
+          [
+            node.scrollTop,
+            node.scrollHeight,
+            ...[...node.querySelectorAll<HTMLElement>('[data-transcript-row]')].map(
+              (row) => `${row.dataset.transcriptRow}@${row.getBoundingClientRect().top}`,
+            ),
+          ].join();
+        let last = read(),
+          still = 0;
+        const check = () => {
+          const now = read();
+          still = now === last ? still + 1 : 0;
+          last = now;
+          if (still === 10) resolve();
+          else requestAnimationFrame(check);
+        };
+        requestAnimationFrame(check);
+      }),
+  );
+}
+
+/**
+ * Scrolls up with the wheel until the row with `key` is in view, most of a screen at a time, so
+ * each screen overlaps the one before and no row is passed over.
+ */
 export async function showRow(page: Page, key: string) {
   const list = transcriptList(page);
   await list.hover();
   await expect
     .poll(
       async () => {
-        const visible = await list.evaluate((node, key) => {
+        const { visible, screen } = await list.evaluate((node, key) => {
           const row = node.querySelector(`[data-transcript-row="${key}"]`);
-          if (!row) return false;
-          const box = row.getBoundingClientRect(),
-            view = node.getBoundingClientRect();
-          return box.bottom > view.top && box.top < view.bottom;
+          const view = node.getBoundingClientRect();
+          if (!row) return { visible: false, screen: view.height };
+          const box = row.getBoundingClientRect();
+          return { visible: box.bottom > view.top && box.top < view.bottom, screen: view.height };
         }, key);
-        if (!visible) await page.mouse.wheel(0, -300);
+        if (!visible) await page.mouse.wheel(0, -Math.round(screen * 0.8));
         return visible;
       },
       { timeout: 15000, intervals: [100] },

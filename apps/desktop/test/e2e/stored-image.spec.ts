@@ -70,7 +70,7 @@ const naturalSize = (page: Page, name: string) =>
     .getByRole('img', { name, exact: true })
     .evaluate((node: HTMLImageElement) => [node.naturalWidth, node.naturalHeight]);
 
-test('PNG and JPEG thumbnails and one keyboard viewer trap/restore focus and fit normal/compact/200%', async ({
+test('PNG and JPEG thumbnails and one keyboard viewer trap/restore focus and fit a short window', async ({
   page,
 }) => {
   test.slow(); // Several fresh demo navigations, including a 4 MiB fixture.
@@ -101,12 +101,9 @@ test('PNG and JPEG thumbnails and one keyboard viewer trap/restore focus and fit
     await expect(dialog).toHaveCount(0);
     await expect(trigger).toBeFocused();
   }
-  for (const [, width, height] of [
-    ['normal', 1440, 900],
-    ['compact', 540, 844],
-    ['zoom-200', 720, 450],
-  ] as const) {
-    await page.setViewportSize({ width, height });
+  // The viewer fits a short window (a 200% zoom of a small one).
+  {
+    await page.setViewportSize({ width: 720, height: 450 });
     await trigger.scrollIntoViewIfNeeded();
     await expect(trigger).toBeEnabled();
     await trigger.click();

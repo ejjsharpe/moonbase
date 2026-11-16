@@ -173,3 +173,16 @@ test('restored drafts and uncertain Save/move facts remain isolated and update e
     await f.dispose();
   }
 });
+
+test('a reported string shows as written, and an unknown error only as a generic failure', async () => {
+  const f = await fixture('reported-errors', false);
+  try {
+    f.editor.report('Can’t move a folder into itself.');
+    f.editor.report(new Error('/private/path'));
+    const [own, unknown] = f.editor.getSnapshot().errors;
+    assert.equal(own, 'Can’t move a folder into itself.');
+    assert.doesNotMatch(unknown, /private/);
+  } finally {
+    await f.dispose();
+  }
+});

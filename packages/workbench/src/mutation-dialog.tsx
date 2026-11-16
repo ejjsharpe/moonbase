@@ -1,10 +1,10 @@
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
-import { styles } from './workbench-styles.ts';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { Button } from '@base-ui/react/button';
 import { Dialog } from '@base-ui/react/dialog';
-import { Popup } from './popup.tsx';
+import { Popup, popupStyles } from './popup.tsx';
+import { space } from '@moonbase/ui/tokens.stylex';
 
 export type { MutationAction as Action } from '@moonbase/application/editor';
 import type {
@@ -78,7 +78,7 @@ export function Mutation({
       onClose={() => {
         if (!busy) close();
       }}>
-      <Dialog.Description {...stylex.props(styles.path)}>
+      <Dialog.Description {...stylex.props(popupStyles.path)}>
         {checkout.hostId} · {checkout.root}
         {selectionDescription && ' — '}
         {selectionDescription}
@@ -136,7 +136,7 @@ export function Mutation({
           The captured checkout is unavailable. Reopen that exact checkout before continuing.
         </p>
       )}
-      <div {...stylex.props(styles.dialogActions)}>
+      <div {...stylex.props(popupStyles.actions)}>
         <Button
           {...stylex.props(controls.button)}
           disabled={
@@ -152,3 +152,7 @@ export function Mutation({
     </Popup>
   );
 }
+
+const styles = stylex.create({
+  label: { display: 'flex', flexDirection: 'column', gap: space.xs, marginBottom: space.md },
+});

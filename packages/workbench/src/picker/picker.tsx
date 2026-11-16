@@ -73,6 +73,8 @@ export function Picker({
   // An opened file takes focus; otherwise focus returns where it was, and an entry that changes
   // view moves it from there.
   const openedFile = useRef(false);
+  // Where focus was before the field took it as it mounted, which the dialog would see instead.
+  const [opener] = useState(() => document.activeElement);
   const input = useRef<HTMLInputElement>(null);
   const [mode, setMode] = useState<'goto' | 'find'>(request.mode === 'find' ? 'find' : 'goto');
   const [query, setQuery] = useState(request.mode === 'commands' ? '>' : request.text);
@@ -213,7 +215,10 @@ export function Picker({
         <Dialog.Backdrop {...stylex.props(styles.backdrop)} />
         <Dialog.Popup
           initialFocus={input}
-          finalFocus={() => (openedFile.current ? (editorFocus() ?? false) : true)}
+          finalFocus={() => {
+            if (openedFile.current) return editorFocus() ?? false;
+            return opener instanceof HTMLElement && opener.isConnected ? opener : true;
+          }}
           data-picker=""
           {...stylex.props(workbench.document, styles.popup)}>
           <Dialog.Title {...stylex.props(controls.hidden)}>
@@ -265,7 +270,9 @@ export function Picker({
                   </span>
                   <Autocomplete.Input
                     ref={input}
-                    autoFocus={generation > 0}
+                    // Focused as it mounts: the dialog's initial focus waits a frame, and keys typed
+                    // straight after the shortcut would reach the editor behind it.
+                    autoFocus
                     aria-label={placeholder}
                     placeholder={placeholder}
                     maxLength={mode === 'find' ? 256 : 4096}

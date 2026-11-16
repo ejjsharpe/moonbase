@@ -1,3 +1,4 @@
+import { waitForExit } from '../fixtures/app-fixture.ts';
 import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
 import { prepareCrashRecovery } from '../fixtures/editor-fixture.ts';
 import { test, expect, _electron as electron } from '@playwright/test';
@@ -87,14 +88,13 @@ for (const action of ['Recover workbench', 'Quit Moonbase', 'cleanup failure'])
           globalThis.recoveryChoice!({ response: 0, checkboxChecked: false }),
         );
       }
-      await expect.poll(() => child.exitCode).toBe(action === 'cleanup failure' ? 1 : 0);
+      await waitForExit(child);
+      expect(child.exitCode).toBe(action === 'cleanup failure' ? 1 : 0);
     } finally {
       try {
-        if (child.exitCode === null) {
-          const exited = new Promise((resolve) => child.once('exit', resolve));
-          await app.evaluate(({ app }) => app.exit(0));
-          await exited;
-        }
+        // An app already on its way out can't evaluate; it exits all the same.
+        if (child.exitCode === null) await app.evaluate(({ app }) => app.exit(0)).catch(() => {});
+        await waitForExit(child);
       } finally {
         // A daemon outlives its app: stop it even when the steps before fail.
         await stopDaemon(join(data, 'daemon-v1'));

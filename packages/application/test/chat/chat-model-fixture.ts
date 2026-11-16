@@ -6,8 +6,9 @@ import {
 } from '@moonbase/application/chat';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 
-export function modelRoot() {
-  const runtime = ManagedRuntime.make(Layer.empty),
+/** A root runtime and scope for chat models; `layer` supplies services such as a `TestClock`. */
+export function modelRoot(layer: Layer.Layer<never> = Layer.empty) {
+  const runtime = ManagedRuntime.make(layer),
     scope = Scope.makeUnsafe();
   return {
     runtime,

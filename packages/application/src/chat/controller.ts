@@ -1,5 +1,5 @@
 import { normalizeApplicationError, toApplicationError } from '@moonbase/effect';
-import { Cause, Deferred, Effect, Exit, Fiber, Scope, type ManagedRuntime } from 'effect';
+import { Cause, Clock, Deferred, Effect, Exit, Fiber, Scope, type ManagedRuntime } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ObservationClose } from '@moonbase/contracts/common';
 import { runApplicationEffect } from '../runtime/effect-client.ts';
@@ -40,8 +40,9 @@ import {
 export type { Pending } from './saved.ts';
 import { TranscriptOwner } from './transcript/transcript.ts';
 import {
+  defaultTranscriptLimits,
   makeEmptyTranscriptState,
-  transcriptLimits,
+  type TranscriptLimits,
   type TranscriptState,
 } from './transcript/transcript-state.ts';
 import { TranscriptViewMemory, type TranscriptView } from './transcript/transcript-view-memory.ts';
@@ -86,18 +87,10 @@ export type ChatDependencies = {
   newId?: () => string;
   backendId?: string;
   transcriptMemory?: TranscriptViewMemory;
-  /** How long closing a chat waits for cancelled reads; defaults to `transcriptLimits.closeGraceMs`. */
-  transcriptCloseGraceMs?: number;
   /**
-   * Backoff before each re-watch of the selected chat after a retryable stream failure; its length
-   * caps consecutive attempts. Defaults to `transcriptLimits.watchRetryMs`.
+   * Replaces some of `defaultTranscriptLimits`. Its watch retry also paces provider setup's watch.
    */
-  transcriptWatchRetryMs?: readonly number[];
-  /**
-   * How long a watch must stay up after its first snapshot for its failure to renew the retry cap.
-   * Defaults to `transcriptLimits.watchHealthyMs`.
-   */
-  transcriptWatchHealthyMs?: number;
+  transcriptLimits?: Partial<TranscriptLimits>;
 };
 /**
  * A unit of work that ends together. Owners nest: the attachment (Start until Detach) holds the
@@ -194,25 +187,22 @@ class ChatModelState {
   private newId: () => string;
   private readonly backend: string;
   private readonly transcriptMemory: TranscriptViewMemory;
-  private readonly transcriptCloseGraceMs?: number;
-  private readonly transcriptWatchRetryMs: readonly number[];
-  private readonly transcriptWatchHealthyMs: number;
+  private readonly transcriptLimits: TranscriptLimits;
 
-  constructor(scope: Scope.Closeable, dependencies: ChatDependencies) {
+  /** The model's Clock in milliseconds, which also paces the re-watch backoff. */
+  private readonly now: () => number;
+  constructor(scope: Scope.Closeable, dependencies: ChatDependencies, clock: Clock.Clock) {
+    this.now = () => clock.currentTimeMillisUnsafe();
     this.scope = scope;
     this.chat = dependencies.chat;
     this.backend = dependencies.backendId ?? 'chat';
     this.transcriptMemory = dependencies.transcriptMemory ?? new TranscriptViewMemory();
-    this.transcriptCloseGraceMs = dependencies.transcriptCloseGraceMs;
-    this.transcriptWatchRetryMs =
-      dependencies.transcriptWatchRetryMs ?? transcriptLimits.watchRetryMs;
-    this.transcriptWatchHealthyMs =
-      dependencies.transcriptWatchHealthyMs ?? transcriptLimits.watchHealthyMs;
+    this.transcriptLimits = { ...defaultTranscriptLimits, ...dependencies.transcriptLimits };
     this.connection = dependencies.connection;
     this.providers = dependencies.providers
       ? makeProviderSetupController(dependencies.providers, {
-          retryMs: this.transcriptWatchRetryMs,
-          healthyMs: this.transcriptWatchHealthyMs,
+          retryMs: this.transcriptLimits.watchRetryMs,
+          healthyMs: this.transcriptLimits.watchHealthyMs,
         })
       : null;
     this.session = structuredClone(dependencies.context);
@@ -811,7 +801,7 @@ class ChatModelState {
               { session: this.session },
               (update) => {
                 if (!attempt.open || !current()) return;
-                attempt.firstAt ??= performance.now();
+                attempt.firstAt ??= this.now();
                 const dropped = attempt.dropped !== undefined && update.dropped !== attempt.dropped;
                 attempt.dropped = update.dropped;
                 this.lastChatPage = update;
@@ -844,10 +834,10 @@ class ChatModelState {
       if (!current()) return;
       if (
         failed.firstAt !== undefined &&
-        performance.now() - failed.firstAt >= this.transcriptWatchHealthyMs
+        this.now() - failed.firstAt >= this.transcriptLimits.watchHealthyMs
       )
         failures = 0;
-      const delay = this.transcriptWatchRetryMs[failures];
+      const delay = this.transcriptLimits.watchRetryMs[failures];
       if (normalizeApplicationError(error).code !== 'Unavailable' || delay === undefined) {
         this.chatsFollowed = undefined;
         return;
@@ -1072,7 +1062,7 @@ class ChatModelState {
         // A chat on this machine is read in place; one over a connection streams.
         local: !this.connection,
         scope: owner.scope,
-        closeGraceMs: this.transcriptCloseGraceMs,
+        limits: this.transcriptLimits,
         publish: (state, snapshot) => {
           if (owner.alive && this.selection === owner)
             this.update({ transcript: state, ...(snapshot ? { snapshot } : {}) });
@@ -1117,7 +1107,7 @@ class ChatModelState {
                 (snapshot) => {
                   if (!attempt.open) return;
                   attempt.received = true;
-                  attempt.firstSnapshotAt ??= performance.now();
+                  attempt.firstSnapshotAt ??= this.now();
                   accept(snapshot);
                 },
                 (error) => {
@@ -1141,11 +1131,11 @@ class ChatModelState {
         if (transcript.getSnapshot().observation === 'failed') return;
         if (
           failed.firstSnapshotAt !== undefined &&
-          performance.now() - failed.firstSnapshotAt >= this.transcriptWatchHealthyMs
+          this.now() - failed.firstSnapshotAt >= this.transcriptLimits.watchHealthyMs
         )
           failures = 0;
         const failure = normalizeApplicationError(error);
-        const delay = this.transcriptWatchRetryMs[failures];
+        const delay = this.transcriptLimits.watchRetryMs[failures];
         if (failure.code !== 'Unavailable' || delay === undefined) {
           const stopped =
             failure.code === 'Unavailable'
@@ -1676,8 +1666,9 @@ export const makeChatModel = (
 ): Effect.Effect<ChatModel, ApplicationError, Scope.Scope> =>
   Effect.gen(function* () {
     const scope = yield* Scope.make();
+    const clock = yield* Clock.Clock;
     const model = yield* Effect.try({
-      try: () => new ChatModelState(scope, dependencies),
+      try: () => new ChatModelState(scope, dependencies, clock),
       catch: normalizeApplicationError,
     });
     yield* Effect.addFinalizer(() => model.release());

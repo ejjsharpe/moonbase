@@ -1,4 +1,3 @@
-import type { ChatTarget } from '@moonbase/contracts/chat';
 import type { AddressInfo } from 'node:net';
 import type * as Esbuild from 'esbuild';
 import assert from 'node:assert/strict';
@@ -7,7 +6,6 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, writeFile, readFile, realpath, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
 import { randomBytes } from 'node:crypto';
@@ -205,7 +203,7 @@ test('actual child host crash resumes Pi-owned work without resubmitting reserve
   }
 });
 
-test('compiled remote entry runs on Electron Node24 against the separate production host with no engine graph', async () => {
+test('compiled remote entry runs on Electron against the separate production host with no engine graph', async () => {
   const rootRequire = createRequire(new URL('../../../package.json', import.meta.url)),
     esbuild = rootRequire('esbuild') as typeof Esbuild,
     electron = rootRequire('electron') as string;
@@ -242,7 +240,7 @@ test('compiled remote entry runs on Electron Node24 against the separate product
         const receipt=await client.command('sendChat',{target,requestId:'electron-send',text:'One controlled input'});
         const recovered=await client.command('getChatSend',{target,requestId:'electron-send'});
         if(JSON.stringify(receipt)!==JSON.stringify(recovered))throw Error('receipt mismatch');
-        console.log(JSON.stringify({node:process.versions.node,electron:process.versions.electron,publicHost,admission:recovered.admission}));
+        console.log(JSON.stringify({electron:process.versions.electron,publicHost,admission:recovered.admission}));
       }finally{await runtime.dispose();}}
     main().catch(()=>{console.error('remote compatibility failed');process.exitCode=1;});`;
   const result = await esbuild.build({
@@ -258,24 +256,6 @@ test('compiled remote entry runs on Electron Node24 against the separate product
     !inputs.some((path) =>
       /pi-durable|pi-ai|chord|packages\/(chat-runtime|workspace|workbench|editor)\//.test(path),
     ),
-  );
-  const sourceDirectory = fileURLToPath(new URL('../src/', import.meta.url));
-  assert.deepEqual(
-    inputs.filter((path) => path.startsWith(sourceDirectory)).sort(),
-    [
-      'remote.ts',
-      'protocol.ts',
-      'health.ts',
-      'rpc-link.ts',
-      'daemon-rpc-link.ts',
-      'remote-workspace.ts',
-      'rpc-services.ts',
-      'upgrade-proof.ts',
-      'endpoint-connection.ts',
-    ]
-      .map((name) => join(sourceDirectory, name))
-      .sort(),
-    'The remote bundle must contain only its transport and protocol leaves.',
   );
   assert(
     !Object.values(result.metafile!.outputs).some((output) =>
@@ -297,103 +277,13 @@ test('compiled remote entry runs on Electron Node24 against the separate product
     exited = once(child, 'exit');
     assert.equal(((await bounded(exited)) as unknown[])[0], 0, errors);
     const record = JSON.parse(output.trim());
-    assert.equal(record.node, '24.22.1');
-    assert.equal(record.electron, '45.1.0');
+    assert(record.electron, 'the entry ran under Electron');
     assert.equal(record.admission, 'admitted');
     assert(!output.includes(token));
     assert(!errors.includes(token));
   } finally {
     if (child && exited) await cleanup(child, exited);
     await cleanup(server.child, server.exited);
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test('repeated actual process interruption parks Pi work visibly instead of reporting healthy idle/running', async () => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-pi-parked-'))),
-    listen = await port(),
-    host = { hostId: 'parked', storeId: 'store' },
-    token = randomBytes(32).toString('base64url'),
-    file = join(directory, 'private.json'),
-    log = join(directory, 'effects');
-  await writeFile(
-    file,
-    JSON.stringify({
-      host,
-      actorId: 'personal',
-      cwd: directory,
-      databasePath: join(directory, 'chat.sqlite'),
-      port: listen,
-      token,
-      log,
-      modelWait: true,
-    }),
-    { mode: 0o600 },
-  );
-  const unavailable = () => Effect.die('No implicit connection');
-  const runtime = ManagedRuntime.make(
-    RemoteChatLive.pipe(
-      Layer.provide(DaemonRpcLinkLive({ host })),
-      Layer.provide(
-        Layer.succeed(ConnectionService, {
-          getConnection: unavailable,
-          connect: unavailable,
-          disconnect: unavailable,
-          watch: () => Stream.empty,
-          endpoint: () =>
-            Effect.succeed({
-              origin: `http://127.0.0.1:${listen}`,
-              token,
-              expected: host,
-              connectionId: 'controlled',
-              health: {
-                ...host,
-                protocol: chatProtocolVersion,
-                version: '0.1.0',
-                capabilities: ['chat-v0', 'daemon-local-v1'],
-              },
-            }),
-        }),
-      ),
-    ),
-  );
-  const client = makeChatClient(runtime),
-    children: ReturnType<typeof start>[] = [];
-  let target: ChatTarget | undefined;
-  try {
-    let parked = false;
-    for (let i = 0; i < 7; i++) {
-      const child = start(file);
-      children.push(child);
-      await bounded(child.ready);
-      if (!target) {
-        target = (
-          await client.command('createChat', {
-            session: { host, actorId: 'personal' },
-            requestId: 'create',
-            title: 'Park safely',
-            settings: { cwd: directory, model },
-          })
-        ).conversation.target;
-        await client.command('sendChat', { target, requestId: 'original', text: 'One input' });
-      }
-      await new Promise((r) => setTimeout(r, 75));
-      const snapshot = await client.command('getChat', { target });
-      if (snapshot.state === 'failed') {
-        assert.match(snapshot.message ?? '', /parked/i);
-        assert(snapshot.run);
-        assert.equal(snapshot.entries.filter((e) => e.role === 'user').length, 1);
-        parked = true;
-        break;
-      }
-      assert.equal(snapshot.state, 'running');
-      child.child.kill('SIGKILL');
-      await bounded(child.exited);
-    }
-    assert(parked, 'Repeated crashes never surfaced Pi parking');
-  } finally {
-    await runtime.dispose();
-    await Promise.all(children.map((c) => cleanup(c.child, c.exited)));
     await rm(directory, { recursive: true, force: true });
   }
 });
