@@ -52,13 +52,13 @@ Atoms hold no domain logic, so a headless test or a non-React client can use the
 - Be exhaustive only at security boundaries (tokens, credentials, HMAC auth, SSH host keys, path and folder authority, supply-chain pinning) and for never losing unsaved work or duplicating a send.
 - Reviewers flag overkill tests as should-fix (delete, merge or slim) and don't ask for extra permutations outside those boundaries.
 - Tests use temporary directories, stores and repositories, faux providers and injected platform capabilities. Never read or write the real OS clipboard in tests; inject callbacks.
-- PR checks run the unit suites and the root integration suites. Browser and Electron Playwright suites don't run in CI; run the ones you touch locally.
+- A PR's checks run the suites of the packages it changes and of the packages that depend on them, browser and Electron Playwright suites included, plus the root integration suites. Run the Playwright project you touch locally.
 
 ## Verifying
 
 - While iterating, run the one test file you changed (`bun test <file> -t "<name>"`, or `node --experimental-strip-types --test <file>`), not the package suite.
 - Before you push, run `bun run check:changed`: foundation check, format and lint on changed files, typecheck for every affected package, and the suites of the packages you edited (and a root integration suite you edited). Add `--full` to also test dependents, and `--integration` when you change the daemon or chat wire.
-- CI runs every suite on every PR.
+- CI runs the affected suites on a PR, and every suite on main.
 - Don't run `bun run test`, the root integration suites or the Playwright projects unless asked. Run only the Playwright project for the surface you touched.
 
 ## Safety

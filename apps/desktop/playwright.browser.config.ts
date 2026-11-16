@@ -11,6 +11,8 @@ export default defineConfig({
     'stored-image.spec.ts',
   ],
   workers: '50%',
+  // One retry on CI; a test that passes only on retry is reported as flaky.
+  retries: process.env.CI ? 1 : 0,
   fullyParallel: true,
   // A run empties its output folder as it starts, so native and browser runs keep their own.
   outputDir: 'test-results/browser',

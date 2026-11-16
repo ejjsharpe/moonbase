@@ -7,9 +7,10 @@ import { Icon } from '@moonbase/ui/icons';
 import { FileIcon } from '@moonbase/ui/file-icons';
 import { rowHeight, type VisibleRow } from './files-tree-rows.ts';
 import { gitStatusMarks } from './files-tree-status.ts';
+import { onMac } from '../shortcuts.ts';
 
 const isContextClick = (event: { button: number; ctrlKey: boolean }) =>
-  event.button === 2 || (event.button === 0 && event.ctrlKey && navigator.platform.includes('Mac'));
+  event.button === 2 || (event.button === 0 && event.ctrlKey && onMac);
 
 /** One `treeitem` of the files tree, placed at its index in the virtualized extent. */
 export function FilesTreeRow({

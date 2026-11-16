@@ -21,6 +21,8 @@ export default defineConfig({
   outputDir,
   // Electron windows share one display and the OS's focus.
   workers: 1,
+  // One retry on CI; a test that passes only on retry is reported as flaky.
+  retries: process.env.CI ? 1 : 0,
   fullyParallel: true,
   timeout: 45000,
   reporter: [['list'], ['json', { outputFile: join(outputDir, 'timings.json') }]],
