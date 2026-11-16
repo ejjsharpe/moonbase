@@ -1,7 +1,7 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { decodeEditorRecovery } from '@moonbase/contracts/workspace-schema';
 import { readOwn } from '../editor/record.ts';
-import { Effect, Queue, Stream } from 'effect';
+import { Deferred, Effect, Queue, Stream } from 'effect';
 import { snapshotWorkspaceLayer, type SnapshotWorkspace } from './faux-workspace-layer.ts';
 import {
   ApplicationError,
@@ -110,6 +110,8 @@ export function fauxWorkspace(seeds: Seed[]) {
   >();
   const watchers = new Set<{ checkout: CheckoutTarget; notify: (event: WorkspaceEvent) => void }>();
   const faults = new Map<WorkspaceCommand, { error: ApplicationError; after: boolean }>();
+  // Commands held by `hold`: each call waits until `release`.
+  const holds = new Map<WorkspaceCommand, Deferred.Deferred<void>>();
   const stats = {
     subscriptions: 0,
     released: 0,
@@ -309,20 +311,27 @@ export function fauxWorkspace(seeds: Seed[]) {
       ? checkout
       : fail('This project is not a Git repository. Initialize Git first.');
   const call = <A>(name: WorkspaceCommand, action: () => A) =>
-    Effect.try({
-      try: () => {
-        const fault = faults.get(name);
-        faults.delete(name);
-        if (fault && !fault.after) throw fault.error;
-        const value = action();
-        if (fault) throw fault.error;
-        return structuredClone(value);
-      },
-      catch: (error) =>
-        error instanceof ApplicationError
-          ? error
-          : new ApplicationError({ code: 'Unavailable', message: String(error) }),
-    });
+    Effect.suspend(() => {
+      const held = holds.get(name);
+      return held ? Deferred.await(held) : Effect.void;
+    }).pipe(
+      Effect.andThen(
+        Effect.try({
+          try: () => {
+            const fault = faults.get(name);
+            faults.delete(name);
+            if (fault && !fault.after) throw fault.error;
+            const value = action();
+            if (fault) throw fault.error;
+            return structuredClone(value);
+          },
+          catch: (error) =>
+            error instanceof ApplicationError
+              ? error
+              : new ApplicationError({ code: 'Unavailable', message: String(error) }),
+        }),
+      ),
+    );
   const service: SnapshotWorkspace = {
     openCheckout: ({ root }) =>
       call(
@@ -853,6 +862,15 @@ export function fauxWorkspace(seeds: Seed[]) {
       read(target);
       entries(target.checkout).set(target.path, { ...document(text), directory: false });
       notify(target.checkout, [target.path]);
+    },
+    /** Holds every `name` call until `release(name)`, as a slow host would. */
+    hold(name: WorkspaceCommand) {
+      if (!holds.has(name)) holds.set(name, Deferred.makeUnsafe<void>());
+    },
+    release(name: WorkspaceCommand) {
+      const held = holds.get(name);
+      holds.delete(name);
+      if (held) Deferred.doneUnsafe(held, Effect.void);
     },
     failNext(
       name: WorkspaceCommand,

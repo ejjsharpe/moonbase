@@ -770,10 +770,16 @@ test('a deferred Enter never opens a row in place of one the new results dropped
   await field.fill('.ts');
   await expect(rows.nth(1)).toHaveAccessibleName('src/example.ts');
   // Until 'file' answers, the old file rows stay listed above its commands. The reader moves onto
-  // one, src/example.ts, which the new results drop, and presses Enter.
+  // one, src/example.ts, which the new results drop, and presses Enter. The lookup is held so
+  // Enter lands while it runs.
+  await page.evaluate(() => window.demo.memory.hold('lookupFiles'));
   await field.fill('file');
   await page.keyboard.press('ArrowDown');
+  await expectHighlighted(goTo, rows.nth(1));
+  await expect(rows.nth(1)).toHaveAccessibleName('src/example.ts');
   await page.keyboard.press('Enter');
+  await expect(goTo).toBeVisible();
+  await page.evaluate(() => window.demo.memory.release('lookupFiles'));
   await expect(goTo).toHaveCount(0);
   // The top row ran (Show Files), not whatever took the second place (Refresh files).
   await expect(files).toHaveAttribute('aria-pressed', 'true');
