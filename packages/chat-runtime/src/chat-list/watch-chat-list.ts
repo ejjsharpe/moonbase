@@ -8,7 +8,9 @@ import {
   type ChatSummary,
 } from '@moonbase/contracts/chat';
 import { readOnChange } from '@moonbase/effect/changes';
-import { watchError, type Host } from '../commands.ts';
+import type { Host } from '../commands/chat-host.ts';
+import { readListedChat, listChats } from '../commands/chat-reads.ts';
+import { watchError } from '../commands/safe-error.ts';
 
 /**
  * The chat list's first page and the chats past it that changed while watching, read again after
@@ -32,11 +34,11 @@ export function watchChatListState(
     async () => {
       const ids = [...touched];
       touched.clear();
-      const list = await host.list({ session });
+      const list = await listChats(host, { session });
       const listed = new Set(list.conversations.map((row) => row.target.conversationId));
       for (const id of ids) {
         changed.delete(id);
-        const row = listed.has(id) ? undefined : await host.listed(session, id);
+        const row = listed.has(id) ? undefined : await readListedChat(host, session, id);
         if (row) changed.set(id, row);
       }
       for (const id of listed) changed.delete(id);

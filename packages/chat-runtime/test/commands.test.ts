@@ -25,7 +25,7 @@ import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { readFile } from 'node:fs/promises';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { LocalPiRuntimeLive } from '../src/index.ts';
-import { classifyPublication } from '../src/commands.ts';
+import { classifyPublication } from '../src/commands/publications.ts';
 import { Metadata, Store } from '../src/documents.ts';
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { session, until, fixture } from './runtime-fixture.ts';

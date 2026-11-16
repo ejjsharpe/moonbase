@@ -3,7 +3,23 @@ import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { Context, Effect, Layer, Stream } from 'effect';
 import type { ChatError } from '@moonbase/contracts/chat-errors';
 import { ChatService, type ChatServiceShape } from '@moonbase/contracts/services';
-import { type Host, safeError } from './commands.ts';
+import { markFolderAsProject, settleChat } from './commands/chat-metadata.ts';
+import type { Host } from './commands/chat-host.ts';
+import {
+  findFiles,
+  findInTranscript,
+  getChatHost,
+  getHistory,
+  getHistoryAround,
+  getTranscriptContent,
+  listChats,
+  readSnapshot,
+} from './commands/chat-reads.ts';
+import { createChat } from './commands/create-chat.ts';
+import { safeError } from './commands/safe-error.ts';
+import { getSend, sendChat } from './commands/send-chat.ts';
+import { stopChat } from './commands/stop-chat.ts';
+import { watchChat } from './commands/watch-chat.ts';
 import { watchChatListState } from './chat-list/watch-chat-list.ts';
 import { ClaudeCodeWorkingDirectory } from './claude-code-working-directory.ts';
 import { LocalPiControl } from './local-pi-control.ts';
@@ -12,23 +28,23 @@ import type { LocalPiRuntimeConfiguration } from './runtime-types.ts';
 
 function makeChatService(host: Host): ChatServiceShape {
   return {
-    getChatHost: (d) => host.run('getChatHost', d, (input) => host.getHost(input)),
-    listChats: (d) => host.run('listChats', d, (input) => host.list(input)),
-    createChat: (d) => host.run('createChat', d, (input) => host.create(input)),
-    getChat: (d) => host.run('getChat', d, (input) => host.snapshot(input.target)),
-    getChatHistory: (d) => host.run('getChatHistory', d, (input) => host.getHistory(input)),
+    getChatHost: (d) => host.run('getChatHost', d, (input) => getChatHost(host, input)),
+    listChats: (d) => host.run('listChats', d, (input) => listChats(host, input)),
+    createChat: (d) => host.run('createChat', d, (input) => createChat(host, input)),
+    getChat: (d) => host.run('getChat', d, (input) => readSnapshot(host, input.target)),
+    getChatHistory: (d) => host.run('getChatHistory', d, (input) => getHistory(host, input)),
     getChatTranscriptContent: (d) =>
-      host.run('getChatTranscriptContent', d, (input) => host.getTranscriptContent(input)),
+      host.run('getChatTranscriptContent', d, (input) => getTranscriptContent(host, input)),
     findChatTranscript: (d) =>
-      host.run('findChatTranscript', d, (input) => host.findTranscript(input)),
+      host.run('findChatTranscript', d, (input) => findInTranscript(host, input)),
     getChatHistoryAround: (d) =>
-      host.run('getChatHistoryAround', d, (input) => host.getHistoryAround(input)),
-    sendChat: (d) => host.run('sendChat', d, (input) => host.send(input)),
-    getChatSend: (d) => host.run('getChatSend', d, (input) => host.getSend(input)),
-    stopChat: (d) => host.run('stopChat', d, (input) => host.stop(input)),
-    settleChat: (d) => host.run('settleChat', d, (input) => host.settle(input)),
-    findChatFiles: (d) => host.run('findChatFiles', d, (input) => host.findFiles(input)),
-    watch: ({ target }) => host.watch(target),
+      host.run('getChatHistoryAround', d, (input) => getHistoryAround(host, input)),
+    sendChat: (d) => host.run('sendChat', d, (input) => sendChat(host, input)),
+    getChatSend: (d) => host.run('getChatSend', d, (input) => getSend(host, input)),
+    stopChat: (d) => host.run('stopChat', d, (input) => stopChat(host, input)),
+    settleChat: (d) => host.run('settleChat', d, (input) => settleChat(host, input)),
+    findChatFiles: (d) => host.run('findChatFiles', d, (input) => findFiles(host, input)),
+    watch: ({ target }) => watchChat(host, target),
     watchChatList: ({ session }) =>
       Stream.unwrap(
         Effect.map(Effect.try({ try: () => host.session(session), catch: safeError }), () =>
@@ -57,7 +73,7 @@ export const LocalPiRuntimeLive = (
             Effect.tryPromise({ try: () => host.hasActiveWork(), catch: safeError }),
           markFolderAsProject: (target) =>
             Effect.tryPromise({
-              try: () => host.markFolderAsProject(target),
+              try: () => markFolderAsProject(host, target),
               catch: (error) => safeError(error, true),
             }),
         }),
