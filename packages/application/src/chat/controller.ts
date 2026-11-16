@@ -1,8 +1,8 @@
 import { normalizeApplicationError, toApplicationError } from '@moonbase/effect';
-import { Cause, Clock, Deferred, Effect, Exit, Fiber, Scope, type ManagedRuntime } from 'effect';
+import { Cause, Clock, Deferred, Effect, Exit, Fiber, Scope } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ObservationClose } from '@moonbase/contracts/common';
-import { runApplicationEffect } from '../runtime/effect-client.ts';
+import { runApplicationEffect, type ChatRunner } from './chat-promises.ts';
 import type {
   ChatCreationSettings,
   ChatMention,
@@ -262,7 +262,7 @@ class ChatModelState {
       this.providers?.setAdmissionsOpen(open);
     }
   }
-  bind<R, E extends ApplicationError>(runtime: ManagedRuntime.ManagedRuntime<R, E>) {
+  bind(runtime: ChatRunner) {
     if (this.bound) throw invalid('Chat model already bound.');
     this.bound = true;
     this.runEffect = (effect) => runApplicationEffect(runtime, effect);
@@ -1674,8 +1674,8 @@ export const makeChatModel = (
     yield* Effect.addFinalizer(() => model.release());
     return model;
   });
-export function makeChatController<R, E extends ApplicationError>(
-  runtime: ManagedRuntime.ManagedRuntime<R, E>,
+export function makeChatController(
+  runtime: ChatRunner,
   model: ChatModel,
 ): ChatController {
   return model.bind(runtime);

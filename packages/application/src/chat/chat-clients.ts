@@ -1,8 +1,7 @@
 import type { ProviderSetupClient } from '@moonbase/contracts/providers';
 import { Effect, Stream, type ManagedRuntime } from 'effect';
-import { runApplicationEffect, observeApplicationStream } from './effect-client.ts';
+import { runApplicationEffect, observeApplicationStream } from './chat-promises.ts';
 import type { ApplicationError } from '@moonbase/contracts/errors';
-import type { EditorClient } from '@moonbase/contracts/workspace';
 import type { ConnectionClient } from '@moonbase/contracts/connection';
 import type { ChatClient } from '@moonbase/contracts/chat';
 import {
@@ -13,32 +12,17 @@ import {
   connectionCommand,
   connectionWatch,
   providerWatch,
-  recoveryWatch,
-  workspaceCommand,
-  workspaceWatch,
-} from './handlers.ts';
+} from './chat-handlers.ts';
+// Legacy (epic #273 D16): the chat, connection and provider setup Promise clients, bound to a
+// runtime, until CL-22 #295 moves chat to services and atoms and CL-24 #298 Electron main.
 import {
   ProviderSetupService,
   ChatService,
   ConnectionService,
-  type WorkspaceService,
   type ChatServiceShape,
   type ConnectionServiceShape,
 } from '@moonbase/contracts/services';
 
-/** Accept the process root's runtime; never acquire a second service graph here. */
-export function makeEditorClient(
-  runtime: ManagedRuntime.ManagedRuntime<WorkspaceService, ApplicationError>,
-): EditorClient {
-  return {
-    command: (operation, input, options) =>
-      runApplicationEffect(runtime, workspaceCommand(operation, input), options),
-    watch: (input, receive, onError) =>
-      observeApplicationStream(runtime, workspaceWatch(input), receive, onError),
-    watchRecovery: (input, receive, onError) =>
-      observeApplicationStream(runtime, recoveryWatch(input), receive, onError),
-  };
-}
 export function makeConnectionClient(
   runtime: ManagedRuntime.ManagedRuntime<ConnectionService, ApplicationError>,
 ): ConnectionClient {

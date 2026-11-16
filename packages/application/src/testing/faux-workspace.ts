@@ -1,5 +1,5 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
-import { readOwn } from '../editor/record.ts';
+import { checkoutKey, readOwn } from '../editor/index.ts';
 import { Effect, Layer, Queue, Stream } from 'effect';
 import { WorkspaceService, type WorkspaceServiceShape } from '@moonbase/contracts/services';
 import { fauxRecovery } from './faux-recovery.ts';
@@ -17,7 +17,6 @@ import {
   type WorkspaceEvent,
   type LookupMatch,
 } from '@moonbase/contracts/workspace';
-import { checkoutKey } from '../editor/references.ts';
 
 type Seed = {
   checkout: CheckoutTarget;

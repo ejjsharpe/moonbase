@@ -1,10 +1,16 @@
 import { Cause, Effect, Exit, Stream, type ManagedRuntime } from 'effect';
+
+// Legacy (epic #273 D16): the chat's Promise clients and controller run their Effects through
+// these until CL-22 #295 moves chat to services and atoms, and CL-24 #298 Electron main.
+
+/** The root runtime's runner, the one the chat runs its Effects on. */
+export type ChatRunner = Pick<ManagedRuntime.ManagedRuntime<never, unknown>, 'runPromiseExit'>;
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { CommandOptions, ObservationClose } from '@moonbase/contracts/common';
 import { normalizeApplicationError, toApplicationError } from '@moonbase/effect';
 
 export async function runApplicationEffect<A, R, E>(
-  runtime: ManagedRuntime.ManagedRuntime<R, E>,
+  runtime: Pick<ManagedRuntime.ManagedRuntime<R, E>, 'runPromiseExit'>,
   effect: Effect.Effect<A, ApplicationError, R>,
   options?: CommandOptions,
 ): Promise<A> {
@@ -22,7 +28,7 @@ export async function runApplicationEffect<A, R, E>(
 
 /** Close fences delivery immediately and joins the actual stream finalizers. */
 export function observeApplicationStream<A, R, E>(
-  runtime: ManagedRuntime.ManagedRuntime<R, E>,
+  runtime: Pick<ManagedRuntime.ManagedRuntime<R, E>, 'runPromiseExit'>,
   stream: Stream.Stream<A, ApplicationError, R>,
   receive: (event: A) => void,
   onError: (error: ApplicationError) => void,

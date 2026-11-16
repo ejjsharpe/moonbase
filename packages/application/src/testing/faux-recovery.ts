@@ -15,7 +15,7 @@ import type {
   FileTarget,
   OperationResult,
 } from '@moonbase/contracts/workspace';
-import { checkoutKey, fileKey } from '../editor/references.ts';
+import { checkoutKey, fileKey } from '../editor/index.ts';
 
 type FauxRecoveryDependencies = {
   /** The seeded checkout, or a failure for one the fake doesn't hold. */
