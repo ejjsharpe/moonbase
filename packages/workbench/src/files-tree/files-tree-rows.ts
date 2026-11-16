@@ -114,6 +114,17 @@ export function addPinnedIndexes(
   return [...indexes].filter((index) => index < rows.length).sort((a, b) => a - b);
 }
 
+/** Whether a listed entry of a checkout is a folder. */
+export function isListedDirectory(
+  listings: Readonly<Record<string, DirectoryListing>>,
+  checkoutIdentity: string,
+  path: string,
+) {
+  const parent = path.split('/').slice(0, -1).join('/');
+  const listing = listings[JSON.stringify([checkoutIdentity, parent])];
+  return !!listing?.entries.find((entry) => entry.path === path)?.directory;
+}
+
 /** The length of a name's stem, which is selected first: all of a folder's or dotfile's name. */
 export function measureStem(name: string, directory: boolean) {
   const dot = name.lastIndexOf('.');

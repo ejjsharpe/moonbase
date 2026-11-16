@@ -25,8 +25,5 @@ export const styles = stylex.create({
     overflowY: 'auto',
   },
   dialogActions: { display: 'flex', flexWrap: 'wrap', gap: space.sm, marginTop: space.lg },
-  treeLabel: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   path: { overflowWrap: 'anywhere', fontSize: type.small, color: colors.secondary },
-  treeExtent: (height: number) => ({ height, position: 'relative', minWidth: '100%' }),
-  treeRow: (top: number) => ({ position: 'absolute', top, width: '100%' }),
 });

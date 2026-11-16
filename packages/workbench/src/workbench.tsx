@@ -6,7 +6,9 @@ import {
   type PickerMode,
   type PickerRequest,
 } from './picker/picker-shortcuts.ts';
-import { FilesTree, type FollowedFiles, type TreeCreateRequest } from './files-tree/files-tree.tsx';
+import { FilesTree } from './files-tree/files-tree.tsx';
+import type { FollowedFiles } from './files-tree/use-follow-active-file.ts';
+import type { TreeCreateRequest } from './files-tree/use-tree-edit.ts';
 import { findCreateFolder } from './files-tree/files-tree-rows.ts';
 import { gitStatusMarks } from './files-tree/files-tree-status.ts';
 import { Mutation, type Action } from './mutation-dialog.tsx';
