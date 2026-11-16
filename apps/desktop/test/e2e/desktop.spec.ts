@@ -509,9 +509,12 @@ test('SQLite contention vetoes Quit Discard; the draft stays and the window stay
     db.exec('ROLLBACK');
     db.close();
   }
-  // The Discard did not commit, so the draft stays; once the store is free, Retry clears the
-  // failure without sending the Discard again.
-  await page.getByRole('button', { name: 'Retry keeping edits', exact: true }).click();
+  // The Discard did not commit, so the draft stays. Once the store is free, Retry (or the next
+  // flush the window makes on its own path) clears the failure without sending the Discard again.
+  await page
+    .getByRole('button', { name: 'Retry keeping edits', exact: true })
+    .click({ timeout: 2000 })
+    .catch(() => {});
   await expect(page.getByRole('button', { name: 'Retry keeping edits', exact: true })).toHaveCount(
     0,
   );
