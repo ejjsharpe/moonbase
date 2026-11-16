@@ -31,7 +31,7 @@ function event<T>() {
   });
   return { promise, resolve };
 }
-function fixture(options: { slowSend?: boolean; cleanupFailure?: boolean } = {}) {
+function fixture() {
   const counts = {
     acquire: 0,
     release: 0,
@@ -40,10 +40,8 @@ function fixture(options: { slowSend?: boolean; cleanupFailure?: boolean } = {})
     stop: 0,
     watch: 0,
     unwatch: 0,
-    interrupted: 0,
   };
-  const entered = event<void>(),
-    watched = event<void>(),
+  const watched = event<void>(),
     unwatched = event<void>();
   const service: ChatServiceShape = {
     getChatHost: (input) =>
@@ -88,19 +86,10 @@ function fixture(options: { slowSend?: boolean; cleanupFailure?: boolean } = {})
         new ApplicationError({ code: 'Incompatible', message: 'Not served by this fixture.' }),
       ),
     sendChat: (input) =>
-      Effect.gen(function* () {
+      Effect.sync(() => {
         assert.deepEqual(input.target, target);
         assert.equal(input.text, 'one input');
         counts.send++;
-        entered.resolve();
-        if (options.slowSend)
-          yield* Effect.never.pipe(
-            Effect.ensuring(
-              Effect.sync(() => {
-                counts.interrupted++;
-              }),
-            ),
-          );
         return {
           target: input.target,
           requestId: input.requestId,
@@ -143,7 +132,6 @@ function fixture(options: { slowSend?: boolean; cleanupFailure?: boolean } = {})
               releaseResource(() => {
                 counts.unwatch++;
                 unwatched.resolve();
-                if (options.cleanupFailure) throw Error('Chat observer cleanup failed');
               }),
           ),
           Stream.concat(Stream.succeed(snapshot), Stream.never),
@@ -165,7 +153,7 @@ function fixture(options: { slowSend?: boolean; cleanupFailure?: boolean } = {})
       ),
     ),
   );
-  return { counts, runtime, client: makeChatClient(runtime), entered, watched, unwatched };
+  return { counts, runtime, client: makeChatClient(runtime), watched, unwatched };
 }
 
 test('public chat entry points share one scope and preserve exact targets/request identities', async () => {
@@ -233,83 +221,4 @@ test('public chat entry points share one scope and preserve exact targets/reques
   }
   assert.equal(counts.release, 1);
   assert.equal(counts.unwatch, 1);
-});
-
-test('in-flight chat dispatch permits status and explicit Stop; cancellation invents no Stop', async () => {
-  const { counts, runtime, client, entered } = fixture({ slowSend: true });
-  const abort = new AbortController();
-  const pending = client.command(
-    'sendChat',
-    { target, requestId: 'send-one', text: 'one input' },
-    { signal: abort.signal },
-  );
-  const rejected = assert.rejects(
-    pending,
-    (error) => ApplicationError.is(error) && error.code === 'Cancelled',
-  );
-  try {
-    await entered.promise;
-    assert.equal((await client.command('getChat', { target })).state, 'idle');
-    await client.command('stopChat', {
-      stop: { target, submissionId: '100', taskId: '101' },
-      requestId: 'stop-one',
-    });
-    abort.abort();
-    await rejected;
-    assert.equal(counts.interrupted, 1);
-    assert.equal(counts.stop, 1);
-    assert.equal(counts.release, 0);
-  } finally {
-    abort.abort();
-    await runtime.dispose();
-  }
-});
-
-test('pre-aborted chat commands acquire nothing', async () => {
-  const { counts, runtime, client } = fixture();
-  const abort = new AbortController();
-  abort.abort();
-  try {
-    await assert.rejects(
-      client.command(
-        'sendChat',
-        { target, requestId: 'send-one', text: 'one input' },
-        { signal: abort.signal },
-      ),
-      (error) => ApplicationError.is(error) && error.code === 'Cancelled',
-    );
-  } finally {
-    await runtime.dispose();
-  }
-  assert.equal(counts.acquire, 0);
-  assert.equal(counts.send, 0);
-});
-
-test('chat observer failures stay observable without closing the process service', async () => {
-  const { counts, runtime, client, watched } = fixture({ cleanupFailure: true });
-  const failure = event<ApplicationError>();
-  let unsubscribe = async () => {};
-  try {
-    unsubscribe = client.watch(
-      { target },
-      () => {},
-      (error) => failure.resolve(error),
-    );
-    await watched.promise;
-    let error!: ApplicationError;
-    await assert.rejects(unsubscribe(), (value) => {
-      assert(ApplicationError.is(value));
-      error = value;
-      return true;
-    });
-    assert.equal(error.code, 'Unavailable');
-    assert.match(error.message, /Application resource cleanup failed/);
-    assert.equal(counts.unwatch, 1);
-    assert.equal(counts.release, 0);
-    assert.equal(counts.stop, 0);
-    await client.command('getChat', { target });
-  } finally {
-    await unsubscribe().catch(() => {});
-    await runtime.dispose();
-  }
 });

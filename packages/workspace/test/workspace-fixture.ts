@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,13 +7,14 @@ import { isWorkspaceHostError, toWireError } from '@moonbase/contracts/workspace
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
+import { initRepository } from './repository-fixture.ts';
 
 export function fixture() {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-workspace-'))),
     root = join(base, 'repo'),
     dataDirectory = join(base, 'state');
   mkdirSync(root);
-  execFileSync('/usr/bin/git', ['init', '-q', '-b', 'main', root]);
+  initRepository(root);
   const start = () => {
     const runtime = ManagedRuntime.make(
       WorkspaceLive({

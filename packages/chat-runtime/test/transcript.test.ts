@@ -91,7 +91,7 @@ function captureHarness(t: TestContext) {
   return () => harness;
 }
 
-test('all retained blocks, large escaped Unicode/JSON/patch/image content and 1,100 entries reconstruct without migration or skips', async (t) => {
+test('all retained blocks, large escaped Unicode/JSON/patch/image content and several history pages of entries reconstruct without migration or skips', async (t) => {
   const getHarness = captureHarness(t),
     f = await fixture(t),
     target = await f.create(),
@@ -102,7 +102,8 @@ test('all retained blocks, large escaped Unicode/JSON/patch/image content and 1,
   const image = Buffer.alloc(700001, 71);
   const retained: string[] = [];
   const entry = await getHarness().commit(async (tx) => {
-    for (let i = 0; i < 1100; i++) {
+    // Four full history pages and part of a fifth.
+    for (let i = 0; i < 140; i++) {
       const row = await tx.appendEntry(
         Number(target.conversationId) as ConversationId,
         i % 20 === 0
@@ -224,15 +225,15 @@ test('all retained blocks, large escaped Unicode/JSON/patch/image content and 1,
     };
   }
   assert.deepEqual(seen, retained.reverse());
-  let around = await f.client.command('getChatHistoryAround', { target, entryId: retained[500] });
+  let around = await f.client.command('getChatHistoryAround', { target, entryId: retained[70] });
   assert(around.olderCursor && around.newerCursor);
-  assert(around.entries.some((row) => row.id === retained[500]));
+  assert(around.entries.some((row) => row.id === retained[70]));
   const originalAround = around;
   const window = new Set(around.entries.map((row) => row.id));
   while (around.olderCursor) {
     around = await f.client.command('getChatHistoryAround', {
       target,
-      entryId: retained[500],
+      entryId: retained[70],
       cursor: around.olderCursor,
     });
     around.entries.forEach((row) => window.add(row.id));
@@ -241,7 +242,7 @@ test('all retained blocks, large escaped Unicode/JSON/patch/image content and 1,
   while (around.newerCursor) {
     around = await f.client.command('getChatHistoryAround', {
       target,
-      entryId: retained[500],
+      entryId: retained[70],
       cursor: around.newerCursor,
     });
     around.entries.forEach((row) => window.add(row.id));

@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "bun src/main.ts",
     "build": "node scripts/build.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "bun check --no-script -p tsconfig.json",
     "lint": "oxlint .",
-    "test": "bun test --timeout 60000 ./test"
+    "test": "bun test --timeout 60000 --parallel=${MOONBASE_TEST_WORKERS:-4} ./test",
+    "test:linux": "bun test --timeout 60000 --parallel=${MOONBASE_TEST_WORKERS:-4} --path-ignore-patterns='test/macos/**' ./test",
+    "test:macos": "bun test --timeout 60000 --parallel=${MOONBASE_TEST_WORKERS:-4} ./test/macos"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.4.0",
@@ -21,5 +23,10 @@
   },
   "engines": {
     "bun": "1.4.4"
+  },
+  "nx": {
+    "tags": [
+      "macos-tests"
+    ]
   }
 }

@@ -2,8 +2,9 @@ import * as Schema from 'effect/Schema';
 import { DaemonFailure } from './failure.ts';
 import { AbsolutePathSchema as absolutePath } from '@moonbase/contracts/daemon-schema';
 
+// 0 listens on any free port, which the `ready` line and `endpoint.json` report.
 const port = Schema.Number.check(
-  Schema.makeFilter((value) => Number.isSafeInteger(value) && value > 0 && value <= 65535),
+  Schema.makeFilter((value) => Number.isSafeInteger(value) && value >= 0 && value <= 65535),
 );
 const keyFile = Schema.Struct({ source: Schema.Literal('file'), path: absolutePath });
 // A root is named by its real path; one under another would only repeat its folders.

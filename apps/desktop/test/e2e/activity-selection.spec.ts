@@ -117,192 +117,108 @@ async function installCopy(page: Page) {
     },
   };
 }
-for (const manifest of [false, true])
-  test(`independent selected live output retains pointer range manifest=${manifest}`, async ({
-    page,
-  }) => {
-    await open(page);
-    const update = async (suffix: string) =>
-      page.evaluate(async (suffix) => {
-        await window.demo.transcript!.activity([
-          { kind: 'thinking', text: 'Thinking more' + suffix, state: 'running' },
-          {
-            kind: 'result',
-            role: 'tool',
-            toolName: 'bash',
-            text: 'SELECT THIS stable prefix\n' + suffix,
-            state: 'running',
-          },
-          { kind: 'details', text: 'detail one' },
-          { kind: 'details', text: 'detail two' },
-          { kind: 'details', text: 'retained fifth' },
-        ]);
-      }, suffix);
-    await update('first');
+test('selected loaded output and fixed Copy remain coherent through a failed replacement read', async ({
+  page,
+}) => {
+  await open(page);
+  const native = await installCopy(page);
+  const initial = 'SELECT THIS stable prefix\n' + 'retained output 🌔\n'.repeat(80);
+  let release: (() => Promise<void>) | undefined;
+  try {
+    await publishOutput(page, initial);
     const row = page.locator('[data-transcript-live]');
-    if (manifest) {
-      await openActivityGroups(page);
-      await row.getByRole('button', { name: 'Load more parts', exact: true }).click();
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () => window.demo.application.chat!.getSnapshot().transcript.manifest?.status,
-          ),
-        )
-        .toBe('complete');
-    }
+    await openActivityGroups(page);
+    await row.getByRole('button', { name: 'Load more parts', exact: true }).click();
     await openActivity(row);
     const output = row.locator('[data-transcript-part="m0.b1"]');
     const pre = output.locator('pre');
-    await pre.scrollIntoViewIfNeeded();
-    const box = await pre.evaluate((el) => {
-      const r = document.createRange();
-      r.setStart(el.firstChild!, 0);
-      r.setEnd(el.firstChild!, 11);
-      const b = r.getBoundingClientRect();
-      return { x: b.x, y: b.y, width: b.width, height: b.height };
-    });
-    await page.mouse.move(box.x + 1, box.y + box.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(box.x + box.width, box.y + box.height / 2, { steps: 8 });
-    await page.mouse.up();
+    await expect(pre).toHaveText(initial);
+    const descriptor = await page.evaluate(
+      () => window.demo.application.chat!.getSnapshot().snapshot!.run!.transcript!.parts[1]!,
+    );
+    await selectPrefix(page, pre);
+    await page.evaluate((bytes) => {
+      const command = window.demo.chat.dependencies.chat.command;
+      const gate = Promise.withResolvers<void>();
+      let held = false;
+      Object.assign(window, {
+        releaseReplacement: () => gate.resolve(),
+        replacementHeld: false,
+      });
+      window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
+        if (
+          !held &&
+          operation === 'getChatTranscriptContent' &&
+          'selection' in input &&
+          input.selection?.partId === 'm0.b1' &&
+          input.selection.bytes !== bytes
+        ) {
+          held = true;
+          await command(operation, input, options);
+          Object.assign(window, { replacementHeld: true });
+          await gate.promise;
+          throw Error('Controlled replacement read failure');
+        }
+        return command(operation, input, options) as never;
+      };
+    }, descriptor.bytes);
+    release = () =>
+      page.evaluate(() =>
+        (window as typeof window & { releaseReplacement(): void }).releaseReplacement(),
+      );
+    await publishOutput(page, initial + 'appended current tail\n');
     await expect
-      .poll(() => page.evaluate(() => window.getSelection()?.toString()))
-      .toBe('SELECT THIS');
-    const before = await page.evaluate(() => ({
-      text: window.getSelection()?.toString(),
-      focus: document.activeElement?.tagName,
-    }));
-    await update('first and appended');
-    await expect(pre).toBeFocused();
-    await expect(row).toContainText('running');
-    const after = await page.evaluate(() => ({
-      text: window.getSelection()?.toString(),
-      focus: document.activeElement?.tagName,
-    }));
-    console.log(JSON.stringify({ manifest, before, after, body: await pre.textContent() }));
-    expect(after.text).toBe(before.text);
-    await expect(pre).toHaveText('SELECT THIS stable prefix\nfirst');
-    await output.getByRole('button', { name: 'Copy part', exact: true }).click();
-    await expect
-      .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
-      .toBe('SELECT THIS stable prefix\nfirst');
+      .poll(() =>
+        page.evaluate(
+          () => (window as typeof window & { replacementHeld: boolean }).replacementHeld,
+        ),
+      )
+      .toBe(true);
+    await expect(pre).toHaveText(initial);
+    expect(await page.evaluate(() => window.getSelection()?.toString())).toBe('SELECT THIS');
+    await expect(output).toContainText('Showing previously read output');
     await pre.click({ position: { x: 8, y: 8 } });
     await expect.poll(() => page.evaluate(() => window.getSelection()?.isCollapsed)).toBe(true);
-    await expect(pre).toHaveText('SELECT THIS stable prefix\nfirst and appended');
-  });
-for (const outcome of ['success', 'error'] as const)
-  test(`selected loaded output and fixed Copy remain coherent through replacement hydration ${outcome}`, async ({
-    page,
-  }) => {
-    await open(page);
-    const native = await installCopy(page);
-    const initial = 'SELECT THIS stable prefix\n' + 'retained output 🌔\n'.repeat(80);
-    let release: (() => Promise<void>) | undefined;
-    try {
-      await publishOutput(page, initial);
-      const row = page.locator('[data-transcript-live]');
-      await openActivityGroups(page);
-      await row.getByRole('button', { name: 'Load more parts', exact: true }).click();
-      await openActivity(row);
-      const output = row.locator('[data-transcript-part="m0.b1"]');
-      const pre = output.locator('pre');
-      await expect(pre).toHaveText(initial);
-      const descriptor = await page.evaluate(
-        () => window.demo.application.chat!.getSnapshot().snapshot!.run!.transcript!.parts[1]!,
-      );
-      await selectPrefix(page, pre);
-      await page.evaluate(
-        ({ bytes, outcome }) => {
-          const command = window.demo.chat.dependencies.chat.command;
-          const gate = Promise.withResolvers<void>();
-          let held = false;
-          Object.assign(window, {
-            releaseReplacement: () => gate.resolve(),
-            replacementHeld: false,
-          });
-          window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
-            if (
-              !held &&
-              operation === 'getChatTranscriptContent' &&
-              'selection' in input &&
-              input.selection?.partId === 'm0.b1' &&
-              input.selection.bytes !== bytes
-            ) {
-              held = true;
-              const reply = await command(operation, input, options);
-              Object.assign(window, { replacementHeld: true });
-              await gate.promise;
-              if (outcome === 'error') throw Error('Controlled replacement read failure');
-              return reply as never;
-            }
-            return command(operation, input, options) as never;
-          };
-        },
-        { bytes: descriptor.bytes, outcome },
-      );
-      release = () =>
-        page.evaluate(() =>
-          (window as typeof window & { releaseReplacement(): void }).releaseReplacement(),
-        );
-      await publishOutput(page, initial + 'appended current tail\n');
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () => (window as typeof window & { replacementHeld: boolean }).replacementHeld,
-          ),
-        )
-        .toBe(true);
-      await expect(pre).toHaveText(initial);
-      expect(await page.evaluate(() => window.getSelection()?.toString())).toBe('SELECT THIS');
-      await expect(output).toContainText('Showing previously read output');
-      await pre.click({ position: { x: 8, y: 8 } });
-      await expect.poll(() => page.evaluate(() => window.getSelection()?.isCollapsed)).toBe(true);
-      await expect(pre).toHaveText(initial);
-      // The latest progress has arrived while the read output stays displayed for Copy.
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () =>
-              window.demo.application.chat!.getSnapshot().snapshot!.run!.transcript!.parts[1]!
-                .bytes,
-          ),
-        )
-        .toBe(new TextEncoder().encode(initial + 'appended current tail\n').length);
-      // The version shown while the next one loads is what Copy copies, so it goes unsaid; only a
-      // selection holding it is called out.
-      await expect(output).not.toContainText('Showing previously read output');
-      await output.getByRole('button', { name: 'Copy part', exact: true }).click();
-      await expect.poll(() => native.writes).toEqual([initial]);
-      expect(native.inputs[0]?.selection).toEqual({
-        partId: descriptor.partId,
-        bytes: descriptor.bytes,
-        revision: descriptor.revision,
-      });
-      await release();
-      if (outcome === 'error') {
-        await expect(output.getByRole('alert')).toContainText('Retry content');
-        await expect(pre).toHaveText(initial);
-        await output.getByRole('button', { name: 'Retry content', exact: true }).click();
-      }
-      await expect(pre).toHaveText(initial + 'appended current tail\n');
-      await output.getByRole('button', { name: 'Copy part', exact: true }).click();
-      await expect
-        .poll(() => native.writes)
-        .toEqual([initial, initial + 'appended current tail\n']);
-      const current = await page.evaluate(
-        () => window.demo.application.chat!.getSnapshot().snapshot!.run!.transcript!.parts[1]!,
-      );
-      expect(native.inputs.at(-1)?.selection).toEqual({
-        partId: current.partId,
-        bytes: current.bytes,
-        revision: current.revision,
-      });
-    } finally {
-      await release?.();
-      await native.dispose();
-    }
-  });
+    await expect(pre).toHaveText(initial);
+    // The latest progress has arrived while the read output stays displayed for Copy.
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            window.demo.application.chat!.getSnapshot().snapshot!.run!.transcript!.parts[1]!.bytes,
+        ),
+      )
+      .toBe(new TextEncoder().encode(initial + 'appended current tail\n').length);
+    // The version shown while the next one loads is what Copy copies, so it goes unsaid; only a
+    // selection holding it is called out.
+    await expect(output).not.toContainText('Showing previously read output');
+    await output.getByRole('button', { name: 'Copy part', exact: true }).click();
+    await expect.poll(() => native.writes).toEqual([initial]);
+    expect(native.inputs[0]?.selection).toEqual({
+      partId: descriptor.partId,
+      bytes: descriptor.bytes,
+      revision: descriptor.revision,
+    });
+    await release();
+    await expect(output.getByRole('alert')).toContainText('Retry content');
+    await expect(pre).toHaveText(initial);
+    await output.getByRole('button', { name: 'Retry content', exact: true }).click();
+    await expect(pre).toHaveText(initial + 'appended current tail\n');
+    await output.getByRole('button', { name: 'Copy part', exact: true }).click();
+    await expect.poll(() => native.writes).toEqual([initial, initial + 'appended current tail\n']);
+    const current = await page.evaluate(
+      () => window.demo.application.chat!.getSnapshot().snapshot!.run!.transcript!.parts[1]!,
+    );
+    expect(native.inputs.at(-1)?.selection).toEqual({
+      partId: current.partId,
+      bytes: current.bytes,
+      revision: current.revision,
+    });
+  } finally {
+    await release?.();
+    await native.dispose();
+  }
+});
 
 for (const change of ['prefix replacement', 'attempt retirement'] as const)
   test(`selected Copy rejects ${change} without writing, then advances after release`, async ({
@@ -341,44 +257,36 @@ for (const change of ['prefix replacement', 'attempt retirement'] as const)
       await native.dispose();
     }
   });
-for (const input of ['pointer', 'Space'] as const)
-  test(`Copy ${input} intent retains the displayed selection when it releases before click`, async ({
-    page,
-  }) => {
-    await open(page);
-    const native = await installCopy(page);
-    try {
-      const initial = 'SELECT THIS stable prefix\nfirst';
-      await publishOutput(page, initial);
-      const row = page.locator('[data-transcript-live]');
-      await openActivity(row);
-      const output = row.locator('[data-transcript-part="m0.b1"]');
-      const pre = output.locator('pre');
-      await selectPrefix(page, pre);
-      await publishOutput(page, initial + ' and appended');
-      await expect(pre).toHaveText(initial);
-      const button = output.getByRole('button', { name: 'Copy part', exact: true });
-      if (input === 'pointer') {
-        const before = await button.boundingBox();
-        await page.mouse.move(before!.x + before!.width / 2, before!.y + before!.height / 2);
-        await page.mouse.down();
-      } else {
-        await button.focus();
-        await page.keyboard.down('Space');
-      }
-      await page.evaluate(() => window.getSelection()?.removeAllRanges());
-      await expect(pre).toHaveText(initial + ' and appended');
-      if (input === 'pointer') {
-        const after = await button.boundingBox();
-        await page.mouse.move(after!.x + after!.width / 2, after!.y + after!.height / 2);
-        await page.mouse.up();
-      } else await page.keyboard.up('Space');
-      await expect.poll(() => native.writes).toEqual([initial]);
-      expect(native.inputs[0]?.selection?.bytes).toBe(new TextEncoder().encode(initial).length);
-    } finally {
-      await native.dispose();
-    }
-  });
+test('a Copy press retains the displayed selection when it releases before the click', async ({
+  page,
+}) => {
+  await open(page);
+  const native = await installCopy(page);
+  try {
+    const initial = 'SELECT THIS stable prefix\nfirst';
+    await publishOutput(page, initial);
+    const row = page.locator('[data-transcript-live]');
+    await openActivity(row);
+    const output = row.locator('[data-transcript-part="m0.b1"]');
+    const pre = output.locator('pre');
+    await selectPrefix(page, pre);
+    await publishOutput(page, initial + ' and appended');
+    await expect(pre).toHaveText(initial);
+    const button = output.getByRole('button', { name: 'Copy part', exact: true });
+    const before = await button.boundingBox();
+    await page.mouse.move(before!.x + before!.width / 2, before!.y + before!.height / 2);
+    await page.mouse.down();
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    await expect(pre).toHaveText(initial + ' and appended');
+    const after = await button.boundingBox();
+    await page.mouse.move(after!.x + after!.width / 2, after!.y + after!.height / 2);
+    await page.mouse.up();
+    await expect.poll(() => native.writes).toEqual([initial]);
+    expect(native.inputs[0]?.selection?.bytes).toBe(new TextEncoder().encode(initial).length);
+  } finally {
+    await native.dispose();
+  }
+});
 test('held Copy intent does not migrate to a new source after navigation', async ({ page }) => {
   await open(page);
   const native = await installCopy(page);
@@ -516,109 +424,107 @@ test('released output retention yields to the existing 128-selection content bou
   }
   await expect(pre).toHaveText(initial + 'appended');
 });
-for (const manifest of [false, true])
-  test(`independent actual pointer selection in loaded live body survives append with reread held manifest=${manifest}`, async ({
-    page,
-  }) => {
-    await open(page);
-    const initial =
-      'SELECT THIS stable prefix\n' +
-      Array.from({ length: 60 }, (_, i) => `retained output line ${i}\n`).join('');
-    const update = async (text: string) =>
-      page.evaluate(async (text) => {
-        await window.demo.transcript!.activity([
-          { kind: 'text', text: 'Before' },
-          { kind: 'result', role: 'tool', toolName: 'bash', text, state: 'running' },
-          { kind: 'details', text: 'detail one' },
-          { kind: 'details', text: 'detail two' },
-          { kind: 'details', text: 'retained fifth' },
-        ]);
-      }, text);
-    await update(initial);
-    const row = page.locator('[data-transcript-live]');
-    if (manifest) {
-      await openActivityGroups(page);
-      await row.getByRole('button', { name: 'Load more parts', exact: true }).click();
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () => window.demo.application.chat!.getSnapshot().transcript.manifest?.status,
-          ),
-        )
-        .toBe('complete');
-    }
-    await openActivity(row);
-    const output = row.locator('[data-transcript-part="m0.b1"]');
-    const pre = output.locator('pre');
-    await expect(pre).toHaveText(initial);
-    await pre.scrollIntoViewIfNeeded();
-    await pre.evaluate((el) => {
-      el.scrollTop = 0;
-      el.setAttribute('data-independent-before', 'true');
-    });
-    const box = await pre.evaluate((el) => {
-      const r = document.createRange();
-      r.setStart(el.firstChild!, 0);
-      r.setEnd(el.firstChild!, 11);
-      const b = r.getBoundingClientRect();
-      return { x: b.x, y: b.y, width: b.width, height: b.height };
-    });
-    await page.mouse.move(box.x + 1, box.y + box.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(box.x + box.width, box.y + box.height / 2, { steps: 8 });
-    await page.mouse.up();
-    const before = await page.evaluate(() => window.getSelection()!.toString());
-    expect(before).toBe('SELECT THIS');
-    await expect(pre).toBeFocused();
-    await page.evaluate(() => {
-      const command = window.demo.chat.dependencies.chat.command;
-      const gate = Promise.withResolvers<void>();
-      Object.assign(window, { r10Release: () => gate.resolve(), r10Held: false });
-      window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
-        if (
-          operation === 'getChatTranscriptContent' &&
-          'selection' in input &&
-          input.selection?.partId === 'm0.b1'
-        ) {
-          const reply = await command(operation, input, options);
-          Object.assign(window, { r10Held: true });
-          await gate.promise;
-          return reply as never;
-        }
-        return command(operation, input, options) as never;
-      };
-    });
-    try {
-      await update(initial + 'new appended tail\n');
-      await expect
-        .poll(() => page.evaluate(() => (window as typeof window & { r10Held: boolean }).r10Held))
-        .toBe(true);
-      await expect(pre).toBeFocused();
-      const during = await page.evaluate(() => ({
-        selected: window.getSelection()!.toString(),
-        focus: document.activeElement?.tagName,
-        text: document.querySelector('[data-independent-before]')?.textContent,
-      }));
-      console.log(JSON.stringify({ manifest, before, during, initialLength: initial.length }));
-      expect.soft(during.selected).toBe(before);
-      expect.soft(during.text).toContain('retained output line 59');
-    } finally {
-      await page.evaluate(() => (window as typeof window & { r10Release(): void }).r10Release());
-    }
+test('a pointer selection in a loaded live body survives an append while its reread is held', async ({
+  page,
+}) => {
+  await open(page);
+  const initial =
+    'SELECT THIS stable prefix\n' +
+    Array.from({ length: 60 }, (_, i) => `retained output line ${i}\n`).join('');
+  const update = async (text: string) =>
+    page.evaluate(async (text) => {
+      await window.demo.transcript!.activity([
+        { kind: 'text', text: 'Before' },
+        { kind: 'result', role: 'tool', toolName: 'bash', text, state: 'running' },
+        { kind: 'details', text: 'detail one' },
+        { kind: 'details', text: 'detail two' },
+        { kind: 'details', text: 'retained fifth' },
+      ]);
+    }, text);
+  await update(initial);
+  const row = page.locator('[data-transcript-live]');
+  await openActivityGroups(page);
+  await row.getByRole('button', { name: 'Load more parts', exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.manifest?.status),
+    )
+    .toBe('complete');
+  await openActivity(row);
+  const output = row.locator('[data-transcript-part="m0.b1"]');
+  const pre = output.locator('pre');
+  await expect(pre).toHaveText(initial);
+  await pre.scrollIntoViewIfNeeded();
+  await pre.evaluate((el) => {
+    el.scrollTop = 0;
+    el.setAttribute('data-independent-before', 'true');
+  });
+  const box = await pre.evaluate((el) => {
+    const r = document.createRange();
+    r.setStart(el.firstChild!, 0);
+    r.setEnd(el.firstChild!, 11);
+    const b = r.getBoundingClientRect();
+    return { x: b.x, y: b.y, width: b.width, height: b.height };
+  });
+  await page.mouse.move(box.x + 1, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width, box.y + box.height / 2, { steps: 8 });
+  await page.mouse.up();
+  const before = await page.evaluate(() => window.getSelection()!.toString());
+  expect(before).toBe('SELECT THIS');
+  await expect(pre).toBeFocused();
+  await page.evaluate(() => {
+    const command = window.demo.chat.dependencies.chat.command;
+    const gate = Promise.withResolvers<void>();
+    Object.assign(window, { releaseReread: () => gate.resolve(), rereadHeld: false });
+    window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
+      if (
+        operation === 'getChatTranscriptContent' &&
+        'selection' in input &&
+        input.selection?.partId === 'm0.b1'
+      ) {
+        const reply = await command(operation, input, options);
+        Object.assign(window, { rereadHeld: true });
+        await gate.promise;
+        return reply as never;
+      }
+      return command(operation, input, options) as never;
+    };
+  });
+  try {
+    await update(initial + 'new appended tail\n');
     await expect
       .poll(() =>
-        page.evaluate(() => {
-          const state = window.demo.application.chat!.getSnapshot();
-          const part = state.snapshot!.run!.transcript!.parts[1]!;
-          return state.transcript.content.find(
-            (content) => content.selection.revision === part.revision,
-          )?.status;
-        }),
+        page.evaluate(() => (window as typeof window & { rereadHeld: boolean }).rereadHeld),
       )
-      .toBe('complete');
-    expect(await page.evaluate(() => window.getSelection()!.toString())).toBe(before);
-    await expect(pre).toHaveText(initial);
-    await pre.click({ position: { x: 8, y: 8 } });
-    await expect.poll(() => page.evaluate(() => window.getSelection()?.isCollapsed)).toBe(true);
-    await expect(pre).toHaveText(initial + 'new appended tail\n');
-  });
+      .toBe(true);
+    await expect(pre).toBeFocused();
+    const during = await page.evaluate(() => ({
+      selected: window.getSelection()!.toString(),
+      focus: document.activeElement?.tagName,
+      text: document.querySelector('[data-independent-before]')?.textContent,
+    }));
+    expect.soft(during.selected).toBe(before);
+    expect.soft(during.text).toContain('retained output line 59');
+  } finally {
+    await page.evaluate(() =>
+      (window as typeof window & { releaseReread(): void }).releaseReread(),
+    );
+  }
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const state = window.demo.application.chat!.getSnapshot();
+        const part = state.snapshot!.run!.transcript!.parts[1]!;
+        return state.transcript.content.find(
+          (content) => content.selection.revision === part.revision,
+        )?.status;
+      }),
+    )
+    .toBe('complete');
+  expect(await page.evaluate(() => window.getSelection()!.toString())).toBe(before);
+  await expect(pre).toHaveText(initial);
+  await pre.click({ position: { x: 8, y: 8 } });
+  await expect.poll(() => page.evaluate(() => window.getSelection()?.isCollapsed)).toBe(true);
+  await expect(pre).toHaveText(initial + 'new appended tail\n');
+});

@@ -2,6 +2,12 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { ConnectionError, type ConnectionErrorReason } from '@moonbase/contracts/connection-errors';
 
 const failure = (reason: ConnectionErrorReason) => new ConnectionError({ reason });
+/**
+ * How long stopping a process group may take in all (`deadlineMs`), and how long its processes
+ * have after SIGTERM before SIGKILL (`termGraceMs`).
+ */
+export type SshStopTiming = { deadlineMs: number; termGraceMs: number };
+export const defaultSshStopTiming: SshStopTiming = { deadlineMs: 2500, termGraceMs: 500 };
 export type ProcessExit = {
   code: number | null;
   signal: NodeJS.Signals | null;
@@ -18,7 +24,15 @@ export class SshProcess {
   private outputBytes = 0;
   exited: ProcessExit | undefined;
   private stopping: Promise<void> | undefined;
-  constructor(executable: string, args: string[], token: string, captureOutput: boolean) {
+  private readonly stopTiming: SshStopTiming;
+  constructor(
+    executable: string,
+    args: string[],
+    token: string,
+    captureOutput: boolean,
+    stopTiming: SshStopTiming = defaultSshStopTiming,
+  ) {
+    this.stopTiming = stopTiming;
     const env = Object.fromEntries(
       Object.entries(process.env).filter(
         (entry): entry is [string, string] =>
@@ -115,7 +129,8 @@ export class SshProcess {
   stop(): Promise<void> {
     if (this.stopping) return this.stopping;
     this.stopping = (async () => {
-      const deadline = Date.now() + 2500;
+      const { deadlineMs, termGraceMs } = this.stopTiming;
+      const deadline = Date.now() + deadlineMs;
       const attempt = (signal: NodeJS.Signals | 0) => {
         try {
           return this.signal(signal);
@@ -142,7 +157,7 @@ export class SshProcess {
       // An exited main PID does not release its proxy/helper group, including closed-pipe helpers.
       if (attempt(0) !== false) {
         await send('SIGTERM');
-        if (!(await gone(Math.min(500, Math.max(0, deadline - Date.now()))))) {
+        if (!(await gone(Math.min(termGraceMs, Math.max(0, deadline - Date.now()))))) {
           await send('SIGKILL');
           if (!(await gone(Math.max(0, deadline - Date.now())))) throw failure('teardown');
         }

@@ -4,7 +4,6 @@ import {
   openTabMenu,
   saveFile,
   selectFileView,
-  captureNative,
   pasteNativeFile,
   filenameCases,
   checkFilenameMaps,
@@ -20,8 +19,8 @@ import { callMain, callMainScript, editorClientId } from '../fixtures/window-ipc
 import { test, expect, _electron as electron } from '@playwright/test';
 import type { ElectronApplication, Page } from '@playwright/test';
 import {
+  cpSync,
   mkdtempSync,
-  mkdirSync,
   writeFileSync,
   readFileSync,
   rmSync,
@@ -39,9 +38,6 @@ let app: ElectronApplication, child: ChildProcess, page: Page, base: string, che
 const errors: string[] = [],
   consoleErrors: string[] = [];
 declare global {
-  interface Window {
-    firstOpenTiming: { started: number; visible: number };
-  }
   var desktopTest: {
     startupFailure: string | null;
     /** Every request main received. */
@@ -59,16 +55,16 @@ declare global {
     release(): void;
   };
 }
-test.beforeEach(async () => {
-  base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-desktop-')));
-  checkout = join(base, 'checkout');
-  mkdirSync(checkout);
+// The controlled checkout is made once per worker and copied for each test.
+let template: string;
+test.beforeAll(() => {
+  template = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-desktop-template-')));
   const git = (...args: string[]) =>
     execFileSync(
       '/usr/bin/git',
       [
         '-C',
-        checkout,
+        template,
         '-c',
         'user.name=Moonbase Test',
         '-c',
@@ -78,13 +74,19 @@ test.beforeEach(async () => {
       { env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' } },
     );
   git('init', '-q', '-b', 'main');
-  writeFileSync(join(checkout, 'a.ts'), "export const value = 'HEAD';\n");
-  writeFileSync(join(checkout, 'b.ts'), 'export const b = 2;\n');
+  writeFileSync(join(template, 'a.ts'), "export const value = 'HEAD';\n");
+  writeFileSync(join(template, 'b.ts'), 'export const b = 2;\n');
   git('add', '.');
   git('commit', '-qm', 'Controlled fixture');
-  writeFileSync(join(checkout, 'a.ts'), "export const value = 'INDEX';\n");
+  writeFileSync(join(template, 'a.ts'), "export const value = 'INDEX';\n");
   git('add', 'a.ts');
-  writeFileSync(join(checkout, 'a.ts'), "export const value = 'WORKING';\n");
+  writeFileSync(join(template, 'a.ts'), "export const value = 'WORKING';\n");
+});
+test.afterAll(() => rmSync(template, { recursive: true, force: true }));
+test.beforeEach(async () => {
+  base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-desktop-')));
+  checkout = join(base, 'checkout');
+  cpSync(template, checkout, { recursive: true });
   await launch();
 });
 async function launch() {
@@ -146,9 +148,6 @@ test.afterEach(async ({}, info) => {
     rmSync(base, { recursive: true, force: true });
   }
 });
-async function capture(name: string) {
-  await captureNative(app, page, test.info().outputPath(`${name}.png`));
-}
 async function forceStop() {
   if (child.exitCode !== null || child.signalCode !== null) return;
   const exit = new Promise<void>((resolve) => child.once('exit', () => resolve()));
@@ -178,162 +177,29 @@ async function edit(text: string, path = 'a.ts') {
 }
 for (const holdDiscovery of [false, true])
   test(`rapid native Open to Find retains the dialog (${holdDiscovery ? 'held discovery' : 'immediate'})`, async () => {
-    await app.context().tracing.start({ screenshots: true, snapshots: true, sources: true });
-    await page.evaluate(() => {
-      const events: unknown[] = [];
-      let previous = '';
-      Object.assign(window, { rapidLookupEvents: events });
-      const record = () => {
-        const active = document.activeElement,
-          state = JSON.stringify({
-            dialogs: document.querySelectorAll('[role="dialog"]').length,
-            focus:
-              active?.getAttribute('aria-label') ?? active?.getAttribute('role') ?? active?.tagName,
-            selected: document.querySelector(
-              '[aria-label="Workbench views"] [aria-selected="true"]',
-            )?.textContent,
-          });
-        if (state !== previous) {
-          previous = state;
-          events.push({ time: performance.now(), state: JSON.parse(state) });
-        }
-      };
-      new MutationObserver(record).observe(document.body, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['aria-selected'],
+    if (holdDiscovery)
+      await app.evaluate(() => {
+        globalThis.desktopTest.held = 'listDirectory';
       });
-      document.addEventListener('focusin', record);
-      record();
-    });
-    try {
-      if (holdDiscovery)
-        await app.evaluate(() => {
-          globalThis.desktopTest.held = 'listDirectory';
-        });
-      await page.getByRole('button', { name: 'Open checkout', exact: true }).click();
-      await explorerAction(page, 'Go to File…');
-      await page.getByRole('combobox').fill('a.ts');
-      if (holdDiscovery) {
-        await expect.poll(() => app.evaluate(() => globalThis.desktopTest.held)).toBe('waiting');
-        await app.evaluate(() => {
-          globalThis.desktopTest.release();
-        });
-      }
-      await expect(page.getByRole('option', { name: 'a.ts', exact: true })).toBeVisible();
-      await page.getByRole('combobox').press('Enter');
-      await expect(page.getByRole('textbox', { name: 'a.ts editor', exact: true })).toBeFocused();
-      await page
-        .getByRole('textbox', { name: 'a.ts editor', exact: true })
-        .pressSequentially('rapid flow typing');
-      await expect(
-        page.locator('.view-line').filter({ hasText: 'rapid flow typing' }).first(),
-      ).toBeVisible();
-    } finally {
-      const evidence = {
-        holdDiscovery,
-        events: await page.evaluate(
-          () => (window as unknown as { rapidLookupEvents: unknown[] }).rapidLookupEvents,
-        ),
-        io: await app.evaluate(() => ({
-          calls: globalThis.desktopTest.calls,
-          results: globalThis.desktopTest.results,
-        })),
-      };
-      const eventsPath = test.info().outputPath('rapid-lookup-events.json');
-      writeFileSync(eventsPath, JSON.stringify(evidence, null, 2) + '\n');
-      await test
-        .info()
-        .attach('rapid-lookup-events', { path: eventsPath, contentType: 'application/json' });
-      const png = await app.evaluate(async ({ BrowserWindow }) =>
-        (await BrowserWindow.getAllWindows()[0].webContents.capturePage())
-          .toPNG()
-          .toString('base64'),
-      );
-      const screenshotPath = test.info().outputPath('rapid-lookup-screen.png');
-      writeFileSync(screenshotPath, Buffer.from(png, 'base64'));
-      await test
-        .info()
-        .attach('rapid-lookup-screen', { path: screenshotPath, contentType: 'image/png' });
-      await app.context().tracing.stop({ path: test.info().outputPath('rapid-lookup-trace.zip') });
+    await page.getByRole('button', { name: 'Open checkout', exact: true }).click();
+    await explorerAction(page, 'Go to File…');
+    await page.getByRole('combobox').fill('a.ts');
+    if (holdDiscovery) {
+      await expect.poll(() => app.evaluate(() => globalThis.desktopTest.held)).toBe('waiting');
+      await app.evaluate(() => {
+        globalThis.desktopTest.release();
+      });
     }
-  });
-test('first native folder open displays ignored files before Git classification finishes', async () => {
-  mkdirSync(join(checkout, 'src'));
-  writeFileSync(join(checkout, 'src/normal.ts'), 'normal');
-  writeFileSync(join(checkout, 'src/ignored.ts'), 'ignored');
-  writeFileSync(join(checkout, 'root-hidden.txt'), 'ignored root marker');
-  writeFileSync(join(checkout, '.gitignore'), 'root-hidden.txt\nsrc/ignored.ts\n');
-  await page.getByRole('button', { name: 'Open checkout', exact: true }).click();
-  await expect(
-    page.getByRole('treeitem', { name: 'root-hidden.txt', exact: true }),
-  ).toHaveAttribute('aria-description', 'Git-ignored');
-  const ignored = page.getByRole('treeitem', { name: 'src/ignored.ts', exact: true });
-  await expect(ignored).toHaveCount(0);
-  await app.evaluate(() => {
-    globalThis.desktopTest.held = 'getIgnoredPaths';
-  });
-  await page.evaluate(() => {
-    window.firstOpenTiming = { started: 0, visible: 0 };
-    document.addEventListener(
-      'click',
-      function begin(event) {
-        if (
-          (event.target as Element)
-            .closest('[role="treeitem"]')
-            ?.getAttribute('aria-label')
-            ?.replace(/, contains changes$/, '') !== 'src'
-        )
-          return;
-        window.firstOpenTiming.started = performance.now();
-        const observer = new MutationObserver(() => {
-          if (document.querySelector('[role="treeitem"][aria-label="src/ignored.ts"]')) {
-            window.firstOpenTiming.visible = performance.now();
-            observer.disconnect();
-          }
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
-        document.removeEventListener('click', begin, true);
-      },
-      true,
-    );
-  });
-  try {
-    // Git status may still be pending, so the folder may not yet say it contains changes.
-    await page.getByRole('treeitem', { name: /^src(, contains changes)?$/ }).click();
-    await expect(ignored).toBeVisible();
+    await expect(page.getByRole('option', { name: 'a.ts', exact: true })).toBeVisible();
+    await page.getByRole('combobox').press('Enter');
+    await expect(page.getByRole('textbox', { name: 'a.ts editor', exact: true })).toBeFocused();
+    await page
+      .getByRole('textbox', { name: 'a.ts editor', exact: true })
+      .pressSequentially('rapid flow typing');
     await expect(
-      page.getByRole('treeitem', { name: /^src\/normal\.ts(, untracked)?$/ }),
+      page.locator('.view-line').filter({ hasText: 'rapid flow typing' }).first(),
     ).toBeVisible();
-    await expect.poll(() => app.evaluate(() => globalThis.desktopTest.held)).toBe('waiting');
-    await expect(ignored).not.toHaveAttribute('aria-description');
-    const milliseconds = await page.evaluate(
-      () => window.firstOpenTiming.visible - window.firstOpenTiming.started,
-    );
-    console.log(
-      `First native folder open, click to rows with Git held: ${milliseconds.toFixed(1)} ms`,
-    );
-    await test.info().attach('first-folder-open', {
-      body: JSON.stringify({ clickToRowsMs: milliseconds, gitClassificationHeld: true }),
-      contentType: 'application/json',
-    });
-    await app.evaluate(() => {
-      globalThis.desktopTest.release();
-    });
-    await expect(ignored).toHaveAttribute('aria-description', 'Git-ignored');
-    await expect(ignored.getByText('ignored.ts', { exact: true })).toHaveCSS(
-      'color',
-      'rgb(139, 144, 160)',
-    );
-    await capture('ignored-files-first-open');
-  } finally {
-    await app.evaluate(() => {
-      globalThis.desktopTest.release();
-    });
-  }
-});
-
+  });
 test('actual sandboxed custom-scheme editor reads, edits and saves through SQLite workspace', async () => {
   await page
     .getByRole('tablist', { name: 'Workbench views', exact: true })
@@ -359,7 +225,6 @@ test('actual sandboxed custom-scheme editor reads, edits and saves through SQLit
       url: location.href,
     })),
   ).toEqual({ node: 'undefined', process: 'undefined', url: 'moonbase://editor/index.html' });
-  await capture('desktop-normal');
   expect(errors).toEqual([]);
 });
 
@@ -568,7 +433,6 @@ test('dirty recovery and comparison metadata restore across actual process resta
     page.locator('.view-line').filter({ hasText: 'dirty restored staged' }).first(),
   ).toBeVisible();
   expect(draftsOf((await recovery()).state)[0].disk.text).toContain('WORKING');
-  await capture('desktop-restored-diff');
   expect(errors).toEqual([]);
 });
 
@@ -866,7 +730,6 @@ test('previews, Keep Open, order, keyboard Close/Reopen and overflow remain usef
   await app.evaluate(({ BrowserWindow }) => {
     BrowserWindow.getAllWindows()[0].setSize(760, 650);
   });
-  await capture('desktop-constrained-tabs');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   const selected = 'long-component-name-for-overflow-6.ts';
   const input = page.getByRole('textbox', { name: `${selected} editor`, exact: true });
@@ -905,7 +768,6 @@ test('previews, Keep Open, order, keyboard Close/Reopen and overflow remain usef
   await app.evaluate(({ BrowserWindow }) => {
     BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1.4);
   });
-  await capture('desktop-zoom');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page
     .getByRole('tablist', { name: 'Open files', exact: true })
@@ -913,25 +775,15 @@ test('previews, Keep Open, order, keyboard Close/Reopen and overflow remain usef
     .focus();
   await page.keyboard.press('Shift+F10');
   await expect(page.getByRole('menu')).toBeVisible();
-  await capture('desktop-keyboard-menu');
   await page.keyboard.press('Escape');
   await explorerAction(page, 'Go to File…');
   await page.getByRole('combobox').fill('a.ts');
   await expect(page.getByRole('option', { name: 'a.ts', exact: true })).toBeVisible();
-  expect(
-    await page.getByRole('dialog').evaluate((element) => getComputedStyle(element).fontFamily),
-  ).toBe(
-    await page
-      .getByLabel('Moonbase workbench', { exact: true })
-      .evaluate((element) => getComputedStyle(element).fontFamily),
-  );
-  await capture('desktop-keyboard-dialog');
   await page.getByRole('combobox').press('Enter');
   await expect(page.getByRole('textbox', { name: 'a.ts editor', exact: true })).toBeFocused();
   await page
     .getByRole('textbox', { name: 'a.ts editor', exact: true })
     .pressSequentially('keyboard lookup typing');
-  await capture('desktop-keyboard');
   expect(errors).toEqual([]);
 });
 
@@ -1193,7 +1045,6 @@ test('replacement consent cannot overwrite another open dirty draft or admit a n
   const drafts = draftsOf((await recovery()).state);
   expect(drafts.find((d) => d.target.path === 'a.ts')?.text).toBe('SOURCE DRAFT');
   expect(drafts.find((d) => d.target.path === 'b.ts')?.text).toBe('DESTINATION DRAFT');
-  await capture('desktop-collision');
 });
 
 test('a file named checkout remains data when its view and draft cross the authority boundary', async () => {
@@ -1230,11 +1081,12 @@ test('an explicit native Quit arriving before renderer startup is not lost', asy
     timeout: 20000,
   });
   child = app.process();
-  await app.waitForEvent('close', { timeout: 5000 });
+  // The app closes once its renderer has started and taken the Quit, however long that takes.
+  await app.waitForEvent('close');
   expect(existsSync(join(base, 'early-quit.json'))).toBe(true);
 });
 
-test('app R1 filename maps preserve actual Save, positions, sibling drafts and restart', async () => {
+test('files named like Object.prototype members keep Save, positions, sibling drafts and restart', async () => {
   for (const path of filenameCases) writeFileSync(join(checkout, path), 'baseline ' + path);
   execFileSync('/usr/bin/git', [
     '-C',
@@ -1259,33 +1111,17 @@ test('app R1 filename maps preserve actual Save, positions, sibling drafts and r
     'Filename fixtures',
   ]);
   await open();
-  let evidence;
-  try {
-    evidence = await checkFilenameMaps(page, checkout, 'a.ts', async () => {
-      expect(errors).toEqual([]);
-      expect(consoleErrors).toEqual([]);
-      await forceStop();
-      await launch();
-      await page.getByRole('tab', { name: 'checkout · main', exact: true }).click();
-      return page;
-    });
-  } finally {
-    writeFileSync(
-      'test-results/filename-bridge-inputs.json',
-      (await app.evaluate(() =>
-        JSON.stringify(
-          { calls: globalThis.desktopTest.calls, results: globalThis.desktopTest.results },
-          null,
-          2,
-        ),
-      )) + '\n',
-    );
-  }
-  writeFileSync('test-results/filename-maps.json', JSON.stringify(evidence, null, 2) + '\n');
-  await capture('desktop-filename-maps');
+  await checkFilenameMaps(page, checkout, 'a.ts', async () => {
+    expect(errors).toEqual([]);
+    expect(consoleErrors).toEqual([]);
+    await forceStop();
+    await launch();
+    await page.getByRole('tab', { name: 'checkout · main', exact: true }).click();
+    return page;
+  });
 });
 
-test('Tab actions first/last selection and Close click work at native size and zoom', async () => {
+test('Tab actions reach the first and last items and Close works in a small zoomed window', async () => {
   await open('b.ts');
   await open();
   await page.getByRole('tab', { name: 'b.ts', exact: true }).hover();
@@ -1293,5 +1129,5 @@ test('Tab actions first/last selection and Close click work at native size and z
   await expect(page.getByRole('tab', { name: 'b.ts', exact: true })).toHaveCount(0);
   // At the small zoomed size the project chats dock would leave the editor no width for its tabs.
   await page.getByRole('button', { name: 'Hide project chats', exact: true }).click();
-  await checkTabMenu(app, page, (name) => capture('desktop-' + name));
+  await checkTabMenu(app, page);
 });

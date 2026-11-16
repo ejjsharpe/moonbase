@@ -7,13 +7,14 @@ import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { WorkspaceHostService, type WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { WorkspaceHostLive, WorkspaceRecoveryLive } from '../src/index.ts';
+import { initRepository } from './repository-fixture.ts';
 
 /** One file host and any number of client stores over it, as a daemon and its clients are. */
 export function harness() {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-split-'))),
     root = join(base, 'repo');
   mkdirSync(root);
-  execFileSync('/usr/bin/git', ['init', '-q', '-b', 'main', root]);
+  initRepository(root);
   const git = (...args: string[]) =>
     execFileSync('/usr/bin/git', [
       '-C',

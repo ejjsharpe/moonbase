@@ -11,7 +11,7 @@ import type { RecoveryLoad } from '@moonbase/contracts/workspace';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import { fixture, until } from '../../../../test/chat/tool-fixture.ts';
 import { join, resolve } from 'node:path';
-import { mkdir, writeFile, appendFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import {
   callMainScript,
@@ -21,7 +21,6 @@ import {
 } from '../fixtures/window-ipc-fixture.ts';
 
 const packaged = !!process.env.MOONBASE_PACKAGED_TEST;
-const evidence = resolve(process.env.MOONBASE_NATIVE_OUTPUT ?? 'test-results', 'lifecycle');
 for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
   test(`native document ${mode.endsWith('veto') ? mode + ' retains' : mode + ' releases'} observers and waits without replacing the root or stopping work`, async () => {
     const veto = mode === 'veto' || mode === 'fresh-veto',
@@ -77,7 +76,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
           : current.evaluate(() => globalThis.desktopTest.interrupted);
       await expect(p.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible();
       await p.evaluate(() => {
-        Object.assign(window, { task08Document: crypto.randomUUID() });
+        Object.assign(window, { lifecycleDocument: crypto.randomUUID() });
       });
       await current.evaluate(({ dialog }, root) => {
         dialog.showOpenDialog = (async () => ({
@@ -107,7 +106,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       const connection = await getConnection(p);
       expect(connection.ok).toBe(true);
       const oldDocument = await p.evaluate(
-        () => (window as unknown as { task08Document: string }).task08Document,
+        () => (window as unknown as { lifecycleDocument: string }).lifecycleDocument,
       );
       // The document's editor and chat watches, which run until it goes.
       const watches = async () => (await running()).filter(({ tag }) => tag.startsWith('watch'));
@@ -192,7 +191,6 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
         await expect
           .poll(() => readFile(join(f.cwd, 'a.ts'), 'utf8'))
           .toBe('retained local draft at reload');
-        let readiness: unknown;
         await until(
           () =>
             current.evaluate(
@@ -206,26 +204,16 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
                   };
                 })()`,
             ),
-          (value) => {
-            readiness = value;
-            return (
-              value.reply.ok &&
-              draftsOf(value.reply.value.state).length === 0 &&
-              value.reply.value.errors.length === 0 &&
-              value.reply.value.operations.length === 0 &&
-              value.alerts.length === 0 &&
-              !value.statuses.some((status: string) =>
-                /not yet kept for recovery|Preserving edits/.test(status),
-              )
-            );
-          },
-        ).finally(async () => {
-          await mkdir(evidence, { recursive: true });
-          await writeFile(
-            join(evidence, 'crash-save-readiness.json'),
-            JSON.stringify(readiness, null, 2),
-          );
-        });
+          (value) =>
+            value.reply.ok &&
+            draftsOf(value.reply.value.state).length === 0 &&
+            value.reply.value.errors.length === 0 &&
+            value.reply.value.operations.length === 0 &&
+            value.alerts.length === 0 &&
+            !value.statuses.some((status: string) =>
+              /not yet kept for recovery|Preserving edits/.test(status),
+            ),
+        );
         const stats = await f.stats();
         expect(stats.commands.filter((v) => v === 'sendChat')).toHaveLength(1);
         expect(stats.commands.filter((v) => v === 'stopChat')).toHaveLength(0);
@@ -233,11 +221,6 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
           app.getAppMetrics().map((v) => v.pid),
         ))
           pids.add(pid);
-        await mkdir(evidence, { recursive: true });
-        await writeFile(
-          join(evidence, `${packaged ? 'package' : 'source'}-crash.json`),
-          JSON.stringify({ restored, stats, oldWatchersReleased: true }, null, 2),
-        );
         await current.evaluate(({ app }) => app.quit());
         await until(async () => child!.exitCode !== null || child!.signalCode !== null, Boolean);
         app = undefined;
@@ -286,23 +269,11 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
         () =>
           new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
       );
-      await mkdir(evidence, { recursive: true });
-      await writeFile(
-        join(evidence, `${packaged ? 'package' : 'source'}-${mode}-before-check.json`),
-        JSON.stringify(
-          {
-            mode,
-            active,
-            waitId: veto ? null : waitId,
-            cancelled: await interrupted(),
-          },
-          null,
-          2,
-        ),
-      );
       if (veto) {
         expect(
-          await p.evaluate(() => (window as unknown as { task08Document: string }).task08Document),
+          await p.evaluate(
+            () => (window as unknown as { lifecycleDocument: string }).lifecycleDocument,
+          ),
         ).toBe(oldDocument);
         const cancelled = await interrupted();
         // Chat stays attached while Editor shows, so fresh editing keeps its watches too.
@@ -349,22 +320,6 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       expect(stats.commands.filter((v) => v === 'sendChat')).toHaveLength(1);
       expect(stats.commands.filter((v) => v === 'stopChat')).toHaveLength(0);
       expect(errors).toEqual([]);
-      await mkdir(evidence, { recursive: true });
-      await writeFile(
-        join(evidence, `${packaged ? 'package' : 'source'}-${mode}.json`),
-        JSON.stringify(
-          {
-            mode,
-            active,
-            waitId: veto ? null : waitId,
-            cancelled: await interrupted(),
-            connection,
-            stats,
-          },
-          null,
-          2,
-        ),
-      );
       for (const pid of await current.evaluate(({ app }) => app.getAppMetrics().map((v) => v.pid)))
         pids.add(pid);
       if (veto) {
@@ -373,13 +328,6 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
       } else await current.evaluate(({ app }) => app.quit());
       await until(async () => child!.exitCode !== null || child!.signalCode !== null, Boolean);
       app = undefined;
-    } catch (error) {
-      await mkdir(evidence, { recursive: true });
-      await writeFile(
-        join(evidence, `${packaged ? 'package' : 'source'}-${mode}-failure.txt`),
-        String(error),
-      );
-      throw error;
     } finally {
       try {
         await f.releaseReply();
@@ -420,16 +368,12 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
                   return (error as NodeJS.ErrnoException).code === 'ESRCH';
                 }
               }, Boolean);
-              await appendFile(
-                join(evidence, 'forced-failure-cleanup.jsonl'),
-                JSON.stringify({ pid, command, signal: 'TERM', confirmedAbsent: true }) + '\n',
-              );
             }
           }
         } finally {
           // A daemon outlives its app: stop this profile's before the fixture goes.
           await stopDaemon(join(f.directory, 'lifecycle-data', 'daemon-v1'));
-          const cleanup = await f.close();
+          await f.close();
           for (const pid of pids)
             await until(async () => {
               try {
@@ -439,12 +383,6 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
                 return (e as NodeJS.ErrnoException).code === 'ESRCH';
               }
             }, Boolean);
-          await mkdir(evidence, { recursive: true });
-          await appendFile(
-            join(evidence, 'cleanup.jsonl'),
-            JSON.stringify({ packaged, mode, veto, pids: [...pids], absent: true, ...cleanup }) +
-              '\n',
-          );
         }
       }
     }

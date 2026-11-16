@@ -19,6 +19,7 @@ import { WorkspaceLive } from './workspace-live-fixture.ts';
 
 import { captureNative, fixture, rejects } from './workspace-fixture.ts';
 import { bufferIdOf, draftsOf, seed } from './recovery-fixture.ts';
+import { initRepository } from './repository-fixture.ts';
 test('known move preserves drafts and exact target, acknowledgement needs only its publication; replay does not move twice', async () => {
   const f = fixture();
   try {
@@ -161,7 +162,7 @@ test('identical source paths in independent checkout identities never reconcile 
   try {
     const root2 = join(f.base, 'repo2');
     mkdirSync(root2);
-    execFileSync('/usr/bin/git', ['init', '-q', '-b', 'main', root2]);
+    initRepository(root2);
     for (const root of [f.root, root2]) writeFileSync(join(root, 'file.txt'), 'disk');
     const a = await f.client.command('openCheckout', { root: f.root }),
       b = await f.client.command('openCheckout', { root: root2 });

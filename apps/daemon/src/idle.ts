@@ -1,11 +1,12 @@
 export type IdleClock = {
   now(): number;
-  setTimeout(callback: () => void, ms: number): unknown;
+  /** `callback` returns the check it ran, so a controlled clock can wait for the check to end. */
+  setTimeout(callback: () => Promise<void>, ms: number): unknown;
   clearTimeout(handle: unknown): void;
 };
 export const systemClock: IdleClock = {
   now: () => performance.now(),
-  setTimeout: (callback, ms) => setTimeout(callback, ms),
+  setTimeout: (callback, ms) => setTimeout(() => void callback(), ms),
   clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 
@@ -39,7 +40,7 @@ export function createIdleMonitor({
     cancel();
     timer = clock.setTimeout(() => {
       timer = undefined;
-      void check();
+      return check();
     }, ms);
   };
   async function check() {

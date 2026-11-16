@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { chmod, lstat, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { ProviderSetupRefusedError } from '@moonbase/contracts/provider-errors';
 import {
@@ -9,24 +9,12 @@ import {
   findFreePort,
   readJson,
   startDaemon,
-  temporaryRoot,
   until,
-  type DaemonProcess,
+  withRoot,
 } from './daemon-fixture.ts';
 import { fauxModelId, fauxProviderId, fauxSignInCode } from './faux-provider.ts';
 
 const model = { provider: fauxProviderId, modelId: fauxModelId };
-
-async function withRoot(run: (root: string, started: DaemonProcess[]) => Promise<void>) {
-  const root = await temporaryRoot(),
-    started: DaemonProcess[] = [];
-  try {
-    await run(root, started);
-  } finally {
-    await Promise.all(started.map((daemon) => daemon.stop('SIGKILL')));
-    await rm(root, { recursive: true, force: true });
-  }
-}
 
 /** A host-mode data directory in `root`, serving `roots` with a key file beside it. */
 async function prepareHost(root: string, roots: string[]) {

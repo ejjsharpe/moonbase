@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHmac, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtemp, readFile, realpath } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Cause, Effect, Fiber, Layer, ManagedRuntime, Stream } from 'effect';
@@ -67,6 +67,17 @@ const entries = {
 const noNetwork = new URL('./no-network.ts', import.meta.url).pathname;
 
 export type DaemonProcess = ReturnType<typeof startDaemon>;
+/** Runs `run` in a new root, then kills the daemons it started and removes the root. */
+export async function withRoot(run: (root: string, started: DaemonProcess[]) => Promise<void>) {
+  const root = await temporaryRoot(),
+    started: DaemonProcess[] = [];
+  try {
+    await run(root, started);
+  } finally {
+    await Promise.all(started.map((daemon) => daemon.stop('SIGKILL')));
+    await rm(root, { recursive: true, force: true });
+  }
+}
 /**
  * Starts a daemon on this Bun, with provider network refused. `entry` is the faux or real source
  * entry, or the absolute path of a built bundle.
@@ -238,11 +249,14 @@ export async function findFreePort() {
 
 export const readJson = async (path: string) => JSON.parse(await readFile(path, 'utf8'));
 
-/** A clock whose time moves only when the test advances it; due timers then fire in order. */
+/**
+ * A clock whose time moves only when the test advances it; due timers then fire in order, each
+ * once the check the previous one ran has ended.
+ */
 export function createControlledClock() {
   let now = 0,
     next = 0;
-  const timers = new Map<number, { at: number; callback: () => void }>();
+  const timers = new Map<number, { at: number; callback: () => Promise<void> }>();
   const clock: IdleClock = {
     now: () => now,
     setTimeout: (callback, ms) => {
@@ -265,12 +279,10 @@ export function createControlledClock() {
         if (!due) break;
         timers.delete(due[0]);
         now = due[1].at;
-        due[1].callback();
         // The check reads active work from the real store before it decides.
-        await delay(40);
+        await due[1].callback();
       }
       now = end;
-      await delay(40);
     },
   };
 }

@@ -27,7 +27,7 @@ import {
   makeEmptyFindState,
   makeEmptyTranscriptState,
   measureTranscriptValue,
-  transcriptLimits,
+  type TranscriptLimits,
   type TranscriptState,
 } from './transcript-state.ts';
 import { isContentChanged, TranscriptContentCache } from './transcript-content.ts';
@@ -59,8 +59,7 @@ type TranscriptDependencies = {
   local: boolean;
   /** The selection's scope; the owner's read fibers live in a child of it. */
   scope: Scope.Scope;
-  /** Defaults to `transcriptLimits.closeGraceMs`. */
-  closeGraceMs?: number;
+  limits: TranscriptLimits;
   publish: (state: TranscriptState, snapshot?: ChatSnapshot) => void;
 };
 type Work = Effect.Effect<void, ApplicationError>;
@@ -98,7 +97,7 @@ export class TranscriptOwner {
   private selectedEntry?: ChatEntry;
   private snapshot?: ChatSnapshot;
   private history: TranscriptHistory;
-  private contents = new TranscriptContentCache();
+  private contents: TranscriptContentCache;
   private manifestAdvance = trackTranscriptCursor();
   private findBoundary: FindBoundary = { start: null, upper: undefined };
   private restorePending = true;
@@ -125,6 +124,7 @@ export class TranscriptOwner {
   private notify = Effect.sync(() => this.publish());
   constructor(dependencies: TranscriptDependencies) {
     this.dependencies = dependencies;
+    this.contents = new TranscriptContentCache(dependencies.limits.contentBytes);
     this.state.view = dependencies.memory.get(dependencies.backend, dependencies.target);
     const anchor = this.state.view.anchor;
     this.history = new TranscriptHistory(!anchor || isLiveRowKey(anchor.key));
@@ -295,7 +295,8 @@ export class TranscriptOwner {
     bytes += measureTranscriptValue(this.state.view);
     for (const size of sizes.values()) bytes += size;
     for (const part of manifest?.parts ?? []) bytes += measureTranscriptValue(part);
-    while (summaries > transcriptLimits.summaryRecords || bytes > transcriptLimits.summaryBytes) {
+    const { summaryRecords, summaryBytes } = this.dependencies.limits;
+    while (summaries > summaryRecords || bytes > summaryBytes) {
       if (this.state.manifest?.parts.length) {
         const [part, ...parts] = this.state.manifest.parts;
         summaries--;
@@ -536,7 +537,12 @@ export class TranscriptOwner {
         const previous = this.state.find;
         this.state = {
           ...this.state,
-          find: appendFindPage(previous, page, this.snapshot?.transcriptBoundary),
+          find: appendFindPage(
+            previous,
+            page,
+            this.snapshot?.transcriptBoundary,
+            this.dependencies.limits.findMatches,
+          ),
         };
         yield* this.notify;
         const first = previous.active === null ? page.matches[0] : undefined;
@@ -872,7 +878,7 @@ export class TranscriptOwner {
     this.closing = Effect.runPromise(
       Scope.close(this.scope, Exit.void).pipe(
         Effect.andThen(Effect.promise(() => Promise.allSettled(reads))),
-        Effect.timeoutOption(this.dependencies.closeGraceMs ?? transcriptLimits.closeGraceMs),
+        Effect.timeoutOption(this.dependencies.limits.closeGraceMs),
         Effect.asVoid,
       ),
     );

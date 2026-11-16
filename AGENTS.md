@@ -21,6 +21,7 @@ Data may be lost between versions while Moonbase is prerelease: a change can sta
 - Code that runs in different processes gets a folder per process: desktop `main/`, `preload/` and `renderer/`, with the IPC contract they share in `ipc/`; workspace `host/` and `client/`, with what they share at `src/`.
 - Client state in `packages/application` is one folder per concept, with `x.ts`, `x-service.ts` and `x-atoms.ts` for its three layers (see its README).
 - Tests sit in each module's `test/`, mirroring `src/` where it has folders. Playwright specs go in `test/e2e/`; desktop's harnesses and faux processes in `test/fixtures/`. Suites that run a real daemon go in the root `test/` folder.
+- Tests that need macOS (the native helper, FSEvents, the Keychain, a daemon serving files) go in the module's `test/macos/`, keeping the name of the file they test; CI runs the rest on Linux. Such a package carries the `macos-tests` Nx tag and `test:linux` and `test:macos` scripts (`packages/workspace` runs wholly on macOS: tag and `test:macos` only). Never skip on `process.platform`; `check:foundation` enforces both.
 - Test helpers: `x-fixture.ts` for shared setup, `faux-x` for a fake process or provider, `x-process.ts` for a script a test spawns. A unit test is named after the file it tests (`editor-session.test.ts` for `editor-session.ts`).
 
 ## Effect

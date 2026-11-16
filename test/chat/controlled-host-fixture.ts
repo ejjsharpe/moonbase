@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, realpath, readFile, writeFile, chmod, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createServer, type AddressInfo } from 'node:net';
+import { createServer } from 'node:net';
 import { ManagedRuntime, Layer } from 'effect';
 import {
   makeChatClient,
@@ -17,21 +17,16 @@ import { checkHostHealth } from '@moonbase/daemon-protocol/health';
 import type { ChatTarget } from '@moonbase/contracts/chat';
 import { fauxModel } from './faux-model.ts';
 
-async function findFreePort() {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address() as AddressInfo;
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return port;
-}
 export async function until<T>(get: () => Promise<T>, ready: (v: T) => boolean) {
   const end = Date.now() + 15000;
+  let v: T | undefined;
   while (Date.now() < end) {
-    const v = await get();
+    v = await get();
     if (ready(v)) return v;
     await new Promise((r) => setTimeout(r, 25));
   }
-  throw Error('Controlled state did not settle');
+  // The state it last saw, to tell which condition held it up (fixtures hold only synthetic keys).
+  throw Error('Controlled state did not settle: ' + String(JSON.stringify(v)).slice(0, 2000));
 }
 export type FixtureStats = {
   watches: number;
@@ -77,7 +72,6 @@ export async function controlledHostFixture(behaviour: URL, hold = false) {
       actorId: 'personal',
     },
     token = randomBytes(32).toString('hex'),
-    port = await findFreePort(),
     log = join(directory, 'forward.jsonl'),
     drop = join(directory, 'drop-send'),
     executable = join(directory, 'controlled-ssh'),
@@ -89,9 +83,11 @@ export async function controlledHostFixture(behaviour: URL, hold = false) {
     });
   await write('identity.json', session);
   await write('token', token);
+  // The host binds any free port and reports it when ready, so a concurrent test can't take it
+  // first; each start, a restart too, serves on a new one, which `root()` then reaches.
   await write('daemon.json', {
     mode: 'host',
-    port,
+    port: 0,
     approvedRoots: [cwd],
     credentialKey: { source: 'file', path: join(directory, 'credential.key') },
   });
@@ -330,8 +326,8 @@ export async function controlledHostFixture(behaviour: URL, hold = false) {
     close,
     release: () => host!.send({ type: 'release' }),
     nextChunk: () => host!.send({ type: 'next-chunk' }),
-    seedHistory: async (target: ChatTarget) => {
-      host!.send({ type: 'seed-history', target });
+    seedHistory: async (target: ChatTarget, count?: number) => {
+      host!.send({ type: 'seed-history', target, count });
       const result = await until(
         stats,
         (value) =>
@@ -340,8 +336,8 @@ export async function controlledHostFixture(behaviour: URL, hold = false) {
       if (result.seedError) throw Error(result.seedError);
       return result.seeded!.ids;
     },
-    seedLongText: async (target: ChatTarget) => {
-      host!.send({ type: 'seed-long-text', target });
+    seedLongText: async (target: ChatTarget, repeats?: number) => {
+      host!.send({ type: 'seed-long-text', target, repeats });
       const result = await until(
         stats,
         (value) =>

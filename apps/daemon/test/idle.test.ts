@@ -63,6 +63,7 @@ test('a local daemon exits idle only after 5 minutes with no client; a request r
     await daemon.client.command('getChatHost', { host: daemon.session.host });
     await time.advance(4 * minute);
     assert.equal(daemon.settled, undefined, 'the request restarted the wait');
+    assert.equal(time.pending, 1, 'its last check scheduled the next rather than going idle');
     await stat(join(daemon.directory, 'endpoint.json'));
     await time.advance(minute + 30_000);
     assert.equal(await daemon.running, 'idle');
@@ -116,6 +117,7 @@ test('unauthenticated requests never delay a local daemon going idle; an authent
     await probe.arrayBuffer();
     await time.advance(4 * minute);
     assert.equal(daemon.settled, undefined, 'the authenticated probe restarted the wait');
+    assert.equal(time.pending, 1, 'its last check scheduled the next rather than going idle');
     await time.advance(minute + 30_000);
     assert.equal(await daemon.running, 'idle');
   } finally {
@@ -154,6 +156,7 @@ test('an open watch and active work keep a local daemon running; it idles once b
     );
     await time.advance(20 * minute);
     assert.equal(daemon.settled, undefined, 'active work keeps the daemon');
+    assert.equal(time.pending, 1, 'its last check scheduled the next rather than going idle');
     await client.command('stopChat', { stop: running.run!.stop, requestId: 'stop' });
     await until(
       () => client.command('getChat', { target }),

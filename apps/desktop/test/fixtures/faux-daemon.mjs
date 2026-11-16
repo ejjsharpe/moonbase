@@ -3,7 +3,6 @@
 import { spawnSync } from 'node:child_process';
 import { constants, mkdirSync, writeFileSync } from 'node:fs';
 import { mkdir, open, readFile, realpath, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -168,11 +167,11 @@ export function installFauxDaemon() {
 }
 
 /**
- * Stops every test daemon still running on a temporary data directory: the faux entry of this
- * checkout, or a packaged app's daemon. A daemon outlives the app that started it.
+ * Stops every test daemon still running on a data directory inside `folder`: the faux entry of
+ * this checkout, or a packaged app's daemon. A daemon outlives the app that started it.
  */
-export async function stopTestDaemons() {
-  const temporary = await realpath(tmpdir());
+export async function stopTestDaemons(folder) {
+  const inside = (await realpath(folder)) + '/';
   const listed = spawnSync('/bin/ps', ['-axo', 'pid=,args='], { encoding: 'utf8' }).stdout ?? '';
   const pids = [];
   for (const line of listed.split('\n')) {
@@ -183,7 +182,7 @@ export async function stopTestDaemons() {
     if (
       (args.includes(join(daemonTests, 'faux-daemon.ts')) ||
         args.includes('Moonbase.app/Contents/Resources/daemon/daemon.mjs')) &&
-      (directory.startsWith(temporary + '/') || directory.startsWith('/private' + temporary + '/'))
+      directory.startsWith(inside)
     )
       pids.push(Number(pid));
   }

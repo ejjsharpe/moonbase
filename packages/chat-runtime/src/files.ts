@@ -36,9 +36,21 @@ export type ChatFileListingRun = (
 ) => Promise<Buffer>;
 type ListingFailure = { code?: unknown; killed?: boolean; stdout?: Buffer };
 
-/** How long a listing may run, and how long a stopped one's process group has to exit after SIGTERM before SIGKILL. */
-export type ChatFileListingTiming = { listingMs: number; stopGraceMs: number };
-const defaultTiming: ChatFileListingTiming = { listingMs: 10_000, stopGraceMs: 2_000 };
+/** Starts one listing's time budget, calling `expire` when it runs out; returns what clears it. */
+export type ChatFileListingBudget = (expire: () => void) => () => void;
+/**
+ * A listing's time budget, and how long a stopped one's process group has to exit after SIGTERM
+ * before SIGKILL.
+ */
+export type ChatFileListingTiming = { budget: ChatFileListingBudget; stopGraceMs: number };
+const listingMs = 10_000;
+const defaultTiming: ChatFileListingTiming = {
+  budget: (expire) => {
+    const timer = setTimeout(expire, listingMs);
+    return () => clearTimeout(timer);
+  },
+  stopGraceMs: 2_000,
+};
 const isGroupAlive = (group: number) => {
   try {
     process.kill(-group, 0);
@@ -63,7 +75,7 @@ async function awaitGroupExit(group: number, stoppedAt: number, stopGraceMs: num
 // Its own process group, so a listing stopped by its budget takes any children with it. The
 // negative-PID kill is needed: a spawn signal or timeout reaches only the group leader.
 const makeRunListing =
-  ({ listingMs, stopGraceMs }: ChatFileListingTiming): ChatFileListingRun =>
+  ({ budget, stopGraceMs }: ChatFileListingTiming): ChatFileListingRun =>
   (executable, args, cwd, signal) =>
     new Promise((resolve, reject) => {
       if (signal.aborted) return reject(Error('The file index is closed'));
@@ -81,7 +93,7 @@ const makeRunListing =
       const settle = (error?: Error) => {
         if (settled) return;
         settled = true;
-        clearTimeout(budget);
+        clearBudget();
         clearTimeout(escalation);
         signal.removeEventListener('abort', stopOnClose);
         const stdout = Buffer.concat(chunks);
@@ -96,11 +108,13 @@ const makeRunListing =
         // Armed here, not on exit: a group that ignores SIGTERM may never exit or close its output.
         escalation = setTimeout(() => signalGroup(child.pid!, 'SIGKILL'), stopGraceMs);
       };
-      const budget = setTimeout(() => stop({ killed: true }), listingMs);
+      const clearBudget = budget(() => stop({ killed: true }));
       const stopOnClose = () => stop({ closed: true });
       signal.addEventListener('abort', stopOnClose, { once: true });
+      // Output still arriving after a stop is kept, up to the size budget: what the listing printed
+      // before its budget ran out is its partial listing, however late this process reads it.
       child.stdout!.on('data', (chunk: Buffer) => {
-        if (stoppedAt !== undefined) return;
+        if (length >= listingBytes) return;
         if (length + chunk.length > listingBytes) {
           chunks.push(chunk.subarray(0, listingBytes - length));
           length = listingBytes;
@@ -167,7 +181,7 @@ export class ChatFileIndex {
       ripgrepExecutable?: string;
       gitExecutable?: string;
       run?: ChatFileListingRun;
-      /** Overrides the listing time budget and stop grace; tests shorten them. */
+      /** Overrides the listing time budget and stop grace; tests end and shorten them. */
       timing?: Partial<ChatFileListingTiming>;
       /** Whether Git may run; on macOS, whether the command-line tools are installed. */
       canRunGit?: () => Promise<boolean>;

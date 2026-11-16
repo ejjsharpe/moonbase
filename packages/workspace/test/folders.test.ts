@@ -8,6 +8,7 @@ import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { fixture, rejects } from './workspace-fixture.ts';
+import { recordWatchDeliveries } from './watch-fixture.ts';
 
 /** A plain folder beside the fixture's repository, in no repository itself. */
 function folder(f: ReturnType<typeof fixture>) {
@@ -22,7 +23,8 @@ const git = (cwd: string, ...args: string[]) =>
     .trim();
 
 test('a plain folder opens without Git; Git reads are empty and Git changes are refused', async () => {
-  const f = fixture();
+  const f = fixture(),
+    deliveries = recordWatchDeliveries();
   let stop: (() => Promise<void>) | undefined;
   try {
     const root = folder(f);
@@ -108,15 +110,14 @@ test('a plain folder opens without Git; Git reads are empty and Git changes are 
       },
     );
     await isReady;
-    // FSEvents may miss a write made as its stream starts, so write until one is reported.
-    const deadline = Date.now() + 10_000;
-    for (let write = 0; !changes.length && Date.now() < deadline; write++) {
-      writeFileSync(join(root, 'new.txt'), `new ${write}`);
-      await new Promise((r) => setTimeout(r, 250));
-    }
+    // Once a watcher reported the write, the watch publishes it when its window closes.
+    await deliveries.write(join(root, 'new.txt'), 'new');
+    for (let poll = 0; !changes.length && poll < 500; poll++)
+      await new Promise((r) => setTimeout(r, 10));
     assert.deepEqual(changes.slice(0, 1), ['changed']);
   } finally {
     await stop?.();
+    deliveries.restore();
     await f.close();
   }
 });

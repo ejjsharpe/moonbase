@@ -88,4 +88,4 @@ bun run --cwd packages/workspace lint
 bun run --cwd packages/workspace test
 ```
 
-Tests run under `bun test` (1.4.4) and use temporary repositories and stores and the real native helper. Run them serially with other resource-heavy suites. Source calls `fs.closeSync` and `fs.watch` through the default `node:fs` import so tests can mock them; Bun's named imports are not live bindings.
+Tests run under `bun test` (1.4.4) and use temporary repositories and stores and the real native helper, so the whole suite is macOS-only: `test:macos` is `test`, and there is no `test:linux`. `build` also compiles the native race tests' helpers, which pause at a step for the test, into `dist/test/`; it rebuilds only what is older than the source. Tests copy one empty repository per test process (`test/repository-fixture.ts`) rather than running `git init` each time. Source calls `fs.closeSync` and `fs.watch` through the default `node:fs` import so tests can mock them; Bun's named imports are not live bindings.

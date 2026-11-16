@@ -33,6 +33,6 @@ bun run --cwd packages/workbench test:ui
 bun run --cwd packages/workbench demo
 ```
 
-`test` runs the logic-only `*.test.ts` files under Node; `test:ui` runs the `*.spec.ts` browser tests against the demo (on port 4176, or `MOONBASE_WORKBENCH_PORT`).
+`test` runs the logic-only `*.test.ts` files under Node; `test:ui` builds the demo and runs the `*.spec.ts` browser tests against it, in parallel; set `MOONBASE_WORKBENCH_PORT` to isolate concurrent runs (default 4176).
 
 The demo renders two project workbenches with independent buffers; `?remote` gives the second a remote identity and `?clipboard` installs a paste fixture.

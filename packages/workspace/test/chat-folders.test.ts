@@ -26,7 +26,8 @@ import {
   type ChatFolders,
   type RootPredicate,
 } from '../src/index.ts';
-import { settledDescriptorCount } from './descriptor-count.ts';
+import { findNewDescriptors, readOpenDescriptors } from './open-descriptors.ts';
+import { initRepository } from './repository-fixture.ts';
 
 const chat: ChatTarget = {
   host: { hostId: 'chat-folders-host', storeId: 'store' },
@@ -68,7 +69,7 @@ function setup(
     repository(name: string, commit = true) {
       const root = join(base, ...name.split('/'));
       mkdirSync(root, { recursive: true });
-      git(root, 'init', '-q', '-b', 'main');
+      initRepository(root);
       if (commit) {
         writeFileSync(join(root, 'file.txt'), 'x');
         git(root, 'add', '.');
@@ -281,9 +282,9 @@ test('a folder is the root of an approved checkout, checked again on every use',
     assert.equal(await has(linked), false);
     await run(host.openCheckout({ root: linked }));
     // A folder check borrows a descriptor: it is not kept against the retained cap.
-    const open = await settledDescriptorCount();
+    const open = await readOpenDescriptors();
     assert.equal(await has(linked), true);
-    assert.equal(await settledDescriptorCount(), open);
+    assert.deepEqual(await findNewDescriptors(open), []);
     assert.equal(await has(join(root, '.git')), false);
     symlinkSync(root, join(f.base, 'link'));
     assert.equal(await has(join(f.base, 'link')), false);

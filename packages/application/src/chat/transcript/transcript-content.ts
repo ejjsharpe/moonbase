@@ -10,11 +10,7 @@ import {
   countTranscriptBytes,
   makeTranscriptFailure,
 } from './transcript-read.ts';
-import {
-  measureTranscriptValue,
-  transcriptLimits,
-  type TranscriptContentState,
-} from './transcript-state.ts';
+import { measureTranscriptValue, type TranscriptContentState } from './transcript-state.ts';
 
 type ContentReply = Extract<ChatOutput<'getChatTranscriptContent'>, { kind: 'content' }>;
 
@@ -45,11 +41,16 @@ export function isContentChanged(
 
 /** Selected part content, bounded by bytes and evicted by least-recent selection. */
 export class TranscriptContentCache {
-  private contents = new LRUCache<string, TranscriptContentState>({
-    max: 128,
-    maxSize: transcriptLimits.contentBytes,
-    sizeCalculation: measureContent,
-  });
+  private readonly contentBytes: number;
+  private contents: LRUCache<string, TranscriptContentState>;
+  constructor(contentBytes: number) {
+    this.contentBytes = contentBytes;
+    this.contents = new LRUCache({
+      max: 128,
+      maxSize: contentBytes,
+      sizeCalculation: measureContent,
+    });
+  }
   peek(key: string) {
     return this.contents.peek(key);
   }
@@ -63,7 +64,7 @@ export class TranscriptContentCache {
    */
   write(key: string, content: TranscriptContentState) {
     let size = measureContent(content);
-    while (size > transcriptLimits.contentBytes && content.chunks.length) {
+    while (size > this.contentBytes && content.chunks.length) {
       size -= measureTranscriptValue(content.chunks[0]);
       const chunks = content.chunks.slice(1);
       content = { ...content, chunks, retainedFrom: chunks[0]?.offset ?? content.loadedBytes };
