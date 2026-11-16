@@ -1,6 +1,6 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import type { CheckoutTarget, FileTarget, FileView } from '@moonbase/contracts/workspace';
-import { readOwn } from './record.ts';
+import { readOwn } from '../record.ts';
 import type { CheckoutView, EditorRecovery } from './recovery-layout.ts';
 
 export const checkoutKey = (target: CheckoutTarget) =>
@@ -111,3 +111,6 @@ export function closeRecoveryReferences(
 
   return history;
 }
+
+export const sameCheckout = (a: CheckoutTarget, b: CheckoutTarget) =>
+  checkoutKey(a) === checkoutKey(b);
