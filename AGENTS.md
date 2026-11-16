@@ -52,7 +52,7 @@ Atoms hold no domain logic, so a headless test or a non-React client can use the
 - Be exhaustive only at security boundaries (tokens, credentials, HMAC auth, SSH host keys, path and folder authority, supply-chain pinning) and for never losing unsaved work or duplicating a send.
 - Reviewers flag overkill tests as should-fix (delete, merge or slim) and don't ask for extra permutations outside those boundaries.
 - Tests use temporary directories, stores and repositories, faux providers and injected platform capabilities. Never read or write the real OS clipboard in tests; inject callbacks.
-- PR checks run the unit suites and the root integration suites. Browser and Electron Playwright suites run nightly (`nightly` workflow, also runnable by hand); run the ones you touch locally.
+- PR checks run the unit suites and the root integration suites. Browser and Electron Playwright suites don't run in CI; run the ones you touch locally.
 
 ## Verifying
 
