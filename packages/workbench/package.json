@@ -16,15 +16,16 @@
     "check:renderer": "node scripts/check-renderer.mjs"
   },
   "dependencies": {
+    "@base-ui/react": "1.9.0",
+    "@effect/atom-react": "4.1.0",
     "@moonbase/application": "workspace:*",
     "@moonbase/contracts": "workspace:*",
     "@moonbase/ui": "workspace:*",
-    "@base-ui/react": "1.9.0",
     "@stylexjs/stylex": "0.19.1",
     "@tanstack/react-virtual": "3.14.26",
-    "react": "19.3.1",
+    "effect": "4.1.0",
     "monaco-editor": "0.57.0",
     "motion": "14.9.0",
-    "effect": "4.1.0"
+    "react": "19.3.1"
   }
 }
