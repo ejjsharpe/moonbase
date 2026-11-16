@@ -24,6 +24,9 @@ export default defineConfig({
   // One retry on CI; a test that passes only on retry is reported as flaky.
   retries: process.env.CI ? 1 : 0,
   fullyParallel: true,
+  // Stop a failing CI run early: a test that fails after its retry is a real failure, and the rest
+  // would only hold a runner.
+  maxFailures: process.env.CI ? 3 : 0,
   timeout: 45000,
   reporter: [['list'], ['json', { outputFile: join(outputDir, 'timings.json') }]],
   globalTeardown: './test/fixtures/global-teardown.ts',

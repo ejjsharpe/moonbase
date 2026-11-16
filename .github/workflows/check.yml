@@ -53,8 +53,8 @@ jobs:
       # `CI` is set, so the chat-runtime ripgrep test fails rather than skips without it.
       - run: node scripts/prepare-ripgrep.mjs
       - run: echo "MOONBASE_TEST_RIPGREP=$PWD/dist/tools/ripgrep/rg" >> "$GITHUB_ENV"
-      - run: bunx nx $NX_RUN -t test --exclude='tag:macos-tests' --parallel=2 --output-style=static
-      - run: bunx nx $NX_RUN -t test:linux --parallel=2 --output-style=static
+      - run: bunx nx $NX_RUN -t test --exclude='tag:macos-tests' --parallel=2 --nxBail --output-style=static
+      - run: bunx nx $NX_RUN -t test:linux --parallel=2 --nxBail --output-style=static
 
   # The workspace's native filesystem binary, the Keychain and the daemon's file host need macOS.
   macos:
@@ -71,7 +71,7 @@ jobs:
       - run: node scripts/prepare-ripgrep.mjs
       - run: echo "MOONBASE_TEST_RIPGREP=$PWD/dist/tools/ripgrep/rg" >> "$GITHUB_ENV"
       # The runner is ephemeral, so the chat-runtime suite may create and delete a temporary keychain.
-      - run: bunx nx $NX_RUN -t test:macos --parallel=1 --output-style=static
+      - run: bunx nx $NX_RUN -t test:macos --parallel=1 --nxBail --output-style=static
         env:
           MOONBASE_TEST_KEYCHAIN: '1'
       - run: bunx nx run @moonbase/desktop:build
@@ -92,7 +92,7 @@ jobs:
       - if: steps.affected.outputs.projects != '[]'
         run: bunx playwright install --with-deps --only-shell chromium
       - if: steps.affected.outputs.projects != '[]'
-        run: bunx nx $NX_RUN -t test:ui test:browser --parallel=2 --output-style=static
+        run: bunx nx $NX_RUN -t test:ui test:browser --parallel=2 --nxBail --output-style=static
       # Failures' traces, and every run's per-test timings (`timings.json`).
       - if: always() && steps.affected.outputs.projects != '[]'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

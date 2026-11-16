@@ -8,6 +8,9 @@ export default defineConfig({
   // One retry on CI; a test that passes only on retry is reported as flaky.
   retries: process.env.CI ? 1 : 0,
   fullyParallel: true,
+  // Stop a failing CI run early: a test that fails after its retry is a real failure, and the rest
+  // would only hold a runner.
+  maxFailures: process.env.CI ? 3 : 0,
   reporter: [['list'], ['json', { outputFile: 'test-results/timings.json' }]],
   use: {
     // Moonbase targets macOS; Monaco picks its keymap from the user agent, so Linux CI runs the Mac one.
