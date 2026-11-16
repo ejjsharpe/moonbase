@@ -10,7 +10,8 @@
     "build": "node scripts/build-native.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint .",
-    "test": "node scripts/build-native.mjs && bun test --timeout 60000 ./test"
+    "test": "node scripts/build-native.mjs && bun test --timeout 60000 --parallel=${MOONBASE_TEST_WORKERS:-4} ./test",
+    "test:macos": "bun run test"
   },
   "dependencies": {
     "effect": "4.1.0",
@@ -19,5 +20,10 @@
   },
   "devDependencies": {
     "@moonbase/application": "workspace:*"
+  },
+  "nx": {
+    "tags": [
+      "macos-tests"
+    ]
   }
 }

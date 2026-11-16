@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHmac, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtemp, readFile, realpath } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Cause, Effect, Fiber, Layer, ManagedRuntime, Stream } from 'effect';
@@ -67,6 +67,17 @@ const entries = {
 const noNetwork = new URL('./no-network.ts', import.meta.url).pathname;
 
 export type DaemonProcess = ReturnType<typeof startDaemon>;
+/** Runs `run` in a new root, then kills the daemons it started and removes the root. */
+export async function withRoot(run: (root: string, started: DaemonProcess[]) => Promise<void>) {
+  const root = await temporaryRoot(),
+    started: DaemonProcess[] = [];
+  try {
+    await run(root, started);
+  } finally {
+    await Promise.all(started.map((daemon) => daemon.stop('SIGKILL')));
+    await rm(root, { recursive: true, force: true });
+  }
+}
 /**
  * Starts a daemon on this Bun, with provider network refused. `entry` is the faux or real source
  * entry, or the absolute path of a built bundle.

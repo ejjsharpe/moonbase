@@ -73,7 +73,10 @@ test('without ripgrep, Git lists tracked and unignored files, never dependencies
   assert(main.matches[0].positions.length > 0);
 });
 
-test('ripgrep lists the same files with its ignore rules', { skip: !ripgrep }, async (t) => {
+// CI provides ripgrep, so there a missing one fails rather than skips.
+const skipRipgrep = !ripgrep && !process.env.CI && 'ripgrep is not installed';
+test('ripgrep lists the same files with its ignore rules', { skip: skipRipgrep }, async (t) => {
+  assert(ripgrep, 'Set MOONBASE_TEST_RIPGREP to the ripgrep scripts/prepare-ripgrep.mjs prepares.');
   const root = await folder(t);
   const index = new ChatFileIndex({ ripgrepExecutable: ripgrep });
   assert.deepEqual(paths(await index.find(root, '')), expected);

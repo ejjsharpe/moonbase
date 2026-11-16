@@ -21,4 +21,4 @@ bun run --cwd packages/ssh test
 bun run test:chat-integration
 ```
 
-Tests use controlled child processes and TCP, never a real SSH host. Use only a host the user has named for manual checks.
+Tests use controlled child processes and TCP, never a real SSH host. The policy tests read the real `ssh -G`; the `NoHostAuthenticationForProxyCommand` case is in `test/macos/` because only macOS's OpenSSH knows that option. Use only a host the user has named for manual checks.

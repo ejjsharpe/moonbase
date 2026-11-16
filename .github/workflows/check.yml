@@ -11,9 +11,13 @@ permissions:
 concurrency:
   group: checks-${{ github.event.pull_request.number || format('{0}-{1}', github.ref, github.sha) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+# Tests that need macOS sit in each package's `test/macos/` (and all of `packages/workspace`); packages
+# that have them carry the `macos-tests` Nx tag. The `macos` job runs those, the Linux jobs the rest.
+# The account runs at most 5 macOS jobs at once and a merge and a PR push can run together, so a run
+# uses one.
 jobs:
   static:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -23,17 +27,26 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
       - run: bun install --frozen-lockfile
       - run: bun run check:foundation
+      - run: node --test scripts/*.test.mjs
       - run: bun run typecheck
       - run: bun run lint
       - run: bun run format:check
       - run: bun run --cwd packages/workbench check:renderer
 
-  # The workspace's native filesystem binary, which the desktop build and tests use, and the pinned ripgrep need macOS.
-  native:
-    runs-on: macos-latest
-    timeout-minutes: 20
+  # Ubuntu 24.04 ships OpenSSH 9.6; the `ssh` tests need 8.7 or newer.
+  unit-linux:
+    name: unit (linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      # Two packages at a time on 4 cores, each running its files in two processes.
+      MOONBASE_TEST_WORKERS: '2'
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -42,14 +55,63 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
       - run: bun install --frozen-lockfile
+      # `CI` is set, so the chat-runtime ripgrep test fails rather than skips without it.
+      - run: node scripts/prepare-ripgrep.mjs
+      - run: echo "MOONBASE_TEST_RIPGREP=$PWD/dist/tools/ripgrep/rg" >> "$GITHUB_ENV"
+      - run: bunx nx run-many -t test --exclude='tag:macos-tests' --parallel=2 --output-style=static
+      - run: bunx nx run-many -t test:linux --parallel=2 --output-style=static
+
+  integration-chat:
+    name: integration (chat)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '26.13.0'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+      - run: bun install --frozen-lockfile
+      - run: bun run test:chat-integration
+
+  # The workspace's native filesystem binary, the Keychain and the daemon's file host need macOS.
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      MOONBASE_TEST_WORKERS: '3'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '26.13.0'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+      - run: bun install --frozen-lockfile
+      # First: the daemon and desktop suites run the helper while the workspace suite would build it.
+      - run: node packages/workspace/scripts/build-native.mjs
       - run: node scripts/prepare-ripgrep.mjs
       - run: echo "MOONBASE_TEST_RIPGREP=$PWD/dist/tools/ripgrep/rg" >> "$GITHUB_ENV"
       # The runner is ephemeral, so the chat-runtime suite may create and delete a temporary keychain.
-      - run: bun run test
+      - run: bunx nx run-many -t test:macos --parallel=1 --output-style=static
         env:
           MOONBASE_TEST_KEYCHAIN: '1'
       - run: bun run test:editor-integration
-      - run: bun run test:chat-integration
       - run: bunx nx run @moonbase/desktop:build
       - run: node apps/desktop/scripts/check-renderer.mjs

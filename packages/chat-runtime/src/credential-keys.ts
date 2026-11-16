@@ -122,6 +122,8 @@ export type KeychainKeySourceOptions = {
   spawn?: SpawnSecurity;
   /** How long one `security` command may run, including any unlock prompt. */
   timeoutMs?: number;
+  /** Replaces the check for macOS and `/usr/bin/security`, for tests that fake it on any OS. */
+  available?: () => Promise<boolean>;
 };
 const keychainService = 'Moonbase daemon credentials';
 // `security -i` splits lines on whitespace and quotes, so only values without quotes of either
@@ -129,12 +131,26 @@ const keychainService = 'Moonbase daemon credentials';
 const isQuotable = (value: string) =>
   [...value].every((character) => !'"\'\\\x7f'.includes(character) && character >= ' ');
 
+/** Whether this is macOS with `/usr/bin/security`, which the Keychain source runs. */
+const canRunSecurity = async () =>
+  process.platform === 'darwin' &&
+  (await stat('/usr/bin/security').then(
+    (info) => info.isFile(),
+    () => false,
+  ));
+
 /**
  * A generic-password item (service `Moonbase daemon credentials`, account `storeId`) read and
  * written by `/usr/bin/security -i`, with every command on its stdin so the key never reaches argv.
  */
 export function createKeychainKeySource(options: KeychainKeySourceOptions): CredentialKeySource {
-  const { storeId, keychain, spawn = spawnProcess as SpawnSecurity, timeoutMs = 120_000 } = options;
+  const {
+    storeId,
+    keychain,
+    spawn = spawnProcess as SpawnSecurity,
+    timeoutMs = 120_000,
+    available = canRunSecurity,
+  } = options;
   if (!/^[A-Za-z0-9._:-]{1,256}$/.test(storeId)) throw unavailable('store-id');
   if (keychain !== undefined && (!isAbsolute(keychain) || !isQuotable(keychain)))
     throw unavailable('keychain-path');
@@ -188,12 +204,6 @@ export function createKeychainKeySource(options: KeychainKeySourceOptions): Cred
       );
       child.stdin.end(line + '\n');
     });
-  const available = async () =>
-    process.platform === 'darwin' &&
-    (await stat('/usr/bin/security').then(
-      (info) => info.isFile(),
-      () => false,
-    ));
   const requireAvailable = async () => {
     if (!(await available())) throw unavailable('keychain-missing');
   };

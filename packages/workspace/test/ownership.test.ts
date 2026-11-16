@@ -16,7 +16,7 @@ import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { recordWatchDeliveries, startOnTestClock } from './watch-fixture.ts';
 import { fixture, isError, quote, seed, waitFor } from './recovery-fixture.ts';
 import { captureNative, releaseNative } from './workspace-fixture.ts';
-import { settledDescriptorCount } from './descriptor-count.ts';
+import { findNewDescriptors, readOpenDescriptors } from './open-descriptors.ts';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
 
 function native<R>(
@@ -333,7 +333,7 @@ test('capture cancellation settles its helper and releases descriptors before re
     const checkout = await client.command('openCheckout', { root: f.root });
     await client.command('readFile', { checkout, path: 'file.txt' });
     writeFileSync(join(f.base, 'external'), 'native bytes');
-    const before = await settledDescriptorCount();
+    const before = await readOpenDescriptors();
     const capturing = runApplicationEffect(
       runtime,
       captureNative({ checkout, clientId: 'alice', paths: [join(f.base, 'external')] }),
@@ -344,7 +344,7 @@ test('capture cancellation settles its helper and releases descriptors before re
     abort.abort();
     await rejected;
     // Nothing the capture opened is left open.
-    assert.equal(await settledDescriptorCount(), before);
+    assert.deepEqual(await findNewDescriptors(before), []);
     assert.equal(
       (await client.command('readFile', { checkout, path: 'file.txt' })).text,
       'original',

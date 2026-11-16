@@ -13,7 +13,9 @@
     "build": "tsc --noEmit -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint .",
-    "test": "bun test --timeout 60000 ./test"
+    "test": "bun test --timeout 60000 --parallel=${MOONBASE_TEST_WORKERS:-4} ./test",
+    "test:linux": "bun test --timeout 60000 --parallel=${MOONBASE_TEST_WORKERS:-4} --path-ignore-patterns='test/macos/**' ./test",
+    "test:macos": "bun test --timeout 60000 --parallel=${MOONBASE_TEST_WORKERS:-4} ./test/macos"
   },
   "dependencies": {
     "effect": "4.1.0",
@@ -31,5 +33,10 @@
   },
   "engines": {
     "node": ">=26.13.0"
+  },
+  "nx": {
+    "tags": [
+      "macos-tests"
+    ]
   }
 }
