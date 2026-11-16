@@ -1,32 +1,55 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { EntryReference } from '@moonbase/contracts/workspace';
-import { runMutation, type EditorMutation } from '@moonbase/application/editor';
+import type { EditorController, EditorMutation, ReplacePrompt } from '@moonbase/application/editor';
 import { checkout, fixture, target } from './editor-fixture.ts';
 
-/** The fixture's editor with each mutation's disposal counted. */
+/**
+ * The fixture's editor with each mutation its `runMutation` creates counted as it is disposed, and
+ * each replace prompt recorded in `asked` and answered with `reply` (left pending while null), so
+ * an unexpected prompt fails a test instead of hanging it.
+ */
 async function counted() {
   const f = await fixture();
+  const replies = { reply: false as boolean | null, asked: [] as string[][] };
+  const seen = new Set<string>();
+  f.editor.subscribe(() => {
+    const prompt = f.editor.getSnapshot().replacePrompt;
+    if (!prompt || seen.has(prompt.id)) return;
+    seen.add(prompt.id);
+    replies.asked.push(prompt.paths);
+    const reply = replies.reply;
+    if (reply !== null) queueMicrotask(() => f.editor.mutations.answer(prompt.id, reply));
+  });
   const disposals: number[] = [];
   const createMutation = f.editor.createMutation.bind(f.editor);
-  const controller = {
-    report: f.editor.report,
-    createMutation(action: Parameters<typeof createMutation>[0]): EditorMutation {
-      const mutation = createMutation(action),
-        index = disposals.push(0) - 1,
-        dispose = mutation.dispose.bind(mutation);
-      mutation.dispose = () => {
-        disposals[index]++;
-        return dispose();
-      };
-      return mutation;
-    },
+  f.editor.createMutation = (action): EditorMutation => {
+    const mutation = createMutation(action),
+      index = disposals.push(0) - 1,
+      dispose = mutation.dispose.bind(mutation);
+    mutation.dispose = () => {
+      disposals[index]++;
+      return dispose();
+    };
+    return mutation;
   };
   const read = async (path: string) => (await f.client.command('readFile', target(path))).text;
-  return { ...f, controller, disposals, read };
+  return Object.assign(replies, { ...f, disposals, read });
 }
 
-const never = () => Promise.reject(new Error('No replacement was expected'));
+/** Resolves with the next replace prompt `editor` publishes. */
+function nextPrompt(editor: EditorController) {
+  return new Promise<ReplacePrompt>((resolve) => {
+    const check = () => {
+      const prompt = editor.getSnapshot().replacePrompt;
+      if (!prompt) return;
+      off();
+      resolve(prompt);
+    };
+    const off = editor.subscribe(check);
+    check();
+  });
+}
+
 /** A completed result, moving or copying each `[source, destination]`. */
 const done = (...pairs: [string, string][]) => ({
   completed: true,
@@ -34,17 +57,22 @@ const done = (...pairs: [string, string][]) => ({
   items: pairs.map(([source, destination]) => ({ source, destination, outcome: 'completed' })),
 });
 const declined = { completed: false, error: '', items: [] };
+const unavailable = {
+  completed: false,
+  error:
+    'File action unavailable. Check the selection and finish the current editor dialog or preservation.',
+  items: [],
+};
 
 test('a direct mutation completes without consent when nothing is replaced', async () => {
   const f = await counted();
   try {
     assert.deepEqual(
-      await runMutation(f.controller, { checkout, kind: 'move', paths: ['a.ts'] }, 'moved.ts', {
-        confirmReplace: never,
-      }),
+      await f.editor.mutations.run({ checkout, kind: 'move', paths: ['a.ts'] }, 'moved.ts'),
       done(['a.ts', 'moved.ts']),
     );
     assert.equal(await f.read('moved.ts'), 'const a = 1;');
+    assert.deepEqual(f.asked, []);
     assert.deepEqual(f.disposals, [1]);
   } finally {
     await f.dispose();
@@ -57,9 +85,7 @@ test('several entries move into a folder and back to the root as one batch each'
     await f.editor.open(target('a.ts'));
     f.editor.edit(target('a.ts'), 'unsaved');
     const move = (paths: string[], destination: string) =>
-      runMutation(f.controller, { checkout, kind: 'move', paths }, destination, {
-        confirmReplace: never,
-      });
+      f.editor.mutations.run({ checkout, kind: 'move', paths }, destination);
     assert.deepEqual(
       await move(['a.ts', 'c.ts'], 'folder'),
       done(['a.ts', 'folder/a.ts'], ['c.ts', 'folder/c.ts']),
@@ -83,23 +109,15 @@ test('several entries move into a folder and back to the root as one batch each'
 test('a direct mutation asks before replacing and applies only with consent', async () => {
   const f = await counted();
   try {
-    const asked: string[][] = [];
-    const confirm = (answer: boolean) => async (replacements: EntryReference[]) => {
-      asked.push(replacements.map((item) => item.target.path));
-      return answer;
-    };
     const copy = { checkout, kind: 'copy' as const, paths: ['a.ts'] };
-    assert.deepEqual(
-      await runMutation(f.controller, copy, 'b.ts', { confirmReplace: confirm(false) }),
-      declined,
-    );
+    assert.deepEqual(await f.editor.mutations.run(copy, 'b.ts'), declined);
     assert.equal(await f.read('b.ts'), 'second');
-    assert.deepEqual(
-      await runMutation(f.controller, copy, 'b.ts', { confirmReplace: confirm(true) }),
-      done(['a.ts', 'b.ts']),
-    );
+    f.reply = true;
+    assert.deepEqual(await f.editor.mutations.run(copy, 'b.ts'), done(['a.ts', 'b.ts']));
     assert.equal(await f.read('b.ts'), 'const a = 1;');
-    assert.deepEqual(asked, [['b.ts'], ['b.ts']]);
+    assert.deepEqual(f.asked, [['b.ts'], ['b.ts']]);
+    assert.equal(f.editor.getSnapshot().replacePrompt, null);
+    assert.equal(f.editor.getSnapshot().mutating, false);
     assert.deepEqual(f.disposals, [1, 1]);
   } finally {
     await f.dispose();
@@ -109,58 +127,18 @@ test('a direct mutation asks before replacing and applies only with consent', as
 test('a direct mutation returns its failure instead of throwing', async () => {
   const f = await counted();
   try {
-    const result = await runMutation(
-      f.controller,
+    const result = await f.editor.mutations.run(
       { checkout, kind: 'create-file', paths: [] },
       'missing/new.ts',
-      { confirmReplace: never },
     );
     assert.equal(result.completed, false);
     assert.notEqual(result.error, '');
     assert.deepEqual(f.disposals, [1]);
-    // A refused acquisition fails the same way, with nothing to dispose.
+    // A checkout that isn't open is refused before anything is created.
     const closed = { ...checkout, checkoutId: 'closed', root: '/memory/closed' };
-    const refused = await runMutation(
-      f.controller,
-      { checkout: closed, kind: 'create-file', paths: [] },
-      'new.ts',
-      { confirmReplace: never },
-    );
-    assert.equal(refused.completed, false);
-    assert.notEqual(refused.error, '');
-    assert.deepEqual(f.disposals, [1]);
-  } finally {
-    await f.dispose();
-  }
-});
-
-test('aborting a direct mutation while it asks declines it and disposes it', async () => {
-  const f = await counted();
-  try {
-    const abort = new AbortController();
-    const result = await runMutation(
-      f.controller,
-      { checkout, kind: 'copy', paths: ['a.ts'] },
-      'b.ts',
-      {
-        signal: abort.signal,
-        confirmReplace: async () => {
-          abort.abort();
-          assert.deepEqual(f.disposals, [1]);
-          return true;
-        },
-      },
-    );
-    assert.deepEqual(result, declined);
-    assert.equal(await f.read('b.ts'), 'second');
-    assert.deepEqual(f.disposals, [1]);
-    // An aborted signal creates nothing.
     assert.deepEqual(
-      await runMutation(f.controller, { checkout, kind: 'move', paths: ['a.ts'] }, 'x.ts', {
-        signal: abort.signal,
-        confirmReplace: never,
-      }),
-      declined,
+      await f.editor.mutations.run({ checkout: closed, kind: 'create-file', paths: [] }, 'new.ts'),
+      unavailable,
     );
     assert.deepEqual(f.disposals, [1]);
   } finally {
@@ -168,41 +146,33 @@ test('aborting a direct mutation while it asks declines it and disposes it', asy
   }
 });
 
-test('a rejected confirmation returns its error instead of throwing', async () => {
+test('one direct mutation runs at a time; another is refused until it ends', async () => {
   const f = await counted();
   try {
-    const result = await runMutation(
-      f.controller,
-      { checkout, kind: 'copy', paths: ['a.ts'] },
-      'b.ts',
-      { confirmReplace: () => Promise.reject(new Error('Prompt unavailable')) },
-    );
-    assert.equal(result.completed, false);
-    assert.notEqual(result.error, '');
-    assert.equal(await f.read('b.ts'), 'second');
+    f.reply = null;
+    const copy = { checkout, kind: 'copy' as const, paths: ['a.ts'] };
+    const running = f.editor.mutations.run(copy, 'b.ts');
+    assert.equal(f.editor.getSnapshot().mutating, true);
+    assert.equal(f.editor.mutations.admits(copy), false);
+    const prompt = await nextPrompt(f.editor);
+    assert.deepEqual(prompt.paths, ['b.ts']);
+    assert.deepEqual(await f.editor.mutations.run(copy, 'other.ts'), unavailable);
+    f.editor.mutations.answer(prompt.id, false);
+    assert.deepEqual(await running, declined);
+    assert.equal(f.editor.mutations.admits(copy), true);
     assert.deepEqual(f.disposals, [1]);
   } finally {
     await f.dispose();
   }
 });
 
-test('aborting while a confirmation is unanswered resolves at once and disposes once', async () => {
+test('disposing the editor while it asks declines the mutation and disposes it once', async () => {
   const f = await counted();
   try {
-    const abort = new AbortController();
-    let asked!: () => void;
-    const asking = new Promise<void>((resolve) => {
-      asked = resolve;
-    });
-    const running = runMutation(f.controller, { checkout, kind: 'copy', paths: ['a.ts'] }, 'b.ts', {
-      signal: abort.signal,
-      confirmReplace: () => {
-        asked();
-        return new Promise<boolean>(() => {});
-      },
-    });
-    await asking;
-    abort.abort();
+    f.reply = null;
+    const running = f.editor.mutations.run({ checkout, kind: 'copy', paths: ['a.ts'] }, 'b.ts');
+    await nextPrompt(f.editor);
+    await f.editor.dispose();
     assert.deepEqual(await running, declined);
     assert.equal(await f.read('b.ts'), 'second');
     assert.deepEqual(f.disposals, [1]);
@@ -215,9 +185,7 @@ test('a move may change only its name’s case, and a copy onto its source is re
   const f = await counted();
   try {
     assert.deepEqual(
-      await runMutation(f.controller, { checkout, kind: 'move', paths: ['a.ts'] }, 'A.ts', {
-        confirmReplace: never,
-      }),
+      await f.editor.mutations.run({ checkout, kind: 'move', paths: ['a.ts'] }, 'A.ts'),
       done(['a.ts', 'A.ts']),
     );
     assert.equal(await f.read('A.ts'), 'const a = 1;');
@@ -228,9 +196,7 @@ test('a move may change only its name’s case, and a copy onto its source is re
     );
     for (const destination of ['b.ts', 'B.ts'])
       assert.deepEqual(
-        await runMutation(f.controller, { checkout, kind: 'copy', paths: ['b.ts'] }, destination, {
-          confirmReplace: never,
-        }),
+        await f.editor.mutations.run({ checkout, kind: 'copy', paths: ['b.ts'] }, destination),
         { completed: false, error: 'Choose a different name from the original.', items: [] },
       );
     assert.equal(await f.read('b.ts'), 'second');
@@ -257,11 +223,6 @@ test('a batch import with known names asks before replacing what they would land
         items: [],
       };
     };
-    const asked: string[][] = [];
-    const confirm = (answer: boolean) => async (replacements: EntryReference[]) => {
-      asked.push(replacements.map((item) => item.target.path));
-      return answer;
-    };
     const action = {
       checkout,
       kind: 'import' as const,
@@ -270,16 +231,12 @@ test('a batch import with known names asks before replacing what they would land
       // Names match as the workspace folds them.
       nativeNames: ['NESTED.ts', 'new.ts'],
     };
-    assert.deepEqual(
-      await runMutation(f.controller, action, 'folder', { confirmReplace: confirm(false) }),
-      declined,
-    );
+    assert.deepEqual(await f.editor.mutations.run(action, 'folder'), declined);
     assert.equal(dispatched.length, 0);
-    const result = await runMutation(f.controller, action, 'folder', {
-      confirmReplace: confirm(true),
-    });
+    f.reply = true;
+    const result = await f.editor.mutations.run(action, 'folder');
     assert.equal(result.completed, true);
-    assert.deepEqual(asked, [['folder/nested.ts'], ['folder/nested.ts']]);
+    assert.deepEqual(f.asked, [['folder/nested.ts'], ['folder/nested.ts']]);
     assert.equal(dispatched.length, 1);
     assert.equal(dispatched[0].destination, 'folder');
     assert.deepEqual(dispatched[0].nativeReferences, ['one', 'two']);
@@ -289,22 +246,18 @@ test('a batch import with known names asks before replacing what they would land
     );
     // Into the root with nothing in the way, it imports without asking.
     assert.equal(
-      (
-        await runMutation(f.controller, { ...action, nativeNames: ['x.ts', 'y.ts'] }, '', {
-          confirmReplace: never,
-        })
-      ).completed,
+      (await f.editor.mutations.run({ ...action, nativeNames: ['x.ts', 'y.ts'] }, '')).completed,
       true,
     );
     assert.deepEqual(dispatched[1].replacements, []);
     // Names that don't match the references are refused before anything is dispatched.
-    assert.deepEqual(
-      await runMutation(f.controller, { ...action, nativeNames: ['only.ts'] }, '', {
-        confirmReplace: never,
-      }),
-      { completed: false, error: 'Imported names don’t match the selection.', items: [] },
-    );
+    assert.deepEqual(await f.editor.mutations.run({ ...action, nativeNames: ['only.ts'] }, ''), {
+      completed: false,
+      error: 'Imported names don’t match the selection.',
+      items: [],
+    });
     assert.equal(dispatched.length, 2);
+    assert.deepEqual(f.asked, [['folder/nested.ts'], ['folder/nested.ts']]);
     assert.deepEqual(f.disposals, [1, 1, 1, 1]);
   } finally {
     await f.dispose();

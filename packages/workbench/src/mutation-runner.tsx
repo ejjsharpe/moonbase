@@ -4,13 +4,13 @@ import { Button } from '@base-ui/react/button';
 import { Dialog } from '@base-ui/react/dialog';
 import { controls } from '@moonbase/ui/controls';
 import {
-  runMutation as runMutationDirectly,
+  mutationUnavailable,
   type EditorController,
+  type EditorSnapshot,
   type MutationAction,
   type MutationRunResult,
 } from '@moonbase/application/editor';
-import { Popup } from './popup.tsx';
-import { styles } from './workbench-styles.ts';
+import { Popup, popupStyles } from './popup.tsx';
 
 /**
  * Runs a file operation without its dialog, asking only before replacing existing entries.
@@ -29,27 +29,25 @@ export type RunMutation = (
 ) => Promise<MutationRunResult>;
 
 /**
- * One workbench's direct mutations: `runMutation` admits one at a time while `admits` allows it,
- * `confirmation` is the replace prompt to render, and `running` is true while one runs.
- * Unmounting abandons a running mutation, so a late reply completes nothing.
+ * One workbench's direct mutations, run by the editor controller, whose gate admits one at a
+ * time. The workbench adds its own part of the gate: none run while `dialogOpen`, one of its own
+ * dialogs being open. `confirmation` renders the controller's replace prompt. Unmounting declines a
+ * pending prompt.
  */
 export function useMutationRunner(
   controller: EditorController,
-  admits: (action: MutationAction) => boolean,
+  state: EditorSnapshot,
+  dialogOpen: () => boolean,
 ) {
-  const [prompt, setPrompt] = useState<{
-    paths: string[];
-    answer: (replace: boolean) => void;
-    finalFocus?: () => HTMLElement | false;
-  } | null>(null);
-  const [running, setRunning] = useState(false);
-  const runningRef = useRef(false),
-    lifetime = useRef(new AbortController());
-  useEffect(() => {
-    const current = new AbortController();
-    lifetime.current = current;
-    return () => current.abort();
-  }, []);
+  // Where the running mutation's replace prompt returns focus as it closes.
+  const [promptFocus, setPromptFocus] = useState<{ finalFocus?: () => HTMLElement | false }>({});
+  useEffect(
+    () => () => {
+      const prompt = controller.getSnapshot().replacePrompt;
+      if (prompt) controller.mutations.answer(prompt.id, false);
+    },
+    [controller],
+  );
   const runMutation: RunMutation = async (
     action,
     destination,
@@ -59,57 +57,27 @@ export function useMutationRunner(
       if (inlineError) inlineError(message);
       else controller.report(message);
     };
-    if (runningRef.current || !admits(action)) {
-      const error =
-        'File action unavailable. Check the selection and finish the current editor dialog or preservation.';
-      fail(error);
-      return { completed: false, error, items: [] };
+    if (dialogOpen()) {
+      fail(mutationUnavailable);
+      return { completed: false, error: mutationUnavailable, items: [] };
     }
-    const signal = lifetime.current.signal;
-    runningRef.current = true;
-    setRunning(true);
-    try {
-      const result = await runMutationDirectly(
-        controller,
-        { ...action, checkout: { ...action.checkout }, paths: [...action.paths] },
-        destination,
-        {
-          signal,
-          confirmReplace: (replacements) =>
-            new Promise<boolean>((resolve) => {
-              const answer = (replace: boolean) => {
-                signal.removeEventListener('abort', decline);
-                if (!signal.aborted) setPrompt(null);
-                resolve(replace);
-              };
-              const decline = () => answer(false);
-              signal.addEventListener('abort', decline, { once: true });
-              setPrompt({
-                paths: replacements.map((item) => item.target.path),
-                answer,
-                finalFocus,
-              });
-            }),
-        },
-      );
-      if (signal.aborted) return { completed: false, error: '', items: [] };
-      if (result.error) fail(result.error);
-      return result;
-    } finally {
-      runningRef.current = false;
-      if (!signal.aborted) setRunning(false);
-    }
+    // The controller applies the rest of the gate, refusing with `mutationUnavailable`. Only an
+    // admitted run takes the prompt's focus, so a refused one never redirects a running one's.
+    if (controller.mutations.admits(action)) setPromptFocus({ finalFocus });
+    const result = await controller.mutations.run(action, destination);
+    if (result.error) fail(result.error);
+    return result;
   };
+  const prompt = state.replacePrompt;
   const confirmation = prompt && (
-    <ReplacePrompt paths={prompt.paths} answer={prompt.answer} finalFocus={prompt.finalFocus} />
+    <ReplacePrompt
+      key={prompt.id}
+      paths={prompt.paths}
+      answer={(replace) => controller.mutations.answer(prompt.id, replace)}
+      finalFocus={promptFocus.finalFocus}
+    />
   );
-  return {
-    runMutation,
-    running: running || !!prompt,
-    /** Whether a mutation is running now, for event handlers ahead of a render. */
-    isRunning: () => runningRef.current,
-    confirmation,
-  };
+  return { runMutation, confirmation };
 }
 
 /** Asks before a file operation replaces existing entries, starting on Cancel. */
@@ -134,11 +102,11 @@ function ReplacePrompt({
       initialFocus={cancel}
       finalFocus={finalFocus}
       onClose={() => answer(false)}>
-      <Dialog.Description {...stylex.props(styles.path)}>
+      <Dialog.Description {...stylex.props(popupStyles.path)}>
         {paths.join(', ')} {paths.length === 1 ? 'already exists' : 'already exist'} and will be
         replaced.
       </Dialog.Description>
-      <div {...stylex.props(styles.dialogActions)}>
+      <div {...stylex.props(popupStyles.actions)}>
         <Button {...stylex.props(controls.button)} onClick={() => answer(true)}>
           Replace
         </Button>

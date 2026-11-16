@@ -145,11 +145,10 @@ test('collapse skips filesystem reads and reopening shows cached children during
   }
 });
 
-test('large expanded trees keep navigation and selection virtualized', async ({ page }) => {
+test('large expanded trees keep navigation, selection and scroll virtualized', async ({ page }) => {
   await page.goto('/');
-  const tree = page
-    .getByRole('region', { name: 'First editor', exact: true })
-    .getByRole('tree', { name: 'Files', exact: true });
+  const region = page.getByRole('region', { name: 'First editor', exact: true });
+  const tree = region.getByRole('tree', { name: 'Files', exact: true });
   await expect(tree).toBeVisible();
   await page.evaluate(async () => {
     const { first, client, checkout } = window.demo;
@@ -177,6 +176,27 @@ test('large expanded trees keep navigation and selection virtualized', async ({ 
   await expect(lastFolder).toHaveAttribute('aria-posinset', '300');
   await expect(lastFolder).toHaveAttribute('aria-setsize', '300');
   expect(await tree.getByRole('treeitem').count()).toBeLessThan(80);
+  // Shown again, the tree is scrolled where it was left, and a focused row it already shows
+  // stays where it was rather than being scrolled to an edge.
+  const savedScroll = () =>
+    page.evaluate(
+      () =>
+        window.demo.first.getSnapshot().recovery.views[window.demo.checkout.checkoutId].tree.scroll,
+    );
+  await tree.evaluate((element) => element.scrollTo({ top: 4200 }));
+  const middleFolder = tree.getByRole('treeitem', { name: 'folder-155', exact: true });
+  await middleFolder.click();
+  await expect.poll(savedScroll).toBe(4200);
+  const nav = region.getByRole('group', { name: 'Sidebar view', exact: true });
+  await nav.getByRole('button', { name: 'Changes', exact: true }).click();
+  await expect(tree).toHaveCount(0);
+  await nav.getByRole('button', { name: 'Files', exact: true }).click();
+  await expect(middleFolder).toBeInViewport();
+  await expect.poll(() => tree.evaluate((element) => element.scrollTop)).toBe(4200);
+  expect(await savedScroll()).toBe(4200);
+  await tree.focus();
+  await tree.press('End');
+  await expect(lastFolder).toBeInViewport();
   await tree.press('Shift+Home');
   await expect(firstFolder).toBeVisible();
   expect(

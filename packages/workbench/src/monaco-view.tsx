@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from 'react';
+import { useImperativeHandle, useLayoutEffect, useRef, type Ref } from 'react';
 import * as monaco from 'monaco-editor';
 import * as stylex from '@stylexjs/stylex';
 import { workbench } from '@moonbase/ui/workbench';
@@ -39,8 +39,15 @@ export function readSelection(root: HTMLElement | null) {
   return '';
 }
 
+/** What a Monaco view offers its workbench. */
+export type MonacoViewHandle = {
+  /** The text field of the editor shown for the target, the working side of a comparison. */
+  focusTarget(): HTMLElement | null;
+};
+
 /** The composition root supplies Monaco's worker environment before mounting. */
 export function MonacoView({
+  ref,
   controller,
   state,
   target,
@@ -49,6 +56,7 @@ export function MonacoView({
   reveal,
   onRevealed,
 }: {
+  ref?: Ref<MonacoViewHandle>;
   controller: EditorController;
   state: EditorSnapshot;
   target?: FileTarget;
@@ -69,6 +77,17 @@ export function MonacoView({
   const mounted = useRef<
     monaco.editor.IStandaloneCodeEditor | monaco.editor.IStandaloneDiffEditor | null
   >(null);
+  useImperativeHandle(
+    ref,
+    () => ({
+      focusTarget() {
+        const editor = mounted.current;
+        const view = editor && 'getModifiedEditor' in editor ? editor.getModifiedEditor() : editor;
+        return view?.getDomNode()?.querySelector('textarea') ?? null;
+      },
+    }),
+    [],
+  );
   const releaseView = useRef<(() => void) | null>(null),
     revealed = useRef(0);
   const key = target ? fileKey(target) : '',

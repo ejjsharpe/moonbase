@@ -3,8 +3,9 @@ import * as stylex from '@stylexjs/stylex';
 import { Dialog } from '@base-ui/react/dialog';
 import { overlays } from '@moonbase/ui/overlays';
 import { workbench } from '@moonbase/ui/workbench';
-import { styles } from './workbench-styles.ts';
+import { colors, space, type } from '@moonbase/ui/tokens.stylex';
 
+/** A modal editor dialog with a title, closed by Escape or its backdrop. */
 export function Popup({
   title,
   children,
@@ -37,3 +38,21 @@ export function Popup({
     </Dialog.Root>
   );
 }
+
+const styles = stylex.create({
+  backdrop: { position: 'fixed', inset: 0, backgroundColor: colors.backdrop, zIndex: 50 },
+  popup: {
+    position: 'fixed',
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    zIndex: 51,
+    overflowY: 'auto',
+  },
+});
+
+/** The parts of a popup's body: the paths it is about, and its row of buttons. */
+export const popupStyles = stylex.create({
+  path: { overflowWrap: 'anywhere', fontSize: type.small, color: colors.secondary },
+  actions: { display: 'flex', flexWrap: 'wrap', gap: space.sm, marginTop: space.lg },
+});

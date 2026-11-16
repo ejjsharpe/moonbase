@@ -2,6 +2,7 @@ import { normalizeApplicationError } from '@moonbase/effect';
 import { getParentPath, isPathAtOrInside } from '@moonbase/contracts/paths';
 import { EditorDiscovery } from './discovery.ts';
 import { EditorPreservation, type ConfirmedClose } from './preservation.ts';
+import { DirectMutations, type DirectMutationControls } from './direct-mutation.ts';
 import {
   RecoveryOutbox,
   type DebounceRunner,
@@ -142,7 +143,7 @@ export type EditorSnapshot = {
   recoveryFailed: boolean;
   errors: readonly string[];
   operations: readonly OperationResult[];
-};
+} & ReturnType<DirectMutations['snapshot']>;
 type SnapshotData =
   | string
   | number
@@ -187,6 +188,10 @@ class EditorModelState {
    */
   private initialization?: { checkoutId: string; done: Promise<void> };
   private preservation: EditorPreservation;
+  readonly mutations = new DirectMutations(this, {
+    run: (effect) => this.run(effect),
+    notify: () => this.emit(),
+  });
   private buffers = new Map<string, EditorBuffer>();
   /** Every open tab's buffer in the recovery store, by file key. */
   private tabs = new Map<string, EditorTab>();
@@ -339,6 +344,7 @@ class EditorModelState {
       disposed: this.disposed,
       closePrompt: this.preservation.prompt,
       preserving: this.preservation.active,
+      ...this.mutations.snapshot(),
       initializing: this.initialization?.checkoutId ?? null,
       discoveryRevision: this.discovery.discoveryRevision,
       recovery: this.recovery,
@@ -2171,6 +2177,7 @@ class EditorModelState {
     this.closing = true;
     this.discovery.invalidateActivation();
     this.preservation.cancelPrompt();
+    this.mutations.close();
     this.outbox.clear();
     for (const workflow of this.workflows) workflow.stop();
     this.emit(true);
@@ -2270,6 +2277,7 @@ export interface EditorController {
   /** Searches file contents in one open checkout; dispose it with the popup that owns it. */
   createTextSearch(): EditorTextSearch;
   createMutation(action: MutationAction): EditorMutation;
+  readonly mutations: DirectMutationControls;
   inspect(checkout: CheckoutTarget, paths: string[]): Promise<CommandOutput<'inspectEntries'>>;
   mutate(
     input: Omit<WorkspaceOperation, 'clientId' | 'id'> & { id?: string },

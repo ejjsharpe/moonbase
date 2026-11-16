@@ -3,7 +3,7 @@ import type { DirectoryEntry, DirectoryListing } from '@moonbase/contracts/works
 /** Each tree row's height in pixels. */
 export const rowHeight = 28;
 /** Rows mounted beyond each edge of the scrolled window. */
-const overscan = 10;
+export const overscan = 10;
 
 /** A listed entry the tree shows, with its place among its siblings. */
 export type VisibleRow = DirectoryEntry & {
@@ -96,35 +96,33 @@ export function findCreateFolder(
 }
 
 /**
- * The indexes of the rows to mount, in order: those in or near the scrolled window, the focused
- * row, and any `pinnedPaths` that are visible rows, however far they are scrolled away.
+ * The indexes of the rows to mount, in order: the virtualizer's `windowed` ones, the focused row,
+ * and any `pinnedPaths` that are visible rows, however far they are scrolled away.
  */
-export function selectMountedIndexes({
-  rows,
-  top,
-  height,
-  focusIndex,
-  pinnedPaths = [],
-}: {
-  rows: readonly VisibleRow[];
-  top: number;
-  height: number;
-  focusIndex: number;
-  pinnedPaths?: Iterable<string>;
-}) {
-  const indexes = new Set<number>([focusIndex]);
-  for (
-    let index = Math.max(0, Math.floor(top / rowHeight) - overscan);
-    index < Math.min(rows.length, Math.ceil((top + height) / rowHeight) + overscan);
-    index++
-  )
-    indexes.add(index);
+export function addPinnedIndexes(
+  windowed: readonly number[],
+  rows: readonly VisibleRow[],
+  focusIndex: number,
+  pinnedPaths: Iterable<string> = [],
+) {
+  const indexes = new Set<number>([...windowed, focusIndex]);
   const pinned = new Set(pinnedPaths);
   if (pinned.size)
     rows.forEach((row, index) => {
       if (pinned.has(row.path)) indexes.add(index);
     });
   return [...indexes].filter((index) => index < rows.length).sort((a, b) => a - b);
+}
+
+/** Whether a listed entry of a checkout is a folder. */
+export function isListedDirectory(
+  listings: Readonly<Record<string, DirectoryListing>>,
+  checkoutIdentity: string,
+  path: string,
+) {
+  const parent = path.split('/').slice(0, -1).join('/');
+  const listing = listings[JSON.stringify([checkoutIdentity, parent])];
+  return !!listing?.entries.find((entry) => entry.path === path)?.directory;
 }
 
 /** The length of a name's stem, which is selected first: all of a folder's or dotfile's name. */

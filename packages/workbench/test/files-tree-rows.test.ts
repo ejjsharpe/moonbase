@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { DirectoryListing } from '@moonbase/contracts/workspace';
 import {
+  addPinnedIndexes,
   findCreateFolder,
   findShownPath,
   listVisibleRows,
   measureStem,
   placeholderPath,
-  selectMountedIndexes,
 } from '../src/files-tree/files-tree-rows.ts';
 
 const checkout = 'checkout';
@@ -166,7 +166,7 @@ test('a name’s stem leaves out its extension, except for folders and dotfiles'
   assert.equal(measureStem('', false), 0);
 });
 
-test('mounted rows cover the scrolled window, the focused row and pinned rows', () => {
+test('mounted rows add the focused row and pinned rows to the windowed ones', () => {
   const rows = Array.from({ length: 200 }, (_, index) => ({
     path: `file-${index}`,
     directory: false,
@@ -176,20 +176,11 @@ test('mounted rows cover the scrolled window, the focused row and pinned rows', 
   }));
   const range = (start: number, end: number) =>
     Array.from({ length: end - start }, (_, index) => start + index);
-  // 28px rows: 1400px down shows rows 50–60, with ten more mounted on each side.
-  assert.deepEqual(
-    selectMountedIndexes({ rows, top: 1400, height: 280, focusIndex: 55 }),
-    range(40, 70),
-  );
-  assert.deepEqual(
-    selectMountedIndexes({
-      rows,
-      top: 1400,
-      height: 280,
-      focusIndex: 3,
-      pinnedPaths: ['file-199', 'file-60', 'not-a-row'],
-    }),
-    [3, ...range(40, 70), 199],
-  );
-  assert.deepEqual(selectMountedIndexes({ rows: [], top: 0, height: 500, focusIndex: 0 }), []);
+  assert.deepEqual(addPinnedIndexes(range(40, 70), rows, 55), range(40, 70));
+  assert.deepEqual(addPinnedIndexes(range(40, 70), rows, 3, ['file-199', 'file-60', 'not-a-row']), [
+    3,
+    ...range(40, 70),
+    199,
+  ]);
+  assert.deepEqual(addPinnedIndexes([], [], 0), []);
 });
