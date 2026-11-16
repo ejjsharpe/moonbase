@@ -3,14 +3,13 @@ import * as stylex from '@stylexjs/stylex';
 import { Button } from '@base-ui/react/button';
 import { Dialog } from '@base-ui/react/dialog';
 import { Tabs } from '@base-ui/react/tabs';
-import type { MoonbaseApplication } from '@moonbase/application';
+import type { DesktopApplicationView } from './desktop-application.ts';
 import type { ChatController } from '@moonbase/application/chat';
 import { controls } from '@moonbase/ui/controls';
 import { colors, radius, shadow, space, type } from '@moonbase/ui/tokens.stylex';
 import { workbench } from '@moonbase/ui/workbench';
 import { ProviderSetup } from '../chat/provider-setup.tsx';
 import { Icon } from '@moonbase/ui/icons';
-import { normalizeApplicationError } from '@moonbase/effect';
 
 export type SettingsSection = 'hosts' | 'providers';
 const noSubscription = () => () => {};
@@ -24,7 +23,7 @@ export function Settings({
   onSectionChange,
   close,
 }: {
-  application: MoonbaseApplication;
+  application: DesktopApplicationView;
   chat: ChatController | null;
   section: SettingsSection;
   onSectionChange(section: SettingsSection): void;
@@ -93,10 +92,10 @@ function Hosts({
   application,
   chat,
 }: {
-  application: MoonbaseApplication;
+  application: DesktopApplicationView;
   chat: ChatController | null;
 }) {
-  const lifecycle = useSyncExternalStore(application.subscribe, application.getSnapshot);
+  const { lifecycle } = application;
   const state = useSyncExternalStore(
     chat?.subscribe ?? noSubscription,
     chat?.getSnapshot ?? noChat,
@@ -122,7 +121,7 @@ function Hosts({
     setPending(true);
     void application
       .selectChatTarget(id)
-      .catch((error) => setSwitchError(normalizeApplicationError(error).message))
+      .catch((error) => setSwitchError(application.describe(error)))
       .finally(() => setPending(false));
   };
   // Buttons stay focusable while disabled, but one that goes, such as Use once its host is in use,

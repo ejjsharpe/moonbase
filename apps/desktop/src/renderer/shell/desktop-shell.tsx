@@ -14,7 +14,6 @@ import {
 import { Tabs } from '@base-ui/react/tabs';
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
-import type { MoonbaseApplication } from '@moonbase/application';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
@@ -28,7 +27,9 @@ import { readOwn } from '@moonbase/application/editor';
 import { Icon } from '@moonbase/ui/icons';
 import {
   isFileDropTaken,
+  useEditorActions,
   Workbench,
+  type WorkbenchEditor,
   type PickerEntry,
   pickerCommand,
   pickerMode,
@@ -45,13 +46,17 @@ import {
   type Place,
 } from './history.ts';
 import { MainTabs, tabValue } from './main-tabs.tsx';
+import { useDesktopApplication, type DesktopApplication } from './desktop-application.ts';
+import { useAtomValue } from '@effect/atom-react';
 
 export type DesktopShellHandle = {
   prepareQuit(): Promise<boolean>;
   importFiles(checkout: CheckoutTarget, references: string[]): void;
 };
 export type DesktopShellProps = {
-  application: MoonbaseApplication;
+  application: DesktopApplication;
+  /** The project editor the shell's workbench shows. */
+  editor: WorkbenchEditor;
   closing?: boolean;
   /** These callbacks return user-approved roots or opaque native references, never source paths. */
   transcriptNative?: (backendId: string) => TranscriptNative;
@@ -129,11 +134,11 @@ const windowShortcuts = [{ label: 'Project chats', keys: 'Meta+J' }];
 const railWidth = (collapsed: boolean) => (collapsed ? 0 : 52);
 const dockDefaultWidth = 400,
   dockMinWidth = 320;
-const noEditor = () => undefined;
 
 export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(function DesktopShell(
   {
-    application,
+    application: desktopApplication,
+    editor,
     closing = false,
     chooseChatFolder,
     recentChatFolders,
@@ -148,13 +153,10 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   },
   ref,
 ) {
-  const controller = application.editors[0],
-    lifecycle = useSyncExternalStore(application.subscribe, application.getSnapshot),
-    state = useSyncExternalStore(
-      controller?.subscribe ?? noSubscription,
-      controller?.getSnapshot ?? noEditor,
-    ),
-    chat = application.chat;
+  const application = useDesktopApplication(desktopApplication),
+    controller = useEditorActions(editor),
+    { lifecycle, chat } = application,
+    state = useAtomValue(editor.atoms.snapshot);
   const [destination, setDestination] = useState<'project' | 'chat'>('chat');
   const [dockOpen, setDockOpen] = useState(true);
   const [resizingDock, setResizingDock] = useState(false);
@@ -560,7 +562,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       const consent = await application.prepareQuit();
       if (
         !consent &&
-        (application.chat?.getSnapshot().storageError ||
+        (application.getChat()?.getSnapshot().storageError ||
           application.getSnapshot().chat.state === 'initialization-failed')
       )
         setDestination('chat');
@@ -888,7 +890,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
           <section {...stylex.props(styles.panel)} aria-label="Editor workbench">
             <Workbench
               ref={handle}
-              controller={controller}
+              editor={editor}
               checkout={selected}
               showBreadcrumbs={false}
               sidebarHidden={sidebarHidden}
