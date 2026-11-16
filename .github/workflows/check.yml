@@ -151,7 +151,7 @@ jobs:
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
       - run: bun install --frozen-lockfile
       - id: affected
-        run: echo "projects=$(bunx nx show projects $NX_PROJECTS --with-target test:ui --with-target test:browser)" >> "$GITHUB_OUTPUT"
+        run: echo "projects=$(bunx nx show projects --json $NX_PROJECTS --with-target test:ui --with-target test:browser)" >> "$GITHUB_OUTPUT"
       - if: steps.affected.outputs.projects != '[]'
         run: bunx playwright install --with-deps --only-shell chromium
       - if: steps.affected.outputs.projects != '[]'
@@ -189,7 +189,7 @@ jobs:
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
       - run: bun install --frozen-lockfile
       - id: affected
-        run: echo "projects=$(bunx nx show projects $NX_PROJECTS --with-target test:native)" >> "$GITHUB_OUTPUT"
+        run: echo "projects=$(bunx nx show projects --json $NX_PROJECTS --with-target test:native)" >> "$GITHUB_OUTPUT"
       - if: steps.affected.outputs.projects != '[]'
         run: node scripts/prepare-ripgrep.mjs
       - if: steps.affected.outputs.projects != '[]'
