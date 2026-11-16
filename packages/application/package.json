@@ -9,7 +9,8 @@
     "./editor": "./src/editor/index.ts",
     "./testing/faux-workspace": "./src/testing/faux-workspace.ts",
     "./testing/faux-chat": "./src/testing/faux-chat.ts",
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./testing/editor-fixture": "./src/testing/editor-fixture.ts"
   },
   "scripts": {
     "typecheck": "bun check --no-script -p tsconfig.json",
