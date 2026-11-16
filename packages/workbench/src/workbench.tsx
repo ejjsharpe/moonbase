@@ -2,6 +2,7 @@ import {
   forwardRef,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -121,6 +122,17 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const buffer =
     target && state.buffers.find((buffer) => fileKey(buffer.target) === fileKey(target));
   const mode = (target && readOwn(view?.fileViews, target.path)) || 'file';
+  // The checkout this workbench shows, for a close that settles after its prompt; null once
+  // unmounted. It must not open a file of a checkout the app has since switched away from, and
+  // the checkout shown need not be the editor's selected one.
+  const shownCheckout = useRef<string | null>(null),
+    projectIdentity = project ? checkoutKey(project) : null;
+  useLayoutEffect(() => {
+    shownCheckout.current = projectIdentity;
+    return () => {
+      shownCheckout.current = null;
+    };
+  }, [projectIdentity]);
   // A plain folder has no Git changes, comparisons or Changes view.
   const git = checkout?.vcs === 'git';
   // Git lists a file once per area it changed in (staged and unstaged, say); count it once.
@@ -188,9 +200,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     const closed = await actions.close(paths.map((path) => ({ checkout, path })));
     const next = actions.getSnapshot().recovery;
     const path = readOwn(next.views, checkout.checkoutId)?.active;
-    // A close that settles after its prompt must not open a file of a checkout the app has since
-    // switched the editor away from.
-    const current = () => actions.getSnapshot().recovery.selectedCheckoutId === checkout.checkoutId;
+    const current = () => shownCheckout.current === checkoutKey(checkout);
     if (closed && path && next.openCheckoutIds.includes(checkout.checkoutId) && current())
       await actions.open({ checkout, path }, { current });
     return closed;

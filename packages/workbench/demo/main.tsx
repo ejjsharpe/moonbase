@@ -98,7 +98,8 @@ const client: typeof raw = {
     return raw.command(name, input, options);
   },
 };
-const workspace = makeDemoWorkspace(base, () => window.demo.client);
+// Specs may swap `window.demo.client`; before it exists the editors load through `client`.
+const workspace = makeDemoWorkspace(base, () => window.demo?.client ?? client);
 const registry = makeDemoRegistry();
 const [firstEditor, secondEditor] = await Promise.all(
   ['demo-first', 'demo-second'].map((clientId) =>
