@@ -24,4 +24,9 @@ export type {
   MutationSnapshot,
 } from './workflows.ts';
 export { readOwn } from './record.ts';
-export { runMutation, type MutationRunResult } from './run-mutation.ts';
+export {
+  maxMutationEntries,
+  mutationUnavailable,
+  type MutationRunResult,
+  type ReplacePrompt,
+} from './direct-mutation.ts';

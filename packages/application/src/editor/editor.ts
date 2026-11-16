@@ -2,6 +2,7 @@ import { normalizeApplicationError } from '@moonbase/effect';
 import { getParentPath, isPathAtOrInside } from '@moonbase/contracts/paths';
 import { EditorDiscovery } from './discovery.ts';
 import { EditorPreservation, type ConfirmedClose } from './preservation.ts';
+import { DirectMutations, type MutationRunResult, type ReplacePrompt } from './direct-mutation.ts';
 import { RecoveryPublications, type PublicationOptions } from './recovery-publications.ts';
 import {
   EditorLookup,
@@ -115,6 +116,9 @@ export type EditorSnapshot = {
   disposed: boolean;
   closePrompt: ClosePrompt | null;
   preserving: boolean;
+  /** Whether a direct mutation (`runMutation`) is running, including while it asks. */
+  mutating: boolean;
+  replacePrompt: ReplacePrompt | null;
   /** The checkout whose `initializeRepository` is running; it refuses saves and file operations. */
   initializing: string | null;
   discoveryRevision: number;
@@ -171,6 +175,7 @@ class EditorModelState {
    */
   private initialization?: { checkoutId: string; done: Promise<void> };
   private preservation: EditorPreservation;
+  private directMutations: DirectMutations;
   private buffers = new Map<string, EditorBuffer>();
   private saveResults = new Map<string, Extract<SaveResult, { kind: 'saved' }>>();
   private comparisons: Record<string, Comparison> = {};
@@ -270,6 +275,18 @@ class EditorModelState {
         this.schedule();
       },
     });
+    this.directMutations = new DirectMutations({
+      state: () => ({
+        ready: this.ready,
+        closing: this.closing,
+        preserving: this.preservation.active || !!this.preservation.prompt,
+        recovery: this.recovery,
+      }),
+      createMutation: (action) => this.createMutation(action),
+      run: (effect) => this.run(effect),
+      notify: () => this.emit(),
+      report: (error) => this.report(error),
+    });
     this.recovery = emptyRecovery(this.clientId);
     this.emit();
   }
@@ -320,6 +337,8 @@ class EditorModelState {
       disposed: this.disposed,
       closePrompt: this.preservation.prompt,
       preserving: this.preservation.active,
+      mutating: this.directMutations.running,
+      replacePrompt: this.directMutations.prompt,
       initializing: this.initialization?.checkoutId ?? null,
       discoveryRevision: this.discovery.discoveryRevision,
       recovery: this.recovery,
@@ -1635,6 +1654,15 @@ class EditorModelState {
     };
     return mutation;
   }
+  canMutate(action: MutationAction) {
+    return this.directMutations.admits(action);
+  }
+  runMutation(action: MutationAction, destination: string) {
+    return this.directMutations.run(action, destination);
+  }
+  answerReplace(promptId: string, replace: boolean) {
+    this.directMutations.answer(promptId, replace);
+  }
   inspect(checkout: CheckoutTarget, paths: string[]) {
     this.assertAdmission();
     return this.inspectIn(checkout, paths, this.scope);
@@ -2065,6 +2093,7 @@ class EditorModelState {
     this.closing = true;
     this.discovery.invalidateActivation();
     this.preservation.cancelPrompt();
+    this.directMutations.cancel();
     this.deferredFacts = [];
     for (const workflow of this.workflows) workflow.stop();
     this.emit(true);
@@ -2166,6 +2195,14 @@ export interface EditorController {
   /** Searches file contents in one open checkout; dispose it with the popup that owns it. */
   createTextSearch(): EditorTextSearch;
   createMutation(action: MutationAction): EditorMutation;
+  /** Whether `runMutation` would admit `action` now: the one mutation gate. */
+  canMutate(action: MutationAction): boolean;
+  /**
+   * Runs one file operation without a dialog, one at a time, publishing `replacePrompt` before it
+   * replaces existing entries. It never rejects; a refusal or failure is the result's `error`.
+   */
+  runMutation(action: MutationAction, destination: string): Promise<MutationRunResult>;
+  answerReplace(promptId: string, replace: boolean): void;
   inspect(checkout: CheckoutTarget, paths: string[]): Promise<CommandOutput<'inspectEntries'>>;
   mutate(
     input: Omit<WorkspaceOperation, 'clientId' | 'id'> & { id?: string },

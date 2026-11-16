@@ -15,7 +15,6 @@ import { Mutation, type Action } from './mutation-dialog.tsx';
 import { useMutationRunner } from './mutation-runner.tsx';
 import { useMoveUndo } from './files-tree/move-undo.ts';
 import { useFileClipboard } from './files-tree/file-clipboard.ts';
-import { maxDraggedEntries } from './files-tree/files-tree-drop.ts';
 import { formatKeys, isCommandKey } from './files-tree/file-commands.ts';
 import { Popup } from './popup.tsx';
 import {
@@ -43,10 +42,10 @@ import type { CheckoutTarget, FileView } from '@moonbase/contracts/workspace';
 import {
   checkoutKey,
   fileKey,
+  mutationUnavailable,
   readOwn,
   type CloseChoice,
   type EditorController,
-  type EditorSnapshot,
 } from '@moonbase/application/editor';
 import { MonacoView, readSelection, type EditorReveal } from './monaco-view.tsx';
 import { WorktreeSwitcher } from './worktree-switcher.tsx';
@@ -195,31 +194,18 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     actionRef.current = value;
     updateAction(value);
   }
-  // Rename, Duplicate and New File/Folder run directly from the tree, asking only to replace.
-  const mutations = useMutationRunner(controller, (value) =>
-    canRequestMutation(value, controller.getSnapshot(), !!(actionRef.current || lookupRef.current)),
-  );
-  function canRequestMutation(
-    value: Action,
-    snapshot: EditorSnapshot = state,
-    blocked = !!(action || lookup || mutations.running),
-  ) {
-    return (
-      snapshot.ready &&
-      !snapshot.disposed &&
-      !snapshot.preserving &&
-      !snapshot.closePrompt &&
-      !blocked &&
-      snapshot.recovery.openCheckoutIds.includes(value.checkout.checkoutId) &&
-      snapshot.recovery.checkouts.some(
-        (target) => checkoutKey(target) === checkoutKey(value.checkout),
-      ) &&
-      // Several entries move or copy into one folder, as a drag from the tree does.
-      (!(value.kind === 'move' || value.kind === 'copy') ||
-        (value.paths.length >= 1 && value.paths.length <= maxDraggedEntries)) &&
-      (value.kind !== 'trash' || value.paths.length > 0)
-    );
+  /**
+   * The mutation gate: the controller's, and none of the workbench's own dialogs open. `now`
+   * reads those from the refs, for an event handler ahead of a render.
+   */
+  function canRequestMutation(value: Action, now = false) {
+    const dialogOpen = now ? actionRef.current || lookupRef.current : action || lookup;
+    return !dialogOpen && controller.canMutate(value);
   }
+  // Rename, Duplicate and New File/Folder run directly from the tree, asking only to replace.
+  const mutations = useMutationRunner(controller, state, (value) =>
+    canRequestMutation(value, true),
+  );
   // Moves and renames made from the tree, one per checkout, for Undo; any other file operation
   // from the tree or a dialog forgets the checkout's.
   const moveUndo = useMoveUndo(controller, mutations.runMutation, openCheckouts);
@@ -228,25 +214,12 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     controller,
     runMutation: moveUndo.run,
     recordMove: moveUndo.record,
-    canRequestMutation: (value) =>
-      canRequestMutation(
-        value,
-        controller.getSnapshot(),
-        !!(actionRef.current || lookupRef.current || mutations.isRunning()),
-      ),
+    canRequestMutation: (value) => canRequestMutation(value, true),
     copyPaths,
   });
   function requestMutation(value: Action, finalFocus?: () => boolean | HTMLElement | null) {
-    if (
-      !canRequestMutation(
-        value,
-        controller.getSnapshot(),
-        !!(actionRef.current || lookupRef.current || mutations.isRunning()),
-      )
-    ) {
-      controller.reportMessage(
-        'File action unavailable. Check the selection and finish the current editor dialog or preservation.',
-      );
+    if (!canRequestMutation(value, true)) {
+      controller.reportMessage(mutationUnavailable);
       return;
     }
     setAction({ ...value, checkout: { ...value.checkout }, paths: [...value.paths] }, finalFocus);
@@ -793,7 +766,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 visible={visible}
                 follow={following && !sidebarHidden && visible}
                 followed={followedFiles.current}
-                dialogOpen={!!(action || choice || lookup || mutations.running)}
+                dialogOpen={!!(action || choice || lookup || state.mutating)}
                 canRequestMutation={canRequestMutation}
                 requestMutation={requestMutation}
                 runMutation={moveUndo.run}

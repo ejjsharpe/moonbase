@@ -12,7 +12,7 @@ export type FollowedFiles = Map<string, string | null>;
 /**
  * Follow Active File: reveals each newly `active` file in the tree while `follow` holds and the
  * tree is left alone (`busy` is false and focus is elsewhere), catching up on a file made active
- * while it couldn't follow. A checkout first seen in `followed` keeps its restored tree.
+ * while it couldn't follow or was busy. A checkout first seen in `followed` keeps its restored tree.
  */
 export function useFollowActiveFile({
   controller,
@@ -47,10 +47,11 @@ export function useFollowActiveFile({
   });
   useEffect(() => {
     // A checkout first seen keeps its restored tree; later, a file made active while the tree
-    // couldn't follow (hidden, unmounted for Changes, or behind a dialog) is revealed once it can.
+    // couldn't follow (hidden, unmounted for Changes, behind a dialog, or busy, such as while a
+    // name it committed is still being applied) is revealed once it can.
     if (!followed.has(checkoutIdentity)) followed.set(checkoutIdentity, active);
     const previous = followed.get(checkoutIdentity)!;
-    if (!follow || dialogOpen || !active || previous === active) return;
+    if (!follow || dialogOpen || busy || !active || previous === active) return;
     followed.set(checkoutIdentity, active);
     const path = active;
     // The tree follows only while shown and left alone: not while the user is in it, typing a
@@ -96,5 +97,5 @@ export function useFollowActiveFile({
         followed.set(checkoutIdentity, previous);
     };
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- Follow each active file, catching up when following resumes.
-  }, [active, follow, dialogOpen]);
+  }, [active, follow, dialogOpen, busy]);
 }
