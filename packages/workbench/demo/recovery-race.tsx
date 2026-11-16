@@ -1,16 +1,20 @@
-import { createMoonbaseApplication } from '@moonbase/application';
-import { makeEditorModel, makeEditorController } from '@moonbase/application/editor';
 import { createRoot } from 'react-dom/client';
-import { useSyncExternalStore } from 'react';
 import { Tabs } from '@base-ui/react/tabs';
 import * as stylex from '@stylexjs/stylex';
+import { RegistryContext, useAtomValue } from '@effect/atom-react';
 import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
-import { Effect, Exit, Scope, ManagedRuntime } from 'effect';
-const modelScope = Scope.makeUnsafe();
-import { ApplicationError } from '@moonbase/contracts/workspace';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { Effect, ManagedRuntime } from 'effect';
+import { WorkspaceService } from '@moonbase/contracts/services';
+import { ApplicationError, type CommandOutput } from '@moonbase/contracts/workspace';
 import { Workbench } from '../src/index.ts';
+import {
+  buildDemoEditor,
+  makeDemoClient,
+  makeDemoRegistry,
+  makeDemoWorkspace,
+  type DemoClient,
+} from './demo-editors.ts';
 import { configureMonacoWorkers } from '../src/workers.ts';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 import '@moonbase/ui/reset.css';
@@ -47,17 +51,18 @@ const memory = fauxWorkspace(
     };
   }),
 );
-const runtime = ManagedRuntime.make(memory.layer),
-  client = makeEditorClient(runtime);
-const seed = makeEditorController(
-  runtime,
-  await runtime.runPromise(
-    makeEditorModel({ client, clientId: 'recovery-race' }).pipe(
-      Effect.provideService(Scope.Scope, modelScope),
-    ),
-  ),
-);
-await seed.load();
+const runtime = ManagedRuntime.make(memory.layer);
+const base = await runtime.runPromise(Effect.service(WorkspaceService)),
+  client = makeDemoClient(runtime, base),
+  registry = makeDemoRegistry();
+const seed = (
+  await buildDemoEditor(
+    runtime,
+    registry,
+    makeDemoWorkspace(base, () => client),
+    'recovery-race',
+  )
+).handle;
 await seed.openCheckout(beta.root);
 await seed.open({ checkout: beta, path: 'a.ts' });
 if (parameters.has('both')) await seed.open({ checkout: beta, path: 'b.ts' });
@@ -67,10 +72,10 @@ await seed.open(
   { checkout: alpha, path: 'a.ts' },
   { view: comparisonArea === 'staged' || comparisonArea === 'unstaged' ? comparisonArea : 'file' },
 );
-if (dirtyArea) seed.edit({ checkout: alpha, path: 'a.ts' }, 'restored dirty A');
+if (dirtyArea) await seed.edit({ checkout: alpha, path: 'a.ts' }, 'restored dirty A');
 if (!missingArea) await seed.open({ checkout: alpha, path: 'b.ts' });
 await seed.flush();
-await seed.dispose();
+await seed.release();
 const edits = new Set(['openTab', 'closeTab', 'updateDraft', 'updateLayout']);
 let loseFinal = false;
 let hold = false,
@@ -84,42 +89,40 @@ let holdCopyPreflight = false,
 let releaseCopyPreflight = () => {};
 let copyPreflight = Promise.resolve(),
   copying = Promise.resolve();
-const application = await createMoonbaseApplication({
-    editors: [
-      {
-        clientId: 'recovery-race',
-        client: {
-          ...client,
-          async command(name, input, options) {
-            if (edits.has(name) && holdCopyPreflight) {
-              holdCopyPreflight = false;
-              const receipt = await client.command(name, input, options);
-              copyPhase = 'preflight';
-              await copyPreflight;
-              return receipt;
-            }
-            if (hold && edits.has(name)) {
-              waiting = true;
-              await wait;
-            }
-            // The close commits in the store, and its reply is lost.
-            if (loseFinal && name === 'closeTab') {
-              loseFinal = false;
-              await client.command(name, input, options);
-              throw new ApplicationError({
-                code: 'Unavailable',
-                message: 'Controlled lost final close response',
-              });
-            }
-            return client.command(name, input, options);
-          },
-        },
-      },
-    ],
-  }),
-  editor = application.editors[0]!;
+const racing: DemoClient = {
+  async command(name, input, options) {
+    if (edits.has(name) && holdCopyPreflight) {
+      holdCopyPreflight = false;
+      const receipt = await client.command(name, input, options);
+      copyPhase = 'preflight';
+      await copyPreflight;
+      return receipt;
+    }
+    if (hold && edits.has(name)) {
+      waiting = true;
+      await wait;
+    }
+    // The close commits in the store, and its reply is lost.
+    if (loseFinal && name === 'closeTab') {
+      loseFinal = false;
+      await client.command(name, input, options);
+      throw new ApplicationError({
+        code: 'Unavailable',
+        message: 'Controlled lost final close response',
+      });
+    }
+    return client.command(name, input, options);
+  },
+};
+const built = await buildDemoEditor(
+    runtime,
+    registry,
+    makeDemoWorkspace(base, () => racing),
+    'recovery-race',
+  ),
+  editor = built.handle;
 function RecoveryRace() {
-  const { recovery } = useSyncExternalStore(editor.subscribe, editor.getSnapshot);
+  const { recovery } = useAtomValue(built.editor.atoms.views);
   const checkout = recovery.checkouts.find(
     (item) => item.checkoutId === recovery.selectedCheckoutId,
   );
@@ -144,11 +147,15 @@ function RecoveryRace() {
             ))}
         </Tabs.List>
       </Tabs.Root>
-      <Workbench controller={editor} checkout={checkout} />
+      <Workbench editor={built.editor} checkout={checkout} />
     </div>
   );
 }
-createRoot(document.getElementById('root')!).render(<RecoveryRace />);
+createRoot(document.getElementById('root')!).render(
+  <RegistryContext.Provider value={registry}>
+    <RecoveryRace />
+  </RegistryContext.Provider>,
+);
 declare global {
   interface Window {
     recoveryRace: {
@@ -164,7 +171,7 @@ declare global {
         finish(): Promise<void>;
         readonly phase: string;
       };
-      load(): ReturnType<typeof client.command<'loadRecovery'>>;
+      load(): Promise<CommandOutput<'loadRecovery'>>;
     };
   }
 }
@@ -207,7 +214,7 @@ window.recoveryRace = {
         releaseCopyPreflight = resolve;
       });
       // The copy's own flush has an edit to send, which the hold catches.
-      editor.edit({ checkout: alpha, path: 'a.ts' }, 'source before the copy');
+      void editor.edit({ checkout: alpha, path: 'a.ts' }, 'source before the copy');
       copying = editor
         .inspect(alpha, ['a.ts'])
         .then((sources) =>
@@ -233,10 +240,7 @@ window.recoveryRace = {
 window.addEventListener(
   'pagehide',
   () => {
-    void application
-      .dispose()
-      .finally(() => runtime.runPromiseExit(Scope.close(modelScope, Exit.void)))
-      .finally(() => runtime.dispose());
+    void editor.release().finally(() => runtime.dispose());
   },
   { once: true },
 );

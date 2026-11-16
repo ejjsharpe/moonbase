@@ -1,10 +1,17 @@
-import { createMoonbaseApplication } from '@moonbase/application';
 import { createRoot } from 'react-dom/client';
-import { ManagedRuntime } from 'effect';
+import { Effect, ManagedRuntime } from 'effect';
 import * as stylex from '@stylexjs/stylex';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import type { CommandInput, EditorClient } from '@moonbase/contracts/workspace';
+import { RegistryContext } from '@effect/atom-react';
+import { WorkspaceService } from '@moonbase/contracts/services';
+import type { CommandInput, CommandOutput } from '@moonbase/contracts/workspace';
 import { Workbench } from '../src/index.ts';
+import {
+  buildDemoEditor,
+  makeDemoClient,
+  makeDemoRegistry,
+  makeDemoWorkspace,
+  type DemoClient,
+} from './demo-editors.ts';
 import { configureMonacoWorkers } from '../src/workers.ts';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 import '@moonbase/ui/reset.css';
@@ -23,8 +30,10 @@ const checkout = {
 };
 const files = { 'a.ts': 'A', 'b.ts': 'B' };
 const memory = fauxWorkspace([{ checkout, files, head: { ...files } }]);
-const runtime = ManagedRuntime.make(memory.layer),
-  raw = makeEditorClient(runtime);
+const runtime = ManagedRuntime.make(memory.layer);
+const base = await runtime.runPromise(Effect.service(WorkspaceService)),
+  raw = makeDemoClient(runtime, base),
+  registry = makeDemoRegistry();
 let entered!: () => void, release!: () => void;
 const began = new Promise<void>((resolve) => {
     entered = resolve;
@@ -35,8 +44,7 @@ const began = new Promise<void>((resolve) => {
 let holdB = false,
   savingB = Promise.resolve(false);
 const requests: CommandInput<'saveFile'>[] = [];
-const client: EditorClient = {
-  ...raw,
+const client: DemoClient = {
   async command(name, input, options) {
     if (name === 'saveFile') {
       const request = input as CommandInput<'saveFile'>;
@@ -49,21 +57,30 @@ const client: EditorClient = {
     return raw.command(name, input, options);
   },
 };
-let application = await createMoonbaseApplication({ editors: [{ client, clientId: 'save-race' }] }),
-  editor = application.editors[0]!;
+let built = await buildDemoEditor(
+    runtime,
+    registry,
+    makeDemoWorkspace(base, () => client),
+    'save-race',
+  ),
+  editor = built.handle;
 await editor.openCheckout(checkout.root);
 for (const path of ['a.ts', 'b.ts']) {
   await editor.open({ checkout, path });
-  editor.edit({ checkout, path }, 'CAPTURE ' + path);
+  await editor.edit({ checkout, path }, 'CAPTURE ' + path);
 }
 await editor.open({ checkout, path: 'a.ts' });
 await editor.flush();
+// Each restart remounts the workbench on the new editor.
+let restarts = 0;
 const styles = stylex.create({ root: { height: '100dvh' } }),
   root = createRoot(document.getElementById('root')!);
 const render = () =>
   root.render(
     <div {...stylex.props(styles.root)}>
-      <Workbench key={editor.instanceId} controller={editor} checkout={checkout} />
+      <RegistryContext.Provider value={registry}>
+        <Workbench key={restarts} editor={built.editor} checkout={checkout} />
+      </RegistryContext.Provider>
     </div>,
   );
 render();
@@ -85,11 +102,15 @@ window.saveRace = {
   },
   load: () => raw.command('loadRecovery', { clientId: editor.clientId }),
   async restart() {
-    await application.dispose();
-    application = await createMoonbaseApplication({
-      editors: [{ client: raw, clientId: 'save-race' }],
-    });
-    editor = application.editors[0]!;
+    await editor.release();
+    built = await buildDemoEditor(
+      runtime,
+      registry,
+      makeDemoWorkspace(base, () => raw),
+      'save-race',
+    );
+    editor = built.handle;
+    restarts++;
     render();
   },
 };
@@ -102,7 +123,7 @@ declare global {
       requests: typeof requests;
       startB(): Promise<void>;
       releaseB(): Promise<void>;
-      load(): ReturnType<typeof raw.command<'loadRecovery'>>;
+      load(): Promise<CommandOutput<'loadRecovery'>>;
       restart(): Promise<void>;
     };
   }
@@ -111,7 +132,7 @@ window.addEventListener(
   'pagehide',
   () => {
     release();
-    void application.dispose().finally(() => runtime.dispose());
+    void editor.release().finally(() => runtime.dispose());
   },
   { once: true },
 );

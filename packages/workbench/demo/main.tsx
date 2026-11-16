@@ -1,9 +1,16 @@
-import { createMoonbaseApplication } from '@moonbase/application';
 import { createRoot } from 'react-dom/client';
 import { createRef, StrictMode, useState } from 'react';
-import { ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { Effect, ManagedRuntime } from 'effect';
+import { RegistryContext } from '@effect/atom-react';
+import { WorkspaceService } from '@moonbase/contracts/services';
+import type { OperationResult, WorkspaceOperation } from '@moonbase/contracts/workspace';
 import { isFileDropTaken, Workbench, type WorkbenchHandle } from '../src/index.ts';
+import {
+  buildDemoEditor,
+  makeDemoClient,
+  makeDemoRegistry,
+  makeDemoWorkspace,
+} from './demo-editors.ts';
 import { configureMonacoWorkers } from '../src/workers.ts';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
@@ -72,16 +79,34 @@ const memory = fauxWorkspace([
   },
 ]);
 // One demo composition root. Feature packages do not construct runtimes.
-const runtime = ManagedRuntime.make(memory.layer),
-  client = makeEditorClient(runtime);
-const firstApplication = await createMoonbaseApplication({
-    editors: [{ client, clientId: 'demo-first' }],
-  }),
-  secondApplication = await createMoonbaseApplication({
-    editors: [{ client, clientId: 'demo-second' }],
-  }),
-  first = firstApplication.editors[0]!,
-  second = secondApplication.editors[0]!;
+const runtime = ManagedRuntime.make(memory.layer);
+const base = await runtime.runPromise(Effect.service(WorkspaceService));
+const raw = makeDemoClient(runtime, base);
+/** Operations a spec answered itself, which the store never journalled. */
+const intercepted = new Set<string>();
+const client: typeof raw = {
+  async command(name, input, options) {
+    if (name === 'mutate' && window.demo.interceptMutation) {
+      const result = await window.demo.interceptMutation(input as WorkspaceOperation);
+      if (result) {
+        intercepted.add((input as WorkspaceOperation).id);
+        return result as never;
+      }
+    }
+    if (name === 'acknowledgeOperation' && intercepted.has((input as { id: string }).id))
+      return undefined as never;
+    return raw.command(name, input, options);
+  },
+};
+const workspace = makeDemoWorkspace(base, () => window.demo.client);
+const registry = makeDemoRegistry();
+const [firstEditor, secondEditor] = await Promise.all(
+  ['demo-first', 'demo-second'].map((clientId) =>
+    buildDemoEditor(runtime, registry, workspace, clientId),
+  ),
+);
+const first = firstEditor.handle,
+  second = secondEditor.handle;
 const firstHandle = createRef<WorkbenchHandle>();
 await Promise.all(
   [first, second].map(async (editor) => {
@@ -161,7 +186,7 @@ function Demo() {
           {...stylex.props(controls.button)}
           onClick={() => {
             setDisposed(true);
-            void secondApplication.dispose().catch((error) => setCleanupError(String(error)));
+            void second.release().catch((error) => setCleanupError(String(error)));
           }}>
           Dispose second editor
         </Button>
@@ -171,7 +196,7 @@ function Demo() {
         <section aria-label="First editor" hidden={!visible} {...stylex.props(styles.editor)}>
           <Workbench
             ref={firstHandle}
-            controller={first}
+            editor={firstEditor.editor}
             checkout={checkout}
             visible={visible}
             sidebarHidden={sidebarHidden}
@@ -203,7 +228,7 @@ function Demo() {
         </section>
         {!disposed && (
           <section aria-label="Second editor" {...stylex.props(styles.editor, styles.second)}>
-            <Workbench controller={second} checkout={secondCheckout} />
+            <Workbench editor={secondEditor.editor} checkout={secondCheckout} />
           </section>
         )}
       </div>
@@ -211,13 +236,15 @@ function Demo() {
   );
 }
 createRoot(document.getElementById('root')!).render(
-  new URLSearchParams(location.search).has('strict') ? (
-    <StrictMode>
+  <RegistryContext.Provider value={registry}>
+    {new URLSearchParams(location.search).has('strict') ? (
+      <StrictMode>
+        <Demo />
+      </StrictMode>
+    ) : (
       <Demo />
-    </StrictMode>
-  ) : (
-    <Demo />
-  ),
+    )}
+  </RegistryContext.Provider>,
 );
 declare global {
   interface Window {
@@ -227,7 +254,8 @@ declare global {
       checkout: typeof checkout;
       memory: typeof memory;
       workbench(): WorkbenchHandle;
-      application: typeof firstApplication;
+      /** Answers a mutation in place of the workspace, or leaves it to the workspace. */
+      interceptMutation?: (operation: WorkspaceOperation) => Promise<OperationResult | undefined>;
       selectNativeImports(): Promise<string[]>;
       selectClipboardImports(): Promise<string[] | null>;
       /** Approves files dropped on the first editor's tree; the demo approves none. */
@@ -248,7 +276,6 @@ declare global {
 window.demo = {
   first,
   second,
-  application: firstApplication,
   checkout,
   memory,
   workbench: () => firstHandle.current!,
@@ -268,9 +295,7 @@ window.demo = {
 window.addEventListener(
   'pagehide',
   () => {
-    void Promise.allSettled([firstApplication.dispose(), secondApplication.dispose()]).finally(() =>
-      runtime.dispose(),
-    );
+    void Promise.allSettled([first.release(), second.release()]).finally(() => runtime.dispose());
   },
   { once: true },
 );
