@@ -150,6 +150,24 @@ test('lost Save response retries its immutable payload once, preserving newer ed
   }
 });
 
+test('a file that exists but fails to read saves over itself, not as a new file', async () => {
+  const f = await fixture();
+  try {
+    await f.editor.open(target('a.ts'));
+    f.editor.edit(target('a.ts'), 'kept through a failed read');
+    f.memory.failNext('readFile', 'Permission denied', false, 'Unavailable');
+    await f.editor.open(target('a.ts'));
+    assert.equal(f.editor.buffer(target('a.ts'))!.text, 'kept through a failed read');
+    assert.equal(await f.editor.save(target('a.ts')), true);
+    assert.equal(
+      (await f.client.command('readFile', target('a.ts'))).text,
+      'kept through a failed read',
+    );
+  } finally {
+    await f.dispose();
+  }
+});
+
 test('captured close defers Discards; earlier Save remains a fact after later Cancel', async () => {
   const f = await fixture();
   try {

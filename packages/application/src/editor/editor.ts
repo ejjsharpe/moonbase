@@ -872,8 +872,11 @@ class EditorModelState {
           this.report(
             editorError('File unavailable on disk. Retained buffer and edits remain accessible.'),
           );
-          // Saving it creates the file, which never replaces one that exists after all.
-          this.buffers.get(key)!.newFile = true;
+          // A missing file is created by its Save, which never replaces one that exists after
+          // all. One that is there but unreadable now (permissions, a passing failure) saves over.
+          const missing = await this.isMissing(target, selection);
+          const buffer = this.buffers.get(key);
+          if (missing && buffer && current()) buffer.newFile = true;
           disk = null;
         }
       } else {
@@ -945,6 +948,23 @@ class EditorModelState {
           mode,
           failedWorkingVersion: this.comparisons[key]?.working?.version,
         });
+      return false;
+    }
+  }
+  /** Whether the file's folder lists without it: a read that failed found nothing there. */
+  private async isMissing(target: FileTarget, scope: Scope.Scope) {
+    try {
+      const listing = await this.discovery.listDirectory(
+        {
+          checkout: target.checkout,
+          path: getParentPath(target.path),
+          includeIgnoredStatus: false,
+        },
+        scope,
+        false,
+      );
+      return !listing.entries.some((entry) => entry.path === target.path);
+    } catch {
       return false;
     }
   }
