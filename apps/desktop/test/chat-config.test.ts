@@ -69,5 +69,8 @@ test('private configuration is owner-only, bounded, explicit and projected; bad 
   await assert.rejects(readConfiguration(path));
   await writeFile(path, ' '.repeat(16385));
   await assert.rejects(readConfiguration(path));
+  await writeFile(path, '{not-json');
+  await assert.rejects(readConfiguration(path), { code: 'InvalidInput' });
+  await assert.rejects(readConfiguration(join(directory, 'missing.json')));
   await assert.rejects(readConfiguration('relative.json'));
 });

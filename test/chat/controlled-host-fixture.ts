@@ -19,12 +19,14 @@ import { fauxModel } from './faux-model.ts';
 
 export async function until<T>(get: () => Promise<T>, ready: (v: T) => boolean) {
   const end = Date.now() + 15000;
+  let v: T | undefined;
   while (Date.now() < end) {
-    const v = await get();
+    v = await get();
     if (ready(v)) return v;
     await new Promise((r) => setTimeout(r, 25));
   }
-  throw Error('Controlled state did not settle');
+  // The state it last saw, to tell which condition held it up (fixtures hold only synthetic keys).
+  throw Error('Controlled state did not settle: ' + String(JSON.stringify(v)).slice(0, 2000));
 }
 export type FixtureStats = {
   watches: number;

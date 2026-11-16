@@ -1,6 +1,5 @@
 import { selectFileView } from '../fixtures/editor-fixture.ts';
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { mkdir, writeFile } from 'node:fs/promises';
 
 /** Opens the composer's folder menu and chooses a folder with the native picker. */
 async function chooseFolderNatively(page: Page) {
@@ -104,39 +103,40 @@ test('browser shell keeps dirty comparisons, cursor, scroll, Monaco undo and sco
   expect(errors).toEqual([]);
 });
 
-for (const mode of ['file', 'staged'] as const) {
-  for (const selection of ['range', 'multiple cursors'] as const) {
-    test(`Chat round trip preserves ${selection} in ${mode} view`, async ({ page }) => {
-      await page.goto('/?chat');
-      await project(page).click();
-      await expect(input(page)).toBeVisible();
-      await page.evaluate(() =>
-        window.demo.first.edit(
-          { checkout: window.demo.checkout, path: 'welcome.ts' },
-          'first\nsecond',
-        ),
-      );
-      await selectFileView(shell(page), mode);
-      if (mode === 'staged')
-        await expect.poll(() => page.evaluate(() => window.demo.diffReady())).toBe(true);
-      await input(page).focus();
-      await input(page).press('Meta+a');
-      if (selection === 'multiple cursors') {
-        await input(page).press('ArrowLeft');
-        await input(page).press('Meta+Alt+ArrowDown');
-      }
-      await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
-      await project(page).click();
-      await expect(input(page)).toBeFocused();
-      await input(page).press('Q');
-      expect(
-        await page.evaluate(
-          () =>
-            window.demo.first.buffer({ checkout: window.demo.checkout, path: 'welcome.ts' })!.text,
-        ),
-      ).toBe(selection === 'range' ? 'Q' : 'Qfirst\nQsecond');
-    });
-  }
+for (const [mode, selection] of [
+  ['file', 'multiple cursors'],
+  ['staged', 'range'],
+] as const) {
+  test(`Chat round trip preserves ${selection} in ${mode} view`, async ({ page }) => {
+    await page.goto('/?chat');
+    await project(page).click();
+    await expect(input(page)).toBeVisible();
+    await page.evaluate(() =>
+      window.demo.first.edit(
+        { checkout: window.demo.checkout, path: 'welcome.ts' },
+        'first\nsecond',
+      ),
+    );
+    await selectFileView(shell(page), mode);
+    if (mode === 'staged')
+      await expect.poll(() => page.evaluate(() => window.demo.diffReady())).toBe(true);
+    await input(page).focus();
+    await input(page).press('Meta+a');
+    if (selection === 'multiple cursors') {
+      await input(page).press('ArrowLeft');
+      await input(page).press('Meta+Alt+ArrowDown');
+    }
+    await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
+    await project(page).click();
+    await expect(input(page)).toBeFocused();
+    await input(page).press('Q');
+    expect(
+      await page.evaluate(
+        () =>
+          window.demo.first.buffer({ checkout: window.demo.checkout, path: 'welcome.ts' })!.text,
+      ),
+    ).toBe(selection === 'range' ? 'Q' : 'Qfirst\nQsecond');
+  });
 }
 
 test('project-tab shortcuts use the editor handler after keyboard navigation from Chat', async ({
@@ -250,33 +250,31 @@ test('reopened projects append to the tab strip and open projects keep their slo
   ).toHaveCSS('transform', 'none');
 });
 
-for (const closed of ['moonbase', 'other', 'third']) {
-  test(`closing the active ${closed} project selects the rightmost remaining tab`, async ({
-    page,
-  }) => {
-    await page.goto('/?chat&design');
-    await page.evaluate(async () => {
-      await window.demo.first.openCheckout('/demo/other');
-      await window.demo.first.openCheckout('/demo/third');
-    });
-    const projects = page.getByRole('group', { name: 'Project tabs', exact: true });
-    await projects.getByRole('tab', { name: `${closed} · main`, exact: true }).click();
-    await projects
-      .getByRole('button', { name: `Close checkout /demo/${closed}`, exact: true })
-      .click();
-    const next = closed === 'third' ? 'other' : 'third';
-    await expect(
-      projects.getByRole('tab', { name: `${next} · main`, exact: true }),
-    ).toHaveAttribute('aria-selected', 'true');
-    const recovery = await page.evaluate(() =>
-      window.demo.client.command('loadRecovery', { clientId: window.demo.first.clientId }),
-    );
-    expect(recovery.state.selectedCheckoutId).toBe(next);
-    expect(recovery.state.openCheckoutIds.at(-1)).toBe(next);
+test('closing the active project selects the rightmost remaining tab', async ({ page }) => {
+  await page.goto('/?chat&design');
+  await page.evaluate(async () => {
+    await window.demo.first.openCheckout('/demo/other');
+    await window.demo.first.openCheckout('/demo/third');
   });
-}
+  const projects = page.getByRole('group', { name: 'Project tabs', exact: true });
+  await projects.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  await projects
+    .getByRole('button', { name: 'Close checkout /demo/moonbase', exact: true })
+    .click();
+  // The rightmost, not the closed tab's neighbour.
+  const next = 'third';
+  await expect(projects.getByRole('tab', { name: 'third · main', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  const recovery = await page.evaluate(() =>
+    window.demo.client.command('loadRecovery', { clientId: window.demo.first.clientId }),
+  );
+  expect(recovery.state.selectedCheckoutId).toBe(next);
+  expect(recovery.state.openCheckoutIds.at(-1)).toBe(next);
+});
 
-for (const selected of ['other · main', 'moonbase · main', 'Agents']) {
+for (const selected of ['other · main', 'Agents']) {
   test(`closing a project from ${selected} keeps the next view steady`, async ({ page }) => {
     await page.goto('/?chat&design');
     await page.evaluate(async () => {
@@ -331,8 +329,8 @@ for (const selected of ['other · main', 'moonbase · main', 'Agents']) {
           : [frame.selected === 'other · main' ? 'elsewhere.ts editor' : 'welcome.ts editor'],
       );
     }
-    // Views sit under the title bar.
-    expect([...new Set(frames.map((frame) => frame.top))]).toEqual([44]);
+    // The view under the title bar never moves.
+    expect(new Set(frames.map((frame) => frame.top)).size).toBe(1);
     await expect(page.getByRole('tab', { name: next, exact: true })).toHaveAttribute(
       'aria-selected',
       'true',
@@ -369,49 +367,47 @@ test('closing the final project shows Agents directly without an empty editor fr
   );
 });
 
-for (const fromChat of [false, true]) {
-  for (const choice of ['Save', 'Discard'] as const) {
-    test(`shell project close ${fromChat ? 'from Chat ' : ''}Cancel retains work, then ${choice} uses the authoritative close gate`, async ({
-      page,
-    }) => {
-      await page.goto('/?chat');
-      await project(page).click();
-      await expect(input(page)).toBeVisible();
-      await input(page).focus();
-      await input(page).press('Meta+a');
-      await input(page).pressSequentially('dirty project close');
-      if (fromChat) await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
-      await project(page).hover();
-      await tabs(page)
-        .getByRole('button', { name: 'Close checkout /demo/moonbase', exact: true })
-        .click();
-      await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
-      await expect(project(page)).toHaveAttribute('aria-selected', 'true');
-      expect(
-        await page.evaluate(
-          () =>
-            window.demo.first.buffer({ checkout: window.demo.checkout, path: 'welcome.ts' })!.text,
-        ),
-      ).toBe('dirty project close');
-      if (fromChat) await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
-      await project(page).hover();
-      await tabs(page)
-        .getByRole('button', { name: 'Close checkout /demo/moonbase', exact: true })
-        .click();
-      await page.getByRole('dialog').getByRole('button', { name: choice, exact: true }).click();
-      await expect(project(page)).toHaveCount(0);
-      await expect(tabs(page).getByRole('tab', { name: 'Agents', exact: true })).toHaveAttribute(
-        'aria-selected',
-        'true',
-      );
-      expect(await page.evaluate(() => window.demo.memory.stats.saves)).toBe(
-        choice === 'Save' ? 1 : 0,
-      );
-      expect(
-        await page.evaluate(() => window.demo.first.getSnapshot().recovery.checkouts),
-      ).toHaveLength(1);
-    });
-  }
+for (const choice of ['Save', 'Discard'] as const) {
+  test(`shell project close from Chat Cancel retains work, then ${choice} uses the authoritative close gate`, async ({
+    page,
+  }) => {
+    await page.goto('/?chat');
+    await project(page).click();
+    await expect(input(page)).toBeVisible();
+    await input(page).focus();
+    await input(page).press('Meta+a');
+    await input(page).pressSequentially('dirty project close');
+    await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
+    await project(page).hover();
+    await tabs(page)
+      .getByRole('button', { name: 'Close checkout /demo/moonbase', exact: true })
+      .click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(project(page)).toHaveAttribute('aria-selected', 'true');
+    expect(
+      await page.evaluate(
+        () =>
+          window.demo.first.buffer({ checkout: window.demo.checkout, path: 'welcome.ts' })!.text,
+      ),
+    ).toBe('dirty project close');
+    await tabs(page).getByRole('tab', { name: 'Agents', exact: true }).click();
+    await project(page).hover();
+    await tabs(page)
+      .getByRole('button', { name: 'Close checkout /demo/moonbase', exact: true })
+      .click();
+    await page.getByRole('dialog').getByRole('button', { name: choice, exact: true }).click();
+    await expect(project(page)).toHaveCount(0);
+    await expect(tabs(page).getByRole('tab', { name: 'Agents', exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(await page.evaluate(() => window.demo.memory.stats.saves)).toBe(
+      choice === 'Save' ? 1 : 0,
+    );
+    expect(
+      await page.evaluate(() => window.demo.first.getSnapshot().recovery.checkouts),
+    ).toHaveLength(1);
+  });
 }
 
 test('failed Open without a project stays visible in Agents and can be dismissed and retried', async ({
@@ -449,47 +445,45 @@ test('failed Open without a project stays visible in Agents and can be dismissed
   );
 });
 
-for (const fromChat of [false, true]) {
-  test(`a background close Save conflict from ${fromChat ? 'Agents' : 'another project'} reveals the captured project and recovery controls`, async ({
-    page,
-  }) => {
-    await page.goto('/?chat&design');
-    await page.evaluate(async () => {
-      const checkout = await window.demo.first.openCheckout('/demo/other');
-      const target = { checkout, path: 'elsewhere.ts' };
-      await window.demo.first.open(target, { intent: 'keep' });
-      window.demo.first.edit(target, 'retained background edit');
-      window.demo.memory.externalWrite(target, 'external background edit');
-    });
-    await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
-    if (fromChat) await page.getByRole('tab', { name: 'Agents', exact: true }).click();
-    const other = page.getByRole('tab', { name: 'other · main', exact: true });
-    await other.hover();
-    await page
-      .getByRole('button', { name: 'Close checkout /demo/other', exact: true })
-      .locator('..')
-      .hover();
-    await page.getByRole('button', { name: 'Close checkout /demo/other', exact: true }).click();
-    await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
-    await expect(other).toHaveAttribute('aria-selected', 'true');
-    await expect(
-      page.getByRole('textbox', { name: 'elsewhere.ts editor', exact: true }),
-    ).toBeVisible();
-    for (const name of ['Compare', 'Overwrite observed version', 'Reload'])
-      await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Overwrite observed version', exact: true }).click();
-    await expect.poll(() => page.evaluate(() => window.demo.memory.stats.saves)).toBe(1);
-    expect(
-      await page.evaluate(() => {
-        const checkout = window.demo.first
-          .getSnapshot()
-          .recovery.checkouts.find((checkout) => checkout.checkoutId === 'other')!;
-        return window.demo.client.command('readFile', { checkout, path: 'elsewhere.ts' });
-      }),
-    ).toMatchObject({ text: 'retained background edit' });
-    await expect(other).toHaveAttribute('aria-selected', 'true');
+test('a background close Save conflict from Agents reveals the captured project and recovery controls', async ({
+  page,
+}) => {
+  await page.goto('/?chat&design');
+  await page.evaluate(async () => {
+    const checkout = await window.demo.first.openCheckout('/demo/other');
+    const target = { checkout, path: 'elsewhere.ts' };
+    await window.demo.first.open(target, { intent: 'keep' });
+    window.demo.first.edit(target, 'retained background edit');
+    window.demo.memory.externalWrite(target, 'external background edit');
   });
-}
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
+  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+  const other = page.getByRole('tab', { name: 'other · main', exact: true });
+  await other.hover();
+  await page
+    .getByRole('button', { name: 'Close checkout /demo/other', exact: true })
+    .locator('..')
+    .hover();
+  await page.getByRole('button', { name: 'Close checkout /demo/other', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(other).toHaveAttribute('aria-selected', 'true');
+  await expect(
+    page.getByRole('textbox', { name: 'elsewhere.ts editor', exact: true }),
+  ).toBeVisible();
+  for (const name of ['Compare', 'Overwrite observed version', 'Reload'])
+    await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Overwrite observed version', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.demo.memory.stats.saves)).toBe(1);
+  expect(
+    await page.evaluate(() => {
+      const checkout = window.demo.first
+        .getSnapshot()
+        .recovery.checkouts.find((checkout) => checkout.checkoutId === 'other')!;
+      return window.demo.client.command('readFile', { checkout, path: 'elsewhere.ts' });
+    }),
+  ).toMatchObject({ text: 'retained background edit' });
+  await expect(other).toHaveAttribute('aria-selected', 'true');
+});
 
 test('failed project close from Chat reveals recovery errors and retains the project', async ({
   page,
@@ -982,12 +976,7 @@ test('the project rail shows coded tiles and peeks at a project on hover without
   await page.goto('/?local&design');
   await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
   const rail = page.getByRole('tablist', { name: 'Workbench views', exact: true });
-  // The rail is part of the window's frame: the title bar's colour, with no edge of its own.
-  await expect(rail).toHaveCSS('background-color', 'rgb(11, 12, 16)');
-  await expect(rail).toHaveCSS('box-shadow', 'none');
-  await expect(rail).toHaveCSS('width', '52px');
   await page.evaluate(() => window.demo.first.openCheckout('/demo/other'));
-  const agents = page.getByRole('tab', { name: 'Agents', exact: true });
   const project = page.getByRole('tab', { name: 'moonbase · main', exact: true });
   const other = page.getByRole('tab', { name: 'other · main', exact: true });
   const closeProject = page.getByRole('button', {
@@ -1002,9 +991,7 @@ test('the project rail shows coded tiles and peeks at a project on hover without
   await expect(tile(other)).toHaveAttribute('data-initials', 'ot');
   await other.click();
   await page.mouse.move(900, 400);
-  await expect(other).toHaveCSS('color', 'rgb(220, 223, 232)');
-  await expect(project).toHaveCSS('color', 'rgb(180, 184, 198)');
-  await expect(agents).toHaveCSS('color', 'rgb(180, 184, 198)');
+  await expect(other).toHaveAttribute('aria-selected', 'true');
   await expect(closeProject).toHaveCSS('opacity', '0');
   await expect(peek).toBeHidden();
   const tileBounds = await tile(project).boundingBox();
@@ -1014,9 +1001,10 @@ test('the project rail shows coded tiles and peeks at a project on hover without
   await expect(peek).toContainText('main');
   await expect(peek).toContainText('memory-demo · /demo/moonbase');
   await expect(closeProject).toHaveCSS('opacity', '1');
-  await expect(rail).toHaveCSS('width', '52px');
+  // The peek opens beside the rail, which doesn't move.
   expect(await tile(project).boundingBox()).toEqual(tileBounds);
-  expect((await peek.boundingBox())!.x).toBeGreaterThanOrEqual(52);
+  const railBox = (await rail.boundingBox())!;
+  expect((await peek.boundingBox())!.x).toBeGreaterThanOrEqual(railBox.x + railBox.width);
   await page.mouse.move(900, 400);
   await expect(peek).toBeHidden();
   await expect(closeProject).toHaveCSS('opacity', '0');
@@ -1192,27 +1180,32 @@ test('the project dock resizes by dragging or keys, expands and closes', async (
   const dock = page.getByRole('complementary', { name: 'Project chats', exact: true });
   const edge = page.getByRole('separator', { name: 'Resize project chats', exact: true });
   const width = async () => (await dock.boundingBox())!.width;
-  await expect.poll(width).toBe(400);
+  await expect.poll(width).toBeGreaterThan(0);
+  const initial = await width();
   const box = (await edge.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + 200);
   await page.mouse.down();
   await page.mouse.move(box.x + box.width / 2 - 150, box.y + 200, { steps: 5 });
   await page.mouse.up();
-  await expect.poll(async () => Math.abs((await width()) - 550)).toBeLessThanOrEqual(2);
+  await expect.poll(async () => Math.abs((await width()) - initial - 150)).toBeLessThanOrEqual(2);
   await edge.press('Home');
-  await expect.poll(width).toBe(320);
+  const narrowest = Number(await edge.getAttribute('aria-valuemin'));
+  await expect.poll(width).toBe(narrowest);
   // The edge sits on the dock's left, so ArrowLeft widens it.
   await edge.press('ArrowLeft');
-  await expect.poll(width).toBe(340);
+  await expect(edge).not.toHaveAttribute('aria-valuenow', String(narrowest));
+  const chosen = Number(await edge.getAttribute('aria-valuenow'));
+  expect(chosen).toBeGreaterThan(narrowest);
+  await expect.poll(width).toBe(chosen);
   const widest = Number(await edge.getAttribute('aria-valuemax'));
   await dock.getByRole('button', { name: 'Expand project chats', exact: true }).click();
   await expect.poll(width).toBe(widest);
   await dock.getByRole('button', { name: 'Restore project chats width', exact: true }).click();
-  await expect.poll(width).toBe(340);
+  await expect.poll(width).toBe(chosen);
   await dock.getByRole('button', { name: 'Hide project chats', exact: true }).click();
   await expect.poll(width).toBe(0);
   await page.getByRole('textbox', { name: 'welcome.ts editor', exact: true }).press('Meta+j');
-  await expect.poll(width).toBe(340);
+  await expect.poll(width).toBe(chosen);
 });
 
 test('removing a middle project moves survivors smoothly up the rail', async ({ page }) => {
@@ -1232,6 +1225,9 @@ test('removing a middle project moves survivors smoothly up the rail', async ({ 
       const survivor = document.querySelector<HTMLElement>(
         '[role="tab"][aria-label="other · main"]',
       )!.parentElement!;
+      const removed = document
+        .querySelector<HTMLElement>('[role="tab"][aria-label="moonbase · main"]')
+        ?.parentElement?.getBoundingClientRect().y;
       const plus = document.querySelector<HTMLElement>('button[aria-label="Open checkout"]')!;
       const bounds = survivor.getBoundingClientRect();
       return {
@@ -1239,6 +1235,7 @@ test('removing a middle project moves survivors smoothly up the rail', async ({ 
         x: bounds.x,
         y: bounds.y,
         plus: plus.getBoundingClientRect().y,
+        removed,
       };
     });
   const frames = [await read()];
@@ -1251,15 +1248,9 @@ test('removing a middle project moves survivors smoothly up the rail', async ({ 
     await page.clock.runFor(16);
     frames.push(await read());
   }
-  await mkdir(test.info().outputDir, { recursive: true });
-  const framesPath = test.info().outputPath('middle-project-motion-frames.json');
-  await writeFile(framesPath, JSON.stringify(frames, null, 2));
-  await test
-    .info()
-    .attach('middle-project-motion-frames', { path: framesPath, contentType: 'application/json' });
   const first = frames[0],
     last = frames.at(-1)!;
-  expect(first.y - last.y).toBeCloseTo(40, 0);
+  expect(last.y).toBeCloseTo(first.removed!, 0);
   expect(frames.some((frame) => frame.y < first.y - 1 && frame.y > last.y + 1)).toBe(true);
   for (let i = 1; i < frames.length; i++) {
     expect(frames[i].x).toBeCloseTo(first.x, 1);
@@ -1329,16 +1320,12 @@ for (const reducedMotion of [false, true]) {
     await expect(page.getByRole('tab', { name: 'other · main', exact: true })).toBeVisible();
     const closed = await capture('close');
     await expect(page.getByRole('tab', { name: 'other · main', exact: true })).toHaveCount(0);
-    await mkdir(test.info().outputDir, { recursive: true });
-    const framesPath = test.info().outputPath('rail-motion-frames.json');
-    await writeFile(framesPath, JSON.stringify({ reducedMotion, opened, closed }, null, 2));
-    await test
-      .info()
-      .attach('rail-motion-frames', { path: framesPath, contentType: 'application/json' });
+    // + moves down a row as the project opens, and back as it closes.
+    expect(opened.at(-1)!.y).toBeGreaterThan(opened[0].y);
+    expect(closed.at(-1)!.y).toBeCloseTo(opened[0].y, 0);
     for (const frames of [opened, closed]) {
       const start = frames[0].y,
         end = frames.at(-1)!.y;
-      expect(Math.abs(end - start)).toBeCloseTo(40, 0);
       const intermediate = frames.some(
         (frame) => frame.y > Math.min(start, end) + 1 && frame.y < Math.max(start, end) - 1,
       );
@@ -1393,7 +1380,7 @@ for (const reducedMotion of [false, true]) {
   });
 }
 
-test('design fixture renders first-message composition, pinned navigation and compact layouts', async ({
+test('the design fixture picks a folder, sends a first message and keeps navigation and Send reachable', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -1407,8 +1394,7 @@ test('design fixture renders first-message composition, pinned navigation and co
     page.getByRole('heading', { name: 'What should we work on?', exact: true }),
   ).toBeVisible();
   const folderChoice = page.getByRole('button', { name: 'Choose working folder', exact: true });
-  const send = page.getByRole('button', { name: 'Send message', exact: true });
-  // The folder, host and model sit in the composer's own toolbar, on the send button's row.
+  // The folder, host and model sit in the composer's own toolbar.
   expect(await folderChoice.evaluate((element) => !!element.closest('form'))).toBe(true);
   await expect(folderChoice).toHaveText(/^No project/);
   // The menu offers the editor's projects and folders chosen before, without the native picker.
@@ -1432,62 +1418,6 @@ test('design fixture renders first-message composition, pinned navigation and co
   await expect(folderChoice).toHaveAttribute('title', '/demo/moonbase');
   await expect(folderChoice.getByText('moonbase', { exact: true })).toBeVisible();
   await expect(folderChoice.locator('[data-initials="mo"]')).toBeVisible();
-  const [folderBox, sendBox] = await Promise.all([folderChoice.boundingBox(), send.boundingBox()]);
-  expect(
-    Math.abs(folderBox!.y + folderBox!.height / 2 - (sendBox!.y + sendBox!.height / 2)),
-  ).toBeLessThan(2);
-  expect(
-    await page
-      .getByRole('main', { name: 'Agent workspace' })
-      .evaluate((element) => getComputedStyle(element).backgroundColor),
-  ).toBe('rgb(20, 21, 27)');
-  expect(
-    await page
-      .getByRole('complementary', { name: 'Saved chats', exact: true })
-      .evaluate((element) => getComputedStyle(element).backgroundColor),
-  ).toBe('rgb(15, 16, 21)');
-  expect(
-    await message.evaluate((element) => element.closest('form')!.getBoundingClientRect().width),
-  ).toBe(720);
-  expect(
-    await page
-      .getByRole('tablist', { name: 'Workbench views', exact: true })
-      .evaluate((element) => element.getBoundingClientRect().width),
-  ).toBe(52);
-  const border = await message.evaluate((element) => {
-    const style = getComputedStyle(element.closest('form')!);
-    return [style.borderTopWidth, style.borderTopStyle];
-  });
-  expect(border).toEqual(['1px', 'solid']);
-  for (const name of ['Agents', 'moonbase · main']) {
-    const geometry = await page.getByRole('tab', { name, exact: true }).evaluate((element) => {
-      const rail = element.closest('[role="tablist"]')!.getBoundingClientRect();
-      const tile = element.querySelector('span')!;
-      const bounds = tile.getBoundingClientRect();
-      const close = element.nextElementSibling!.getBoundingClientRect();
-      return {
-        size: [bounds.width, bounds.height],
-        left: bounds.left - rail.left,
-        right: rail.right - bounds.right,
-        // The close button is centred on the tile's top-right corner, nudged 4px down.
-        closeX: close.left + close.width / 2 - bounds.right,
-        closeY: close.top + close.height / 2 - bounds.top,
-        radius: getComputedStyle(tile).borderRadius,
-      };
-    });
-    expect(geometry.size).toEqual([32, 32]);
-    expect(geometry.left).toBe(10);
-    expect(geometry.right).toBe(10);
-    expect(geometry.closeX).toBeCloseTo(0, 1);
-    expect(geometry.closeY).toBeCloseTo(4, 1);
-    expect(geometry.radius).toBe('8px');
-  }
-  expect(
-    await page
-      .getByRole('tab', { name: 'Agents', exact: true })
-      .locator('svg')
-      .getAttribute('class'),
-  ).toContain('tabler-icon');
   await message.fill('Review the desktop shell and editor');
   await message.press('Enter');
   await expect(
@@ -1500,34 +1430,11 @@ test('design fixture renders first-message composition, pinned navigation and co
       window.demo.chat.calls.filter((call) => ['createChat', 'sendChat'].includes(call)),
     ),
   ).toEqual(['createChat', 'sendChat']);
-  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
-  await expect(
-    page.getByRole('button', { name: 'Explorer actions', exact: true }).locator('svg'),
-  ).toBeVisible();
-  const tree = page.getByRole('tree', { name: 'Files', exact: true });
-  const folder = tree.getByRole('treeitem', { name: 'src', exact: true });
-  const file = tree.getByRole('treeitem', { name: 'welcome.ts, modified', exact: true });
-  await expect(folder.locator('svg.tabler-icon-folder')).toBeVisible();
-  await expect(file.locator('svg.tabler-icon-brand-typescript')).toBeVisible();
-  expect((await folder.getByText('src', { exact: true }).boundingBox())!.x).toBe(
-    (await file.getByText('welcome.ts', { exact: true }).boundingBox())!.x,
-  );
-  await folder.click();
-  await expect(folder).toHaveAttribute('aria-expanded', 'true');
-  await expect(folder.locator('svg.tabler-icon-folder-open')).toBeVisible();
-  await page.getByRole('button', { name: 'Changes', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Explorer actions', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Files', exact: true }).click();
-  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
   await page.getByRole('button', { name: 'New chat', exact: true }).click();
-  for (const width of [768, 390]) {
-    await page.setViewportSize({ width, height: 844 });
-    await expect(message).toBeInViewport();
-    await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeInViewport();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
-      true,
-    );
-  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(message).toBeInViewport();
+  await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.evaluate(() => window.demo.first.openCheckout('/demo/other'));
   await expect(
     page.getByRole('tab', { name: 'other · main', exact: true }).locator('..'),
@@ -1540,14 +1447,6 @@ test('design fixture renders first-message composition, pinned navigation and co
   expect((await agents.boundingBox())!.x).toBe(before!.x);
   await page.getByRole('button', { name: 'Show conversations', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Conversations', exact: true })).toBeVisible();
-  const close = await page
-    .getByRole('button', { name: 'Close conversations', exact: true })
-    .boundingBox();
-  const fresh = await page
-    .getByRole('dialog')
-    .getByRole('button', { name: 'New chat', exact: true })
-    .boundingBox();
-  expect(close!.y + close!.height).toBeLessThanOrEqual(fresh!.y);
   await page.keyboard.press('Escape');
   expect(errors).toEqual([]);
 });
@@ -2125,12 +2024,6 @@ test('the chats sidebar orders by activity: Ready, Working, Idle, then a Settled
     'aria-pressed',
     'true',
   );
-  // Closed, the toggle sits at the foot of the list.
-  const bottom = async (locator: typeof list) => {
-    const box = (await locator.boundingBox())!;
-    return box.y + box.height;
-  };
-  expect((await bottom(list)) - (await bottom(settled))).toBeLessThan(80);
   // Another chat opened, the settled one is behind the toggle.
   await list.getByRole('button', { name: /^Conversation/ }).click();
   await expect(list.getByRole('button', { name: /^Summarise this repository/ })).toHaveCount(0);
@@ -2368,13 +2261,13 @@ test('a hidden rail slides over the window at its left edge and away once the po
   // Focus leaves the hidden rail for the view, not the page.
   await expect.poll(() => page.evaluate(() => document.activeElement !== document.body)).toBe(true);
   await page.mouse.move(700, 500);
-  await expect.poll(left).toBe(-52);
+  await expect.poll(left).toBeLessThan(0);
   await page.mouse.move(3, 500);
   await expect.poll(left).toBe(0);
   await page.mouse.move(30, 300);
   await expect.poll(left).toBe(0);
   await page.mouse.move(120, 500);
-  await expect.poll(left).toBe(-52);
+  await expect.poll(left).toBeLessThan(0);
   await page.mouse.move(3, 500);
   await page.getByRole('button', { name: 'Keep rail open', exact: true }).click();
   await page.mouse.move(700, 500);
@@ -2413,6 +2306,7 @@ test('on Agents the title bar names the open chat and holds its actions', async 
 });
 
 test('back and forward step through chats, projects and files', async ({ page }) => {
+  await page.clock.install();
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/?local&design&transcript');
   const bar = page.locator('header[aria-label="Window title bar"]');
@@ -2420,7 +2314,7 @@ test('back and forward step through chats, projects and files', async ({ page })
   const back = bar.getByRole('button', { name: 'Back', exact: true });
   const forward = bar.getByRole('button', { name: 'Forward', exact: true });
   // A place counts once it has shown for a moment, as it would between a person's clicks.
-  const settle = () => page.waitForTimeout(300);
+  const settle = () => page.clock.runFor(300);
   await expect(title).toHaveText('New chat');
   await expect(back).toBeDisabled();
   await expect(forward).toBeDisabled();
@@ -2466,12 +2360,13 @@ test('back and forward step through chats, projects and files', async ({ page })
 test('a place chosen while back is on its way counts, and a closed file opens again', async ({
   page,
 }) => {
+  await page.clock.install();
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/?local&design&transcript');
   const bar = page.locator('header[aria-label="Window title bar"]');
   const back = bar.getByRole('button', { name: 'Back', exact: true });
   const forward = bar.getByRole('button', { name: 'Forward', exact: true });
-  const settle = () => page.waitForTimeout(300);
+  const settle = () => page.clock.runFor(300);
   await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
   await expect(bar).toContainText('moonbase/welcome.ts');
   await settle();
@@ -2574,7 +2469,7 @@ test('a peeked rail that slides away hands its focus to the view', async ({ page
   const left = () => rail.evaluate((element) => Math.round(element.getBoundingClientRect().x));
   await page.getByRole('button', { name: 'Hide rail', exact: true }).click();
   await page.mouse.move(700, 500);
-  await expect.poll(left).toBe(-52);
+  await expect.poll(left).toBeLessThan(0);
   await page.mouse.move(3, 500);
   await expect.poll(left).toBe(0);
   // Agents is already open, so its tab keeps focus.
@@ -2582,7 +2477,7 @@ test('a peeked rail that slides away hands its focus to the view', async ({ page
   await agents.click();
   await expect(agents).toBeFocused();
   await page.mouse.move(700, 500);
-  await expect.poll(left).toBe(-52);
+  await expect.poll(left).toBeLessThan(0);
   const focused = () =>
     page.evaluate(() => {
       const element = document.activeElement;

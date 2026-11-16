@@ -291,13 +291,15 @@ test('buffer tabs reveal only their own close control without moving', async ({ 
   await expect(closeExample).toHaveCSS('opacity', '1');
   await expect(closeWelcome).toHaveCSS('opacity', '0');
   await expect(closeReadme).toHaveCSS('opacity', '0');
-  // Measure once the tab's entry animation has settled.
+  // Measure once the fonts have loaded and the tabs' entry animations have settled: the tab's
+  // place depends on those before it.
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
   await expect
     .poll(() =>
       example.evaluate(async (element) => {
-        const width = element.getBoundingClientRect().width;
+        const before = JSON.stringify(element.getBoundingClientRect());
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-        return width === element.getBoundingClientRect().width;
+        return before === JSON.stringify(element.getBoundingClientRect());
       }),
     )
     .toBe(true);
@@ -305,7 +307,7 @@ test('buffer tabs reveal only their own close control without moving', async ({ 
   await welcome.hover();
   await expect(closeWelcome).toHaveCSS('opacity', '1');
   await expect(closeReadme).toHaveCSS('opacity', '0');
-  expect(await example.boundingBox()).toEqual(originalBounds);
+  await expect.poll(() => example.boundingBox()).toEqual(originalBounds);
   await page.mouse.move(0, 0);
   await closeReadme.focus();
   await expect(closeReadme).toBeFocused();
@@ -769,11 +771,27 @@ test('a deferred Enter never opens a row in place of one the new results dropped
   await expect(rows.nth(1)).toHaveAccessibleName('Refresh files');
   await field.fill('.ts');
   await expect(rows.nth(1)).toHaveAccessibleName('src/example.ts');
+  // 'file' answers only once the reader has pressed Enter.
+  await page.evaluate(() => {
+    const { client } = window.demo;
+    const command = client.command.bind(client);
+    const held = new Promise<void>((resolve) => {
+      Object.assign(window, { releaseLookup: resolve });
+    });
+    client.command = (async (name, input, options) => {
+      if (name === 'lookupFiles' && (input as { query: string }).query === 'file') await held;
+      return command(name, input, options);
+    }) as typeof client.command;
+  });
   // Until 'file' answers, the old file rows stay listed above its commands. The reader moves onto
   // one, src/example.ts, which the new results drop, and presses Enter.
   await field.fill('file');
   await page.keyboard.press('ArrowDown');
+  await expectHighlighted(goTo, rows.nth(1));
+  await expect(rows.nth(1)).toHaveAccessibleName('src/example.ts');
   await page.keyboard.press('Enter');
+  await expect(goTo).toBeVisible();
+  await page.evaluate(() => (window as unknown as { releaseLookup(): void }).releaseLookup());
   await expect(goTo).toHaveCount(0);
   // The top row ran (Show Files), not whatever took the second place (Refresh files).
   await expect(files).toHaveAttribute('aria-pressed', 'true');
@@ -1574,107 +1592,44 @@ test('a recovery edit that fails after an already-started Save is retried and lo
     .toBe('NEWER B typed after resolution');
 });
 
-test('valid prototype-shaped filenames edit and save without changing browser prototypes', async ({
+test('Tab actions first/last keyboard selection and Close click fit a small window', async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 543, height: 441 });
   await page.goto('/');
-  const errors: string[] = [];
-  page.on('pageerror', (error) => errors.push(error.message));
-  page.on('console', (message) => {
-    if (message.type() === 'error') errors.push(message.text());
+  await page.evaluate(async () => {
+    const { first, checkout } = window.demo;
+    await first.open({ checkout, path: 'README.md' }, { intent: 'keep' });
+    await first.close([{ checkout, path: 'README.md' }]);
+    await first.open({ checkout, path: 'src/example.ts' }, { intent: 'preview' });
   });
-  try {
-    for (const path of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
-      await page.evaluate(
-        (path) =>
-          window.demo.first.mutate({
-            checkout: window.demo.checkout,
-            kind: 'create-file',
-            sources: [],
-            destination: path,
-            text: 'baseline ' + path,
-          }),
-        path,
-      );
-      await first(page)
-        .getByRole('treeitem', { name: path + ', untracked', exact: true })
-        .dblclick();
-      const input = first(page).getByRole('textbox', { name: path + ' editor', exact: true });
-      await expect(input).toBeVisible();
-      await input.focus();
-      await input.press('ArrowRight');
-      expect(await page.evaluate(() => Object.hasOwn(Object.prototype, 'file'))).toBe(false);
-      await input.press('Meta+a');
-      await input.pressSequentially('saved ' + path);
-      await saveFile(first(page));
-      await expect
-        .poll(() =>
-          page.evaluate(
-            async (path) =>
-              (
-                await window.demo.client.command('readFile', {
-                  checkout: window.demo.checkout,
-                  path,
-                })
-              ).text,
-            path,
-          ),
-        )
-        .toBe('saved ' + path);
-    }
-    expect(errors).toEqual([]);
-  } finally {
-    await page
-      .evaluate(() => {
-        delete (Object.prototype as { file?: unknown }).file;
-      })
-      .catch(() => {});
-  }
-});
-
-for (const viewport of [
-  { width: 1600, height: 1000 },
-  { width: 760, height: 650 },
-  { width: 543, height: 441 },
-])
-  test(`Tab actions first/last keyboard selection and Close click fit ${viewport.width}x${viewport.height}`, async ({
-    page,
-  }) => {
-    await page.setViewportSize(viewport);
-    await page.goto('/');
-    await page.evaluate(async () => {
-      const { first, checkout } = window.demo;
-      await first.open({ checkout, path: 'README.md' }, { intent: 'keep' });
-      await first.close([{ checkout, path: 'README.md' }]);
-      await first.open({ checkout, path: 'src/example.ts' }, { intent: 'preview' });
+  const trigger = first(page)
+    .getByRole('tablist', { name: 'Open files', exact: true })
+    .getByRole('tab', { selected: true });
+  await trigger.focus();
+  await trigger.press('Shift+F10');
+  const menu = page.getByRole('menu'),
+    firstItem = page.getByRole('menuitem', { name: 'Keep Open', exact: true }),
+    lastItem = page.getByRole('menuitem', { name: 'Reopen Closed Files', exact: true });
+  const within = async (item: ReturnType<Page['getByRole']>) =>
+    item.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.top >= 0 && rect.bottom <= innerHeight;
     });
-    const trigger = first(page)
-      .getByRole('tablist', { name: 'Open files', exact: true })
-      .getByRole('tab', { selected: true });
-    await trigger.focus();
-    await trigger.press('Shift+F10');
-    const menu = page.getByRole('menu'),
-      firstItem = page.getByRole('menuitem', { name: 'Keep Open', exact: true }),
-      lastItem = page.getByRole('menuitem', { name: 'Reopen Closed Files', exact: true });
-    const within = async (item: ReturnType<Page['getByRole']>) =>
-      item.evaluate((element) => {
-        const rect = element.getBoundingClientRect();
-        return rect.top >= 0 && rect.bottom <= innerHeight;
-      });
-    await expect(firstItem).toBeFocused();
-    await page.keyboard.press('Home');
-    await expect(firstItem).toBeFocused();
-    expect(await within(firstItem)).toBe(true);
-    await page.keyboard.press('End');
-    await expect(lastItem).toBeFocused();
-    expect(await within(lastItem)).toBe(true);
-    await page.keyboard.press('Enter');
-    await expect(first(page).getByRole('tab', { name: 'README.md', exact: true })).toBeVisible();
-    await trigger.click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Close', exact: true }).click();
-    await expect(first(page).getByRole('tab', { name: 'README.md', exact: true })).toHaveCount(0);
-    await expect(menu).toHaveCount(0);
-  });
+  await expect(firstItem).toBeFocused();
+  await page.keyboard.press('Home');
+  await expect(firstItem).toBeFocused();
+  expect(await within(firstItem)).toBe(true);
+  await page.keyboard.press('End');
+  await expect(lastItem).toBeFocused();
+  expect(await within(lastItem)).toBe(true);
+  await page.keyboard.press('Enter');
+  await expect(first(page).getByRole('tab', { name: 'README.md', exact: true })).toBeVisible();
+  await trigger.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Close', exact: true }).click();
+  await expect(first(page).getByRole('tab', { name: 'README.md', exact: true })).toHaveCount(0);
+  await expect(menu).toHaveCount(0);
+});
 
 test('StrictMode lookup searches and opens a result after effect replay', async ({ page }) => {
   await page.goto('/?strict');

@@ -4,8 +4,9 @@ const port = Number(process.env.MOONBASE_WORKBENCH_PORT ?? 4176);
 export default defineConfig({
   testDir: './test/e2e',
   testMatch: '*.spec.ts',
-  workers: 1,
-  fullyParallel: false,
+  workers: '50%',
+  fullyParallel: true,
+  reporter: [['list'], ['json', { outputFile: 'test-results/timings.json' }]],
   use: {
     // Moonbase targets macOS; Monaco picks its keymap from the user agent, so Linux CI runs the Mac one.
     userAgent:
@@ -14,10 +15,11 @@ export default defineConfig({
     viewport: { width: 1600, height: 1000 },
     trace: 'retain-on-failure',
   },
+  // The built demo: a dev server compiles each module on first request, which parallel tests race.
   webServer: {
-    command: `bun run demo --port ${port}`,
+    command: `bun run build && vp preview --config vite.config.ts --host 127.0.0.1 --port ${port} --strictPort`,
     url: `http://127.0.0.1:${port}`,
     reuseExistingServer: false,
-    timeout: 60000,
+    timeout: 120000,
   },
 });

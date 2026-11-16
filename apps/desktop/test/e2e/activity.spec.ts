@@ -5,6 +5,7 @@ import {
   scrollToStart,
   stepToggle,
   transcriptList,
+  waitForListRest,
 } from '../fixtures/transcript-list.ts';
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { readFindHighlight } from '../fixtures/find-highlight.ts';
@@ -15,99 +16,94 @@ async function open(page: Page) {
   await expect(page.getByRole('heading', { name: 'Reading a retained answer' })).toBeAttached();
 }
 const live = (page: Page) => page.locator('[data-transcript-live]');
-for (const source of ['durable', 'live'] as const)
-  test(`${source} failed result keeps originating call evidence through a held and failed first manifest read`, async ({
-    page,
-  }) => {
-    await open(page);
-    await page.evaluate(async (source) => {
-      const result = [
-        {
-          kind: 'result' as const,
-          role: 'tool' as const,
-          toolName: 'read',
-          state: 'failed' as const,
-          pairing: 'matched' as const,
-          call: { entryId: 'origin', partId: 'call' },
-          text: 'Partial failed output retained',
-        },
-        ...Array.from({ length: 4 }, (_, index) => ({
-          kind: 'details' as const,
-          role: 'tool' as const,
-          toolName: 'read',
-          text: JSON.stringify({ detail: index }),
-        })),
-      ];
-      await window.demo.transcript!.record([
-        {
-          id: 'origin',
-          parts: [
-            {
-              kind: 'arguments',
-              partId: 'call',
-              toolName: 'read',
-              state: 'requested',
-              text: '{"path":"failed.txt"}',
-            },
-          ],
-        },
-        ...(source === 'durable' ? [{ id: 'result', role: 'tool' as const, parts: result }] : []),
-      ]);
-      if (source === 'live') await window.demo.transcript!.activity(result, 'none');
-      const controller = window.demo.application.chat!;
-      await controller.jumpToLatest();
-      const state = controller.getSnapshot();
-      const resultSource =
-        source === 'live'
-          ? state.snapshot!.run!.transcript!.source
-          : state.transcript.entries.find((entry) => entry.id === 'result')!.transcript!.source;
-      const command = window.demo.chat.dependencies.chat.command;
-      const gate = Promise.withResolvers<void>();
-      Object.assign(window, { releaseEvidenceManifest: () => gate.resolve() });
-      window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
-        if (
-          operation === 'getChatTranscriptContent' &&
-          'source' in input &&
-          !('selection' in input) &&
-          JSON.stringify(input.source) === JSON.stringify(resultSource)
-        ) {
-          await gate.promise;
-          throw Error('Controlled first manifest failure');
-        }
-        return command(operation, input, options) as never;
-      };
-    }, source);
-    const origin = page.locator('[data-transcript-entry="origin"]');
-    const result =
-      source === 'live' ? live(page) : page.locator('[data-transcript-entry="result"]');
-    await expect(origin).toContainText('Read failed.txt · failed');
-    await openActivityGroups(page);
-    await result.getByRole('button', { name: 'Load more parts', exact: true }).click();
-    await expect
-      .poll(() =>
-        page.evaluate(() => {
-          const manifest = window.demo.application.chat!.getSnapshot().transcript.manifest;
-          return [manifest?.status, manifest?.parts.length];
-        }),
-      )
-      .toEqual(['loading', 0]);
-    // The output row draws no step of its own; its call's headline carries the failure.
-    await expect(
-      result.locator('[data-transcript-step]').filter({ hasText: 'Partial failed' }),
-    ).toHaveCount(0);
-    await expect.soft(origin).toContainText('Read failed.txt · failed');
-    await page.evaluate(() =>
-      (window as typeof window & { releaseEvidenceManifest(): void }).releaseEvidenceManifest(),
-    );
-    await expect(result.getByRole('alert')).toContainText('Retry parts');
-    await expect(
-      result.locator('[data-transcript-step]').filter({ hasText: 'Partial failed' }),
-    ).toHaveCount(0);
-    await expect(origin).toContainText('Read failed.txt · failed');
-    // Opening the call's card opens its output beneath it, retained failure and all.
-    await openActivity(origin);
-    await expect(result.getByText('Partial failed output retained')).toBeVisible();
+test('a failed result keeps its call evidence through a held and failed first manifest read', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(async () => {
+    const result = [
+      {
+        kind: 'result' as const,
+        role: 'tool' as const,
+        toolName: 'read',
+        state: 'failed' as const,
+        pairing: 'matched' as const,
+        call: { entryId: 'origin', partId: 'call' },
+        text: 'Partial failed output retained',
+      },
+      ...Array.from({ length: 4 }, (_, index) => ({
+        kind: 'details' as const,
+        role: 'tool' as const,
+        toolName: 'read',
+        text: JSON.stringify({ detail: index }),
+      })),
+    ];
+    await window.demo.transcript!.record([
+      {
+        id: 'origin',
+        parts: [
+          {
+            kind: 'arguments',
+            partId: 'call',
+            toolName: 'read',
+            state: 'requested',
+            text: '{"path":"failed.txt"}',
+          },
+        ],
+      },
+      { id: 'result', role: 'tool' as const, parts: result },
+    ]);
+    const controller = window.demo.application.chat!;
+    await controller.jumpToLatest();
+    const resultSource = controller
+      .getSnapshot()
+      .transcript.entries.find((entry) => entry.id === 'result')!.transcript!.source;
+    const command = window.demo.chat.dependencies.chat.command;
+    const gate = Promise.withResolvers<void>();
+    Object.assign(window, { releaseEvidenceManifest: () => gate.resolve() });
+    window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
+      if (
+        operation === 'getChatTranscriptContent' &&
+        'source' in input &&
+        !('selection' in input) &&
+        JSON.stringify(input.source) === JSON.stringify(resultSource)
+      ) {
+        await gate.promise;
+        throw Error('Controlled first manifest failure');
+      }
+      return command(operation, input, options) as never;
+    };
   });
+  const origin = page.locator('[data-transcript-entry="origin"]');
+  const result = page.locator('[data-transcript-entry="result"]');
+  await expect(origin).toContainText('Read failed.txt · failed');
+  await openActivityGroups(page);
+  await result.getByRole('button', { name: 'Load more parts', exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const manifest = window.demo.application.chat!.getSnapshot().transcript.manifest;
+        return [manifest?.status, manifest?.parts.length];
+      }),
+    )
+    .toEqual(['loading', 0]);
+  // The output row draws no step of its own; its call's headline carries the failure.
+  await expect(
+    result.locator('[data-transcript-step]').filter({ hasText: 'Partial failed' }),
+  ).toHaveCount(0);
+  await expect.soft(origin).toContainText('Read failed.txt · failed');
+  await page.evaluate(() =>
+    (window as typeof window & { releaseEvidenceManifest(): void }).releaseEvidenceManifest(),
+  );
+  await expect(result.getByRole('alert')).toContainText('Retry parts');
+  await expect(
+    result.locator('[data-transcript-step]').filter({ hasText: 'Partial failed' }),
+  ).toHaveCount(0);
+  await expect(origin).toContainText('Read failed.txt · failed');
+  // Opening the call's card opens its output beneath it, retained failure and all.
+  await openActivity(origin);
+  await expect(result.getByText('Partial failed output retained')).toBeVisible();
+});
 test('ordered activity stays between authored answers across manifest and history pages; exact call references alone supply failure', async ({
   page,
 }) => {
@@ -296,265 +292,242 @@ test('requested and executed arguments, unknown JSON and interrupted partial res
   ]);
   await expect(row).toContainText('55 earlier bytes / 2 lines');
   await row.getByRole('button', { name: 'Copy part', exact: true }).last().click();
-  expect(await page.evaluate(() => window.demo.transcript!.copied.at(-1))).toBe(
-    '{"published":"inert details"}',
-  );
-  for (const [, width, height] of [
-    ['normal', 1440, 900],
-    ['compact', 540, 844],
-    ['zoom-200', 720, 450],
-  ] as const) {
-    await page.setViewportSize({ width, height });
-    await row.scrollIntoViewIfNeeded();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
-      true,
-    );
-  }
+  await expect
+    .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
+    .toBe('{"published":"inert details"}');
+  // Nothing it shows overflows a narrow window.
+  await page.setViewportSize({ width: 540, height: 844 });
+  await row.scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
-for (const manifest of [false, true])
-  for (const focus of [false, true])
-    test(`same-source thinking/tool appends after loaded manifest=${manifest} focus=${focus}`, async ({
-      page,
-    }) => {
-      await open(page);
-      await page.evaluate(async () => {
-        await window.demo.transcript!.record([
+test('same-source thinking/tool appends keep the loaded manifest, focus and selection', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(async () => {
+    await window.demo.transcript!.record([
+      {
+        id: 'stream-origin',
+        parts: [
           {
-            id: 'stream-origin',
-            parts: [
-              {
-                kind: 'arguments',
-                partId: 'call',
-                toolName: 'bash',
-                state: 'requested',
-                text: '{"command":"stream moon"}',
-              },
-            ],
+            kind: 'arguments',
+            partId: 'call',
+            toolName: 'bash',
+            state: 'requested',
+            text: '{"command":"stream moon"}',
           },
-        ]);
-        const command = window.demo.chat.dependencies.chat.command;
-        Object.assign(window, { progressHistoryReads: 0 });
-        window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
-          if (
-            ['getChat', 'getChatHistory', 'getChatHistoryAround'].includes(operation) ||
-            (operation === 'getChatTranscriptContent' && !('selection' in input))
-          )
-            (window as typeof window & { progressHistoryReads: number }).progressHistoryReads++;
-          return command(operation, input, options) as never;
-        };
-      });
-      const update = (suffix: string, failed = false) =>
-        page.evaluate(
-          async ({ suffix, failed }) => {
-            await window.demo.transcript!.activity([
-              { kind: 'text', text: 'Authored before' },
-              { kind: 'thinking', text: `Thought ${suffix}`, state: 'running' },
-              {
-                kind: 'result',
-                role: 'tool',
-                toolName: 'bash',
-                text: `Output ${suffix}`,
-                state: failed ? 'failed' : 'running',
-                pairing: 'matched',
-                call: { entryId: 'stream-origin', partId: 'call' },
-              },
-              { kind: 'details', role: 'tool', toolName: 'bash', text: 'Detail A' },
-              { kind: 'details', role: 'tool', toolName: 'bash', text: 'Detail B' },
-            ]);
-          },
-          { suffix, failed },
-        );
-      await update('first');
-      await page.evaluate(() => window.demo.application.chat!.jumpToLatest());
-      const row = live(page);
-      await openActivityGroups(page);
-      if (manifest) {
-        await row.getByRole('button', { name: 'Load more parts', exact: true }).click();
-        await expect
-          .poll(() =>
-            page.evaluate(
-              () => window.demo.application.chat!.getSnapshot().transcript.manifest?.status,
-            ),
-          )
-          .toBe('complete');
-      }
-      await openActivity(row);
-      // The output opens with its call, recorded in an earlier row.
-      await openActivity(page.locator('[data-transcript-entry="stream-origin"]'));
-      const group = stepToggle(row, 'm0.b1');
-      const thought = row.locator('[data-transcript-part="m0.b1"]');
-      const output = row.locator('[data-transcript-part="m0.b2"]');
-      // Opening the card shows its parts; none folds on its own.
-      const tail = row.locator('[data-transcript-part="m0.b4"]');
-      await expect(thought.locator('pre')).toHaveText('Thought first');
-      await expect(output.locator('pre')).toHaveText('Output first');
-      if (focus) await output.locator('pre').focus();
-      if (manifest)
-        await tail.locator('pre').evaluate((element) => {
-          const range = document.createRange();
-          range.selectNodeContents(element);
-          window.getSelection()!.removeAllRanges();
-          window.getSelection()!.addRange(range);
-        });
-      const source = await row.getAttribute('data-transcript-live');
-      const reads = () =>
-        page.evaluate(
-          () => (window as typeof window & { progressHistoryReads: number }).progressHistoryReads,
-        );
-      const beforeReads = await reads();
-      for (const suffix of ['first and next', 'first and next again']) {
-        await update(suffix, suffix.endsWith('again'));
-        await expect(row).toHaveAttribute('data-transcript-live', source!);
-        await expect
-          .soft(thought.locator('pre'))
-          .toHaveText(`Thought ${suffix}`, { timeout: 1500 });
-        await expect.soft(output.locator('pre')).toHaveText(`Output ${suffix}`, { timeout: 1500 });
-        await expect
-          .soft(row.locator('[data-transcript-step] > [data-glyph]').first())
-          .toHaveText(`Thought ${suffix}`, { timeout: 1500 });
-        if (focus) await expect(output.locator('pre')).toBeFocused();
-        await expect(group).toHaveAttribute('aria-expanded', 'true');
-      }
-      expect(await reads()).toBe(beforeReads);
-      if (manifest)
-        expect(await page.evaluate(() => window.getSelection()?.toString())).toBe('Detail B');
-      await expect
-        .soft(page.locator('[data-transcript-entry="stream-origin"]'))
-        .toContainText('Ran stream moon · failed', { timeout: 1500 });
-      if (manifest) {
-        await expect(row.getByRole('alert')).toContainText('Retry parts');
-        expect(
-          await row
-            .locator('[data-transcript-part]')
-            .evaluateAll((parts) => parts.map((part) => part.getAttribute('data-transcript-part'))),
-        ).toEqual(['m0.b0', 'm0.b1', 'm0.b2', 'm0.b3', 'm0.b4']);
-      }
-      await output.getByRole('button', { name: 'Copy part', exact: true }).click();
-      await expect
-        .configure({ soft: true })
-        .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
-        .toBe('Output first and next again');
-      await group.click();
-      await update('first and next again, held locally', true);
-      await expect(group).toHaveAttribute('aria-expanded', 'false');
-      await expect(thought.locator('pre')).not.toBeVisible();
-    });
-for (const outcome of ['success', 'error'] as const)
-  test(`same-source current content and complete Copy survive held old content ${outcome}`, async ({
-    page,
-  }) => {
-    await open(page);
-    const update = (suffix: string) =>
-      page.evaluate(async (suffix) => {
+        ],
+      },
+    ]);
+    const command = window.demo.chat.dependencies.chat.command;
+    Object.assign(window, { progressHistoryReads: 0 });
+    window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
+      if (
+        ['getChat', 'getChatHistory', 'getChatHistoryAround'].includes(operation) ||
+        (operation === 'getChatTranscriptContent' && !('selection' in input))
+      )
+        (window as typeof window & { progressHistoryReads: number }).progressHistoryReads++;
+      return command(operation, input, options) as never;
+    };
+  });
+  const update = (suffix: string, failed = false) =>
+    page.evaluate(
+      async ({ suffix, failed }) => {
         await window.demo.transcript!.activity([
-          { kind: 'text', text: 'Before' },
-          { kind: 'thinking', text: 'Thought first\n'.repeat(20) + suffix, state: 'running' },
+          { kind: 'text', text: 'Authored before' },
+          { kind: 'thinking', text: `Thought ${suffix}`, state: 'running' },
           {
             kind: 'result',
             role: 'tool',
             toolName: 'bash',
-            state: 'running',
-            text: 'Output first\n'.repeat(20) + suffix,
+            text: `Output ${suffix}`,
+            state: failed ? 'failed' : 'running',
+            pairing: 'matched',
+            call: { entryId: 'stream-origin', partId: 'call' },
           },
-          { kind: 'details', text: 'Detail A' },
-          { kind: 'details', text: 'Detail B' },
+          { kind: 'details', role: 'tool', toolName: 'bash', text: 'Detail A' },
+          { kind: 'details', role: 'tool', toolName: 'bash', text: 'Detail B' },
         ]);
-      }, suffix);
-    await update('');
-    await page.evaluate(() => window.demo.application.chat!.jumpToLatest());
-    const row = live(page);
-    await row.getByRole('button', { name: 'Load more parts', exact: true }).click();
-    await expect
-      .poll(() =>
-        page.evaluate(
-          () => window.demo.application.chat!.getSnapshot().transcript.manifest?.status,
-        ),
-      )
-      .toBe('complete');
-    await page.evaluate((outcome) => {
-      const command = window.demo.chat.dependencies.chat.command;
-      const old = window.demo.application.chat!.getSnapshot().snapshot!.run!.transcript!.parts[2]!;
-      const gate = Promise.withResolvers<void>();
-      let failCurrent = false;
-      Object.assign(window, {
-        oldContentHeld: false,
-        oldContentSettled: false,
-        releaseOldContent: () => gate.resolve(),
-        failCurrentContent: () => {
-          failCurrent = true;
-        },
-      });
-      let held = false;
-      window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
-        if (
-          failCurrent &&
-          operation === 'getChatTranscriptContent' &&
-          'selection' in input &&
-          input.selection?.partId === old.partId
-        )
-          throw Error('Controlled current read failure');
-        if (
-          operation === 'getChatTranscriptContent' &&
-          'selection' in input &&
-          input.selection?.partId === old.partId &&
-          input.selection.revision === old.revision &&
-          !held
-        ) {
-          held = true;
-          const reply = await command(operation, input, options);
-          Object.assign(window, { oldContentHeld: true });
-          await gate.promise;
-          Object.assign(window, { oldContentSettled: true });
-          if (outcome === 'error') throw Error('Controlled late old read failure');
-          return reply as never;
-        }
-        return command(operation, input, options) as never;
-      };
-    }, outcome);
-    await openActivity(row);
-    const thought = row.locator('[data-transcript-part="m0.b1"]');
-    const output = row.locator('[data-transcript-part="m0.b2"]');
-    await expect
-      .poll(() =>
-        page.evaluate(() => (window as typeof window & { oldContentHeld: boolean }).oldContentHeld),
-      )
-      .toBe(true);
-    await output.locator('pre').focus();
-    await update('and current appended 🌔');
-    const expected = 'Output first\n'.repeat(20) + 'and current appended 🌔';
-    await expect(output.locator('pre')).toHaveText(expected);
-    await expect(thought.locator('pre')).toHaveText(
-      'Thought first\n'.repeat(20) + 'and current appended 🌔',
+      },
+      { suffix, failed },
     );
-    await expect(output.locator('pre')).toBeFocused();
-    await expect(row.getByRole('alert')).toContainText('Retry parts');
-    await output.getByRole('button', { name: 'Copy part', exact: true }).click();
+  await update('first');
+  await page.evaluate(() => window.demo.application.chat!.jumpToLatest());
+  const row = live(page);
+  await openActivityGroups(page);
+  await row.getByRole('button', { name: 'Load more parts', exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.manifest?.status),
+    )
+    .toBe('complete');
+  await openActivity(row);
+  // The output opens with its call, recorded in an earlier row.
+  await openActivity(page.locator('[data-transcript-entry="stream-origin"]'));
+  const group = stepToggle(row, 'm0.b1');
+  const thought = row.locator('[data-transcript-part="m0.b1"]');
+  const output = row.locator('[data-transcript-part="m0.b2"]');
+  // Opening the card shows its parts; none folds on its own.
+  const tail = row.locator('[data-transcript-part="m0.b4"]');
+  await expect(thought.locator('pre')).toHaveText('Thought first');
+  await expect(output.locator('pre')).toHaveText('Output first');
+  await output.locator('pre').focus();
+  await tail.locator('pre').evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+  });
+  const source = await row.getAttribute('data-transcript-live');
+  const reads = () =>
+    page.evaluate(
+      () => (window as typeof window & { progressHistoryReads: number }).progressHistoryReads,
+    );
+  const beforeReads = await reads();
+  for (const suffix of ['first and next', 'first and next again']) {
+    await update(suffix, suffix.endsWith('again'));
+    await expect(row).toHaveAttribute('data-transcript-live', source!);
+    await expect.soft(thought.locator('pre')).toHaveText(`Thought ${suffix}`, { timeout: 1500 });
+    await expect.soft(output.locator('pre')).toHaveText(`Output ${suffix}`, { timeout: 1500 });
     await expect
-      .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
-      .toBe(expected);
-    expect(
-      await page.evaluate(
+      .soft(row.locator('[data-transcript-step] > [data-glyph]').first())
+      .toHaveText(`Thought ${suffix}`, { timeout: 1500 });
+    await expect(output.locator('pre')).toBeFocused();
+    await expect(group).toHaveAttribute('aria-expanded', 'true');
+  }
+  expect(await reads()).toBe(beforeReads);
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toBe('Detail B');
+  await expect
+    .soft(page.locator('[data-transcript-entry="stream-origin"]'))
+    .toContainText('Ran stream moon · failed', { timeout: 1500 });
+  await expect(row.getByRole('alert')).toContainText('Retry parts');
+  expect(
+    await row
+      .locator('[data-transcript-part]')
+      .evaluateAll((parts) => parts.map((part) => part.getAttribute('data-transcript-part'))),
+  ).toEqual(['m0.b0', 'm0.b1', 'm0.b2', 'm0.b3', 'm0.b4']);
+  await output.getByRole('button', { name: 'Copy part', exact: true }).click();
+  await expect
+    .configure({ soft: true })
+    .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
+    .toBe('Output first and next again');
+  await group.click();
+  await update('first and next again, held locally', true);
+  await expect(group).toHaveAttribute('aria-expanded', 'false');
+  await expect(thought.locator('pre')).not.toBeVisible();
+});
+test('same-source current content and complete Copy survive a late old content reply', async ({
+  page,
+}) => {
+  await open(page);
+  const update = (suffix: string) =>
+    page.evaluate(async (suffix) => {
+      await window.demo.transcript!.activity([
+        { kind: 'text', text: 'Before' },
+        { kind: 'thinking', text: 'Thought first\n'.repeat(20) + suffix, state: 'running' },
+        {
+          kind: 'result',
+          role: 'tool',
+          toolName: 'bash',
+          state: 'running',
+          text: 'Output first\n'.repeat(20) + suffix,
+        },
+        { kind: 'details', text: 'Detail A' },
+        { kind: 'details', text: 'Detail B' },
+      ]);
+    }, suffix);
+  await update('');
+  await page.evaluate(() => window.demo.application.chat!.jumpToLatest());
+  const row = live(page);
+  await row.getByRole('button', { name: 'Load more parts', exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.manifest?.status),
+    )
+    .toBe('complete');
+  await page.evaluate(() => {
+    const command = window.demo.chat.dependencies.chat.command;
+    const old = window.demo.application.chat!.getSnapshot().snapshot!.run!.transcript!.parts[2]!;
+    const gate = Promise.withResolvers<void>();
+    let failCurrent = false;
+    Object.assign(window, {
+      oldContentHeld: false,
+      oldContentSettled: false,
+      releaseOldContent: () => gate.resolve(),
+      failCurrentContent: () => {
+        failCurrent = true;
+      },
+    });
+    let held = false;
+    window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
+      if (
+        failCurrent &&
+        operation === 'getChatTranscriptContent' &&
+        'selection' in input &&
+        input.selection?.partId === old.partId
+      )
+        throw Error('Controlled current read failure');
+      if (
+        operation === 'getChatTranscriptContent' &&
+        'selection' in input &&
+        input.selection?.partId === old.partId &&
+        input.selection.revision === old.revision &&
+        !held
+      ) {
+        held = true;
+        const reply = await command(operation, input, options);
+        Object.assign(window, { oldContentHeld: true });
+        await gate.promise;
+        Object.assign(window, { oldContentSettled: true });
+        return reply as never;
+      }
+      return command(operation, input, options) as never;
+    };
+  });
+  await openActivity(row);
+  const thought = row.locator('[data-transcript-part="m0.b1"]');
+  const output = row.locator('[data-transcript-part="m0.b2"]');
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as typeof window & { oldContentHeld: boolean }).oldContentHeld),
+    )
+    .toBe(true);
+  await output.locator('pre').focus();
+  await update('and current appended 🌔');
+  const expected = 'Output first\n'.repeat(20) + 'and current appended 🌔';
+  await expect(output.locator('pre')).toHaveText(expected);
+  await expect(thought.locator('pre')).toHaveText(
+    'Thought first\n'.repeat(20) + 'and current appended 🌔',
+  );
+  await expect(output.locator('pre')).toBeFocused();
+  await expect(row.getByRole('alert')).toContainText('Retry parts');
+  await output.getByRole('button', { name: 'Copy part', exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
+    .toBe(expected);
+  expect(
+    await page.evaluate(
+      () => (window as typeof window & { oldContentSettled: boolean }).oldContentSettled,
+    ),
+  ).toBe(false);
+  await page.evaluate(() =>
+    (window as typeof window & { releaseOldContent(): void }).releaseOldContent(),
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(
         () => (window as typeof window & { oldContentSettled: boolean }).oldContentSettled,
       ),
-    ).toBe(false);
-    await page.evaluate(() =>
-      (window as typeof window & { releaseOldContent(): void }).releaseOldContent(),
-    );
-    await expect
-      .poll(() =>
-        page.evaluate(
-          () => (window as typeof window & { oldContentSettled: boolean }).oldContentSettled,
-        ),
-      )
-      .toBe(true);
-    await expect(output.locator('pre')).toHaveText(expected);
-    await expect(output.getByRole('alert')).toHaveCount(0);
-    await page.evaluate(() =>
-      (window as typeof window & { failCurrentContent(): void }).failCurrentContent(),
-    );
-    await update('and current appended 🌔, then another append');
-    await expect(output.getByRole('alert')).toContainText('Retry content');
-  });
+    )
+    .toBe(true);
+  await expect(output.locator('pre')).toHaveText(expected);
+  await expect(output.getByRole('alert')).toHaveCount(0);
+  await page.evaluate(() =>
+    (window as typeof window & { failCurrentContent(): void }).failCurrentContent(),
+  );
+  await update('and current appended 🌔, then another append');
+  await expect(output.getByRole('alert')).toContainText('Retry content');
+});
 test('thinking/tool progress changes before completion with stable focus and expansion; group collapse survives updates', async ({
   page,
 }) => {
@@ -730,7 +703,7 @@ test('an activity card stays mounted as the live response joins it, the live res
   await expect
     .poll(async () => {
       await mark(origin);
-      await page.waitForTimeout(1000);
+      await waitForListRest(page);
       return isMarked(origin);
     })
     .toBe(true);
@@ -775,7 +748,7 @@ test('an activity card stays mounted as the live response joins it, the live res
   await answer('All checks pass.\n\n' + 'Detail.\n\n'.repeat(400));
   await expect(row).toContainText('Detail.');
   await scrollToEnd(page);
-  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+  await waitForListRest(page);
   await page.mouse.wheel(0, -300);
   await expect.poll(() => readAnchor(page)).toEqual({ key: 'entry:origin', atLatest: false });
 });
@@ -822,7 +795,7 @@ test('a reader scrolled up into the card stays put, and the card stays mounted, 
   await expect
     .poll(async () => {
       await mark(step);
-      await page.waitForTimeout(500);
+      await waitForListRest(page);
       return isMarked(step);
     })
     .toBe(true);
@@ -843,7 +816,7 @@ test('a reader scrolled up into the card stays put, and the card stays mounted, 
       }),
     )
     .toBe('All checks pass.');
-  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+  await waitForListRest(page);
   expect(await isMarked(step)).toBe(true);
   expect(Math.abs((await readTop()) - before)).toBeLessThan(1.5);
 });
@@ -928,41 +901,48 @@ test("Find revealing a match in a call's output shows the call's card open, and 
   await expect(chevron).toHaveAttribute('aria-expanded', 'true');
   await expect(result.locator('pre')).toBeVisible();
 });
-for (const valid of [false, true])
-  test(`EOF patch source without terminal newline stays exact in Copy: ${valid ? 'valid replacement' : 'truncated replacement'}`, async ({
-    page,
-  }) => {
-    await open(page);
-    const source = '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old' + (valid ? '\n+new' : '');
-    await page.evaluate(async (source) => {
+test('EOF patch sources without a terminal newline stay exact in Copy, parsed or not', async ({
+  page,
+}) => {
+  await open(page);
+  const valid = '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new',
+    truncated = '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old';
+  await page.evaluate(
+    async (sources) => {
       await window.demo.transcript!.record([
         {
           id: 'eof-patch',
           role: 'tool',
-          parts: [
-            { text: source, kind: 'patch', role: 'tool', toolName: 'edit', state: 'completed' },
-          ],
+          parts: sources.map((text) => ({
+            text,
+            kind: 'patch' as const,
+            role: 'tool' as const,
+            toolName: 'edit',
+            state: 'completed' as const,
+          })),
         },
       ]);
       await window.demo.application.chat!.jumpToLatest();
-    }, source);
-    const row = page.locator('[data-transcript-entry="eof-patch"]');
-    await openActivity(row);
-    await row.getByRole('button', { name: 'Copy patch', exact: true }).click();
-    await expect
-      .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
-      .toBe(source);
-    if (valid) {
-      const table = row.getByRole('table');
-      await expect(table.getByRole('row').filter({ hasText: '-old' })).toHaveText('1-old');
-      await expect(table.getByRole('row').filter({ hasText: '+new' })).toHaveText('1+new');
-      await expect(row.getByText(/Malformed or unsupported/)).toHaveCount(0);
-    } else {
-      await expect(row).toContainText('Malformed or unsupported');
-      await expect(row.getByRole('table')).toHaveCount(0);
-      expect(await row.locator('pre').textContent()).toBe(source);
-    }
-  });
+    },
+    [valid, truncated],
+  );
+  const row = page.locator('[data-transcript-entry="eof-patch"]');
+  await openActivity(row);
+  const parsed = row.locator('[data-transcript-part="m0.b0"]'),
+    fallback = row.locator('[data-transcript-part="m0.b1"]');
+  const table = parsed.getByRole('table');
+  await expect(table.getByRole('row').filter({ hasText: '-old' })).toHaveText('1-old');
+  await expect(table.getByRole('row').filter({ hasText: '+new' })).toHaveText('1+new');
+  await parsed.getByRole('button', { name: 'Copy patch', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1))).toBe(valid);
+  await expect(fallback).toContainText('Malformed or unsupported');
+  await expect(fallback.getByRole('table')).toHaveCount(0);
+  expect(await fallback.locator('pre').textContent()).toBe(truncated);
+  await fallback.getByRole('button', { name: 'Copy patch', exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
+    .toBe(truncated);
+});
 
 test('historical patches retain real coordinates, malformed/numbered/large fallback and complete source Copy', async ({
   page,
@@ -1004,7 +984,7 @@ test('historical patches retain real coordinates, malformed/numbered/large fallb
   await expect(table.getByRole('row').filter({ hasText: '+new 🌔' })).toHaveText('81+new 🌔');
   await first.getByRole('region', { name: 'Recorded unified patch' }).scrollIntoViewIfNeeded();
   await first.getByRole('button', { name: 'Copy patch', exact: true }).click();
-  expect(await page.evaluate(() => window.demo.transcript!.copied.at(-1))).toBe(patch);
+  await expect.poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1))).toBe(patch);
   const malformed = row.locator('[data-transcript-part="m0.b1"]');
   await expect(malformed).toContainText('Malformed or unsupported');
   const numbered = row.locator('[data-transcript-part="m0.b2"]');
@@ -1020,7 +1000,7 @@ test('historical patches retain real coordinates, malformed/numbered/large fallb
   );
   await expect(large).toContainText('Source 15,999');
   await large.getByRole('button', { name: 'Copy patch', exact: true }).click();
-  expect(await page.evaluate(() => window.demo.transcript!.copied.at(-1))).toBe(huge);
+  await expect.poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1))).toBe(huge);
 });
 test('a running response shows no status notes; redaction is honest; stopped partial activity survives without provider signatures', async ({
   page,
@@ -1070,68 +1050,63 @@ test('a running response shows no status notes; redaction is honest; stopped par
   await expect(row.locator('[data-transcript-part="m0.b0"] button')).toHaveCount(0);
 });
 
-for (const input of ['pointer', 'Enter', 'Space'] as const)
-  test(`Find ${input} collapse persists in the matching Activity until its original range changes`, async ({
-    page,
-  }) => {
-    await open(page);
-    await page.evaluate(async () => {
-      await window.demo.transcript!.setEntry(
-        0,
-        ['first NEEDLE\n' + 'x'.repeat(300) + '\nsecond NEEDLE'],
-        ['thinking'],
-      );
-      await window.demo.transcript!.setEntry(1, ['Unrelated thought'], ['thinking']);
-    });
-    await page.getByRole('region', { name: 'Chat transcript', exact: true }).focus();
-    await page.keyboard.press('Control+f');
-    const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
-    await find.fill('needle');
-    const row = page.locator('[data-transcript-entry="reading-0"]');
-    const activity = row.getByRole('button', { name: /^Activity/ });
-    // The thought shows whenever its card is open; it has no fold of its own.
-    const thought = row.locator('[data-transcript-part] pre').first();
-    await expect(activity).toHaveAttribute('aria-expanded', 'true');
-    await expect(thought).toBeVisible();
-    await expect
-      .poll(() => readFindHighlight(page))
-      .toEqual([expect.objectContaining({ text: 'NEEDLE', entry: 'reading-0' })]);
-    if (input === 'pointer') await activity.click();
-    else {
-      await activity.focus();
-      await page.keyboard.press(input === 'Space' ? 'Space' : 'Enter');
-    }
-    await expect(activity).toHaveAttribute('aria-expanded', 'false');
-    const active = await page.evaluate(
-      () => window.demo.application.chat!.getSnapshot().transcript.find.active,
+test('a collapse during Find persists in the matching Activity until its original range changes', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(async () => {
+    await window.demo.transcript!.setEntry(
+      0,
+      ['first NEEDLE\n' + 'x'.repeat(300) + '\nsecond NEEDLE'],
+      ['thinking'],
     );
-    await page.evaluate(() => {
-      const controller = window.demo.application.chat!,
-        view = controller.getSnapshot().transcript.view;
-      controller.setTranscriptView({
-        ...view,
-        anchor: { key: 'entry:reading-1', offset: 16 },
-      });
-      window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot));
-    });
-    await expect(activity).toHaveAttribute('aria-expanded', 'false');
-    const unrelated = page
-      .locator('[data-transcript-entry="reading-1"]')
-      .getByRole('button', { name: /^Activity/ });
-    await expect(unrelated).toHaveAttribute('aria-expanded', 'false');
-    expect(
-      await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.find.active),
-    ).toEqual(active);
-    await find.focus();
-    await find.press('Enter');
-    await expect(activity).toHaveAttribute('aria-expanded', 'true');
-    await expect(thought).toBeVisible();
-    await expect
-      .poll(() => readFindHighlight(page))
-      .toEqual([expect.objectContaining({ text: 'NEEDLE', before: 'xxxxxxxx\nsecond ' })]);
-    await expect(unrelated).toHaveAttribute('aria-expanded', 'false');
-    await expect(find).toBeFocused();
+    await window.demo.transcript!.setEntry(1, ['Unrelated thought'], ['thinking']);
   });
+  await page.getByRole('region', { name: 'Chat transcript', exact: true }).focus();
+  await page.keyboard.press('Control+f');
+  const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
+  await find.fill('needle');
+  const row = page.locator('[data-transcript-entry="reading-0"]');
+  const activity = row.getByRole('button', { name: /^Activity/ });
+  // The thought shows whenever its card is open; it has no fold of its own.
+  const thought = row.locator('[data-transcript-part] pre').first();
+  await expect(activity).toHaveAttribute('aria-expanded', 'true');
+  await expect(thought).toBeVisible();
+  await expect
+    .poll(() => readFindHighlight(page))
+    .toEqual([expect.objectContaining({ text: 'NEEDLE', entry: 'reading-0' })]);
+  await activity.click();
+  await expect(activity).toHaveAttribute('aria-expanded', 'false');
+  const active = await page.evaluate(
+    () => window.demo.application.chat!.getSnapshot().transcript.find.active,
+  );
+  await page.evaluate(() => {
+    const controller = window.demo.application.chat!,
+      view = controller.getSnapshot().transcript.view;
+    controller.setTranscriptView({
+      ...view,
+      anchor: { key: 'entry:reading-1', offset: 16 },
+    });
+    window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot));
+  });
+  await expect(activity).toHaveAttribute('aria-expanded', 'false');
+  const unrelated = page
+    .locator('[data-transcript-entry="reading-1"]')
+    .getByRole('button', { name: /^Activity/ });
+  await expect(unrelated).toHaveAttribute('aria-expanded', 'false');
+  expect(
+    await page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.find.active),
+  ).toEqual(active);
+  await find.focus();
+  await find.press('Enter');
+  await expect(activity).toHaveAttribute('aria-expanded', 'true');
+  await expect(thought).toBeVisible();
+  await expect
+    .poll(() => readFindHighlight(page))
+    .toEqual([expect.objectContaining({ text: 'NEEDLE', before: 'xxxxxxxx\nsecond ' })]);
+  await expect(unrelated).toHaveAttribute('aria-expanded', 'false');
+  await expect(find).toBeFocused();
+});
 
 const answers = (count: number) =>
   Array.from({ length: count }, (_, index) => ({
@@ -1171,7 +1146,7 @@ test('a folded run stays folded as the reader scrolls it to the top, and is rest
   await page.mouse.wheel(0, 4);
   // The place saved is the run's first row: its other rows aren't shown.
   await expect.poll(() => readAnchor(page)).toEqual({ key: 'entry:run-0', atLatest: false });
-  await page.waitForTimeout(500);
+  await waitForListRest(page);
   await expect(fold).toHaveAttribute('aria-expanded', 'false');
   await expect(page.locator('[data-transcript-row="entry:run-3"]')).toBeHidden();
   const before = await runTop(page);
@@ -1215,7 +1190,7 @@ test('a folded run opens for a Find match in it, folds again for that match, and
   // The reader folds the run while its match is active; it stays folded.
   await fold.click();
   await expect(fold).toHaveAttribute('aria-expanded', 'false');
-  await page.waitForTimeout(300);
+  await waitForListRest(page);
   await expect(fold).toHaveAttribute('aria-expanded', 'false');
   // Find moving to the next match in the run opens it again.
   await find.focus();

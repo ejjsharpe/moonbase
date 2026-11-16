@@ -24,4 +24,4 @@ export function readDaemonPid(directory: string): Promise<number | undefined>;
 export function stopDaemon(directory: string, pid?: number): Promise<void>;
 export function readFauxCalls(directory: string): Promise<number>;
 export function installFauxDaemon(): void;
-export function stopTestDaemons(): Promise<number>;
+export function stopTestDaemons(folder: string): Promise<number>;

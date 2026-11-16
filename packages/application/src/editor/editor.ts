@@ -2225,6 +2225,7 @@ export interface EditorController {
   readonly instanceId: `${string}-${string}-${string}-${string}-${string}`;
   subscribe: (listener: () => void) => () => void;
   getSnapshot: () => EditorSnapshot;
+  /** Shows an error: a string as written, an `ApplicationError`'s message, else a generic one. */
   report: (error: unknown) => void;
   clearErrors(): void;
   load(): Promise<void>;

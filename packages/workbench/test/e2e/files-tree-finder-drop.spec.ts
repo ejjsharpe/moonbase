@@ -149,6 +149,7 @@ const emptyArea = async (page: Page) => {
 test('files dropped from Finder on a folder import there without a dialog, and are selected', async ({
   page,
 }) => {
+  await page.clock.install();
   await setup(page);
   await create(page, 'dest/', 'dest/inner.ts');
   // A move to undo, which the import forgets.
@@ -158,10 +159,14 @@ test('files dropped from Finder on a folder import there without a dialog, and a
   await name.fill('NOTES.md');
   await name.press('Enter');
   await expect(row(page, 'NOTES.md')).toBeVisible();
+  // The moment a hover takes to expand passes only when the test says.
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
   const drag = await dragFiles(page, row(page, 'dest'), ['a.txt']);
   await expect.poll(() => dropTargets(page)).toEqual(['dest']);
   expect(await page.evaluate(() => window.dropEffects)).toEqual(['copy']);
   // Hovering a collapsed folder for a moment expands it.
+  await page.clock.runFor(500);
+  await page.clock.resume();
   await expect(row(page, 'dest/inner.ts')).toBeVisible();
   await expect.poll(() => dropTargets(page)).toEqual(['dest', 'dest/inner.ts']);
   await drag.drop();

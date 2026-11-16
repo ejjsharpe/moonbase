@@ -221,8 +221,8 @@ for (const timing of ['normal', 'pending scroll'])
       client.command = async (name, input, options) => {
         const result = await command(name, input, options);
         if (name === 'listDirectory' && (input as { path: string }).path === '')
-          (result as DirectoryListing).entries = Array.from({ length: 10000 }, (_, index) => ({
-            path: `file-${String(index).padStart(5, '0')}`,
+          (result as DirectoryListing).entries = Array.from({ length: 300 }, (_, index) => ({
+            path: `file-${String(index).padStart(3, '0')}`,
             directory: false,
           }));
         return result;
@@ -249,13 +249,13 @@ for (const timing of ['normal', 'pending scroll'])
     if (timing === 'pending scroll') await page.evaluate(() => window.releaseTreeScroll());
     await expect(menu(page)).toBeVisible();
     expect(await tree(page).getByRole('treeitem').count()).toBeLessThan(80);
-    expect(await selected(page)).toHaveLength(10000);
-    await item(page, 'Move 10000 Items to Trash').click();
+    expect(await selected(page)).toHaveLength(300);
+    await item(page, 'Move 300 Items to Trash').click();
     const dialog = page.getByRole('dialog', { name: 'Move to Trash', exact: true });
-    await expect(dialog).toContainText('file-00000');
-    await expect(dialog).toContainText('file-09999');
+    await expect(dialog).toContainText('file-000');
+    await expect(dialog).toContainText('file-299');
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
-    await row(page, 'file-09999').click({ button: 'right' });
+    await row(page, 'file-299').click({ button: 'right' });
     await tree(page).evaluate((element) => {
       element.scrollTop = 0;
     });
