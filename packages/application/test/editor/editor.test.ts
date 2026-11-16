@@ -163,6 +163,30 @@ test('a file that exists but fails to read saves over itself, not as a new file'
       (await f.client.command('readFile', target('a.ts'))).text,
       'kept through a failed read',
     );
+    // A folder listing cut short, which leaves the file out, doesn't show it is gone either.
+    const cut: typeof f.client = {
+      ...f.client,
+      async command(name, input, options) {
+        const output = await f.client.command(name, input, options);
+        return name === 'listDirectory' ? { ...output, entries: [], partial: true } : output;
+      },
+    };
+    const other = await acquireEditor(f.runtime, { client: cut, clientId: 'partial-listing' });
+    try {
+      await other.load();
+      await other.openCheckout(checkout.root);
+      await other.open(target('b.ts'));
+      other.edit(target('b.ts'), 'kept through a cut listing');
+      f.memory.failNext('readFile', 'Permission denied', false, 'Unavailable');
+      await other.open(target('b.ts'));
+      assert.equal(await other.save(target('b.ts')), true);
+      assert.equal(
+        (await f.client.command('readFile', target('b.ts'))).text,
+        'kept through a cut listing',
+      );
+    } finally {
+      await other.dispose();
+    }
   } finally {
     await f.dispose();
   }

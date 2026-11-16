@@ -951,7 +951,7 @@ class EditorModelState {
       return false;
     }
   }
-  /** Whether the file's folder lists without it: a read that failed found nothing there. */
+  /** Whether the file's folder lists in full without it: a read that failed found nothing there. */
   private async isMissing(target: FileTarget, scope: Scope.Scope) {
     try {
       const listing = await this.discovery.listDirectory(
@@ -963,6 +963,8 @@ class EditorModelState {
         scope,
         false,
       );
+      // A listing cut short or with an error doesn't show the file is gone.
+      if (listing.partial || listing.error) return false;
       return !listing.entries.some((entry) => entry.path === target.path);
     } catch {
       return false;
