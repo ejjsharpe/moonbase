@@ -11,11 +11,10 @@ export default defineConfig({
     'stored-image.spec.ts',
   ],
   workers: '50%',
-  // One retry on CI; a test that passes only on retry is reported as flaky.
-  retries: process.env.CI ? 1 : 0,
+  // No retries: a test that fails once is fixed, not rerun.
+  retries: 0,
   fullyParallel: true,
-  // Stop a failing CI run early: a test that fails after its retry is a real failure, and the rest
-  // would only hold a runner.
+  // Stop a failing CI run early: the rest would only hold a runner.
   maxFailures: process.env.CI ? 3 : 0,
   // A run empties its output folder as it starts, so native and browser runs keep their own.
   outputDir: 'test-results/browser',
