@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 import { defaultRangeExtractor, useVirtualizer } from '@tanstack/react-virtual';
 import { addPinnedIndexes, overscan, rowHeight, type VisibleRow } from './files-tree-rows.ts';
 
@@ -42,6 +42,9 @@ export function useTreeVirtualizer({
     getScrollElement: () => treeElement.current,
     estimateSize: () => rowHeight,
     overscan,
+    // The virtualizer starts where the tree was left, so keeping focus in view leaves a row that
+    // is already shown where it is.
+    initialOffset: initialScroll,
     // Saving each scroll would publish the recovery and render the workbench for each.
     onChange(instance) {
       const offset = instance.scrollOffset ?? 0;
@@ -59,10 +62,7 @@ export function useTreeVirtualizer({
         editPath === null ? pinnedPaths : [editPath, ...pinnedPaths],
       ),
   });
-  useLayoutEffect(() => {
-    const element = treeElement.current;
-    // The scroll event that follows tells the virtualizer, which reads where the browser clamped.
-    if (element) element.scrollTop = initialScroll;
+  useEffect(() => {
     return () => {
       if (scrolled.current === null) return;
       try {
@@ -71,7 +71,7 @@ export function useTreeVirtualizer({
         // The checkout or the editor has gone, and its scroll with it.
       }
     };
-    // oxlint-disable-next-line react-hooks/exhaustive-deps -- Restore the scroll once; the tree is keyed by checkout.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- Save a scroll still moving as the tree unmounts.
   }, []);
   function scrollToRow(index: number) {
     if (index >= 0 && index < rows.length) virtualizer.scrollToIndex(index);

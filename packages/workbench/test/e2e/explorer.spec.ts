@@ -186,14 +186,27 @@ test('large expanded trees keep navigation, selection and scroll virtualized', a
   await expect(lastFolder).toHaveAttribute('aria-posinset', '10000');
   await expect(lastFolder).toHaveAttribute('aria-setsize', '10000');
   expect(await tree.getByRole('treeitem').count()).toBeLessThan(80);
-  // Shown again, the tree is scrolled where it was left.
+  // Shown again, the tree is scrolled where it was left, and a focused row it already shows
+  // stays where it was rather than being scrolled to an edge.
+  const savedScroll = () =>
+    page.evaluate(
+      () =>
+        window.demo.first.getSnapshot().recovery.views[window.demo.checkout.checkoutId].tree.scroll,
+    );
+  await tree.evaluate((element) => element.scrollTo({ top: 140000 }));
+  const middleFolder = tree.getByRole('treeitem', { name: 'folder-05010', exact: true });
+  await middleFolder.click();
+  await expect.poll(savedScroll).toBe(140000);
   const nav = region.getByRole('group', { name: 'Sidebar view', exact: true });
   await nav.getByRole('button', { name: 'Changes', exact: true }).click();
   await expect(tree).toHaveCount(0);
   await nav.getByRole('button', { name: 'Files', exact: true }).click();
-  await expect(lastFolder).toBeInViewport();
-  await expect(tree.getByRole('treeitem', { name: 'folder-09990', exact: true })).toBeInViewport();
+  await expect(middleFolder).toBeInViewport();
+  await expect.poll(() => tree.evaluate((element) => element.scrollTop)).toBe(140000);
+  expect(await savedScroll()).toBe(140000);
   await tree.focus();
+  await tree.press('End');
+  await expect(lastFolder).toBeInViewport();
   await tree.press('Shift+Home');
   await expect(firstFolder).toBeVisible();
   expect(
