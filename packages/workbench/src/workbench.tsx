@@ -1389,22 +1389,21 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           </Button>
         </div>
       )}
-      {state.publication && (
+      {state.recoveryFailed && (
         <p role="status" {...stylex.props(controls.status)}>
-          Recovery publication PENDING/UNCERTAIN ({state.publication.kind}):{' '}
-          {state.publication.requestId}. Live work is retained.
+          Recent edits are not yet kept for recovery. They stay open here.
           <Button
             {...stylex.props(controls.button)}
             onClick={() =>
               run(
                 withFocus(
-                  controller.resolveRecoveryPublication(),
+                  controller.flush().then(() => true),
                   focusRequest?.origin ?? 'editor',
                   true,
                 ),
               )
             }>
-            Resolve recovery publication
+            Retry keeping edits
           </Button>
         </p>
       )}

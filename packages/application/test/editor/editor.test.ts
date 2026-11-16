@@ -9,7 +9,22 @@ import {
   type CommandInput,
 } from '@moonbase/contracts/workspace';
 import { checkoutKey, fileKey, type CloseChoice } from '@moonbase/application/editor';
+import type { RecoveryState } from '@moonbase/contracts/recovery';
 import { checkout, second, target, fixture } from './editor-fixture.ts';
+
+/** A client's recovery as the store holds it. */
+const storedRecovery = async (client: EditorClient, clientId: string) =>
+  (await client.command('loadRecovery', { clientId })).state;
+/** The drafts a recovery holds, as the file each is for, its text and its baseline. */
+const draftsOf = (state: RecoveryState) =>
+  state.buffers.flatMap((b) =>
+    b.draft ? [{ target: b.target, text: b.draft.text, disk: b.draft.disk }] : [],
+  );
+/** The paths of a checkout's tabs in a recovery, in order. */
+const tabPathsOf = (state: RecoveryState, c: CheckoutTarget = checkout) =>
+  (state.views[c.checkoutId]?.tabs ?? []).map(
+    (id) => state.buffers.find((b) => b.id === id)!.target.path,
+  );
 
 test('memory inspection rejects empty and oversized selections like the production service', async () => {
   const f = await fixture();
@@ -79,23 +94,28 @@ test('external-change conflict retains dirty text and baseline; Overwrite checks
   }
 });
 
-test('Reload persistence failure vetoes loss; Cancel keeps the edits', async () => {
+test('a Reload whose discard fails keeps the edits; Cancel keeps them too', async () => {
   const f = await fixture();
   try {
     await f.editor.open(target('a.ts'));
     f.editor.edit(target('a.ts'), 'dirty');
     f.memory.externalWrite(target('a.ts'), 'external');
     await f.editor.save(target('a.ts'));
-    f.memory.failNext('persistRecovery');
+    f.memory.failNext('closeTab');
     await assert.rejects(f.editor.reload(target('a.ts')));
     assert.equal(f.editor.buffer(target('a.ts'))!.text, 'dirty');
-    assert(f.editor.getSnapshot().publication);
+    assert.equal(f.editor.getSnapshot().recoveryFailed, true);
     f.editor.cancelConflict(target('a.ts'));
     assert.equal(f.editor.buffer(target('a.ts'))!.text, 'dirty');
-    assert.equal(await f.editor.resolveRecoveryPublication(), true);
-    assert.equal(f.editor.buffer(target('a.ts'))!.text, 'external');
+    await f.editor.flush();
+    assert.equal(f.editor.getSnapshot().recoveryFailed, false);
+    assert.deepEqual(
+      draftsOf(await storedRecovery(f.client, f.editor.clientId)).map((d) => d.text),
+      [f.editor.buffer(target('a.ts'))!.text],
+    );
     assert.equal(await f.editor.reload(target('a.ts')), true);
     assert.equal(f.editor.buffer(target('a.ts'))!.text, 'external');
+    assert.deepEqual(draftsOf(await storedRecovery(f.client, f.editor.clientId)), []);
   } finally {
     await f.dispose();
   }
@@ -130,6 +150,48 @@ test('lost Save response retries its immutable payload once, preserving newer ed
   }
 });
 
+test('a file that exists but fails to read saves over itself, not as a new file', async () => {
+  const f = await fixture();
+  try {
+    await f.editor.open(target('a.ts'));
+    f.editor.edit(target('a.ts'), 'kept through a failed read');
+    f.memory.failNext('readFile', 'Permission denied', false, 'Unavailable');
+    await f.editor.open(target('a.ts'));
+    assert.equal(f.editor.buffer(target('a.ts'))!.text, 'kept through a failed read');
+    assert.equal(await f.editor.save(target('a.ts')), true);
+    assert.equal(
+      (await f.client.command('readFile', target('a.ts'))).text,
+      'kept through a failed read',
+    );
+    // A folder listing cut short, which leaves the file out, doesn't show it is gone either.
+    const cut: typeof f.client = {
+      ...f.client,
+      async command(name, input, options) {
+        const output = await f.client.command(name, input, options);
+        return name === 'listDirectory' ? { ...output, entries: [], partial: true } : output;
+      },
+    };
+    const other = await acquireEditor(f.runtime, { client: cut, clientId: 'partial-listing' });
+    try {
+      await other.load();
+      await other.openCheckout(checkout.root);
+      await other.open(target('b.ts'));
+      other.edit(target('b.ts'), 'kept through a cut listing');
+      f.memory.failNext('readFile', 'Permission denied', false, 'Unavailable');
+      await other.open(target('b.ts'));
+      assert.equal(await other.save(target('b.ts')), true);
+      assert.equal(
+        (await f.client.command('readFile', target('b.ts'))).text,
+        'kept through a cut listing',
+      );
+    } finally {
+      await other.dispose();
+    }
+  } finally {
+    await f.dispose();
+  }
+});
+
 test('captured close defers Discards; earlier Save remains a fact after later Cancel', async () => {
   const f = await fixture();
   try {
@@ -150,7 +212,7 @@ test('captured close defers Discards; earlier Save remains a fact after later Ca
     assert.equal(f.editor.buffer(target('a.ts'))!.disk.text, 'edit a.ts');
     assert.equal(f.editor.buffer(target('b.ts'))!.text, 'edit b.ts');
     assert.equal(f.editor.buffer(target('c.ts'))!.text, 'edit c.ts');
-    f.memory.failNext('persistRecovery');
+    f.memory.failNext('closeTab');
     assert.equal(
       await answering(
         f.editor,
@@ -160,7 +222,12 @@ test('captured close defers Discards; earlier Save remains a fact after later Ca
       false,
     );
     assert.equal(f.editor.buffer(target('b.ts'))!.text, 'edit b.ts');
-    assert.equal(await f.editor.resolveRecoveryPublication(), true);
+    await f.editor.flush();
+    assert(
+      draftsOf(await storedRecovery(f.client, f.editor.clientId)).some(
+        (d) => d.target.path === 'b.ts' && d.text === 'edit b.ts',
+      ),
+    );
     assert.equal(
       await answering(
         f.editor,
@@ -247,6 +314,14 @@ test('two editor instances isolate buffers, positions, selection and recovery; r
       other.getSnapshot().recovery.views[checkout.checkoutId].positions['a.ts'],
       undefined,
     );
+    for (const [clientId, text] of [
+      [f.editor.clientId, 'one'],
+      [other.clientId, 'two'],
+    ])
+      assert.deepEqual(
+        draftsOf(await storedRecovery(f.client, clientId)).map((d) => [d.target.path, d.text]),
+        [['a.ts', text]],
+      );
     await f.editor.dispose();
     const restored = await acquireEditor(f.runtime, { client: f.client, clientId: 'editor-one' });
     try {
@@ -258,31 +333,6 @@ test('two editor instances isolate buffers, positions, selection and recovery; r
     assert.equal(other.buffer(target('a.ts'))!.text, 'two');
   } finally {
     await other.dispose();
-    await f.dispose();
-  }
-});
-
-test('recovery CAS conflict is visible and vetoes close', async () => {
-  const f = await fixture(),
-    duplicate = await acquireEditor(f.runtime, { client: f.client, clientId: f.editor.clientId });
-  try {
-    await duplicate.load();
-    await duplicate.openCheckout(checkout.root);
-    await duplicate.flush();
-    await f.editor.open(target('a.ts'));
-    f.editor.edit(target('a.ts'), 'dirty');
-    assert.equal(
-      await answering(
-        f.editor,
-        () => f.editor.close([target('a.ts')]),
-        async () => 'discard',
-      ),
-      false,
-    );
-    assert.equal(f.editor.buffer(target('a.ts'))!.text, 'dirty');
-    assert.match(f.editor.getSnapshot().errors.join(' '), /revision changed/);
-  } finally {
-    await duplicate.dispose();
     await f.dispose();
   }
 });
@@ -310,7 +360,7 @@ test('tree keeps ignored files visible and revealable while lookup retains its f
   }
 });
 
-test('lost move response resolves status once and publishes dirty drafts at the exact successful destination', async () => {
+test('lost move response resolves status once and keeps dirty drafts at the exact successful destination', async () => {
   const f = await fixture('editor-one', false);
   try {
     await f.editor.open(target('a.ts'));
@@ -344,10 +394,9 @@ test('lost move response resolves status once and publishes dirty drafts at the 
     assert.equal(f.memory.stats.mutations, 1);
     assert.equal(f.editor.buffer(target('a.ts')), undefined);
     assert.equal(f.editor.buffer(target('renamed.ts'))!.text, 'dirty source');
-    assert.equal(
-      (await f.client.command('loadRecovery', { clientId: f.editor.clientId })).state.drafts[0]
-        .target.path,
-      'renamed.ts',
+    assert.deepEqual(
+      draftsOf(await storedRecovery(f.client, f.editor.clientId)).map((d) => d.target.path),
+      ['renamed.ts'],
     );
   } finally {
     await f.dispose();
@@ -510,9 +559,10 @@ test('pending commands retain newer live text and close cannot cross an unresolv
     assert.equal(await save, false);
     assert.equal(editor.buffer(target('a.ts'))!.disk.text, 'captured save');
     assert.equal(editor.buffer(target('a.ts'))!.text, 'newer live edit');
-    assert.equal(
-      (await f.client.command('loadRecovery', { clientId: editor.clientId })).state.drafts[0].text,
-      'newer live edit',
+    await editor.flush();
+    assert.deepEqual(
+      draftsOf(await storedRecovery(f.client, editor.clientId)).map((d) => d.text),
+      ['newer live edit'],
     );
   } finally {
     release();
@@ -595,27 +645,35 @@ test('dirty Copy carries a separate destination draft; Trash retains dirty sourc
     sources = await f.editor.inspect(checkout, ['a.ts']);
     await f.editor.mutate({ checkout, sources, kind: 'trash' });
     assert.equal(f.editor.buffer(target('a.ts'))!.text, 'dirty copy');
-    assert.equal(
-      (await f.client.command('loadRecovery', { clientId: f.editor.clientId })).state.drafts.length,
-      2,
+    await f.editor.flush();
+    const stored = await storedRecovery(f.client, f.editor.clientId);
+    assert.deepEqual(
+      draftsOf(stored)
+        .map((d) => [d.target.path, d.text])
+        .sort(),
+      [
+        ['a.ts', 'dirty copy'],
+        ['copy.ts', 'dirty copy'],
+      ],
     );
+    assert.deepEqual(tabPathsOf(stored).sort(), ['a.ts', 'copy.ts']);
   } finally {
     await f.dispose();
   }
 });
 
-test('mutation persistence failure precedes effects; acknowledgement waits for reconciled recovery publication', async () => {
+test('a failed recovery edit stops a mutation before its effects; the operation is acknowledged once followed', async () => {
   const f = await fixture();
   try {
     await f.editor.open(target('a.ts'));
     f.editor.edit(target('a.ts'), 'dirty');
     const sources = await f.editor.inspect(checkout, ['a.ts']);
-    f.memory.failNext('persistRecovery');
+    f.memory.failNext('updateDraft');
     await assert.rejects(
       f.editor.mutate({ checkout, sources, kind: 'move', destination: 'moved.ts' }),
     );
     assert.equal(f.memory.stats.mutations, 0);
-    assert.equal(await f.editor.resolveRecoveryPublication(), true);
+    await f.editor.flush();
     await f.editor.mutate({ checkout, sources, kind: 'move', destination: 'moved.ts' });
     assert.equal(
       (await f.client.command('loadRecovery', { clientId: f.editor.clientId })).operations.length,
@@ -663,7 +721,7 @@ test('stale file activation cannot replace a later successful comparison', async
   }
 });
 
-test('disposal releases view subscriptions without discarding a published draft or ending the process runtime', async () => {
+test('disposal releases view subscriptions without discarding a kept draft or ending the process runtime', async () => {
   const f = await fixture();
   try {
     await f.editor.open(target('a.ts'));
@@ -673,10 +731,9 @@ test('disposal releases view subscriptions without discarding a published draft 
     await f.runtime.runPromise(Effect.yieldNow);
     assert.equal(f.memory.stats.active, 0);
     assert.equal(f.memory.stats.subscriptions, f.memory.stats.released);
-    assert.equal(
-      (await f.client.command('loadRecovery', { clientId: f.editor.clientId })).state.drafts[0]
-        .text,
-      'recover me',
+    assert.deepEqual(
+      draftsOf(await storedRecovery(f.client, f.editor.clientId)).map((d) => d.text),
+      ['recover me'],
     );
     assert.equal((await f.client.command('readFile', target('b.ts'))).text, 'second');
     await assert.rejects(f.editor.open(target('b.ts')), /disposed/);
@@ -685,7 +742,7 @@ test('disposal releases view subscriptions without discarding a published draft 
   }
 });
 
-test('Quit uses the same deferred preservation gate and persistence failure keeps all edits', async () => {
+test('Quit uses the same deferred preservation gate and a failed discard keeps all edits', async () => {
   const f = await fixture();
   try {
     await f.editor.open(target('a.ts'));
@@ -698,7 +755,7 @@ test('Quit uses the same deferred preservation gate and persistence failure keep
       ),
       false,
     );
-    f.memory.failNext('persistRecovery');
+    f.memory.failNext('closeTab');
     assert.equal(
       await answering(
         f.editor,
@@ -708,7 +765,11 @@ test('Quit uses the same deferred preservation gate and persistence failure keep
       false,
     );
     assert.equal(f.editor.buffer(target('a.ts'))!.text, 'dirty');
-    assert.equal(await f.editor.resolveRecoveryPublication(), true);
+    await f.editor.flush();
+    assert.deepEqual(
+      draftsOf(await storedRecovery(f.client, f.editor.clientId)).map((d) => d.text),
+      ['dirty'],
+    );
     assert.equal(
       await answering(
         f.editor,
@@ -723,10 +784,11 @@ test('Quit uses the same deferred preservation gate and persistence failure keep
   }
 });
 
-test('origin acknowledgement cannot hide a move from another observer; observer publication/ack then hides its fact', async () => {
+test('origin acknowledgement cannot hide a move from another observer; the observer acknowledges once it follows', async () => {
   const f = await fixture('origin', false);
+  // The observer follows the store only when asked, so it edits before it hears of the move.
   const observer = await acquireEditor(f.runtime, {
-    client: { ...f.client, watch: () => async () => {} },
+    client: { ...f.client, watch: () => async () => {}, watchRecovery: () => async () => {} },
     clientId: 'observer',
   });
   try {
@@ -786,8 +848,10 @@ test("an observer's own Save does not rebase another dirty editor's baseline", a
     f.editor.edit(target('a.ts'), 'saved origin');
     await f.editor.flush();
     assert.equal(await f.editor.save(target('a.ts')), true);
-    const durable = await f.client.command('loadRecovery', { clientId: other.clientId });
-    assert.deepEqual(durable.state.drafts[0].disk, baseline);
+    assert.deepEqual(
+      draftsOf(await storedRecovery(f.client, other.clientId)).map((d) => d.disk),
+      [baseline],
+    );
     assert.equal(await other.save(target('a.ts')), false);
     assert.equal(other.buffer(target('a.ts'))!.text, 'other draft');
   } finally {
@@ -797,7 +861,7 @@ test("an observer's own Save does not rebase another dirty editor's baseline", a
 });
 
 for (const kind of ['move', 'copy'] as const)
-  test(`${kind} receipts preserve edits made while the mutation response is pending`, async () => {
+  test(`${kind} keeps edits made while the mutation response is pending`, async () => {
     const f = await fixture('unused', false);
     await f.editor.dispose();
     let ready!: () => void, release!: () => void;
@@ -841,11 +905,24 @@ for (const kind of ['move', 'copy'] as const)
         assert.equal(editor.buffer(target('a.ts')), undefined);
         assert.deepEqual(editor.buffer(target('destination.ts'))!.disk, baseline);
       } else assert.equal(editor.buffer(target('a.ts'))!.text, 'newer live text');
+      await editor.flush();
       const durable = await f.client.command('loadRecovery', { clientId: editor.clientId });
       assert.equal(durable.operations.length, 0);
-      assert.equal(
-        durable.state.drafts.find((draft) => draft.target.path === 'destination.ts')!.text,
-        kind === 'move' ? 'newer live text' : 'captured draft',
+      assert.deepEqual(
+        draftsOf(durable.state)
+          .map((d) => [d.target.path, d.text])
+          .sort(),
+        kind === 'move'
+          ? [['destination.ts', 'newer live text']]
+          : [
+              ['a.ts', 'newer live text'],
+              ['destination.ts', 'captured draft'],
+            ],
+      );
+      // The moved tab is re-pathed; the copy's draft is adopted as a tab of its own.
+      assert.deepEqual(
+        tabPathsOf(durable.state).sort(),
+        kind === 'move' ? ['destination.ts'] : ['a.ts', 'destination.ts'],
       );
     } finally {
       release();
@@ -874,7 +951,7 @@ test('clean tabs restore current disk content while dirty tabs retain their orig
 });
 
 for (const origin of ['own', 'foreign'] as const)
-  test(`move collision retains both drafts and evidence for ${origin} outcome`, async () => {
+  test(`a draft opened at a move's destination is kept beside the arriving draft (${origin} move)`, async () => {
     const f = await fixture('collision', false);
     await f.editor.dispose();
     let admit!: () => void, release!: () => void;
@@ -930,41 +1007,33 @@ for (const origin of ['own', 'foreign'] as const)
       release();
       await operation;
       if (origin === 'foreign') await editor.reconcileRecovery();
-      assert.equal(editor.buffer(target('a.ts'))!.text, 'source edits');
-      assert.equal(editor.buffer(target('destination.ts'))!.text, 'destination edits');
+      await editor.flush();
+      // The source's draft moved with it; the draft opened over the file it replaced is kept
+      // beside it, and both are durable.
+      const kept = () => {
+        const buffers = editor.getSnapshot().buffers;
+        assert.equal(buffers.find((b) => b.target.path === 'destination.ts')?.text, 'source edits');
+        const aside = buffers.find((b) => b.text === 'destination edits');
+        assert(aside && aside.target.path !== 'destination.ts');
+        assert.equal(editor.buffer(target('a.ts')), undefined);
+      };
+      kept();
+      assert.match(editor.getSnapshot().errors.join(' '), /destination\.ts/);
       const retained = await f.client.command('loadRecovery', { clientId: editor.clientId });
-      assert.deepEqual(retained.state.drafts.map((draft) => draft.text).sort(), [
-        'destination edits',
-        'source edits',
-      ]);
-      assert.equal(retained.operations.length, 1);
+      assert.deepEqual(
+        draftsOf(retained.state)
+          .map((draft) => draft.text)
+          .sort(),
+        ['destination edits', 'source edits'],
+      );
+      assert.equal(retained.operations.length, 0);
       assert.equal(f.memory.stats.mutations, 1);
       await editor.dispose();
       editor = await acquireEditor(f.runtime, { client, clientId: 'collision-observer' });
       await editor.load();
-      assert.equal(editor.buffer(target('a.ts'))!.text, 'source edits');
-      assert.equal(editor.buffer(target('destination.ts'))!.text, 'destination edits');
-      await editor.resolveOperation('collision', origin === 'own' ? editor.clientId : 'foreign');
-      assert.equal(
-        (await f.client.command('loadRecovery', { clientId: editor.clientId })).operations.length,
-        1,
-      );
-      assert.equal(
-        await answering(
-          editor,
-          () => editor.close([target('a.ts')]),
-          async () => 'discard',
-        ),
-        true,
-      );
-      await editor.resolveOperation('collision', origin === 'own' ? editor.clientId : 'foreign');
-      assert.equal(editor.buffer(target('destination.ts'))!.text, 'destination edits');
+      kept();
       const recent = editor.getSnapshot().recovery.recentFiles.map(fileKey);
       assert.equal(new Set(recent).size, recent.length);
-      assert.equal(
-        (await f.client.command('loadRecovery', { clientId: editor.clientId })).operations.length,
-        0,
-      );
     } finally {
       release();
       await editor.dispose();
@@ -1111,33 +1180,33 @@ test('checkout close retains exact metadata and reopens its order, comparison, p
   }
 });
 
-test('memory persistence rejects composite view keys and invalid open membership', async () => {
+test('the memory store refuses a layout with composite view keys or invalid open membership', async () => {
   const f = await fixture('schema', false);
   try {
     await f.editor.flush();
-    const loaded = await f.client.command('loadRecovery', { clientId: f.editor.clientId });
-    const state = structuredClone(loaded.state),
-      selected = state.views[checkout.checkoutId];
+    const {
+      buffers: _,
+      version: _version,
+      clientId: _clientId,
+      ...layout
+    } = await storedRecovery(f.client, f.editor.clientId);
+    const selected = layout.views[checkout.checkoutId];
     assert(selected);
-    delete state.views[checkout.checkoutId];
-    state.views[checkoutKey(checkout)] = selected;
+    const edits = f.memory.stats.edits;
     await assert.rejects(
-      f.client.command('persistRecovery', {
-        requestId: crypto.randomUUID(),
+      f.client.command('updateLayout', {
         clientId: f.editor.clientId,
-        expectedRevision: loaded.revision,
-        state,
+        layout: { ...layout, views: { [checkoutKey(checkout)]: selected } },
       }),
     );
     for (const openCheckoutIds of [['not-known'], [checkout.checkoutId, checkout.checkoutId], []])
       await assert.rejects(
-        f.client.command('persistRecovery', {
-          requestId: crypto.randomUUID(),
+        f.client.command('updateLayout', {
           clientId: f.editor.clientId,
-          expectedRevision: loaded.revision,
-          state: { ...loaded.state, openCheckoutIds },
+          layout: { ...layout, openCheckoutIds },
         }),
       );
+    assert.equal(f.memory.stats.edits, edits);
   } finally {
     await f.dispose();
   }
@@ -1146,7 +1215,7 @@ test('memory persistence rejects composite view keys and invalid open membership
 test('closed checkout metadata receives operation facts without discovery or reopening', async () => {
   const f = await fixture('closed-facts', false);
   try {
-    await f.editor.open(target('a.ts'));
+    await f.editor.open(target('a.ts'), { view: 'staged' });
     await f.editor.openCheckout(second.root);
     await answering(
       f.editor,
@@ -1187,7 +1256,9 @@ test('closed checkout metadata receives operation facts without discovery or reo
     try {
       await restored.load();
       const state = restored.getSnapshot();
-      assert.equal(state.recovery.views[checkout.checkoutId].active, 'moved.ts');
+      const closed = state.recovery.views[checkout.checkoutId];
+      assert.equal(closed.fileViews['moved.ts'], 'staged');
+      assert.equal(closed.fileViews['a.ts'], undefined);
       assert.deepEqual(state.recovery.openCheckoutIds, [second.checkoutId]);
       assert(observed.length);
       assert.equal(
@@ -1244,8 +1315,7 @@ test('pre-existing persisted replacement drafts survive a foreign move and contr
       destination: 'b.ts',
     });
     const pending = await f.client.command('loadRecovery', { clientId: f.editor.clientId });
-    assert.deepEqual(pending.state.drafts, before.state.drafts);
-    assert.equal(pending.revision, before.revision);
+    assert.deepEqual(draftsOf(pending.state), draftsOf(before.state));
     assert.equal(pending.operations.length, 1);
     assert.equal(
       result.recoveryChanges.some((change) => change.clientId === f.editor.clientId),
@@ -1261,15 +1331,9 @@ test('pre-existing persisted replacement drafts survive a foreign move and contr
       assert.equal(restored.buffer(target('a.ts'))!.text, 'original source draft');
       assert.equal(restored.buffer(target('b.ts'))!.text, 'original destination draft');
       const retained = await f.client.command('loadRecovery', { clientId: restored.clientId });
-      assert.equal(new Set(retained.state.drafts.map((draft) => fileKey(draft.target))).size, 2);
-      assert.equal(retained.operations.length, 1);
-      await assert.rejects(
-        f.client.command('acknowledgeOperation', {
-          clientId: restored.clientId,
-          operationClientId: 'foreign',
-          id: result.id,
-        }),
-      );
+      assert.equal(new Set(draftsOf(retained.state).map((draft) => fileKey(draft.target))).size, 2);
+      // Followed with both drafts kept, the operation is acknowledged.
+      assert.equal(retained.operations.length, 0);
       assert.equal(f.memory.stats.mutations, 1);
     } finally {
       await restored.dispose();
@@ -1355,6 +1419,85 @@ test("closing a restored active clean file loads its survivor's remembered compa
     } finally {
       await restored.dispose();
     }
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("another window's copy onto a clean tab gives the tab the copied draft, not its stale text", async () => {
+  const f = await fixture('copy-onto-tab');
+  const { editor } = f;
+  try {
+    await editor.open(target('a.ts'));
+    editor.edit(target('a.ts'), 'SOURCE DRAFT');
+    await editor.open(target('b.ts'), { intent: 'keep' });
+    await editor.flush();
+    // Another client of the store copies a.ts over b.ts, which this editor shows clean.
+    await f.client.command('mutate', {
+      id: 'copy-over',
+      clientId: 'other-window',
+      checkout,
+      kind: 'copy',
+      sources: await f.client.command('inspectEntries', { checkout, paths: ['a.ts'] }),
+      replacements: await f.client.command('inspectEntries', { checkout, paths: ['b.ts'] }),
+      destination: 'b.ts',
+    });
+    await editor.reconcileRecovery();
+    await editor.flush();
+    assert.equal(editor.buffer(target('b.ts'))?.text, 'SOURCE DRAFT');
+    const { state } = await f.client.command('loadRecovery', { clientId: editor.clientId });
+    const copied = state.buffers.find((b) => b.target.path === 'b.ts')?.draft;
+    assert.equal(copied?.text, 'SOURCE DRAFT');
+    assert.equal(copied?.disk.version, editor.buffer(target('b.ts'))?.disk.version);
+  } finally {
+    await f.dispose();
+  }
+});
+
+test('text kept beside a replaced file saves by creating its own file, never replacing one', async () => {
+  const f = await fixture('kept-text', false);
+  const { editor } = f;
+  try {
+    await editor.open(target('a.ts'), { intent: 'keep' });
+    await editor.open(target('b.ts'), { intent: 'keep' });
+    await editor.flush();
+    // An existing file holds the first free name, and the editor has listed it.
+    await f.client.command('mutate', {
+      id: 'occupy',
+      clientId: 'other-window',
+      checkout,
+      kind: 'create-file',
+      sources: [],
+      destination: 'b (unsaved).ts',
+      text: 'NOT YOURS',
+    });
+    await editor.list(checkout);
+    // Text typed into b.ts is not yet sent when another client moves a.ts over it.
+    editor.edit(target('b.ts'), 'typed over b');
+    await f.client.command('mutate', {
+      id: 'move-over',
+      clientId: 'other-window',
+      checkout,
+      kind: 'move',
+      sources: await f.client.command('inspectEntries', { checkout, paths: ['a.ts'] }),
+      replacements: await f.client.command('inspectEntries', { checkout, paths: ['b.ts'] }),
+      destination: 'b.ts',
+    });
+    await editor.reconcileRecovery();
+    await editor.flush();
+    const kept = target('b (unsaved 2).ts');
+    assert.equal(editor.buffer(kept)?.text, 'typed over b');
+    assert.match(editor.getSnapshot().errors.join(' '), /b \(unsaved 2\)\.ts/);
+    // Saving creates the file with the text and leaves the other one as it was.
+    assert.equal(await editor.save(kept, true), true);
+    assert.equal((await f.client.command('readFile', kept)).text, 'typed over b');
+    assert.equal((await f.client.command('readFile', target('b (unsaved).ts'))).text, 'NOT YOURS');
+    assert.equal(editor.buffer(kept)?.text, editor.buffer(kept)?.disk.text);
+    const { state } = await f.client.command('loadRecovery', { clientId: editor.clientId });
+    assert.deepEqual(
+      state.buffers.filter((b) => b.draft).map((b) => [b.target.path, b.draft!.text]),
+      [],
+    );
   } finally {
     await f.dispose();
   }

@@ -474,10 +474,9 @@ export class EditorMutation {
       if (!current()) return false;
       this.update({ result });
       if (result.outcome !== 'completed') {
+        // The host's own note on it is not shown: no host text reaches the UI.
         this.update({
-          error:
-            result.message ??
-            'Operation incomplete. Review the recorded outcome before continuing.',
+          error: 'Operation incomplete. Review the recorded outcome before continuing.',
         });
         return false;
       }

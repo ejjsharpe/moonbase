@@ -3,11 +3,10 @@ import { test } from 'node:test';
 import { Effect, Exit, ManagedRuntime, Scope } from 'effect';
 import {
   ApplicationError,
-  emptyRecovery,
   type EditorClient,
-  type RecoveryLoad,
   type WorkspaceEvent,
 } from '@moonbase/contracts/workspace';
+import { emptyRecoveryState } from '@moonbase/contracts/recovery';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { makeEditorController, makeEditorModel } from '@moonbase/application/editor';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
@@ -78,7 +77,7 @@ test('one acquired model binds once; two models share one runtime and failed hel
     await entered.promise;
     assert.equal(first.getSnapshot().disposed, false);
     const snapshot = first.getSnapshot(),
-      publications = memory.stats.publications;
+      stored = JSON.stringify(await raw.command('loadRecovery', { clientId: first.clientId }));
     late({ checkout, paths: ['a.ts'] });
     assert.strictEqual(first.getSnapshot(), snapshot);
     await assert.rejects(first.open(target('a.ts')), /disposed/);
@@ -92,7 +91,11 @@ test('one acquired model binds once; two models share one runtime and failed hel
     assert.equal(appErrors[0].code, 'Persistence');
     assert.equal(first.getSnapshot().disposed, false);
     await assert.rejects(first.dispose(), /Observation cleanup failed/);
-    assert.equal(memory.stats.publications, publications + 1);
+    assert.equal(
+      JSON.stringify(await raw.command('loadRecovery', { clientId: first.clientId })),
+      stored,
+      'a disposing editor sends no edits',
+    );
     await second.dispose();
     assert.equal(second.getSnapshot().disposed, true);
   } finally {
@@ -101,60 +104,6 @@ test('one acquired model binds once; two models share one runtime and failed hel
     await second.dispose();
     // A failed child finalizer remains an honest root-close failure too.
     await runtime.runPromiseExit(Scope.close(root, Exit.void));
-    await runtime.dispose();
-  }
-});
-
-test('prior producer unfamiliar nested saved draft blocks load/edit/publication and leaves original saved bytes unchanged', async () => {
-  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
-  const runtime = ManagedRuntime.make(memory.layer),
-    raw = makeEditorClient(runtime);
-  const state = emptyRecovery('strict-producer');
-  state.checkouts = [checkout];
-  state.openCheckoutIds = [checkout.checkoutId];
-  state.selectedCheckoutId = checkout.checkoutId;
-  const prior = {
-    ...state,
-    drafts: [
-      {
-        target: target('a.ts'),
-        text: 'irreplaceable draft',
-        disk: { text: 'A', version: '1' },
-        futureMetadata: { preserve: true },
-      },
-    ],
-  };
-  const original = JSON.stringify(prior);
-  let publications = 0;
-  const client: EditorClient = {
-    ...raw,
-    async command(name, input, options) {
-      if (name === 'persistRecovery') publications++;
-      if (name === 'loadRecovery')
-        return {
-          revision: 1,
-          state: structuredClone(prior),
-          errors: [],
-          operations: [],
-        } as RecoveryLoad;
-      return raw.command(name, input, options);
-    },
-  };
-  const editor = await acquireEditor(runtime, { client, clientId: state.clientId });
-  try {
-    await assert.rejects(
-      editor.load(),
-      (error) => ApplicationError.is(error) && error.code === 'Incompatible',
-    );
-    assert.equal(editor.getSnapshot().ready, false);
-    assert.equal(editor.getSnapshot().recoveryReady, false);
-    assert.throws(() => editor.edit(target('a.ts'), 'new text'), /Load editor recovery/);
-    await assert.rejects(editor.flush(), /Load editor recovery/);
-    assert.equal(publications, 0);
-    assert.equal(memory.stats.publications, 0);
-    assert.equal(JSON.stringify(prior), original);
-  } finally {
-    await editor.dispose();
     await runtime.dispose();
   }
 });
@@ -646,7 +595,7 @@ test('model disposal joins an already-detached checkout watch close and retains 
     assert.equal(editor.getSnapshot().disposed, false);
     release.release();
     await failed;
-    assert.equal(await checkoutClose, true);
+    await checkoutClose;
     assert.equal(editor.getSnapshot().disposed, false);
     await assert.rejects(editor.dispose(), /Detached observation release failed/);
   } finally {
@@ -933,7 +882,7 @@ for (const outcome of ['success', 'held-failure', 'throw'] as const)
       settled = false;
     let late!: (event: WorkspaceEvent) => void;
     const state = {
-      ...emptyRecovery('reentrant-watch'),
+      ...emptyRecoveryState('reentrant-watch'),
       checkouts: [checkout],
       openCheckoutIds: [checkout.checkoutId],
       selectedCheckoutId: checkout.checkoutId,
@@ -941,7 +890,7 @@ for (const outcome of ['success', 'held-failure', 'throw'] as const)
     const client: EditorClient = {
       ...raw,
       async command(name, input, options) {
-        if (name === 'loadRecovery') return { revision: 0, state, errors: [], operations: [] };
+        if (name === 'loadRecovery') return { state, errors: [], operations: [] };
         return raw.command(name, input, options);
       },
       watch(input, receive, onError) {
@@ -1004,7 +953,7 @@ for (const outcome of ['success', 'held-failure', 'throw'] as const)
       await loading;
       assert.equal(releases, outcome === 'throw' ? 0 : 1);
       assert.equal(memory.stats.active, 0);
-      assert.equal(memory.stats.publications, 0);
+      assert.equal(memory.stats.edits, 0);
     } finally {
       off();
       release.release();

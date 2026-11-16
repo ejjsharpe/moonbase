@@ -11,6 +11,7 @@ import {
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { checkoutKey } from '@moonbase/application/editor';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
+import type { RecoveryState } from '@moonbase/contracts/recovery';
 
 const folder: CheckoutTarget = {
   hostId: 'local',
@@ -40,6 +41,11 @@ function hold() {
   };
 }
 
+/** Each draft the recovery holds, as its checkout, path and text. */
+const draftsOf = (state: RecoveryState) =>
+  state.buffers.flatMap((b) => (b.draft ? [[b.target.checkout, b.target.path, b.draft.text]] : []));
+const isFolder = (checkout: CheckoutTarget) => checkoutKey(checkout) === checkoutKey(folder);
+
 async function fixture(
   options: {
     initialization?: ReturnType<typeof hold>;
@@ -60,14 +66,14 @@ async function fixture(
   const client: EditorClient = {
     command: async (operation, input, options_) => {
       commands.push(operation);
-      // After `git init` the workspace no longer approves the folder target, so it refuses a
-      // publication that names it, as the native workspace does.
+      // After `git init` the workspace no longer approves the folder target, so it refuses an
+      // edit that names it, as the native workspace does.
       if (
-        operation === 'persistRecovery' &&
         initialized &&
-        (input as CommandInput<'persistRecovery'>).state.checkouts.some(
-          (checkout) => checkoutKey(checkout) === checkoutKey(folder),
-        )
+        ((operation === 'openTab' &&
+          isFolder((input as CommandInput<'openTab'>).target.checkout)) ||
+          (operation === 'updateLayout' &&
+            (input as CommandInput<'updateLayout'>).layout.checkouts.some(isFolder)))
       )
         throw new ApplicationError({
           code: 'Unauthorized',
@@ -90,6 +96,7 @@ async function fixture(
       }
       return inner.watch(input, ...rest);
     },
+    watchRecovery: inner.watchRecovery,
   };
   const editor = await acquireEditor(runtime, { client, clientId: 'folders' });
   await editor.load();
@@ -170,12 +177,10 @@ test('initializeRepository keeps the folder’s tabs and drafts on the Git check
       'a.ts',
       'b.ts',
     ]);
-    // The draft was published with the Git target, and saves to it.
+    // The draft is kept under the Git target, and saves to it.
+    await f.editor.flush();
     const saved = await f.inner.command('loadRecovery', { clientId: 'folders' });
-    assert.deepEqual(
-      saved.state.drafts.map((draft) => [draft.target.checkout, draft.target.path, draft.text]),
-      [[initialized, 'a.ts', 'unsaved']],
-    );
+    assert.deepEqual(draftsOf(saved.state), [[initialized, 'a.ts', 'unsaved']]);
     assert.equal(await f.editor.save({ checkout: initialized, path: 'a.ts' }), true);
     assert.equal(
       (await f.inner.command('readFile', { checkout: initialized, path: 'a.ts' })).text,
@@ -297,21 +302,24 @@ test('a save or file operation during initializeRepository is refused, and the r
   }
 });
 
-test('an edit during initializeRepository is kept and published under the Git target', async () => {
+test('an edit during initializeRepository is kept and sent under the Git target', async () => {
   const initialization = hold();
   const f = await fixture({ initialization });
   try {
     const { initializing, commands } = await startInitializing(f, initialization);
     f.editor.edit({ checkout: folder, path: 'a.ts' }, 'typed while Git initializes');
-    // Past the publication debounce, nothing has published the retired folder target.
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    assert(!f.commands.slice(commands).includes('persistRecovery'));
+    // A flush waits for Git: nothing sends the edit under the retired folder target.
+    const flushing = f.editor.flush();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert(!f.commands.slice(commands).includes('updateDraft'));
     assert.equal(f.editor.getSnapshot().recoveryReady, false);
 
     initialization.finish();
     const initialized = await initializing;
+    await flushing;
+    await f.editor.flush();
     const snapshot = f.editor.getSnapshot();
-    assert.equal(snapshot.publication, undefined);
+    assert.equal(snapshot.recoveryFailed, false);
     assert.deepEqual(snapshot.errors, []);
     assert.equal(
       f.editor.buffer({ checkout: initialized, path: 'a.ts' })?.text,
@@ -319,16 +327,13 @@ test('an edit during initializeRepository is kept and published under the Git ta
     );
     const saved = await f.inner.command('loadRecovery', { clientId: 'folders' });
     assert.deepEqual(saved.state.checkouts, [initialized]);
-    assert.deepEqual(
-      saved.state.drafts.map((draft) => [draft.target.checkout, draft.target.path, draft.text]),
-      [[initialized, 'a.ts', 'typed while Git initializes']],
-    );
-    // Later edits keep publishing.
+    assert.deepEqual(draftsOf(saved.state), [[initialized, 'a.ts', 'typed while Git initializes']]);
+    // Later edits keep being sent.
     f.editor.edit({ checkout: initialized, path: 'a.ts' }, 'and after');
     await f.editor.flush();
-    assert.equal(
-      (await f.inner.command('loadRecovery', { clientId: 'folders' })).state.drafts[0]?.text,
-      'and after',
+    assert.deepEqual(
+      draftsOf((await f.inner.command('loadRecovery', { clientId: 'folders' })).state),
+      [[initialized, 'a.ts', 'and after']],
     );
   } finally {
     await f.dispose();
@@ -370,19 +375,16 @@ test('if the rebind fails after git init, the folder’s work still moves to the
       f.editor.initializeRepository(folder),
       /Git was initialized, but the project did not finish moving to it: Watch could not start\./,
     );
-    const { recovery, initializing, publication } = f.editor.getSnapshot();
+    const { recovery, initializing } = f.editor.getSnapshot();
     const initialized = recovery.checkouts[0];
     assert.equal(initialized.vcs, 'git');
     assert.deepEqual(recovery.checkouts, [initialized]);
     assert.equal(initializing, null);
-    assert.equal(publication, undefined);
     assert.equal(f.editor.buffer({ checkout: initialized, path: 'a.ts' })?.text, 'unsaved');
+    await f.editor.flush();
     assert.deepEqual(
-      (await f.inner.command('loadRecovery', { clientId: 'folders' })).state.drafts.map((draft) => [
-        draft.target.checkout,
-        draft.text,
-      ]),
-      [[initialized, 'unsaved']],
+      draftsOf((await f.inner.command('loadRecovery', { clientId: 'folders' })).state),
+      [[initialized, 'a.ts', 'unsaved']],
     );
     // Its watch is up on the repository: a change on disk reaches the editor.
     const revision = f.editor.getSnapshot().discoveryRevision;

@@ -13,6 +13,7 @@ import {
   connectionCommand,
   connectionWatch,
   providerWatch,
+  recoveryWatch,
   workspaceCommand,
   workspaceWatch,
 } from './handlers.ts';
@@ -34,6 +35,8 @@ export function makeEditorClient(
       runApplicationEffect(runtime, workspaceCommand(operation, input), options),
     watch: (input, receive, onError) =>
       observeApplicationStream(runtime, workspaceWatch(input), receive, onError),
+    watchRecovery: (input, receive, onError) =>
+      observeApplicationStream(runtime, recoveryWatch(input), receive, onError),
   };
 }
 export function makeConnectionClient(

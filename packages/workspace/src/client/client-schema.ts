@@ -8,7 +8,6 @@ import { InvalidRequestError } from '@moonbase/contracts/workspace-host-errors';
 import {
   OperationResultSchema,
   RecoveryChangeSchema,
-  RecoveryPublicationSchema,
   WorkspaceIdentifierSchema,
   WorkspaceOperationSchema,
   workspaceInputSchemas,
@@ -126,10 +125,6 @@ export const OperationRecordSchema = struct({
   publicationRevisions: Schema.Record(Schema.String, Schema.mutableKey(natural)),
   acknowledgedBy: array(WorkspaceIdentifierSchema),
 });
-const PublicationRecordSchema = struct({
-  digest: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
-  receipt: RecoveryPublicationSchema,
-});
 export const FeedCursorSchema = struct({ sequence: natural, epoch: Schema.String });
 export const FeedGapSchema = struct({
   hostId: Schema.String,
@@ -143,7 +138,6 @@ export type FeedGap = typeof FeedGapSchema.Type;
 export const clientDecoders = {
   ...strictDecoders({
     publications: natural,
-    'recovery-publications': PublicationRecordSchema,
     /** Per host and checkout, the last operation-feed sequence applied to the recovery. */
     'feed-cursors': FeedCursorSchema,
     /** Per host and checkout, a feed gap that left drafts at their old paths. */

@@ -14,7 +14,6 @@ import {
 const recoveryConflicts = {
   'operation-identity': 'Operation identity changed before recovery publication.',
   'save-identity': 'Save identity changed before recovery publication.',
-  'recovery-changed': 'Recovery changed in another window. Reload before publishing.',
   'operation-not-sent':
     'The operation never reached the host and did not run. Repeat it as a new operation.',
 } as const;
@@ -34,7 +33,6 @@ const pendingPublications = {
   save: 'Admitted Save recovery publication pending; previous valid snapshot retained. ',
   'operation-acknowledgement':
     'Known operation recovery publication is pending. Preserve the prior valid snapshot before acknowledgement.',
-  'reconcile-first': 'Publish reconciled recovery before acknowledging this operation.',
   'uncertain-draft':
     'An uncertain operation still owns this recovery draft. Inspect/reconcile the original paths before discarding it.',
   'save-running':
@@ -64,7 +62,6 @@ const recoveryProblems = {
   'save-group': 'A Save publication group belongs to one client.',
   'destination-drafts': 'Destination has recovery drafts. Preserve them before replacement.',
   'invalid-state': 'Invalid recovery state.',
-  'publication-id': 'Recovery request ID already belongs to a different immutable publication.',
   'unknown-buffer': 'No such buffer is open in this recovery.',
   'buffer-replaced':
     'A move replaced this clean buffer with the file moved onto it. Keep its text under a new path.',

@@ -8,7 +8,7 @@ import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { Effect, Exit, Scope, ManagedRuntime } from 'effect';
 const modelScope = Scope.makeUnsafe();
-import { ApplicationError, type CommandInput } from '@moonbase/contracts/workspace';
+import { ApplicationError } from '@moonbase/contracts/workspace';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import { Workbench } from '../src/index.ts';
 import { configureMonacoWorkers } from '../src/workers.ts';
@@ -71,8 +71,8 @@ if (dirtyArea) seed.edit({ checkout: alpha, path: 'a.ts' }, 'restored dirty A');
 if (!missingArea) await seed.open({ checkout: alpha, path: 'b.ts' });
 await seed.flush();
 await seed.dispose();
-let loseFinal = false,
-  failStatus = false;
+const edits = new Set(['openTab', 'closeTab', 'updateDraft', 'updateLayout']);
+let loseFinal = false;
 let hold = false,
   waiting = false,
   release!: () => void;
@@ -80,12 +80,9 @@ let wait = new Promise<void>((resolve) => {
   release = resolve;
 });
 let holdCopyPreflight = false,
-  holdCopyRead = false,
   copyPhase = '';
-let releaseCopyPreflight = () => {},
-  releaseCopyRead = () => {};
+let releaseCopyPreflight = () => {};
 let copyPreflight = Promise.resolve(),
-  copyRead = Promise.resolve(),
   copying = Promise.resolve();
 const application = await createMoonbaseApplication({
     editors: [
@@ -94,48 +91,24 @@ const application = await createMoonbaseApplication({
         client: {
           ...client,
           async command(name, input, options) {
-            if (name === 'persistRecovery' && holdCopyPreflight) {
+            if (edits.has(name) && holdCopyPreflight) {
               holdCopyPreflight = false;
               const receipt = await client.command(name, input, options);
               copyPhase = 'preflight';
               await copyPreflight;
               return receipt;
             }
-            if (
-              name === 'readFile' &&
-              (input as CommandInput<'readFile'>).path === 'copy.ts' &&
-              holdCopyRead
-            ) {
-              holdCopyRead = false;
-              const disk = await client.command(name, input, options);
-              copyPhase = 'read';
-              await copyRead;
-              return disk;
-            }
-            if (hold && name === 'persistRecovery') {
+            if (hold && edits.has(name)) {
               waiting = true;
               await wait;
             }
-            if (
-              loseFinal &&
-              name === 'persistRecovery' &&
-              !(input as CommandInput<'persistRecovery'>).state.views.alpha.openFiles.includes(
-                'b.ts',
-              )
-            ) {
+            // The close commits in the store, and its reply is lost.
+            if (loseFinal && name === 'closeTab') {
               loseFinal = false;
-              failStatus = true;
               await client.command(name, input, options);
               throw new ApplicationError({
                 code: 'Unavailable',
                 message: 'Controlled lost final close response',
-              });
-            }
-            if (failStatus && name === 'getRecoveryPublication') {
-              failStatus = false;
-              throw new ApplicationError({
-                code: 'Unavailable',
-                message: 'Controlled status outage',
               });
             }
             return client.command(name, input, options);
@@ -188,7 +161,6 @@ declare global {
       copy: {
         start(): void;
         releasePreflight(): void;
-        releaseRead(): void;
         finish(): Promise<void>;
         readonly phase: string;
       };
@@ -230,14 +202,12 @@ window.recoveryRace = {
   copy: {
     start() {
       holdCopyPreflight = true;
-      holdCopyRead = true;
       copyPhase = '';
       copyPreflight = new Promise<void>((resolve) => {
         releaseCopyPreflight = resolve;
       });
-      copyRead = new Promise<void>((resolve) => {
-        releaseCopyRead = resolve;
-      });
+      // The copy's own flush has an edit to send, which the hold catches.
+      editor.edit({ checkout: alpha, path: 'a.ts' }, 'source before the copy');
       copying = editor
         .inspect(alpha, ['a.ts'])
         .then((sources) =>
@@ -250,9 +220,7 @@ window.recoveryRace = {
     releasePreflight() {
       releaseCopyPreflight();
     },
-    releaseRead() {
-      releaseCopyRead();
-    },
+
     finish() {
       return copying;
     },

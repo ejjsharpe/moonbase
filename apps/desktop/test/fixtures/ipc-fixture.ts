@@ -44,6 +44,7 @@ const unused = (name: string) => () => {
 export const unusedEditorClient: EditorClient = {
   command: unused('The workspace') as never,
   watch: unused('The workspace watch') as never,
+  watchRecovery: unused('The recovery watch') as never,
 };
 export const unusedNative: NativeActions = {
   chooseCheckout: unused('The picker') as never,

@@ -2,18 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { InvalidRequestError } from '@moonbase/contracts/workspace-host-errors';
 import type { SQLInputValue } from 'node:sqlite';
 import { Effect } from 'effect';
-import {
-  type CommandInput,
-  type FileDocument,
-  type RecoveryPublication,
-} from '@moonbase/contracts/workspace';
+import type { FileDocument } from '@moonbase/contracts/workspace';
 import type { RecoveryState } from '@moonbase/contracts/recovery';
 import { Store } from '../store.ts';
-import { canonical, errorText, hash, key, text, textDocument } from '../validation.ts';
-import {
-  InvalidRecoveryRequestError,
-  RecoveryConflictError,
-} from '@moonbase/contracts/workspace-errors';
+import { errorText, key, text, textDocument } from '../validation.ts';
 import { WorkspaceStoreError } from '@moonbase/contracts/workspace-host-errors';
 import { attempt } from '../attempt.ts';
 import {
@@ -28,14 +20,13 @@ import {
 } from './client-schema.ts';
 import { invalidStored } from '../store.ts';
 
-// shortcut: settled save and operation records and publication receipts still grow on disk; compact
+// shortcut: settled save and operation records still grow on disk; compact
 // them only with proven replay and recovery compatibility. The file host's journal does compact.
 /** Saves with something left to do; a partial index keeps settled history out of every read. */
 export const pendingSaves = "json_extract(body, '$.state') IN ('sent', 'restored', 'settled')";
 /** Operations with something left to do (see `OperationRecord.open`), indexed the same way. */
 export const openOperations = "json_extract(body, '$.open') = 1";
 
-type PublicationRecord = { digest: string; receipt: RecoveryPublication };
 export type StoredRecovery = {
   client: string;
   revision: number;
@@ -43,7 +34,7 @@ export type StoredRecovery = {
   state: RecoveryState;
 };
 
-/** One client's recovery, saves and operations, and publication receipts; the file name is stable. */
+/** The clients' recoveries, saves and operations; the file name is stable. */
 export class ClientStore extends Store {
   /** This store's identity to a file host, minted the first time and kept in the store. */
   readonly installationId: string;
@@ -129,39 +120,6 @@ export class ClientStore extends Store {
   publication(client: string): number {
     return this.get<number>('publications', client) ?? 0;
   }
-  recoveryPublication(clientId: string, requestId: string) {
-    const record = this.get<PublicationRecord>(
-      'recovery-publications',
-      hash(canonical([clientId, requestId])),
-    );
-    if (record) {
-      const receipt = record.receipt;
-      const row = this.db.prepare('SELECT revision FROM recovery WHERE client=?').get(clientId);
-      const currentRevision = row ? savedRevision(row.revision) : -1;
-      if (
-        receipt.clientId !== clientId ||
-        receipt.requestId !== requestId ||
-        !Number.isSafeInteger(receipt.previousRevision) ||
-        !Number.isSafeInteger(receipt.revision) ||
-        receipt.revision !== receipt.previousRevision + 1 ||
-        !Number.isSafeInteger(currentRevision) ||
-        receipt.revision > currentRevision
-      )
-        throw invalidStored();
-    }
-    return record;
-  }
-  replayPublication(
-    input: CommandInput<'persistRecovery'>,
-    digest: string,
-  ): RecoveryPublication | null {
-    const previous = this.recoveryPublication(input.clientId, input.requestId);
-    if (previous && previous.digest !== digest)
-      throw new InvalidRecoveryRequestError({ problem: 'publication-id' });
-    if (previous && previous.receipt.previousRevision !== input.expectedRevision)
-      throw invalidStored();
-    return previous?.receipt ?? null;
-  }
   /**
    * Writes a state the caller read and checked in the same transaction, advancing the revision
    * without impersonating a client publication.
@@ -170,42 +128,12 @@ export class ClientStore extends Store {
     this.writeRecovery(client, revision + 1, state);
   }
   /**
-   * Writes a client's own word (a publication or an edit) as its next revision; saves begun
-   * before it no longer restore their text over it.
+   * Writes a client's own word (an edit) as its next revision; saves begun before it no longer
+   * restore their text over it.
    */
   writeClientRecovery(client: string, revision: number, state: RecoveryState) {
     this.writeRecovery(client, revision + 1, state);
     this.put('publications', client, revision + 1);
-  }
-  /**
-   * Publishes `input` as the client's next revision, translated from the renderer's path-keyed
-   * snapshot against the recovery it replaces, in one transaction.
-   */
-  persist(
-    input: CommandInput<'persistRecovery'>,
-    digest: string,
-    translate: (retained: RecoveryState | null) => RecoveryState,
-  ) {
-    return this.transaction((): RecoveryPublication => {
-      const previous = this.replayPublication(input, digest);
-      if (previous) return previous;
-      const { clientId: client, requestId, expectedRevision: expected } = input;
-      const stored = this.readRecovery(client);
-      const revision = stored?.revision ?? 0;
-      if (revision !== expected) throw new RecoveryConflictError({ conflict: 'recovery-changed' });
-      const receipt = {
-        clientId: client,
-        requestId,
-        previousRevision: revision,
-        revision: revision + 1,
-      };
-      this.writeClientRecovery(client, revision, translate(stored?.state ?? null));
-      this.put('recovery-publications', hash(canonical([client, requestId])), {
-        digest,
-        receipt,
-      });
-      return receipt;
-    });
   }
   /**
    * Reserves a save's ID with its record and, in the same transaction, its text and the baseline's

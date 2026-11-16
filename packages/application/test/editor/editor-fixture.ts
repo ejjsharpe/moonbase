@@ -1,7 +1,11 @@
 import { acquireEditor } from './editor-model-fixture.ts';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { type CheckoutTarget, type EditorClient } from '@moonbase/contracts/workspace';
+import {
+  type CheckoutTarget,
+  type EditorClient,
+  type WorkspaceCommand,
+} from '@moonbase/contracts/workspace';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 
 export const checkout: CheckoutTarget = {
@@ -98,6 +102,60 @@ export async function observedFixture(clientId: string) {
     async dispose() {
       await editor.dispose();
       await f.dispose();
+    },
+  };
+}
+
+/** The recovery edits a client sends the store. */
+export const recoveryEdits: ReadonlySet<string> = new Set([
+  'openTab',
+  'closeTab',
+  'updateDraft',
+  'updateLayout',
+]);
+
+/** A client's durable recovery: its drafts, and each checkout's tab paths. */
+export async function storedRecovery(client: EditorClient, clientId: string) {
+  const { state } = await client.command('loadRecovery', { clientId });
+  const drafts = state.buffers.flatMap((b) =>
+    b.draft ? [{ target: b.target, text: b.draft.text, disk: b.draft.disk }] : [],
+  );
+  const tabs = (checkoutId = checkout.checkoutId) =>
+    (state.views[checkoutId]?.tabs ?? []).map(
+      (id) => state.buffers.find((b) => b.id === id)!.target.path,
+    );
+  return { state, drafts, tabs };
+}
+
+/**
+ * Wraps a client so a test can hold its next command of a name, or its next recovery edit
+ * (`'edit'`), until released; `sent` lists each recovery edit as it reaches the store.
+ */
+export function holding(raw: EditorClient) {
+  const holds = new Map<string, { entered: () => void; promise: Promise<void> }>();
+  const sent: { name: string; input: unknown }[] = [];
+  const client: EditorClient = {
+    ...raw,
+    command(name, input, options) {
+      const edit = recoveryEdits.has(name);
+      if (edit) sent.push({ name, input: structuredClone(input) });
+      let key: string | undefined = name;
+      if (!holds.has(key)) key = edit && holds.has('edit') ? 'edit' : undefined;
+      if (!key) return raw.command(name, input, options);
+      const hold = holds.get(key)!;
+      holds.delete(key);
+      hold.entered();
+      return hold.promise.then(() => raw.command(name, input, options));
+    },
+  };
+  return {
+    client,
+    sent,
+    hold(name: WorkspaceCommand | 'edit') {
+      const entered = held(),
+        release = held();
+      holds.set(name, { entered: entered.release, promise: release.promise });
+      return { entered: entered.promise, release: release.release };
     },
   };
 }

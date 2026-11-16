@@ -92,10 +92,12 @@ test('prototype-shaped filenames keep own JSON view keys through Save, reopen, r
     }
     await editor.flush();
     const persisted = (await client.command('loadRecovery', { clientId: 'filenames' })).state;
-    const json = JSON.parse(JSON.stringify(persisted));
+    const json = JSON.parse(JSON.stringify(persisted)),
+      view = json.views[checkout.checkoutId];
     for (const path of names) {
-      assert(Object.hasOwn(json.views[checkout.checkoutId].fileViews, path));
-      assert(Object.hasOwn(json.views[checkout.checkoutId].positions, path));
+      const id = persisted.buffers.find((buffer) => buffer.target.path === path)!.id;
+      assert(Object.hasOwn(view.fileViews, id));
+      assert(Object.hasOwn(view.positions, id));
     }
     await editor.dispose();
     editor = await acquireEditor(runtime, { client, clientId: 'filenames' });

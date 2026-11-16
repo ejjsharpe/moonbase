@@ -131,8 +131,22 @@ export function makeEditorIpcHandlers(options: EditorIpcOptions, document: Scope
     operationStatus: command('operationStatus'),
     acknowledgeOperation: command('acknowledgeOperation'),
     loadRecovery: command('loadRecovery'),
-    persistRecovery: command('persistRecovery'),
-    getRecoveryPublication: command('getRecoveryPublication'),
+    openTab: command('openTab'),
+    closeTab: command('closeTab'),
+    updateDraft: command('updateDraft'),
+    updateLayout: command('updateLayout'),
+    watchRecovery: (input) =>
+      Stream.unwrap(
+        Effect.as(
+          input.clientId === editorClientId
+            ? Effect.void
+            : Effect.fail(new IpcAuthorityError({ refusal: 'foreign-client' })),
+          streamObservation(
+            (receive, fail) => client.watchRecovery(input, receive, fail),
+            options.reportCleanup,
+          ),
+        ),
+      ),
     watchWorkspace: (input) =>
       Stream.unwrap(
         Effect.as(

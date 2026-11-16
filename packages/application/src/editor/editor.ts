@@ -2,7 +2,20 @@ import { normalizeApplicationError } from '@moonbase/effect';
 import { getParentPath, isPathAtOrInside } from '@moonbase/contracts/paths';
 import { EditorDiscovery } from './discovery.ts';
 import { EditorPreservation, type ConfirmedClose } from './preservation.ts';
-import { RecoveryPublications, type PublicationOptions } from './recovery-publications.ts';
+import {
+  RecoveryOutbox,
+  type DebounceRunner,
+  type RecoveryEditRequest,
+} from './recovery-outbox.ts';
+import {
+  emptyCheckoutView,
+  emptyEditorRecovery,
+  readRecoveryState,
+  toRecoveryLayout,
+  type CheckoutView,
+  type EditorRecovery,
+  type EditorTab,
+} from './recovery-layout.ts';
 import {
   EditorLookup,
   EditorTextSearch,
@@ -10,29 +23,34 @@ import {
   getMutationDestinations,
   type MutationAction,
 } from './workflows.ts';
-import { Deferred, Effect, Exit, Fiber, Scope, Semaphore, type ManagedRuntime } from 'effect';
+import {
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  FiberHandle,
+  Scope,
+  Semaphore,
+  type ManagedRuntime,
+} from 'effect';
 import { watchRetry } from '../watch-retry.ts';
 import { runApplicationEffect } from '../runtime/effect-client.ts';
-import { decodeEditorRecovery } from '@moonbase/contracts/workspace-schema';
+import type { RecoveryOutline, RecoveryState } from '@moonbase/contracts/recovery';
 import {
   ApplicationError,
-  emptyRecovery,
   maximumFileBytes,
   type CheckoutTarget,
-  type CheckoutView,
   type Comparison,
   type DirectoryEntry,
   type DirectoryListing,
   type EditorClient,
   type EditorPosition,
-  type EditorRecovery,
   type FileDocument,
   type FileTarget,
   type FileView,
   type GitStatus,
+  type ObservationClose,
   type OperationResult,
-  type SaveResult,
-  type RecoveryChange,
   type RecoveryLoad,
   type WorkspaceCommand,
   type CommandInput,
@@ -48,7 +66,9 @@ import {
   moveRecoveryReferences,
   closeRecoveryReferences,
 } from './references.ts';
+import { findFreePath } from './free-path.ts';
 export { checkoutKey, fileKey } from './references.ts';
+export type { CheckoutView, EditorRecovery } from './recovery-layout.ts';
 // These diagnostics are authored by this module; injected failures use shared normalization.
 const editorError = (message: string) => new ApplicationError({ code: 'Unavailable', message });
 const sameCheckout = (a: CheckoutTarget, b: CheckoutTarget) => checkoutKey(a) === checkoutKey(b);
@@ -60,7 +80,6 @@ const isInitialized = (previous: CheckoutTarget, next: CheckoutTarget) =>
   previous.checkoutId === next.checkoutId &&
   previous.root === next.root;
 const operationKey = (clientId: string, id: string) => JSON.stringify([clientId, id]);
-const deferObservation = Symbol('defer recovery observation');
 const definitiveNonAdmission = (error: unknown) =>
   ApplicationError.is(error) && error.code === 'InvalidInput';
 /**
@@ -89,14 +108,8 @@ const validPath = (path: string, directory = false) => {
       message: 'Use an exact relative path without traversal or .git.',
     });
 };
-const view = (): CheckoutView => ({
-  openFiles: [],
-  active: '',
-  preview: null,
-  fileViews: {},
-  positions: {},
-  tree: { expanded: [], selected: [], focus: '', scroll: 0, hideIgnoredFiles: false },
-});
+const view = emptyCheckoutView;
+const isDirty = (buffer: EditorBuffer) => buffer.text !== buffer.disk.text;
 
 type PendingSave = CommandInput<'saveFile'>;
 export type EditorBuffer = {
@@ -106,6 +119,8 @@ export type EditorBuffer = {
   conflict?: FileDocument;
   pendingSave?: PendingSave;
   saving: boolean;
+  /** Its file isn't on disk (text kept apart from a replaced file): a Save creates it. */
+  newFile?: boolean;
 };
 export type CloseChoice = 'save' | 'discard' | 'cancel';
 export type ClosePrompt = { id: string; buffer: Readonly<EditorBuffer> };
@@ -123,7 +138,8 @@ export type EditorSnapshot = {
   comparisons: Readonly<Record<string, Comparison>>;
   listings: Readonly<Record<string, DirectoryListing>>;
   git: Readonly<Record<string, GitStatus>>;
-  publication?: { requestId: string; kind: 'recovery' | 'close' | 'reload' };
+  /** The last recovery edit failed; edits made since are not kept until a flush succeeds. */
+  recoveryFailed: boolean;
   errors: readonly string[];
   operations: readonly OperationResult[];
 };
@@ -172,7 +188,11 @@ class EditorModelState {
   private initialization?: { checkoutId: string; done: Promise<void> };
   private preservation: EditorPreservation;
   private buffers = new Map<string, EditorBuffer>();
-  private saveResults = new Map<string, Extract<SaveResult, { kind: 'saved' }>>();
+  /** Every open tab's buffer in the recovery store, by file key. */
+  private tabs = new Map<string, EditorTab>();
+  /** Buffers this editor closed, which a late recovery outline may still list. */
+  private closedBuffers = new Set<string>();
+  private recoveryWatch?: ObservationClose;
   private comparisons: Record<string, Comparison> = {};
   private comparisonAttempts = new Map<string, { mode: FileView; failedWorkingVersion?: string }>();
   private listings: Record<string, DirectoryListing> = {};
@@ -203,23 +223,15 @@ class EditorModelState {
       operation?: WorkspaceOperation;
       result: OperationResult;
       applied: Set<string>;
-      copies?: EditorBuffer[];
-      closedCopyTargets?: Set<string>;
       acknowledged?: boolean;
     }
   >();
   private listeners = new Set<() => void>();
-  private referenceRevision = 0;
-  private deferredFacts: {
-    changes: RecoveryChange[];
-    result?: OperationResult;
-    forcePublication: boolean;
-  }[] = [];
-  private publications: RecoveryPublications;
+  private outbox: RecoveryOutbox;
   private discovery: EditorDiscovery;
   private snapshot!: EditorSnapshot;
   private scope: Scope.Closeable;
-  constructor(scope: Scope.Closeable, options: EditorDependencies) {
+  constructor(scope: Scope.Closeable, options: EditorDependencies, debounce: DebounceRunner) {
     this.scope = scope;
     this.client = options.client;
     this.clientId = options.clientId ?? crypto.randomUUID();
@@ -237,40 +249,47 @@ class EditorModelState {
       notify: () => this.emit(),
       report: (error) => this.report(error),
     });
-    this.publications = new RecoveryPublications(this.clientId, scope, {
-      execute: (effect) => this.runEffect(effect),
-      run: (effect) => this.run(effect),
-      isClosing: () => this.closing,
-      persistRecovery: (request) => this.command('persistRecovery', request),
-      getRecoveryPublication: (request) => this.command('getRecoveryPublication', request),
-      confirmSaves: (requests) => {
-        for (const id of requests) {
-          this.saveResults.delete(id);
-          for (const buffer of this.buffers.values())
-            if (buffer.pendingSave?.requestId === id) buffer.pendingSave = undefined;
-        }
+    this.outbox = new RecoveryOutbox(debounce, {
+      clientId: this.clientId,
+      execute: (effect) => this.run(effect),
+      send: async (kind, input) => {
+        await this.command(kind, input, this.scope, false);
       },
-      resumeFacts: () => this.resumeFacts(),
+      layout: () => toRecoveryLayout(this.recovery, this.tabs),
+      ready: async () => {
+        // A layout now would name the folder target that `git init` retires.
+        while (this.initialization) await this.initialization.done;
+      },
+      resync: (edit, error) => this.resync(edit, error),
+      settleClose: async (bufferId) => {
+        const loaded = await this.command(
+          'loadRecovery',
+          { clientId: this.clientId },
+          this.scope,
+          false,
+        );
+        return !loaded.state.buffers.some((buffer) => buffer.id === bufferId);
+      },
+      finishClose: (edit, reopen) => this.finishClose(edit.bufferId, reopen),
+      shownTab: (bufferId) => {
+        const tab = [...this.tabs.values()].find((shown) => shown.id === bufferId);
+        return tab && structuredClone(tab.target);
+      },
       notify: () => this.emit(),
       report: (error) => this.report(error),
     });
     this.preservation = new EditorPreservation({
       run: (effect) => this.run(effect),
       isClosing: () => this.closing,
-      retainsConfirmation: () => this.publications.retainsConfirmation,
-      invalidateReads: (kind) => {
-        this.discovery.invalidateActivation();
-        if (kind === 'close') this.publications.cancelScheduled();
-      },
+      invalidateReads: () => this.discovery.invalidateActivation(),
       notify: () => this.emit(),
       report: (error) => this.report(error),
       afterRelease: async () => {
-        this.resumeFacts();
         await this.activateSelected();
         this.schedule();
       },
     });
-    this.recovery = emptyRecovery(this.clientId);
+    this.recovery = emptyEditorRecovery(this.clientId);
     this.emit();
   }
   /** Composition fences admissions without interrupting already-admitted work. */
@@ -314,7 +333,7 @@ class EditorModelState {
         !this.closing &&
         !this.preservation.active &&
         !this.initialization &&
-        this.publications.confirmed &&
+        this.outbox.idle &&
         ![...this.buffers.values()].some((buffer) => buffer.saving || buffer.pendingSave) &&
         ![...this.operations.values()].some((value) => !value.acknowledged),
       disposed: this.disposed,
@@ -327,7 +346,7 @@ class EditorModelState {
       comparisons: this.comparisons,
       listings: this.listings,
       git: this.git,
-      publication: this.publications.pending,
+      recoveryFailed: this.outbox.failed,
       errors: this.errors,
       operations: [...this.operations.values()]
         .filter((value) => !value.acknowledged)
@@ -343,7 +362,10 @@ class EditorModelState {
   }
   report = (error: unknown) => {
     if (this.closing || this.discovery.isObsoleteReadError(error)) return;
-    this.errors = [...this.errors.slice(-19), normalizeApplicationError(error).message];
+    // A string is shown as it is, so callers pass only their own notes as strings (never host
+    // text); any other failure shows only an `ApplicationError`'s message, or fixed text.
+    const message = typeof error === 'string' ? error : normalizeApplicationError(error).message;
+    this.errors = [...this.errors.slice(-19), message];
     this.emit();
   };
   clearErrors() {
@@ -392,35 +414,24 @@ class EditorModelState {
     if (this.ready) return;
     this.loading = true;
     const loaded = await this.command('loadRecovery', { clientId: this.clientId });
-    try {
-      decodeEditorRecovery(loaded.state);
-    } catch (error) {
-      this.report(error);
-      throw error;
-    }
     if (this.closing) return;
     if (loaded.state.clientId !== this.clientId)
       throw editorError('Recovery belongs to another editor client.');
-    this.recovery = decodeEditorRecovery(loaded.state);
+    const { recovery, tabs } = readRecoveryState(loaded.state);
+    this.recovery = recovery;
+    this.tabs = tabs;
     // A since-removed Hide button saved choices it never applied; they are dropped, not honoured.
     for (const view of Object.values(this.recovery.views)) delete view.tree.hideIgnored;
-    this.publications.initialize(loaded.revision);
     this.errors.push(...loaded.errors);
-    for (const draft of this.recovery.drafts) {
-      this.buffers.set(fileKey(draft.target), { ...structuredClone(draft), saving: false });
-      const selected =
-        readOwn(this.recovery.views, draft.target.checkout.checkoutId) ??
-        writeOwn(this.recovery.views, draft.target.checkout.checkoutId, view());
-      if (!selected.openFiles.includes(draft.target.path))
-        selected.openFiles.push(draft.target.path);
-      if (selected.preview === draft.target.path) selected.preview = null;
-    }
+    for (const buffer of loaded.state.buffers)
+      if (buffer.draft) this.showDraft({ id: buffer.id, target: buffer.target }, buffer.draft);
     for (const result of loaded.operations)
       this.operations.set(operationKey(result.clientId, result.id), { result, applied: new Set() });
     this.ready = true;
+    await this.watchRecovery();
     if (loaded.operations.length)
       try {
-        await this.publishFacts([], undefined, loaded);
+        await this.reconcile(undefined, loaded);
       } catch (error) {
         this.report(error);
       }
@@ -442,12 +453,39 @@ class EditorModelState {
     this.loading = false;
     this.changed();
   }
+  /**
+   * Follows the recovery store's outline of this editor's recovery, so a move another window or
+   * client makes re-paths its tabs as it commits. A failed watch is watched again at the next
+   * reconcile.
+   */
+  private async watchRecovery() {
+    if (this.recoveryWatch || this.closing) return;
+    const close = this.client.watchRecovery(
+      { clientId: this.clientId },
+      (outline) => {
+        if (this.closing) return;
+        try {
+          this.follow(outline, false);
+        } catch (error) {
+          this.report(error);
+        }
+      },
+      (error) => {
+        if (this.recoveryWatch === close) this.recoveryWatch = undefined;
+        this.report(error);
+      },
+    );
+    this.recoveryWatch = close;
+    await this.runEffect(
+      Scope.addFinalizer(this.scope, Effect.tryPromise(() => close()).pipe(Effect.ignore)),
+    );
+  }
   private observe(checkout: CheckoutTarget) {
     return this.discovery.observe(
       checkout,
       () => this.recovery.openCheckoutIds.includes(checkout.checkoutId),
       (isCurrent) => {
-        void this.publishFacts([]).catch(this.report);
+        void this.reconcile().catch(this.report);
         void this.refreshCheckout(checkout).catch((error) => {
           if (isCurrent()) this.report(error);
         });
@@ -493,17 +531,17 @@ class EditorModelState {
         message: 'Git is already being initialized. Wait for it to finish.',
       });
     this.assertRebindable(checkout);
+    // The folder's approval ends with `git init`: send the edits while it holds.
+    await this.outbox.flush();
     let finish!: () => void;
     this.initialization = {
       checkoutId: checkout.checkoutId,
       done: new Promise<void>((resolve) => (finish = resolve)),
     };
-    this.publications.cancelScheduled();
     this.emit();
     let target: CheckoutTarget | undefined, failure: ApplicationError | undefined;
     try {
-      // The folder's approval ends with `git init`: publish while it holds, and end its reads.
-      await this.publish(this.capture());
+      // End the folder's reads.
       await this.discovery.releaseObservation(checkout);
       let initialized: CheckoutTarget;
       try {
@@ -536,12 +574,9 @@ class EditorModelState {
     } finally {
       this.initialization = undefined;
       finish();
-      if (!this.closing) {
-        this.emit();
-        this.resumeFacts();
-      }
+      if (!this.closing) this.emit();
     }
-    // Drafts edited meanwhile publish now, under the Git target.
+    // Edits made meanwhile are sent now, under the Git target.
     if (!this.closing && !this.preservation.active) {
       const flushed = this.flushRecovery();
       await (failure ? flushed.catch(this.report) : flushed);
@@ -602,8 +637,11 @@ class EditorModelState {
     this.moveCheckout(previous, next);
     if (open) await this.observe(next);
   }
+  /**
+   * Moves a checkout's views, tabs, buffers and recents to the target it became; the next layout
+   * relists it in the store, whose buffers then follow under the same checkout ID.
+   */
   private moveCheckout(previous: CheckoutTarget, next: CheckoutTarget) {
-    this.referenceRevision++;
     const previousKey = checkoutKey(previous);
     const ofPrevious = (key: string) => JSON.parse(key)[0] === previousKey;
     const rebind = <T extends { checkout: CheckoutTarget }>(item: T): T =>
@@ -611,11 +649,14 @@ class EditorModelState {
     this.recovery.checkouts = this.recovery.checkouts.map((item) =>
       sameCheckout(item, previous) ? next : item,
     );
-    this.recovery.drafts = this.recovery.drafts.map((draft) => ({
-      ...draft,
-      target: rebind(draft.target),
-    }));
     this.recovery.recentFiles = this.recovery.recentFiles.map(rebind);
+    // oxlint-disable-next-line no-useless-spread -- Rebinding reinserts tabs; visit each once.
+    for (const [key, tab] of [...this.tabs])
+      if (sameCheckout(tab.target.checkout, previous)) {
+        this.tabs.delete(key);
+        tab.target = rebind(tab.target);
+        this.tabs.set(fileKey(tab.target), tab);
+      }
     // oxlint-disable-next-line no-useless-spread -- Rebinding reinserts buffers; visit each once.
     for (const [key, buffer] of [...this.buffers])
       if (sameCheckout(buffer.target.checkout, previous)) {
@@ -631,6 +672,8 @@ class EditorModelState {
     for (const key of Object.keys(this.listings)) if (ofPrevious(key)) delete this.listings[key];
     delete this.git[previousKey];
     this.preservation.rebindClosedReferences(previous, next);
+    // The store relists the checkout, and its buffers follow, with the next layout.
+    this.changed();
   }
   private async addCheckout(target: CheckoutTarget) {
     if (this.closing) return target;
@@ -698,76 +741,14 @@ class EditorModelState {
       },
     );
   }
-  private resumeFacts() {
-    if (
-      this.closing ||
-      this.preservation.active ||
-      this.initialization ||
-      this.publications.pending
-    )
-      return;
-    // A pre-capture recovery snapshot may predate a committed Discard; fetch fresh state.
-    for (const request of this.deferredFacts.splice(0))
-      void this.publishFacts(
-        request.changes,
-        request.result,
-        undefined,
-        request.forcePublication,
-      ).catch(this.report);
-  }
-  private invalidateRecovery() {
-    this.publications.invalidate();
-  }
+  /** The layout changed: send it once nothing has changed for a moment. */
   private changed() {
-    this.invalidateRecovery();
+    this.outbox.updateLayout();
     this.schedule();
   }
   private schedule() {
-    if (
-      !this.ready ||
-      this.loading ||
-      this.closing ||
-      this.preservation.active ||
-      // `initializeRepository` publishes once it has rebound.
-      this.initialization ||
-      this.publications.pending
-    )
-      return;
-    this.publications.schedule(() => this.flushRecovery());
-  }
-  private capture(savedRequests: string[] = []): EditorRecovery {
-    const state = structuredClone(this.recovery);
-    state.drafts = [...this.buffers.values()]
-      .filter(
-        (buffer) =>
-          buffer.text !== buffer.disk.text ||
-          (buffer.pendingSave && !savedRequests.includes(buffer.pendingSave.requestId)),
-      )
-      .map(({ target, text, disk }) => structuredClone({ target, text, disk }));
-    return state;
-  }
-  private publicationBlocked() {
-    return this.publications.blocked();
-  }
-  private publish(state: EditorRecovery, options: PublicationOptions = {}) {
-    return this.publications.publish(state, options);
-  }
-  async resolveRecoveryPublication(): Promise<boolean> {
-    this.assertAdmission();
-    if (this.closing) return false;
-    const { resolved, rejected } = await this.publications.resolve(() =>
-      this.preservation.release(),
-    );
-    if (resolved && !rejected) this.schedule();
-    // Rejoin after the publication tail settles; never run a rejected destructive callback.
-    if (rejected && !this.closing)
-      try {
-        await this.publishFacts([], undefined, undefined, true);
-      } catch (error) {
-        this.report(error);
-        return false;
-      }
-    return resolved;
+    if (!this.ready || this.loading || this.closing) return;
+    this.outbox.schedule();
   }
   async flush() {
     this.assertAdmission();
@@ -775,13 +756,50 @@ class EditorModelState {
   }
   private async flushRecovery() {
     this.assertReady();
-    // A capture now would name the folder target that `git init` retires.
+    // An edit now would name the folder target that `git init` retires.
     while (this.initialization) await this.initialization.done;
     this.assertReady();
     if (this.preservation.active)
       throw editorError('Finish the captured preservation action before flushing.');
-    this.publications.cancelScheduled();
-    await this.publish(this.capture());
+    await this.outbox.flush();
+  }
+  /** Opens a tab in the recovery store for a file the editor shows a tab for. */
+  private openTab(target: FileTarget) {
+    const key = fileKey(target);
+    if (this.tabs.has(key)) return;
+    const tab = { id: crypto.randomUUID(), target: structuredClone(target) };
+    this.tabs.set(key, tab);
+    this.outbox.openTab(tab.id, tab.target);
+  }
+  /** Closes a clean tab in the recovery store; the editor no longer shows it. */
+  private closeTab(target: FileTarget) {
+    const key = fileKey(target),
+      tab = this.tabs.get(key);
+    if (!tab) return;
+    this.tabs.delete(key);
+    this.closedBuffers.add(tab.id);
+    this.outbox.closeTab(tab.id);
+  }
+  /** Sends a buffer's text to the recovery store. */
+  private sendDraft(buffer: EditorBuffer) {
+    const tab = this.tabs.get(fileKey(buffer.target));
+    if (tab) this.outbox.updateDraft(tab.id, buffer.text, buffer.disk);
+  }
+  /** Shows a buffer the store holds with a draft as an open tab with that text. */
+  private showDraft(tab: EditorTab, draft: { text: string; disk: FileDocument }) {
+    const key = fileKey(tab.target);
+    this.tabs.set(key, structuredClone(tab));
+    this.buffers.set(key, {
+      target: structuredClone(tab.target),
+      text: draft.text,
+      disk: structuredClone(draft.disk),
+      saving: false,
+    });
+    const checkoutId = tab.target.checkout.checkoutId;
+    const selected =
+      readOwn(this.recovery.views, checkoutId) ?? writeOwn(this.recovery.views, checkoutId, view());
+    if (!selected.openFiles.includes(tab.target.path)) selected.openFiles.push(tab.target.path);
+    if (selected.preview === tab.target.path) selected.preview = null;
   }
   buffer(target: FileTarget): Readonly<EditorBuffer> | undefined {
     return this.snapshot.buffers.find((buffer) => fileKey(buffer.target) === fileKey(target));
@@ -797,6 +815,7 @@ class EditorModelState {
     const buffer = this.buffers.get(fileKey(target));
     if (!buffer) throw editorError('Open this file before editing it.');
     buffer.text = text;
+    this.sendDraft(buffer);
     if (text !== buffer.disk.text) this.keepOpen(target);
     this.changed();
   }
@@ -853,6 +872,11 @@ class EditorModelState {
           this.report(
             editorError('File unavailable on disk. Retained buffer and edits remain accessible.'),
           );
+          // A missing file is created by its Save, which never replaces one that exists after
+          // all. One that is there but unreadable now (permissions, a passing failure) saves over.
+          const missing = await this.isMissing(target, selection);
+          const buffer = this.buffers.get(key);
+          if (missing && buffer && current()) buffer.newFile = true;
           disk = null;
         }
       } else {
@@ -872,6 +896,7 @@ class EditorModelState {
       if (mode === 'file') this.comparisonAttempts.delete(key);
       else this.comparisonAttempts.set(key, { mode });
       let buffer = this.buffers.get(key);
+      if (buffer && disk && mode === 'file') buffer.newFile = undefined;
       if (!buffer && disk) {
         buffer = { target, text: disk.text, disk, saving: false };
         this.buffers.set(key, buffer);
@@ -886,7 +911,8 @@ class EditorModelState {
           : this.comparisons[key];
       if (comparison) this.comparisons[key] = comparison;
       else delete this.comparisons[key];
-      if (comparison?.error) this.report(comparison.error);
+      // The host's text says why; it reaches the UI only as fixed text.
+      if (comparison?.error) this.report(normalizeApplicationError(comparison.error));
       if (!selected.openFiles.includes(target.path)) {
         const previous = selected.preview;
         if (options.intent === 'preview' && previous && previous !== target.path) {
@@ -897,9 +923,11 @@ class EditorModelState {
             this.buffers.delete(oldKey);
             delete this.comparisons[oldKey];
             this.comparisonAttempts.delete(oldKey);
+            this.closeTab({ checkout: target.checkout, path: previous });
           }
         }
         selected.openFiles.splice(selected.openFiles.indexOf(selected.active) + 1, 0, target.path);
+        this.openTab(target);
         if (options.intent === 'preview' && (!buffer || buffer.text === buffer.disk.text))
           selected.preview = target.path;
       }
@@ -923,27 +951,42 @@ class EditorModelState {
       return false;
     }
   }
+  /** Whether the file's folder lists in full without it: a read that failed found nothing there. */
+  private async isMissing(target: FileTarget, scope: Scope.Scope) {
+    try {
+      const listing = await this.discovery.listDirectory(
+        {
+          checkout: target.checkout,
+          path: getParentPath(target.path),
+          includeIgnoredStatus: false,
+        },
+        scope,
+        false,
+      );
+      // A listing cut short or with an error doesn't show the file is gone.
+      if (listing.partial || listing.error) return false;
+      return !listing.entries.some((entry) => entry.path === target.path);
+    } catch {
+      return false;
+    }
+  }
   async save(target: FileTarget, overwrite = false): Promise<boolean> {
     this.assertAdmission();
     return this.saveFile(target, overwrite);
   }
-  private async saveFile(
-    target: FileTarget,
-    overwrite = false,
-    preservation?: number,
-  ): Promise<boolean> {
+  private async saveFile(target: FileTarget, overwrite = false): Promise<boolean> {
     this.checkout(target.checkout);
     if (this.initialization?.checkoutId === target.checkout.checkoutId) {
       this.report(editorError('Git is initializing in this project. Save again when it finishes.'));
       return false;
     }
-    if (this.publicationBlocked()) return false;
     if (this.uncertainAffects(target)) {
       this.report(editorError('Resolve the pending file operation before saving this file.'));
       return false;
     }
     const buffer = this.buffers.get(fileKey(target));
     if (!buffer || buffer.saving) return false;
+    if (buffer.newFile) return this.createFile(buffer);
     const request = buffer.pendingSave ?? {
       target: structuredClone(target),
       clientId: this.clientId,
@@ -955,12 +998,10 @@ class EditorModelState {
     buffer.saving = true;
     this.emit();
     try {
-      const result =
-        this.saveResults.get(request.requestId) ??
-        (await this.command('saveFile', request).catch((error) => {
-          if (!this.closing && definitiveNonAdmission(error)) buffer.pendingSave = undefined;
-          throw error;
-        }));
+      const result = await this.command('saveFile', request).catch((error) => {
+        if (!this.closing && definitiveNonAdmission(error)) buffer.pendingSave = undefined;
+        throw error;
+      });
       if (this.closing) return false;
       if (result.kind === 'conflict') {
         buffer.pendingSave = undefined;
@@ -971,18 +1012,66 @@ class EditorModelState {
         return false;
       }
       if (result.persistencePending) {
+        // The host's own note on it is not shown: no host text reaches the UI.
         this.report(
-          result.message ??
-            'Saved on disk; recovery is uncertain. Edits retained. Retry the same Save before closing.',
+          'Saved on disk; recovery is uncertain. Edits retained. Retry the same Save before closing.',
         );
         return false;
       }
-      this.saveResults.set(request.requestId, structuredClone(result));
+      // The store took the save's outcome in before it answered: its draft now stands over the
+      // saved text, and the buffer's text clears it once it matches.
       buffer.disk = result.disk;
       buffer.conflict = undefined;
-      this.invalidateRecovery();
-      await this.publishFacts([], undefined, undefined, true, preservation);
-      return !buffer.pendingSave && buffer.text === result.disk.text;
+      buffer.pendingSave = undefined;
+      this.sendDraft(buffer);
+      try {
+        await this.outbox.flush();
+      } catch (error) {
+        this.report(error);
+      }
+      return buffer.text === result.disk.text;
+    } finally {
+      if (!this.closing) {
+        buffer.saving = false;
+        this.emit();
+      }
+    }
+  }
+  /**
+   * Saves a buffer whose file isn't on disk by creating the file with its text. Creation never
+   * replaces a file: one that exists by now refuses it, and the text stays a draft.
+   */
+  private async createFile(buffer: EditorBuffer) {
+    buffer.saving = true;
+    this.emit();
+    try {
+      const { target } = buffer;
+      const result = await this.mutateFiles(
+        {
+          checkout: target.checkout,
+          kind: 'create-file',
+          sources: [],
+          destination: target.path,
+          text: buffer.text,
+        },
+        buffer,
+      );
+      if (result.outcome !== 'completed') return false;
+      const disk = await this.command('readFile', target);
+      buffer.newFile = undefined;
+      buffer.disk = disk;
+      buffer.conflict = undefined;
+      // The file holds the text now. The store's draft still stands over the file it was kept
+      // from, so it is dropped as a Discard would, keeping the tab; newer typing is sent after.
+      const tab = this.tabs.get(fileKey(target));
+      if (tab) this.outbox.discardDraft(tab.id, tab.target);
+      this.sendDraft(buffer);
+      this.outbox.updateLayout();
+      await this.outbox.flush();
+      return buffer.text === disk.text;
+    } catch (error) {
+      this.report(error);
+      return false;
     } finally {
       if (!this.closing) {
         buffer.saving = false;
@@ -996,26 +1085,19 @@ class EditorModelState {
       key = fileKey(captured);
     this.checkout(captured.checkout);
     const buffer = this.buffers.get(key);
-    if (
-      !buffer ||
-      buffer.pendingSave ||
-      this.preservation.active ||
-      this.initialization ||
-      this.publicationBlocked()
-    )
+    if (!buffer || buffer.pendingSave || this.preservation.active || this.initialization)
       return false;
-    const reference = this.referenceRevision,
-      revision = this.publications.currentRevision;
-    const sameBuffer = () =>
-      this.buffers.get(key) === buffer &&
-      fileKey(buffer.target) === key &&
-      this.referenceRevision === reference;
+    const sameBuffer = () => this.buffers.get(key) === buffer && fileKey(buffer.target) === key;
     return this.preservation.reload(captured, {
       readFile: (target) => this.command('readFile', target),
-      captureRecovery: () => this.capture(),
-      publishRecovery: (state, options) => this.publish(state, options),
-      isCurrent: () => sameBuffer() && this.publications.currentRevision === revision,
-      applyConfirmedReload: (disk) => {
+      isCurrent: sameBuffer,
+      reloadFile: async (disk) => {
+        const tab = this.tabs.get(key);
+        if (tab) {
+          this.outbox.discardDraft(tab.id, tab.target);
+          this.outbox.updateLayout();
+          await this.outbox.flush();
+        }
         if (sameBuffer()) {
           buffer.disk = disk;
           buffer.text = disk.text;
@@ -1028,6 +1110,7 @@ class EditorModelState {
             };
             this.comparisonAttempts.set(key, { mode: 'conflict' });
           }
+          this.changed();
         } else
           this.report(
             'Reload committed for its original target; a changed live buffer was retained.',
@@ -1110,8 +1193,6 @@ class EditorModelState {
       this.closing ||
       this.preservation.active ||
       this.initialization ||
-      this.publications.pending ||
-      this.publications.inFlight !== 0 ||
       [...this.buffers.values()].some(
         (buffer) => buffer.text !== buffer.disk.text || buffer.saving || buffer.pendingSave,
       ) ||
@@ -1138,7 +1219,6 @@ class EditorModelState {
       return false;
     }
     if (
-      this.publicationBlocked() ||
       this.preservation.active ||
       [...this.buffers.values()].some((buffer) => buffer.saving || buffer.pendingSave)
     )
@@ -1150,36 +1230,43 @@ class EditorModelState {
       this.report(editorError('Resolve pending file operations before closing their files.'));
       return false;
     }
-    const referenceRevision = this.referenceRevision;
     return this.preservation.close(captured, kind, checkout && structuredClone(checkout), {
       captureBuffer: (target) => {
         const buffer = this.buffers.get(fileKey(target));
         return buffer && structuredClone(buffer);
       },
-      saveFile: (target, generation) => this.saveFile(target, false, generation),
-      captureRecovery: () => this.capture(),
-      publishRecovery: (state, options) => this.publish(state, options),
-      referencesCurrent: () => referenceRevision === this.referenceRevision,
-      applyConfirmedClose: (result) => this.applyConfirmedClose(result),
+      saveFile: (target) => this.saveFile(target),
+      closeFiles: (result) => this.closeFiles(result),
     });
   }
-  private async applyConfirmedClose({ targets, discarded, state, kind, checkout }: ConfirmedClose) {
-    // A confirmed close overrides older Copy materialization only for these exact targets.
-    for (const known of this.operations.values())
-      if (known.result.kind === 'copy' && known.copies)
-        for (const target of targets)
-          if (sameCheckout(target.checkout, known.result.checkout))
-            (known.closedCopyTargets ??= new Set()).add(fileKey(target));
-    closeRecoveryReferences(this.recovery, targets, kind, checkout);
-    this.recovery.drafts = state.drafts;
+  /**
+   * Closes files whose drafts were saved or discarded: once every edit made so far has committed,
+   * the store closes their tabs (discarding the drafts chosen), and only then does the editor. A
+   * Quit keeps its tabs, dropping only discarded drafts.
+   */
+  private async closeFiles({ targets, discarded, kind, checkout }: ConfirmedClose) {
+    await this.outbox.flush();
+    for (const target of targets) {
+      const key = fileKey(target),
+        tab = this.tabs.get(key);
+      if (!tab) continue;
+      if (kind !== 'quit') this.outbox.closeTab(tab.id, discarded.has(key));
+      else if (discarded.has(key)) this.outbox.discardDraft(tab.id, tab.target);
+    }
+    await this.outbox.flush();
+    const closed = closeRecoveryReferences(this.recovery, targets, kind, checkout, true);
     if (kind === 'quit')
       for (const key of discarded) {
-        const buffer = this.buffers.get(key)!;
+        const buffer = this.buffers.get(key);
+        if (!buffer) continue;
         buffer.text = buffer.disk.text;
         buffer.conflict = undefined;
       }
     else {
       for (const key of targets.map(fileKey)) {
+        const tab = this.tabs.get(key);
+        if (tab) this.closedBuffers.add(tab.id);
+        this.tabs.delete(key);
         this.buffers.delete(key);
         delete this.comparisons[key];
         this.comparisonAttempts.delete(key);
@@ -1193,6 +1280,9 @@ class EditorModelState {
         }
       }
     }
+    this.outbox.updateLayout();
+    await this.outbox.flush();
+    return closed;
   }
   async reopen(checkout: CheckoutTarget) {
     this.assertAdmission();
@@ -1207,10 +1297,11 @@ class EditorModelState {
         writeOwn(selected.fileViews, file.path, file.view);
         if (file.positions)
           writeOwn(selected.positions, file.path, structuredClone(file.positions));
+        this.openTab({ checkout, path: file.path });
       }
     selected.active = action.active;
     selected.preview = null;
-    this.invalidateRecovery();
+    this.outbox.updateLayout();
     const success = await this.openFile({ checkout, path: action.active });
     await this.flushRecovery();
     this.preservation.forgetClosedAction(index);
@@ -1640,10 +1731,20 @@ class EditorModelState {
   }
   async mutate(input: Omit<WorkspaceOperation, 'clientId' | 'id'> & { id?: string }) {
     this.assertAdmission();
+    return this.mutateFiles(input);
+  }
+  /**
+   * `saving` is a Save of a buffer whose file isn't on disk, which creates it with the buffer's
+   * text; it may run inside a Close's preservation, whose Save it is.
+   */
+  private async mutateFiles(
+    input: Omit<WorkspaceOperation, 'clientId' | 'id'> & { id?: string },
+    saving?: EditorBuffer,
+  ) {
     this.checkout(input.checkout);
     this.assertNotInitializing(input.checkout);
-    if (this.preservation.active || this.publicationBlocked())
-      throw editorError('Finish the captured preservation/publication action first.');
+    if (this.preservation.active && !saving)
+      throw editorError('Finish the captured preservation action first.');
     const operation: WorkspaceOperation = {
       ...structuredClone(input),
       clientId: this.clientId,
@@ -1675,6 +1776,7 @@ class EditorModelState {
     if (
       [...this.buffers.values()].some(
         (buffer) =>
+          buffer !== saving &&
           sameCheckout(buffer.target.checkout, operation.checkout) &&
           !operation.sources.some((source) =>
             isPathAtOrInside(buffer.target.path, source.target.path),
@@ -1701,8 +1803,9 @@ class EditorModelState {
       )
     )
       throw editorError('Resolve the source Save before moving or copying it.');
-    // Publish dirty source drafts before any external mutation, including Trash.
-    await this.flushRecovery();
+    // Send the source drafts before any external mutation, including Trash.
+    if (saving) await this.outbox.flush();
+    else await this.flushRecovery();
     const uncertain: OperationResult = {
       id: operation.id,
       clientId: this.clientId,
@@ -1717,7 +1820,6 @@ class EditorModelState {
       operation,
       result: uncertain,
       applied: new Set(),
-      copies: structuredClone([...this.buffers.values()]),
     });
     this.emit();
     try {
@@ -1737,7 +1839,7 @@ class EditorModelState {
         throw editorError(
           'Operation response identity mismatch. Original pending evidence retained.',
         );
-      await this.publishFacts([], result);
+      await this.reconcile(result);
       if (this.recovery.openCheckoutIds.includes(operation.checkout.checkoutId))
         await this.refreshCheckout(operation.checkout);
       return result;
@@ -1764,7 +1866,7 @@ class EditorModelState {
     }
     if (result.clientId !== operationClientId || result.id !== id)
       throw editorError('Operation status identity mismatch.');
-    await this.publishFacts([], result);
+    await this.reconcile(result);
     if (this.recovery.openCheckoutIds.includes(result.checkout.checkoutId))
       await this.refreshCheckout(result.checkout);
     return result;
@@ -1772,7 +1874,7 @@ class EditorModelState {
   async reconcileRecovery() {
     this.assertAdmission();
     this.assertReady();
-    await this.publishFacts([]);
+    await this.reconcile();
   }
   private uncertainAffects(target: FileTarget) {
     return [...this.operations.values()].some(({ operation, result }) => {
@@ -1795,12 +1897,8 @@ class EditorModelState {
       );
     });
   }
-  private async applyOperationFacts(
-    result: OperationResult,
-    durable: EditorRecovery,
-    check: () => void,
-  ) {
-    check();
+  /** Takes an operation's completed items into what the editor remembers by path. */
+  private applyOperationFacts(result: OperationResult) {
     const key = operationKey(result.clientId, result.id);
     let known = this.operations.get(key);
     if (!known) {
@@ -1822,236 +1920,250 @@ class EditorModelState {
         'Operation checkout identity unavailable or changed. Evidence and drafts retained without rebinding.',
       );
     known.result = result;
-    this.invalidateRecovery();
-    let reconciled = true;
     for (const item of result.items.filter((item) => item.outcome === 'completed')) {
       const itemKey = JSON.stringify([item.source, item.destination]);
       if (known.applied.has(itemKey)) continue;
       if (operation && !operation.sources.some((source) => source.target.path === item.source))
         continue;
-      if (
-        result.kind === 'move' &&
-        item.destination &&
-        !this.moveReferences(result.checkout, item.source, item.destination)
-      ) {
-        reconciled = false;
-        continue;
-      }
-      if (result.kind === 'copy' && item.destination) {
-        const durableCopies = durable.drafts.filter(
-          (draft) =>
-            sameCheckout(draft.target.checkout, result.checkout) &&
-            isPathAtOrInside(draft.target.path, item.destination!),
-        );
-        for (const draft of durableCopies)
-          if (
-            !known.closedCopyTargets?.has(fileKey(draft.target)) &&
-            !this.buffers.has(fileKey(draft.target))
-          ) {
-            this.buffers.set(fileKey(draft.target), { ...structuredClone(draft), saving: false });
-            const selected = this.checkout(result.checkout, false);
-            if (!selected.openFiles.includes(draft.target.path))
-              selected.openFiles.push(draft.target.path);
-          }
-        for (const buffer of known.copies ?? [])
-          if (
-            sameCheckout(buffer.target.checkout, result.checkout) &&
-            isPathAtOrInside(buffer.target.path, item.source) &&
-            buffer.text !== buffer.disk.text
-          ) {
-            const target = {
-              checkout: result.checkout,
-              path: item.destination + buffer.target.path.slice(item.source.length),
-            };
-            if (
-              !known.closedCopyTargets?.has(fileKey(target)) &&
-              !this.buffers.has(fileKey(target))
-            ) {
-              const disk = await this.command('readFile', target);
-              check();
-              if (
-                known.closedCopyTargets?.has(fileKey(target)) ||
-                this.buffers.has(fileKey(target))
-              )
-                continue;
-              this.buffers.set(fileKey(target), { target, disk, text: buffer.text, saving: false });
-              const selected = this.checkout(result.checkout, false);
-              if (!selected.openFiles.includes(target.path)) selected.openFiles.push(target.path);
-            }
-          }
+      if (result.kind === 'move' && item.destination) {
+        moveRecoveryReferences(this.recovery, result.checkout, item.source, item.destination);
+        this.preservation.moveClosedReferences(result.checkout, item.source, item.destination);
       }
       // Trash keeps dirty drafts visible at their original target for manual recovery.
       if (result.kind === 'trash')
         this.preservation.removeTrashedReferences(result.checkout, item.source);
       known.applied.add(itemKey);
     }
-    return reconciled;
   }
-  private publishFacts(
-    changes: RecoveryChange[],
-    result?: OperationResult,
-    initial?: RecoveryLoad,
-    forcePublication = false,
-    preservation?: number,
-  ): Promise<void> {
+  /**
+   * Reads this editor's recovery from the store (which also takes in other clients' moves) and
+   * follows it, takes in the operations it has not acknowledged (and `result`), then
+   * acknowledges each settled one.
+   */
+  private reconcile(result?: OperationResult, initial?: RecoveryLoad): Promise<void> {
     return this.run(
       this.factsLock.withPermits(1)(
         Effect.tryPromise({
           try: async () => {
-            const boundary = this.preservation.generation;
-            const check = () => {
-              if (
-                this.closing ||
-                this.initialization ||
-                this.publications.pending ||
-                boundary !== this.preservation.generation ||
-                (this.preservation.active && preservation !== boundary)
-              )
-                throw deferObservation;
-            };
-            try {
-              check();
-              await this.publications.waitForIdle();
-              check();
-              const loaded =
-                initial ?? (await this.command('loadRecovery', { clientId: this.clientId }));
-              check();
-              if (loaded.state.clientId !== this.clientId)
-                throw editorError('Recovery belongs to another editor client.');
-              const facts = [
-                ...new Map(
-                  [...loaded.operations, ...(result ? [result] : [])].map((fact) => [
-                    operationKey(fact.clientId, fact.id),
-                    fact,
-                  ]),
-                ).values(),
-              ];
-              const before = (fact: OperationResult) =>
-                fact.recoveryChanges.find((change) => change.clientId === this.clientId)
-                  ?.previousRevision ?? Infinity;
-              facts.sort((a, b) => before(a) - before(b));
-              const reconciled = new Set<string>();
-              if (this.preservation.active) {
-                // A captured Save may publish its own known revision, never remap another captured draft.
-                if (
-                  facts.some((fact) =>
-                    fact.recoveryChanges.some(
-                      (change) =>
-                        change.clientId === this.clientId &&
-                        change.revision > this.publications.currentRevision,
-                    ),
-                  )
-                )
-                  throw deferObservation;
-                if (
-                  facts.length &&
-                  !this.deferredFacts.some((request) => !request.result && !request.changes.length)
-                )
-                  this.deferredFacts.push({ changes: [], forcePublication: false });
-              } else
-                for (const fact of facts) {
-                  if (await this.applyOperationFacts(fact, loaded.state, check))
-                    reconciled.add(operationKey(fact.clientId, fact.id));
-                  check();
-                }
-              // Keep each known Save until its exact receipt chain and recovery publication succeed.
-              const savedRequests = [...this.saveResults.keys()];
-              const transitions = [
-                ...changes,
-                ...facts.flatMap((fact) => fact.recoveryChanges),
-                ...[...this.saveResults.values()].flatMap((result) => result.recoveryChanges),
-              ]
-                .filter((change) => change.clientId === this.clientId)
-                .sort((a, b) => a.previousRevision - b.previousRevision);
-              for (const transition of transitions) this.publications.advanceRevision(transition);
-              if (!facts.length && !changes.length && !savedRequests.length && !forcePublication)
-                return;
-              await this.publish(this.capture(savedRequests), { before: check, savedRequests });
-              check();
-              for (const fact of facts)
-                if (
-                  fact.outcome !== 'uncertain' &&
-                  reconciled.has(operationKey(fact.clientId, fact.id))
-                ) {
-                  await this.command('acknowledgeOperation', {
-                    clientId: this.clientId,
-                    operationClientId: fact.clientId,
-                    id: fact.id,
-                  });
-                  const known = this.operations.get(operationKey(fact.clientId, fact.id))!;
-                  known.acknowledged = true;
-                  known.copies = undefined;
-                  known.closedCopyTargets = undefined;
-                  check();
-                }
-              this.emit();
-            } catch (error) {
-              if (error !== deferObservation) throw error;
-              if (!this.closing) {
-                const observation =
-                  !changes.length &&
-                  !result &&
-                  this.deferredFacts.find((request) => !request.result && !request.changes.length);
-                if (observation) observation.forcePublication ||= forcePublication;
-                else
-                  this.deferredFacts.push({
-                    changes: structuredClone(changes),
-                    result: result && structuredClone(result),
-                    forcePublication,
-                  });
-              }
-              this.resumeFacts();
+            if (this.closing) return;
+            while (this.initialization) await this.initialization.done;
+            if (!this.recoveryWatch) await this.watchRecovery();
+            const loaded =
+              initial ?? (await this.command('loadRecovery', { clientId: this.clientId }));
+            if (this.closing) return;
+            if (loaded.state.clientId !== this.clientId)
+              throw editorError('Recovery belongs to another editor client.');
+            this.follow(loaded.state, true);
+            const facts = [
+              ...new Map(
+                [...loaded.operations, ...(result ? [result] : [])].map((fact) => [
+                  operationKey(fact.clientId, fact.id),
+                  fact,
+                ]),
+              ).values(),
+            ];
+            for (const fact of facts) this.applyOperationFacts(fact);
+            if (facts.length) this.changed();
+            for (const fact of facts) {
+              if (fact.outcome === 'uncertain' || this.closing) continue;
+              await this.command('acknowledgeOperation', {
+                clientId: this.clientId,
+                operationClientId: fact.clientId,
+                id: fact.id,
+              });
+              this.operations.get(operationKey(fact.clientId, fact.id))!.acknowledged = true;
             }
+            this.emit();
           },
           catch: normalizeApplicationError,
         }),
       ),
     );
   }
-  private moveReferences(checkout: CheckoutTarget, source: string, destination: string) {
-    const move = (path: string) =>
-      isPathAtOrInside(path, source) ? destination + path.slice(source.length) : path;
-    const incoming = [...this.buffers.values()].filter(
-      (buffer) =>
-        sameCheckout(buffer.target.checkout, checkout) &&
-        isPathAtOrInside(buffer.target.path, source),
-    );
-    if (
-      incoming.some((buffer) =>
-        [...this.buffers.values()].some(
-          (other) =>
-            sameCheckout(other.target.checkout, checkout) &&
-            !incoming.includes(other) &&
-            other.target.path.normalize('NFC').toLowerCase() ===
-              move(buffer.target.path).normalize('NFC').toLowerCase(),
-        ),
-      )
-    ) {
-      this.report(
-        'Move destination has another open buffer. Both drafts and operation evidence are retained. Close one through Save/Discard/Cancel, then resolve operation status.',
-      );
+  /** After the store refused an edit as given, follows its recovery and sends what differs. */
+  private async resync(edit: RecoveryEditRequest, error: ApplicationError) {
+    // A tab the store would not close (it holds a draft the editor did not know) stays open.
+    if (edit.kind === 'closeTab') {
+      this.closedBuffers.delete(edit.bufferId);
       return false;
     }
-    this.referenceRevision++;
-    this.checkout(checkout, false);
-    // oxlint-disable-next-line no-useless-spread -- Renaming reinserts buffers; visit each original buffer once.
-    for (const [key, buffer] of [...this.buffers])
-      if (
-        sameCheckout(buffer.target.checkout, checkout) &&
-        isPathAtOrInside(buffer.target.path, source)
-      ) {
-        this.buffers.delete(key);
-        this.comparisonAttempts.delete(key);
-        buffer.target = { checkout, path: move(buffer.target.path) };
-        this.buffers.set(fileKey(buffer.target), buffer);
-        if (this.comparisons[key]) {
-          this.comparisons[fileKey(buffer.target)] = this.comparisons[key];
-          delete this.comparisons[key];
-        }
-      }
-    moveRecoveryReferences(this.recovery, checkout, source, destination);
-    this.preservation.moveClosedReferences(checkout, source, destination);
+    const loaded = await this.command('loadRecovery', { clientId: this.clientId });
+    if (this.closing) throw error;
+    this.follow(loaded.state, true);
     return true;
+  }
+  /**
+   * Takes in where the store holds this editor's buffers: a tab whose buffer a move took to
+   * another file follows it, and a tab at that file whose clean buffer gave way leaves (its
+   * unsent text kept at a new path). A draft the store made itself (a copy, a restored save) opens
+   * as a tab; an outline has no text, so its text is read with the next reconcile. A `full` state,
+   * read just now, also gets the edits it lacks: tabs it doesn't hold, and text it holds otherwise.
+   */
+  private follow(store: RecoveryOutline | RecoveryState, full: boolean) {
+    const held = new Map(store.buffers.map((buffer) => [buffer.id, buffer]));
+    const shown = new Set([...this.tabs.values()].map((tab) => tab.id));
+    let changed = false,
+      unread = false;
+    // oxlint-disable-next-line no-useless-spread -- Moving a tab reinserts it; visit each once.
+    for (const [key, tab] of [...this.tabs]) {
+      const buffer = held.get(tab.id);
+      // A checkout relisted under its ID (after `git init`) is the editor's own rebind.
+      if (!buffer || !sameCheckout(buffer.target.checkout, tab.target.checkout)) continue;
+      if (buffer.target.path === tab.target.path || this.tabs.get(key) !== tab) continue;
+      this.moveTab(key, buffer.target);
+      changed = true;
+    }
+    for (const buffer of store.buffers) {
+      if (!buffer.draft || this.closedBuffers.has(buffer.id)) continue;
+      if (shown.has(buffer.id)) {
+        // A draft the store made over a clean tab (another window's copy onto it) is the newer:
+        // the tab takes it, rather than sending its stale text over it.
+        const key = fileKey(buffer.target),
+          own = this.buffers.get(key);
+        if (!own || isDirty(own) || this.outbox.isDraftPending(buffer.id)) continue;
+        if (!('text' in buffer.draft)) {
+          unread = true;
+          continue;
+        }
+        if (own.text === buffer.draft.text && own.disk.version === buffer.draft.disk.version)
+          continue;
+        own.text = buffer.draft.text;
+        own.disk = structuredClone(buffer.draft.disk);
+        changed = true;
+        continue;
+      }
+      if (!('text' in buffer.draft)) {
+        unread = true;
+        continue;
+      }
+      if (!this.recovery.checkouts.some((c) => sameCheckout(c, buffer.target.checkout))) continue;
+      const key = fileKey(buffer.target),
+        own = this.buffers.get(key);
+      // This editor's text for the file, under a buffer the store doesn't hold, stays the newer.
+      if (own && isDirty(own) && own.text !== buffer.draft.text) this.keepElsewhere(own);
+      this.showDraft({ id: buffer.id, target: buffer.target }, buffer.draft);
+      changed = true;
+    }
+    if (full) {
+      const drafts = new Map(
+        (store as RecoveryState).buffers.map((buffer) => [buffer.id, buffer.draft?.text]),
+      );
+      // A clean buffer the editor no longer shows (one whose close was lost) is closed, so it
+      // never holds a file the editor opens again under another buffer.
+      for (const buffer of (store as RecoveryState).buffers)
+        if (!buffer.draft && !shown.has(buffer.id) && !this.outbox.isTabPending(buffer.id))
+          this.outbox.closeTab(buffer.id);
+      for (const [key, tab] of this.tabs) {
+        if (this.outbox.isTabPending(tab.id)) continue;
+        if (!held.has(tab.id)) this.outbox.openTab(tab.id, tab.target);
+        const buffer = this.buffers.get(key);
+        const text = buffer && (isDirty(buffer) ? buffer.text : undefined);
+        if (buffer && text !== drafts.get(tab.id)) this.sendDraft(buffer);
+      }
+      this.outbox.forgetLayout();
+      changed = true;
+    }
+    if (unread) void this.reconcile().catch(this.report);
+    if (changed) {
+      this.changed();
+      this.emit();
+    }
+  }
+  /** Moves a tab, its buffer and its view to where the store's buffer now is. */
+  private moveTab(key: string, target: FileTarget) {
+    const tab = this.tabs.get(key)!,
+      next = fileKey(target),
+      source = tab.target.path;
+    // A clean buffer at the destination gave way to this one in the store.
+    if (this.tabs.has(next)) this.dropReplacedTab(next);
+    this.tabs.delete(key);
+    tab.target = structuredClone(target);
+    this.tabs.set(next, tab);
+    const buffer = this.buffers.get(key);
+    if (buffer) {
+      this.buffers.delete(key);
+      buffer.target = structuredClone(target);
+      this.buffers.set(next, buffer);
+    }
+    this.comparisonAttempts.delete(key);
+    if (this.comparisons[key]) {
+      this.comparisons[next] = this.comparisons[key];
+      delete this.comparisons[key];
+    }
+    const selected = readOwn(this.recovery.views, target.checkout.checkoutId);
+    if (!selected) return;
+    const rename = (path: string) => (path === source ? target.path : path);
+    selected.openFiles = [...new Set(selected.openFiles.map(rename))];
+    selected.active = rename(selected.active);
+    if (selected.preview !== null) selected.preview = rename(selected.preview);
+    for (const memory of [selected.fileViews, selected.positions] as Record<string, unknown>[])
+      if (Object.hasOwn(memory, source)) {
+        writeOwn(memory, target.path, memory[source]);
+        delete memory[source];
+      }
+  }
+  /** A tab whose clean buffer a move replaced leaves; text not yet sent is kept elsewhere. */
+  private dropReplacedTab(key: string) {
+    const tab = this.tabs.get(key)!,
+      buffer = this.buffers.get(key);
+    this.tabs.delete(key);
+    this.closedBuffers.add(tab.id);
+    // The store keeps the replaced ID until the client closes it.
+    this.outbox.closeTab(tab.id);
+    if (buffer && isDirty(buffer)) this.keepElsewhere(buffer);
+    this.buffers.delete(key);
+    delete this.comparisons[key];
+    this.comparisonAttempts.delete(key);
+  }
+  /**
+   * A close whose reply was lost committed, as the store showed later: the Discard stands. A
+   * closed tab closes here too; a Discard that keeps its tab (Quit, Reload) drops its text.
+   */
+  private finishClose(bufferId: string, reopen: { target: FileTarget } | undefined) {
+    const entry = [...this.tabs].find(([, tab]) => tab.id === bufferId);
+    if (!entry) return;
+    const [key, tab] = entry;
+    const buffer = this.buffers.get(key);
+    if (reopen) {
+      if (buffer) {
+        buffer.text = buffer.disk.text;
+        buffer.conflict = undefined;
+      }
+      this.outbox.openTab(tab.id, tab.target);
+    } else {
+      closeRecoveryReferences(this.recovery, [tab.target], 'files');
+      this.closedBuffers.add(tab.id);
+      this.tabs.delete(key);
+      this.buffers.delete(key);
+      delete this.comparisons[key];
+      this.comparisonAttempts.delete(key);
+    }
+    this.changed();
+    this.emit();
+  }
+  /**
+   * Keeps text the store has no place for (its buffer was replaced) as a draft at a new path
+   * beside its file, with the file text it was edited from, and says where.
+   */
+  private keepElsewhere(buffer: EditorBuffer) {
+    const { checkout } = buffer.target;
+    const taken = new Set(
+      [...this.tabs.values()]
+        .filter((tab) => sameCheckout(tab.target.checkout, checkout))
+        .map((tab) => tab.target.path),
+    );
+    // Files the editor has listed are taken too; a Save creates the file and never replaces one.
+    for (const listing of Object.values(this.listings))
+      for (const entry of listing.entries) taken.add(entry.path);
+    const target = { checkout, path: findFreePath(buffer.target.path, taken) };
+    const tab = { id: crypto.randomUUID(), target };
+    this.showDraft(tab, { text: buffer.text, disk: buffer.disk });
+    this.buffers.get(fileKey(target))!.newFile = true;
+    this.outbox.openTab(tab.id, target);
+    this.outbox.updateDraft(tab.id, buffer.text, buffer.disk);
+    this.report(
+      `${buffer.target.path} was replaced while it had unsaved changes. They are kept in ${target.path}; Save creates it.`,
+    );
   }
   /** Immediately stop admissions; cleanup is owned by the caller outside this model scope. */
   private beginDisposal() {
@@ -2059,7 +2171,7 @@ class EditorModelState {
     this.closing = true;
     this.discovery.invalidateActivation();
     this.preservation.cancelPrompt();
-    this.deferredFacts = [];
+    this.outbox.clear();
     for (const workflow of this.workflows) workflow.stop();
     this.emit(true);
     this.listeners.clear();
@@ -2122,7 +2234,7 @@ export interface EditorController {
   /** Runs `git init` in an open plain-folder checkout; its tabs and drafts move to the result. */
   initializeRepository(checkout: CheckoutTarget): Promise<CheckoutTarget>;
   selectCheckout(target: CheckoutTarget): Promise<boolean>;
-  resolveRecoveryPublication(): Promise<boolean>;
+  /** Sends the recovery edits made so far; resolves once each has committed. */
   flush(): Promise<void>;
   buffer(target: FileTarget): Readonly<EditorBuffer> | undefined;
   edit(target: FileTarget, text: string): void;
@@ -2172,8 +2284,12 @@ export const makeEditorModel = (
 ): Effect.Effect<EditorModel, ApplicationError, Scope.Scope> =>
   Effect.gen(function* () {
     const scope = yield* Scope.make();
+    const handle = yield* FiberHandle.make<void, never>().pipe(
+      Effect.provideService(Scope.Scope, scope),
+    );
+    const debounce: DebounceRunner = yield* FiberHandle.runtime(handle)<never>();
     const model = yield* Effect.try({
-      try: () => new EditorModelState(scope, dependencies),
+      try: () => new EditorModelState(scope, dependencies, debounce),
       catch: normalizeApplicationError,
     });
     yield* Effect.addFinalizer(() => model.release());

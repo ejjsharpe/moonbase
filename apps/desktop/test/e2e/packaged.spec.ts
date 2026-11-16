@@ -6,6 +6,7 @@ import {
   captureNative,
   pasteNativeFile,
   explorerAction,
+  draftsOf,
 } from '../fixtures/editor-fixture.ts';
 import {
   filenameCases,
@@ -288,7 +289,7 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
       JSON.stringify(filenameEvidence, null, 2) + '\n',
     );
     expect(errors).toEqual([]);
-    const dirty = (await recoveryState(page)).state.drafts.length;
+    const dirty = draftsOf((await recoveryState(page)).state).length;
     const closed = app.waitForEvent('close');
     await app.evaluate(({ app }) => app.quit());
     for (let index = 0; index < dirty; index++)

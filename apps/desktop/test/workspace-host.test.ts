@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,7 +13,7 @@ import {
   type WorkspaceHostServiceShape,
 } from '@moonbase/contracts/services';
 import { chatHostCapabilities } from '@moonbase/contracts/host';
-import { emptyRecovery, type CheckoutTarget } from '@moonbase/contracts/workspace';
+import type { CheckoutTarget, EditorClient } from '@moonbase/contracts/workspace';
 import { RemoteWorkspaceHostLive } from '@moonbase/daemon-protocol/remote';
 import { WorkspaceRecoveryLive } from '@moonbase/workspace';
 import {
@@ -75,23 +75,19 @@ async function temporaryProfile(t: TestContext, stops: (() => Promise<unknown>)[
   });
   return userData;
 }
-const draftState = (
-  target: CheckoutTarget,
-  text: string,
-  disk = { text: 'one', version: createHash('sha256').update('one').digest('hex') },
-) => ({
-  ...emptyRecovery('desktop-primary'),
-  checkouts: [target],
-  openCheckoutIds: [target.checkoutId],
-  selectedCheckoutId: target.checkoutId,
-  drafts: [
-    {
-      target: { checkout: target, path: 'a.txt' },
-      text,
-      disk,
-    },
-  ],
-});
+const one = { text: 'one', version: createHash('sha256').update('one').digest('hex') };
+/** Opens `a.txt` of `target` as buffer `a` with `text` over `disk`, as the editor does. */
+async function editDraft(client: EditorClient, target: CheckoutTarget, text: string, disk = one) {
+  const clientId = 'desktop-primary';
+  await client.command('openTab', {
+    clientId,
+    bufferId: 'a',
+    target: { checkout: target, path: 'a.txt' },
+  });
+  await client.command('updateDraft', { clientId, bufferId: 'a', text, disk });
+}
+const draftsOf = (load: { state: { buffers: { draft?: { text: string } }[] } }) =>
+  load.state.buffers.flatMap((b) => (b.draft ? [b.draft] : []));
 
 test('without a reachable daemon the store keeps drafts, files are unavailable, and a failed attempt is not repeated at once', async (t) => {
   const userData = await temporaryProfile(t);
@@ -118,21 +114,16 @@ test('without a reachable daemon the store keeps drafts, files are unavailable, 
     userData,
     reached({ verifyCheckout: () => Effect.void }),
   );
-  await seeded.client.command('persistRecovery', {
-    clientId: 'desktop-primary',
-    requestId: randomUUID(),
-    expectedRevision: 0,
-    state: draftState(target, 'before'),
-  });
+  await editDraft(seeded.client, target, 'before');
   await seeded.runtime.dispose();
   const first = await composeWorkspace(t, userData, local);
-  const load = await first.client.command('loadRecovery', { clientId: 'desktop-primary' });
+  await first.client.command('loadRecovery', { clientId: 'desktop-primary' });
   // Edits keep being kept without the daemon.
-  await first.client.command('persistRecovery', {
+  await first.client.command('updateDraft', {
     clientId: 'desktop-primary',
-    requestId: randomUUID(),
-    expectedRevision: load.revision,
-    state: draftState(target, 'unsaved work'),
+    bufferId: 'a',
+    text: 'unsaved work',
+    disk: one,
   });
   await assert.rejects(first.client.command('openCheckout', { root: target.root }), {
     code: 'Unavailable',
@@ -148,7 +139,7 @@ test('without a reachable daemon the store keeps drafts, files are unavailable, 
   await first.runtime.dispose();
   const second = await composeWorkspace(t, userData, local);
   const reloaded = await second.client.command('loadRecovery', { clientId: 'desktop-primary' });
-  assert.equal(reloaded.state.drafts[0].text, 'unsaved work');
+  assert.equal(draftsOf(reloaded)[0]?.text, 'unsaved work');
   assert(reloaded.errors.length > 0);
 });
 
@@ -193,12 +184,7 @@ test('a save sent as the daemon is stopped keeps its text, and resolves once the
 
   const checkout = await client.command('openCheckout', { root: project });
   const disk = await client.command('readFile', { checkout, path: 'a.txt' });
-  await client.command('persistRecovery', {
-    clientId: 'desktop-primary',
-    requestId: randomUUID(),
-    expectedRevision: 0,
-    state: draftState(checkout, 'edited', disk),
-  });
+  await editDraft(client, checkout, 'edited', disk);
   const save = {
     target: { checkout, path: 'a.txt' },
     clientId: 'desktop-primary',
@@ -216,7 +202,7 @@ test('a save sent as the daemon is stopped keeps its text, and resolves once the
   const loaded = await client.command('loadRecovery', { clientId: 'desktop-primary' });
   // Whether the request reached the old daemon or not, the text is in a draft or on disk, never lost.
   const onDisk = (await readFile(join(project, 'a.txt'), 'utf8')) === 'edited';
-  assert(onDisk || loaded.state.drafts.some((d) => d.text === 'edited'), String(sent));
+  assert(onDisk || draftsOf(loaded).some((d) => d.text === 'edited'), String(sent));
   // The next request started a new daemon in a new connection, and files are served again.
   const again = await client.command('readFile', { checkout, path: 'a.txt' });
   assert.equal(again.text, onDisk ? 'edited' : 'one');

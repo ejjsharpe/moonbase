@@ -60,7 +60,10 @@ async function measure(count, activeBytes, restored = false) {
       await app.dispose();
       app = await createMoonbaseApplication(options);
       editor = app.editors[0];
-      assert.equal(editor.getSnapshot().recovery.drafts.length, count);
+      assert.equal(
+        editor.getSnapshot().buffers.filter((buffer) => buffer.text !== buffer.disk.text).length,
+        count,
+      );
     }
     assert.equal(editor.getSnapshot().recovery.views[checkout.checkoutId].active, target.path);
     const held = editor.getSnapshot();
@@ -72,10 +75,11 @@ async function measure(count, activeBytes, restored = false) {
     const editMs = [],
       positionMs = [];
     let notifications = 0;
+    // Each edit and position notifies once; the first edit may also tell that recovery is pending.
     const off = editor.subscribe(() => notifications++);
     for (let index = 0; index < texts.length; index++) {
       await new Promise((resolve) => setImmediate(resolve));
-      const publications = memory.stats.publications;
+      const edits = memory.stats.edits;
       const editStart = performance.now();
       editor.edit(target, texts[index]);
       const editElapsed = performance.now() - editStart;
@@ -86,11 +90,11 @@ async function measure(count, activeBytes, restored = false) {
         editMs.push(editElapsed);
         positionMs.push(positionElapsed);
       }
-      assert.equal(memory.stats.publications, publications);
+      assert.equal(memory.stats.edits, edits);
       assert.equal(editor.getSnapshot(), editor.getSnapshot());
     }
     off();
-    assert.equal(notifications, 50);
+    assert(notifications === 50 || notifications === 51, `${notifications} notifications`);
     assert.equal(editor.buffer(target).text, texts.at(-1));
     assert.equal(editor.getSnapshot().buffers.length, count);
     assert.deepEqual(held, expectedHeld);

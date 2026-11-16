@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
@@ -15,23 +15,19 @@ import {
 import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
 import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { emptyRecovery } from '@moonbase/contracts/workspace';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 
-import { captureNative, fixture, rejects, draft } from './workspace-fixture.ts';
-test('known move preserves drafts and exact target, acknowledgement requires recovery publication; replay does not move twice', async () => {
+import { captureNative, fixture, rejects } from './workspace-fixture.ts';
+import { bufferIdOf, draftsOf, seed } from './recovery-fixture.ts';
+test('known move preserves drafts and exact target, acknowledgement needs only its publication; replay does not move twice', async () => {
   const f = fixture();
   try {
     writeFileSync(join(f.root, 'file.txt'), 'disk');
     const checkout = await f.client.command('openCheckout', { root: f.root }),
       disk = await f.client.command('readFile', { checkout, path: 'file.txt' });
-    const state = draft('alice', checkout, 'dirty', disk);
-    await f.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: 0,
-      state,
-    });
+    await seed(f.client, 'alice', [
+      { target: { checkout, path: 'file.txt' }, text: 'dirty', disk },
+    ]);
     const sources = await f.client.command('inspectEntries', { checkout, paths: ['file.txt'] });
     const operation = {
       id: 'move-1',
@@ -44,23 +40,12 @@ test('known move preserves drafts and exact target, acknowledgement requires rec
     const result = await f.client.command('mutate', operation);
     assert.equal(result.outcome, 'completed');
     assert.deepEqual(result.checkout, checkout);
-    await assert.rejects(
-      f.client.command('acknowledgeOperation', {
-        clientId: 'alice',
-        operationClientId: 'alice',
-        id: 'move-1',
-      }),
-      rejects('Persistence'),
+    const recovered = draftsOf(
+      (await f.client.command('loadRecovery', { clientId: 'alice' })).state,
     );
-    const recovered = await f.client.command('loadRecovery', { clientId: 'alice' });
-    assert.equal(recovered.state.drafts[0].target.path, 'renamed.txt');
-    assert.deepEqual(recovered.state.drafts[0].disk, disk);
-    await f.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: recovered.revision,
-      state: recovered.state,
-    });
+    assert.equal(recovered[0]?.target.path, 'renamed.txt');
+    assert.deepEqual(recovered[0]?.disk, disk);
+    // The store applied the move to the recovery itself, so no edit has to come in between.
     await f.client.command('acknowledgeOperation', {
       clientId: 'alice',
       operationClientId: 'alice',
@@ -79,8 +64,8 @@ test('known move preserves drafts and exact target, acknowledgement requires rec
         result,
       );
       assert.equal(
-        (await restarted.client.command('loadRecovery', { clientId: 'alice' })).state.drafts[0]
-          .target.path,
+        draftsOf((await restarted.client.command('loadRecovery', { clientId: 'alice' })).state)[0]
+          ?.target.path,
         'renamed.txt',
       );
     } finally {
@@ -96,13 +81,7 @@ test('create/copy and scoped native import use actual files; single-use referenc
   try {
     const checkout = await f.client.command('openCheckout', { root: f.root });
     const publish = async (id: string) => {
-      const current = await f.client.command('loadRecovery', { clientId: 'alice' });
-      await f.client.command('persistRecovery', {
-        requestId: randomUUID(),
-        clientId: 'alice',
-        expectedRevision: current.revision,
-        state: current.state,
-      });
+      await f.client.command('loadRecovery', { clientId: 'alice' });
       await f.client.command('acknowledgeOperation', {
         clientId: 'alice',
         operationClientId: 'alice',
@@ -187,15 +166,10 @@ test('identical source paths in independent checkout identities never reconcile 
     const a = await f.client.command('openCheckout', { root: f.root }),
       b = await f.client.command('openCheckout', { root: root2 });
     const disk = await f.client.command('readFile', { checkout: a, path: 'file.txt' });
-    const state = draft('alice', a, 'first', disk);
-    state.checkouts.push(b);
-    state.drafts.push({ target: { checkout: b, path: 'file.txt' }, text: 'second', disk });
-    await f.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: 0,
-      state,
-    });
+    await seed(f.client, 'alice', [
+      { target: { checkout: a, path: 'file.txt' }, text: 'first', disk },
+      { target: { checkout: b, path: 'file.txt' }, text: 'second', disk },
+    ]);
     const sources = await f.client.command('inspectEntries', { checkout: a, paths: ['file.txt'] });
     const result = await f.client.command('mutate', {
       id: 'move',
@@ -211,7 +185,7 @@ test('identical source paths in independent checkout identities never reconcile 
     try {
       const restored = await restarted.client.command('loadRecovery', { clientId: 'alice' });
       assert.deepEqual(
-        restored.state.drafts.map((d) => [d.target.checkout.checkoutId, d.target.path, d.text]),
+        draftsOf(restored.state).map((d) => [d.target.checkout.checkoutId, d.target.path, d.text]),
         [
           [a.checkoutId, 'moved.txt', 'first'],
           [b.checkoutId, 'file.txt', 'second'],
@@ -233,21 +207,16 @@ test('real SQLite write contention vetoes recovery discard and mutation before a
     writeFileSync(join(f.root, 'file.txt'), 'disk');
     const checkout = await f.client.command('openCheckout', { root: f.root });
     const disk = await f.client.command('readFile', { checkout, path: 'file.txt' });
-    await f.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: 0,
-      state: draft('alice', checkout, 'retained', disk),
-    });
+    const target = { checkout, path: 'file.txt' };
+    await seed(f.client, 'alice', [{ target, text: 'retained', disk }]);
     const lock = new DatabaseSync(join(f.dataDirectory, 'moonbase-workspace-v1.sqlite'));
     try {
       lock.exec('BEGIN IMMEDIATE');
       await assert.rejects(
-        f.client.command('persistRecovery', {
-          requestId: randomUUID(),
+        f.client.command('closeTab', {
           clientId: 'alice',
-          expectedRevision: 1,
-          state: emptyRecovery('alice'),
+          bufferId: bufferIdOf(target),
+          discard: true,
         }),
         rejects('Persistence'),
       );
@@ -264,7 +233,7 @@ test('real SQLite write contention vetoes recovery discard and mutation before a
       );
       assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'disk');
       assert.equal(
-        (await f.client.command('loadRecovery', { clientId: 'alice' })).state.drafts[0].text,
+        draftsOf((await f.client.command('loadRecovery', { clientId: 'alice' })).state)[0]?.text,
         'retained',
       );
     } finally {
@@ -303,12 +272,9 @@ for (const kind of ['move', 'trash'] as const)
       writeFileSync(join(f.root, 'file.txt'), 'disk bytes');
       const checkout = await client.command('openCheckout', { root: f.root }),
         disk = await client.command('readFile', { checkout, path: 'file.txt' });
-      await client.command('persistRecovery', {
-        requestId: randomUUID(),
-        clientId: 'alice',
-        expectedRevision: 0,
-        state: draft('alice', checkout, 'dirty survives', disk),
-      });
+      await seed(client, 'alice', [
+        { target: { checkout, path: 'file.txt' }, text: 'dirty survives', disk },
+      ]);
       const sources = await client.command('inspectEntries', { checkout, paths: ['file.txt'] });
       const operation = {
         id: 'lost',
@@ -326,12 +292,10 @@ for (const kind of ['move', 'trash'] as const)
       const restarted = f.start();
       try {
         const recovered = await restarted.client.command('loadRecovery', { clientId: 'alice' });
-        assert.equal(recovered.state.drafts[0].text, 'dirty survives');
-        assert.deepEqual(recovered.state.drafts[0].disk, disk);
-        assert.equal(
-          recovered.state.drafts[0].target.path,
-          kind === 'move' ? 'moved.txt' : 'file.txt',
-        );
+        const [kept] = draftsOf(recovered.state);
+        assert.equal(kept?.text, 'dirty survives');
+        assert.deepEqual(kept?.disk, disk);
+        assert.equal(kept?.target.path, kind === 'move' ? 'moved.txt' : 'file.txt');
         // The host settles it from the disk: the object left its path (and reached a move's
         // destination), so it completed, and Trash keeps the draft where it was.
         assert.equal(recovered.operations[0].outcome, 'completed');
@@ -360,12 +324,9 @@ test('known native Trash keeps another client draft and deliberate replacement u
     writeFileSync(join(f.root, 'file.txt'), 'disk');
     const checkout = await f.client.command('openCheckout', { root: f.root }),
       disk = await f.client.command('readFile', { checkout, path: 'file.txt' });
-    await f.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'bob',
-      expectedRevision: 0,
-      state: draft('bob', checkout, 'bob survives trash', disk),
-    });
+    await seed(f.client, 'bob', [
+      { target: { checkout, path: 'file.txt' }, text: 'bob survives trash', disk },
+    ]);
     const sources = await f.client.command('inspectEntries', { checkout, paths: ['file.txt'] });
     const result = await f.client.command('mutate', {
       id: 'trash',
@@ -378,7 +339,7 @@ test('known native Trash keeps another client draft and deliberate replacement u
     assert(!existsSync(join(f.root, 'file.txt')));
     trashPath = result.items[0].message!.replace('macOS Trash: ', '');
     assert.equal(
-      (await f.client.command('loadRecovery', { clientId: 'bob' })).state.drafts[0].text,
+      draftsOf((await f.client.command('loadRecovery', { clientId: 'bob' })).state)[0]?.text,
       'bob survives trash',
     );
   } finally {
@@ -414,12 +375,9 @@ test('filesystem success followed by real SQLite publication failure stays obser
     writeFileSync(join(f.root, 'file.txt'), 'disk');
     const checkout = await client.command('openCheckout', { root: f.root });
     const disk = await client.command('readFile', { checkout, path: 'file.txt' });
-    await client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: 0,
-      state: draft('alice', checkout, 'retained dirty', disk),
-    });
+    await seed(client, 'alice', [
+      { target: { checkout, path: 'file.txt' }, text: 'retained dirty', disk },
+    ]);
     const sources = await client.command('inspectEntries', { checkout, paths: ['file.txt'] });
     const operation = {
       id: 'publication',
@@ -447,9 +405,11 @@ test('filesystem success followed by real SQLite publication failure stays obser
       lock.exec('ROLLBACK');
       lock.close();
     }
-    const recovered = await client.command('loadRecovery', { clientId: 'alice' });
-    assert.equal(recovered.state.drafts[0].target.path, 'moved.txt');
-    assert.equal(recovered.state.drafts[0].text, 'retained dirty');
+    const [recovered] = draftsOf(
+      (await client.command('loadRecovery', { clientId: 'alice' })).state,
+    );
+    assert.equal(recovered?.target.path, 'moved.txt');
+    assert.equal(recovered?.text, 'retained dirty');
     assert.equal((await client.command('mutate', operation)).outcome, 'completed');
     assert.equal(readFileSync(count, 'utf8'), 'called\n');
   } finally {
@@ -526,13 +486,7 @@ test('batch move reports partial success and explicit replacement revalidates th
     );
     assert.equal(readFileSync(join(f.root, 'target/first'), 'utf8'), 'first');
     assert.equal(readFileSync(join(f.root, 'second'), 'utf8'), 'second');
-    const load = await f.client.command('loadRecovery', { clientId: 'alice' });
-    await f.client.command('persistRecovery', {
-      requestId: randomUUID(),
-      clientId: 'alice',
-      expectedRevision: load.revision,
-      state: load.state,
-    });
+    await f.client.command('loadRecovery', { clientId: 'alice' });
     await f.client.command('acknowledgeOperation', {
       clientId: 'alice',
       operationClientId: 'alice',

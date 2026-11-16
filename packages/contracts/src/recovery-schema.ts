@@ -9,6 +9,7 @@ import {
   FilePositionsSchema,
   FileTextSchema,
   FileViewSchema,
+  OperationResultSchema,
   RecoveryCheckoutSchema,
   RecoveryTargetSchema,
   WorkspaceIdentifierSchema,
@@ -133,11 +134,19 @@ export const RecoveryOutlineSchema = struct({
 });
 
 const clientId = WorkspaceIdentifierSchema;
+/** A client's recovery as it loads, with draft text, and what needs its attention. */
+export const RecoveryLoadSchema = struct({
+  state: RecoveryStateSchema,
+  errors: array(Schema.String),
+  /** Operations in its checkouts it has not yet acknowledged. */
+  operations: array(OperationResultSchema),
+});
 /**
- * The recovery store's edits. Each applies to one client's recovery in order with that client's
- * other edits, returns once committed, and counts as that client's publication.
+ * The recovery store's commands: loading a client's recovery, and its edits. Each edit applies to
+ * one client's recovery in order with that client's other edits and returns once committed.
  */
-export const recoveryEditInputSchemas = {
+export const recoveryInputSchemas = {
+  loadRecovery: struct({ clientId }),
   /** Opens a buffer as a tab of its checkout; a buffer already open stays where it is now. */
   openTab: struct({ clientId, bufferId: BufferIdSchema, target: RecoveryTargetSchema }),
   /** Closes a buffer and its tab; one with a draft only with `discard`. */
@@ -149,13 +158,14 @@ export const recoveryEditInputSchemas = {
     text: FileTextSchema,
     disk: FileDocumentSchema,
   }),
-  /** Replaces everything but the buffers. */
+  /** Replaces everything but the buffers; a buffer the recovery no longer holds is left out. */
   updateLayout: struct({ clientId, layout: RecoveryLayoutSchema }),
 };
-export const recoveryEditOutputSchemas = {
+export const recoveryOutputSchemas = {
+  loadRecovery: RecoveryLoadSchema,
   openTab: voidResult,
   closeTab: voidResult,
   updateDraft: voidResult,
   updateLayout: voidResult,
-} satisfies Record<keyof typeof recoveryEditInputSchemas, Schema.Constraint>;
+} satisfies Record<keyof typeof recoveryInputSchemas, Schema.Constraint>;
 export const WatchRecoveryInputSchema = struct({ clientId });

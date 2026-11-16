@@ -33,6 +33,12 @@ export const workspaceWatch = (input: Parameters<WorkspaceService['Service']['wa
       service.watch(input).pipe(Stream.mapError(toWireError)),
     ),
   );
+export const recoveryWatch = (input: { clientId: string }) =>
+  Stream.unwrap(
+    Effect.map(WorkspaceService, (service) =>
+      service.watchRecovery(input).pipe(Stream.mapError(toWireError)),
+    ),
+  );
 
 // Connection failures become the legacy `ApplicationError` here, the one place they reach
 // clients and renderers, with the codes they have always had.

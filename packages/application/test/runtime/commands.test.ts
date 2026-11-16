@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
+import { emptyRecoveryState } from '@moonbase/contracts/recovery';
 import {
   ApplicationError,
-  emptyRecovery,
   type CheckoutTarget,
   type WorkspaceEvent,
 } from '@moonbase/contracts/workspace';
@@ -70,7 +70,7 @@ function fixture(
         return { text: input.path, version: String(counts.reads) };
       }),
     loadRecovery: ({ clientId }) =>
-      Effect.succeed({ revision: 0, state: emptyRecovery(clientId), errors: [], operations: [] }),
+      Effect.succeed({ state: emptyRecoveryState(clientId), errors: [], operations: [] }),
     saveFile: unavailable,
     listDirectory: unavailable,
     getIgnoredPaths: unavailable,
@@ -85,8 +85,6 @@ function fixture(
     mutate: unavailable,
     operationStatus: unavailable,
     acknowledgeOperation: unavailable,
-    persistRecovery: unavailable,
-    getRecoveryPublication: unavailable,
     openTab: unavailable,
     closeTab: unavailable,
     updateDraft: unavailable,
@@ -196,7 +194,10 @@ test('ending a view subscription disposes its listener without ending the servic
     await event;
     await stop();
     await runtime.runPromise(Effect.yieldNow);
-    assert.equal((await client.command('loadRecovery', { clientId: 'client' })).revision, 0);
+    assert.equal(
+      (await client.command('loadRecovery', { clientId: 'client' })).state.clientId,
+      'client',
+    );
   } finally {
     await stop();
     await runtime.dispose();

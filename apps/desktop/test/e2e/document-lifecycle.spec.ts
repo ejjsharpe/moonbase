@@ -3,6 +3,7 @@ import {
   prepareCrashRecovery,
   recoverCrashedWorkbench,
   recoveryState,
+  draftsOf,
 } from '../fixtures/editor-fixture.ts';
 import { callMainScript } from '../fixtures/window-ipc-fixture.ts';
 import type { RecoveryLoad } from '@moonbase/contracts/workspace';
@@ -76,7 +77,7 @@ for (const mode of ['reload', 'veto', 'crash'])
       await editor.pressSequentially('durable dirty text');
       const recovery = (): Promise<RecoveryLoad> => recoveryState(page);
       await expect
-        .poll(async () => (await recovery()).state.drafts[0]?.text)
+        .poll(async () => draftsOf((await recovery()).state)[0]?.text)
         .toBe('durable dirty text');
       const target = { checkout: (await recovery()).state.checkouts[0], path: 'a.ts' };
       // The document's watches, which run until it goes (an unpackaged main reports them).

@@ -2,9 +2,17 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createMoonbaseApplication, type MoonbaseApplication } from '@moonbase/application';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { emptyRecovery, type EditorClient, type CommandInput } from '@moonbase/contracts/workspace';
+import type { RecoveryState } from '@moonbase/contracts/recovery';
+import type { EditorClient } from '@moonbase/contracts/workspace';
 import type { EditorController, ClosePrompt } from '@moonbase/application/editor';
 import { fauxChat, editorCapabilities, checkout, target } from './application-fixture.ts';
+
+/** The drafts a recovery holds, as the file each is for and its text. */
+const draftsOf = (state: RecoveryState) =>
+  state.buffers.flatMap((b) => (b.draft ? [{ target: b.target, text: b.draft.text }] : []));
+/** The positions the recovery keeps for the open file at `path`. */
+const positionsOf = (state: RecoveryState, path: string) =>
+  state.views[checkout.checkoutId].positions[state.buffers.find((b) => b.target.path === path)!.id];
 
 async function tick() {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -74,7 +82,7 @@ for (const failure of ['once', 'always'] as const)
       await model.openCheckout(checkout.root);
       await model.open(target);
       await model.flush();
-      const publications = editor.memory.stats.publications;
+      const edits = editor.memory.stats.edits;
       let attempts = 0,
         notifications = 0;
       stopThrowing = model.subscribe(() => {
@@ -85,7 +93,8 @@ for (const failure of ['once', 'always'] as const)
       });
 
       assert.doesNotThrow(() => model.edit(target, 'Automatically preserved despite view failure'));
-      assert.equal(notifications, 1, 'later subscribers run synchronously');
+      assert(notifications > 0, 'later subscribers run synchronously');
+      assert.equal(notifications, attempts);
       assert.equal(model.getSnapshot().recoveryReady, false);
       assert.equal(app.canUnload(), false);
       for (let attempt = 0; attempt < 100 && !model.getSnapshot().recoveryReady; attempt++)
@@ -93,14 +102,13 @@ for (const failure of ['once', 'always'] as const)
 
       assert.equal(model.getSnapshot().recoveryReady, true);
       assert.equal(app.canUnload(), true);
-      assert(attempts > 1, 'subscriber remains installed during publication');
+      assert(attempts > 1, 'subscriber remains installed while the edit is sent');
       assert.equal(notifications, attempts);
-      assert.equal(editor.memory.stats.publications, publications + 1);
+      assert.equal(editor.memory.stats.edits, edits + 1);
       const saved = await editor.client.command('loadRecovery', { clientId: model.clientId });
-      assert.equal(saved.state.drafts.length, 1);
-      assert.deepEqual(saved.state.drafts[0].target, target);
-      assert.equal(saved.state.drafts[0].text, 'Automatically preserved despite view failure');
-      assert.equal(model.buffer(target)?.text, saved.state.drafts[0].text);
+      assert.deepEqual(draftsOf(saved.state), [
+        { target, text: 'Automatically preserved despite view failure' },
+      ]);
       assert.deepEqual(model.getSnapshot().errors, []);
     } finally {
       stopThrowing();
@@ -521,15 +529,16 @@ test('required startup failure joins real held cleanup and retains both safe fai
   const editor = editorCapabilities(),
     held = Promise.withResolvers<void>(),
     releasing = Promise.withResolvers<void>();
-  const state = emptyRecovery('one');
-  state.checkouts = [checkout];
-  state.openCheckoutIds = [checkout.checkoutId];
-  state.selectedCheckoutId = checkout.checkoutId;
-  await editor.client.command('persistRecovery', {
+  await editor.client.command('updateLayout', {
     clientId: 'one',
-    requestId: 'seed',
-    expectedRevision: 0,
-    state,
+    layout: {
+      checkouts: [checkout],
+      openCheckoutIds: [checkout.checkoutId],
+      selectedCheckoutId: checkout.checkoutId,
+      views: {},
+      recentFiles: [],
+      sidebarWidth: 270,
+    },
   });
   let releases = 0,
     settled = false;
@@ -606,7 +615,6 @@ test('prepared controllers block all IO and state admissions while teardown sett
       () => model.load(),
       () => model.openCheckout(checkout.root),
       () => model.selectCheckout(checkout),
-      () => model.resolveRecoveryPublication(),
       () => model.flush(),
       () => model.edit(target, 'late'),
       () => model.keepOpen(target),
@@ -788,16 +796,16 @@ for (const choice of ['discard', 'cancel'] as const)
         assert(app.editors.every((model) => model.getSnapshot().recoveryReady));
         await app.dispose();
         assert.deepEqual(
-          (await editor.client.command('loadRecovery', { clientId: 'one' })).state.drafts,
+          draftsOf((await editor.client.command('loadRecovery', { clientId: 'one' })).state),
           [],
         );
       } else {
         assert.equal(app.getSnapshot().phase, 'live');
         first.edit(target, 'accepted after veto');
         await first.flush();
-        assert.equal(
-          (await editor.client.command('loadRecovery', { clientId: 'one' })).state.drafts[0].text,
-          'accepted after veto',
+        assert.deepEqual(
+          draftsOf((await editor.client.command('loadRecovery', { clientId: 'one' })).state),
+          [{ target, text: 'accepted after veto' }],
         );
       }
     } finally {
@@ -835,9 +843,9 @@ test('a synchronous edit during the final editor notification vetoes stale Quit 
     assert.equal(model.buffer(target)?.text, 'accepted in final notification');
     off();
     await model.flush();
-    assert.equal(
-      (await editor.client.command('loadRecovery', { clientId: 'one' })).state.drafts[0].text,
-      'accepted in final notification',
+    assert.deepEqual(
+      draftsOf((await editor.client.command('loadRecovery', { clientId: 'one' })).state),
+      [{ target, text: 'accepted in final notification' }],
     );
   } finally {
     off();
@@ -954,8 +962,8 @@ test('Quit confirms clean view metadata captured by the final Discard notificati
     assert.equal(model.getSnapshot().recoveryReady, true);
     await app.dispose();
     const saved = await editor.client.command('loadRecovery', { clientId: 'one' });
-    assert.deepEqual(saved.state.drafts, []);
-    assert.deepEqual(saved.state.views[checkout.checkoutId].positions[target.path].file, {
+    assert.deepEqual(draftsOf(saved.state), []);
+    assert.deepEqual(positionsOf(saved.state, target.path).file, {
       line: 1,
       column: 7,
       top: 20,
@@ -968,24 +976,19 @@ test('Quit confirms clean view metadata captured by the final Discard notificati
   }
 });
 
-test('uncertain final Quit metadata keeps its original publication and vetoes until explicit resolution', async () => {
+test('a failed final layout edit vetoes Quit until a later flush keeps it', async () => {
   const editor = editorCapabilities();
   let positioned = false,
-    loseMetadata = true;
-  const publications: CommandInput<'persistRecovery'>[] = [];
+    loseLayout = true,
+    layouts = 0;
   const client: EditorClient = {
     ...editor.client,
     command: async (operation, input, options) => {
-      if (positioned && operation === 'persistRecovery') {
-        publications.push(structuredClone(input as CommandInput<'persistRecovery'>));
-        if (loseMetadata)
-          throw new ApplicationError({
-            code: 'Uncertain',
-            message: 'Controlled metadata response loss',
-          });
+      if (positioned && operation === 'updateLayout') {
+        layouts++;
+        if (loseLayout)
+          throw new ApplicationError({ code: 'Persistence', message: 'Controlled layout failure' });
       }
-      if (positioned && loseMetadata && operation === 'getRecoveryPublication')
-        return null as never;
       return editor.client.command(operation, input, options);
     },
   };
@@ -1010,19 +1013,16 @@ test('uncertain final Quit metadata keeps its original publication and vetoes un
     assert.equal(await quit, false);
     assert.equal(app.getSnapshot().phase, 'live');
     assert.equal(model.buffer(target)?.text, 'original');
-    assert.equal(publications.length, 1);
-    const original = publications[0];
-    assert.equal(model.getSnapshot().publication?.requestId, original.requestId);
-    assert.equal(await app.prepareQuit(), false);
-    assert.equal(publications.length, 1);
-    assert.equal(model.getSnapshot().publication?.requestId, original.requestId);
-    loseMetadata = false;
-    assert.equal(await model.resolveRecoveryPublication(), true);
-    assert.deepEqual(publications, [original, original]);
+    assert(layouts > 0);
+    assert.equal(model.getSnapshot().recoveryFailed, true);
+    assert.equal(model.getSnapshot().recoveryReady, false);
+    loseLayout = false;
+    await model.flush();
+    assert.equal(model.getSnapshot().recoveryFailed, false);
     assert.equal(model.getSnapshot().recoveryReady, true);
     const saved = await editor.client.command('loadRecovery', { clientId: 'one' });
-    assert.deepEqual(saved.state.drafts, []);
-    assert.deepEqual(saved.state.views[checkout.checkoutId].positions[target.path].file, {
+    assert.deepEqual(draftsOf(saved.state), []);
+    assert.deepEqual(positionsOf(saved.state, target.path).file, {
       line: 1,
       column: 7,
       top: 20,

@@ -5,18 +5,16 @@ import * as Schema from 'effect/Schema';
 import { fileURLToPath } from 'node:url';
 import {
   ApplicationError,
-  emptyRecovery,
-  type WorkspaceCommand,
   type CommandInput,
   type CommandOutput,
 } from '@moonbase/contracts/workspace';
 import {
   decodeWorkspaceInput,
   decodeWorkspaceOutput,
-  decodeEditorRecovery,
   decodeWorkspaceEvent,
   decodeWorkspaceWatchInput,
   isWorkspaceCommand,
+  type workspaceInputSchemas,
 } from '@moonbase/contracts/workspace-schema';
 import {
   decodeConnectionInput,
@@ -64,23 +62,8 @@ const result = {
   outcome: 'completed' as const,
   items: [{ source: target.path, destination: 'copy.txt', outcome: 'completed' as const }],
 };
-const state = {
-  ...emptyRecovery('client'),
-  checkouts: [checkout],
-  openCheckoutIds: [checkout.checkoutId],
-  selectedCheckoutId: checkout.checkoutId,
-  drafts: [{ target, text: 'draft', disk }],
-  views: {
-    [checkout.checkoutId]: {
-      openFiles: [target.path],
-      active: target.path,
-      preview: null,
-      fileViews: { [target.path]: 'file' as const },
-      positions: { [target.path]: { 'file:original': { line: 1, column: 1, top: 0, left: 0 } } },
-      tree: { expanded: [''], selected: [], focus: '', scroll: 0, hideIgnoredFiles: true },
-    },
-  },
-};
+/** The workspace's file commands (the recovery store's are in `recovery-schema`). */
+type FileCommand = keyof typeof workspaceInputSchemas;
 const inputs = {
   openCheckout: { root: checkout.root },
   readFile: target,
@@ -104,10 +87,7 @@ const inputs = {
   mutate: operation,
   operationStatus: { clientId: 'client', id: operation.id },
   acknowledgeOperation: { clientId: 'client', operationClientId: 'other', id: operation.id },
-  loadRecovery: { clientId: 'client' },
-  persistRecovery: { clientId: 'client', requestId: receipt.requestId, expectedRevision: 1, state },
-  getRecoveryPublication: { clientId: 'client', requestId: receipt.requestId },
-} satisfies { [K in WorkspaceCommand]: CommandInput<K> };
+} satisfies { [K in FileCommand]: CommandInput<K> };
 const outputs = {
   openCheckout: checkout,
   readFile: disk,
@@ -152,11 +132,8 @@ const outputs = {
   mutate: result,
   operationStatus: null,
   acknowledgeOperation: undefined,
-  loadRecovery: { revision: 1, state, errors: [], operations: [] },
-  persistRecovery: receipt,
-  getRecoveryPublication: null,
-} satisfies { [K in WorkspaceCommand]: CommandOutput<K> };
-for (const operation of Object.keys(inputs) as WorkspaceCommand[]) {
+} satisfies { [K in FileCommand]: CommandOutput<K> };
+for (const operation of Object.keys(inputs) as FileCommand[]) {
   test(`${operation} shared schema preserves known request and reply values`, () => {
     assert.deepEqual(decodeWorkspaceInput(operation, inputs[operation]), inputs[operation]);
     const expected =
@@ -188,69 +165,21 @@ for (const operation of Object.keys(inputs) as WorkspaceCommand[]) {
     );
   });
 }
-test('all saved objects reject unfamiliar nested fields before reply projection', () => {
-  const paths = [
-    [],
-    ['checkouts', 0],
-    ['drafts', 0],
-    ['drafts', 0, 'target'],
-    ['drafts', 0, 'disk'],
-    ['views', checkout.checkoutId],
-    ['views', checkout.checkoutId, 'tree'],
-    ['views', checkout.checkoutId, 'positions', target.path, 'file:original'],
-  ];
-  for (const path of paths) {
-    const unknown = structuredClone(state);
-    let object: unknown = unknown;
-    for (const key of path) object = Reflect.get(object as object, key);
-    Object.assign(object as object, { foreign: 'preserve original' });
-    const bytes = JSON.stringify(unknown);
-    assert.throws(() => decodeEditorRecovery(unknown));
-    assert.throws(() =>
-      decodeWorkspaceInput('persistRecovery', { ...inputs.persistRecovery, state: unknown }),
-    );
-    assert.throws(() =>
-      decodeWorkspaceOutput('loadRecovery', { ...outputs.loadRecovery, state: unknown }),
-    );
-    assert.equal(JSON.stringify(unknown), bytes);
-  }
-  assert.deepEqual(decodeEditorRecovery(state), state);
-});
-test('reply projection, dynamic keys, optional omission and mutable DTOs remain supported', () => {
-  const decoded = decodeEditorRecovery(state);
-  decoded.drafts.push({ target, text: '', disk });
-  decoded.views['another'] = structuredClone(state.views[checkout.checkoutId]);
-  decoded.views[checkout.checkoutId].fileViews['another.txt'] = 'staged';
-  decoded.views[checkout.checkoutId].positions['another.txt'] = {};
-  delete decoded.views['another'];
-  decoded.views[checkout.checkoutId].positions[target.path].file = {
-    line: 2,
-    column: 3,
-    left: 0,
-    top: 4,
-  };
-  assert.equal(decoded.drafts.length, 2);
-  assert.equal(state.drafts.length, 1);
+test('reply projection and optional omission remain supported', () => {
   assert.deepEqual(
     decodeWorkspaceInput('listDirectory', { checkout, path: '', hideIgnored: undefined }),
     { checkout, path: '' },
   );
   assert.deepEqual(decodeWorkspaceOutput('readFile', { ...disk, private: 'hidden' }), disk);
-  const proto = JSON.parse('{"__proto__":"file","constructor":"file"}');
-  const special = structuredClone(state);
-  special.views[checkout.checkoutId].fileViews = proto;
-  assert.deepEqual(decodeEditorRecovery(special).views[checkout.checkoutId].fileViews, proto);
 });
-test('file bytes, finite values, identity grammars and collection bounds retain distinct policies', () => {
+test('file bytes, identity grammars and collection bounds retain distinct policies', () => {
   for (const text of ['', '\ufeff', '😀'.repeat(524288)])
     assert.equal(decodeWorkspaceInput('saveFile', { ...inputs.saveFile, text }).text, text);
   for (const text of ['\0', '\ud800', '😀'.repeat(524289)])
     assert.throws(() => decodeWorkspaceInput('saveFile', { ...inputs.saveFile, text }));
-  for (const bad of [-1, 1.1, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1])
-    assert.throws(() =>
-      decodeWorkspaceInput('persistRecovery', { ...inputs.persistRecovery, expectedRevision: bad }),
-    );
-  assert.throws(() => decodeWorkspaceInput('loadRecovery', { clientId: 'chat:identity' }));
+  assert.throws(() =>
+    decodeWorkspaceInput('operationStatus', { clientId: 'chat:identity', id: operation.id }),
+  );
   assert.deepEqual(decodeConnectionInput('connect', { profileId: 'chat:identity' }), {
     profileId: 'chat:identity',
   });
@@ -274,13 +203,6 @@ test('file bytes, finite values, identity grammars and collection bounds retain 
   // Saved targets from before `vcs` existed decode as Git checkouts.
   const { vcs: _, ...saved } = checkout;
   assert.deepEqual(decodeWorkspaceOutput('openCheckout', saved), checkout);
-  assert.deepEqual(
-    decodeEditorRecovery({ ...state, checkouts: [saved], drafts: [], recentFiles: [] }).checkouts,
-    [checkout],
-  );
-  assert.throws(() =>
-    decodeEditorRecovery({ ...state, drafts: Array.from({ length: 513 }, () => state.drafts[0]) }),
-  );
   for (const value of ['constructor', '__proto__', 'unknown', 1, null]) {
     assert.equal(isWorkspaceCommand(value), false);
     assert.equal(isConnectionCommand(value), false);
@@ -291,29 +213,6 @@ test('file bytes, finite values, identity grammars and collection bounds retain 
     paths: [],
     ready: true,
   });
-});
-test('a recovery state names only its own checkouts, once each, with exact relative paths', () => {
-  const view = state.views[checkout.checkoutId];
-  const other = { ...checkout, root: '/elsewhere' };
-  assert.deepEqual(decodeEditorRecovery(state), state);
-  for (const bad of [
-    { ...state, checkouts: [checkout, checkout] },
-    { ...state, openCheckoutIds: [checkout.checkoutId, checkout.checkoutId] },
-    { ...state, openCheckoutIds: ['missing'], selectedCheckoutId: null },
-    { ...state, selectedCheckoutId: 'missing' },
-    { ...state, views: { missing: view } },
-    { ...state, drafts: [state.drafts[0], state.drafts[0]] },
-    { ...state, drafts: [{ ...state.drafts[0], target: { ...target, checkout: other } }] },
-    { ...state, recentFiles: [{ ...target, path: '../outside' }] },
-    { ...state, views: { [checkout.checkoutId]: { ...view, active: 'closed.txt' } } },
-    { ...state, views: { [checkout.checkoutId]: { ...view, openFiles: ['.git/config'] } } },
-    { ...state, sidebarWidth: 99 },
-    { ...state, checkouts: [{ ...checkout, root: 'relative' }], drafts: [] },
-  ])
-    assert.throws(() => decodeEditorRecovery(bad));
-  assert.throws(() =>
-    decodeWorkspaceInput('persistRecovery', { ...inputs.persistRecovery, clientId: 'other' }),
-  );
 });
 const host = { hostId: 'host', storeId: 'store' };
 const health = {
