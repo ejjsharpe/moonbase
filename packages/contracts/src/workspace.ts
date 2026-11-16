@@ -2,8 +2,7 @@
 export const maximumFileBytes = 2 * 1024 * 1024;
 import type * as Contracts from './workspace-schema.ts';
 import type { ApplicationError } from './errors.ts';
-import type { CommandOptions, ObservationClose } from './common.ts';
-import type { RecoveryCommands, RecoveryOutline } from './recovery.ts';
+import type { RecoveryCommands } from './recovery.ts';
 export type { RecoveryLoad } from './recovery.ts';
 export { ApplicationError, type ApplicationErrorCode } from './errors.ts';
 export type { CommandOptions, ObservationClose } from './common.ts';
@@ -41,21 +40,3 @@ export type WorkspaceCommands = {
 export type WorkspaceCommand = keyof WorkspaceCommands;
 export type CommandInput<K extends WorkspaceCommand> = WorkspaceCommands[K]['input'];
 export type CommandOutput<K extends WorkspaceCommand> = WorkspaceCommands[K]['output'];
-export interface EditorClient {
-  command<K extends WorkspaceCommand>(
-    operation: K,
-    input: CommandInput<K>,
-    options?: CommandOptions,
-  ): Promise<CommandOutput<K>>;
-  watch(
-    input: { checkout: CheckoutTarget; paths: string[] },
-    receive: (event: WorkspaceEvent) => void,
-    onError: (error: ApplicationError) => void,
-  ): ObservationClose;
-  /** A client's recovery without draft text, then again each time that changes. */
-  watchRecovery(
-    input: { clientId: string },
-    receive: (outline: RecoveryOutline) => void,
-    onError: (error: ApplicationError) => void,
-  ): ObservationClose;
-}
