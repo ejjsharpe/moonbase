@@ -685,7 +685,7 @@ if (!packaged)
       );
       expect(draftsOf((await recovery(next.page)).state)).toEqual([]);
       expect((await f.stats()).commands.filter((v) => v === 'stopChat')).toHaveLength(1);
-      await stop(next.app, true);
+      await stop(next.app);
       current = undefined;
     } finally {
       if (current) await stop(current, true);
