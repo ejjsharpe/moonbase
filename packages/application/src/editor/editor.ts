@@ -362,8 +362,8 @@ class EditorModelState {
   }
   report = (error: unknown) => {
     if (this.closing || this.discovery.isObsoleteReadError(error)) return;
-    // A string is a note of the editor's or its view's own; any other failure shows only an
-    // `ApplicationError`'s message. Host text is never passed as a string, so it never shows.
+    // A string is shown as it is, so callers pass only their own notes as strings (never host
+    // text); any other failure shows only an `ApplicationError`'s message, or fixed text.
     const message = typeof error === 'string' ? error : normalizeApplicationError(error).message;
     this.errors = [...this.errors.slice(-19), message];
     this.emit();
