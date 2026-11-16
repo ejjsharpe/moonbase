@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:mock": "MOONBASE_DEV_MOCK=1 node scripts/dev.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "bun check --no-script -p tsconfig.json",
     "lint": "oxlint .",
     "test": "node --experimental-strip-types --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} test/*.test.ts test/macos/*.test.ts",
     "test:linux": "node --experimental-strip-types --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} test/*.test.ts",

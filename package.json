@@ -13,8 +13,8 @@
     "build": "nx run-many -t build",
     "check:foundation": "node scripts/check-foundation.mjs",
     "check:changed": "node scripts/check-changed.mjs",
-    "test:editor-integration": "tsc --noEmit -p test/editor-workspace/tsconfig.json && node packages/workspace/scripts/build-native.mjs && bun test --timeout 60000 ./test/editor-workspace",
-    "test:chat-integration": "tsc --noEmit -p test/chat/tsconfig.json && node --experimental-strip-types --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} test/chat/*.test.ts",
+    "test:editor-integration": "bun check --no-script -p test/editor-workspace/tsconfig.json && node packages/workspace/scripts/build-native.mjs && bun test --timeout 60000 ./test/editor-workspace",
+    "test:chat-integration": "bun check --no-script -p test/chat/tsconfig.json && node --experimental-strip-types --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} test/chat/*.test.ts",
     "lint:fix": "bun run lint --fix --ignore-pattern \"packages/ui/**\"",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check ."

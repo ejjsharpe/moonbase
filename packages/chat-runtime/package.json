@@ -10,8 +10,8 @@
     "./claude-code": "./src/claude-code.ts"
   },
   "scripts": {
-    "build": "tsc --noEmit -p tsconfig.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "bun check --no-script -p tsconfig.json",
+    "typecheck": "bun check --no-script -p tsconfig.json",
     "lint": "oxlint .",
     "test": "bun test --timeout 60000 --parallel=${MOONBASE_TEST_WORKERS:-4} ./test",
     "test:linux": "bun test --timeout 60000 --parallel=${MOONBASE_TEST_WORKERS:-4} --path-ignore-patterns='test/macos/**' ./test",
