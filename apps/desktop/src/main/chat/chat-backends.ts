@@ -1,100 +1,68 @@
-import type { NativeTranscriptActions } from './transcript-native.ts';
-import { toWireError } from '@moonbase/contracts/workspace-host-errors';
 import { randomUUID } from 'node:crypto';
-import { Effect, type ManagedRuntime } from 'effect';
+import { Cause, Effect, Exit } from 'effect';
+import { toWireError } from '@moonbase/contracts/workspace-host-errors';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { toChatApplicationError } from '@moonbase/contracts/chat-legacy-errors';
 import type {
+  ChatServiceShape,
+  ConnectionServiceShape,
   LocalHostServiceError,
+  ProviderSetupService,
   ProviderSetupServiceError,
 } from '@moonbase/contracts/services';
-import type { ChatClient } from '@moonbase/contracts/chat';
-import type { ConnectionClient } from '@moonbase/contracts/connection';
-import { bindChatClient, bindProviderSetupClient } from '@moonbase/application/chat/clients';
-import { runApplicationEffect } from '@moonbase/application/chat/promises';
+import type { ChatSession } from '@moonbase/contracts/chat';
 import type { DaemonChat, LocalDaemonClient } from '../daemon/local-daemon-client.ts';
 import type { ChatConfiguration } from './config.ts';
-import { ChatIpcSession } from './session.ts';
 import type { ChatTargetId, DesktopChatTarget } from '../../ipc/chat-rpcs.ts';
 import type { RequestIds } from '../request-ids.ts';
 
 /** A remote host's daemon in host mode, over its SSH connection. */
 export type RemoteChat = {
   configuration: ChatConfiguration;
-  chat: ChatClient;
-  connection: ConnectionClient;
+  chat: ChatServiceShape;
+  connection: ConnectionServiceShape;
   providers: DaemonChat['providers'];
   folders: DaemonChat['folders'];
 };
+/** What a chat target's requests reach: its chat, provider setup and, for a remote host, connection. */
+export type ChatTargetClients = {
+  chat: ChatServiceShape;
+  context: ChatSession;
+  providers: ProviderSetupService['Service'];
+  connection: ConnectionServiceShape | null;
+};
 
-export function createChatBackends({
-  runtime,
+// Folder and provider setup errors reach the renderer as the legacy error with its code (CL-22).
+const legacy = <A>(effect: Effect.Effect<A, LocalHostServiceError | ProviderSetupServiceError>) =>
+  Effect.mapError(effect, toChatApplicationError);
+
+export type ChatBackendsOptions = {
+  /** The local daemon, found or started on demand. */
+  local: Pick<LocalDaemonClient, 'get' | 'peek'>;
+  remote?: RemoteChat | null;
+  readonly pickFolder: Effect.Effect<string | null>;
+  /** The identity this profile's workspace store has to the daemon. */
+  installationId: string;
+  /** Lets the editor open a checkout the daemon made for a chat. */
+  adoptCheckout?(checkout: CheckoutTarget): void;
+  /** Request IDs of chat operations left unknown, kept across reloads and restarts. */
+  requestIds: RequestIds;
+};
+
+/**
+ * The window's chat targets: the local daemon, reached on demand, and the configured remote host.
+ * What a document holds of them (provider sign-ins, image URLs, Copies) is its own; see
+ * `makeChatDocument`.
+ */
+export function makeChatBackends({
   local,
   remote = null,
   pickFolder,
   installationId,
   adoptCheckout = () => {},
-  transcript,
-  reportCleanup,
   requestIds,
-}: {
-  runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>;
-  /** The local daemon, found or started on demand; local chat is installed once it is reached. */
-  local: Pick<LocalDaemonClient, 'get' | 'peek'>;
-  remote?: RemoteChat | null;
-  pickFolder(): Promise<string | null>;
-  /** The identity this profile's workspace store has to the daemon. */
-  installationId: string;
-  /** Lets the editor open a checkout the daemon made for a chat. */
-  adoptCheckout?(checkout: CheckoutTarget): void;
-  transcript?: NativeTranscriptActions;
-  /** Reports a cleanup failure no request is left to answer with. */
-  reportCleanup?(error: unknown): void;
-  /** Request IDs of chat operations left unknown, kept across reloads and restarts. */
-  requestIds: RequestIds;
-}) {
-  const sessions = new Map<ChatTargetId, ChatIpcSession>();
-  /** Worktree creations for the current document; replacing the document cancels them. */
-  const worktreeCreations = new Set<AbortController>();
-  let documentId = randomUUID();
-  // Folder and provider setup errors reach the renderer as the legacy error with its code (CL-22).
-  const run = <A>(effect: Effect.Effect<A, LocalHostServiceError | ProviderSetupServiceError>) =>
-    runApplicationEffect(runtime, effect.pipe(Effect.mapError(toChatApplicationError)));
-  const installChatSessions = () => {
-    const backend = local.peek();
-    if (backend && !sessions.has('local'))
-      sessions.set(
-        'local',
-        new ChatIpcSession(
-          bindChatClient(runtime, backend.chat),
-          { mode: 'local' },
-          backend.session,
-          {
-            transcript,
-            reportCleanup,
-            providers: bindProviderSetupClient(runtime, backend.providers, documentId),
-          },
-        ),
-      );
-    // A remote host sets up its own providers; its folders are its approved roots, which a
-    // chat names directly, so main grants nothing for it.
-    if (remote && !sessions.has('remote'))
-      sessions.set(
-        'remote',
-        new ChatIpcSession(
-          remote.chat,
-          { mode: 'remote', connection: remote.connection },
-          remote.configuration.context,
-          {
-            transcript,
-            reportCleanup,
-            providers: bindProviderSetupClient(runtime, remote.providers, documentId),
-          },
-        ),
-      );
-  };
-  installChatSessions();
+}: ChatBackendsOptions) {
   const targets: DesktopChatTarget[] = [
     { id: 'local', label: 'Local', mode: 'local' },
     ...(remote
@@ -112,65 +80,62 @@ export function createChatBackends({
    * reload or a restart asks for the first outcome. The ID is kept only while the outcome is
    * unknown (`Uncertain`, or cancelled); an answer, a refusal included, is final.
    */
-  const withRequestId = async <A>(key: string, send: (requestId: string) => Promise<A>) => {
-    const requestId = requestIds.get(key) ?? randomUUID();
-    requestIds.put(key, requestId);
-    try {
-      const output = await send(requestId);
-      requestIds.delete(key);
-      return output;
-    } catch (error) {
-      if (!ApplicationError.is(error) || !['Uncertain', 'Cancelled'].includes(error.code))
-        requestIds.delete(key);
-      throw error;
-    }
-  };
-  /** The local daemon's clients, finding or starting it, with local chat installed. */
-  const reachLocal = async (): Promise<DaemonChat> => {
-    const backend = await local.get();
-    installChatSessions();
-    return backend;
-  };
-  const releaseChatDocument = async () => {
-    const owner = documentId;
-    for (const creation of worktreeCreations) creation.abort();
-    worktreeCreations.clear();
-    const closing = [...sessions.values()].map((session) => run(session.dispose));
-    sessions.clear();
-    documentId = randomUUID();
-    installChatSessions();
-    const results = await Promise.allSettled([
-      ...closing,
-      ...(local.peek() ? [run(local.peek()!.providers.releaseOwner(owner))] : []),
-      // A remote host may be disconnected or unreachable; it drops an owner it hasn't heard
-      // from in 30 minutes, so releasing it there is best effort.
-      ...(remote ? [run(remote.providers.releaseOwner(owner)).catch(() => {})] : []),
-    ]);
-    const failure = results.find((result) => result.status === 'rejected');
-    if (failure?.status === 'rejected') throw failure.reason;
-  };
+  const withRequestId = <A>(
+    key: string,
+    send: (requestId: string) => Effect.Effect<A, ApplicationError>,
+  ) =>
+    Effect.suspend(() => {
+      const requestId = requestIds.get(key) ?? randomUUID();
+      requestIds.put(key, requestId);
+      return send(requestId).pipe(
+        Effect.onExit((exit) =>
+          Effect.sync(() => {
+            if (Exit.isSuccess(exit)) return requestIds.delete(key);
+            const error = Cause.findErrorOption(exit.cause);
+            const unknown =
+              error._tag === 'None'
+                ? Cause.hasInterrupts(exit.cause)
+                : ['Uncertain', 'Cancelled'].includes(error.value.code);
+            if (!unknown) requestIds.delete(key);
+          }),
+        ),
+      );
+    });
 
   return {
-    getTargets: () => targets,
-    getSession: (backendId: ChatTargetId) => {
-      // The daemon may have been reached for files before local chat asked for it.
-      installChatSessions();
-      return sessions.get(backendId);
-    },
-    getSessions: () =>
-      [...sessions.values()].map((session) => ({ dispose: () => run(session.dispose) })),
-    findTranscriptImage: (token: string) =>
-      [...sessions.values()].map((session) => session.findImage(token)).find(Boolean),
-    async getContext(backendId: ChatTargetId) {
-      if (backendId === 'local') return (await reachLocal()).session;
-      return remote!.configuration.context;
-    },
-    async chooseFolder() {
-      const owner = documentId;
-      const backend = await reachLocal();
-      const selection = await pickFolder();
-      if (owner !== documentId || !selection) return null;
-      const { path } = await run(
+    targets,
+    /** The target's clients: the local daemon's once it has been reached, and the remote host's. */
+    findTarget: (backendId: ChatTargetId): Effect.Effect<ChatTargetClients | undefined> =>
+      backendId === 'remote'
+        ? Effect.succeed(
+            remote
+              ? {
+                  chat: remote.chat,
+                  context: remote.configuration.context,
+                  providers: remote.providers,
+                  connection: remote.connection,
+                }
+              : undefined,
+          )
+        : Effect.map(
+            local.peek,
+            (backend) =>
+              backend && {
+                chat: backend.chat,
+                context: backend.session,
+                providers: backend.providers,
+                connection: null,
+              },
+          ),
+    getContext: (backendId: ChatTargetId) =>
+      backendId === 'local'
+        ? Effect.map(local.get, (backend) => backend.session)
+        : Effect.succeed(remote!.configuration.context),
+    chooseFolder: Effect.gen(function* () {
+      const backend = yield* local.get;
+      const selection = yield* pickFolder;
+      if (!selection) return null;
+      const { path } = yield* legacy(
         backend.folders.approveFolder({
           host: backend.session.host,
           requestId: randomUUID(),
@@ -178,67 +143,55 @@ export function createChatBackends({
         }),
       );
       return path;
-    },
+    }),
     /**
      * Local chat's folders the native picker approved before, still the same directories, newest
      * first; or a remote host's approved roots and their folders, which it offers in place of a
      * picker for its disk.
      */
-    async recentFolders(backendId: ChatTargetId = 'local') {
-      if (backendId === 'remote') {
-        if (!remote) return [];
-        const { host } = remote.configuration.context;
-        return (await run(remote.folders.listHostFolders({ host }))).folders;
-      }
-      const backend = local.peek();
-      if (!backend) return [];
-      return (await run(backend.folders.listRecentFolders({ host: backend.session.host }))).folders;
-    },
+    recentFolders: (backendId: ChatTargetId = 'local') =>
+      Effect.gen(function* () {
+        if (backendId === 'remote') {
+          if (!remote) return [];
+          const { host } = remote.configuration.context;
+          return (yield* legacy(remote.folders.listHostFolders({ host }))).folders;
+        }
+        const backend = yield* local.peek;
+        if (!backend) return [];
+        return (yield* legacy(backend.folders.listRecentFolders({ host: backend.session.host })))
+          .folders;
+      }),
     /**
      * Starts a new local chat's worktree from a folder the daemon lets local chat use: it derives
      * the location and makes the worktree, which it opens as a checkout, so the chat may use it and
      * the editor may then open it. `requestId` is the renderer's for this new chat's send in a
      * worktree, kept until it learns the outcome, so a repeat after a lost reply gets the first
-     * worktree and another chat never does.
+     * worktree and another chat never does. A request its document's release interrupts leaves
+     * the worktree on disk but offers it to no document.
      */
-    async createWorktree(root: string, branch: string, requestId: string) {
-      const owner = documentId,
-        creation = new AbortController();
-      worktreeCreations.add(creation);
-      try {
-        const backend = await reachLocal();
-        await run(backend.folders.checkApprovedFolder({ host: backend.session.host, path: root }));
-        const created = await runApplicationEffect(
-          runtime,
-          backend.workspace
-            .createChatWorktree({ installationId, requestId, root, branch })
-            .pipe(Effect.mapError(toWireError)),
-          { signal: creation.signal },
+    createWorktree: (root: string, branch: string, requestId: string) =>
+      Effect.gen(function* () {
+        const backend = yield* local.get;
+        yield* legacy(
+          backend.folders.checkApprovedFolder({ host: backend.session.host, path: root }),
         );
-        // A replaced document's worktree is left on disk but not offered to the new document.
-        if (owner !== documentId)
-          throw new ApplicationError({
-            code: 'Cancelled',
-            message: 'The window reloaded while the worktree was created.',
-          });
-        adoptCheckout(created);
+        const created = yield* backend.workspace
+          .createChatWorktree({ installationId, requestId, root, branch })
+          .pipe(Effect.mapError(toWireError));
+        yield* Effect.sync(() => adoptCheckout(created));
         return created.root;
-      } finally {
-        worktreeCreations.delete(creation);
-      }
-    },
+      }),
     /**
      * Opens a local chat without a project's folder as a project where it is, so nothing moves and
      * the agent keeps working in the same place, then lists the chat under that project. The daemon
      * does both steps as one operation.
      */
-    async turnIntoProject(conversationId: string) {
-      const owner = documentId;
-      const backend = await reachLocal();
-      const created = await withRequestId(
-        JSON.stringify(['turnChatIntoProject', conversationId]),
-        (requestId) =>
-          run(
+    turnIntoProject: (conversationId: string) =>
+      Effect.gen(function* () {
+        const backend = yield* local.get;
+        const created = yield* withRequestId(
+          JSON.stringify(['turnChatIntoProject', conversationId]),
+          (requestId) =>
             backend.workspace
               .turnChatIntoProject({
                 installationId,
@@ -246,17 +199,27 @@ export function createChatBackends({
                 target: { ...backend.session, conversationId },
               })
               .pipe(Effect.mapError(toWireError)),
-          ),
-      );
-      if (owner !== documentId)
-        throw new ApplicationError({
-          code: 'Cancelled',
-          message: 'The window reloaded while the project was opened.',
-        });
-      adoptCheckout(created);
-      return created.root;
-    },
-    releaseDocument: releaseChatDocument,
+        );
+        yield* Effect.sync(() => adoptCheckout(created));
+        return created.root;
+      }),
+    /**
+     * Releases what a document's provider setup holds on each target. A remote host may be
+     * disconnected or unreachable; it drops an owner it hasn't heard from in 30 minutes, so
+     * releasing it there is best effort.
+     */
+    releaseOwner: (ownerId: string) =>
+      Effect.gen(function* () {
+        const backend = yield* local.peek;
+        const [released] = yield* Effect.all(
+          [
+            Effect.exit(backend ? legacy(backend.providers.releaseOwner(ownerId)) : Effect.void),
+            remote ? Effect.ignore(remote.providers.releaseOwner(ownerId)) : Effect.void,
+          ],
+          { concurrency: 'unbounded' },
+        );
+        return yield* released;
+      }),
   };
 }
-export type DesktopChatBackends = ReturnType<typeof createChatBackends>;
+export type ChatBackends = ReturnType<typeof makeChatBackends>;

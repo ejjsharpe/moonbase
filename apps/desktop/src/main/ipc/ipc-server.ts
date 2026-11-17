@@ -1,4 +1,4 @@
-import { Deferred, Effect, Exit, FiberSet, Layer, Scope } from 'effect';
+import { Context, Deferred, Effect, Exit, Layer, Scope, SynchronizedRef } from 'effect';
 import { RpcSerialization, RpcServer, type Rpc, type RpcGroup } from 'effect/rpc';
 import * as NetAddress from 'effect/net/NetAddress';
 import type * as Socket from 'effect/socket/Socket';
@@ -18,27 +18,30 @@ type Document = {
   /** The RPC server's handler for each connection, once it has started. */
   serve: Deferred.Deferred<(socket: Socket.Socket) => Effect.Effect<unknown, unknown>>;
 };
+/** The window's document, if it has connected; none once the server is closed. */
+type ServerState = { _tag: 'Open'; document?: Document } | { _tag: 'Closed' };
 
 /**
  * The window's IPC: each port main hands its document is one RPC connection to the document's
  * server, which holds what the document's requests acquire. Releasing the document closes its
- * connections and interrupts its requests, then a new document starts with none.
+ * connections and interrupts its requests, then a new document starts with none. Closing the
+ * scope releases the document and refuses every later connection.
  */
 export const makeIpcServer = (handlers: DocumentHandlers) =>
   Effect.gen(function* () {
-    const root = yield* Effect.scope;
-    const fibers = yield* FiberSet.make();
-    const run = yield* FiberSet.runtime(fibers)();
-    let current: Document | undefined;
-    let closed = false;
+    // Documents close after the server stops taking connections, which the finalizer below does.
+    const documents = yield* Scope.fork(yield* Effect.scope, 'parallel');
+    const state = yield* SynchronizedRef.make<ServerState>({ _tag: 'Open' });
+    yield* Effect.addFinalizer(() => SynchronizedRef.set(state, { _tag: 'Closed' }));
 
-    const startDocument = (): Document => {
-      const scope = Scope.forkUnsafe(root, 'parallel');
-      const document: Document = { scope, connections: 0, serve: Deferred.makeUnsafe() };
+    const startDocument = Effect.gen(function* () {
+      const scope = yield* Scope.fork(documents, 'parallel');
+      const serve = yield* Deferred.make<
+        (socket: Socket.Socket) => Effect.Effect<unknown, unknown>
+      >();
       const socketServer = SocketServer.SocketServer.of({
         address: NetAddress.inetAddressFromIpStringUnsafe('127.0.0.1', 0),
-        run: (handler) =>
-          Effect.andThen(Deferred.succeed(document.serve, handler as never), Effect.never),
+        run: (handler) => Effect.andThen(Deferred.succeed(serve, handler as never), Effect.never),
       });
       const server = RpcServer.layer(DesktopRpcs, {
         disableFatalDefects: true,
@@ -54,19 +57,28 @@ export const makeIpcServer = (handlers: DocumentHandlers) =>
           ),
         ]),
       );
-      run(
-        Layer.buildWithScope(server, scope).pipe(
-          Effect.catchCause((cause) =>
-            Effect.andThen(
-              Effect.logError('The IPC server could not start.', cause),
-              Scope.close(scope, Exit.void),
-            ),
+      yield* Layer.buildWithScope(server, scope).pipe(
+        Effect.catchCause((cause) =>
+          Effect.andThen(
+            Effect.logError('The IPC server could not start.', cause),
+            Scope.close(scope, Exit.void),
           ),
         ),
+        Effect.forkIn(scope),
       );
-      return document;
-    };
+      return { scope, serve, connections: 0 } satisfies Document;
+    });
 
+    /** Gives back `document`'s place, if it is still the window's. */
+    const leave = (document: Document) =>
+      SynchronizedRef.update(state, (current): ServerState =>
+        current._tag === 'Open' && current.document?.scope === document.scope
+          ? {
+              _tag: 'Open',
+              document: { ...current.document, connections: current.document.connections - 1 },
+            }
+          : current,
+      );
     /** One connection of `document`, served until either side closes it or the document ends. */
     const serve = (document: Document, port: MessagePortLike) =>
       Effect.gen(function* () {
@@ -74,52 +86,45 @@ export const makeIpcServer = (handlers: DocumentHandlers) =>
         const socket = yield* makePortSocket(Effect.succeed(port));
         yield* Effect.scoped(handler(socket));
       }).pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            document.connections--;
-            port.close();
-          }),
-        ),
         Effect.ignore,
-        Effect.forkIn(document.scope),
+        Effect.interruptible,
+        Effect.ensuring(Effect.andThen(Effect.sync(() => port.close()), leave(document))),
+        // Started uninterruptible, so a document closed at once still closes the port.
+        Effect.forkIn(document.scope, { uninterruptible: true }),
       );
-
-    yield* Effect.addFinalizer(() =>
-      Effect.suspend(() => {
-        closed = true;
-        const document = current;
-        current = undefined;
-        return document ? Scope.close(document.scope, Exit.void) : Effect.void;
-      }),
-    );
 
     return {
       /**
        * Serves `port` for the current document, starting one if needed; refuses it (false) past
-       * `ipcLimits.connections` or once disposed. Synchronous, so a check and its reservation are
-       * one step.
+       * `ipcLimits.connections` or once closed. The check and its reservation are one step.
        */
-      connect(port: MessagePortLike): boolean {
-        if (closed) return false;
-        const document = (current ??= startDocument());
-        if (document.connections >= ipcLimits.connections) return false;
-        document.connections++;
-        run(serve(document, port));
-        return true;
-      },
+      connect: (port: MessagePortLike) =>
+        SynchronizedRef.modifyEffect(state, (current) =>
+          Effect.gen(function* () {
+            if (current._tag === 'Closed') return [false, current] as const;
+            const document = current.document ?? (yield* startDocument);
+            if (document.connections >= ipcLimits.connections)
+              return [false, { _tag: 'Open', document }] as const;
+            yield* serve(document, port);
+            return [
+              true,
+              { _tag: 'Open', document: { ...document, connections: document.connections + 1 } },
+            ] as const;
+          }),
+        ),
       /** Ends the current document's connections and what its requests hold. */
-      releaseDocument: Effect.suspend(() => {
-        const document = current;
-        current = undefined;
-        return document ? Scope.close(document.scope, Exit.void) : Effect.void;
-      }),
-      /** Releases the current document and refuses every later connection. */
-      dispose: Effect.suspend(() => {
-        closed = true;
-        const document = current;
-        current = undefined;
-        return document ? Scope.close(document.scope, Exit.void) : Effect.void;
-      }),
+      releaseDocument: Effect.flatMap(
+        SynchronizedRef.modify(
+          state,
+          (current): readonly [Document | undefined, ServerState] =>
+            current._tag === 'Open' ? [current.document, { _tag: 'Open' }] : [undefined, current],
+        ),
+        (document) => (document ? Scope.close(document.scope, Exit.void) : Effect.void),
+      ),
     };
   });
-export type IpcServer = Effect.Success<ReturnType<typeof makeIpcServer>>;
+/** The window's IPC server. */
+export class IpcServer extends Context.Service<
+  IpcServer,
+  Effect.Success<ReturnType<typeof makeIpcServer>>
+>()('moonbase/desktop/IpcServer') {}

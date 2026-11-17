@@ -1,235 +1,162 @@
-import { normalizeApplicationError } from '@moonbase/effect';
 import { randomUUID } from 'node:crypto';
-import type { App, BrowserWindow, Dialog } from 'electron';
-import type { ApplicationError } from '@moonbase/contracts/errors';
-import type { DesktopChatBackends } from './chat/chat-backends.ts';
+import type { BrowserWindow } from 'electron';
+import {
+  Cause,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  FiberSet,
+  PubSub,
+  SubscriptionRef,
+} from 'effect';
+import { ApplicationError } from '@moonbase/contracts/errors';
 import { boundApplicationError } from '../ipc/ipc-errors.ts';
 import type { WindowAction } from '../ipc/window-rpcs.ts';
+import * as WindowState from './window-state.ts';
 
-/** What the window's document answers a `quit` or `dispose` request with. */
-export type QuitAnswer = { id: string; consent: boolean; cleanupError?: ApplicationError };
+export type { QuitAnswer } from './window-state.ts';
+
+/** A failure's message, as Quit and the log report it. */
+export const describeCause = (cause: Cause.Cause<unknown>) =>
+  Cause.prettyErrors(cause)
+    .map((error) => error.message)
+    .join('\n');
+/** A cleanup failure as the document hears of it. */
+const toApplicationError = (cause: Cause.Cause<unknown>) => {
+  const error = Cause.squash(cause);
+  return ApplicationError.is(error)
+    ? error
+    : new ApplicationError({ code: 'Unavailable', message: describeCause(cause) });
+};
 
 /**
- * The window's Quit handshake and document lifetime: it asks the document to prepare Quit and to
- * dispose (`sendAction`), releases a replaced document's IPC (`ipc`) and chat sessions, and quits
- * once every owner is released.
+ * The window's Quit handshake and its document's readiness: it asks the document to prepare Quit
+ * and to dispose, reports cleanup failures to it, and says when Quit may release everything.
  */
-export function installWindowLifecycle({
-  app,
-  window,
-  dialog,
-  sendAction,
-  ipc,
-  chatBackends,
-  releaseRoot,
-  releaseTransport,
-}: {
-  app: Pick<App, 'on' | 'quit' | 'exit'>;
-  window: BrowserWindow;
-  dialog: Pick<Dialog, 'showMessageBox'>;
-  /** Delivers an action to the documents watching for them. */
-  sendAction(action: WindowAction): void;
-  /** The window's IPC: a document's connections and what they hold, then all of it. */
-  ipc: { releaseDocument(): Promise<void>; dispose(): Promise<void> };
-  chatBackends: Pick<DesktopChatBackends, 'getSessions' | 'releaseDocument'>;
-  releaseRoot(): Promise<void>;
-  releaseTransport(): void;
-}) {
-  let documentId = randomUUID();
-  const backgroundFailures: unknown[] = [];
-  /**
-   * The latest document cleanup failures, as sent: each watch hears of them all again, since one
-   * that ended may have missed them, and the document takes each id once.
-   */
-  const failureReports: Extract<WindowAction, { action: 'cleanup-error' }>[] = [];
-  const pendingCleanup = new Set<Promise<void>>();
-  const reportCleanup = (cleanup: Promise<void>) => {
-    const reported = cleanup.catch((error) => {
-      if (backgroundFailures.length < 8) backgroundFailures.push(error);
-      const report = {
-        action: 'cleanup-error' as const,
-        id: randomUUID(),
-        error: boundApplicationError(normalizeApplicationError(error)),
-      };
-      failureReports.push(report);
-      if (failureReports.length > 64) failureReports.shift();
-      if (rendererReady && !window.isDestroyed()) sendAction(report);
-      console.error('Document cleanup failed:', normalizeApplicationError(error).message);
-    });
-    pendingCleanup.add(reported);
-    void reported.then(() => pendingCleanup.delete(reported));
-  };
-  let quit: { id: string; stage: 'preserve' | 'dispose' } | undefined,
-    exiting = false,
-    rendererReady = false,
-    quitRequested = false,
-    terminating = false;
-  function show() {
-    if (!window.isDestroyed()) {
+export class WindowLifecycle extends Context.Service<
+  WindowLifecycle,
+  {
+    readonly state: SubscriptionRef.SubscriptionRef<WindowState.WindowState>;
+    /** What main asks of the document; each document watching for actions hears them. */
+    readonly actions: PubSub.PubSub<WindowAction>;
+    readonly show: Effect.Effect<void>;
+    readonly requestQuit: Effect.Effect<void>;
+    readonly markReady: Effect.Effect<void>;
+    answerQuit(answer: WindowState.QuitAnswer): Effect.Effect<void>;
+    /** Another document replaced the window's. */
+    readonly replaceDocument: Effect.Effect<void>;
+    /** The renderer crashed; false once Moonbase is closing. */
+    readonly crashDocument: Effect.Effect<boolean>;
+    /** The user recovers a crashed workbench; false once Moonbase is closing. */
+    readonly recoverDocument: Effect.Effect<boolean>;
+    /** Quits without asking the document. */
+    readonly finishQuit: Effect.Effect<void>;
+    /** Runs a document's release, whose failure is reported; Quit waits for it. */
+    runCleanup(release: Effect.Effect<unknown, unknown>): Effect.Effect<void>;
+    reportCleanup(cause: Cause.Cause<unknown>): Effect.Effect<void>;
+    /** Whether Quit is under way, when no new native work starts. */
+    readonly isQuitting: Effect.Effect<boolean>;
+    /** Whether Quit is releasing everything. */
+    readonly isClosing: Effect.Effect<boolean>;
+    /** Waits for Quit, then for the document releases under way. */
+    readonly awaitQuit: Effect.Effect<void>;
+  }
+>()('moonbase/desktop/WindowLifecycle') {}
+
+export type WindowLifecycleOptions = {
+  window: Pick<BrowserWindow, 'isDestroyed' | 'show' | 'focus'>;
+  /** Hands an action to the documents watching; an unpackaged test entry may hold or reorder it. */
+  deliver?(action: WindowAction, publish: (action: WindowAction) => void): void;
+};
+
+export const makeWindowLifecycle = ({ window, deliver }: WindowLifecycleOptions) =>
+  Effect.gen(function* () {
+    const state = yield* SubscriptionRef.make(WindowState.initialWindowState);
+    const actions = yield* PubSub.unbounded<WindowAction>();
+    const quit = yield* Deferred.make<void>();
+    const cleanups = yield* FiberSet.make();
+    const show = Effect.sync(() => {
+      if (window.isDestroyed()) return;
       window.show();
       window.focus();
-    }
-  }
-  async function finishQuit() {
-    if (terminating) return;
-    terminating = true;
-    rendererReady = false;
-    await Promise.all(pendingCleanup);
-    const failures: unknown[] = backgroundFailures.splice(0);
-    for (const cleanup of [
-      ...chatBackends.getSessions().map((session) => () => session.dispose()),
-      () => ipc.dispose(),
-      releaseRoot,
-    ]) {
-      try {
-        await cleanup();
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-    try {
-      if (failures.length) {
-        const detail = failures.map((error) => normalizeApplicationError(error).message).join('\n');
-        console.error('Quit cleanup failed:', detail);
-        await dialog.showMessageBox(window, {
-          type: 'error',
-          message: 'Moonbase could not finish cleanup.',
-          detail:
-            'Preserved recovery remains available on next launch. Moonbase will now quit.\n' +
-            detail,
-          buttons: ['Quit Moonbase'],
-        });
-      }
-    } finally {
-      exiting = true;
-      releaseTransport();
-      window.destroy();
-      if (failures.length) app.exit(1);
-      else app.quit();
-    }
-  }
-  function requestQuit() {
-    if (terminating) return;
-    quitRequested = true;
-    show();
-    if (!rendererReady) return;
-    if (!quit) {
-      quit = { id: randomUUID(), stage: 'preserve' };
-      sendAction({ action: 'quit', id: quit.id });
-    }
-  }
-  /**
-   * The document watches for actions: it is ready for Quit and to hear of cleanup failures. A
-   * watch that replaced one whose connection ended may have missed the pending request, so it is
-   * asked again; the document takes each request once.
-   */
-  function markReady() {
-    rendererReady = true;
-    for (const report of failureReports) sendAction(report);
-    if (quit) sendAction({ action: quit.stage === 'preserve' ? 'quit' : 'dispose', id: quit.id });
-    else if (quitRequested) requestQuit();
-  }
-  async function answerQuit(answer: QuitAnswer) {
-    const owner = documentId,
-      intent = quit;
-    try {
-      if (!quit || answer.id !== quit.id) return;
-      if (answer.cleanupError !== undefined) {
-        if (quit.stage !== 'dispose') {
-          quit = undefined;
-          show();
-          console.error('Quit failed: a cleanup failure answers only disposal.');
-          return;
-        }
-        if (backgroundFailures.length < 8) backgroundFailures.push(answer.cleanupError);
-      }
-      if (quit.stage === 'dispose' && !answer.consent) {
-        console.error('Invalid disposal answer: disposal cannot return to the live workbench.');
-        return;
-      }
-      if (!answer.consent) {
-        quit = undefined;
-        quitRequested = false;
-        show();
-        return;
-      }
-      // Local agents keep running in the daemon, so Quit asks nothing more of them.
-      if (quit.stage === 'preserve') {
-        quit = { id: randomUUID(), stage: 'dispose' };
-        sendAction({ action: 'dispose', id: quit.id });
-        return;
-      }
-      await finishQuit();
-    } catch (error) {
-      if (owner !== documentId || intent !== quit) return;
-      if (quit?.stage === 'dispose') {
-        console.error('Invalid disposal acknowledgment:', normalizeApplicationError(error).message);
-        return;
-      }
-      quit = undefined;
-      show();
-      console.error('Quit failed:', normalizeApplicationError(error).message);
-    }
-  }
-  window.on('close', (event) => {
-    if (!exiting) {
-      event.preventDefault();
-      window.hide();
-    }
-  });
-  window.webContents.on('did-frame-navigate', (_event, _url, _code, _status, isMainFrame) => {
-    if (!isMainFrame) return;
-    documentId = randomUUID();
-    rendererReady = false;
-    // A replacement document must prepare its own application before acknowledging Quit.
-    quit = undefined;
-    reportCleanup(ipc.releaseDocument());
-    reportCleanup(chatBackends.releaseDocument());
-  });
-  window.webContents.on('render-process-gone', async (_event, details) => {
-    if (terminating || exiting) return;
-    documentId = randomUUID();
-    reportCleanup(ipc.releaseDocument());
-    reportCleanup(chatBackends.releaseDocument());
-    rendererReady = false;
-    quit = undefined;
-    quitRequested = false;
-    console.error('Workbench renderer exited:', details.reason);
-    const owner = documentId;
-    const recovery = await dialog.showMessageBox(window, {
-      type: 'error',
-      message: 'The workbench stopped unexpectedly.',
-      detail:
-        'Recover the workbench from its last persisted state, or quit. Recent changes may not have been preserved.',
-      buttons: ['Recover workbench', 'Quit Moonbase'],
-      defaultId: 0,
-      cancelId: 1,
-      noLink: true,
     });
-    if (owner !== documentId || terminating || exiting) return;
-    if (recovery.response === 0) {
-      quitRequested = false;
-      show();
-      window.webContents.reload();
-    } else await finishQuit();
+    const publish = (action: WindowAction) => void PubSub.publishUnsafe(actions, action);
+    /** Moves the state in one step, then does what the move asks. */
+    const transition = (
+      move: (current: WindowState.WindowState) => readonly [
+        WindowState.WindowEffects,
+        WindowState.WindowState,
+      ],
+    ) =>
+      Effect.flatMap(
+        SubscriptionRef.modify(state, (current) => move(current)),
+        (effects) =>
+          Effect.gen(function* () {
+            if (effects.log) yield* Effect.logError(effects.log);
+            if (effects.show) yield* show;
+            if (effects.send?.length && !window.isDestroyed())
+              yield* Effect.sync(() => {
+                for (const action of effects.send!)
+                  if (deliver) deliver(action, publish);
+                  else publish(action);
+              });
+            if (effects.finish) yield* Deferred.succeed(quit, undefined);
+          }),
+      );
+    const reportCleanup = (cause: Cause.Cause<unknown>) =>
+      Effect.andThen(
+        Effect.logError('Document cleanup failed:', describeCause(cause)),
+        transition((current) =>
+          WindowState.reportCleanup(current, {
+            action: 'cleanup-error',
+            id: randomUUID(),
+            error: boundApplicationError(toApplicationError(cause)),
+          }),
+        ),
+      );
+    const phase = Effect.map(SubscriptionRef.get(state), (current) => current.phase._tag);
+    return WindowLifecycle.of({
+      state,
+      actions,
+      show,
+      requestQuit: transition((current) => WindowState.requestQuit(current, randomUUID())),
+      markReady: transition((current) => WindowState.markReady(current, randomUUID())),
+      answerQuit: (answer) =>
+        transition((current) => WindowState.answerQuit(current, answer, randomUUID())),
+      replaceDocument: transition(WindowState.replaceDocument),
+      crashDocument: SubscriptionRef.modify(state, (current) => {
+        const [, next] = WindowState.crashDocument(current);
+        return [current.phase._tag !== 'Closing', next];
+      }),
+      recoverDocument: SubscriptionRef.modify(
+        state,
+        (current): readonly [boolean, WindowState.WindowState] =>
+          current.phase._tag === 'Closing'
+            ? [false, current]
+            : [true, { ...current, phase: { _tag: 'Open', quitRequested: false } }],
+      ),
+      finishQuit: transition(WindowState.finishQuit),
+      runCleanup: (release) =>
+        FiberSet.run(
+          cleanups,
+          Effect.onExit(release, (exit) =>
+            Exit.isFailure(exit) ? reportCleanup(exit.cause) : Effect.void,
+          ).pipe(Effect.ignore),
+        ).pipe(Effect.asVoid),
+      reportCleanup,
+      isQuitting: Effect.map(SubscriptionRef.get(state), WindowState.isQuitting),
+      isClosing: Effect.map(phase, (tag) => tag === 'Closing'),
+      awaitQuit: Effect.andThen(Deferred.await(quit), FiberSet.awaitEmpty(cleanups)),
+    });
   });
-  app.on('before-quit', (event) => {
-    if (!exiting) {
-      event.preventDefault();
-      requestQuit();
-    }
-  });
-  app.on('activate', show);
-  app.on('second-instance', show);
 
-  window.once('ready-to-show', show);
-  return {
-    show,
-    requestQuit,
-    reportCleanup,
-    markReady,
-    answerQuit,
-    isQuitting: () => !!quit || terminating,
-  };
-}
-export type WindowLifecycle = ReturnType<typeof installWindowLifecycle>;
+/** The window lifecycle's failures to report on Quit, with those of releasing everything. */
+export const collectQuitFailures = (
+  lifecycle: WindowLifecycle['Service'],
+  closed: Exit.Exit<unknown, unknown>,
+): Effect.Effect<string[]> =>
+  Effect.map(SubscriptionRef.get(lifecycle.state), ({ failures }) => [
+    ...failures.map((error) => error.message),
+    ...(Exit.isFailure(closed) ? [describeCause(closed.cause)] : []),
+  ]);

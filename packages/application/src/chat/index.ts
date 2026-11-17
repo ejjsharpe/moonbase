@@ -14,7 +14,14 @@ export type { ActiveChat, ChatActivityGroups, ChatActivityReason } from './activ
 export { ChatFileSearch, type ChatFileSearchSnapshot } from './file-search.ts';
 export { type ProviderSetupController, type ProviderSetupSnapshot } from './provider-setup.ts';
 
-export { iterateTranscriptSource, makeTranscriptReader } from './transcript/transcript-read.ts';
+export {
+  checkTranscriptReply,
+  countDecodedTranscriptBytes,
+  iterateTranscriptSource,
+  makeTranscriptFailure,
+  makeTranscriptReader,
+  trackTranscriptCursor,
+} from './transcript/transcript-read.ts';
 export type { TranscriptRead, TranscriptChunk } from './transcript/transcript-read.ts';
 export { TranscriptViewMemory } from './transcript/transcript-view-memory.ts';
 export type { TranscriptView, TranscriptViewAnchor } from './transcript/transcript-view-memory.ts';
