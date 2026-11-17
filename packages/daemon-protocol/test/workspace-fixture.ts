@@ -14,8 +14,8 @@ import {
   WorkspaceUnavailableError,
 } from '@moonbase/contracts/workspace-host-errors';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
-import { RemoteWorkspaceHostLive } from '../src/remote-workspace.ts';
-import { serveChat, type ChatServerOptions } from '../src/server.ts';
+import { RemoteWorkspaceHostLive } from '../src/client/remote-workspace.ts';
+import { serveChat, type ChatServerOptions } from '../src/server/server.ts';
 import { controlledChat, host, nonce } from './controlled-chat-fixture.ts';
 import { refusingDaemon } from './served-services.ts';
 

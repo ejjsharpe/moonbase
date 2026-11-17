@@ -17,10 +17,10 @@ import {
   type ChatServiceShape,
   type WorkspaceHostServiceShape,
 } from '@moonbase/contracts/services';
-import { serveChat } from '../src/server.ts';
+import { serveChat } from '../src/server/server.ts';
 import { checkHostHealth, healthDomain, requestUpgradeNonce } from '../src/health.ts';
 import { upgradeProtocols } from '../src/upgrade-proof.ts';
-import { DaemonRpcLinkLive, EndpointConnectionLive, RemoteChatLive } from '../src/remote.ts';
+import { DaemonRpcLinkLive, EndpointConnectionLive, RemoteChatLive } from '../src/client/remote.ts';
 import { controlledChat, host, nonce as randomNonce, target } from './controlled-chat-fixture.ts';
 import { refusingDaemon } from './served-services.ts';
 import { until } from './runtime-fixture.ts';

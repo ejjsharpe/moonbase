@@ -11,10 +11,10 @@ import {
 } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
-import { DaemonRpcLinkLive, RemoteChatLive, RemoteLocalHostLive } from '../src/remote.ts';
-import { serveChat } from '../src/server.ts';
+import { DaemonRpcLinkLive, RemoteChatLive, RemoteLocalHostLive } from '../src/client/remote.ts';
+import { serveChat } from '../src/server/server.ts';
 import { refusingDaemon } from './served-services.ts';
-import * as P from '../src/protocol.ts';
+import * as P from '../src/client/protocol.ts';
 import { nonce } from './controlled-chat-fixture.ts';
 import { fixture as runtimeFixture, session, until } from './runtime-fixture.ts';
 import { chatProtocolVersion } from '@moonbase/contracts/host';

@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./remote": "./src/remote.ts",
-    "./server": "./src/server.ts",
-    "./loopback": "./src/loopback.ts",
+    "./remote": "./src/client/remote.ts",
+    "./server": "./src/server/server.ts",
+    "./loopback": "./src/client/loopback.ts",
     "./health": "./src/health.ts"
   },
   "scripts": {

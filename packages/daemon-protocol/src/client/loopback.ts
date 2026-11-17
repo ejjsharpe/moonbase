@@ -7,7 +7,7 @@ import type { ChatHostHealth } from '@moonbase/contracts/host';
 import { ConnectionService, type ConnectionServiceShape } from '@moonbase/contracts/services';
 import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
 import { isSameChatHost } from '@moonbase/contracts/chat-validation';
-import { checkHostHealth } from './health.ts';
+import { checkHostHealth } from '../health.ts';
 import { readDaemonFiles, readDaemonIdentity } from './loopback-files.ts';
 
 export type LoopbackConnectionConfiguration = {

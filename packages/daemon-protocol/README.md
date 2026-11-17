@@ -2,6 +2,8 @@
 
 `@moonbase/daemon-protocol` is the daemon's wire protocol, shared by the daemon and every client: the signed health route, Effect RPC for chat, folders, control and provider setup (`/v3/rpc`), the workspace's own Effect RPC socket (`/v3/workspace`), their server, and the client-side services over them. It needs no chat engine or file host: the server receives the chat, folder, provider setup and file host services, and clients get the contracts services back. Folder approval policy belongs to the [daemon](../../apps/daemon/README.md).
 
+The source splits by side: `src/server/` is the daemon's listener and handlers, `src/client/` the links, remote services and connections, and `src/` what both use (the signed health check and the upgrade proof). Electron main bundles only `src/client/` and `src/`, which the desktop build checks.
+
 | Export | Role |
 | --- | --- |
 | `./server` | `serveChat(config, services, options?)`: the daemon's 127.0.0.1 listener in either mode, serving RPC at `/v3/rpc`, signed health at `/v1/health` and, given `options.workspace` (a file host's `WorkspaceHostServiceShape`), the workspace socket at `/v3/workspace`; `options.admit` is called for each request, watch and authenticated health probe (it refuses by throwing, or returns what ends the admission once the answer settles, even after the connection closes) and `options.trackWorkspaceConnection` while each workspace connection is open, and `options.closeMs` bounds how long closing the server waits for the mutations it still runs (`onCloseTimeout` past it); `localDaemonCapabilities` / `hostDaemonCapabilities` are what each mode advertises |

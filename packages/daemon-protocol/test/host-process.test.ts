@@ -13,7 +13,7 @@ import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import { ConnectionService } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
-import { DaemonRpcLinkLive, RemoteChatLive } from '../src/remote.ts';
+import { DaemonRpcLinkLive, RemoteChatLive } from '../src/client/remote.ts';
 import { createRequire } from 'node:module';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
 
@@ -228,7 +228,7 @@ test('compiled remote entry runs on Electron against the separate production hos
     import {Effect,Layer,ManagedRuntime,Stream} from 'effect';
     import { ConnectionService, LocalHostService } from '@moonbase/contracts/services';
     import {makeChatClient} from '@moonbase/application/runtime/clients';
-    import {DaemonRpcLinkLive,RemoteChatLive} from './src/remote.ts';
+    import {DaemonRpcLinkLive,RemoteChatLive} from './src/client/remote.ts';
     async function main(){
       const config=JSON.parse(readFileSync(process.argv[2],'utf8'));
       const unavailable=()=>Effect.die('No implicit connection command');

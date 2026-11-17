@@ -30,8 +30,8 @@ import {
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { LocalHostLive, LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { ProviderSetupLive, localProviderIds } from '@moonbase/chat-runtime/providers';
-import { DaemonRpcLinkLive, RemoteChatLive, RemoteDaemonLive } from '../src/remote.ts';
-import { localDaemonCapabilities, serveChat } from '../src/server.ts';
+import { DaemonRpcLinkLive, RemoteChatLive, RemoteDaemonLive } from '../src/client/remote.ts';
+import { localDaemonCapabilities, serveChat } from '../src/server/server.ts';
 import { hooked, hookedProviders, refusingDaemon } from './served-services.ts';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
 

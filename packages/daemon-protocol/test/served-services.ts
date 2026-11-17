@@ -5,7 +5,7 @@ import type {
   LocalHostHandlers,
   ProviderSetupService,
 } from '@moonbase/contracts/services';
-import type { ChatServerServices } from '../src/server.ts';
+import type { ChatServerServices } from '../src/server/server.ts';
 import { chatHostCapabilities } from '@moonbase/contracts/host';
 
 /** Hooks a test runs around each served operation: before it (with its signal) and after it. */

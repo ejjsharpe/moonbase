@@ -3,7 +3,7 @@ import { Effect, Layer, Stream } from 'effect';
 import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import type { HostVerificationError } from '@moonbase/contracts/connection-errors';
 import { ConnectionService, type ChatHostEndpoint } from '@moonbase/contracts/services';
-import { checkHostHealth } from './health.ts';
+import { checkHostHealth } from '../health.ts';
 
 /**
  * A `ConnectionService` for one known endpoint, checked once when built: for a process that
