@@ -1,5 +1,17 @@
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Queue, Stream, type Scope } from 'effect';
-import { createServer, type Server, type AddressInfo } from 'node:net';
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  FiberMap,
+  Layer,
+  Option,
+  Ref,
+  Schedule,
+  Scope,
+  Stream,
+  SubscriptionRef,
+} from 'effect';
 import { randomUUID } from 'node:crypto';
 import { CancelledError } from '@moonbase/contracts/errors';
 import {
@@ -10,46 +22,57 @@ import {
 } from '@moonbase/contracts/connection-errors';
 import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import type { ChatHostHealth } from '@moonbase/contracts/host';
-import { releaseResource } from '@moonbase/effect';
 import {
   ConnectionService,
   type ChatHostEndpoint,
   type ConnectionServiceShape,
 } from '@moonbase/contracts/services';
-import { defaultSshStopTiming, SshProcess, type SshStopTiming } from './process.ts';
 import {
-  defaultSshExecutable,
-  type DecodedSshConfiguration,
-  type SshConfiguration,
-} from './configuration.ts';
+  defaultSshStopTiming,
+  startSshProcess,
+  type SshProcess,
+  type SshStopTiming,
+} from './process.ts';
+import { refusedPolicy, sshOptions } from './ssh-policy.ts';
+import { reserveLoopbackPort } from './loopback-port.ts';
+import { defaultSshExecutable, type SshConfiguration } from './configuration.ts';
 
 /** What an SSH connection fails with. */
 type SshFailure = ConnectionError | HostVerificationError | CancelledError;
 const error = (reason: ConnectionErrorReason) => new ConnectionError({ reason });
 // While the forward comes up, its health route may not answer or may drop its reply.
 const retriedVerification = new Set<HostVerificationReason>(['unreachable', 'read-failed']);
+const verificationPause = '50 millis';
+const maximumObservers = 64;
 const cancelled = () => new CancelledError({ operation: 'SSH connection' });
-const ensure: (condition: unknown, reason: ConnectionErrorReason) => asserts condition = (
-  condition,
-  reason,
-) => {
-  if (!condition) throw error(reason);
-};
-const command = <A>(run: () => A): Effect.Effect<A, ConnectionError> =>
-  Effect.try({
-    try: run,
-    catch: (e) => (e instanceof ConnectionError ? e : error('invalid-command')),
-  });
+
+/** One connection attempt and what it started. A connect after it ended starts the next. */
 type Generation = {
-  id: string;
-  ready: Deferred.Deferred<ConnectionSnapshot, SshFailure>;
-  fiber?: Fiber.Fiber<void, SshFailure>;
-  processes: Set<SshProcess>;
-  forward?: SshProcess;
-  origin?: string;
-  health?: ChatHostHealth;
-  reason?: 'disconnect' | 'cancel' | 'root';
+  readonly id: string;
+  /** Owns the generation's processes; closed once they are stopped. */
+  readonly scope: Scope.Closeable;
+  /** Settles every Connect that waits on this generation. */
+  readonly ready: Deferred.Deferred<ConnectionSnapshot, SshFailure>;
+  /** What the generation started, stopped again by a release after one that failed. */
+  readonly processes: SshProcess[];
 };
+/** A verified forward: the only source of the privileged endpoint. */
+type Verified = {
+  readonly origin: string;
+  readonly health: ChatHostHealth;
+  readonly forward: SshProcess;
+};
+/** What a Connect found: a generation to wait on, or why it may not start one. */
+type Admission =
+  | { readonly generation: Generation; readonly verified?: Verified }
+  | { readonly refused: 'releasing' };
+type ConnectionState = {
+  readonly snapshot: ConnectionSnapshot;
+  /** The generation being started, connected, or released; at most one at a time. */
+  readonly generation?: Generation;
+  readonly verified?: Verified;
+};
+
 export type SshOptions = {
   /**
    * Checks the chat host's signed health on the forwarded port. The consumer supplies the
@@ -63,9 +86,12 @@ export type SshOptions = {
   /** How long stopping an owned process group may take; tests shorten it. */
   stopTiming?: Partial<SshStopTiming>;
 };
+
 /**
  * Root-scoped capability only. The consumer composes the process runtime and shared handlers, and
- * decodes the configuration where it reads it (`decodeSshConfiguration`).
+ * decodes the configuration where it reads it (`decodeSshConfiguration`). The connection's state
+ * is a `SubscriptionRef` (`watch` is its changes), each attempt a fiber in a `FiberMap` keyed by
+ * its generation, and each generation a child Scope of the layer's.
  */
 export function SshLive(input: SshConfiguration, options: SshOptions) {
   return Layer.effect(
@@ -74,438 +100,279 @@ export function SshLive(input: SshConfiguration, options: SshOptions) {
       // Process groups are POSIX; on any other platform this layer is a defect, not an outcome.
       if (process.platform === 'win32') return yield* Effect.die(error('platform'));
       const config = { ...input, sshExecutable: input.sshExecutable ?? defaultSshExecutable },
-        scope = yield* Effect.scope;
-      const owner = yield* Effect.acquireRelease(
-        Effect.sync(
-          () =>
-            new Connection(config, scope, options.verify, options.startupMs ?? 20_000, {
-              ...defaultSshStopTiming,
-              ...options.stopTiming,
-            }),
-        ),
-        (c) => c.dispose(),
-      );
-      return owner.service;
-    }),
-  );
-}
-class Connection {
-  readonly config: DecodedSshConfiguration;
-  readonly scope: Scope.Scope;
-  readonly service: ConnectionServiceShape;
-  private state: ConnectionSnapshot;
-  private current: Generation | undefined;
-  private readonly generations = new Set<Generation>();
-  private readonly observers = new Set<Queue.Queue<ConnectionSnapshot, Cause.Done>>();
-  private closed = false;
-  readonly startupMs: number;
-  readonly stopTiming: SshStopTiming;
-  readonly verify: SshOptions['verify'];
-  constructor(
-    config: DecodedSshConfiguration,
-    scope: Scope.Scope,
-    verify: SshOptions['verify'],
-    startupMs: number,
-    stopTiming: SshStopTiming,
-  ) {
-    this.config = config;
-    this.verify = verify;
-    this.startupMs = startupMs;
-    this.stopTiming = stopTiming;
-    this.scope = scope;
-    this.state = { profile: config.profile, state: 'disconnected', connectionId: null };
-    this.service = {
-      getConnection: () =>
-        command(() => {
-          this.open();
-          return this.snapshot();
-        }),
-      connect: ({ profileId }) =>
-        Effect.flatMap(
-          command(() => {
-            ensure(profileId === config.profile.id, 'wrong-profile');
-            this.open();
-          }),
-          () => this.connect(),
-        ),
-      disconnect: ({ connectionId }) =>
-        Effect.flatMap(
-          command(() => this.open()),
-          () => this.disconnect(connectionId),
-        ),
-      endpoint: ({ host }) =>
-        command(() => {
-          this.open();
-          if (
-            host.hostId !== config.profile.expected.hostId ||
-            host.storeId !== config.profile.expected.storeId
-          )
-            throw error('host-mismatch');
-          const g = this.current;
-          if (!g?.origin || !g.health || g.forward?.exited || this.state.state !== 'connected')
-            throw error('not-verified');
-          return structuredClone({
-            origin: g.origin,
-            token: config.token,
-            expected: config.profile.expected,
-            connectionId: g.id,
-            health: g.health,
-          });
-        }),
-      watch: () => this.watch(),
-    };
-  }
-  private open() {
-    if (this.closed) throw error('closed');
-  }
-  private snapshot() {
-    return structuredClone(this.state);
-  }
-  private publish(state: ConnectionSnapshot) {
-    this.state = state;
-    for (const q of this.observers) Queue.offerUnsafe(q, this.snapshot());
-  }
-  private watch() {
-    // oxlint-disable-next-line no-this-alias -- The Effect generator retains the connection owner.
-    const self = this;
-    return Stream.unwrap(
-      Effect.gen(function* () {
-        const q = yield* Queue.sliding<ConnectionSnapshot, Cause.Done>(1);
-        yield* Effect.acquireRelease(
-          command(() => {
-            self.open();
-            if (self.observers.size >= 64) throw error('observer-limit');
-            self.observers.add(q);
-            Queue.offerUnsafe(q, self.snapshot());
-            return q;
-          }),
-          (queue) =>
-            releaseResource(() => {
-              self.observers.delete(queue);
-              Queue.endUnsafe(queue);
-            }),
-        );
-        return Stream.fromQueue(q);
-      }),
-    );
-  }
-  private connect(): Effect.Effect<ConnectionSnapshot, SshFailure> {
-    // oxlint-disable-next-line no-this-alias -- The Effect generator retains the connection owner.
-    const self = this;
-    return Effect.uninterruptibleMask((restore) =>
-      Effect.gen(function* () {
-        let g = self.current;
-        if (g && self.state.state !== 'connecting' && self.state.state !== 'connected')
-          return yield* Effect.fail(error('releasing'));
-        if (!g) {
-          g = { id: randomUUID(), ready: Deferred.makeUnsafe(), processes: new Set() };
-          self.current = g;
-          self.generations.add(g);
-          self.publish({ profile: self.config.profile, state: 'connecting', connectionId: g.id });
-          g.fiber = yield* Effect.forkIn(self.attempt(g), self.scope);
-        }
-        if (g.forward?.exited) return yield* Effect.fail(error('generation-exited'));
-        const captured = g;
-        return yield* restore(Deferred.await(captured.ready)).pipe(
-          Effect.map((value) => structuredClone(value)),
-          Effect.onInterrupt(() => self.cancelConnecting(captured)),
-        );
-      }),
-    );
-  }
-  private cancelConnecting(g: Generation) {
-    return Effect.suspend(() => {
-      if (this.current !== g || this.state.state !== 'connecting') return Effect.void;
-      g.reason = 'cancel';
-      this.publish({ profile: this.config.profile, state: 'disconnecting', connectionId: g.id });
-      return this.release(g);
-    });
-  }
-  private disconnect(id: string) {
-    return Effect.suspend(() => {
-      const g = this.current;
-      if (!g) return Effect.void;
-      if (g.id !== id) return Effect.fail(error('stale-generation'));
-      g.reason = 'disconnect';
-      this.publish({ profile: this.config.profile, state: 'disconnecting', connectionId: g.id });
-      return this.release(g);
-    });
-  }
-  private release(g: Generation) {
-    // oxlint-disable-next-line no-this-alias -- The Effect generator retains the connection owner.
-    const self = this;
-    return Effect.uninterruptible(
-      Effect.gen(function* () {
-        const interrupted = g.fiber && g.fiber.pollUnsafe() === undefined;
-        if (g.fiber) yield* Fiber.interrupt(g.fiber);
-        const exit = g.fiber?.pollUnsafe();
-        // An interrupted attempt already spent its release budget; retry only on a later explicit release.
-        if (
-          interrupted &&
-          exit &&
-          Exit.isFailure(exit) &&
-          exit.cause.reasons.some(Cause.isDieReason)
-        )
-          return yield* Effect.failCause(exit.cause).pipe(Effect.orDie);
-        const cleanup = yield* Effect.exit(
-          releaseResource(async () => {
-            await Promise.all([...g.processes].map((child) => child.stop()));
-          }),
-        );
-        if (Exit.isFailure(cleanup)) {
-          yield* Deferred.failCause(g.ready, Cause.combine(Cause.fail(cancelled()), cleanup.cause));
-          return yield* Effect.failCause(cleanup.cause);
-        }
-        self.finished(g);
-        // The owning path also settles admissions whose attempt fiber never started.
-        yield* Deferred.fail(g.ready, cancelled());
-      }),
-    );
-  }
-  private finished(g: Generation, failure?: SshFailure) {
-    this.generations.delete(g);
-    if (this.current !== g) return;
-    this.current = undefined;
-    this.publish(
-      g.reason
-        ? { profile: this.config.profile, state: 'disconnected', connectionId: null }
-        : {
-            profile: this.config.profile,
-            state: 'failed',
-            connectionId: g.id,
-            message: failure?.message ?? 'SSH connection ended.',
-          },
-    );
-  }
-  private arguments() {
-    return [
-      '-N',
-      '-T',
-      '-n',
-      '-o',
-      'BatchMode=yes',
-      '-o',
-      'ExitOnForwardFailure=yes',
-      '-o',
-      'ControlMaster=no',
-      '-o',
-      'ControlPath=none',
-      '-o',
-      'ControlPersist=no',
-      '-o',
-      'ForkAfterAuthentication=no',
-      '-o',
-      'GatewayPorts=no',
-      '-o',
-      'PermitLocalCommand=no',
-      '-o',
-      'RemoteCommand=none',
-      '-o',
-      'ForwardAgent=no',
-      '-o',
-      'ForwardX11=no',
-    ];
-  }
-  private spawn(g: Generation, args: string[], captureOutput = false) {
-    return Effect.try({
-      try: () => {
-        const child = new SshProcess(
-          this.config.sshExecutable,
-          args,
-          this.config.token,
-          captureOutput,
-          this.stopTiming,
-        );
-        g.processes.add(child);
-        void child.terminal.then(() => {
-          if (this.current === g && g.forward === child && !g.reason)
-            this.publish({
-              profile: this.config.profile,
-              state: 'failed',
-              connectionId: g.id,
-              message: child.failure().message,
-            });
-        });
-        return child;
-      },
-      catch: () => error('process-start'),
-    });
-  }
-  private port() {
-    return Effect.acquireUseRelease(
-      Effect.sync(() => ({ server: createServer(), abort: new AbortController() })),
-      ({ server, abort }) =>
-        Effect.tryPromise({
-          try: (signal) =>
-            new Promise<number>((resolve, reject) => {
-              const failed = () => {
-                clean();
-                reject(error('port-unavailable'));
-              };
-              const clean = () => {
-                server.off('error', failed);
-                signal.removeEventListener('abort', failed);
-              };
-              server.once('error', failed);
-              signal.addEventListener('abort', failed, { once: true });
-              if (signal.aborted) return failed();
-              server.listen(
-                { host: '127.0.0.1', port: 0, exclusive: true, signal: abort.signal },
-                () => {
-                  clean();
-                  resolve((server.address() as AddressInfo).port);
-                },
-              );
-            }),
-          catch: () => error('port-unavailable'),
-        }),
-      ({ server, abort }) =>
-        releaseResource(async () => {
-          abort.abort();
-          await closeServer(server);
-        }),
-    );
-  }
-  private attempt(g: Generation): Effect.Effect<void, SshFailure> {
-    // oxlint-disable-next-line no-this-alias -- The Effect generator retains the connection owner.
-    const self = this;
-    const establish = Effect.gen(function* () {
-      if (g.reason || self.closed || self.current !== g) return yield* Effect.fail(cancelled());
-      const preflight = yield* self.spawn(
-        g,
-        [...self.arguments(), '-G', '--', self.config.profile.destination],
-        true,
-      );
-      const configured = yield* Effect.promise(() => preflight.terminal);
-      yield* releaseResource(() => preflight.stop());
-      if (configured.spawnFailed || configured.code !== 0 || preflight.overflow)
-        return yield* Effect.fail(preflight.failure());
-      if (/^(localforward|remoteforward|dynamicforward)\s+/im.test(preflight.output))
-        return yield* Effect.fail(error('policy-forwards'));
-      if (/^stricthostkeychecking\s+(false|no|off)\s*$/im.test(preflight.output))
-        return yield* Effect.fail(error('policy-host-key'));
-      if (
-        /^nohostauthenticationfor(?:localhost|proxycommand)\s+(?!no\s*$|false\s*$|off\s*$)\S+/im.test(
-          preflight.output,
-        )
-      )
-        return yield* Effect.fail(error('policy-host-authentication'));
-      if (
-        /^clearallforwardings\s+yes\s*$/im.test(preflight.output) ||
-        /^tunnel\s+(?!false\s*$|no\s*$|none\s*$)\S+/im.test(preflight.output)
-      )
-        return yield* Effect.fail(error('policy-tunnel'));
-      preflight.output = '';
-      preflight.stderr = '';
-      const port = yield* self.port();
-      g.origin = `http://127.0.0.1:${port}`;
-      const child = yield* self.spawn(g, [
-        ...self.arguments(),
-        '-L',
-        `127.0.0.1:${port}:127.0.0.1:${self.config.profile.remotePort}`,
-        '--',
-        self.config.profile.destination,
-      ]);
-      g.forward = child;
-      const exited = Effect.flatMap(
-        Effect.promise(() => child.terminal),
-        () => Effect.fail(child.failure()),
-      );
-      const verify: Effect.Effect<ChatHostHealth, HostVerificationError> = Effect.gen(function* () {
-        while (true) {
-          const result = yield* Effect.result(
-            self.verify({
-              origin: g.origin!,
-              token: self.config.token,
-              expected: self.config.profile.expected,
-            }),
-          );
-          if (result._tag === 'Success') return result.success;
-          if (!retriedVerification.has(result.failure.reason))
-            return yield* Effect.fail(result.failure);
-          yield* Effect.sleep('50 millis');
-        }
+        { profile, token } = config,
+        startupMs = options.startupMs ?? 20_000,
+        stopTiming = { ...defaultSshStopTiming, ...options.stopTiming };
+      const scope = yield* Effect.scope;
+      const attempts = yield* FiberMap.make<string, void, SshFailure>();
+      const state = yield* SubscriptionRef.make<ConnectionState>({
+        snapshot: { profile, state: 'disconnected', connectionId: null },
       });
-      const health = yield* Effect.raceFirst(verify, exited);
-      g.health = structuredClone(health);
-      self.publish({
-        profile: self.config.profile,
-        state: 'connected',
+      const observers = yield* Ref.make(0);
+
+      const connecting = (g: Generation): ConnectionSnapshot => ({
+        profile,
+        state: 'connecting',
         connectionId: g.id,
-        health,
       });
-      yield* Deferred.succeed(g.ready, self.snapshot());
-      return child;
-    }).pipe(
-      Effect.timeoutOrElse({
-        duration: self.startupMs,
-        orElse: () => Effect.fail(error('startup-deadline')),
-      }),
-    );
-    return Effect.gen(function* () {
-      const child = yield* establish;
-      yield* Effect.promise(() => child.terminal);
-      return yield* Effect.fail(child.failure());
-    }).pipe(
-      Effect.onExit((exit) =>
+      const disconnecting = (g: Generation): ConnectionSnapshot => ({
+        profile,
+        state: 'disconnecting',
+        connectionId: g.id,
+      });
+      const failed = (g: Generation, failure: SshFailure): ConnectionSnapshot => ({
+        profile,
+        state: 'failed',
+        connectionId: g.id,
+        message: failure.message,
+      });
+      /** Replaces the state while `g` is the current generation; whether it was. */
+      const updateFor = (g: Generation, next: Omit<ConnectionState, 'generation'>) =>
+        SubscriptionRef.modifySome(state, (s) =>
+          s.generation === g
+            ? [true, Option.some({ ...next, generation: g })]
+            : [false, Option.none()],
+        );
+
+      /** Starts a process in `g`, recorded there before anything can interrupt. */
+      const start = (g: Generation, args: string[], captureOutput: boolean) =>
+        Effect.uninterruptible(
+          Effect.tap(
+            startSshProcess(config.sshExecutable, args, { token, captureOutput, stopTiming }),
+            (child) => Effect.sync(() => g.processes.push(child)),
+          ),
+        );
+
+      /** Checks the effective policy, forwards a fresh port and verifies the host through it. */
+      const establish = (g: Generation): Effect.Effect<Verified, SshFailure, Scope.Scope> =>
         Effect.gen(function* () {
-          const cause = Exit.isFailure(exit) ? exit.cause : undefined;
-          const ended: SshFailure = g.reason ? cancelled() : error('ended');
-          let failure =
-            (cause && !Cause.hasInterruptsOnly(cause)
-              ? cause.reasons.find(Cause.isFailReason)?.error
-              : undefined) ?? ended;
-          // A cleanup defect is reported beside the attempt's own end, not in place of it.
-          if (cause?.reasons.some(Cause.isDieReason))
-            failure = g.reason ? ended : error('cleanup-failed');
-          if (self.current === g)
-            self.publish(
-              g.reason
-                ? { profile: self.config.profile, state: 'disconnecting', connectionId: g.id }
-                : {
-                    profile: self.config.profile,
-                    state: 'failed',
-                    connectionId: g.id,
-                    message: failure.message,
-                  },
-            );
-          const cleanup = yield* Effect.exit(
-            releaseResource(async () => {
-              await Promise.all([...g.processes].map((child) => child.stop()));
+          if ((yield* SubscriptionRef.get(state)).generation !== g) return yield* cancelled();
+          const preflight = yield* start(g, [...sshOptions, '-G', '--', profile.destination], true);
+          const configured = yield* preflight.exit;
+          yield* Effect.mapError(preflight.stop, () => error('cleanup-failed'));
+          const { text, overflow } = yield* preflight.output;
+          if (configured.spawnFailed || configured.code !== 0 || overflow)
+            return yield* Effect.flatMap(preflight.failure, Effect.fail);
+          const refused = refusedPolicy(text);
+          yield* preflight.forget;
+          if (refused) return yield* error(refused);
+          const port = yield* reserveLoopbackPort;
+          const origin = `http://127.0.0.1:${port}`;
+          const forward = yield* start(
+            g,
+            [
+              ...sshOptions,
+              '-L',
+              `127.0.0.1:${port}:127.0.0.1:${profile.remotePort}`,
+              '--',
+              profile.destination,
+            ],
+            false,
+          );
+          const verified = options.verify({ origin, token, expected: profile.expected }).pipe(
+            Effect.retry({
+              schedule: Schedule.spaced(verificationPause),
+              while: (failure) => retriedVerification.has(failure.reason),
             }),
           );
-          if (Exit.isFailure(cleanup)) {
-            yield* Deferred.failCause(g.ready, Cause.combine(Cause.fail(failure), cleanup.cause));
-            return yield* Effect.failCause(cleanup.cause);
+          const exited = Effect.andThen(forward.exit, Effect.flatMap(forward.failure, Effect.fail));
+          const health = yield* Effect.raceFirst(verified, exited);
+          return { origin, health: structuredClone(health), forward };
+        }).pipe(
+          Effect.timeoutOrElse({
+            duration: startupMs,
+            orElse: () => Effect.fail(error('startup-deadline')),
+          }),
+        );
+
+      /**
+       * Ends `g`: publishes that it is going, stops its processes and closes its Scope, then
+       * settles its Connects. A stop that fails (`teardown`) keeps `g` current, so Connect is
+       * refused (`releasing`) until a later release succeeds.
+       */
+      const end = (g: Generation, failure?: SshFailure) =>
+        Effect.uninterruptible(
+          Effect.gen(function* () {
+            const outcome = failure ?? cancelled();
+            const current = yield* updateFor(g, {
+              snapshot: failure ? failed(g, failure) : disconnecting(g),
+            });
+            if (current) {
+              const stops = yield* Effect.forEach(g.processes, (child) => Effect.exit(child.stop), {
+                concurrency: 'unbounded',
+              });
+              const stopFailure = stops.find(Exit.isFailure);
+              if (stopFailure) {
+                yield* Deferred.failCause(
+                  g.ready,
+                  Cause.combine(Cause.fail(outcome), stopFailure.cause),
+                );
+                return yield* stopFailure;
+              }
+              yield* Scope.close(g.scope, Exit.void);
+              yield* SubscriptionRef.modifySome(state, (s) =>
+                s.generation === g
+                  ? [
+                      undefined,
+                      Option.some({
+                        snapshot: failure
+                          ? failed(g, failure)
+                          : { profile, state: 'disconnected', connectionId: null },
+                      }),
+                    ]
+                  : [undefined, Option.none()],
+              );
+            }
+            yield* Deferred.fail(g.ready, outcome);
+          }),
+        );
+      /** Ends `g` on request: interrupts its attempt, then releases what it started. */
+      const release = (g: Generation) =>
+        Effect.uninterruptible(Effect.andThen(FiberMap.remove(attempts, g.id), end(g)));
+
+      /** One generation's attempt, from preflight until its forward exits. */
+      const attempt = (g: Generation) =>
+        Effect.gen(function* () {
+          const verified = yield* establish(g);
+          const snapshot: ConnectionSnapshot = {
+            profile,
+            state: 'connected',
+            connectionId: g.id,
+            health: verified.health,
+          };
+          yield* updateFor(g, { snapshot, verified });
+          yield* Deferred.succeed(g.ready, structuredClone(snapshot));
+          yield* verified.forward.exit;
+          return yield* Effect.flatMap(verified.forward.failure, Effect.fail);
+        }).pipe(
+          Scope.provide(g.scope),
+          // An attempt that ends on its own releases itself; a release that interrupts it ends it.
+          Effect.onExit((exit) => {
+            if (Exit.isSuccess(exit) || Cause.hasInterruptsOnly(exit.cause)) return Effect.void;
+            // A cleanup defect is reported beside the attempt's own end, not in place of it.
+            const failure = exit.cause.reasons.some(Cause.isDieReason)
+              ? error('cleanup-failed')
+              : (exit.cause.reasons.find(Cause.isFailReason)?.error ?? error('ended'));
+            return end(g, failure);
+          }),
+        );
+
+      const connect = Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const candidate: Generation = {
+            id: randomUUID(),
+            scope: yield* Scope.fork(scope),
+            ready: yield* Deferred.make<ConnectionSnapshot, SshFailure>(),
+            processes: [],
+          };
+          const admitted = yield* SubscriptionRef.modifySome(
+            state,
+            (s): readonly [Admission, Option.Option<ConnectionState>] => {
+              const g = s.generation;
+              if (!g)
+                return [
+                  { generation: candidate },
+                  Option.some({ snapshot: connecting(candidate), generation: candidate }),
+                ] as const;
+              if (s.snapshot.state !== 'connecting' && s.snapshot.state !== 'connected')
+                return [{ refused: 'releasing' as const }, Option.none()] as const;
+              return [{ generation: g, verified: s.verified }, Option.none()] as const;
+            },
+          );
+          if ('refused' in admitted) {
+            yield* Scope.close(candidate.scope, Exit.void);
+            return yield* error(admitted.refused);
           }
-          self.finished(g, failure);
-          yield* Deferred.fail(g.ready, failure);
+          const g = admitted.generation;
+          if (g === candidate)
+            yield* FiberMap.run(attempts, g.id, attempt(g)).pipe(Effect.onInterrupt(() => end(g)));
+          else {
+            yield* Scope.close(candidate.scope, Exit.void);
+            if (admitted.verified && !(yield* admitted.verified.forward.isRunning))
+              return yield* error('generation-exited');
+          }
+          return yield* restore(Deferred.await(g.ready)).pipe(
+            Effect.map((snapshot) => structuredClone(snapshot)),
+            Effect.onInterrupt(() =>
+              // Cancelling a Connect cancels the attempt it started or joined, while it connects.
+              Effect.flatMap(
+                SubscriptionRef.modifySome(state, (s) =>
+                  s.generation === g && s.snapshot.state === 'connecting'
+                    ? [true, Option.some({ ...s, snapshot: disconnecting(g) })]
+                    : [false, Option.none()],
+                ),
+                (connectingStill) => (connectingStill ? release(g) : Effect.void),
+              ),
+            ),
+          );
         }),
-      ),
-    );
-  }
-  dispose() {
-    // oxlint-disable-next-line no-this-alias -- The Effect generator retains the connection owner.
-    const self = this;
-    return Effect.gen(function* () {
-      self.closed = true;
-      for (const g of self.generations) {
-        g.reason = 'root';
-        yield* self.release(g);
-      }
-      self.current = undefined;
-      self.generations.clear();
-      for (const queue of self.observers) Queue.endUnsafe(queue);
-      self.observers.clear();
-    });
-  }
-}
-async function closeServer(server: Server) {
-  await new Promise<void>((resolve, reject) =>
-    server.close((e) =>
-      e && (e as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING'
-        ? reject(error('port-release'))
-        : resolve(),
-    ),
+      );
+
+      // Closing the connection releases its generation before the attempts and their Scopes close.
+      yield* Effect.addFinalizer(() =>
+        Effect.flatMap(SubscriptionRef.get(state), ({ generation }) =>
+          generation ? Effect.orDie(release(generation)) : Effect.void,
+        ),
+      );
+
+      const service: ConnectionServiceShape = {
+        getConnection: () =>
+          Effect.map(SubscriptionRef.get(state), (s) => structuredClone(s.snapshot)),
+        connect: ({ profileId }) =>
+          profileId === profile.id ? connect : Effect.fail(error('wrong-profile')),
+        disconnect: ({ connectionId }) =>
+          Effect.flatten(
+            SubscriptionRef.modifySome(
+              state,
+              (s): readonly [Effect.Effect<void, SshFailure>, Option.Option<ConnectionState>] => {
+                const g = s.generation;
+                if (!g) return [Effect.void, Option.none()];
+                if (g.id !== connectionId)
+                  return [Effect.fail(error('stale-generation')), Option.none()];
+                return [release(g), Option.some({ snapshot: disconnecting(g), generation: g })];
+              },
+            ),
+          ),
+        endpoint: ({ host }) =>
+          Effect.gen(function* () {
+            if (
+              host.hostId !== profile.expected.hostId ||
+              host.storeId !== profile.expected.storeId
+            )
+              return yield* error('host-mismatch');
+            const { snapshot, generation, verified } = yield* SubscriptionRef.get(state);
+            if (
+              !generation ||
+              !verified ||
+              snapshot.state !== 'connected' ||
+              !(yield* verified.forward.isRunning)
+            )
+              return yield* error('not-verified');
+            return structuredClone({
+              origin: verified.origin,
+              token,
+              expected: profile.expected,
+              connectionId: generation.id,
+              health: verified.health,
+            });
+          }),
+        watch: () =>
+          Stream.unwrap(
+            Effect.as(
+              Effect.acquireRelease(
+                Effect.flatMap(
+                  Ref.modify(observers, (count) =>
+                    count >= maximumObservers ? [false, count] : [true, count + 1],
+                  ),
+                  (admitted) => (admitted ? Effect.void : Effect.fail(error('observer-limit'))),
+                ),
+                () => Ref.update(observers, (count) => count - 1),
+              ),
+              SubscriptionRef.changes(state).pipe(Stream.map((s) => structuredClone(s.snapshot))),
+            ),
+          ),
+      };
+      return service;
+    }),
   );
 }

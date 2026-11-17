@@ -3,7 +3,7 @@ import { test, mock } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Effect, Queue } from 'effect';
+import { Effect } from 'effect';
 import { ApplicationError, type ObservationClose } from '@moonbase/contracts/workspace';
 import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { ConnectionService } from '@moonbase/contracts/services';
@@ -343,6 +343,20 @@ test('watch subscriptions are bounded and unsubscribe plus concurrent root dispo
     assert.equal(reported?.code, 'Unavailable');
     await assert.rejects(overflow(), failure('Unavailable'));
     await Promise.all(stops.map((stop) => stop()));
+    // A closed watch gives its place back.
+    let observed = false;
+    stops.push(
+      f.client.watch(
+        () => {
+          observed = true;
+        },
+        (e) => {
+          reported = e;
+        },
+      ),
+    );
+    await until(() => observed);
+    await Promise.all(stops.map((stop) => stop()));
     await f.runtime.dispose();
     assert.equal(f.spawned().length, 0);
   } finally {
@@ -364,49 +378,6 @@ test('watch subscriptions are bounded and unsubscribe plus concurrent root dispo
     assert.equal(raced.spawned().length, 0);
   } finally {
     await raced.close();
-  }
-});
-
-test('IO watch close awaits release and retains a redacted cleanup failure on repeated close', async () => {
-  const f = await fixture();
-  let observed = false,
-    failed = false;
-  const errors: ApplicationError[] = [];
-  const stop = f.client.watch(
-    () => {
-      observed = true;
-    },
-    (error) => errors.push(error),
-  );
-  try {
-    await until(() => observed);
-    const remove = Set.prototype.delete;
-    mock.method(Set.prototype, 'delete', function (this: Set<unknown>, value: unknown) {
-      const removed = remove.call(this, value);
-      if (removed && !failed && Queue.isQueue(value)) {
-        failed = true;
-        throw Error(f.key);
-      }
-      return removed;
-    });
-    const closed = stop();
-    assert.equal(stop(), closed);
-    await assert.rejects(
-      closed,
-      (error) =>
-        failure('Unavailable')(error) &&
-        /cleanup/.test((error as ApplicationError).message) &&
-        !JSON.stringify(error).includes(f.key),
-    );
-    assert(failed);
-    assert.equal(errors.length, 0);
-    await assert.rejects(stop(), failure('Unavailable'));
-    assert.equal((await f.client.command('getConnection', {})).state, 'disconnected');
-    assert.equal(f.spawned().length, 0);
-  } finally {
-    mock.restoreAll();
-    await stop().catch(() => {});
-    await f.close();
   }
 });
 
