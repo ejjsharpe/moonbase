@@ -191,15 +191,20 @@ const serveDaemon = (options: DaemonOptions, config: DaemonConfig, directory: st
       providerSetup = Context.get(runtime, ProviderSetupService);
 
     const stop = yield* makeDaemonStop;
-    /** Stops the daemon once: new work is refused at once, then the wait for a stop ends. */
+    /**
+     * Stops the daemon once: new work is refused at once, then the wait for a stop ends. It runs to
+     * the end even if its caller is interrupted (the idle wait, when a use arrives meanwhile).
+     */
     const requestStop = (reason: DaemonExit, { unused = false } = {}) =>
-      Effect.gen(function* () {
-        if (!(yield* stop.request(reason, { unused }))) return false;
-        yield* control.setAdmissionsOpen(false);
-        yield* journal({ event: 'stopping', reason });
-        yield* Deferred.succeed(stop.stopped, reason);
-        return true;
-      });
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          if (!(yield* stop.request(reason, { unused }))) return false;
+          yield* control.setAdmissionsOpen(false);
+          yield* journal({ event: 'stopping', reason });
+          yield* Deferred.succeed(stop.stopped, reason);
+          return true;
+        }),
+      );
     const stopping = Effect.map(SubscriptionRef.get(stop.use), (use) => use.stopping);
 
     const closeWorkspace = yield* openWorkspace({
