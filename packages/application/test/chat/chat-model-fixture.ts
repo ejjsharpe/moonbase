@@ -4,7 +4,7 @@ import {
   makeChatController,
   type ChatDependencies,
 } from '@moonbase/application/chat';
-import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
+import { runApplicationEffect } from '@moonbase/application/chat/promises';
 
 /** A root runtime and scope for chat models; `layer` supplies services such as a `TestClock`. */
 export function modelRoot(layer: Layer.Layer<never> = Layer.empty) {

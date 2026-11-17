@@ -4,20 +4,22 @@ import { Effect, Exit, Scope, Stream } from 'effect';
 import type {
   CheckoutTarget,
   CommandInput,
-  EditorClient,
+  CommandOutput,
   WorkspaceCommand,
 } from '@moonbase/contracts/workspace';
+import type { WorkspaceServiceShape } from '@moonbase/contracts/services';
+import { toWireError } from '@moonbase/contracts/workspace-errors';
 import { EditorRpcs, editorClientId } from '../../ipc/editor-rpcs.ts';
 import { IpcAuthorityError, IpcInputError, NativeActionError } from '../../ipc/ipc-errors.ts';
 import { IpcRequestIdSchema } from '../../ipc/ipc-limits.ts';
 import type { NativeActions } from '../native-actions.ts';
 import type { DocumentGrants, EditorApprovals } from './editor-approvals.ts';
-import { streamObservation } from './observation-stream.ts';
 import { settledPromise } from './settled-promise.ts';
 import * as Schema from 'effect/Schema';
 
 export type EditorIpcOptions = {
-  client: EditorClient;
+  /** The root's workspace; its errors cross as the legacy `ApplicationError` codes and text. */
+  workspace: WorkspaceServiceShape;
   native: NativeActions;
   approvals: EditorApprovals;
   /**
@@ -35,15 +37,13 @@ const isInside = (root: string, path: string) => {
   return rest === '' || (rest !== '..' && !rest.startsWith(`..${sep}`) && !isAbsolute(rest));
 };
 const isRequestId = Schema.is(IpcRequestIdSchema);
-/** A request's work in main: cancelled, it is aborted and waited for, as its document is. */
-const promise = settledPromise;
 
 /**
  * The editor procedures for one document. Authority belongs to the document main served, never to
  * a renderer root or caller ID: a command reaches the workspace only for a checkout main approved.
  */
 export function makeEditorIpcHandlers(options: EditorIpcOptions, document: Scope.Scope) {
-  const { client, native, approvals } = options;
+  const { workspace, native, approvals } = options;
   const grants: DocumentGrants = approvals.makeDocumentGrants();
   const checkApproved = (checkout: CheckoutTarget) =>
     approvals.isApproved(checkout)
@@ -63,7 +63,10 @@ export function makeEditorIpcHandlers(options: EditorIpcOptions, document: Scope
           return yield* new IpcInputError({ problem: 'request-id' });
         const refusal = yield* Effect.sync(() => approvals.findRefusal(operation, input, grants));
         if (refusal) return yield* new IpcAuthorityError({ refusal });
-        const output = yield* promise((signal) => client.command(operation, input, { signal }));
+        const run = workspace[operation] as (
+          input: CommandInput<K>,
+        ) => Effect.Effect<CommandOutput<K>, Parameters<typeof toWireError>[0]>;
+        const output = yield* run(input).pipe(Effect.mapError(toWireError));
         yield* Effect.sync(() => approvals.record(operation, output, grants));
         return output;
       });
@@ -141,24 +144,18 @@ export function makeEditorIpcHandlers(options: EditorIpcOptions, document: Scope
           input.clientId === editorClientId
             ? Effect.void
             : Effect.fail(new IpcAuthorityError({ refusal: 'foreign-client' })),
-          streamObservation(
-            (receive, fail) => client.watchRecovery(input, receive, fail),
-            options.reportCleanup,
-          ),
+          workspace.watchRecovery(input).pipe(Stream.mapError(toWireError)),
         ),
       ),
     watchWorkspace: (input) =>
       Stream.unwrap(
         Effect.as(
           checkApproved(input.checkout),
-          streamObservation(
-            (receive, fail) => client.watch(input, receive, fail),
-            options.reportCleanup,
-          ),
+          workspace.watch(input).pipe(Stream.mapError(toWireError)),
         ),
       ),
     chooseCheckout: () =>
-      promise(() => native.chooseCheckout()).pipe(
+      settledPromise(() => native.chooseCheckout()).pipe(
         Effect.tap((root) =>
           Effect.sync(() => {
             if (typeof root === 'string') grants.roots.add(root);

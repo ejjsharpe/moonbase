@@ -1,16 +1,19 @@
+import { getFailureCode } from '@moonbase/application/editor';
 import { acquireEditor, answering } from './editor-model-fixture.ts';
 import { held, storedRecovery } from './editor-fixture.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import {
+  toWorkspaceClient as makeEditorClient,
+  type WorkspaceClient,
+} from '@moonbase/application/testing/editor-fixture';
 import {
   ApplicationError,
   type CheckoutTarget,
   type CommandInput,
-  type EditorClient,
 } from '@moonbase/contracts/workspace';
-import { type EditorController } from '@moonbase/application/editor';
+import type { EditorDriver } from './editor-model-fixture.ts';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 
 const checkout: CheckoutTarget = {
@@ -24,7 +27,7 @@ const checkout: CheckoutTarget = {
 };
 const target = (path: string) => ({ checkout, path });
 /** An editor with drafts in a.ts, b.ts and c.ts, through a client the test may wrap. */
-async function fixture(wrap: (raw: EditorClient) => EditorClient = (raw) => raw) {
+async function fixture(wrap: (raw: WorkspaceClient) => WorkspaceClient = (raw) => raw) {
   const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A', 'b.ts': 'B', 'c.ts': 'C' } }]);
   const runtime = ManagedRuntime.make(memory.layer),
     raw = makeEditorClient(runtime),
@@ -37,7 +40,7 @@ async function fixture(wrap: (raw: EditorClient) => EditorClient = (raw) => raw)
     editor.edit(target(path), 'captured ' + path);
   }
   await editor.flush();
-  const restarted: EditorController[] = [];
+  const restarted: EditorDriver[] = [];
   return {
     memory,
     runtime,
@@ -63,7 +66,7 @@ async function fixture(wrap: (raw: EditorClient) => EditorClient = (raw) => raw)
 /** Saves of `path` whose reply is lost once after the file is written. */
 const losingReply =
   (path: string, requests: CommandInput<'saveFile'>[] = []) =>
-  (raw: EditorClient): EditorClient => {
+  (raw: WorkspaceClient): WorkspaceClient => {
     let lose = true;
     return {
       ...raw,
@@ -81,7 +84,7 @@ const losingReply =
       },
     };
   };
-const quit = (editor: EditorController, choice: 'discard' | 'cancel') =>
+const quit = (editor: EditorDriver, choice: 'discard' | 'cancel') =>
   answering(
     editor,
     () => editor.prepareQuit(),
@@ -326,10 +329,7 @@ test('disposal during a held Save cancels it, releases observations and sends no
     },
   }));
   try {
-    const cancelled = assert.rejects(
-      f.editor.save(target('a.ts')),
-      (error) => ApplicationError.is(error) && error.code === 'Cancelled',
-    );
+    const cancelled = assert.rejects(f.editor.save(target('a.ts')), /Editor disposed/);
     await admitted.promise;
     const edits = f.memory.stats.edits;
     await f.editor.dispose();
@@ -351,7 +351,7 @@ test('a Save refused as invalid frees its request, and a corrected Save goes thr
     f.editor.edit(target('a.ts'), 'bad\0text');
     await assert.rejects(
       f.editor.save(target('a.ts')),
-      (error) => ApplicationError.is(error) && error.code === 'InvalidInput',
+      (error) => getFailureCode(error) === 'InvalidInput',
     );
     assert.equal(f.editor.buffer(target('a.ts'))!.pendingSave, undefined);
     assert.equal(f.memory.stats.saves, 0);

@@ -180,7 +180,9 @@ test('switching checkouts dismisses a file menu even when the relative paths mat
     const other = first
       .getSnapshot()
       .recovery.checkouts.find((target) => target.checkoutId === 'other')!;
-    await first.mutate({
+    await window.demo.client.command('mutate', {
+      clientId: first.clientId,
+      id: crypto.randomUUID(),
       checkout: other,
       kind: 'create-file',
       sources: [],
@@ -873,23 +875,24 @@ test('files dropped on the tree import into its folder once; elsewhere they impo
       return files.map((file) => `ref:${file.name}`);
     };
     // The demo workspace has no native file authority; record the import instead.
-    const { first } = window.demo,
-      mutate = first.mutate.bind(first);
-    first.mutate = async (input) => {
-      if (input.kind !== 'import') return mutate(input);
-      drops.imported.push({
-        destination: input.destination,
-        nativeReferences: input.nativeReferences,
-      });
-      return {
-        ...input,
-        id: input.id!,
-        clientId: first.clientId,
-        recoveryChanges: [],
-        outcome: 'completed',
-        items: [],
+    const { client } = window.demo,
+      command = client.command;
+    client.command = (async (operation, input, options) => {
+      const operationInput = input as {
+        kind?: string;
+        id: string;
+        clientId: string;
+        destination?: string;
+        nativeReferences?: string[];
       };
-    };
+      if (operation !== 'mutate' || operationInput.kind !== 'import')
+        return command(operation, input, options);
+      drops.imported.push({
+        destination: operationInput.destination,
+        nativeReferences: operationInput.nativeReferences,
+      });
+      return { ...operationInput, recoveryChanges: [], outcome: 'completed', items: [] };
+    }) as typeof command;
   });
   /** Drops a Finder file named `name` on `selector`, as the OS does. */
   const drop = (selector: string, name: string) =>
@@ -2533,11 +2536,7 @@ test('Settings shows why switching hosts failed, holding Use and focus while it 
     window.demo.chat.storage.write = () => {
       throw Error('Controlled draft storage failure');
     };
-    const application = window.demo.application;
-    const select = application.selectChatTarget.bind(application);
-    const gate = Promise.withResolvers<void>();
-    Object.assign(window, { releaseSwitch: gate.resolve });
-    application.selectChatTarget = (id) => gate.promise.then(() => select(id));
+    Object.assign(window, { releaseSwitch: window.demo.application.holdNextSwitch() });
   });
   await message.press('Meta+,');
   const settings = page.getByRole('dialog', { name: 'Settings', exact: true });

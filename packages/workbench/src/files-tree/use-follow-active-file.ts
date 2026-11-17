@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { checkoutKey, type EditorController } from '@moonbase/application/editor';
+import { checkoutKey } from '@moonbase/application/editor';
 import { isTreeDragActive } from './use-entry-drag.ts';
+import type { EditorActions } from '../editor-actions.ts';
 
 /**
  * Per checkout key, the active file its tree last followed (or left alone while the user was in
@@ -15,7 +16,7 @@ export type FollowedFiles = Map<string, string | null>;
  * while it couldn't follow or was busy. A checkout first seen in `followed` keeps its restored tree.
  */
 export function useFollowActiveFile({
-  controller,
+  actions,
   checkout,
   treeElement,
   setAnchor,
@@ -26,7 +27,7 @@ export function useFollowActiveFile({
   dialogOpen,
   busy,
 }: {
-  controller: EditorController;
+  actions: EditorActions;
   checkout: CheckoutTarget;
   treeElement: RefObject<HTMLDivElement | null>;
   /** Sets the entry a Shift-selection extends from, or clears it. */
@@ -79,16 +80,14 @@ export function useFollowActiveFile({
       if (!canFollow()) return;
       // Hidden ignored files stay hidden rather than turning Hide Ignored Files off, and a follow
       // the user didn't ask for reports nothing.
-      controller
-        .reveal({ checkout, path }, { ignored: 'skip', current: canFollow, quiet: true })
-        .then(
-          (revealed) => {
-            if (revealed) setAnchor(null);
-          },
-          () => {
-            // Following is best effort: a file that has gone simply isn't revealed.
-          },
-        );
+      actions.reveal({ checkout, path }, { ignored: 'skip', current: canFollow, quiet: true }).then(
+        (revealed) => {
+          if (revealed) setAnchor(null);
+        },
+        () => {
+          // Following is best effort: a file that has gone simply isn't revealed.
+        },
+      );
     }, 50);
     return () => {
       clearTimeout(timer);

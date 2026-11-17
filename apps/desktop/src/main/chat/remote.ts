@@ -9,8 +9,8 @@ import {
 } from '@moonbase/contracts/services';
 import type { ApplicationError } from '@moonbase/contracts/errors';
 import { DaemonServicesLive } from '../daemon/daemon-services.ts';
-import { bindChatClient, bindConnectionClient } from '@moonbase/application/runtime/clients';
-import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
+import { bindChatClient, bindConnectionClient } from '@moonbase/application/chat/clients';
+import { runApplicationEffect } from '@moonbase/application/chat/promises';
 import type { ChatConfiguration } from './config.ts';
 import type { RemoteChat } from './chat-backends.ts';
 

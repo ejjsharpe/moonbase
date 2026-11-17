@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { EditorClient } from '@moonbase/contracts/workspace';
+import type { WorkspaceClient as EditorClient } from '@moonbase/application/testing/editor-fixture';
 import { code, fixture, listDrafts } from './editor-workspace-fixture.ts';
 
 test('a stored recovery of an unknown format fails to load, the editor refuses to load, and the row stays untouched', async () => {

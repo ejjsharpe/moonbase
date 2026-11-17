@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test';
 import type { Locator, Page } from '@playwright/test';
-import type { EditorController } from '@moonbase/application/editor';
+import type { WorkspaceOperation } from '@moonbase/contracts/workspace';
 
 declare global {
   interface Window {
-    importCalls: Parameters<EditorController['mutate']>[0][];
+    importCalls: WorkspaceOperation[];
     importRefs: string[];
   }
 }
@@ -14,7 +14,9 @@ async function explorerAction(scope: Locator | Page, name: string) {
   const page = 'goto' in scope ? scope : scope.page();
   await page.getByRole('menuitem', { name, exact: true }).click();
 }
-const dialog = (page: Page) => page.getByRole('dialog');
+const dialog = (page: Page) => page.getByRole('dialog', { name: 'Import files', exact: true });
+/** The editor's prompt before a file operation replaces existing entries. */
+const replacePrompt = (page: Page) => page.getByRole('dialog', { name: /^Replace / });
 const imports = (page: Page) =>
   dialog(page).getByRole('button', { name: 'Import files', exact: true });
 async function setup(page: Page) {
@@ -28,12 +30,10 @@ async function setup(page: Page) {
     window.importCalls = [];
     window.importRefs = ['opaque-one'];
     window.demo.selectNativeImports = async () => window.importRefs;
-    window.demo.first.mutate = async (input) => {
+    window.demo.interceptMutation = async (input) => {
       window.importCalls.push(structuredClone(input));
       return {
         ...input,
-        id: input.id!,
-        clientId: window.demo.first.clientId,
         items: [],
         recoveryChanges: [],
         outcome: 'completed',
@@ -55,11 +55,9 @@ test('native picker asks for a full single destination and captures explicit rep
   expect(await page.evaluate(() => window.importCalls)).toEqual([]);
   await page.getByLabel('Destination relative path', { exact: true }).fill('README.md');
   await imports(page).click();
-  await expect(dialog(page).getByRole('alert')).toContainText('Replace README.md?');
+  await expect(replacePrompt(page)).toContainText('README.md already exists');
   expect(await page.evaluate(() => window.importCalls)).toEqual([]);
-  await dialog(page)
-    .getByRole('button', { name: 'Replace captured destination', exact: true })
-    .click();
+  await replacePrompt(page).getByRole('button', { name: 'Replace', exact: true }).click();
   await expect(dialog(page)).toHaveCount(0);
   const [call] = await page.evaluate(() => window.importCalls);
   expect(call).toMatchObject({
@@ -112,9 +110,8 @@ test('batch imports allow root and explicitly captured replacement paths in the 
     .fill('README.md');
   await imports(page).click();
   expect(await page.evaluate(() => window.importCalls)).toEqual([]);
-  await dialog(page)
-    .getByRole('button', { name: 'Replace captured destination', exact: true })
-    .click();
+  await replacePrompt(page).getByRole('button', { name: 'Replace', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.importCalls.length)).toBe(1);
   expect((await page.evaluate(() => window.importCalls))[0]).toMatchObject({
     destination: '',
     nativeReferences: ['opaque-a', 'opaque-b'],

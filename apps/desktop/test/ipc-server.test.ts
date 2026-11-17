@@ -3,12 +3,17 @@ import { test } from 'node:test';
 import { Effect, Exit } from 'effect';
 import { maximumChatInputBytes } from '@moonbase/contracts/chat';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import type { CheckoutTarget, EditorClient } from '@moonbase/contracts/workspace';
+import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { ipcLimits } from '../src/ipc/ipc-limits.ts';
 import { makePortSocket } from '../src/ipc/port-socket.ts';
 import { ChatIpcSession } from '../src/main/chat/session.ts';
 import { toMessagePortLike } from '../src/renderer/ipc/desktop-ipc.ts';
-import { makeIpcFixture, noChat, waitFor } from './fixtures/ipc-fixture.ts';
+import {
+  makeIpcFixture,
+  noChat,
+  waitFor,
+  type FakeWorkspaceClient,
+} from './fixtures/ipc-fixture.ts';
 import { ManagedRuntime, Layer } from 'effect';
 
 const target: CheckoutTarget = {
@@ -22,7 +27,7 @@ const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' }
 /** A workspace whose reads wait until their request is cancelled, and whose watches stay open. */
 function heldWorkspace() {
   const state = { reads: 0, cancelled: 0, watches: 0, closed: 0 };
-  const client: EditorClient = {
+  const client: FakeWorkspaceClient = {
     command: (_operation, _input, options) =>
       new Promise((_resolve, reject) => {
         state.reads++;

@@ -6,8 +6,8 @@ import { build, type Metafile } from 'esbuild';
 const entries = {
   index: '',
   editor: '/editor',
-  'runtime-clients': '/runtime/clients',
-  'runtime-effect-client': '/runtime/effect-client',
+  'chat-clients': '/chat/clients',
+  'chat-promises': '/chat/promises',
 };
 // One build of every entry; each entry's graph is the files reachable from it.
 let metafile: Metafile;
@@ -46,7 +46,11 @@ for (const [name, entry] of Object.entries(entries))
       [],
     );
     if (entry === '' || entry === '/editor')
-      for (const owner of ['recovery-outbox', 'preservation', 'discovery'])
+      for (const owner of [
+        'recovery/recovery-outbox-service',
+        'preservation/preservation-service',
+        'discovery/discovery-service',
+      ])
         assert(
           graph.has(`packages/application/src/editor/${owner}.ts`),
           `The actual browser graph must include the private ${owner} owner`,

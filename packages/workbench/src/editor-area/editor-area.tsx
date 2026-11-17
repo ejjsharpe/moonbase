@@ -3,7 +3,7 @@ import * as stylex from '@stylexjs/stylex';
 import { Tabs } from '@base-ui/react/tabs';
 import { workbench } from '@moonbase/ui/workbench';
 import type { CheckoutTarget, FileTarget, FileView } from '@moonbase/contracts/workspace';
-import type { EditorController, EditorSnapshot } from '@moonbase/application/editor';
+import type { EditorSnapshot } from '@moonbase/application/editor';
 import { CheatSheet, editorShortcuts } from '../cheat-sheet.tsx';
 import { EditorTabs, type EditorTabsHandle } from '../editor-tabs/editor-tabs.tsx';
 import type { FocusReturn } from '../focus-return.ts';
@@ -11,13 +11,14 @@ import { MonacoView, type EditorReveal, type MonacoViewHandle } from '../monaco-
 import type { Shortcut } from '../shortcuts.ts';
 import { Breadcrumbs } from './breadcrumbs.tsx';
 import { FileNotices } from './file-notices.tsx';
+import type { EditorActions } from '../editor-actions.ts';
 
 /**
  * The main editor: a checkout's open files as tabs over the active file's breadcrumbs, notices
  * and Monaco view, or the shortcut list when no file is open.
  */
 export function EditorArea({
-  controller,
+  actions,
   state,
   checkout,
   view,
@@ -36,7 +37,7 @@ export function EditorArea({
   closeFiles,
   withFocus,
 }: {
-  controller: EditorController;
+  actions: EditorActions;
   state: EditorSnapshot;
   checkout: CheckoutTarget;
   view: EditorSnapshot['recovery']['views'][string];
@@ -62,11 +63,11 @@ export function EditorArea({
       aria-label="Main editor">
       <Tabs.Root
         value={view.active}
-        onValueChange={(value) => run(controller.open({ checkout, path: String(value) }))}
+        onValueChange={(value) => run(actions.open({ checkout, path: String(value) }))}
         {...stylex.props(styles.panel)}>
         <EditorTabs
           ref={tabsRef}
-          controller={controller}
+          actions={actions}
           state={state}
           checkout={checkout}
           view={view}
@@ -85,7 +86,7 @@ export function EditorArea({
           )}
           {target ? (
             <FileNotices
-              controller={controller}
+              actions={actions}
               state={state}
               target={target}
               buffer={buffer}
@@ -96,7 +97,7 @@ export function EditorArea({
           )}
           <MonacoView
             ref={monacoRef}
-            controller={controller}
+            actions={actions}
             state={state}
             target={target}
             mode={mode}

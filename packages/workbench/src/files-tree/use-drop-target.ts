@@ -1,7 +1,8 @@
 import { useRef, useState, type RefObject } from 'react';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { readOwn, type EditorController } from '@moonbase/application/editor';
+import { readOwn } from '@moonbase/application/editor';
 import { rowHeight, type VisibleRow } from './files-tree-rows.ts';
+import type { EditorActions } from '../editor-actions.ts';
 
 /**
  * The files tree as a drop target, for its own entries and for files from the OS alike: the
@@ -9,12 +10,12 @@ import { rowHeight, type VisibleRow } from './files-tree-rows.ts';
  * hovered for a moment, and scrolling near the tree's edges.
  */
 export function useDropTarget({
-  controller,
+  actions,
   checkout,
   treeElement,
   expanded,
 }: {
-  controller: EditorController;
+  actions: EditorActions;
   checkout: CheckoutTarget;
   treeElement: RefObject<HTMLDivElement | null>;
   expanded: ReadonlySet<string>;
@@ -25,12 +26,12 @@ export function useDropTarget({
   /** Expands a folder that a drag has hovered over for a moment. */
   function expandForDrag(path: string) {
     try {
-      const current = readOwn(controller.getSnapshot().recovery.views, checkout.checkoutId)?.tree;
+      const current = readOwn(actions.getSnapshot().recovery.views, checkout.checkoutId)?.tree;
       if (!current || current.expanded.includes(path)) return;
-      controller.tree(checkout, { expanded: [...current.expanded, path] });
-      void controller.list(checkout, path).catch(controller.report);
+      actions.tree(checkout, { expanded: [...current.expanded, path] });
+      void actions.list(checkout, path).catch(actions.report);
     } catch (error) {
-      controller.report(error);
+      actions.report(error);
     }
   }
   /** Drops the highlight and pending expansion; the drag itself may go on elsewhere. */

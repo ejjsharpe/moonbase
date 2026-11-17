@@ -1,9 +1,10 @@
+import { getFailureCode } from '@moonbase/application/editor';
 import { acquireEditor } from './editor-model-fixture.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ManagedRuntime } from 'effect';
-import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import type { CheckoutTarget } from '@moonbase/contracts/workspace';
+import { toWorkspaceClient as makeEditorClient } from '@moonbase/application/testing/editor-fixture';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 
 const main: CheckoutTarget = {
@@ -59,7 +60,10 @@ test('the editor lists only the worktrees of an open checkout’s project, main 
       { root: main.root, branch: 'main', main: true, locked: false, prunable: false },
       { root: linked.root, branch: 'topic', main: false, locked: false, prunable: false },
     ]);
-    await assert.rejects(f.editor.listWorktrees(other), ApplicationError.is);
+    await assert.rejects(
+      f.editor.listWorktrees(other),
+      (error) => getFailureCode(error) !== undefined,
+    );
   } finally {
     await f.dispose();
   }
@@ -97,7 +101,7 @@ test('a refused worktree creation leaves the open checkouts unchanged', async ()
         branch: 'topic',
         location: '/memory/elsewhere',
       }),
-      (error) => ApplicationError.is(error) && error.code === 'Conflict',
+      (error) => getFailureCode(error) === 'Conflict',
     );
     assert.deepEqual(f.editor.getSnapshot().recovery.openCheckoutIds, before.openCheckoutIds);
     assert.equal(f.editor.getSnapshot().recovery.selectedCheckoutId, main.checkoutId);

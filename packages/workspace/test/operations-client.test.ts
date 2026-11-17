@@ -14,7 +14,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { makeWorkspaceClient } from './workspace-client-fixture.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 
 import { captureNative, fixture, rejects } from './workspace-fixture.ts';
@@ -268,7 +268,7 @@ for (const kind of ['move', 'trash'] as const)
           filesystemHelper: helper,
         }),
       ),
-      client = makeEditorClient(runtime);
+      client = makeWorkspaceClient(runtime);
     try {
       writeFileSync(join(f.root, 'file.txt'), 'disk bytes');
       const checkout = await client.command('openCheckout', { root: f.root }),
@@ -371,7 +371,7 @@ test('filesystem success followed by real SQLite publication failure stays obser
         filesystemHelper: helper,
       }),
     ),
-    client = makeEditorClient(runtime);
+    client = makeWorkspaceClient(runtime);
   try {
     writeFileSync(join(f.root, 'file.txt'), 'disk');
     const checkout = await client.command('openCheckout', { root: f.root });
@@ -431,7 +431,7 @@ test('unavailable persistence and real filesystem file-size exhaustion report ty
     );
     try {
       await assert.rejects(
-        makeEditorClient(unavailable).command('loadRecovery', { clientId: 'alice' }),
+        makeWorkspaceClient(unavailable).command('loadRecovery', { clientId: 'alice' }),
         rejects('Persistence'),
       );
     } finally {
@@ -559,7 +559,7 @@ test('cancelling admitted native copy is typed, preserves source and leaves unre
         filesystemHelper: helper,
       }),
     ),
-    client = makeEditorClient(runtime),
+    client = makeWorkspaceClient(runtime),
     abort = new AbortController();
   try {
     writeFileSync(join(f.root, 'file.txt'), 'source survives');

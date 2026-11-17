@@ -1,14 +1,11 @@
 import { useState, type KeyboardEvent } from 'react';
 import type { CheckoutTarget, FileTarget } from '@moonbase/contracts/workspace';
-import {
-  checkoutKey,
-  type EditorController,
-  type EditorSnapshot,
-} from '@moonbase/application/editor';
+import { checkoutKey, type EditorSnapshot } from '@moonbase/application/editor';
 import { cycleRecentTabs, type RecentTabs } from './editor-tabs/recent-tabs.tsx';
 import type { ExplorerPanel } from './explorer/explorer.tsx';
 import type { FocusOrigin, FocusReturn } from './focus-return.ts';
 import { pickerCommand, pickerMode, type PickerMode } from './picker/picker-shortcuts.ts';
+import type { EditorActions } from './editor-actions.ts';
 
 /**
  * The workbench's keys, outside dialogs, menus and fields other than the editor's: ⌘S saves, ⌘P
@@ -17,7 +14,7 @@ import { pickerCommand, pickerMode, type PickerMode } from './picker/picker-shor
  * tabs until Control is let go. Commands return focus to where they started.
  */
 export function useWorkbenchKeys({
-  controller,
+  actions,
   state,
   checkout,
   view,
@@ -29,7 +26,7 @@ export function useWorkbenchKeys({
   closeFiles,
   run,
 }: {
-  controller: EditorController;
+  actions: EditorActions;
   state: EditorSnapshot;
   checkout: CheckoutTarget | undefined;
   view: EditorSnapshot['recovery']['views'][string] | undefined;
@@ -62,7 +59,7 @@ export function useWorkbenchKeys({
     };
     if (command && key === 's' && !event.altKey && !(event.ctrlKey && event.metaKey)) {
       take();
-      if (target) run(controller.save(target));
+      if (target) run(actions.save(target));
     } else if (picking) {
       take();
       openPicker(picking);
@@ -80,12 +77,12 @@ export function useWorkbenchKeys({
       if (target) run(withFocus(closeFiles([target.path]), findOrigin(element), true));
     } else if (event.metaKey && event.shiftKey && key === 't') {
       take();
-      run(withFocus(controller.reopen(checkout), findOrigin(element), true));
+      run(withFocus(actions.reopen(checkout), findOrigin(element), true));
     } else if (event.metaKey && event.altKey && ['ArrowLeft', 'ArrowRight'].includes(event.key)) {
       take();
       run(
         withFocus(
-          controller.navigate(checkout, event.key === 'ArrowRight' ? 1 : -1),
+          actions.navigate(checkout, event.key === 'ArrowRight' ? 1 : -1),
           findOrigin(element),
         ),
       );
@@ -111,7 +108,7 @@ export function useWorkbenchKeys({
       event.stopPropagation();
       const path = recent.paths[recent.index];
       setRecent(null);
-      run(withFocus(controller.open({ checkout, path }), recent.origin));
+      run(withFocus(actions.open({ checkout, path }), recent.origin));
     }
   }
   return {

@@ -1,4 +1,5 @@
 export { makeChatModel, makeChatController } from './controller.ts';
+export type { ChatRunner } from './chat-promises.ts';
 export type {
   ChatController,
   ChatModel,

@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TestContext } from 'node:test';
 import { ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import type { CheckoutTarget, EditorClient } from '@moonbase/contracts/workspace';
+import type { CheckoutTarget } from '@moonbase/contracts/workspace';
+import { makeWorkspaceClient, type FakeWorkspaceClient } from './workspace-client-fixture.ts';
 import { WorkspaceRecoveryLive } from '@moonbase/workspace';
 import { createDaemonWorkspaceHost } from '../../src/main/daemon/workspace-host.ts';
 import type { LocalDaemonClient } from '../../src/main/daemon/local-daemon-client.ts';
@@ -26,7 +26,7 @@ export async function composeWorkspace(
     ),
   );
   t.after(() => runtime.dispose());
-  return { runtime, client: makeEditorClient(runtime) };
+  return { runtime, client: makeWorkspaceClient(runtime) };
 }
 /** A temporary profile; `stops` run in order, even after a failure, before the profile is removed. */
 export async function temporaryProfile(t: TestContext, stops: (() => Promise<unknown>)[] = []) {
@@ -43,7 +43,7 @@ export async function temporaryProfile(t: TestContext, stops: (() => Promise<unk
 export const one = { text: 'one', version: createHash('sha256').update('one').digest('hex') };
 /** Opens `a.txt` of `target` as buffer `a` with `text` over `disk`, as the editor does. */
 export async function editDraft(
-  client: EditorClient,
+  client: FakeWorkspaceClient,
   target: CheckoutTarget,
   text: string,
   disk = one,

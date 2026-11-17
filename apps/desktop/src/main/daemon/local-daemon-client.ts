@@ -10,7 +10,7 @@ import {
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
 import { DaemonServicesLive } from './daemon-services.ts';
-import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
+import { runApplicationEffect } from '@moonbase/application/chat/promises';
 import {
   daemonRetryAfterMs,
   LocalDaemonConnectionLive,

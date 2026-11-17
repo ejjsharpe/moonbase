@@ -11,8 +11,8 @@ import type {
 } from '@moonbase/contracts/services';
 import type { ChatClient } from '@moonbase/contracts/chat';
 import type { ConnectionClient } from '@moonbase/contracts/connection';
-import { bindChatClient, bindProviderSetupClient } from '@moonbase/application/runtime/clients';
-import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
+import { bindChatClient, bindProviderSetupClient } from '@moonbase/application/chat/clients';
+import { runApplicationEffect } from '@moonbase/application/chat/promises';
 import type { DaemonChat, LocalDaemonClient } from '../daemon/local-daemon-client.ts';
 import type { ChatConfiguration } from './config.ts';
 import { ChatIpcSession } from './session.ts';

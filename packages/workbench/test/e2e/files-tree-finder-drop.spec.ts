@@ -5,7 +5,7 @@ declare global {
     /** The names of each drop's files the app was asked to approve. */
     approved: string[][];
     /** Each import the editor dispatched. */
-    imported: Parameters<typeof window.demo.first.mutate>[0][];
+    imported: Parameters<NonNullable<typeof window.demo.interceptMutation>>[0][];
     /** Whether each drop reaching the window had already been taken by the tree. */
     windowDrops: boolean[];
     /** Each `dropEffect` the page set on a drag's DataTransfer. */
@@ -69,10 +69,10 @@ async function setup(page: Page) {
       window.approved.push(files.map((file) => file.name));
       return files.map((file) => `ref:${file.name}`);
     };
-    const { first } = window.demo,
-      mutate = first.mutate.bind(first);
-    first.mutate = async (input) => {
-      if (input.kind !== 'import') return mutate(input);
+    const { client } = window.demo;
+    // The faux workspace imports nothing: an import becomes a new file at each destination.
+    window.demo.interceptMutation = async (input) => {
+      if (input.kind !== 'import') return undefined;
       window.imported.push(structuredClone(input));
       const names = input.nativeReferences!.map((reference) => reference.slice('ref:'.length));
       const destinations =
@@ -80,7 +80,9 @@ async function setup(page: Page) {
           ? names.map((name) => [input.destination, name].filter(Boolean).join('/'))
           : [input.destination!];
       for (const destination of destinations)
-        await mutate({
+        await client.command('mutate', {
+          clientId: input.clientId,
+          id: crypto.randomUUID(),
           checkout: input.checkout,
           kind: 'create-file',
           sources: [],
@@ -92,8 +94,6 @@ async function setup(page: Page) {
         });
       return {
         ...input,
-        id: input.id!,
-        clientId: first.clientId,
         recoveryChanges: [],
         outcome: 'completed',
         items: destinations.map((destination, index) => ({

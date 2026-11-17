@@ -1,5 +1,5 @@
-import { ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { Effect, ManagedRuntime } from 'effect';
+import { WorkspaceService } from '@moonbase/contracts/services';
 import { WorkspaceLocalLive } from '../src/index.ts';
 const [root, dataDirectory, file] = process.argv.slice(2);
 if (!root || !dataDirectory || !file)
@@ -15,13 +15,19 @@ const runtime = ManagedRuntime.make(
   }),
 );
 try {
-  const client = makeEditorClient(runtime);
-  const checkout = await client.command('openCheckout', { root });
-  console.log({
-    checkout,
-    document: await client.command('readFile', { checkout, path: file }),
-    git: await client.command('gitStatus', { checkout }),
-  });
+  console.log(
+    await runtime.runPromise(
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        const checkout = yield* workspace.openCheckout({ root });
+        return {
+          checkout,
+          document: yield* workspace.readFile({ checkout, path: file }),
+          git: yield* workspace.gitStatus({ checkout }),
+        };
+      }),
+    ),
+  );
 } finally {
   await runtime.dispose();
 }

@@ -1,14 +1,15 @@
-import { useState, useSyncExternalStore } from 'react';
+import { useState } from 'react';
+import { useAtomValue } from '@effect/atom-react';
 import * as stylex from '@stylexjs/stylex';
 import { Button } from '@base-ui/react/button';
 import { Menu } from '@base-ui/react/menu';
-import type { EditorController } from '@moonbase/application/editor';
 import type { CheckoutTarget, Worktree } from '@moonbase/contracts/workspace';
 import { controls } from '@moonbase/ui/controls';
 import { overlays } from '@moonbase/ui/overlays';
 import { checkoutName, projectHue, projectInitials, projectTiles } from '@moonbase/ui/projects';
 import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
 import { Icon } from '@moonbase/ui/icons';
+import type { EditorActions } from '../editor-actions.ts';
 
 /**
  * The project sidebar's header: the checkout's name and branch. It opens a menu of the
@@ -16,19 +17,17 @@ import { Icon } from '@moonbase/ui/icons';
  * branch or worktrees, so its header offers Initialize Git instead, disabled while it runs.
  */
 export function WorktreeSwitcher({
-  controller,
+  actions,
   checkout,
   run,
 }: {
-  controller: EditorController;
+  actions: EditorActions;
   checkout: CheckoutTarget;
   run(work: Promise<unknown>): void;
 }) {
   const [worktrees, setWorktrees] = useState<readonly Worktree[] | null>(null);
-  const initializing = useSyncExternalStore(
-    controller.subscribe,
-    () => controller.getSnapshot().initializing === checkout.checkoutId,
-  );
+  const initializing =
+    useAtomValue(actions.editor.atoms.session).initializing === checkout.checkoutId;
   const name = checkoutName(checkout);
   if (checkout.vcs === 'none')
     return (
@@ -41,7 +40,7 @@ export function WorktreeSwitcher({
           title="Run git init in this folder"
           disabled={initializing}
           {...stylex.props(controls.button, styles.initialize)}
-          onClick={() => run(controller.initializeRepository(checkout))}>
+          onClick={() => run(actions.initializeRepository(checkout))}>
           {initializing ? 'Initializing…' : 'Initialize Git'}
         </Button>
       </div>
@@ -51,7 +50,7 @@ export function WorktreeSwitcher({
       onOpenChange={(open) => {
         if (!open) return;
         setWorktrees(null);
-        run(controller.listWorktrees(checkout).then((result) => setWorktrees(result.worktrees)));
+        run(actions.listWorktrees(checkout).then((result) => setWorktrees(result.worktrees)));
       }}>
       <Menu.Trigger
         aria-label={`Switch worktree, ${name} · ${checkout.branch}`}
@@ -84,7 +83,7 @@ export function WorktreeSwitcher({
                     disabled={current}
                     aria-label={`${worktreeName} · ${worktree.branch}${current ? ', current' : ''}`}
                     {...stylex.props(overlays.menuItem, styles.item)}
-                    onClick={() => run(controller.openCheckout(worktree.root))}>
+                    onClick={() => run(actions.openCheckout(worktree.root))}>
                     <span
                       aria-hidden="true"
                       data-initials={projectInitials(worktreeName)}

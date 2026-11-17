@@ -8,7 +8,7 @@ const packages = new Map([
       directory: 'packages/application',
       exports: {
         '.': './src/index.ts',
-        './runtime/clients': './src/index.ts',
+        './chat/clients': './src/index.ts',
         './editor': './src/editor.ts',
         './chat': './src/chat.ts',
       },
@@ -81,7 +81,7 @@ for (const source of [
   "import type {} from '@effect/platform-node';",
   "import type {} from '@moonbase/desktop';",
   "import type {} from '@moonbase/contracts/services';",
-  "import type {} from '@moonbase/application/runtime/clients';",
+  "import type {} from '@moonbase/application/chat/clients';",
 ])
   assert(check({ 'packages/workbench/src/index.ts': source }).length, source);
 assert(
@@ -128,8 +128,7 @@ assert(
 );
 assert.deepEqual(
   check({
-    'packages/daemon-protocol/examples/remote.ts':
-      "import '@moonbase/application/runtime/clients';",
+    'packages/daemon-protocol/examples/remote.ts': "import '@moonbase/application/chat/clients';",
   }),
   [],
 );

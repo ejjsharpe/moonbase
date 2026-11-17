@@ -1,15 +1,14 @@
 import { acquireEditor, answering } from './editor-model-fixture.ts';
-import type { EditorController } from '@moonbase/application/editor';
+import type { EditorDriver } from './editor-model-fixture.ts';
 import * as controllerFixture from './editor-fixture.ts';
 import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
 import { ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import {
-  ApplicationError,
-  type EditorClient,
-  type WorkspaceCommand,
-} from '@moonbase/contracts/workspace';
+  toWorkspaceClient as makeEditorClient,
+  type WorkspaceClient,
+} from '@moonbase/application/testing/editor-fixture';
+import { ApplicationError, type WorkspaceCommand } from '@moonbase/contracts/workspace';
 import { fileKey } from '@moonbase/application/editor';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 
@@ -197,7 +196,7 @@ describe('checkout discovery and activation', () => {
   for (const area of ['staged', 'unstaged'] as const)
     test(`restored dirty ${area} survivor loads its remembered comparison`, async () => {
       const f = await observedFixture('r6-dirty-' + area);
-      let restarted: EditorController | undefined;
+      let restarted: EditorDriver | undefined;
       try {
         await f.editor.open(target('a.ts'), { view: area });
         f.editor.edit(target('a.ts'), 'restored dirty comparison');
@@ -239,7 +238,7 @@ describe('checkout discovery and activation', () => {
   for (const area of ['staged', 'untracked'] as const)
     test(`settled ${area} comparison activation does not retry on every release`, async () => {
       const f = await observedFixture('r6-comparison-ready-' + area);
-      let restarted: EditorController | undefined,
+      let restarted: EditorDriver | undefined,
         reads = 0;
       try {
         await f.editor.open(target('a.ts'), { view: area });
@@ -311,7 +310,7 @@ describe('checkout discovery and activation', () => {
     const runtime = ManagedRuntime.make(memory.layer),
       raw = makeEditorClient(runtime);
     let reads = 0;
-    const client: EditorClient = {
+    const client: WorkspaceClient = {
       ...raw,
       watch: () => async () => {},
       command(name, input, options) {

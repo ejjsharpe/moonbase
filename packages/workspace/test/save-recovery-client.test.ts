@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { writeFileSync, readFileSync, chmodSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { makeWorkspaceClient } from './workspace-client-fixture.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { fixture, rejects } from './workspace-fixture.ts';
 import { draftsOf, seed } from './recovery-fixture.ts';
@@ -173,7 +173,7 @@ for (const kind of ['save', 'move'] as const)
           filesystemHelper: helper,
         }),
       ),
-      client = makeEditorClient(runtime);
+      client = makeWorkspaceClient(runtime);
     try {
       writeFileSync(join(f.root, 'file.txt'), 'original');
       const checkout = await client.command('openCheckout', { root: f.root }),
@@ -249,7 +249,7 @@ test('save rejects a replaced staging object and never publishes or removes the 
         filesystemHelper: helper,
       }),
     ),
-    client = makeEditorClient(runtime);
+    client = makeWorkspaceClient(runtime);
   try {
     writeFileSync(join(f.root, 'file.txt'), 'original');
     const checkout = await client.command('openCheckout', { root: f.root }),
@@ -293,7 +293,7 @@ test('restart recovers the admitted Save text even when no earlier draft publica
         filesystemHelper: helper,
       }),
     ),
-    client = makeEditorClient(runtime);
+    client = makeWorkspaceClient(runtime);
   try {
     writeFileSync(join(f.root, 'file.txt'), 'original');
     const checkout = await client.command('openCheckout', { root: f.root }),

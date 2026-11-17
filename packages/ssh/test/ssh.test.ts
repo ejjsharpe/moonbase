@@ -7,7 +7,7 @@ import { Effect } from 'effect';
 import { ApplicationError, type ObservationClose } from '@moonbase/contracts/workspace';
 import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { ConnectionService } from '@moonbase/contracts/services';
-import { makeConnectionClient } from '@moonbase/application/runtime/clients';
+import { makeConnectionClient } from '@moonbase/application/chat/clients';
 import {
   alive,
   checkSystemPolicy,

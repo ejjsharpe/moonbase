@@ -18,7 +18,7 @@ import {
   fauxToolCall,
   type FauxResponseStep,
 } from '@earendil-works/pi-ai/providers/faux';
-import { makeChatClient } from '@moonbase/application/runtime/clients';
+import { makeChatClient } from '@moonbase/application/chat/clients';
 import type { ChatTarget } from '@moonbase/contracts/chat';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 

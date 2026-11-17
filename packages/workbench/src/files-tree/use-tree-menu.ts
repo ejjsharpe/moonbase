@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { checkoutKey, type EditorController } from '@moonbase/application/editor';
+import { checkoutKey } from '@moonbase/application/editor';
+import type { EditorActions } from '../editor-actions.ts';
 
 /** A files tree's open context menu: for `paths`, opened on the row `path` at `point`. */
 export type TreeMenu = {
@@ -18,7 +19,7 @@ export type TreeMenu = {
  * focus to the tree as it closes unless focus went elsewhere.
  */
 export function useTreeMenu({
-  controller,
+  actions,
   checkout,
   treeElement,
   setAnchor,
@@ -30,7 +31,7 @@ export function useTreeMenu({
   dialogOpen,
   disposed,
 }: {
-  controller: EditorController;
+  actions: EditorActions;
   checkout: CheckoutTarget;
   treeElement: RefObject<HTMLDivElement | null>;
   /** Sets the entry a Shift-selection extends from, or clears it. */
@@ -90,7 +91,7 @@ export function useTreeMenu({
         point: DOMRect.fromRect({ x, y }),
         scroll: treeElement.current!.scrollTop,
       });
-      controller.tree(checkout, { focus: path, selected: paths });
+      actions.tree(checkout, { focus: path, selected: paths });
     },
     /** Closes the menu, returning focus to the tree or, with `restoreFocus` false, not. */
     closeMenu(options?: { restoreFocus: boolean }) {

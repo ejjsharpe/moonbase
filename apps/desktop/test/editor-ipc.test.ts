@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import {
   ApplicationError,
   type CheckoutTarget,
-  type EditorClient,
   type WorkspaceEvent,
 } from '@moonbase/contracts/workspace';
 import {
@@ -16,7 +15,12 @@ import {
   type RecoveryOutline,
 } from '@moonbase/contracts/recovery';
 import type { NativeActions } from '../src/main/native-actions.ts';
-import { makeIpcFixture, unusedNative, waitFor } from './fixtures/ipc-fixture.ts';
+import {
+  makeIpcFixture,
+  unusedNative,
+  waitFor,
+  type FakeWorkspaceClient,
+} from './fixtures/ipc-fixture.ts';
 
 const target: CheckoutTarget = {
   hostId: 'local-host',
@@ -37,7 +41,7 @@ const worktree = (root: string) => ({
 /** A workspace that answers what these tests ask and counts what reached it. */
 function fakeWorkspace(overrides: Partial<Record<string, (input: never) => unknown>> = {}) {
   const dispatched: string[] = [];
-  const client: EditorClient = {
+  const client: FakeWorkspaceClient = {
     command: async (operation, input) => {
       dispatched.push(operation);
       const override = overrides[operation];
@@ -453,7 +457,6 @@ test('a workspace watch delivers its events until closed, and closing it closes 
           receive = deliver;
           return async () => {
             closes++;
-            throw new ApplicationError({ code: 'Persistence', message: 'Close failed' });
           };
         },
       },
@@ -472,10 +475,9 @@ test('a workspace watch delivers its events until closed, and closing it closes 
     await waitFor(() => events.length === 1);
     await close();
     await waitFor(() => closes === 1);
-    // Delivery stops at close; main's close failure is reported, having no reply to fail.
+    // Delivery stops at close.
     receive!({ checkout: target, paths: ['b.ts'] });
     assert.equal(events.length, 1);
-    await waitFor(() => f.cleanupFailures.length === 1);
   } finally {
     await f.dispose();
   }

@@ -1,11 +1,10 @@
 import { acquireEditor } from './editor-model-fixture.ts';
 import { ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
 import {
-  type CheckoutTarget,
-  type EditorClient,
-  type WorkspaceCommand,
-} from '@moonbase/contracts/workspace';
+  toWorkspaceClient,
+  type WorkspaceClient,
+} from '@moonbase/application/testing/editor-fixture';
+import { type CheckoutTarget, type WorkspaceCommand } from '@moonbase/contracts/workspace';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 
 export const checkout: CheckoutTarget = {
@@ -43,7 +42,7 @@ export async function fixture(clientId = 'editor-one', observe = true) {
     })),
   );
   const runtime = ManagedRuntime.make(memory.layer),
-    client = makeEditorClient(runtime);
+    client = toWorkspaceClient(runtime);
   const editor = await acquireEditor(runtime, {
     client: observe ? client : { ...client, watch: () => async () => {} },
     clientId,
@@ -80,8 +79,8 @@ export async function observedFixture(clientId: string) {
   await f.editor.selectCheckout(checkout);
   await f.editor.flush();
   await f.editor.dispose();
-  const transport: { command?: EditorClient['command'] } = {};
-  const client: EditorClient = {
+  const transport: { command?: WorkspaceClient['command'] } = {};
+  const client: WorkspaceClient = {
     ...f.client,
     watch: () => async () => {},
     command(name, input, options) {
@@ -115,7 +114,7 @@ export const recoveryEdits: ReadonlySet<string> = new Set([
 ]);
 
 /** A client's durable recovery: its drafts, and each checkout's tab paths. */
-export async function storedRecovery(client: EditorClient, clientId: string) {
+export async function storedRecovery(client: WorkspaceClient, clientId: string) {
   const { state } = await client.command('loadRecovery', { clientId });
   const drafts = state.buffers.flatMap((b) =>
     b.draft ? [{ target: b.target, text: b.draft.text, disk: b.draft.disk }] : [],
@@ -131,10 +130,10 @@ export async function storedRecovery(client: EditorClient, clientId: string) {
  * Wraps a client so a test can hold its next command of a name, or its next recovery edit
  * (`'edit'`), until released; `sent` lists each recovery edit as it reaches the store.
  */
-export function holding(raw: EditorClient) {
+export function holding(raw: WorkspaceClient) {
   const holds = new Map<string, { entered: () => void; promise: Promise<void> }>();
   const sent: { name: string; input: unknown }[] = [];
-  const client: EditorClient = {
+  const client: WorkspaceClient = {
     ...raw,
     command(name, input, options) {
       const edit = recoveryEdits.has(name);

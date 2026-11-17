@@ -1,11 +1,8 @@
 import type { DirectoryListing, CheckoutTarget } from '@moonbase/contracts/workspace';
-import {
-  checkoutKey,
-  type EditorController,
-  type MutationAction,
-} from '@moonbase/application/editor';
+import { checkoutKey, type MutationAction } from '@moonbase/application/editor';
 import type { Icon } from '@moonbase/ui/icons';
 import { onMac } from '../shortcuts.ts';
+import type { EditorActions } from '../editor-actions.ts';
 
 /** What a name typed in the tree does. */
 export type TreeEditKind = 'rename' | 'duplicate' | 'create-file' | 'create-directory';
@@ -34,7 +31,7 @@ const revealLabel = onMac ? 'Reveal in Finder' : 'Show in Folder';
 
 /** What file commands act on and how they reach the app. */
 export type FileCommandContext = {
-  controller: EditorController;
+  actions: EditorActions;
   checkout: CheckoutTarget;
   listings: Readonly<Record<string, DirectoryListing>>;
   canRequestMutation: (action: MutationAction) => boolean;
@@ -61,7 +58,7 @@ export type FileCommandContext = {
  */
 export function listFileCommands(
   {
-    controller,
+    actions,
     checkout,
     listings,
     canRequestMutation,
@@ -113,7 +110,7 @@ export function listFileCommands(
       // Like Enter in the tree, so the keyboard stays where it was.
       staysInTree: true,
       run: () => {
-        void controller.open({ checkout, path: one }, { view: 'file', intent: 'keep' });
+        void actions.open({ checkout, path: one }, { view: 'file', intent: 'keep' });
       },
     });
   if (folder)
@@ -195,7 +192,7 @@ export function listFileCommands(
         label: count > 1 ? 'Copy Paths' : 'Copy Path',
         keys: 'Alt+Meta+C',
         staysInTree: true,
-        run: () => void copyPaths(checkout, paths, false).catch(controller.report),
+        run: () => void copyPaths(checkout, paths, false).catch(actions.report),
       },
       {
         id: 'copy-relative-path',
@@ -203,7 +200,7 @@ export function listFileCommands(
         label: count > 1 ? 'Copy Relative Paths' : 'Copy Relative Path',
         keys: 'Shift+Alt+Meta+C',
         staysInTree: true,
-        run: () => void copyPaths(checkout, paths, true).catch(controller.report),
+        run: () => void copyPaths(checkout, paths, true).catch(actions.report),
       },
     );
   if (revealPath && one !== null)
@@ -213,7 +210,7 @@ export function listFileCommands(
       label: revealLabel,
       keys: 'Alt+Meta+R',
       staysInTree: true,
-      run: () => void revealPath(checkout, one).catch(controller.report),
+      run: () => void revealPath(checkout, one).catch(actions.report),
     });
   const trash: FileCommand = {
     id: 'trash',

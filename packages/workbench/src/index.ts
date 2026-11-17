@@ -3,3 +3,5 @@ export { pickerCommand, pickerMode, type PickerMode } from './picker/picker-shor
 export type { PickerEntry } from './picker/go-to-rows.ts';
 export type { Shortcut } from './shortcuts.ts';
 export { isFileDropTaken } from './files-tree/files-tree-drop.ts';
+export { makeWorkbenchEditor, type WorkbenchEditor } from './workbench-editor.ts';
+export { makeEditorActions, useEditorActions, type EditorActions } from './editor-actions.ts';

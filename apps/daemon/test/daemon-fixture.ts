@@ -19,7 +19,7 @@ import {
   makeChatClient,
   makeConnectionClient,
   makeProviderSetupClient,
-} from '@moonbase/application/runtime/clients';
+} from '@moonbase/application/chat/clients';
 import { EndpointConnectionLive, RemoteDaemonLive } from '@moonbase/daemon-protocol/remote';
 import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
 import type { ChatHostTarget } from '@moonbase/contracts/host';

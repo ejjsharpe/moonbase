@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, type FocusEvent, type RefObject } from 'react';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { checkoutKey, type EditorController } from '@moonbase/application/editor';
+import { checkoutKey } from '@moonbase/application/editor';
+import type { EditorActions } from '../editor-actions.ts';
 
 /** Whether an element that took focus can take it again. */
 export const canRefocus = (element: Element | null): element is HTMLElement =>
@@ -17,12 +18,12 @@ export const isNameField = (target: EventTarget) =>
  * once the press ends, since moving focus while a row is pressed would cancel a drag from it.
  */
 export function useTreeFocus({
-  controller,
+  actions,
   checkout,
   treeElement,
   visible,
 }: {
-  controller: EditorController;
+  actions: EditorActions;
   checkout: CheckoutTarget;
   treeElement: RefObject<HTMLDivElement | null>;
   visible: boolean;
@@ -38,7 +39,7 @@ export function useTreeFocus({
   /** The tree, when it is shown for an open checkout and can take focus back. */
   function returnTreeFocus() {
     const element = treeElement.current,
-      snapshot = controller.getSnapshot(),
+      snapshot = actions.getSnapshot(),
       recovery = snapshot.recovery;
     return visibility.current &&
       !snapshot.disposed &&
