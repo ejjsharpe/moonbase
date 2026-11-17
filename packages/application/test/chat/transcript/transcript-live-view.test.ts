@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { TranscriptView } from '@moonbase/application/chat';
 import type { ChatSnapshot, ChatTranscriptSource } from '@moonbase/contracts/chat';
-import { TranscriptReadError } from '../../../src/chat/transcript/transcript-errors.ts';
+import { TranscriptReadError } from '@moonbase/application/chat';
 import {
   transcriptFixture,
   transcriptHarness,

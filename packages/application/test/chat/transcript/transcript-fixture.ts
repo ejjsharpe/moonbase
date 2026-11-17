@@ -16,8 +16,7 @@ import {
   type TranscriptLimits,
   type TranscriptState,
 } from '@moonbase/application/chat';
-import type { ChatPort } from '../../../src/chat/chat-ports.ts';
-import { makeTranscript, type Transcript } from '../../../src/chat/transcript/transcript.ts';
+import { makeTranscript, type ChatPort, type Transcript } from '@moonbase/application/chat';
 
 export { scaledTranscriptLimits } from './transcript-limits-fixture.ts';
 export const digest = (text: string) => createHash('sha256').update(text).digest('hex');

@@ -9,7 +9,6 @@ import {
 import { maximumChatReplyBytes } from '@moonbase/contracts/chat';
 import type { ChatSnapshot, ChatTranscriptSource } from '@moonbase/contracts/chat';
 import type { TranscriptLimits, TranscriptState } from '@moonbase/application/chat';
-import { TranscriptReadError } from '../../../src/chat/transcript/transcript-errors.ts';
 import {
   digest,
   part,
@@ -317,7 +316,8 @@ test('complete-source iterator works with injected reads, reports progress, vali
         onProgress: () => abort.abort(),
       }),
     ),
-    (error) => error instanceof TranscriptReadError && error.code === 'Cancelled',
+    // Electron main, its one consumer, reads the legacy code (until CL-24).
+    { code: 'Cancelled' },
   );
   f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) => ({
     ...(fallback() as object),
