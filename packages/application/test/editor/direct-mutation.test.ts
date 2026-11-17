@@ -223,7 +223,6 @@ test('a batch import with known names asks before replacing what they would land
         checkout: operation.checkout,
         kind: operation.kind,
         outcome: 'completed',
-        recoveryChanges: [],
         items: [],
       } as never);
     },

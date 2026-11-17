@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { Effect } from 'effect';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
-import type { RecoveryChange } from '@moonbase/contracts/workspace';
 import type { RecoveryState } from '@moonbase/contracts/recovery';
 import {
   binary,
@@ -30,16 +30,27 @@ const retype = async (client: Client, drafts: SeedDraft[], text: (draft: SeedDra
       disk: draft.disk,
     });
 };
-/** Asserts that `changes` is one publication of alice's recovery. */
-const assertOnePublication = (changes: readonly RecoveryChange[] | false | undefined) => {
-  assert(changes && changes.length === 1, 'expected one recovery publication');
-  assert.equal(changes[0].clientId, 'alice');
-  assert.equal(changes[0].revision, changes[0].previousRevision + 1);
+/** Alice's stored recovery revision under `base`: each publication of her recovery adds one. */
+const revisionOf = (base: string) => {
+  const db = new DatabaseSync(join(base, 'state/moonbase-workspace-v1.sqlite'));
+  try {
+    const row = db.prepare("SELECT revision FROM recovery WHERE client = 'alice'").get();
+    return Number(row?.revision ?? 0);
+  } finally {
+    db.close();
+  }
+};
+/** Asserts that `change` publishes alice's recovery exactly once. */
+const assertOnePublication = async <T>(base: string, change: () => Promise<T>) => {
+  const before = revisionOf(base);
+  const value = await change();
+  assert.equal(revisionOf(base), before + 1, 'expected one recovery publication');
+  return value;
 };
 /** The layout part of a recovery, for an `updateLayout`. */
 const layoutOf = ({ version: _v, clientId: _c, buffers: _b, ...layout }: RecoveryState) => layout;
 
-test('concurrent lost-move reconciliation publishes once and acknowledgement keeps its receipt', async () => {
+test('concurrent lost-move reconciliation publishes once and acknowledgement keeps its result', async () => {
   const f = fixture(),
     count = join(f.base, 'effects');
   const helper = f.wrapper(
@@ -71,24 +82,25 @@ test('concurrent lost-move reconciliation publishes once and acknowledgement kee
     );
     await current.runtime.dispose();
     current = f.start();
-    await Promise.all([
-      current.client.command('operationStatus', { clientId: 'alice', id: 'lost' }),
-      current.client.command('loadRecovery', { clientId: 'alice' }),
-    ]);
+    await assertOnePublication(f.base, () =>
+      Promise.all([
+        current.client.command('operationStatus', { clientId: 'alice', id: 'lost' }),
+        current.client.command('loadRecovery', { clientId: 'alice' }),
+      ]),
+    );
     const receipt = await current.client.command('operationStatus', {
       clientId: 'alice',
       id: 'lost',
     });
-    assertOnePublication(receipt?.recoveryChanges);
+    assert.equal(receipt?.outcome, 'completed');
     await current.client.command('acknowledgeOperation', {
       clientId: 'alice',
       operationClientId: 'alice',
       id: 'lost',
     });
     assert.deepEqual(
-      (await current.client.command('operationStatus', { clientId: 'alice', id: 'lost' }))
-        ?.recoveryChanges,
-      receipt?.recoveryChanges,
+      await current.client.command('operationStatus', { clientId: 'alice', id: 'lost' }),
+      receipt,
     );
     assert.equal(readFileSync(count, 'utf8'), 'effect\n');
   } finally {
@@ -438,7 +450,6 @@ test('a client publication during grouped disk inspection stays authoritative', 
 });
 
 test('grouped Save publisher preserves visible persistence failure and clears pending on a non-replaying retry', async () => {
-  const { DatabaseSync } = await import('node:sqlite');
   const f = fixture(),
     ready = join(f.base, 'saved'),
     release = join(f.base, 'release'),
@@ -473,10 +484,9 @@ test('grouped Save publisher preserves visible persistence failure and clears pe
       lock.exec('ROLLBACK');
       lock.close();
     }
-    const result = await client.command('saveFile', input);
+    const result = await assertOnePublication(f.base, () => client.command('saveFile', input));
     assert.equal(result.kind, 'saved');
     assert(result.kind === 'saved' && !result.persistencePending);
-    assertOnePublication(result.kind === 'saved' && result.recoveryChanges);
     assert.deepEqual(await client.command('saveFile', input), result);
     assert.equal(readFileSync(count, 'utf8'), 'replace\n');
   } finally {
@@ -574,30 +584,32 @@ for (const sibling of ['save', 'move'] as const)
         );
         writeFileSync(join(f.root, 'a.txt'), 'external');
         if (sibling === 'save') {
-          const result = await current.client.command('saveFile', {
-            clientId: 'alice',
-            requestId: 'b',
-            target: drafts[1].target,
-            expectedVersion: drafts[1].disk.version,
-            text: 'saved b',
-          });
+          const result = await assertOnePublication(f.base, () =>
+            current.client.command('saveFile', {
+              clientId: 'alice',
+              requestId: 'b',
+              target: drafts[1].target,
+              expectedVersion: drafts[1].disk.version,
+              text: 'saved b',
+            }),
+          );
           assert.equal(result.kind, 'saved');
-          assertOnePublication(result.kind === 'saved' && result.recoveryChanges);
         } else {
           const sources = await current.client.command('inspectEntries', {
             checkout,
             paths: ['b.txt'],
           });
-          const result = await current.client.command('mutate', {
-            clientId: 'alice',
-            id: 'b',
-            checkout,
-            kind: 'move',
-            sources,
-            destination: 'moved-b.txt',
-          });
+          const result = await assertOnePublication(f.base, () =>
+            current.client.command('mutate', {
+              clientId: 'alice',
+              id: 'b',
+              checkout,
+              kind: 'move',
+              sources,
+              destination: 'moved-b.txt',
+            }),
+          );
           assert.equal(result.outcome, 'completed');
-          assertOnePublication(result.recoveryChanges);
         }
         if (competing) await retype(current.client, drafts, (d) => 'later ' + d.target.path);
         for (let restart = 0; restart < 2; restart++) {
@@ -766,7 +778,6 @@ test('an interrupted save the disk no longer shows settles as a conflict and blo
 
 for (const sibling of ['save', 'move'] as const)
   test(`pending text survives a failed ${sibling} fact publication and its non-replaying retry`, async () => {
-    const { DatabaseSync } = await import('node:sqlite');
     const f = fixture(),
       ready = join(f.base, 'ready'),
       release = join(f.base, 'release'),
@@ -829,11 +840,11 @@ for (const sibling of ['save', 'move'] as const)
         lock.exec('ROLLBACK');
         lock.close();
       }
-      const retried =
+      const retried = await assertOnePublication(f.base, async () =>
         sibling === 'save'
           ? await current.client.command('saveFile', saveInput)
-          : await current.client.command('mutate', moveInput);
-      assertOnePublication('recoveryChanges' in retried && retried.recoveryChanges);
+          : await current.client.command('mutate', moveInput),
+      );
       for (let restart = 0; restart < 2; restart++) {
         await current.runtime.dispose();
         current = f.start();
@@ -854,7 +865,6 @@ for (const sibling of ['save', 'move'] as const)
   });
 
 test('complete restoration retries wait for an active sibling admission without publishing part of its group', async () => {
-  const { DatabaseSync } = await import('node:sqlite');
   const f = fixture(),
     ready = join(f.base, 'ready'),
     release = join(f.base, 'release'),
@@ -954,15 +964,15 @@ if [ "$1" = replace ]; then printf 'replace\\n' >> ${quote(count)}; if [ "$2" = 
       await assert.rejects(saving, isError('Uncertain'));
       if (lost === 'stage') writeFileSync(join(f.root, 'file.txt'), 'external');
       const actual = await current.client.command('readFile', target);
-      const saved = await current.client.command('saveFile', {
-        clientId: 'alice',
-        requestId: 'b',
-        target: { checkout, path: 'b.txt' },
-        expectedVersion: disk.version,
-        text: 'saved b',
-      });
-      assert.equal(saved.kind, 'saved');
-      assertOnePublication(saved.kind === 'saved' && saved.recoveryChanges);
+      const saved = await assertOnePublication(f.base, () =>
+        current.client.command('saveFile', {
+          clientId: 'alice',
+          requestId: 'b',
+          target: { checkout, path: 'b.txt' },
+          expectedVersion: disk.version,
+          text: 'saved b',
+        }),
+      );
       assert(saved.kind === 'saved');
       // b's save moved its baseline; a lost replace left file.txt's text on disk.
       const fileDisk = lost === 'replace' ? actual : disk;

@@ -187,7 +187,6 @@ function readFeedRecords(context: RecoveryContext, entries: OperationFeedEntry[]
       result: {
         id: entry.id,
         clientId: entry.clientId,
-        recoveryChanges: [],
         checkout: entry.checkout,
         kind: entry.kind,
         outcome: 'completed',

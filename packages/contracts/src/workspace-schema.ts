@@ -109,11 +109,6 @@ export const CheckoutTreeSchema = struct({
 });
 /** The most JSON bytes a recovery state may take. */
 export const maximumRecoveryBytes = 32 * 1024 * 1024;
-export const RecoveryChangeSchema = struct({
-  clientId: WorkspaceIdentifierSchema,
-  previousRevision: natural,
-  revision: natural,
-});
 export const EntryReferenceSchema = struct({
   target: FileTargetSchema,
   identity: Schema.String,
@@ -152,7 +147,6 @@ export const OperationResultSchema = struct({
   clientId: WorkspaceIdentifierSchema,
   checkout: CheckoutTargetSchema,
   kind,
-  recoveryChanges: array(RecoveryChangeSchema),
   outcome,
   items: array(OperationItemSchema),
   message: optional(Schema.String),
@@ -161,7 +155,6 @@ export const SaveResultSchema = Schema.Union([
   struct({
     kind: Schema.Literal('saved'),
     disk: FileDocumentSchema,
-    recoveryChanges: array(RecoveryChangeSchema),
     persistencePending: optional(Schema.Boolean),
     message: optional(Schema.String),
   }),
