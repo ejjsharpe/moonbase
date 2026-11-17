@@ -1,13 +1,18 @@
 import { hostTokenPattern } from '@moonbase/contracts/host';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { Effect } from 'effect';
+import { Clock, Duration, Effect, Stream } from 'effect';
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientRequest,
+  type HttpClientResponse,
+} from 'effect/http';
 import {
   HostVerificationError,
   type HostVerificationReason,
 } from '@moonbase/contracts/connection-errors';
 import type { ChatHostHealth, ChatHostTarget, HostHealthReply } from '@moonbase/contracts/host';
 import type { ChatHostEndpoint } from '@moonbase/contracts/services';
-import { releaseResource } from '@moonbase/effect';
 import { decodeChatHostHealth } from '@moonbase/contracts/host-schema';
 
 export type { ChatHostEndpoint } from '@moonbase/contracts/services';
@@ -17,7 +22,7 @@ const refuse = (reason: HostVerificationReason): never => {
 };
 const maximumHealthBytes = 8 * 1024;
 /** How long one check may take, from its request until its body is read, on the caller's Clock. */
-const healthDeadline = '5 seconds';
+const healthDeadline = Duration.seconds(5);
 /** The HMAC domain for signed health proofs. */
 export const healthDomain = 'moonbase-daemon-health-v1';
 const identity = (value: unknown): value is string =>
@@ -145,123 +150,143 @@ export const requestUpgradeNonce = (
       : Effect.succeed({ health, upgradeNonce }),
   );
 
+/** Refuses a body past `maximumHealthBytes` as it arrives, before anything decodes it. */
+const readBoundedBody = (response: HttpClientResponse.HttpClientResponse) =>
+  response.stream.pipe(
+    Stream.mapError(
+      (error) =>
+        new HostVerificationError({
+          reason: error.reason._tag === 'EmptyBodyError' ? 'empty' : 'read-failed',
+        }),
+    ),
+    Stream.runFoldEffect(
+      () => ({ chunks: [] as Uint8Array[], length: 0 }),
+      (body, chunk) => {
+        const length = body.length + chunk.byteLength;
+        if (length > maximumHealthBytes)
+          return Effect.fail(new HostVerificationError({ reason: 'too-large' }));
+        body.chunks.push(chunk);
+        return Effect.succeed({ chunks: body.chunks, length });
+      },
+    ),
+    Effect.map(({ chunks, length }) => {
+      const bytes = new Uint8Array(length);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return bytes;
+    }),
+  );
+
+/** Checks a health reply: its status, its type, then its bounded body against the request. */
+const readHealthReply = (
+  response: HttpClientResponse.HttpClientResponse,
+  endpoint: ChatHostEndpoint,
+  nonce: string,
+) =>
+  Effect.gen(function* () {
+    if (response.status === 401 || response.status === 403)
+      return yield* new HostVerificationError({ reason: 'rejected' });
+    if (response.status < 200 || response.status > 299)
+      return yield* new HostVerificationError({ reason: 'status' });
+    if (!/^application\/json(?:\s*;|$)/i.test(response.headers['content-type'] ?? ''))
+      return yield* new HostVerificationError({ reason: 'not-json' });
+    const bytes = yield* readBoundedBody(response);
+    return yield* Effect.try({
+      try: () => {
+        let value: unknown;
+        try {
+          value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+        } catch {
+          return refuse('malformed');
+        }
+        const health = validateHostHealth(value, endpoint.expected),
+          reply = value as Record<string, unknown>,
+          upgradeNonce = reply.upgradeNonce;
+        if (upgradeNonce !== undefined && !nonceValid(upgradeNonce)) return refuse('invalid');
+        if (
+          reply.nonce !== nonce ||
+          !matchesProof(
+            reply.proof,
+            signature(endpoint.token, 'response', nonce, health, upgradeNonce),
+          )
+        )
+          return refuse('unproved');
+        return upgradeNonce === undefined ? { health } : { health, upgradeNonce };
+      },
+      catch: (error) =>
+        error instanceof HostVerificationError
+          ? error
+          : new HostVerificationError({ reason: 'read-failed' }),
+    });
+  });
+
+/**
+ * The request never follows a redirect with the credential, sends no cookies and adds no tracing
+ * headers: the host sees only the health route, its nonce and its proof.
+ */
+const healthRequestInit: globalThis.RequestInit = {
+  redirect: 'error',
+  credentials: 'omit',
+  cache: 'no-store',
+};
+
 const readSignedHealth = (
   endpoint: ChatHostEndpoint,
 ): Effect.Effect<{ health: ChatHostHealth; upgradeNonce?: string }, HostVerificationError> =>
-  Effect.suspend(() => {
-    // A deadline before the host answered is `unreachable`; one while its body stalls, `read-failed`.
-    let answered = false;
-    return Effect.flatMap(
-      Effect.try({
-        try: () => {
-          const origin = endpointOrigin(endpoint),
-            nonce = randomBytes(32).toString('base64url');
-          return {
-            origin,
-            nonce,
-            authorization: `Moonbase-HMAC-SHA256 ${signature(endpoint.token, 'request', nonce)}`,
-          };
-        },
-        catch: (error) =>
-          error instanceof HostVerificationError
-            ? error
-            : new HostVerificationError({ reason: 'endpoint' }),
-      }),
-      ({ origin, nonce, authorization }) =>
-        Effect.flatMap(
-          Effect.tryPromise({
-            try: (signal) =>
-              fetch(`${origin}/v1/health`, {
-                headers: {
-                  Authorization: authorization,
-                  'X-Moonbase-Nonce': nonce,
-                  Accept: 'application/json',
-                },
-                redirect: 'error',
-                credentials: 'omit',
-                cache: 'no-store',
-                signal,
-              }),
-            catch: () => new HostVerificationError({ reason: 'unreachable' }),
+  Effect.gen(function* () {
+    const { origin, nonce, authorization } = yield* Effect.try({
+      try: () => {
+        const origin = endpointOrigin(endpoint),
+          nonce = randomBytes(32).toString('base64url');
+        return {
+          origin,
+          nonce,
+          authorization: `Moonbase-HMAC-SHA256 ${signature(endpoint.token, 'request', nonce)}`,
+        };
+      },
+      catch: (error) =>
+        error instanceof HostVerificationError
+          ? error
+          : new HostVerificationError({ reason: 'endpoint' }),
+    });
+    const client = HttpClient.withScope(yield* HttpClient.HttpClient);
+    const started = yield* Clock.currentTimeMillis;
+    // One deadline for the whole check: before the host answered it is `unreachable`, while its
+    // body stalls `read-failed`.
+    const response = yield* client
+      .execute(
+        HttpClientRequest.get(`${origin}/v1/health`).pipe(
+          HttpClientRequest.setHeaders({
+            Authorization: authorization,
+            'X-Moonbase-Nonce': nonce,
+            Accept: 'application/json',
           }),
-          (response) => {
-            answered = true;
-            return Effect.acquireUseRelease(
-              Effect.sync(() => response.body?.getReader()),
-              (reader) =>
-                Effect.tryPromise({
-                  try: async () => {
-                    if (response.status === 401 || response.status === 403)
-                      return refuse('rejected');
-                    if (!response.ok) return refuse('status');
-                    if (
-                      !/^application\/json(?:\s*;|$)/i.test(
-                        response.headers.get('content-type') ?? '',
-                      )
-                    )
-                      return refuse('not-json');
-                    if (!reader) return refuse('empty');
-                    const chunks: Uint8Array[] = [];
-                    let length = 0;
-                    while (true) {
-                      const part = await reader.read();
-                      if (part.done) break;
-                      length += part.value.byteLength;
-                      if (length > maximumHealthBytes) return refuse('too-large');
-                      chunks.push(part.value);
-                    }
-                    const bytes = new Uint8Array(length);
-                    let offset = 0;
-                    for (const chunk of chunks) {
-                      bytes.set(chunk, offset);
-                      offset += chunk.byteLength;
-                    }
-                    let value: unknown;
-                    try {
-                      value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
-                    } catch {
-                      return refuse('malformed');
-                    }
-                    const health = validateHostHealth(value, endpoint.expected),
-                      reply = value as Record<string, unknown>,
-                      upgradeNonce = reply.upgradeNonce;
-                    if (upgradeNonce !== undefined && !nonceValid(upgradeNonce))
-                      return refuse('invalid');
-                    if (
-                      reply.nonce !== nonce ||
-                      !matchesProof(
-                        reply.proof,
-                        signature(endpoint.token, 'response', nonce, health, upgradeNonce),
-                      )
-                    )
-                      return refuse('unproved');
-                    return upgradeNonce === undefined ? { health } : { health, upgradeNonce };
-                  },
-                  catch: (error) =>
-                    error instanceof HostVerificationError
-                      ? error
-                      : new HostVerificationError({ reason: 'read-failed' }),
-                }),
-              (reader) =>
-                releaseResource(async () => {
-                  try {
-                    await reader?.cancel();
-                  } finally {
-                    reader?.releaseLock();
-                  }
-                }),
-            );
-          },
         ),
-    ).pipe(
+      )
+      .pipe(
+        Effect.mapError(() => new HostVerificationError({ reason: 'unreachable' })),
+        Effect.timeoutOrElse({
+          duration: healthDeadline,
+          orElse: () => Effect.fail(new HostVerificationError({ reason: 'unreachable' })),
+        }),
+      );
+    const remaining = Math.max(
+      0,
+      Duration.toMillis(healthDeadline) - ((yield* Clock.currentTimeMillis) - started),
+    );
+    return yield* readHealthReply(response, endpoint, nonce).pipe(
       Effect.timeoutOrElse({
-        duration: healthDeadline,
-        orElse: () =>
-          Effect.fail(
-            new HostVerificationError({
-              reason: answered ? 'read-failed' : 'unreachable',
-            }),
-          ),
+        duration: remaining,
+        orElse: () => Effect.fail(new HostVerificationError({ reason: 'read-failed' })),
       }),
     );
-  });
+  }).pipe(
+    // Closing the request's scope aborts it, so a reply is never left open behind the check.
+    Effect.scoped,
+    Effect.provide(FetchHttpClient.layer),
+    Effect.provideService(FetchHttpClient.RequestInit, healthRequestInit),
+    Effect.provideService(HttpClient.TracerPropagationEnabled, false),
+  );

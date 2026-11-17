@@ -29,9 +29,9 @@ import {
 } from '@moonbase/contracts/host';
 import { rpcLimits } from '@moonbase/contracts/rpc-upgrade';
 import { ConnectionService, type VerifiedChatEndpoint } from '@moonbase/contracts/services';
-import { requestUpgradeNonce } from './health.ts';
+import { requestUpgradeNonce } from '../health.ts';
 import * as P from './protocol.ts';
-import { upgradeProtocols } from './upgrade-proof.ts';
+import { upgradeProtocols } from '../upgrade-proof.ts';
 
 /** What a watch delivers: a value (`reset` when it replaced missed updates) or a gap. */
 export type WatchUpdate<A> = { value: A; reset: boolean } | { reconnecting: true };
