@@ -2,10 +2,12 @@ import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import type { ConversationId, Cursor, Harness } from '@earendil-works/pi-durable';
 import {
   Cause,
+  Deferred,
   Effect,
   Exit,
   Fiber,
   FiberSet,
+  Option,
   RcMap,
   Ref,
   Semaphore,
@@ -141,19 +143,42 @@ export class Host {
   /**
    * Runs `effect` as the host's own work: a caller that stops waiting leaves it running, and
    * closing the host waits for it. Work the closing host interrupted, or refused because it had
-   * closed, fails as the store's.
+   * closed, fails as the store's, unless its `body` had already ended: closing interrupts at the
+   * first boundary after an uninterruptible body, which would discard what it committed, so the
+   * body's own result is returned instead.
    */
-  own<A>(effect: Effect.Effect<A, ChatError>): Effect.Effect<A, ChatError> {
+  own<A>(
+    effect: Effect.Effect<A, ChatError>,
+    body?: Deferred.Deferred<A, ChatError>,
+  ): Effect.Effect<A, ChatError> {
     return Effect.uninterruptibleMask((restore) =>
       Effect.gen({ self: this }, function* () {
         const fiber = yield* FiberSet.run(this.work, effect);
         const exit = yield* restore(Fiber.await(fiber)).pipe(
           Effect.onInterrupt(() => Effect.sync(() => fiber.interruptUnsafe())),
         );
-        if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause))
-          return yield* Effect.fail(safeError(null));
+        if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) {
+          const ended = body ? yield* Deferred.poll(body) : Option.none();
+          return yield* Option.isSome(ended) ? ended.value : Effect.fail(safeError(null));
+        }
         return yield* exit;
       }),
+    );
+  }
+  /** Runs a mutation's committing `body` as owned, admitted work; see `own` for its result. */
+  ownMutation<A>(
+    wrap: (body: Effect.Effect<A, ChatError>) => Effect.Effect<A, ChatError>,
+    body: Effect.Effect<A, ChatError>,
+  ): Effect.Effect<A, ChatError> {
+    return Effect.flatMap(Deferred.make<A, ChatError>(), (ended) =>
+      this.own(
+        this.admitMutation(
+          wrap(
+            Effect.uninterruptible(body.pipe(Effect.onExit((exit) => Deferred.done(ended, exit)))),
+          ),
+        ),
+        ended,
+      ),
     );
   }
   /**
@@ -203,17 +228,17 @@ export class Host {
     if (!isChatMutation(operation))
       return this.own(isCancellableChatRead(operation) ? invoke : Effect.uninterruptible(invoke));
     // Counted inside the owned work, so Quit still sees a mutation whose caller stopped waiting.
-    if (operation !== 'sendChat')
-      return this.own(this.admitMutation(Effect.uninterruptible(invoke)));
+    if (operation !== 'sendChat') return this.ownMutation((body) => body, invoke);
     const { target } = data as ChatInput<'sendChat'>;
-    // The metadata check runs to completion, then the Send waits its turn for the conversation.
-    return this.own(
-      this.admitMutation(
+    // The metadata check runs to completion, then the Send waits its turn for the conversation; a
+    // Send still waiting when the store closes never started, so it fails as the store's.
+    return this.ownMutation(
+      (body) =>
         Effect.andThen(
           Effect.uninterruptible(this.metadata(target)),
-          this.admitSend(target.conversationId, invoke),
+          this.admitSend(target.conversationId, body),
         ),
-      ),
+      invoke,
     );
   }
   /** Reads Pi with the signal that aborts it when the caller stops waiting. */

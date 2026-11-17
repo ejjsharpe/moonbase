@@ -52,16 +52,13 @@ export function markFolderAsProject(
   host: Host,
   target: ChatTarget,
 ): Effect.Effect<void, ChatError> {
-  return host.own(
-    host.admitMutation(
-      Effect.uninterruptible(
-        Effect.gen(function* () {
-          if (!(yield* host.metadata(target, true)).settings?.ownFolder) return;
-          yield* updateMetadata(host, target, (meta) => {
-            delete meta.settings?.ownFolder;
-          });
-        }),
-      ),
-    ),
+  return host.ownMutation(
+    (body) => body,
+    Effect.gen(function* () {
+      if (!(yield* host.metadata(target, true)).settings?.ownFolder) return;
+      yield* updateMetadata(host, target, (meta) => {
+        delete meta.settings?.ownFolder;
+      });
+    }),
   );
 }
