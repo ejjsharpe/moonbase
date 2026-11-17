@@ -55,9 +55,13 @@ export function requestQuit(state: WindowState, id: string): Transition {
   const { phase } = state;
   if (phase._tag === 'Closing') return [{}, state];
   if (phase._tag === 'Quitting') return [{ show: true }, state];
-  if (!state.ready) return [{ show: true }, { ...state, phase: { _tag: 'Open', quitRequested: true } }];
+  if (!state.ready)
+    return [{ show: true }, { ...state, phase: { _tag: 'Open', quitRequested: true } }];
   const quitting = { _tag: 'Quitting', id, stage: 'preserve' } as const;
-  return [{ show: true, send: [quitAction(quitting)] }, { ...state, phase: quitting }];
+  return [
+    { show: true, send: [quitAction(quitting)] },
+    { ...state, phase: quitting },
+  ];
 }
 /**
  * The document watches for actions: it is ready for Quit and to hear of cleanup failures. A watch

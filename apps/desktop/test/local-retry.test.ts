@@ -11,22 +11,15 @@ import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import type { ChatSession } from '@moonbase/contracts/chat';
 import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
 import { makeChatClient } from '@moonbase/application/chat/clients';
-import { ChatIpcSession } from '../src/main/chat/session.ts';
-import { makeIpcFixture, noChat } from './fixtures/ipc-fixture.ts';
+import { fakeChatTargets, makeIpcFixture } from './fixtures/ipc-fixture.ts';
 
 /** Local chat over desktop IPC, as the renderer sends it, to `runtime`'s chat. */
-const overIpc = (runtime: ManagedRuntime.ManagedRuntime<never, never>, context: ChatSession) => {
-  const session = new ChatIpcSession(makeChatClient(runtime as never), { mode: 'local' }, context);
-  return makeIpcFixture({
+const overIpc = (runtime: ManagedRuntime.ManagedRuntime<never, never>, context: ChatSession) =>
+  makeIpcFixture({
     chat: {
-      backends: {
-        ...noChat,
-        getTargets: () => [{ id: 'local', label: 'Local', mode: 'local' }],
-        getSession: () => session,
-      },
+      backends: fakeChatTargets({ local: { chat: makeChatClient(runtime as never), context } }),
     },
   });
-};
 
 test('desktop recovers an exact committed Create before renewed folder approval, while new Create still requires approval', async (t) => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-local-retry-'))),

@@ -1,15 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { BrowserWindow } from 'electron';
-import {
-  Cause,
-  Context,
-  Deferred,
-  Effect,
-  Exit,
-  FiberSet,
-  PubSub,
-  SubscriptionRef,
-} from 'effect';
+import { Cause, Context, Deferred, Effect, Exit, FiberSet, PubSub, SubscriptionRef } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { boundApplicationError } from '../ipc/ipc-errors.ts';
 import type { WindowAction } from '../ipc/window-rpcs.ts';
@@ -84,10 +75,9 @@ export const makeWindowLifecycle = ({ window, deliver }: WindowLifecycleOptions)
     const publish = (action: WindowAction) => void PubSub.publishUnsafe(actions, action);
     /** Moves the state in one step, then does what the move asks. */
     const transition = (
-      move: (current: WindowState.WindowState) => readonly [
-        WindowState.WindowEffects,
-        WindowState.WindowState,
-      ],
+      move: (
+        current: WindowState.WindowState,
+      ) => readonly [WindowState.WindowEffects, WindowState.WindowState],
     ) =>
       Effect.flatMap(
         SubscriptionRef.modify(state, (current) => move(current)),

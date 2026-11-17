@@ -1,7 +1,7 @@
 import { Cause, Effect, Exit, Stream, type ManagedRuntime } from 'effect';
 
 // Legacy (epic #273 D16): the chat's Promise clients and controller run their Effects through
-// these until CL-22 #295 moves chat to services and atoms, and CL-24 #298 Electron main.
+// these until CL-22 #295 moves chat to services and atoms.
 
 /** The root runtime's runner, the one the chat runs its Effects on. */
 export type ChatRunner = Pick<ManagedRuntime.ManagedRuntime<never, unknown>, 'runPromiseExit'>;

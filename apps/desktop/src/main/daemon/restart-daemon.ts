@@ -38,6 +38,8 @@ export const restartDaemon = ({
       }),
     }).pipe(
       Effect.andThen(start),
-      Effect.catch(({ message }) => Effect.sync(() => dialog.showErrorBox('Moonbase daemon', message))),
+      Effect.catch(({ message }) =>
+        Effect.sync(() => dialog.showErrorBox('Moonbase daemon', message)),
+      ),
     );
   });

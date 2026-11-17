@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Cause, Effect, Exit } from 'effect';
 import { toWireError } from '@moonbase/contracts/workspace-host-errors';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import type { ApplicationError } from '@moonbase/contracts/errors';
 import { toChatApplicationError } from '@moonbase/contracts/chat-legacy-errors';
 import type {
   ChatServiceShape,

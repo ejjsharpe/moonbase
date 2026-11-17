@@ -6,14 +6,14 @@ import { ApplicationError } from '@moonbase/contracts/errors';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { ipcLimits } from '../src/ipc/ipc-limits.ts';
 import { makePortSocket } from '../src/ipc/port-socket.ts';
-import { ChatIpcSession } from '../src/main/chat/session.ts';
 import { toMessagePortLike } from '../src/renderer/ipc/desktop-ipc.ts';
 import {
+  fakeChatTargets,
   makeIpcFixture,
-  noChat,
   waitFor,
   type FakeWorkspaceClient,
 } from './fixtures/ipc-fixture.ts';
+import type { ChatClient } from '@moonbase/contracts/chat';
 import { ManagedRuntime, Layer } from 'effect';
 
 const target: CheckoutTarget = {
@@ -75,15 +75,18 @@ test('a port message over the length bound, or one that is not text, closes the 
 test('a document holds at most its connection limit, and a closed one frees its place', async () => {
   const f = await makeIpcFixture();
   try {
-    const connections = Array.from({ length: ipcLimits.connections }, () => f.connectRaw());
+    const connections = await Promise.all(
+      Array.from({ length: ipcLimits.connections }, () => f.connectRaw()),
+    );
     assert(connections.every(Boolean));
-    assert.equal(f.connectRaw(), undefined);
+    assert.equal(await f.connectRaw(), undefined);
     connections[0]!.close();
-    await waitFor(() => {
-      const connection = f.connectRaw();
+    for (;;) {
+      const connection = await f.connectRaw();
       connection?.close();
-      return !!connection;
-    });
+      if (connection) break;
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
   } finally {
     await f.dispose();
   }
@@ -111,7 +114,7 @@ test('main refuses a frame it cannot read, an unknown procedure and an input its
       ].map((cleanupError) => ['answerQuit', { id: 'quit', consent: true, cleanupError }] as const),
     ] as const)
       assert.equal((await f.call(tag, payload)).error?._tag, 'Die', tag);
-    const raw = f.connectRaw()!;
+    const raw = (await f.connectRaw())!;
     raw.send('{not json');
     assert.equal((await raw.next())._tag, 'Defect');
     raw.close();
@@ -123,38 +126,24 @@ test('main refuses a frame it cannot read, an unknown procedure and an input its
 
 test('each kind runs at most its limit of requests and of watches at once, refusing more', async () => {
   const workspace = heldWorkspace();
-  const sessions = new Map(
-    (['local', 'remote'] as const).map((id) => [
-      id,
-      new ChatIpcSession(
-        {
-          command: (_operation, _input, options) =>
-            workspace.client.command('readFile', read, options) as never,
-          watch: () => async () => {},
-          watchChatList: () => async () => {},
-        },
-        { mode: 'local' },
-        context,
-      ),
-    ]),
-  );
+  const chat: ChatClient = {
+    command: (_operation, _input, options) =>
+      workspace.client.command('readFile', read, options) as never,
+    watch: () => async () => {},
+    watchChatList: () => async () => {},
+  };
   const f = await makeIpcFixture({
     editor: { client: workspace.client },
     chat: {
       backends: {
-        ...noChat,
-        getTargets: () => [
-          { id: 'local', label: 'Local', mode: 'local' },
-          { id: 'remote', label: 'Remote', mode: 'remote' },
-        ],
-        getSession: (id) => sessions.get(id),
-        chooseFolder: async () => null,
+        ...fakeChatTargets({ local: { chat, context }, remote: { chat, context } }),
+        chooseFolder: Effect.succeed(null),
       },
     },
   });
   try {
     f.approvals.adoptCheckout(target);
-    const raw = f.connectRaw()!;
+    const raw = (await f.connectRaw())!;
     let id = 0;
     const send = (tag: string, payload: unknown) =>
       raw.send({ _tag: 'Request', id: String(id++), tag, payload, headers: [] });
@@ -200,26 +189,16 @@ test('each kind runs at most its limit of requests and of watches at once, refus
 
 test('the chat request size bound admits the largest escaped message', async () => {
   const sent: unknown[] = [];
-  const session = new ChatIpcSession(
-    {
-      command: async (_operation, input) => {
-        sent.push(input);
-        throw new ApplicationError({ code: 'Uncertain', message: 'Admission reply lost' });
-      },
-      watch: () => async () => {},
-      watchChatList: () => async () => {},
+  const chat: ChatClient = {
+    command: async (_operation, input) => {
+      sent.push(input);
+      throw new ApplicationError({ code: 'Uncertain', message: 'Admission reply lost' });
     },
-    { mode: 'local' },
-    context,
-  );
+    watch: () => async () => {},
+    watchChatList: () => async () => {},
+  };
   const f = await makeIpcFixture({
-    chat: {
-      backends: {
-        ...noChat,
-        getTargets: () => [{ id: 'local', label: 'Local', mode: 'local' }],
-        getSession: () => session,
-      },
-    },
+    chat: { backends: fakeChatTargets({ local: { chat, context } }) },
   });
   try {
     const chat = f.target('local').chat;
@@ -278,7 +257,7 @@ test('releasing a document interrupts its requests, closes its watches and conne
   const f = await makeIpcFixture({ editor: { client: workspace.client } });
   try {
     f.approvals.adoptCheckout(target);
-    const raw = f.connectRaw()!;
+    const raw = (await f.connectRaw())!;
     const reading = f.editor.command('readFile', read);
     void reading.catch(() => {});
     f.editor.watch(
@@ -296,9 +275,10 @@ test('releasing a document interrupts its requests, closes its watches and conne
     const next = f.editor.command('readFile', read);
     void next.catch(() => {});
     await waitFor(() => workspace.state.reads === 2);
+    await f.close();
+    assert.equal(workspace.state.cancelled, 2);
+    assert.equal(await f.connectRaw(), undefined);
   } finally {
     await f.dispose();
   }
-  assert.equal(workspace.state.cancelled, 2);
-  assert.equal(f.connectRaw(), undefined);
 });

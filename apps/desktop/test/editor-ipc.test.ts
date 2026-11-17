@@ -14,6 +14,7 @@ import {
   type RecoveryLayout,
   type RecoveryOutline,
 } from '@moonbase/contracts/recovery';
+import { Effect } from 'effect';
 import type { NativeActions } from '../src/main/native-actions.ts';
 import {
   makeIpcFixture,
@@ -93,7 +94,7 @@ const layout = (checkouts: CheckoutTarget[]): RecoveryLayout => {
 };
 const native = (overrides: Partial<NativeActions> = {}): NativeActions => ({
   ...unusedNative,
-  chooseCheckout: async () => '/approved',
+  chooseCheckout: Effect.succeed('/approved'),
   ...overrides,
 });
 
@@ -334,10 +335,10 @@ test('copyPaths and revealPath reach native actions only for approved checkouts 
   const f = await makeIpcFixture({
     editor: {
       native: native({
-        copyText: async (text) => void copied.push(text),
-        reveal: async (path) => void revealed.push(path),
+        copyText: (text) => Effect.sync(() => void copied.push(text)),
+        reveal: (path) => Effect.sync(() => void revealed.push(path)),
       }),
-      localHostId: async () => localHost,
+      localHostId: Effect.sync(() => localHost),
     },
   });
   const copy = (paths: unknown, relative: unknown = false) =>
@@ -398,19 +399,23 @@ test('copyPaths and revealPath reach native actions only for approved checkouts 
 test('captured imports belong to the document: released with it, or at once when their request is cancelled', async () => {
   const released: string[][] = [];
   let capture = Promise.withResolvers<string[]>();
+  const choose = Promise.withResolvers<string[]>();
   let captures = 0;
   let release: () => Promise<void> = async () => {};
   const f = await makeIpcFixture({
     editor: {
       native: native({
-        imports: () => {
-          captures++;
-          return capture.promise;
-        },
-        release: async ({ references }) => {
-          released.push(references);
-          await release();
-        },
+        choosePaths: () => Effect.promise(() => choose.promise),
+        capture: () =>
+          Effect.promise(() => {
+            captures++;
+            return capture.promise;
+          }),
+        release: ({ references }) =>
+          Effect.promise(async () => {
+            released.push(references);
+            await release();
+          }),
       }),
     },
   });
@@ -419,6 +424,13 @@ test('captured imports belong to the document: released with it, or at once when
     capture.resolve(['kept']);
     assert.deepEqual(await f.shell.dropImports(target, [new File([''], '/dropped.txt')]), ['kept']);
     assert.deepEqual(released, []);
+    // A request whose document goes while the user chooses captures nothing.
+    const choosing = f.shell.pasteImports(target);
+    void choosing.catch(() => {});
+    await f.releaseDocument();
+    choose.resolve(['/pasted']);
+    await assert.rejects(choosing);
+    assert.equal(captures, 1);
     // A capture still under way when its document goes finishes, and is released, not offered.
     capture = Promise.withResolvers();
     const late = f.shell.pasteImports(target);

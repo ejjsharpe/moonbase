@@ -111,15 +111,19 @@ const watchSource = (chat: ChatServiceShape, source: ChatTranscriptSource) =>
       Stream.take(1),
       Stream.runDrain,
     );
-    return Effect.flatMap(SubscriptionRef.get(observed), (observation) => {
-      if (observation._tag === 'Failed') return Effect.fail(observation.error);
-      if (observation._tag === 'Waiting') return Effect.fail(sourceChanged());
-      const { snapshot } = observation;
-      return snapshot.observationStatus === 'reconnecting' ||
-        !areJsonValuesEqual(snapshot.run?.transcript?.source, source)
-        ? Effect.fail(sourceChanged())
-        : Effect.void;
-    });
+    // A yield first, so a snapshot already received is the one checked.
+    return Effect.flatMap(
+      Effect.andThen(Effect.yieldNow, SubscriptionRef.get(observed)),
+      (observation) => {
+        if (observation._tag === 'Failed') return Effect.fail(observation.error);
+        if (observation._tag === 'Waiting') return Effect.fail(sourceChanged());
+        const { snapshot } = observation;
+        return snapshot.observationStatus === 'reconnecting' ||
+          !areJsonValuesEqual(snapshot.run?.transcript?.source, source)
+          ? Effect.fail(sourceChanged())
+          : Effect.void;
+      },
+    );
   });
 
 /**
@@ -131,9 +135,12 @@ const readSource = (
   read: (input: ContentInput) => Effect.Effect<ContentReply, ApplicationError>,
   input: Pick<TranscriptCopy, 'source' | 'selection'>,
   check: Effect.Effect<void, ApplicationError>,
-  receive: (
-    chunk: { selection: ChatTranscriptSelection; offset: number; encoding: string; data: string },
-  ) => Effect.Effect<void, ApplicationError>,
+  receive: (chunk: {
+    selection: ChatTranscriptSelection;
+    offset: number;
+    encoding: string;
+    data: string;
+  }) => Effect.Effect<void, ApplicationError>,
 ) =>
   Effect.gen(function* () {
     const { source, selection } = input;

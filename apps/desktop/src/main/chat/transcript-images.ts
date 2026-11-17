@@ -74,7 +74,8 @@ export const makeTranscriptImages = (
         Effect.sync(() => {
           const key = JSON.stringify(image);
           const issued = tokens.get(key);
-          if (issued && images.get(issued)) return `moonbase://editor${transcriptImagePath}${issued}`;
+          if (issued && images.get(issued))
+            return `moonbase://editor${transcriptImagePath}${issued}`;
           const token = randomBytes(32).toString('base64url');
           images.set(token, { key, image });
           tokens.set(key, token);

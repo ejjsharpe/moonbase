@@ -16,7 +16,12 @@ export type WindowEventsOptions = {
  * shows it, Quit asks the document first, a replaced document is released, and a crashed renderer
  * asks the user to recover the workbench or quit.
  */
-export const installWindowEvents = ({ app, window, dialog, releaseDocument }: WindowEventsOptions) =>
+export const installWindowEvents = ({
+  app,
+  window,
+  dialog,
+  releaseDocument,
+}: WindowEventsOptions) =>
   Effect.gen(function* () {
     const lifecycle = yield* WindowLifecycle;
     const run = yield* FiberSet.makeRuntime();

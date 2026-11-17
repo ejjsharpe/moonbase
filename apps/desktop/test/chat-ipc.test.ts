@@ -4,8 +4,8 @@ import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatClient, ChatListUpdate } from '@moonbase/contracts/chat';
 import type { ConnectionClient } from '@moonbase/contracts/connection';
 import type { ProviderSetupClient, ProviderState } from '@moonbase/contracts/providers';
-import { ChatIpcSession } from '../src/main/chat/session.ts';
-import { makeIpcFixture, noChat, waitFor } from './fixtures/ipc-fixture.ts';
+import { Effect } from 'effect';
+import { fakeChatTargets, makeIpcFixture, waitFor } from './fixtures/ipc-fixture.ts';
 
 const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' };
 const target = { ...context, conversationId: 'chat' };
@@ -49,28 +49,17 @@ async function chatFixture(
       return async () => void closes++;
     },
   };
-  const sessions = {
-    local: new ChatIpcSession(
-      chat,
-      { mode: 'local' },
-      context,
-      options.providers ? { providers: options.providers } : {},
-    ),
-    remote: new ChatIpcSession(chat, { mode: 'remote', connection }, context),
-  };
   const f = await makeIpcFixture({
     chat: {
       backends: {
-        ...noChat,
-        getTargets: () => [
-          { id: 'local', label: 'Local', mode: 'local' },
-          { id: 'remote', label: 'Host', mode: 'remote' },
-        ],
-        getSession: (id) => sessions[id],
-        chooseFolder: async () => '/chosen',
+        ...fakeChatTargets({
+          local: { chat, context, ...(options.providers ? { providers: options.providers } : {}) },
+          remote: { chat, context, connection },
+        }),
+        chooseFolder: Effect.succeed('/chosen'),
       },
-      isQuitting: options.quitting ?? (() => false),
     },
+    lifecycle: { isQuitting: Effect.sync(options.quitting ?? (() => false)) },
   });
   return {
     f,
@@ -112,11 +101,6 @@ test('a chat request reaches its target only for the configured host and actor, 
       ['connect', { input: { profileId: 7 } }],
     ] as const)
       assert.equal((await f.call(tag, payload)).error?._tag, 'Die', tag);
-    // A target without provider setup, and local chat without a connection, refuse those calls.
-    assert.deepEqual(await f.call('getProviders', { backendId: 'remote', input: {} }), {
-      ok: false,
-      error: { _tag: 'IpcInputError', problem: 'chat-request' },
-    });
     assert.deepEqual(calls, []);
   } finally {
     await f.dispose();

@@ -1,9 +1,16 @@
-import { Cause, Effect, Layer, ManagedRuntime, PubSub, Queue, Scope, Stream } from 'effect';
-import { runApplicationEffect } from '@moonbase/application/chat/promises';
+import { Cause, Effect, Exit, Layer, ManagedRuntime, PubSub, Queue, Scope, Stream } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ObservationClose } from '@moonbase/contracts/common';
 import type { RecoveryOutline } from '@moonbase/contracts/recovery';
-import type { WorkspaceServiceShape } from '@moonbase/contracts/services';
+import type {
+  ChatServiceShape,
+  ConnectionServiceShape,
+  ProviderSetupService,
+  WorkspaceServiceShape,
+} from '@moonbase/contracts/services';
+import type { ChatClient, ChatSession } from '@moonbase/contracts/chat';
+import type { ConnectionClient } from '@moonbase/contracts/connection';
+import type { ProviderSetupClient } from '@moonbase/contracts/providers';
 import { normalizeApplicationError } from '@moonbase/effect';
 import type { WorkspaceCommand, WorkspaceEvent } from '@moonbase/contracts/workspace';
 import type { MessagePortLike } from '../../src/ipc/port-socket.ts';
@@ -13,12 +20,12 @@ import {
   type DocumentHandlersOptions,
 } from '../../src/main/ipc/document-handlers.ts';
 import type { ChatIpcOptions } from '../../src/main/ipc/chat-ipc.ts';
+import type { ChatTargetClients } from '../../src/main/chat/chat-backends.ts';
+import { makeChatDocuments, type ChatDocumentOptions } from '../../src/main/chat/chat-document.ts';
 import { EditorApprovals } from '../../src/main/ipc/editor-approvals.ts';
 import type { EditorIpcOptions } from '../../src/main/ipc/editor-ipc.ts';
 import { makeIpcServer } from '../../src/main/ipc/ipc-server.ts';
 import type { NativeActions } from '../../src/main/native-actions.ts';
-import type { SessionImage } from '../../src/main/chat/session.ts';
-import type { TranscriptImageReader } from '../../src/main/chat/transcript-native.ts';
 import {
   makeChatTargetClients,
   makeShellClients,
@@ -30,7 +37,7 @@ import { makeWorkspaceClient, type FakeWorkspaceClient } from './workspace-clien
 export type { FakeWorkspaceClient };
 
 /** A callback watch as a stream, closed (ignoring a close failure) when the stream ends. */
-const watched = <A>(
+export const watched = <A>(
   watch: (receive: (value: A) => void, fail: (error: ApplicationError) => void) => ObservationClose,
 ) =>
   Stream.callback<A, ApplicationError>((queue) =>
@@ -44,6 +51,85 @@ const watched = <A>(
       (close) => Effect.promise(() => close().catch(() => {})),
     ),
   );
+/** A Promise command as the Effect a service returns, aborted when interrupted. */
+const command = <A>(run: (signal: AbortSignal) => Promise<A>) =>
+  Effect.tryPromise({ try: run, catch: (error) => normalizeApplicationError(error) });
+/** The chat service main calls, over a test's Promise fake. */
+export const toChatService = (client: ChatClient): ChatServiceShape =>
+  new Proxy({} as ChatServiceShape, {
+    get: (_, name: string) => {
+      if (name === 'watch')
+        return (input: Parameters<ChatClient['watch']>[0]) =>
+          watched((receive, fail) => client.watch(input, receive as never, fail));
+      if (name === 'watchChatList')
+        return (input: Parameters<ChatClient['watchChatList']>[0]) =>
+          watched((receive, fail) => client.watchChatList(input, receive as never, fail));
+      return (input: never) =>
+        command((signal) => client.command(name as never, input, { signal }));
+    },
+  });
+/** The provider setup main calls, over a test's Promise fake for every owner. */
+export const toProviderService = (
+  client: ProviderSetupClient,
+): ProviderSetupService['Service'] => ({
+  forOwner: () =>
+    new Proxy({} as ReturnType<ProviderSetupService['Service']['forOwner']>, {
+      get: (_, name: string) => (input: never) =>
+        command((signal) => client.command(name as never, input, { signal })),
+    }),
+  releaseOwner: () => Effect.void,
+  watch: () => watched((receive, fail) => client.watch(receive as never, fail)),
+  getProviderUrl: () => Effect.die('unused'),
+});
+/** The remote connection main calls, over a test's Promise fake. */
+export const toConnectionService = (client: ConnectionClient): ConnectionServiceShape =>
+  new Proxy({} as ConnectionServiceShape, {
+    get: (_, name: string) => {
+      if (name === 'watch')
+        return () => watched((receive, fail) => client.watch(receive as never, fail));
+      return (input: never) =>
+        command((signal) => client.command(name as never, input, { signal }));
+    },
+  });
+/** A test's fakes of one chat target, as main reaches them. */
+export type FakeChatTarget = {
+  chat: ChatClient;
+  context: ChatSession;
+  providers?: ProviderSetupClient;
+  connection?: ConnectionClient;
+};
+const unusedProviders: ProviderSetupClient = {
+  command: async () => {
+    throw new ApplicationError({
+      code: 'Unavailable',
+      message: 'Providers are not part of this test.',
+    });
+  },
+  watch: () => async () => {},
+};
+/** Chat backends whose targets are `targets`' fakes, as their clients reach main. */
+export const fakeChatTargets = (
+  targets: Partial<Record<'local' | 'remote', FakeChatTarget>>,
+): Pick<ChatIpcOptions['backends'], 'targets' | 'findTarget'> => {
+  const clients = Object.fromEntries(
+    Object.entries(targets).map(([id, target]) => [
+      id,
+      {
+        chat: toChatService(target.chat),
+        context: target.context,
+        providers: toProviderService(target.providers ?? unusedProviders),
+        connection: target.connection ? toConnectionService(target.connection) : null,
+      } satisfies ChatTargetClients,
+    ]),
+  ) as Partial<Record<'local' | 'remote', ChatTargetClients>>;
+  return {
+    targets: (['local', 'remote'] as const)
+      .filter((id) => targets[id])
+      .map((id) => ({ id, label: id === 'local' ? 'Local' : 'Host', mode: id })),
+    findTarget: (id) => Effect.succeed(clients[id]),
+  };
+};
+
 /** The `WorkspaceService` main serves, over a test's fake. */
 export const toWorkspaceService = (client: FakeWorkspaceClient): WorkspaceServiceShape =>
   new Proxy({} as WorkspaceServiceShape, {
@@ -87,31 +173,23 @@ export const unusedEditorClient: FakeWorkspaceClient = {
   watchRecovery: unused('The recovery watch') as never,
 };
 export const unusedNative: NativeActions = {
-  chooseCheckout: unused('The picker') as never,
-  imports: unused('Imports') as never,
-  release: async () => {},
-  copyText: unused('The clipboard') as never,
-  reveal: unused('Finder') as never,
+  chooseCheckout: Effect.die('The picker is not part of this test.'),
+  choosePaths: () => Effect.die('Imports are not part of this test.'),
+  capture: () => Effect.die('Imports are not part of this test.'),
+  release: () => Effect.void,
+  copyText: () => Effect.die('The clipboard is not part of this test.'),
+  reveal: () => Effect.die('Finder is not part of this test.'),
 };
 export const noChat: ChatIpcOptions['backends'] = {
-  getTargets: () => [],
-  getContext: unused('Chat') as never,
-  chooseFolder: unused('The folder picker') as never,
-  recentFolders: async () => [],
-  createWorktree: unused('Worktrees') as never,
-  turnIntoProject: unused('Projects') as never,
-  getSession: () => undefined,
+  targets: [],
+  findTarget: () => Effect.succeed(undefined),
+  getContext: () => Effect.die('Chat is not part of this test.'),
+  chooseFolder: Effect.die('The folder picker is not part of this test.'),
+  recentFolders: () => Effect.succeed([]),
+  createWorktree: () => Effect.die('Worktrees are not part of this test.'),
+  turnIntoProject: () => Effect.die('Projects are not part of this test.'),
 };
 
-/** A session's image as the protocol handler reads it, on `runtime`, as main binds it. */
-export const toImageReader = (
-  runtime: ManagedRuntime.ManagedRuntime<never, never>,
-  found: SessionImage | undefined,
-): TranscriptImageReader | undefined =>
-  found && {
-    image: found.image,
-    read: (signal) => runApplicationEffect(runtime, found.read, { signal }),
-  };
 /** Polls `check` until it holds, failing if it never does. */
 export async function waitFor(check: () => unknown) {
   const deadline = Date.now() + 15_000;
@@ -143,33 +221,53 @@ export type RawConnection = {
 export async function makeIpcFixture(
   options: {
     editor?: Partial<Omit<EditorIpcOptions, 'workspace'>> & { client?: FakeWorkspaceClient };
-    chat?: Partial<ChatIpcOptions>;
-    lifecycle?: DocumentHandlersOptions['lifecycle'];
+    chat?: Partial<Omit<DocumentHandlersOptions['chat'], 'documents' | 'backends'>> & {
+      backends?: Partial<ChatIpcOptions['backends']>;
+      releaseOwner?: (ownerId: string) => Effect.Effect<void, ApplicationError>;
+      perf?: ChatDocumentOptions['perf'];
+    };
+    lifecycle?: Partial<DocumentHandlersOptions['lifecycle']>;
     intercept?: DocumentHandlersOptions['intercept'];
   } = {},
 ) {
   const cleanupFailures: unknown[] = [];
-  const reportCleanup = (error: unknown) => void cleanupFailures.push(error);
+  const reportCleanup = (cause: Cause.Cause<unknown>) =>
+    Effect.sync(() => void cleanupFailures.push(Cause.squash(cause)));
   const main = ManagedRuntime.make(Layer.empty);
   const actions = await main.runPromise(PubSub.unbounded<WindowAction>());
   const approvals = options.editor?.approvals ?? new EditorApprovals();
   const scope = Scope.makeUnsafe();
+  const { releaseOwner = () => Effect.void, perf, ...chat } = options.chat ?? {};
+  const backends = { ...noChat, ...chat.backends };
+  const documents = await main.runPromise(
+    Scope.provide(
+      makeChatDocuments(
+        { findTarget: backends.findTarget, releaseOwner },
+        { isClosing: Effect.succeed(false), ...(perf ? { perf } : {}) },
+      ),
+      scope,
+    ),
+  );
   const server = await main.runPromise(
     Scope.provide(
       makeIpcServer(
         makeDocumentHandlers({
           editor: {
             native: unusedNative,
-            localHostId: async () => 'local-host',
+            localHostId: Effect.succeed('local-host'),
             reportCleanup,
             ...options.editor,
             workspace: toWorkspaceService(options.editor?.client ?? unusedEditorClient),
             approvals,
           },
-          chat: { backends: noChat, isQuitting: () => false, reportCleanup, ...options.chat },
-          actions,
-          lifecycle:
-            options.lifecycle ?? (() => ({ markReady: () => {}, answerQuit: async () => {} })),
+          chat: { ...chat, backends, documents },
+          lifecycle: {
+            actions,
+            markReady: Effect.void,
+            answerQuit: () => Effect.void,
+            isQuitting: Effect.succeed(false),
+            ...options.lifecycle,
+          },
           ...(options.intercept ? { intercept: options.intercept } : {}),
         }),
       ),
@@ -179,9 +277,9 @@ export async function makeIpcFixture(
   /** Main's ends of the ports it took. */
   const mainPorts = new Set<MessagePort>();
   /** A port pair whose main end the server takes, or undefined when it refuses one. */
-  const openPort = (): MessagePort | undefined => {
+  const openPort = async (): Promise<MessagePort | undefined> => {
     const { port1, port2 } = new MessageChannel();
-    if (server.connect(toMainPortLike(port1))) {
+    if (await main.runPromise(server.connect(toMainPortLike(port1)))) {
       mainPorts.add(port1);
       return port2;
     }
@@ -195,18 +293,17 @@ export async function makeIpcFixture(
       Layer.provideMerge(
         WorkspaceIpcLive,
         makeDesktopIpcLayer(
-          Effect.suspend(() => {
-            const port = openPort();
-            return port
+          Effect.flatMap(Effect.promise(openPort), (port) =>
+            port
               ? Effect.succeed<MessagePortLike>(toMessagePortLike(port))
-              : Effect.fail('refused');
-          }),
+              : Effect.fail('refused'),
+          ),
         ),
       ),
     );
   let renderer = makeRenderer();
-  const connectRaw = (): RawConnection | undefined => {
-    const port = openPort();
+  const connectRaw = async (): Promise<RawConnection | undefined> => {
+    const port = await openPort();
     if (!port) return undefined;
     const frames: Record<string, unknown>[] = [];
     const waiters: ((frame: Record<string, unknown>) => void)[] = [];
@@ -235,7 +332,7 @@ export async function makeIpcFixture(
   let rawId = 0;
   /** Sends one request as raw JSON on a connection of its own kind, and reads its outcome. */
   const call = async (tag: string, payload: unknown): Promise<RawReply> => {
-    raw ??= connectRaw();
+    raw ??= await connectRaw();
     if (!raw) throw Error('The server refused a raw connection.');
     const id = String(rawId++);
     raw.send({ _tag: 'Request', id, tag, payload, headers: [] });
@@ -265,6 +362,10 @@ export async function makeIpcFixture(
     call,
     actions,
     cleanupFailures,
+    /** The current document's transcript image lookup, as the `moonbase:` protocol reads it. */
+    findImages: () => main.runPromise(documents.findImages),
+    /** Runs `effect` on main's runtime, as main's own work runs. */
+    run: <A, E>(effect: Effect.Effect<A, E>) => main.runPromise(effect),
     get editor() {
       return makeWorkspaceClient(renderer);
     },
@@ -287,13 +388,17 @@ export async function makeIpcFixture(
       raw = undefined;
       const old = renderer;
       renderer = makeRenderer();
-      await main.runPromise(server.releaseDocument);
+      // A failed release has no request left to answer with, so main reports it.
+      const released = await main.runPromise(Effect.exit(server.releaseDocument));
+      if (Exit.isFailure(released)) cleanupFailures.push(Cause.squash(released.cause));
       await old.dispose();
     },
+    /** Closes main's server, as Quit does. */
+    close: () => main.runPromise(Scope.close(scope, Exit.void)),
     async dispose() {
       raw?.close();
       await renderer.dispose();
-      await main.runPromise(server.dispose);
+      await main.runPromise(Scope.close(scope, Exit.void));
       await main.dispose();
     },
   };

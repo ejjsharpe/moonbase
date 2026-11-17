@@ -90,7 +90,9 @@ export const makeLocalDaemonClient = (
       yield* Ref.set(acquired, backend);
       return backend;
     }).pipe(
-      Effect.tapError(({ message }) => Effect.logError('The local daemon is unavailable:', message)),
+      Effect.tapError(({ message }) =>
+        Effect.logError('The local daemon is unavailable:', message),
+      ),
       Effect.mapError(
         ({ code, message }) =>
           new ApplicationError({

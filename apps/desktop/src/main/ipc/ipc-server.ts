@@ -36,9 +36,8 @@ export const makeIpcServer = (handlers: DocumentHandlers) =>
 
     const startDocument = Effect.gen(function* () {
       const scope = yield* Scope.fork(documents, 'parallel');
-      const serve = yield* Deferred.make<
-        (socket: Socket.Socket) => Effect.Effect<unknown, unknown>
-      >();
+      const serve =
+        yield* Deferred.make<(socket: Socket.Socket) => Effect.Effect<unknown, unknown>>();
       const socketServer = SocketServer.SocketServer.of({
         address: NetAddress.inetAddressFromIpStringUnsafe('127.0.0.1', 0),
         run: (handler) => Effect.andThen(Deferred.succeed(serve, handler as never), Effect.never),
@@ -88,7 +87,12 @@ export const makeIpcServer = (handlers: DocumentHandlers) =>
       }).pipe(
         Effect.ignore,
         Effect.interruptible,
-        Effect.ensuring(Effect.andThen(Effect.sync(() => port.close()), leave(document))),
+        Effect.ensuring(
+          Effect.andThen(
+            Effect.sync(() => port.close()),
+            leave(document),
+          ),
+        ),
         // Started uninterruptible, so a document closed at once still closes the port.
         Effect.forkIn(document.scope, { uninterruptible: true }),
       );
@@ -114,10 +118,8 @@ export const makeIpcServer = (handlers: DocumentHandlers) =>
         ),
       /** Ends the current document's connections and what its requests hold. */
       releaseDocument: Effect.flatMap(
-        SynchronizedRef.modify(
-          state,
-          (current): readonly [Document | undefined, ServerState] =>
-            current._tag === 'Open' ? [current.document, { _tag: 'Open' }] : [undefined, current],
+        SynchronizedRef.modify(state, (current): readonly [Document | undefined, ServerState] =>
+          current._tag === 'Open' ? [current.document, { _tag: 'Open' }] : [undefined, current],
         ),
         (document) => (document ? Scope.close(document.scope, Exit.void) : Effect.void),
       ),

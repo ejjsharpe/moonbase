@@ -130,7 +130,8 @@ export const makeNativeActions = ({
             ? new Uint8Array(await payload.arrayBuffer())
             : new Uint8Array();
         });
-        if (!bytes.length) return yield* Effect.fail(invalid('Clipboard contains no Finder files.'));
+        if (!bytes.length)
+          return yield* Effect.fail(invalid('Clipboard contains no Finder files.'));
         return yield* readFinderFiles(bytes).pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         );
@@ -160,7 +161,8 @@ export const makeNativeActions = ({
       capture,
       release,
       // A clipboard write under way is waited for, never left to finish unseen.
-      copyText: (text) => Effect.uninterruptible(Effect.promise(async () => clipboard.writeText(text))),
+      copyText: (text) =>
+        Effect.uninterruptible(Effect.promise(async () => clipboard.writeText(text))),
       reveal: (path) => Effect.sync(() => shell.showItemInFolder(path)),
     } satisfies NativeActions;
   });

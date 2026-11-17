@@ -22,7 +22,11 @@ import type { ChatConfiguration } from './chat/config.ts';
 import { acquireRemoteChat } from './chat/remote.ts';
 import { findDaemonCommand } from './daemon/daemon-command.ts';
 import { acquireDaemonChat, makeLocalDaemonClient } from './daemon/local-daemon-client.ts';
-import { createLocalDaemon, findDaemonDirectory, readDaemonSession } from './daemon/local-daemon.ts';
+import {
+  createLocalDaemon,
+  findDaemonDirectory,
+  readDaemonSession,
+} from './daemon/local-daemon.ts';
 import { restartDaemon } from './daemon/restart-daemon.ts';
 import { createDaemonWorkspaceHost } from './daemon/workspace-host.ts';
 import { makeDocumentHandlers } from './ipc/document-handlers.ts';

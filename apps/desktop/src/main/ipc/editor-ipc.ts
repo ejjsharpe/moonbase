@@ -1,6 +1,6 @@
 import { realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative, sep } from 'node:path';
-import { Cause, Effect, Exit, Scope, Stream } from 'effect';
+import { Effect, Exit, Scope, Stream, type Cause } from 'effect';
 import type {
   CheckoutTarget,
   CommandInput,
@@ -84,7 +84,11 @@ export function makeEditorIpcHandlers(options: EditorIpcOptions, document: Scope
    * cancelled while the capture is under way waits for it and releases what it took at once,
    * since nothing published it.
    */
-  const captureImports = (checkout: CheckoutTarget, kind: 'picker' | 'clipboard', paths?: string[]) =>
+  const captureImports = (
+    checkout: CheckoutTarget,
+    kind: 'picker' | 'clipboard',
+    paths?: string[],
+  ) =>
     Effect.gen(function* () {
       yield* checkApproved(checkout);
       return yield* Effect.uninterruptibleMask((restore) =>
