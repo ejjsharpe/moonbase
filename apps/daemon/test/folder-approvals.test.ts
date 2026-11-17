@@ -27,6 +27,15 @@ test('native folder approvals survive a restart and lapse when the folder is rep
     await restarted.touch(alpha);
     assert.deepEqual(await restarted.listRecent(), [alpha, beta]);
 
+    // Approvals made at once are all saved, whatever order their saves run in.
+    const concurrent = ['one', 'two', 'three', 'four', 'five', 'six'].map((name) =>
+      join(root, `concurrent-${name}`),
+    );
+    for (const folder of concurrent) await mkdir(folder);
+    await Promise.all(concurrent.map((folder) => restarted.approve(folder, { recent: false })));
+    const again = await createFolderApprovals(file);
+    for (const folder of concurrent) assert.equal(await again.has(folder), true, folder);
+
     // A different directory at the same path is not the folder that was approved.
     await rename(alpha, join(root, 'moved'));
     await mkdir(alpha);
@@ -34,7 +43,7 @@ test('native folder approvals survive a restart and lapse when the folder is rep
     assert.deepEqual(await (await createFolderApprovals(file)).listRecent(), [beta]);
     await rm(beta, { recursive: true });
     assert.deepEqual(await (await createFolderApprovals(file)).listRecent(), []);
-    assert.equal(JSON.parse(await readFile(file, 'utf8')).length, 3);
+    assert.equal(JSON.parse(await readFile(file, 'utf8')).length, 3 + concurrent.length);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
