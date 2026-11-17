@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --experimental-strip-types --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} test/*.test.ts"
+    "test": "node --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} test/*.test.ts"
   },
   "exports": {
     "./*": "./src/*.ts",

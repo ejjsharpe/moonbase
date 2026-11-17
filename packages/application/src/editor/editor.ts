@@ -1002,6 +1002,10 @@ class EditorModelState {
     };
     buffer.pendingSave = request;
     buffer.saving = true;
+    // A draft sent while the Save settles could reach the store after it, over the baseline the
+    // Save replaced and that nothing moves again: the buffer's drafts wait for the Save's end.
+    const tabId = this.tabs.get(fileKey(target))?.id;
+    if (tabId) this.outbox.holdDraft(tabId);
     this.emit();
     try {
       const result = await this.command('saveFile', request).catch((error) => {
@@ -1029,6 +1033,7 @@ class EditorModelState {
       buffer.disk = result.disk;
       buffer.conflict = undefined;
       buffer.pendingSave = undefined;
+      if (tabId) this.outbox.releaseDraft(tabId);
       this.sendDraft(buffer);
       try {
         await this.outbox.flush();
@@ -1037,6 +1042,7 @@ class EditorModelState {
       }
       return buffer.text === result.disk.text;
     } finally {
+      if (tabId) this.outbox.releaseDraft(tabId);
       if (!this.closing) {
         buffer.saving = false;
         this.emit();

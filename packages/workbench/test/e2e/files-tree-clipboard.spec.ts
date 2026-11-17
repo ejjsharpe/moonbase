@@ -79,7 +79,7 @@ const osReads = (page: Page) =>
  */
 async function pasteAndSettle(page: Page, target = tree(page)) {
   const before = await osReads(page);
-  await target.press('ControlOrMeta+v');
+  await target.press('Meta+v');
   await expect.poll(() => osReads(page)).toBe(before + 1);
   await page.evaluate(() => new Promise((resolve) => setTimeout(resolve)));
 }
@@ -100,12 +100,12 @@ test('copy and paste into a folder copies the entry and writes its path as text'
   await page.goto('/?clipboard');
   await create(page, 'dest/');
   await row(page, 'welcome.ts').click();
-  await tree(page).press('ControlOrMeta+c');
+  await tree(page).press('Meta+c');
   expect(await page.evaluate(() => window.demo.copied)).toEqual(['welcome.ts']);
   // Copied entries aren't dimmed.
   expect(await cutRows(page)).toEqual([]);
   await row(page, 'dest').click();
-  await tree(page).press('ControlOrMeta+v');
+  await tree(page).press('Meta+v');
   await expect(row(page, 'dest/welcome.ts')).toBeVisible();
   await expect(row(page, 'welcome.ts')).toBeVisible();
   await expectSelected(page, ['dest/welcome.ts']);
@@ -121,7 +121,7 @@ test('cut and paste moves, dimming while pending; Escape clears it and ⌘Z undo
   await fauxOSClipboard(page, []);
   await create(page, 'dest/');
   await row(page, 'welcome.ts').click();
-  await tree(page).press('ControlOrMeta+x');
+  await tree(page).press('Meta+x');
   await expect.poll(() => cutRows(page)).toEqual(['welcome.ts']);
   await tree(page).press('Escape');
   await expect.poll(() => cutRows(page)).toEqual([]);
@@ -130,9 +130,9 @@ test('cut and paste moves, dimming while pending; Escape clears it and ⌘Z undo
   await pasteAndSettle(page);
   expect(await mutations(page)).toBe(1);
   await row(page, 'welcome.ts').click();
-  await tree(page).press('ControlOrMeta+x');
+  await tree(page).press('Meta+x');
   await row(page, 'dest').click();
-  await tree(page).press('ControlOrMeta+v');
+  await tree(page).press('Meta+v');
   await expect(row(page, 'dest/welcome.ts')).toBeVisible();
   await expect(row(page, 'welcome.ts')).toHaveCount(0);
   await expectSelected(page, ['dest/welcome.ts']);
@@ -141,7 +141,7 @@ test('cut and paste moves, dimming while pending; Escape clears it and ⌘Z undo
   const moved = await mutations(page);
   await pasteAndSettle(page);
   expect(await mutations(page)).toBe(moved);
-  await tree(page).press('ControlOrMeta+z');
+  await tree(page).press('Meta+z');
   await expect(row(page, 'welcome.ts')).toBeVisible();
   expect(await exists(page, 'dest/welcome.ts')).toBe(false);
   await expectSelected(page, ['welcome.ts']);
@@ -153,7 +153,7 @@ test('a paste whose folders can’t be listed reports it and keeps the cut to re
   await page.goto('/?clipboard');
   await create(page, 'dest/');
   await row(page, 'welcome.ts').click();
-  await tree(page).press('ControlOrMeta+x');
+  await tree(page).press('Meta+x');
   await row(page, 'dest').click();
   await page.evaluate(() => {
     const { client } = window.demo;
@@ -168,7 +168,7 @@ test('a paste whose folders can’t be listed reports it and keeps the cut to re
       },
     });
   });
-  await tree(page).press('ControlOrMeta+v');
+  await tree(page).press('Meta+v');
   await expect(region(page).getByRole('alert')).toContainText(
     'Can’t paste yet: dest couldn’t be listed. Try again.',
   );
@@ -176,7 +176,7 @@ test('a paste whose folders can’t be listed reports it and keeps the cut to re
   expect(await cutRows(page)).toEqual(['welcome.ts']);
   await page.evaluate(() => (window as unknown as { stopFailing(): void }).stopFailing());
   await tree(page).focus();
-  await tree(page).press('ControlOrMeta+v');
+  await tree(page).press('Meta+v');
   await expect(row(page, 'dest/welcome.ts')).toBeVisible();
   await expect(row(page, 'welcome.ts')).toHaveCount(0);
 });
@@ -185,7 +185,7 @@ test('declining the OS clipboard import pastes nothing, keeping the cut', async 
   await page.goto('/?clipboard');
   await create(page, 'dest/');
   await row(page, 'welcome.ts').click();
-  await tree(page).press('ControlOrMeta+x');
+  await tree(page).press('Meta+x');
   await row(page, 'dest').click();
   await fauxOSClipboard(page, null);
   await pasteAndSettle(page);
@@ -202,7 +202,7 @@ test('⌘V pastes the tree’s entries only in the Files view, and only with ⌘
   await fauxOSClipboard(page, []);
   await create(page, 'dest/');
   await row(page, 'welcome.ts').click();
-  await tree(page).press('ControlOrMeta+c');
+  await tree(page).press('Meta+c');
   await row(page, 'dest').click();
   // The Changes view still imports OS files, but has no tree to paste into.
   const changes = region(page).getByRole('button', { name: 'Changes', exact: true });
@@ -214,8 +214,8 @@ test('⌘V pastes the tree’s entries only in the Files view, and only with ⌘
   await region(page).getByRole('button', { name: 'Files', exact: true }).click();
   await tree(page).focus();
   // ⌘⇧V reads nothing and pastes nothing; the next ⌘V pastes once.
-  await tree(page).press('ControlOrMeta+Shift+v');
-  await tree(page).press('ControlOrMeta+v');
+  await tree(page).press('Meta+Shift+v');
+  await tree(page).press('Meta+v');
   await expect(row(page, 'dest/welcome.ts')).toBeVisible();
   expect(await osReads(page)).toBe(2);
   expect(await mutations(page)).toBe(2);
@@ -225,12 +225,12 @@ test('files copied in the OS since win over the tree’s clipboard', async ({ pa
   await page.goto('/?clipboard');
   await create(page, 'dest/');
   await row(page, 'welcome.ts').click();
-  await tree(page).press('ControlOrMeta+c');
+  await tree(page).press('Meta+c');
   await page.evaluate(() => {
     window.demo.selectClipboardImports = async () => ['native-reference'];
   });
   await row(page, 'dest').click();
-  await tree(page).press('ControlOrMeta+v');
+  await tree(page).press('Meta+v');
   const importing = page.getByRole('dialog', { name: 'Import files', exact: true });
   await expect(importing).toBeVisible();
   await importing.getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -240,7 +240,7 @@ test('files copied in the OS since win over the tree’s clipboard', async ({ pa
     window.demo.selectClipboardImports = async () => [];
   });
   await tree(page).focus();
-  await tree(page).press('ControlOrMeta+v');
+  await tree(page).press('Meta+v');
   await expect(row(page, 'dest/welcome.ts')).toBeVisible();
 });
 
@@ -282,7 +282,7 @@ test('the menu cuts, copies and pastes, enabling Paste only with something to pa
   page,
 }) => {
   await page.goto('/?clipboard');
-  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+  const mod = 'Meta';
   await row(page, 'README.md').click({ button: 'right' });
   await expect(item(page, 'Cut')).toHaveAttribute('aria-keyshortcuts', `${mod}+X`);
   await expect(item(page, 'Copy')).toHaveAttribute('aria-keyshortcuts', `${mod}+C`);
@@ -315,7 +315,7 @@ test('a cut entry that has gone reports it and clears the clipboard', async ({ p
   await page.goto('/?clipboard');
   await create(page, 'dest/', 'gone.ts');
   await row(page, 'gone.ts').click();
-  await tree(page).press('ControlOrMeta+x');
+  await tree(page).press('Meta+x');
   await page.evaluate(async () => {
     const { first, checkout } = window.demo;
     const sources = await first.inspect(checkout, ['gone.ts']);
@@ -323,7 +323,7 @@ test('a cut entry that has gone reports it and clears the clipboard', async ({ p
   });
   await expect(row(page, 'gone.ts')).toHaveCount(0);
   await row(page, 'dest').click();
-  await tree(page).press('ControlOrMeta+v');
+  await tree(page).press('Meta+v');
   await expect(region(page).getByRole('alert')).toContainText(
     'Can’t paste: gone.ts no longer exists.',
   );
@@ -340,10 +340,10 @@ test('unsaved text survives a cut and paste', async ({ page }) => {
   });
   await expect(row(page, 'welcome.ts')).toHaveAttribute('aria-label', /unsaved/);
   await row(page, 'welcome.ts').click();
-  await tree(page).press('ControlOrMeta+x');
+  await tree(page).press('Meta+x');
   await expect(row(page, 'welcome.ts')).toHaveAttribute('aria-label', /^welcome\.ts, unsaved, cut/);
   await row(page, 'dest').click();
-  await tree(page).press('ControlOrMeta+v');
+  await tree(page).press('Meta+v');
   await expect(row(page, 'dest/welcome.ts')).toHaveAttribute('aria-label', /unsaved/);
   expect(
     await page.evaluate(

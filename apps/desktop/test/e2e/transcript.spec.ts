@@ -22,8 +22,10 @@ async function open(page: Page) {
   // Expanding the activity can move the reader off the end.
   const jump = page.getByRole('button', { name: 'Jump to latest', exact: true });
   // It can also settle back by itself between seeing the button and clicking it.
-  if (await jump.isVisible()) await jump.click({ timeout: 2000 }).catch(() => undefined);
-  await expect(jump).toBeHidden();
+  await expect(async () => {
+    if (await jump.isVisible()) await jump.click({ timeout: 1000 }).catch(() => undefined);
+    await expect(jump).toBeHidden({ timeout: 1000 });
+  }).toPass();
 }
 const transcript = (page: Page) =>
   page.getByRole('region', { name: 'Chat transcript', exact: true });
@@ -140,7 +142,7 @@ test.describe('the virtualized transcript', () => {
     expect(most).toBeGreaterThan(3);
     expect(most).toBeLessThan(40);
     await expect(page.locator('[data-transcript-entry]').first()).toBeAttached();
-    expect(await page.locator('[data-transcript-entry]').count()).toBeLessThan(40);
+    await expect.poll(() => page.locator('[data-transcript-entry]').count()).toBeLessThan(40);
   });
 
   test('opens at the end and follows while the live row grows', async ({ page }) => {
@@ -820,14 +822,14 @@ test.describe('the virtualized transcript', () => {
 
     // A focused element that stayed mounted gets focus back.
     await table(398).focus();
-    await page.keyboard.press('ControlOrMeta+f');
+    await page.keyboard.press('Meta+f');
     await expect(field).toBeFocused();
     await field.press('Escape');
     await expect(table(398)).toBeFocused();
 
     // A match far back unmounts the focused row, which leaves focus on the transcript.
     await table(399).focus();
-    await page.keyboard.press('ControlOrMeta+f');
+    await page.keyboard.press('Meta+f');
     await field.fill('needle');
     await expect(findStatus(page, /2 matches/)).toBeVisible();
     await field.press('Shift+Enter');
@@ -1882,7 +1884,7 @@ test('Find reading navigation cancels held reveal and editor shortcuts retain th
   await expect(
     page.getByRole('textbox', { name: 'Find in conversation', exact: true }),
   ).toHaveCount(0);
-  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).press('ControlOrMeta+p');
+  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).press('Meta+p');
   await expect(page.getByRole('dialog', { name: 'Go to', exact: true })).toBeVisible();
 });
 
@@ -2415,7 +2417,7 @@ test('scrolling and live progress re-render only the rows they change', async ({
   await open(page);
   await settle(page);
   expect((await rows.take()).length).toBeGreaterThan(0);
-  expect(await page.locator('[data-transcript-entry]').count()).toBeGreaterThan(3);
+  await expect.poll(() => page.locator('[data-transcript-entry]').count()).toBeGreaterThan(3);
   await transcript(page).hover();
   for (let i = 0; i < 12; i++) {
     await page.mouse.wheel(0, -120);

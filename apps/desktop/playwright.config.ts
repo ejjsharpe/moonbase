@@ -21,21 +21,31 @@ export default defineConfig({
   outputDir,
   // Electron windows share one display and the OS's focus.
   workers: 1,
-  // One retry on CI; a test that passes only on retry is reported as flaky.
-  retries: process.env.CI ? 1 : 0,
+  // No retries: a test that fails once is fixed, not rerun.
+  retries: 0,
   fullyParallel: true,
+  // Stop a failing CI run early: the rest would only hold a runner.
+  maxFailures: process.env.CI ? 3 : 0,
   timeout: 45000,
   reporter: [['list'], ['json', { outputFile: join(outputDir, 'timings.json') }]],
   globalTeardown: './test/fixtures/global-teardown.ts',
   use: { trace: 'retain-on-failure' },
+  // `native` runs the Electron specs from source; select a subset by file or `--grep`.
   projects: [
-    { name: 'editor', testMatch: 'desktop.spec.ts' },
-    { name: 'local', testMatch: 'local-chat.spec.ts' },
-    { name: 'transcripts', testMatch: 'integrated-transcript.spec.ts' },
-    { name: 'configuration', testMatch: 'configuration.spec.ts' },
-    { name: 'reload', testMatch: ['reload.spec.ts', 'document-lifecycle.spec.ts'] },
-    { name: 'composition', testMatch: ['composition.spec.ts', 'lifecycle.spec.ts'] },
-    { name: 'recovery', testMatch: 'recovery.spec.ts' },
+    {
+      name: 'native',
+      testMatch: [
+        'desktop.spec.ts',
+        'local-chat.spec.ts',
+        'integrated-transcript.spec.ts',
+        'configuration.spec.ts',
+        'reload.spec.ts',
+        'document-lifecycle.spec.ts',
+        'composition.spec.ts',
+        'lifecycle.spec.ts',
+        'recovery.spec.ts',
+      ],
+    },
     { name: 'packaged', testMatch: 'packaged.spec.ts' },
   ],
 });

@@ -20,7 +20,7 @@ The token stays in this process: OpenSSH gets neither it in its arguments nor an
 bun run --cwd packages/ssh typecheck
 bun run --cwd packages/ssh lint
 bun run --cwd packages/ssh test
-bun run test:chat-integration
+bun run --cwd test/chat test
 ```
 
 Tests use controlled child processes and TCP, never a real SSH host. The policy tests read the real `ssh -G`; the `NoHostAuthenticationForProxyCommand` case is in `test/macos/` because only macOS's OpenSSH knows that option. Use only a host the user has named for manual checks.

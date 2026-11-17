@@ -66,6 +66,8 @@ export class RecoveryOutbox {
   private unsettled: { edit: CloseRequest; reopen: OpenRequest | undefined } | undefined;
   /** The layout last committed, so an unchanged layout is not sent again. */
   private committedLayout: string | undefined;
+  /** Buffers whose queued drafts wait for a Save to settle. */
+  private held = new Set<string>();
   private lock = Semaphore.makeUnsafe(1);
   private debounce: DebounceRunner;
   private dependencies: OutboxDependencies;
@@ -116,6 +118,13 @@ export class RecoveryOutbox {
     }
     this.queue.push({ kind: 'updateDraft', bufferId, text, disk: structuredClone(disk) });
     this.dependencies.notify();
+  }
+  /** Keeps the buffer's queued draft unsent until `releaseDraft`, which sends it. */
+  holdDraft(bufferId: string) {
+    this.held.add(bufferId);
+  }
+  releaseDraft(bufferId: string) {
+    if (this.held.delete(bufferId)) this.schedule();
   }
   updateLayout() {
     this.queue = this.queue.filter((edit) => edit.kind !== 'updateLayout');
@@ -187,9 +196,11 @@ export class RecoveryOutbox {
       if (!scheduled) this.failure = undefined;
       notify();
     }
-    while (this.queue.length) {
+    for (;;) {
       await ready();
-      const edit = this.queue.shift()!;
+      const index = this.queue.findIndex((edit, at) => !this.isHeld(edit, at));
+      if (index < 0) break;
+      const [edit] = this.queue.splice(index, 1);
       this.sending = edit;
       notify();
       try {
@@ -250,6 +261,11 @@ export class RecoveryOutbox {
     // Everything made so far has committed, or was abandoned with the action that made it.
     if (sent || !scheduled) this.failure = undefined;
     notify();
+  }
+  /** A held draft waits, unless the buffer's tab opens or closes after it in the queue. */
+  private isHeld(edit: RecoveryEditRequest, at: number) {
+    if (edit.kind !== 'updateDraft' || !this.held.has(edit.bufferId)) return false;
+    return !this.queue.slice(at + 1).some((later) => isStructural(later, edit.bufferId));
   }
   /** Forgets what is queued; for an editor that is closing. */
   clear() {

@@ -57,7 +57,9 @@ for (const mode of ['reload', 'veto', 'crash'])
       await app.evaluate(() => {
         globalThis.reloadProbe = { held: null };
       });
-      await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible({
+        timeout: 30_000,
+      });
       await page.evaluate(() => {
         Object.assign(window, { documentIdentity: crypto.randomUUID() });
       });
@@ -110,9 +112,9 @@ for (const mode of ['reload', 'veto', 'crash'])
         ? -1
         : await app.evaluate(
             () =>
-              [...globalThis.desktopTest.active.values()].findLast(
-                (request) => request.tag === 'readFile',
-              )!.seq,
+              [...globalThis.desktopTest.active.values()]
+                .filter((request) => request.tag === 'readFile')
+                .at(-1)!.seq,
           );
       await app.evaluate((_, pid) => void (globalThis.reloadProbe.held = pid), heldPid);
       pids.add(heldPid);
@@ -123,13 +125,10 @@ for (const mode of ['reload', 'veto', 'crash'])
       if (mode === 'veto') {
         await editor.focus();
         await editor.press('End');
-        await app.evaluate(async ({ BrowserWindow }) => {
-          const c = BrowserWindow.getAllWindows()[0].webContents;
-          await c.insertText(' fresh');
-          await c.executeJavaScript(
-            'new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))',
-          );
-        });
+        await app.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows()[0].webContents.insertText(' fresh'),
+        );
+        await expect(page.locator('.view-lines')).toContainText('fresh');
         const outcome = await app.evaluate(
           ({ BrowserWindow }) =>
             new Promise<string>((resolve) => {

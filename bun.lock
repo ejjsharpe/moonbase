@@ -201,6 +201,12 @@
         "@moonbase/application": "workspace:*",
       },
     },
+    "test/chat": {
+      "name": "@moonbase/chat-integration",
+    },
+    "test/editor-workspace": {
+      "name": "@moonbase/editor-integration",
+    },
   },
   "trustedDependencies": [
     "electron",
@@ -438,6 +444,8 @@
 
     "@moonbase/application": ["@moonbase/application@workspace:packages/application"],
 
+    "@moonbase/chat-integration": ["@moonbase/chat-integration@workspace:test/chat"],
+
     "@moonbase/chat-runtime": ["@moonbase/chat-runtime@workspace:packages/chat-runtime"],
 
     "@moonbase/config": ["@moonbase/config@workspace:packages/config"],
@@ -449,6 +457,8 @@
     "@moonbase/daemon-protocol": ["@moonbase/daemon-protocol@workspace:packages/daemon-protocol"],
 
     "@moonbase/desktop": ["@moonbase/desktop@workspace:apps/desktop"],
+
+    "@moonbase/editor-integration": ["@moonbase/editor-integration@workspace:test/editor-workspace"],
 
     "@moonbase/effect": ["@moonbase/effect@workspace:packages/effect"],
 

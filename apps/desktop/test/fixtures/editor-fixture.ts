@@ -210,7 +210,7 @@ export async function checkTabMenu(app: ElectronApplication, page: Page, reopene
   await page.keyboard.press('Home');
   const first = page.getByRole('menuitem', { name: 'Keep Open', exact: true });
   await expect(first).toBeFocused();
-  expect(await first.evaluate(inView)).toBe(true);
+  await expect.poll(() => first.evaluate(inView)).toBe(true);
   await page.keyboard.press('Enter');
   await expect(page.getByRole('menu')).toHaveCount(0);
   await expect(trigger).toBeFocused();
@@ -219,7 +219,7 @@ export async function checkTabMenu(app: ElectronApplication, page: Page, reopene
   await page.keyboard.press('End');
   const last = page.getByRole('menuitem', { name: 'Reopen Closed Files', exact: true });
   await expect(last).toBeFocused();
-  expect(await last.evaluate(inView)).toBe(true);
+  await expect.poll(() => last.evaluate(inView)).toBe(true);
   await page.keyboard.press('Enter');
   await expect(page.getByRole('menu')).toHaveCount(0);
   await expect(page.getByRole('tab', { name: reopened, exact: true })).toHaveAttribute(

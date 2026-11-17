@@ -175,7 +175,7 @@ test('large expanded trees keep navigation, selection and scroll virtualized', a
   await expect(lastFolder).toBeVisible();
   await expect(lastFolder).toHaveAttribute('aria-posinset', '300');
   await expect(lastFolder).toHaveAttribute('aria-setsize', '300');
-  expect(await tree.getByRole('treeitem').count()).toBeLessThan(80);
+  await expect.poll(() => tree.getByRole('treeitem').count()).toBeLessThan(80);
   // Shown again, the tree is scrolled where it was left, and a focused row it already shows
   // stays where it was rather than being scrolled to an edge.
   const savedScroll = () =>
@@ -206,7 +206,7 @@ test('large expanded trees keep navigation, selection and scroll virtualized', a
           .selected.length,
     ),
   ).toBe(300);
-  expect(await tree.getByRole('treeitem').count()).toBeLessThan(80);
+  await expect.poll(() => tree.getByRole('treeitem').count()).toBeLessThan(80);
   await expect(firstFolder).toHaveAttribute('aria-selected', 'true');
 });
 

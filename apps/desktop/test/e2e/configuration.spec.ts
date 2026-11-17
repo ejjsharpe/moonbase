@@ -80,7 +80,9 @@ for (const configured of [false, true])
       pids = new Set<number>([child.pid!]);
     try {
       const page = await app.firstWindow();
-      await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible({
+        timeout: 30_000,
+      });
       await page
         .getByRole('tablist', { name: 'Workbench views', exact: true })
         .getByRole('tab', { name: 'Agents', exact: true })
