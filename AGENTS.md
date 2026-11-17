@@ -56,10 +56,12 @@ Atoms hold no domain logic, so a headless test or a non-React client can use the
 
 ## Verifying
 
+Run as little as proves the change. CI runs the affected suites (dependents, root integration, Playwright) on every PR, so don't repeat them locally.
+
 - While iterating, run the one test file you changed (`bun test <file> -t "<name>"`, or `node --test <file>`), not the package suite.
-- Before you push, run `bun run check` (`nx affected -t typecheck test`, lint, format check and `check:foundation`). Root integration suites are Nx projects (`@moonbase/chat-integration`, `@moonbase/editor-integration`), so `nx affected` runs them; run `bunx nx test @moonbase/chat-integration` when you change the daemon or chat wire.
-- CI runs the affected suites on a PR, and every suite on main.
-- Don't run `bun run test`, the root integration suites or the Playwright projects unless asked. Run only the Playwright project for the surface you touched.
+- Before you push, run `bun run check:fast`. It typechecks affected projects (cached, so dependents are covered), tests only the projects you changed, and lints and format-checks only the changed files, plus `check:foundation`.
+- Don't run `bun run check`, `bun run test`, the root integration suites or the Playwright projects unless asked. Exceptions: run `bunx nx test @moonbase/chat-integration` when you change the daemon or chat wire, and the Playwright project for a surface you touched.
+- Use `--base=origin/main` scoping (`nx affected`), never `--all` or `run-many` without `-p`. Nx caches typecheck, lint and test, so a repeated run is instant.
 
 ## Safety
 
