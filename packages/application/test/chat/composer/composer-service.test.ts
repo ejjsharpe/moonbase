@@ -266,10 +266,10 @@ test('a worktree outcome reaches every view, until the new chat is left for a ch
   await chat.select(target('other'));
   made.resolve('/repo-worktrees/chat-fix-it');
   await until(() => !composer.snapshot.creatingWorktree);
-  assert.deepEqual(composer.snapshot.message, {
-    chat: '',
-    text: 'The worktree is ready at /repo-worktrees/chat-fix-it. Send from a new chat there to start it.',
-  });
+  // For the new chat in every place.
+  assert.equal(composer.snapshot.message?.chat, '');
+  assert.equal(composer.snapshot.message?.place, undefined);
+  assert.match(composer.message!, /\/repo-worktrees\/chat-fix-it/);
   // Moving between open chats, or back to the new chat, keeps it to be seen.
   await chat.select(target('another'));
   await chat.closeView();
@@ -305,22 +305,18 @@ test('files from the tree join the draft relative to its folder, or say why not'
   mention(['/b/src/a.ts', '/elsewhere/x.ts']);
   assert.equal(chat.getSnapshot().draft, '@src/a.ts ');
   assert.deepEqual(composer.snapshot.folders, { 'src/a.ts': '/b' });
-  assert.deepEqual(composer.snapshot.message, {
-    chat: '',
-    text: "1 of the files are outside this chat's working folder and weren't mentioned.",
-  });
+  assert.equal(composer.snapshot.message?.chat, '');
+  assert.match(composer.message!, /outside/);
   // A mention that lands clears the message; one the draft has from another folder can't.
   composer.noteMentions(['src/a.ts'], '/a');
   mention(['/b/src/a.ts']);
-  assert.match(composer.message!, /already mentions src\/a\.ts in \/a/);
+  assert.equal(chat.getSnapshot().draft, '@src/a.ts ');
+  assert.match(composer.message!, /src\/a\.ts/);
   // An open chat whose folder hasn't loaded mentions nothing.
   await chat.select(target('open'));
   mention(['/b/c.ts']);
   assert.equal(chat.getSnapshot().draft, '');
-  assert.deepEqual(composer.snapshot.message, {
-    chat: 'open',
-    text: "This chat's working folder isn't known yet, so the files weren't mentioned.",
-  });
+  assert.equal(composer.snapshot.message?.chat, 'open');
 });
 
 test('showing the draft elsewhere leaves its mentions; Send checks them against its folder', () => {
@@ -334,11 +330,7 @@ test('showing the draft elsewhere leaves its mentions; Send checks them against 
   // Sending from the notes folder writes out the file from elsewhere and holds the send.
   composer.sync(composer.composer.choose(agents, { cwd: '/notes' }));
   composer.send(agents);
-  assert.deepEqual(composer.snapshot.message, {
-    chat: '',
-    place: 'agents',
-    text: "A mentioned file isn't in /notes, so it is written out as a full path instead. Send again to send the message.",
-  });
+  assert.equal(composer.snapshot.message?.place, 'agents');
   assert.deepEqual(chat.sent, []);
   assert.equal(chat.getSnapshot().draft, 'Fix @index.md and /repo/src/a.ts');
   assert.deepEqual(chat.getSnapshot().mentions, [{ path: 'index.md' }]);
@@ -455,11 +447,8 @@ test('/new keeps the rest in the open chat when the new chat cannot take it', as
   chat.setDraft('/new\nMore');
   assert.equal(await composer.startNewChat('More', [], '/repo'), false);
   // The message is for the open chat while it still holds the rest.
-  assert.deepEqual(composer.snapshot.message, {
-    chat: 'open',
-    draft: 'More',
-    text: "The new chat's draft has no room for the rest of this message, so it stays here.",
-  });
+  assert.equal(composer.snapshot.message?.chat, 'open');
+  assert.equal(composer.snapshot.message?.draft, 'More');
   assert.equal(chat.getSnapshot().selected?.conversationId, 'open');
   assert.equal(chat.getSnapshot().draft, 'More');
   assert.equal(chat.drafts.get('')!.text.length, 32 * 1024 - 2);

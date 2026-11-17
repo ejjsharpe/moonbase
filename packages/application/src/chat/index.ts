@@ -60,4 +60,11 @@ export {
 export { chatWorktreeBranch } from './composer/worktree-branch.ts';
 export { makeNativeActions, type NativeActions } from './native-actions/native-actions-runner.ts';
 export { nativeActionsAtoms } from './native-actions/native-actions-atoms.ts';
-export type { NativeActionKind, TranscriptNotice } from './native-actions/native-actions.ts';
+export {
+  busyNotice,
+  doneNotice,
+  offlineNotice,
+  pendingNotice,
+  type NativeActionKind,
+  type TranscriptNotice,
+} from './native-actions/native-actions.ts';
