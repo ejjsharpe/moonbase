@@ -4,7 +4,17 @@ import { once } from 'node:events';
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Cause, Effect, Fiber, Layer, ManagedRuntime, Stream } from 'effect';
+import {
+  Cause,
+  type Clock,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  ManagedRuntime,
+  Scope,
+  Stream,
+} from 'effect';
 import type { ChatCommand, ChatInput, ChatOutput, ChatTarget } from '@moonbase/contracts/chat';
 import type { ApplicationError } from '@moonbase/contracts/errors';
 import { toChatApplicationError } from '@moonbase/contracts/chat-legacy-errors';
@@ -27,8 +37,10 @@ import {
   HostVerificationError,
   toConnectionApplicationError,
 } from '@moonbase/contracts/connection-errors';
-import { runDaemon, type DaemonExit } from '../src/daemon.ts';
-import type { IdleClock } from '../src/idle.ts';
+import * as BunServices from '@effect/platform-bun/BunServices';
+import { TestClock } from 'effect/testing';
+import { runDaemon, type DaemonExit, type DaemonOptions } from '../src/daemon.ts';
+import { argumentsConfig } from '../src/daemon-config.ts';
 import { createFauxProviders } from './faux-provider.ts';
 
 export const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -251,71 +263,85 @@ export async function findFreePort() {
 export const readJson = async (path: string) => JSON.parse(await readFile(path, 'utf8'));
 
 /**
- * A clock whose time moves only when the test advances it; due timers then fire in order, each
- * once the check the previous one ran has ended.
+ * A `TestClock` for a daemon's idle wait, and nothing else of it: `advance` moves its time and
+ * runs the waits that come due.
  */
-export function createControlledClock() {
-  let now = 0,
-    next = 0;
-  const timers = new Map<number, { at: number; callback: () => Promise<void> }>();
-  const clock: IdleClock = {
-    now: () => now,
-    setTimeout: (callback, ms) => {
-      timers.set(++next, { at: now + ms, callback });
-      return next;
-    },
-    clearTimeout: (handle) => timers.delete(handle as number),
-  };
+export function createTestClock() {
+  const clock = Effect.runSync(TestClock.make().pipe(Scope.provide(Scope.makeUnsafe())));
   return {
-    clock,
-    get pending() {
-      return timers.size;
-    },
-    async advance(ms: number) {
-      const end = now + ms;
-      for (;;) {
-        const due = [...timers]
-          .filter(([, timer]) => timer.at <= end)
-          .sort((a, b) => a[1].at - b[1].at)[0];
-        if (!due) break;
-        timers.delete(due[0]);
-        now = due[1].at;
-        // The check reads active work from the real store before it decides.
-        await due[1].callback();
-      }
-      now = end;
+    clock: clock as unknown as Clock.Clock,
+    advance: (ms: number) => Effect.runPromise(clock.adjust(ms)),
+  };
+}
+export type IdleTestClock = ReturnType<typeof createTestClock>;
+
+/**
+ * Runs a daemon in this process on Bun's services, with `directory` as its one argument (or with
+ * the arguments given). `exit`
+ * settles with the daemon's exit: its reason, or its failure as thrown; `stop` interrupts it as a
+ * signal does and waits for it to finish.
+ */
+export function runInProcess(
+  directory: string | readonly string[],
+  options: Omit<DaemonOptions, 'closeClaudeCode' | 'ready'> & {
+    ready?: (line: string) => void;
+    closeClaudeCode?: () => Promise<void> | void;
+  },
+) {
+  const fiber = Effect.runFork(
+    runDaemon({
+      ...options,
+      ready: (line) => Effect.sync(() => options.ready?.(line)),
+      closeClaudeCode: Effect.promise(async () => options.closeClaudeCode?.()),
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          BunServices.layer,
+          argumentsConfig(typeof directory === 'string' ? [directory] : directory),
+        ),
+      ),
+    ),
+  );
+  const exit = Effect.runPromise(Fiber.await(fiber)).then((exit) => {
+    if (Exit.isSuccess(exit)) return exit.value;
+    if (Cause.hasInterruptsOnly(exit.cause)) return 'stopped' as const;
+    throw Cause.squash(exit.cause);
+  });
+  return {
+    exit,
+    stop: async () => {
+      await Effect.runPromise(Fiber.interrupt(fiber));
+      return exit;
     },
   };
 }
 
-export type ControlledClock = ReturnType<typeof createControlledClock>;
-
 /**
- * Runs a local-mode daemon in this process with faux providers, on `time`'s clock, and resolves
- * once it is ready. `stop` aborts it and waits for it to finish.
+ * Runs a local-mode daemon in this process with faux providers, its idle wait on `time`, and
+ * resolves once it is ready. `stop` interrupts it and waits for it to finish.
  */
 export async function startInProcess(
   root: string,
-  time: ControlledClock,
-  { closeClaudeCode = async () => {} }: { closeClaudeCode?: () => Promise<void> } = {},
+  time: IdleTestClock,
+  { closeClaudeCode }: { closeClaudeCode?: () => Promise<void> } = {},
 ) {
-  const directory = join(root, 'data'),
-    controller = new AbortController();
-  let ready!: (port: number) => void;
-  const listening = new Promise<number>((resolve) => (ready = resolve));
+  const directory = join(root, 'data');
+  const listening = Promise.withResolvers<number>();
   let settled: DaemonExit | Error | undefined;
-  const running = runDaemon({
-    directory,
-    signal: controller.signal,
-    ready: (line) => ready(JSON.parse(line).port),
-    closeClaudeCode,
+  const daemon = runInProcess(directory, {
+    ready: (line) => listening.resolve(JSON.parse(line).port),
+    ...(closeClaudeCode ? { closeClaudeCode } : {}),
     providers: () => createFauxProviders(directory),
-    clock: time.clock,
-  }).then(
+    idleClock: time.clock,
+  });
+  const running = daemon.exit.then(
     (exit) => (settled = exit),
     (error: Error) => (settled = error),
   );
-  const port = await listening;
+  const port = await Promise.race([
+    listening.promise,
+    running.then(() => Promise.reject(Error('The daemon stopped before it was ready.'))),
+  ]);
   const token = (await readFile(join(directory, 'token'), 'utf8')).trim(),
     identity = await readJson(join(directory, 'identity.json'));
   return {
@@ -328,7 +354,7 @@ export async function startInProcess(
     },
     running,
     stop: async () => {
-      controller.abort();
+      await daemon.stop().catch(() => {});
       return running;
     },
   };

@@ -49,19 +49,20 @@ export type ChatServerOptions = {
   /** The file host; its methods need nothing from their context. */
   workspace?: WorkspaceHostServiceShape;
   /**
-   * Admits one request, watch or authenticated health probe, returning what ends it once its
-   * answer settles (a mutation's outlives its connection), or throws to refuse it. A daemon counts
-   * requests as use with it and refuses them once it is stopping.
+   * Admits one request, watch or authenticated health probe for as long as its scope is open,
+   * which closes once its answer settles (a mutation's outlives its connection), or fails to refuse
+   * it. A daemon counts requests as use with it and refuses them once it is stopping.
    */
-  admit?(): () => void;
-  /** Called once a workspace connection opens; what it returns, once that closes. */
-  trackWorkspaceConnection?(): () => void;
+  admit?: Effect.Effect<void, HostUnavailableError, Scope.Scope>;
+  /** Held in each workspace connection's scope, from when it opens until it closes. */
+  trackWorkspaceConnection?: Effect.Effect<void, never, Scope.Scope>;
   /**
    * How long closing the server waits, on the Clock, for the mutations it still runs (5 s by
-   * default); past it the close goes on without them and `onCloseTimeout` is called.
+   * default); past it the close goes on without them and runs `onCloseTimeout`.
    */
   closeMs?: number;
-  onCloseTimeout?(): void;
+  /** Runs once a close goes on without the mutations it waited for. */
+  onCloseTimeout?: Effect.Effect<void>;
 };
 /** A local-mode daemon's features beyond chat: local-mode chat and control, providers, folders. */
 export const localDaemonCapabilities: readonly ChatHostCapability[] = [
@@ -124,7 +125,7 @@ export const serveChat = (
     const configuration = yield* services.chat.getChatHost({ host: expected });
     if (JSON.stringify(configuration).includes(token))
       return yield* Effect.fail(new HostKeyExposedError());
-    const admit = options.admit ?? (() => () => {});
+    const admit = options.admit ?? Effect.void;
     const run = yield* FiberSet.makeRuntimePromise<never>();
     const nonces = createUpgradeNonces();
     // The RPC servers live in a scope of their own. Closing it waits for the mutations they run,
@@ -137,7 +138,7 @@ export const serveChat = (
         yield* Fiber.await(closing).pipe(
           Effect.timeoutOrElse({
             duration: options.closeMs ?? 5_000,
-            orElse: () => Effect.sync(() => options.onCloseTimeout?.()),
+            orElse: () => options.onCloseTimeout ?? Effect.void,
           }),
         );
       }),
@@ -204,12 +205,9 @@ export const serveChat = (
           health,
           issue: () => nonces.issue(),
         });
-        const release = admit();
-        try {
-          await run(services.chat.getChatHost({ host: expected }));
-        } finally {
-          release();
-        }
+        await run(
+          Effect.scoped(Effect.andThen(admit, services.chat.getChatHost({ host: expected }))),
+        );
         return new Response(JSON.stringify(value), { status: 200, headers });
       } catch (thrown) {
         const refused =

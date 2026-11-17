@@ -1,4 +1,4 @@
-import { Effect, Layer } from 'effect';
+import { Effect, Exit, Layer, Scope } from 'effect';
 import { RpcSchema, RpcSerialization, RpcServer } from 'effect/rpc';
 import { ChatRpcs } from '@moonbase/contracts/chat-rpc';
 import { LocalHostRpcs, ProviderSetupRpcs } from '@moonbase/contracts/daemon-rpc';
@@ -16,10 +16,10 @@ import { makeWorkspaceHandlers, type WorkspaceRpcServices } from './workspace-ha
 
 export type RpcServerOptions = {
   /**
-   * Admits one request, returning what ends it once it settles (a mutation's outlives its
-   * connection), or throws a `HostUnavailableError` to refuse it.
+   * Admits one request for as long as its scope is open, which closes once the request settles (a
+   * mutation's outlives its connection), or fails with a `HostUnavailableError` to refuse it.
    */
-  admit(): () => void;
+  admit: Effect.Effect<void, HostUnavailableError, Scope.Scope>;
 };
 /** What one connection may run at once on a socket. */
 type AdmissionLimits = {
@@ -91,23 +91,20 @@ function makeAdmission(options: RpcServerOptions, limits: AdmissionLimits) {
           kind === 'requests' && limits.inFlightBytes !== undefined ? estimateBytes(payload) : 0;
         if (counts[kind] >= limit || (bytes > 0 && counts.bytes + bytes > limits.inFlightBytes!))
           return Effect.fail(busy());
-        let release: () => void;
-        try {
-          release = options.admit();
-        } catch (error) {
-          return Effect.fail(error instanceof HostUnavailableError ? error : failed());
-        }
         counts[kind]++;
         counts.bytes += bytes;
         running.set(client.id, counts);
-        return restore(effect).pipe(
+        const admitted = Scope.makeUnsafe();
+        return options.admit.pipe(
+          Scope.provide(admitted),
           Effect.catchDefect(() => Effect.fail(failed())),
+          Effect.andThen(restore(effect).pipe(Effect.catchDefect(() => Effect.fail(failed())))),
+          Effect.onExit((exit) => Scope.close(admitted, Exit.asVoid(exit))),
           Effect.ensuring(
             Effect.sync(() => {
               counts[kind]--;
               counts.bytes -= bytes;
               if (!counts.requests && !counts.watches && !counts.status) running.delete(client.id);
-              release();
             }),
           ),
         );
@@ -171,7 +168,7 @@ const statusProcedures: ReadonlySet<string> = new Set(['saveStatus', 'operationS
  */
 export const serveWorkspaceRpc = (
   services: WorkspaceRpcServices,
-  options: RpcServerOptions & { track?(): () => void },
+  options: RpcServerOptions & { track?: Effect.Effect<void, never, Scope.Scope> },
 ) =>
   Effect.gen(function* () {
     const { connections, protocol } = yield* socketProtocol({

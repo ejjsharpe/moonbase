@@ -124,10 +124,8 @@ export class Checkouts extends Context.Service<
       };
       const permit = (real: string, requested: string): Effect.Effect<void, WorkspaceFailure> =>
         allowRoot
-          ? Effect.tryPromise({
-              try: async () => allowRoot(real, requested),
-              catch: () => false,
-            }).pipe(
+          ? Effect.suspend(() => allowRoot(real, requested)).pipe(
+              Effect.catchDefect(() => Effect.succeed(false)),
               Effect.orElseSucceed(() => false),
               Effect.flatMap((allowed) =>
                 allowed

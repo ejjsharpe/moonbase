@@ -173,13 +173,13 @@ assert.equal(
   bunVersion,
   'Unexpected packaged Bun runtime',
 );
-// The daemon finds the app's ripgrep relative to its own bundle (`apps/daemon/src/ripgrep.ts`).
+// The daemon finds the app's ripgrep relative to its own bundle (`apps/daemon/src/executables.ts`).
 const daemonRipgrep = fileURLToPath(
   new URL('../workspace/ripgrep/rg', pathToFileURL(join(resources, 'daemon/daemon.mjs'))),
 );
 assert.equal(daemonRipgrep, join(resources, 'workspace/ripgrep/rg'));
 assert((await stat(daemonRipgrep)).mode & 0o111, 'The daemon finds no executable ripgrep');
-// Likewise the workspace's native helper (`apps/daemon/src/workspace.ts`): without it the daemon
+// Likewise the workspace's native helper (`apps/daemon/src/executables.ts`): without it the daemon
 // composes no file host.
 const daemonHelper = fileURLToPath(
   new URL('../workspace/filesystem', pathToFileURL(join(resources, 'daemon/daemon.mjs'))),

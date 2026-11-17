@@ -1,5 +1,5 @@
 import * as Schema from 'effect/Schema';
-import { DaemonFailure } from './failure.ts';
+import { DaemonConfigurationError } from './daemon-errors.ts';
 import { AbsolutePathSchema as absolutePath } from '@moonbase/contracts/daemon-schema';
 
 // 0 listens on any free port, which the `ready` line and `endpoint.json` report.
@@ -52,6 +52,6 @@ export function decodeDaemonSettings(value: unknown): DaemonSettings {
   try {
     return decode(value);
   } catch {
-    throw new DaemonFailure('InvalidInput', 'The daemon configuration is invalid.');
+    throw new DaemonConfigurationError({ problem: 'settings' });
   }
 }
