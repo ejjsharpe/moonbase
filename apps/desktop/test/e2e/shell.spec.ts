@@ -292,9 +292,11 @@ for (const selected of ['other · main', 'Agents']) {
     await expect(other.locator('..')).toHaveCSS('transform', 'none');
     const frames = await page.evaluate(async () => {
       const command = window.demo.client.command;
+      // Recovery edits wait until half the frames are sampled, so the close is caught midway.
+      const held = Promise.withResolvers<void>();
       window.demo.client.command = async (...args) => {
         if (['openTab', 'closeTab', 'updateDraft', 'updateLayout'].includes(args[0]))
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          await held.promise;
         return command(...args);
       };
       const frames: { selected: string | null; editors: string[]; top: number }[] = [];
@@ -302,6 +304,7 @@ for (const selected of ['other · main', 'Agents']) {
         .querySelector<HTMLButtonElement>('button[aria-label="Close checkout /demo/other"]')!
         .click();
       for (let i = 0; i < 32; i++) {
+        if (i === 16) held.resolve();
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
         frames.push({
           selected:
@@ -972,7 +975,7 @@ test('compact Agents navigation uses a keyboard-dismissable drawer and keeps Sen
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test('the project rail shows coded tiles and peeks at a project on hover without moving', async ({
+test('the project rail shows coded tiles and peeks at a project on hover or focus without moving', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -1014,20 +1017,11 @@ test('the project rail shows coded tiles and peeks at a project on hover without
   await closeProject.focus();
   await expect(closeProject).toBeFocused();
   await expect(closeProject).toHaveCSS('opacity', '1');
-});
-
-test('keyboard focus on a rail tile peeks at its project', async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/?local&design');
-  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
-  const peek = page
-    .locator('[data-side="right"] > [data-side="right"]')
-    .filter({ hasText: '/demo/moonbase' });
+  // Keyboard focus on a tile peeks at its project too.
   await page.getByRole('tab', { name: 'Agents', exact: true }).focus();
   await page.keyboard.press('ArrowDown');
-  await expect(page.getByRole('tab', { name: 'moonbase · main', exact: true })).toBeFocused();
+  await expect(project).toBeFocused();
   await expect(peek).toBeVisible();
-  await expect(peek).toContainText('moonbase');
 });
 
 test('the rail keeps one tile per project and the sidebar header switches its worktrees', async ({
@@ -2222,7 +2216,7 @@ test('⌘B and the sidebar button hide the main sidebar in projects and Agents, 
   await expect.poll(widthOf(list)).toBeGreaterThan(100);
 });
 
-test('⌃⌘S toggles the sidebar and never saves', async ({ page }) => {
+test('⌃⌘S and the layout’s B key toggle the sidebar, and never save', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/?local&design');
   await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
@@ -2244,6 +2238,35 @@ test('⌃⌘S toggles the sidebar and never saves', async ({ page }) => {
   await page.getByRole('tree', { name: 'Files', exact: true }).focus();
   await page.keyboard.press('Meta+b');
   await expect(editor).toBeFocused();
+  await page.keyboard.press('Meta+b');
+  await expect.poll(widthOf(explorer)).toBeGreaterThan(100);
+  // The key follows the layout: ⌘ with the key that types B, not the physical B key.
+  // Playwright can't switch layouts, so this sends the keys a layout reports. It resolves whether
+  // the page took the key, preventing its default.
+  const press = (key: string, code: string) =>
+    page.evaluate(
+      ([key, code]) => {
+        return !document.body.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key,
+            code,
+            metaKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      },
+      [key, code],
+    );
+  // On Dvorak the physical B key types X: that's Cut, left alone.
+  expect(await press('x', 'KeyB')).toBe(false);
+  await expect.poll(widthOf(explorer)).toBeGreaterThan(100);
+  // The key that types B there, physically N, hides the sidebar.
+  expect(await press('b', 'KeyN')).toBe(true);
+  await expect.poll(widthOf(explorer)).toBe(0);
+  // A non-Latin layout falls back to the physical key.
+  expect(await press('и', 'KeyB')).toBe(true);
+  await expect.poll(widthOf(explorer)).toBeGreaterThan(100);
 });
 
 test('a hidden rail slides over the window at its left edge and away once the pointer is past it', async ({
@@ -2455,6 +2478,13 @@ test('hiding project chats from inside them hands focus to the project, so the w
   await expect(goTo).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(goTo).toHaveCount(0);
+  // Hiding them from the picker, which returns focus to the dock as it closes, hands it back too.
+  await editor.focus();
+  await message.press('Meta+Shift+p');
+  await goTo.getByRole('option', { name: 'Hide project chats', exact: true }).click();
+  await expect(goTo).toHaveCount(0);
+  await expect.poll(widthOf(dock)).toBe(0);
+  await expect(editor).toBeFocused();
   await blur();
   await page.keyboard.press('Meta+,');
   await expect(page.getByRole('dialog', { name: 'Settings', exact: true })).toBeVisible();
@@ -2484,43 +2514,6 @@ test('a peeked rail that slides away hands its focus to the view', async ({ page
       return element.closest('[aria-label="Workbench views"]') ? 'rail' : 'view';
     });
   await expect.poll(focused).toBe('view');
-});
-
-test('the sidebar key follows the layout: ⌘ with the key that types B, not the physical B key', async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/?local&design');
-  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
-  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
-  const explorer = page.locator('aside[aria-label="Editor sidebar"]');
-  await expect.poll(widthOf(explorer)).toBeGreaterThan(100);
-  // Playwright can't switch layouts, so this sends the keys a layout reports. It resolves whether
-  // the page took the key, preventing its default.
-  const press = (key: string, code: string) =>
-    page.evaluate(
-      ([key, code]) => {
-        return !document.body.dispatchEvent(
-          new KeyboardEvent('keydown', {
-            key,
-            code,
-            metaKey: true,
-            bubbles: true,
-            cancelable: true,
-          }),
-        );
-      },
-      [key, code],
-    );
-  // On Dvorak the physical B key types X: that's Cut, left alone.
-  expect(await press('x', 'KeyB')).toBe(false);
-  await expect.poll(widthOf(explorer)).toBeGreaterThan(100);
-  // The key that types B there, physically N, hides the sidebar.
-  expect(await press('b', 'KeyN')).toBe(true);
-  await expect.poll(widthOf(explorer)).toBe(0);
-  // A non-Latin layout falls back to the physical key.
-  expect(await press('и', 'KeyB')).toBe(true);
-  await expect.poll(widthOf(explorer)).toBeGreaterThan(100);
 });
 
 test('Settings shows why switching hosts failed, holding Use and focus while it tries', async ({
@@ -2585,23 +2578,6 @@ test('a host switch keeps focus in Settings, and the window keys wait behind it'
     page.getByRole('tab', { name: 'welcome.ts', exact: true, includeHidden: true }),
   ).toHaveCount(1);
   await expect.poll(widthOf(dock)).toBe(400);
-});
-
-test('hiding project chats from the picker hands focus back to the project', async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/?local&design');
-  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
-  await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
-  const dock = page.locator('aside[aria-label="Project chats"]');
-  const editor = page.getByRole('textbox', { name: 'welcome.ts editor', exact: true });
-  await expect.poll(widthOf(dock)).toBe(400);
-  await editor.focus();
-  await dock.getByLabel('Message', { exact: true }).press('Meta+Shift+p');
-  const goTo = page.getByRole('dialog', { name: 'Go to', exact: true });
-  await goTo.getByRole('option', { name: 'Hide project chats', exact: true }).click();
-  await expect(goTo).toHaveCount(0);
-  await expect.poll(widthOf(dock)).toBe(0);
-  await expect(editor).toBeFocused();
 });
 
 test('releasing Control commits the recent-tabs switcher opened with focus on the page', async ({
