@@ -37,7 +37,8 @@ for (const entry of [
 ])
   assert(inputs.some((p) => p.endsWith(entry)));
 assert(!inputs.some((p) => /packages\/editor\//.test(p)));
-assert(inputs.some((p) => p.endsWith('application/src/chat/controller.ts')));
+// The chat application runs in the renderer: its outbox, the never-resend boundary, is bundled.
+assert(inputs.some((p) => p.endsWith('application/src/chat/sends/sends-service.ts')));
 const assets = await readdir(new URL('renderer/assets/', output));
 assert.equal(
   assets.filter((name) => /^(editor|json|css|html|ts)\.worker.*\.js$/.test(name)).length,
