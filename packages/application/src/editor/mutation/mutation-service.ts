@@ -331,20 +331,32 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
         state,
         admits,
         mutate: (action, options) =>
-          Effect.gen(function* () {
-            const reserved = yield* Effect.uninterruptible(
-              Effect.gen(function* () {
-                if (!(yield* admits(action))) return false;
-                yield* SubscriptionRef.update(state, (s) => ({ ...s, mutating: true }));
-                return true;
-              }),
-            );
-            if (!reserved) return { completed: false, error: mutationUnavailable, items: [] };
-            return yield* session.run(apply(action, options)).pipe(
-              Effect.catchCause(() => Effect.succeed({ completed: false, error: '', items: [] })),
-              Effect.ensuring(SubscriptionRef.update(state, (s) => ({ ...s, mutating: false }))),
-            );
-          }),
+          Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const [modes, { recovery }] = yield* Effect.all([session.get, views.get]);
+              // Checking the gate and taking it are one step, so two mutations can't both start.
+              const reserved = yield* SubscriptionRef.modify(state, (s) =>
+                admitsMutation(
+                  { ...modes, prompting: false, mutating: s.mutating, recovery },
+                  action,
+                )
+                  ? [true, { ...s, mutating: true }]
+                  : [false, s],
+              );
+              if (!reserved)
+                return {
+                  completed: false,
+                  error: mutationUnavailable,
+                  items: [],
+                } as MutationRunResult;
+              return yield* restore(session.run(apply(action, options))).pipe(
+                Effect.catchCause(() =>
+                  Effect.succeed<MutationRunResult>({ completed: false, error: '', items: [] }),
+                ),
+                Effect.ensuring(SubscriptionRef.update(state, (s) => ({ ...s, mutating: false }))),
+              );
+            }),
+          ),
         answer: (promptId, replace) =>
           Effect.gen(function* () {
             const { replacePrompt } = yield* SubscriptionRef.get(state);
