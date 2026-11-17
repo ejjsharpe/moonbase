@@ -14,7 +14,7 @@ jobs:
       - uses: ./.github/actions/setup
       - run: node scripts/prepare-ripgrep.mjs
       # Bypass nx: its `build` target depends on the macOS-only workspace helper.
-      - run: node apps/desktop/scripts/build.mjs
+      - run: bun run --cwd apps/desktop build
       # Report every failure: no max-failures, one retry-free pass.
       - run: xvfb-run -a bun run --cwd apps/desktop test:native -- --max-failures=0 --reporter=list,json
         continue-on-error: true
