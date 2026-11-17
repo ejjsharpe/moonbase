@@ -68,7 +68,7 @@ for (const entry of [
 for (const entry of [
   'packages/workbench/src/workbench.tsx',
   'apps/desktop/src/renderer/shell/desktop-shell.tsx',
-  'apps/desktop/src/renderer/chat/view.tsx',
+  'apps/desktop/src/renderer/chat/chat-view.tsx',
 ])
   assert(
     renderer.some((p) => p.endsWith(entry)),
