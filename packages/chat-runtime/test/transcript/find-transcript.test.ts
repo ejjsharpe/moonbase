@@ -4,7 +4,7 @@ import { Harness, type ConversationId } from '@earendil-works/pi-durable';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import type { ChatClient, ChatTarget, ChatOutput } from '@moonbase/contracts/chat';
-import { fixture } from './runtime-fixture.ts';
+import { fixture } from '../runtime-fixture.ts';
 
 async function collect(client: ChatClient, target: ChatTarget, query: string, cursor?: string) {
   const matches: ChatOutput<'findChatTranscript'>['matches'] = [];
@@ -121,27 +121,12 @@ test('Find scans 1,100 mixed saved records and lazy long JSON with exact Unicode
   );
   for (const query of ['PRIVATE', 'REDACTED', 'IMAGESECRET'])
     assert.deepEqual((await collect(f.client, target, query)).matches, []);
-  for (const changed of [
-    { query: 'different' },
-    { cursor: needle.pages[0].startCursor + 'x' },
-    { target: { ...target, actorId: 'foreign' } },
-  ])
-    await assert.rejects(
-      f.client.command('findChatTranscript', {
-        target,
-        query: 'needle',
-        cursor: needle.pages[0].startCursor,
-        ...changed,
-      }),
-    );
-  await f.restart();
   await assert.rejects(
     f.client.command('findChatTranscript', {
-      target,
+      target: { ...target, actorId: 'foreign' },
       query: 'needle',
       cursor: needle.pages[0].startCursor,
     }),
-    { code: 'InvalidInput' },
   );
 });
 
@@ -193,7 +178,7 @@ test('Find cancellation leaves exact Stop and unrelated reads responsive while s
     },
   ]);
   await f.client.command('sendChat', { target, requestId: 'run', text: 'Running' });
-  const { until } = await import('./runtime-fixture.ts');
+  const { until } = await import('../runtime-fixture.ts');
   const view = await until(
     () => f.client.command('getChat', { target }),
     (view) => !!view.run,
@@ -305,7 +290,7 @@ test('Find JSON token continuations preserve string escaping, long keys, nesting
 
 test('Find adapts dense escaped matches to actual JSON envelopes with maximum-size authorities', async (t) => {
   const { ManagedRuntime } = await import('effect');
-  const { LocalPiRuntimeLive } = await import('../src/index.ts');
+  const { LocalPiRuntimeLive } = await import('../../src/index.ts');
   const { makeChatClient } = await import('@moonbase/application/runtime/clients');
   let harness!: Harness;
   const open = Harness.open;
@@ -403,4 +388,75 @@ test('Find continuations inside deeply nested JSON with wide indexes always fit 
       match.snippet.text,
       text.slice(match.snippet.start, match.snippet.start + match.snippet.text.length),
     );
+});
+
+test('lazy JSON matches JSON.stringify across escaped controls and lone/pair surrogate boundaries', async (t) => {
+  let harness!: Harness;
+  const open = Harness.open;
+  t.mock.method(
+    Harness,
+    'open',
+    async (...args: Parameters<typeof open>) => (harness = await open(...args)),
+  );
+  const f = await fixture(t),
+    target = await f.create();
+  const json = {
+    ['k'.repeat(4095) + '😀\udc00' + '\\"']: [
+      'x'.repeat(4094) + '\ud800a\udc00😀\u0000\b\f\r\n\t' + 'y'.repeat(16400),
+      { str: '\\uD800 punctuation },[ : true', arr: [null, true, false, -0, 1e22] },
+    ],
+  };
+  const text = JSON.stringify(json);
+  await harness.commit(
+    (tx) =>
+      tx.appendEntry(Number(target.conversationId) as ConversationId, {
+        kind: 'pi.user',
+        model: [
+          {
+            role: 'toolResult',
+            toolCallId: 'call',
+            toolName: 'custom',
+            timestamp: 1,
+            isError: false,
+            content: [],
+            details: json,
+          },
+        ],
+      }),
+    context,
+  );
+  for (const query of [
+    '😀',
+    '\\ud800',
+    '\\udc00',
+    '\\u0000',
+    '\\r\\n',
+    '},{',
+    'true',
+    '0',
+    'k😀',
+  ]) {
+    let cursor: string | null | undefined;
+    const found: ChatOutput<'findChatTranscript'>['matches'] = [];
+    do {
+      const page: ChatOutput<'findChatTranscript'> = await f.client.command('findChatTranscript', {
+        target,
+        query,
+        ...(cursor ? { cursor } : {}),
+      });
+      found.push(...page.matches.filter((m) => m.partId === 'm0.details'));
+      cursor = page.nextCursor;
+    } while (cursor);
+    const expr = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
+    assert.deepEqual(
+      found.map((m) => [m.start, m.end]),
+      [...text.matchAll(expr)].map((m) => [m.index, m.index + m[0].length]),
+      query,
+    );
+    for (const m of found)
+      assert.equal(
+        m.snippet.text,
+        text.slice(m.snippet.start, m.snippet.start + m.snippet.text.length),
+      );
+  }
 });

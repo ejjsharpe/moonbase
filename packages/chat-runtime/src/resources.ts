@@ -12,7 +12,8 @@ import {
   type ChatError,
 } from '@moonbase/contracts/chat-errors';
 import { IncompatibleHostError } from '@moonbase/contracts/host-errors';
-import { Host, safeError } from './commands.ts';
+import { Host } from './commands/chat-host.ts';
+import { safeError } from './commands/safe-error.ts';
 import { Store, readOwnedMetadata, getSettings } from './documents.ts';
 import type { LocalPiRuntimeConfiguration, RetainedWork } from './runtime-types.ts';
 import { decodeStoreOwner } from './stored-records.ts';
