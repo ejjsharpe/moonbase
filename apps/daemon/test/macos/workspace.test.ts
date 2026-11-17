@@ -4,24 +4,28 @@ import { execFileSync } from 'node:child_process';
 import { chmod, mkdir, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { Effect, Fiber, Layer, ManagedRuntime, Stream } from 'effect';
+import { Duration, Effect, Fiber, Layer, ManagedRuntime, Scope, Stream } from 'effect';
+import { TestClock } from 'effect/testing';
+import * as BunServices from '@effect/platform-bun/BunServices';
 import { makeKeyFileSource } from '@moonbase/chat-runtime/credentials';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
 import { makeConnectionClient } from '@moonbase/application/chat/clients';
 import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
 import { EndpointConnectionLive, RemoteWorkspaceHostLive } from '@moonbase/daemon-protocol/remote';
-import { runDaemon, type DaemonExit } from '../../src/daemon.ts';
-import { closeWorkspace, findFilesystemHelper } from '../../src/workspace.ts';
-import type { LogRecord } from '../../src/log.ts';
+import type { DaemonExit } from '../../src/daemon.ts';
+import { findFilesystemHelper } from '../../src/executables.ts';
+import { closeWorkspace } from '../../src/workspace.ts';
+import { DaemonJournal } from '../../src/journal.ts';
 import {
   bounded,
-  createControlledClock,
+  createTestClock,
   createFauxClient,
+  runInProcess,
   findFreePort,
   readJson,
   temporaryRoot,
   until,
-  type ControlledClock,
+  type IdleTestClock,
 } from '../daemon-fixture.ts';
 import { createFauxProviders, fauxModelId, fauxProviderId } from '../faux-provider.ts';
 
@@ -46,10 +50,9 @@ const gone = (pid: number) => {
  */
 async function startDaemon(
   root: string,
-  { settings, time }: { settings?: object; time?: ControlledClock } = {},
+  { settings, time }: { settings?: object; time?: IdleTestClock } = {},
 ) {
-  const directory = join(root, 'data'),
-    controller = new AbortController();
+  const directory = join(root, 'data');
   const helper = findFilesystemHelper(import.meta.url, { fromSource: true });
   assert.ok(
     helper &&
@@ -65,20 +68,18 @@ async function startDaemon(
   await writeFile(join(directory, 'faux.json'), '{}');
   const ready = Promise.withResolvers<void>();
   let settled: DaemonExit | Error | undefined;
-  const running = runDaemon({
-    directory,
-    signal: controller.signal,
+  const daemon = runInProcess(directory, {
     ready: () => ready.resolve(),
-    closeClaudeCode: async () => {},
     filesystemHelper: helper,
-    ...(time ? { clock: time.clock } : {}),
+    ...(time ? { idleClock: time.clock } : {}),
     providers: (loaded) => ({
       ...createFauxProviders(directory),
       ...(loaded.credentialKey?.source === 'file'
         ? { keySource: makeKeyFileSource(loaded.credentialKey.path) }
         : {}),
     }),
-  }).then(
+  });
+  const running = daemon.exit.then(
     (exit) => (settled = exit),
     (error: Error) => (settled = error),
   );
@@ -96,14 +97,15 @@ async function startDaemon(
   return {
     directory,
     host,
-    abort: () => controller.abort(),
+    /** Interrupts the daemon, as SIGTERM does. */
+    abort: () => void daemon.stop().catch(() => {}),
     running,
     get settled() {
       return settled;
     },
     stop: async () => {
       await clients.dispose().catch(() => {});
-      controller.abort();
+      await daemon.stop().catch(() => {});
       return running;
     },
   };
@@ -381,7 +383,7 @@ test('stopping during a long helper operation stops its process group, exits cle
   await withRoot(async (root) => {
     const repo = join(root, 'repo'),
       pidFile = join(root, 'hook.pid'),
-      time = createControlledClock();
+      time = createTestClock();
     await mkdir(repo);
     git(repo, 'init', '-q', '-b', 'main');
     await writeFile(join(repo, 'secret-name.txt'), 'file text that never reaches the log');
@@ -447,13 +449,9 @@ test('stopping during a long helper operation stops its process group, exits cle
 test('a daemon without the filesystem helper composes no workspace and still runs', async () => {
   await withRoot(async (root) => {
     const directory = join(root, 'data'),
-      controller = new AbortController(),
       ready = Promise.withResolvers<void>();
-    const running = runDaemon({
-      directory,
-      signal: controller.signal,
+    const daemon = runInProcess(directory, {
       ready: () => ready.resolve(),
-      closeClaudeCode: async () => {},
       providers: () => createFauxProviders(directory),
     });
     await bounded(ready.promise);
@@ -473,25 +471,43 @@ test('a daemon without the filesystem helper composes no workspace and still run
     const host = await clients.runPromise(WorkspaceHostService);
     assert.equal(await refusal(host.openCheckout({ root })), 'Incompatible');
     await clients.dispose();
-    controller.abort();
-    assert.equal(await running, 'stopped');
+    assert.equal(await daemon.stop(), 'stopped');
   });
 });
 
-test('closing a workspace that fails or never finishes is logged by code and shutdown goes on', async () => {
-  const records: LogRecord[] = [];
-  const log = { write: (record: LogRecord) => void records.push(record) };
-  await closeWorkspace(async () => {}, { deadlineMs: 60_000, log });
-  // A helper that never exits would otherwise keep the daemon, and its lock, forever.
-  await bounded(closeWorkspace(() => new Promise(() => {}), { deadlineMs: 1, log }));
-  await closeWorkspace(
-    async () => {
-      throw new Error('stale lock at /private/path');
-    },
-    { deadlineMs: 60_000, log },
-  );
-  assert.deepEqual(records, [
-    { event: 'workspace', reason: 'close-timeout' },
-    { event: 'workspace', reason: 'close-failed', code: 'Unavailable' },
-  ]);
+test('closing a workspace that fails or never finishes is journalled by code and shutdown goes on', async () => {
+  await withRoot(async (root) => {
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    await chmod(root, 0o700);
+    const closeWith = (finalizer: Effect.Effect<void>) =>
+      Effect.gen(function* () {
+        const scope = yield* Scope.make();
+        yield* Scope.addFinalizer(scope, finalizer);
+        yield* closeWorkspace(scope, Duration.seconds(5));
+      });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* closeWith(Effect.void);
+        // A helper that never exits would otherwise keep the daemon, and its lock, forever.
+        const never = yield* Effect.forkChild(closeWith(Effect.never));
+        yield* TestClock.adjust(Duration.seconds(5));
+        yield* Fiber.join(never);
+        yield* closeWith(Effect.die(new Error('stale lock at /private/path')));
+      }).pipe(
+        Effect.provide(DaemonJournal(root)),
+        Effect.provide(Layer.merge(TestClock.layer(), BunServices.layer)),
+      ),
+    );
+    const lines = (await readFile(join(root, 'logs', 'daemon.log'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => {
+        const { time: _, ...record } = JSON.parse(line);
+        return record;
+      });
+    assert.deepEqual(lines, [
+      { event: 'workspace', reason: 'close-timeout' },
+      { event: 'workspace', reason: 'close-failed', code: 'Unavailable' },
+    ]);
+  });
 });

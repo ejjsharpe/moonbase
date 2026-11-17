@@ -63,18 +63,18 @@ export type HostConfiguration = typeof WorkspaceConfigurationSchema.Type;
  * Whether the host may open `real` as a checkout root. `requested` is the path as the client named
  * it, so a predicate can refuse one reached through a link. Called on open, before a worktree is
  * made (with its parent folder, as the location doesn't exist yet) and on every later use of the
- * checkout; a refusal or a throw denies.
+ * checkout; a refusal, a failure or a defect denies.
  */
-export type RootPredicate = (real: string, requested: string) => boolean | Promise<boolean>;
+export type RootPredicate = (real: string, requested: string) => Effect.Effect<boolean, unknown>;
 /**
  * A chat's own folder, as the daemon's chats know it, for `turnChatIntoProject`. The host cannot
  * import the chat engine, so the daemon supplies this; without it the operation is `Incompatible`.
  */
 export type ChatFolders = {
   /** The chat's working folder; refuses any folder but one the daemon made for a chat. */
-  findOwnFolder(target: ChatTarget): Promise<string>;
+  findOwnFolder(target: ChatTarget): Effect.Effect<string, unknown>;
   /** Marks the chat's folder as a project. Repeating it changes nothing. */
-  markAsProject(requestId: string, target: ChatTarget): Promise<void>;
+  markAsProject(requestId: string, target: ChatTarget): Effect.Effect<void, unknown>;
 };
 export type WorkspaceHostConfiguration = WorkspaceConfiguration & {
   allowRoot?: RootPredicate;

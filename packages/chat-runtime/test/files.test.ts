@@ -219,10 +219,10 @@ test('a local chat searches its own folder; a new chat only an approved one', as
       databasePath: join(approved, '..', `${approved.split('/').at(-1)}.sqlite`),
       models,
       ripgrepExecutable: missing,
-      approveFolder: async (cwd) => {
-        if (cwd !== approved)
-          throw new FolderRefusedError({ refusal: 'not-approved', use: 'search' });
-      },
+      approveFolder: (cwd) =>
+        cwd === approved
+          ? Effect.void
+          : Effect.fail(new FolderRefusedError({ refusal: 'not-approved', use: 'search' })),
     }),
   );
   t.after(async () => {
@@ -330,7 +330,7 @@ test('a cancelled search returns at once, and its stalled listing is stopped at 
         models: createModels(),
         ripgrepExecutable: stalled,
         fileListingTiming: { stopGrace },
-        approveFolder: async () => {},
+        approveFolder: () => Effect.void,
       }),
       TestClock.layer(),
     ),
@@ -413,7 +413,7 @@ test('disposing the runtime stops its running listings and waits for them to exi
       models: createModels(),
       ripgrepExecutable: stalled,
       fileListingTiming: { stopGrace },
-      approveFolder: async () => {},
+      approveFolder: () => Effect.void,
     }),
   );
   let disposed = false;

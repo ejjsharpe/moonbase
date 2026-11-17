@@ -30,9 +30,17 @@ export function createChat(
   return Effect.gen(function* () {
     yield* host.checkSession(d.session);
     const now = yield* DateTime.now;
+    const created = yield* callHarness(() => findCreated(host, d), true);
+    if (created) return created;
+    yield* callHarness(() => checkRequested(host, d), true);
+    // A folder the host does not approve is refused before anything is made.
+    const { approveCreation } = host.config;
+    if (approveCreation)
+      yield* Effect.mapError(approveCreation(d.settings), (error) => safeError(error, true));
     return yield* callHarness(() => createOnce(host, d, now), true);
   });
 }
+const bindingOf = (d: ChatInput<'createChat'>) => JSON.stringify({ operation: 'createChat', ...d });
 const summarize = (
   host: Host,
   conversationId: string,
@@ -48,12 +56,11 @@ const summarize = (
     meta,
     getSettings(meta),
   );
-async function createOnce(
+/** The chat an earlier attempt of this request made; a request ID reused for another is refused. */
+async function findCreated(
   host: Host,
   d: ChatInput<'createChat'>,
-  now: DateTime.Utc,
-): Promise<ChatOutput<'createChat'>> {
-  const binding = JSON.stringify({ operation: 'createChat', ...d });
+): Promise<ChatOutput<'createChat'> | undefined> {
   const existing = await host.harness.snapshot(
     Request,
     key(d.session.actorId, d.requestId),
@@ -61,7 +68,7 @@ async function createOnce(
   );
   if (existing) {
     decodeStoredRequest(existing, d.session.actorId, d.requestId);
-    if (existing.binding !== binding) throw new RequestReusedError();
+    if (existing.binding !== bindingOf(d)) throw new RequestReusedError();
     if (existing.conversationId)
       return {
         requestId: d.requestId,
@@ -75,7 +82,10 @@ async function createOnce(
         ),
       };
   }
-  let settings: ChatSettings, ownFolder: string | undefined;
+  return undefined;
+}
+/** Refuses a folder that is missing or not named by its real path, or an unknown model. */
+async function checkRequested(host: Host, d: ChatInput<'createChat'>) {
   const requested = d.settings;
   if (requested.cwd !== undefined) {
     const cwd = await realpath(requested.cwd).catch(() => {
@@ -92,7 +102,15 @@ async function createOnce(
     !getSupportedThinkingLevels(model).includes(requested.reasoningEffort)
   )
     throw new InvalidChatRequestError({ problem: 'reasoning-effort' });
-  await host.config.approveCreation?.(requested);
+}
+async function createOnce(
+  host: Host,
+  d: ChatInput<'createChat'>,
+  now: DateTime.Utc,
+): Promise<ChatOutput<'createChat'>> {
+  const binding = bindingOf(d);
+  let settings: ChatSettings, ownFolder: string | undefined;
+  const requested = d.settings;
   if (requested.cwd !== undefined) settings = { ...requested, cwd: requested.cwd };
   else {
     ownFolder = await makeChatFolder(host.config.chatFolders!, d.title, DateTime.toDate(now));

@@ -132,10 +132,9 @@ export const turnChatIntoProject = (input: HostInput<'turnChatIntoProject'>) =>
       const { chats } = yield* HostSettings;
       const checkouts = yield* Checkouts;
       if (!chats) return yield* new WorkspaceUnsupportedError({ feature: 'chat-projects' });
-      const folder = yield* Effect.tryPromise({
-        try: () => chats.findOwnFolder(input.target),
-        catch: asWorkspaceFailure,
-      });
+      const folder = yield* chats
+        .findOwnFolder(input.target)
+        .pipe(Effect.mapError(asWorkspaceFailure));
       const target = yield* Effect.interruptible(checkouts.open(folder));
       // `open` resolves links: a folder replaced by one since it was checked opens elsewhere.
       if (target.root !== folder)
@@ -144,10 +143,9 @@ export const turnChatIntoProject = (input: HostInput<'turnChatIntoProject'>) =>
       const { common, gitEntry } = yield* attempt(() => checkouts.approval(target));
       if (common && (gitEntry?.pointer !== null || common.path !== join(folder, '.git')))
         return yield* new CheckoutAccessError({ refusal: 'chat-folder-repository' });
-      yield* Effect.tryPromise({
-        try: () => chats.markAsProject(input.requestId, input.target),
-        catch: asWorkspaceFailure,
-      });
+      yield* chats
+        .markAsProject(input.requestId, input.target)
+        .pipe(Effect.mapError(asWorkspaceFailure));
       return target;
     }),
   );

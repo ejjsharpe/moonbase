@@ -1,88 +1,64 @@
-export type IdleClock = {
-  now(): number;
-  /** `callback` returns the check it ran, so a controlled clock can wait for the check to end. */
-  setTimeout(callback: () => Promise<void>, ms: number): unknown;
-  clearTimeout(handle: unknown): void;
-};
-export const systemClock: IdleClock = {
-  now: () => performance.now(),
-  setTimeout: (callback, ms) => setTimeout(() => void callback(), ms),
-  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+import { Clock, Duration, Effect, Schedule, Stream, SubscriptionRef } from 'effect';
+import type { DaemonUse } from './daemon-stop.ts';
+
+export type IdleOptions = {
+  /** How long a local daemon may go unused before it stops. */
+  idle: Duration.Duration;
+  /** How often an otherwise unused daemon checks for active work. */
+  poll: Duration.Duration;
+  /** Whether chats have work running; a check that fails counts as work. */
+  hasActiveWork: Effect.Effect<boolean, unknown>;
 };
 
 /**
- * Calls `onIdle` once nothing has used the daemon for `idleMs`: no client request in flight, no
- * open watch and no active work. A client's request or watch resets the wait. Work is checked
- * every `pollMs` while otherwise idle, and counts as use whenever it is seen.
+ * Waits, on the Clock, until the daemon has been unused for `idle`: active work counts as use
+ * whenever a check sees it. Work is checked every `poll`, or sooner when the wait ends first.
  */
-export function createIdleMonitor({
-  idleMs,
-  pollMs,
-  clock,
-  hasActiveWork,
-  onIdle,
-}: {
-  idleMs: number;
-  pollMs: number;
-  clock: IdleClock;
-  hasActiveWork(): Promise<boolean>;
-  onIdle(): void;
-}) {
-  let users = 0,
-    last = clock.now(),
-    timer: unknown,
-    stopped = false;
-  const cancel = () => {
-    if (timer !== undefined) clock.clearTimeout(timer);
-    timer = undefined;
-  };
-  const schedule = (ms: number) => {
-    cancel();
-    timer = clock.setTimeout(() => {
-      timer = undefined;
-      return check();
-    }, ms);
-  };
-  async function check() {
-    if (stopped || users) return;
-    let active: boolean;
-    try {
-      active = await hasActiveWork();
-    } catch {
+const waitUnused = ({ idle, poll, hasActiveWork }: IdleOptions) =>
+  Effect.gen(function* () {
+    const idleMs = Duration.toMillis(idle),
+      pollMs = Duration.toMillis(poll);
+    let last = yield* Clock.currentTimeMillis;
+    /** Checks for work and answers how long is left before the daemon is idle. */
+    const remaining = Effect.gen(function* () {
       // Work that can't be ruled out keeps the daemon running.
-      active = true;
-    }
-    if (stopped || users || timer !== undefined) return;
-    const now = clock.now();
-    if (active) last = now;
-    const remaining = last + idleMs - now;
-    if (remaining <= 0) {
-      stopped = true;
-      onIdle();
-    } else schedule(Math.min(pollMs, remaining));
-  }
-  schedule(Math.min(pollMs, idleMs));
-  return {
-    /** A client request or watch began. */
-    begin() {
-      users++;
-      last = clock.now();
-      cancel();
-    },
-    /** A client request or watch ended. */
-    end() {
-      users = Math.max(0, users - 1);
-      last = clock.now();
-      if (!users && !stopped) schedule(Math.min(pollMs, idleMs));
-    },
-    /** Whether the monitor has stopped, by `stop` or by going idle. */
-    get stopped() {
-      return stopped;
-    },
-    stop() {
-      stopped = true;
-      cancel();
-    },
-  };
-}
-export type IdleMonitor = ReturnType<typeof createIdleMonitor>;
+      const active = yield* hasActiveWork.pipe(
+        Effect.orElseSucceed(() => true),
+        Effect.catchDefect(() => Effect.succeed(true)),
+      );
+      const now = yield* Clock.currentTimeMillis;
+      if (active) last = now;
+      return last + idleMs - now;
+    });
+    yield* Effect.sleep(Math.min(pollMs, idleMs));
+    yield* Effect.repeat(remaining, {
+      schedule: Schedule.forever.pipe(
+        Schedule.modifyDelay(({ input }: Schedule.Metadata<unknown, number>) =>
+          Effect.succeed(Math.min(pollMs, input)),
+        ),
+      ),
+      until: (left) => left <= 0,
+    });
+  });
+
+/**
+ * Answers once nothing has used the daemon for `idle`: no use held in `use` (a client's request,
+ * watch or workspace connection) and no active work. A use that begins restarts the wait, which
+ * starts again from its end. `onIdle` decides, and answers whether the daemon then stopped; one
+ * that did not (a use arrived meanwhile) leaves the wait to start again.
+ */
+export const waitForIdle = (
+  use: SubscriptionRef.SubscriptionRef<DaemonUse>,
+  options: IdleOptions,
+  onIdle: Effect.Effect<boolean>,
+) =>
+  SubscriptionRef.changes(use).pipe(
+    Stream.map((state) => state.users),
+    Stream.changes,
+    Stream.switchMap((users) =>
+      users > 0 ? Stream.never : Stream.fromEffect(Effect.andThen(waitUnused(options), onIdle)),
+    ),
+    Stream.filter((stopped) => stopped),
+    Stream.runHead,
+    Effect.asVoid,
+  );

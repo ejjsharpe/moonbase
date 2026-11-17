@@ -6,11 +6,10 @@ import { join } from 'node:path';
 import type { ChatTarget } from '@moonbase/contracts/chat';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
 import { decodeDaemonSettings } from '../src/daemon-settings.ts';
-import { runDaemon } from '../src/daemon.ts';
-import { readDirectoryArgument } from '../src/data-directory.ts';
-import { describeFailure } from '../src/failure.ts';
+import { describeFailure } from '../src/daemon-errors.ts';
 import {
   bounded,
+  runInProcess,
   createFauxClient,
   findFreePort,
   readJson,
@@ -51,7 +50,9 @@ test('host settings name each approved root by an absolute path, none under anot
     settings(['/work', '/other']),
   );
   for (const roots of [['work'], ['/work', '/work/inner']])
-    assert.throws(() => decodeDaemonSettings(settings(roots)), { code: 'InvalidInput' });
+    assert.throws(() => decodeDaemonSettings(settings(roots)), {
+      _tag: 'DaemonConfigurationError',
+    });
 });
 const writeScript = (directory: string, script: FauxScript) =>
   writeFile(join(directory, 'faux.json'), JSON.stringify(script));
@@ -364,13 +365,10 @@ for (const refusal of refusals)
       const args = (await refusal.prepare(root, directory, secret)) ?? [directory];
       const ready: string[] = [];
       const failure = await bounded(
-        runDaemon({
-          directory: readDirectoryArgument(args),
-          signal: new AbortController().signal,
+        runInProcess(args, {
           ready: (line) => ready.push(line),
-          closeClaudeCode: async () => {},
           providers: () => createFauxProviders(directory),
-        }).then(
+        }).exit.then(
           () => assert.fail('The daemon started'),
           (error: unknown) => JSON.stringify(describeFailure(error)),
         ),

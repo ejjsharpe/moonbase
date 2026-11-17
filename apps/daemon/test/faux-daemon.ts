@@ -1,11 +1,11 @@
 import { chmodSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeKeyFileSource } from '@moonbase/chat-runtime/credentials';
+import { Console, Effect } from 'effect';
 import { runDaemon } from '../src/daemon.ts';
-import { readDirectoryArgument } from '../src/data-directory.ts';
-import { describeFailure } from '../src/failure.ts';
-import { onShutdownSignal } from '../src/signals.ts';
-import { findFilesystemHelper } from '../src/workspace.ts';
+import { argumentsConfig } from '../src/daemon-config.ts';
+import { runDaemonProcess } from '../src/daemon-process.ts';
+import { findFilesystemHelper } from '../src/executables.ts';
 import { createFauxProviders, readFauxScript } from './faux-provider.ts';
 
 /**
@@ -38,29 +38,29 @@ const holdingRead = (helper: string | undefined) =>
   helper && process.env.MOONBASE_TEST_HOLD_READ
     ? holdingHelper(process.env.MOONBASE_TEST_HOLD_READ, helper)
     : helper;
-try {
-  const directory = readDirectoryArgument(process.argv.slice(2));
-  const script = readFauxScript(directory);
-  await runDaemon({
-    directory,
-    signal: onShutdownSignal(),
-    ready: (line) => console.log(line),
-    closeClaudeCode: async () => {},
-    filesystemHelper: holdingRead(findFilesystemHelper(import.meta.url, { fromSource: true })),
-    providers: (settings) => ({
-      ...createFauxProviders(directory),
-      ...(settings.credentialKey?.source === 'file'
-        ? { keySource: makeKeyFileSource(settings.credentialKey.path) }
-        : {}),
-    }),
-    ...(script.idleMs ? { idleMs: script.idleMs } : {}),
-    ...(script.pollMs ? { pollMs: script.pollMs } : {}),
-    // A test stands in for another app version's daemon with its own build.
-    ...(process.env.MOONBASE_TEST_DAEMON_BUILD
-      ? { build: process.env.MOONBASE_TEST_DAEMON_BUILD }
+const args = process.argv.slice(2);
+// The faux script is read before the daemon checks its directory; one it can't read is empty.
+const script = args.length === 1 && args[0] ? readFauxScript(args[0]) : {};
+const helper = holdingRead(findFilesystemHelper(import.meta.url, { fromSource: true }));
+const daemon = runDaemon({
+  ready: (line) => Console.log(line),
+  closeClaudeCode: Effect.void,
+  ...(helper ? { filesystemHelper: helper } : {}),
+  providers: (settings) => ({
+    ...createFauxProviders(args[0]!),
+    ...(settings.credentialKey?.source === 'file'
+      ? { keySource: makeKeyFileSource(settings.credentialKey.path) }
       : {}),
-  });
-} catch (error) {
-  console.error(JSON.stringify({ event: 'failed', error: describeFailure(error) }));
-  process.exitCode = 1;
-}
+  }),
+  // A test stands in for another app version's daemon with its own build.
+  ...(process.env.MOONBASE_TEST_DAEMON_BUILD
+    ? { build: process.env.MOONBASE_TEST_DAEMON_BUILD }
+    : {}),
+});
+runDaemonProcess(
+  daemon,
+  argumentsConfig(args, {
+    ...(script.idleMs ? { idle: `${script.idleMs} millis` } : {}),
+    ...(script.pollMs ? { poll: `${script.pollMs} millis` } : {}),
+  }),
+);

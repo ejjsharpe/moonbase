@@ -25,7 +25,10 @@ import { initRepository } from './repository-fixture.ts';
 function setup({
   reserved = () => [],
   allowRoot,
-}: { reserved?: (base: string) => string[]; allowRoot?: RootPredicate } = {}) {
+}: {
+  reserved?: (base: string) => string[];
+  allowRoot?: (real: string, requested: string) => boolean;
+} = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-roots-')));
   const calls: [string, string][] = [];
   const start = (paths: string[]) =>
@@ -36,10 +39,11 @@ function setup({
         reserved: paths,
         ...(allowRoot
           ? {
-              allowRoot: (real, requested) => {
-                calls.push([real, requested]);
-                return allowRoot(real, requested);
-              },
+              allowRoot: ((real, requested) =>
+                Effect.sync(() => {
+                  calls.push([real, requested]);
+                  return allowRoot(real, requested);
+                })) satisfies RootPredicate,
             }
           : {}),
       }),

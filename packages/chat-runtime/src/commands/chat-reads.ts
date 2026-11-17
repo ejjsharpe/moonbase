@@ -54,7 +54,7 @@ export function findFiles(
           const { approveFolder } = host.config;
           return approveFolder
             ? Effect.as(
-                Effect.tryPromise({ try: () => approveFolder(d.cwd), catch: safeError }),
+                Effect.mapError(approveFolder(d.cwd), (error) => safeError(error)),
                 d.cwd,
               )
             : Effect.succeed(d.cwd);

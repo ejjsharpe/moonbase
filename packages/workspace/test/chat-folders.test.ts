@@ -35,19 +35,39 @@ const chat: ChatTarget = {
   conversationId: 'chat-1',
 };
 
-function setup(
-  options: {
-    allowRoot?: RootPredicate;
-    chats?: ChatFolders;
-    nativeImports?: boolean;
-  } = {},
-) {
+function setup({
+  allowRoot,
+  chats,
+  nativeImports,
+}: {
+  allowRoot?: (real: string) => boolean;
+  chats?: {
+    [K in keyof ChatFolders]: (...args: Parameters<ChatFolders[K]>) => Promise<unknown>;
+  };
+  nativeImports?: boolean;
+} = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-chat-folders-')));
+  const attempt = <A>(run: () => Promise<A>) => Effect.tryPromise({ try: run, catch: (e) => e });
   const runtime = ManagedRuntime.make(
     WorkspaceHostLive({
       dataDirectory: join(base, 'state'),
       hostId: 'chat-folders-host',
-      ...options,
+      ...(allowRoot
+        ? {
+            allowRoot: ((real) => Effect.sync(() => allowRoot(real))) satisfies RootPredicate,
+          }
+        : {}),
+      ...(chats
+        ? {
+            chats: {
+              findOwnFolder: (target) =>
+                attempt(() => chats.findOwnFolder(target) as Promise<string>),
+              markAsProject: (requestId, target) =>
+                Effect.asVoid(attempt(() => chats.markAsProject(requestId, target))),
+            } satisfies ChatFolders,
+          }
+        : {}),
+      ...(nativeImports === undefined ? {} : { nativeImports }),
     }),
   );
   const git = (root: string, ...args: string[]) =>

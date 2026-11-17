@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { mkdtemp, realpath, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Layer, ManagedRuntime } from 'effect';
+import { Effect, Layer, ManagedRuntime } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
@@ -45,10 +45,13 @@ test('desktop recovers an exact committed Create before renewed folder approval,
     ...context,
     models,
     databasePath: join(root, 'chat.sqlite'),
-    approveCreation: async () => {
-      validations++;
-      if (!approved) throw new FolderRefusedError({ refusal: 'not-approved' });
-    },
+    approveCreation: () =>
+      Effect.suspend(() => {
+        validations++;
+        return approved
+          ? Effect.void
+          : Effect.fail(new FolderRefusedError({ refusal: 'not-approved' }));
+      }),
   };
   let runtime = ManagedRuntime.make(
     Layer.orDie(LocalPiRuntimeLive(config).pipe(Layer.provide(NodeServices.layer))),
