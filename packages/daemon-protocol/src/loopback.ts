@@ -1,20 +1,14 @@
-import { hostTokenPattern } from '@moonbase/contracts/host';
 import { randomUUID } from 'node:crypto';
-import { constants } from 'node:fs';
-import { lstat, open } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
-import { Effect, Layer, Queue, Semaphore, Stream, type Cause } from 'effect';
-import { ApplicationError, fail } from '@moonbase/contracts/errors';
-import type { ConnectionProfile, ConnectionSnapshot } from '@moonbase/contracts/connection';
-import { decodeChatInput } from '@moonbase/contracts/chat-schema';
-import { chatProtocolVersion, type ChatHostHealth } from '@moonbase/contracts/host';
+import { isAbsolute } from 'node:path';
+import { Effect, Layer, Ref, Semaphore, Stream, SubscriptionRef } from 'effect';
+import { ApplicationError } from '@moonbase/contracts/errors';
+import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
+import type { ChatHostHealth } from '@moonbase/contracts/host';
 import { ConnectionService, type ConnectionServiceShape } from '@moonbase/contracts/services';
-import { normalizeApplicationError, releaseResource } from '@moonbase/effect';
-import { checkHostHealth } from './health.ts';
 import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
 import { isSameChatHost } from '@moonbase/contracts/chat-validation';
-import { readObject } from '@moonbase/contracts/common';
-import { isPrivateTo } from '@moonbase/contracts/files';
+import { checkHostHealth } from './health.ts';
+import { readDaemonFiles, readDaemonIdentity } from './loopback-files.ts';
 
 export type LoopbackConnectionConfiguration = {
   /** The absolute data directory of a daemon on this machine. */
@@ -29,91 +23,6 @@ const maximumObservers = 64;
 
 const failure = (code: ApplicationError['code'], message: string) =>
   new ApplicationError({ code, message });
-const unsafe = () =>
-  failure(
-    'Unavailable',
-    'The daemon data directory or one of its files is not private to this user.',
-  );
-const malformed = () => failure('Unavailable', 'The daemon’s connection files are malformed.');
-
-/** Opens an existing private file without following a link and checks what was opened. */
-async function readPrivateFile(path: string, maxBytes: number) {
-  let file;
-  try {
-    file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT')
-      throw failure('Unavailable', 'The daemon is not running.');
-    throw unsafe();
-  }
-  try {
-    const info = await file.stat();
-    if (!info.isFile() || !isPrivateTo(info, process.getuid?.())) throw unsafe();
-    if (info.size > maxBytes) throw malformed();
-    return new TextDecoder('utf8', { fatal: true }).decode(await file.readFile());
-  } catch (error) {
-    throw ApplicationError.is(error) ? error : malformed();
-  } finally {
-    await file.close();
-  }
-}
-const parse = <A>(text: string, decode: (value: unknown) => A) => {
-  try {
-    return decode(JSON.parse(text));
-  } catch {
-    throw malformed();
-  }
-};
-
-/** Refuses a data directory that is missing, a link, or not private to this user. */
-async function checkDirectory(directory: string) {
-  const info = await lstat(directory).catch(() => {
-    throw failure('Unavailable', 'The daemon is not running.');
-  });
-  if (!info.isDirectory() || info.isSymbolicLink() || !isPrivateTo(info, process.getuid?.()))
-    throw unsafe();
-}
-const parseIdentity = (identity: string) =>
-  parse(identity, (value) => decodeChatInput('listChats', { session: value }).session).host;
-
-/** The daemon's host and store, from its directory's `identity.json`. */
-async function readDaemonIdentity(directory: string) {
-  await checkDirectory(directory);
-  return parseIdentity(await readPrivateFile(join(directory, 'identity.json'), 4096));
-}
-
-/** The daemon's identity, its listening port and its token, read fresh from its directory. */
-async function readDaemonFiles(directory: string) {
-  await checkDirectory(directory);
-  const [identity, endpoint, token] = await Promise.all([
-    readPrivateFile(join(directory, 'identity.json'), 4096),
-    readPrivateFile(join(directory, 'endpoint.json'), 4096),
-    readPrivateFile(join(directory, 'token'), 8192),
-  ]);
-  const host = parseIdentity(identity);
-  const { port, pid, protocol } = parse(endpoint, (value) => {
-    const record = readObject(value, ['port', 'pid', 'version', 'protocol', 'build']);
-    if (
-      !Number.isSafeInteger(record.port) ||
-      (record.port as number) < 1 ||
-      (record.port as number) > 65535 ||
-      !Number.isSafeInteger(record.pid) ||
-      (record.pid as number) < 1 ||
-      !Number.isSafeInteger(record.protocol)
-    )
-      throw Error();
-    return {
-      port: record.port as number,
-      pid: record.pid as number,
-      protocol: record.protocol as number,
-    };
-  });
-  if (protocol !== chatProtocolVersion)
-    throw failure('Incompatible', 'The daemon speaks another protocol version.');
-  const key = token.trim();
-  if (!hostTokenPattern.test(key)) throw malformed();
-  return { expected: host, origin: `http://127.0.0.1:${port}`, port, pid, token: key };
-}
 
 /** A verified connection to one daemon process, which its endpoint's `pid` names. */
 type Generation = {
@@ -147,68 +56,44 @@ export function LoopbackConnectionLive(
       // oxlint-disable-next-line no-control-regex -- Labels reject control characters.
       if (typeof label !== 'string' || !/^[^\x00-\x1f\x7f]{1,128}$/.test(label))
         return yield* Effect.fail(failure('InvalidInput', 'Choose a short connection label.'));
-      const readFiles = <A>(read: (directory: string) => Promise<A>) =>
-        Effect.tryPromise({
-          try: () => read(config.directory),
-          catch: (error) =>
-            ApplicationError.is(error)
-              ? error
-              : failure('Unavailable', 'The daemon’s connection files could not be read.'),
-        });
-      const read = () => readFiles(readDaemonFiles);
       // The expected identity is the directory's at startup; a different one later is refused.
-      const expected = yield* readFiles(readDaemonIdentity);
-      let profile: ConnectionProfile = {
-        id: loopbackProfileId,
-        label,
-        destination: '127.0.0.1',
-        expected,
-      };
-      let state: ConnectionSnapshot = { profile, state: 'disconnected', connectionId: null },
-        current: Generation | undefined,
-        closed = false;
-      const observers = new Set<Queue.Queue<ConnectionSnapshot, Cause.Done>>();
+      const expected = yield* readDaemonIdentity(config.directory);
+      const state = yield* SubscriptionRef.make<ConnectionSnapshot>({
+        profile: { id: loopbackProfileId, label, destination: '127.0.0.1', expected },
+        state: 'disconnected',
+        connectionId: null,
+      });
+      /** The verified generation; set only together with a `connected` state, under `lock`. */
+      const current = yield* Ref.make<Generation | undefined>(undefined);
       const lock = yield* Semaphore.make(1);
-      const publish = (next: ConnectionSnapshot) => {
-        state = next;
-        for (const queue of observers) Queue.offerUnsafe(queue, structuredClone(state));
-      };
-      const isOpen = Effect.suspend(() =>
-        closed
-          ? Effect.fail(failure('Unavailable', 'Loopback connection scope is closed.'))
-          : Effect.void,
-      );
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          closed = true;
-          current = undefined;
-          for (const queue of observers) Queue.endUnsafe(queue);
-          observers.clear();
-        }),
-      );
+      const observers = yield* Ref.make(0);
+      // Closing the connection forgets the verified endpoint, so its token is never handed out.
+      yield* Effect.addFinalizer(() => lock.withPermits(1)(Ref.set(current, undefined)));
       // This connection is still on the legacy error, so a health failure becomes one here.
       const verify = (origin: string, token: string) =>
         checkHostHealth({ origin, token, expected }).pipe(
           Effect.mapError(toConnectionApplicationError),
         );
       const connect = Effect.gen(function* () {
-        yield* isOpen;
-        const files = yield* read().pipe(
-          Effect.tap((files) =>
-            isSameChatHost(files.expected, expected)
-              ? Effect.void
-              : Effect.fail(
-                  failure('Incompatible', 'The daemon’s host or store identity changed.'),
-                ),
+        const { profile } = yield* SubscriptionRef.get(state);
+        const files = yield* readDaemonFiles(config.directory).pipe(
+          Effect.filterOrFail(
+            (files) => isSameChatHost(files.expected, expected),
+            () => failure('Incompatible', 'The daemon’s host or store identity changed.'),
           ),
           Effect.tapError((error) =>
-            Effect.sync(() => {
-              current = undefined;
-              publish({ profile, state: 'failed', connectionId: null, message: error.message });
-            }),
+            Effect.andThen(
+              Ref.set(current, undefined),
+              SubscriptionRef.set(state, {
+                profile,
+                state: 'failed',
+                connectionId: null,
+                message: error.message,
+              }),
+            ),
           ),
         );
-        const reuse = current;
+        const reuse = yield* Ref.get(current);
         // The token outlives a restart and the port can repeat, so the process tells daemons apart.
         if (
           reuse &&
@@ -217,28 +102,47 @@ export function LoopbackConnectionLive(
           reuse.token === files.token
         ) {
           const healthy = yield* Effect.result(verify(reuse.origin, reuse.token));
-          if (healthy._tag === 'Success' && current === reuse && state.state === 'connected')
-            return structuredClone(state);
+          const snapshot = yield* SubscriptionRef.get(state);
+          if (
+            healthy._tag === 'Success' &&
+            (yield* Ref.get(current)) === reuse &&
+            snapshot.state === 'connected'
+          )
+            return structuredClone(snapshot);
         }
-        const id = randomUUID();
-        current = undefined;
-        profile = { ...profile, remotePort: files.port };
-        publish({ profile, state: 'connecting', connectionId: id });
+        const id = randomUUID(),
+          next = { ...profile, remotePort: files.port };
+        yield* Ref.set(current, undefined);
+        yield* SubscriptionRef.set(state, { profile: next, state: 'connecting', connectionId: id });
         const health = yield* verify(files.origin, files.token).pipe(
           Effect.tapError((error) =>
-            Effect.sync(() => {
-              if (!closed)
-                publish({ profile, state: 'failed', connectionId: id, message: error.message });
+            SubscriptionRef.set(state, {
+              profile: next,
+              state: 'failed',
+              connectionId: id,
+              message: error.message,
             }),
           ),
         );
-        yield* isOpen;
-        current = { id, origin: files.origin, pid: files.pid, token: files.token, health };
-        publish({ profile, state: 'connected', connectionId: id, health });
-        return structuredClone(state);
+        yield* Ref.set(current, {
+          id,
+          origin: files.origin,
+          pid: files.pid,
+          token: files.token,
+          health,
+        });
+        const connected: ConnectionSnapshot = {
+          profile: next,
+          state: 'connected',
+          connectionId: id,
+          health,
+        };
+        yield* SubscriptionRef.set(state, connected);
+        return structuredClone(connected);
       });
       const service: ConnectionServiceShape = {
-        getConnection: () => Effect.as(isOpen, structuredClone(state)),
+        getConnection: () =>
+          Effect.map(SubscriptionRef.get(state), (snapshot) => structuredClone(snapshot)),
         connect: ({ profileId }) =>
           profileId === loopbackProfileId
             ? lock.withPermits(1)(connect)
@@ -246,59 +150,74 @@ export function LoopbackConnectionLive(
         disconnect: ({ connectionId }) =>
           lock.withPermits(1)(
             Effect.gen(function* () {
-              yield* isOpen;
-              if (state.connectionId === null) return;
-              if (state.connectionId !== connectionId)
+              const snapshot = yield* SubscriptionRef.get(state);
+              if (snapshot.connectionId === null) return;
+              if (snapshot.connectionId !== connectionId)
                 return yield* Effect.fail(
                   failure('Conflict', 'This disconnect names a stale connection generation.'),
                 );
-              current = undefined;
-              publish({ profile, state: 'disconnected', connectionId: null });
+              yield* Ref.set(current, undefined);
+              yield* SubscriptionRef.set(state, {
+                profile: snapshot.profile,
+                state: 'disconnected',
+                connectionId: null,
+              });
             }),
           ),
         endpoint: ({ host }) =>
-          Effect.try({
-            try: () => {
-              if (closed) fail('Unavailable', 'Loopback connection scope is closed.');
-              if (!isSameChatHost(host, expected))
-                fail('Conflict', 'Connection target does not match the daemon’s host and store.');
-              if (!current || state.state !== 'connected' || state.connectionId !== current.id)
-                fail('Unavailable', 'No verified connection is available for that host and store.');
-              return structuredClone({
-                origin: current!.origin,
-                token: current!.token,
-                expected,
-                connectionId: current!.id,
-                health: current!.health,
-              });
-            },
-            catch: normalizeApplicationError,
+          Effect.gen(function* () {
+            if (!isSameChatHost(host, expected))
+              return yield* Effect.fail(
+                failure(
+                  'Conflict',
+                  'Connection target does not match the daemon’s host and store.',
+                ),
+              );
+            const generation = yield* Ref.get(current),
+              snapshot = yield* SubscriptionRef.get(state);
+            if (
+              !generation ||
+              snapshot.state !== 'connected' ||
+              snapshot.connectionId !== generation.id
+            )
+              return yield* Effect.fail(
+                failure(
+                  'Unavailable',
+                  'No verified connection is available for that host and store.',
+                ),
+              );
+            return structuredClone({
+              origin: generation.origin,
+              token: generation.token,
+              expected,
+              connectionId: generation.id,
+              health: generation.health,
+            });
           }),
         watch: () =>
           Stream.unwrap(
-            Effect.gen(function* () {
-              const queue = yield* Queue.sliding<ConnectionSnapshot, Cause.Done>(1);
-              yield* Effect.acquireRelease(
-                Effect.gen(function* () {
-                  yield* isOpen;
-                  if (observers.size >= maximumObservers)
-                    return yield* Effect.fail(
-                      failure(
-                        'Unavailable',
-                        'Connection observer limit reached. Close an existing observation before subscribing.',
-                      ),
-                    );
-                  observers.add(queue);
-                  Queue.offerUnsafe(queue, structuredClone(state));
-                }),
-                () =>
-                  releaseResource(() => {
-                    observers.delete(queue);
-                    Queue.endUnsafe(queue);
-                  }),
-              );
-              return Stream.fromQueue(queue);
-            }),
+            Effect.as(
+              Effect.acquireRelease(
+                Effect.flatMap(
+                  Ref.modify(observers, (count) =>
+                    count >= maximumObservers ? [false, count] : [true, count + 1],
+                  ),
+                  (admitted) =>
+                    admitted
+                      ? Effect.void
+                      : Effect.fail(
+                          failure(
+                            'Unavailable',
+                            'Connection observer limit reached. Close an existing observation before subscribing.',
+                          ),
+                        ),
+                ),
+                () => Ref.update(observers, (count) => count - 1),
+              ),
+              SubscriptionRef.changes(state).pipe(
+                Stream.map((snapshot) => structuredClone(snapshot)),
+              ),
+            ),
           ),
       };
       return service;
