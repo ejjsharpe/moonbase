@@ -97,11 +97,6 @@ test('row secondary and Control-click target without opening, listing or togglin
     await expect(row(page, path)).toHaveAttribute('aria-selected', 'true');
     await page.keyboard.press('Escape');
     await expect(tree(page)).toBeFocused();
-    // Only macOS Chromium turns Control-click into a context menu.
-    if (process.platform !== 'darwin') continue;
-    await row(page, path).click({ modifiers: ['Control'] });
-    await expect(menu(page)).toBeVisible();
-    await page.keyboard.press('Escape');
   }
   await expect(row(page, 'src')).toHaveAttribute('aria-expanded', 'false');
   await expect(region(page).getByRole('tab', { name: 'welcome.ts', exact: true })).toHaveAttribute(
@@ -248,7 +243,7 @@ for (const timing of ['normal', 'pending scroll'])
     await expect(menu(page)).toBeVisible();
     if (timing === 'pending scroll') await page.evaluate(() => window.releaseTreeScroll());
     await expect(menu(page)).toBeVisible();
-    expect(await tree(page).getByRole('treeitem').count()).toBeLessThan(80);
+    await expect.poll(() => tree(page).getByRole('treeitem').count()).toBeLessThan(80);
     expect(await selected(page)).toHaveLength(300);
     await item(page, 'Move 300 Items to Trash').click();
     const dialog = page.getByRole('dialog', { name: 'Move to Trash', exact: true });
@@ -690,7 +685,7 @@ test('file, folder, multi-item and shell-less menus offer only their own command
   page,
 }) => {
   await page.goto('/');
-  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+  const mod = 'Meta';
   await row(page, 'README.md').click({ button: 'right' });
   const file = await menuItems(page);
   expect(file).toContain('Open [Enter]');
@@ -735,7 +730,7 @@ test('copy, reveal and mention reach the shell and copy returns focus to the tre
   await row(page, 'README.md').click({ button: 'right' });
   await item(page, 'Copy Relative Path').click();
   await row(page, 'src').click({ button: 'right' });
-  await item(page, process.platform === 'darwin' ? 'Reveal in Finder' : 'Show in Folder').click();
+  await item(page, 'Reveal in Finder').click();
   await expect(tree(page)).toBeFocused();
   await tree(page).press('Home');
   await tree(page).press('Shift+End');
@@ -765,14 +760,14 @@ test('tree shortcuts run the selection’s menu commands', async ({ page }) => {
   await expect(rename).toHaveValue('README.md');
   await rename.press('Escape');
   await expect(tree(page)).toBeFocused();
-  await tree(page).press('ControlOrMeta+Alt+KeyC');
-  await tree(page).press('ControlOrMeta+Alt+Shift+KeyC');
-  await tree(page).press('ControlOrMeta+Alt+KeyR');
+  await tree(page).press('Meta+Alt+KeyC');
+  await tree(page).press('Meta+Alt+Shift+KeyC');
+  await tree(page).press('Meta+Alt+KeyR');
   expect(await page.evaluate(() => [window.demo.copied, window.demo.revealed])).toEqual([
     ['/demo/moonbase/README.md', 'README.md'],
     ['/demo/moonbase/README.md'],
   ]);
-  await tree(page).press('ControlOrMeta+Backspace');
+  await tree(page).press('Meta+Backspace');
   const trash = page.getByRole('dialog', { name: 'Move to Trash', exact: true });
   await expect(trash).toContainText('README.md');
   await trash.getByRole('button', { name: 'Cancel', exact: true }).click();

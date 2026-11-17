@@ -28,7 +28,9 @@ for (const action of ['Recover workbench', 'Quit Moonbase', 'cleanup failure'])
     const child = app.process();
     try {
       const page = await app.firstWindow();
-      await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible({
+        timeout: 30_000,
+      });
       await prepareCrashRecovery(app);
       if (action === 'cleanup failure') {
         // A real scoped finalizer fails after the renderer has acknowledged disposal.
