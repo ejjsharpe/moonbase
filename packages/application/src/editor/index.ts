@@ -47,3 +47,5 @@ export type { LookupRow, LookupSnapshot } from './lookup/lookup.ts';
 export { EditorTextSearch, type TextSearch } from './text-search/text-search-service.ts';
 export type { TextSearchOptions, TextSearchSnapshot } from './text-search/text-search.ts';
 export { EditorLoader } from './editor-loader.ts';
+export { EditorWorktrees } from './worktrees/worktrees-service.ts';
+export type { ListedWorktrees } from './worktrees/worktrees.ts';

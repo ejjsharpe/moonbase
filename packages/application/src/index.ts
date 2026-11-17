@@ -13,3 +13,19 @@ export {
   type ApplicationPhase,
   type ApplicationChatStatus,
 } from './runtime/application.ts';
+export {
+  PlaceNavigation,
+  placeSettleMs,
+  stepTimeoutMs,
+  type PlaceNavigationShape,
+} from './place-history/place-history-service.ts';
+export {
+  emptyHistory,
+  findStep,
+  isSamePlace,
+  settleStep,
+  stepTo,
+  visitPlace,
+  type Place,
+  type PlaceHistory,
+} from './place-history/place-history.ts';

@@ -23,7 +23,8 @@ import { getChatPlace } from '../chat/folder.ts';
 import { ChatView } from '../chat/view.tsx';
 import { checkoutName } from '@moonbase/ui/projects';
 import { homePath } from '../components/folder-menu.tsx';
-import { readOwn } from '@moonbase/application/editor';
+import { EditorWorktrees, readOwn } from '@moonbase/application/editor';
+import { Context } from 'effect';
 import { findComposerPlace } from '@moonbase/application/chat';
 import { Icon } from '@moonbase/ui/icons';
 import {
@@ -37,15 +38,8 @@ import {
   type WorkbenchHandle,
 } from '@moonbase/workbench';
 import { styles } from './shell-styles.ts';
-import {
-  emptyHistory,
-  findStep,
-  isSamePlace,
-  settleStep,
-  stepTo,
-  visitPlace,
-  type Place,
-} from './history.ts';
+import { findStep, type Place } from '@moonbase/application';
+import { Effect } from 'effect';
 import { MainTabs, tabValue } from './main-tabs.tsx';
 import { useDesktopApplication, type DesktopApplication } from './desktop-application.ts';
 import { useAtomValue } from '@effect/atom-react';
@@ -90,8 +84,6 @@ const sidebarHiddenKey = 'moonbase.sidebar.hidden';
  */
 const titleMinLeft = (mac ? 84 : 8) + 3 * 28 + 2 * 2 + 12;
 /** Back and forward through places, as in VS Code: ⌃- and ⌃⇧- on macOS, Alt+← and Alt+→ elsewhere. */
-const placeSettleMs = 150,
-  stepTimeoutMs = 3000;
 const backShortcut = mac ? '⌃-' : 'Alt+←',
   forwardShortcut = mac ? '⌃⇧-' : 'Alt+→';
 function readHistoryStep(event: KeyboardEvent): 1 | -1 | undefined {
@@ -170,10 +162,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   const [dockOpen, setDockOpen] = useState(true);
   const [resizingDock, setResizingDock] = useState(false);
   const [settings, setSettings] = useState<SettingsSection | null>(null);
-  const [projectWorktrees, setProjectWorktrees] = useState<{
-    checkoutId: string;
-    roots: readonly string[];
-  } | null>(null);
+  const projectWorktrees = useAtomValue(editor.atoms.worktrees);
+  const worktrees = Context.get(editor.context, EditorWorktrees);
   const [railCollapsed, toggleRail] = useStoredToggle(railCollapsedKey);
   const [sidebarHidden, toggleSidebar, setSidebarHidden] = useStoredToggle(sidebarHiddenKey);
   // Hiding the rail while focus is in it hands focus back to the view, not the page.
@@ -183,7 +173,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     toggleRail();
   };
   const railToggle = useRef(toggleRailKeepingFocus);
-  const navigation = useRef<(direction: 1 | -1) => void>(() => {});
+  const stepPlace = useRef<(direction: 1 | -1) => void>(() => {});
   railToggle.current = toggleRailKeepingFocus;
   // The sidebar and rail keys work wherever focus is, even on the page itself. They are caught
   // before anything else sees them: ⌃⌘S would otherwise reach the editor's Save.
@@ -216,7 +206,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
           !!root.current?.contains(target) &&
           !root.current.closest('[aria-hidden="true"]');
         if (step && (inShell || (onPage && ownsPageKeys(root.current))))
-          toggle = () => navigation.current(step);
+          toggle = () => stepPlace.current(step);
       }
       if (!toggle) return;
       event.preventDefault();
@@ -234,7 +224,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       if (!(event.target instanceof Node) || !shell?.contains(event.target)) return;
       if (shell.closest('[aria-hidden="true"]')) return;
       event.preventDefault();
-      navigation.current(event.button === 3 ? -1 : 1);
+      stepPlace.current(event.button === 3 ? -1 : 1);
     };
     window.addEventListener('mouseup', mouseUp);
     return () => window.removeEventListener('mouseup', mouseUp);
@@ -328,30 +318,11 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   if (view === 'chat') place = chat ? { kind: 'chat', chat: chatSelected } : null;
   else if (selected)
     place = { kind: 'project', checkoutId: selected.checkoutId, path: activePath || null };
-  const [history, setHistory] = useState(emptyHistory);
-  // The step back or forward on its way: until it is done, what shows isn't a visit of its own.
-  const stepping = useRef<{ place: Place; from: number; to: number; reached: boolean } | null>(
-    null,
-  );
-  const stepCount = useRef(0);
-  const placeNow = useRef(place);
-  placeNow.current = place;
+  const history = useAtomValue(desktopApplication.atoms.history);
+  const { navigation } = desktopApplication.service;
   const placeKey = place && JSON.stringify(place);
   useEffect(() => {
-    if (!place) return;
-    const step = stepping.current;
-    if (step) {
-      if (isSamePlace(place, step.place)) step.reached = true;
-      return;
-    }
-    // A place counts once it settles: one shown on the way, as when a project shows its last file
-    // before the one asked for opens, is passed over.
-    const visited = place;
-    const settle = setTimeout(
-      () => setHistory((history) => visitPlace(history, visited)),
-      placeSettleMs,
-    );
-    return () => clearTimeout(settle);
+    void desktopApplication.run(navigation.show(place));
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- The key stands for the place.
   }, [placeKey]);
   const projectCheckouts = selected
@@ -362,21 +333,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     : [];
   // A chat in any of the project's worktrees, including one a chat created, belongs to its dock.
   // Only the latest listing applies, and a failed one keeps the last good roots.
-  const worktreeListing = useRef(0);
-  const listProjectWorktrees = (checkout: CheckoutTarget) => {
-    if (!controller) return Promise.resolve();
-    const listing = ++worktreeListing.current;
-    return controller.listWorktrees(checkout).then(
-      (result) => {
-        if (listing === worktreeListing.current)
-          setProjectWorktrees({
-            checkoutId: checkout.checkoutId,
-            roots: result.worktrees.map((worktree) => worktree.root),
-          });
-      },
-      () => {},
-    );
-  };
+  const listProjectWorktrees = (checkout: CheckoutTarget) => editor.run(worktrees.list(checkout));
   const dockCheckout = dockVisible ? selected : undefined;
   useEffect(() => {
     if (dockCheckout) void listProjectWorktrees(dockCheckout);
@@ -432,27 +389,14 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   const backIndex = findStep(history, -1, canShow),
     forwardIndex = findStep(history, 1, canShow);
   const goTo = (index: number | undefined) => {
-    if (index === undefined) return;
-    const target = history.places[index];
-    const step = { place: target, from: history.index, to: index, reached: false };
-    const count = ++stepCount.current;
-    stepping.current = step;
-    setHistory((current) => stepTo(current, index));
-    // Once the step is done and has had a moment to show, the history follows what is showing.
-    void Promise.race([
-      showPlace(target).catch(report),
-      new Promise((resolve) => setTimeout(resolve, stepTimeoutMs)),
-    ])
-      .then(() => new Promise((resolve) => setTimeout(resolve, placeSettleMs)))
-      .then(() => {
-        if (count !== stepCount.current) return;
-        stepping.current = null;
-        const showing = placeNow.current;
-        if (showing && isSamePlace(showing, target)) step.reached = true;
-        setHistory((current) => settleStep(current, step, showing));
-      });
+    const target = index === undefined ? undefined : history.places[index];
+    if (index === undefined || !target) return;
+    const go = Effect.tryPromise({ try: () => showPlace(target), catch: (error) => error }).pipe(
+      Effect.catch((error) => Effect.sync(() => report(error))),
+    );
+    run(desktopApplication.run(navigation.step(index, go)));
   };
-  navigation.current = (direction) => goTo(direction < 0 ? backIndex : forwardIndex);
+  stepPlace.current = (direction) => goTo(direction < 0 ? backIndex : forwardIndex);
   // The picker's chats, projects and app commands, read only while it is open; the workbench
   // adds files and editor commands.
   const pickerEntries = (): PickerEntry[] => [
@@ -998,13 +942,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                             const created = await createChatWorktree(root, branch, requestId);
                             await listProjectWorktrees(selected);
                             // Kept even if listing failed, so the new chat stays in this dock.
-                            setProjectWorktrees((listed) => {
-                              const roots =
-                                listed?.checkoutId === selected.checkoutId ? listed.roots : [];
-                              return roots.includes(created)
-                                ? listed
-                                : { checkoutId: selected.checkoutId, roots: [...roots, created] };
-                            });
+                            await editor.run(worktrees.add(selected.checkoutId, created));
                             return created;
                           })
                         }
