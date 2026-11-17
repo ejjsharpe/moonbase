@@ -337,7 +337,20 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
               ),
               Effect.onInterrupt(() => Deferred.interrupt(read.done).pipe(Effect.asVoid)),
             );
-            yield* Effect.forkIn(work, scope, { startImmediately: true });
+            // The checkout's watch may have been released while the replaced classification
+            // closed: work forked into its closed scope would never run or settle, so the read
+            // ends at once instead, as the checkout's other reads did.
+            yield* Effect.uninterruptible(
+              Effect.suspend(() => {
+                if (scope.state._tag !== 'Closed')
+                  return Effect.asVoid(Effect.forkIn(work, scope, { startImmediately: true }));
+                if (reads.get(key) === read) reads.delete(key);
+                return Effect.andThen(
+                  Scope.close(read.classificationScope, Exit.void),
+                  Deferred.interrupt(read.done),
+                );
+              }),
+            );
             return yield* Deferred.await(read.done);
           });
 
