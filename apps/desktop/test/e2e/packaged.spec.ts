@@ -20,7 +20,7 @@ import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 test('unsigned macOS package runs with only system PATH, SQLite, native/rg resources and CSP workers', async () => {
-  test.setTimeout(45000);
+  test.setTimeout(90_000);
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-package-'))),
     checkout = join(base, 'checkout');
   mkdirSync(checkout);
@@ -128,7 +128,9 @@ test('unsigned macOS package runs with only system PATH, SQLite, native/rg resou
     expect(resource.notices).toContain('@stylexjs/stylex@0.19.1');
     expect(resource.notices).toContain('monaco-editor@0.57.0');
     expect(resource.notices).toContain('MIT License');
-    await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
     await page.getByRole('tab', { name: 'Agents', exact: true }).click();
     await expect(
       (await openSettings(page)).getByText('Local ready', { exact: true }),

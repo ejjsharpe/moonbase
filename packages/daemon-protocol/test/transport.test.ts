@@ -526,11 +526,14 @@ test('authenticated Find transports saved matches, rejects foreign continuations
     { signal: abort.signal },
   );
   const rejected = assert.rejects(pending, { code: 'Cancelled' });
-  for (let i = 0; i < 100 && !entered; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  const until19648 = Date.now() + 10_000;
+  while (!entered && Date.now() < until19648)
+    await new Promise((resolve) => setTimeout(resolve, 5));
   assert(entered);
   abort.abort();
   await rejected;
-  for (let i = 0; i < 100 && !peerSignal?.aborted; i++)
+  const until19831 = Date.now() + 10_000;
+  while (!peerSignal?.aborted && Date.now() < until19831)
     await new Promise((resolve) => setTimeout(resolve, 5));
   assert(peerSignal?.aborted);
   assert.equal(

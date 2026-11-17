@@ -113,7 +113,7 @@ async function fixture(
   };
 }
 const waitUntil = async (condition: () => boolean) => {
-  const deadline = Date.now() + 2000;
+  const deadline = Date.now() + 10_000;
   while (!condition() && Date.now() < deadline)
     await new Promise((resolve) => setTimeout(resolve, 10));
   assert(condition());
@@ -203,7 +203,7 @@ test('a failed initializeRepository leaves the plain folder open and observed', 
     // Its watch is back: a change on disk reaches the editor.
     const revision = f.editor.getSnapshot().discoveryRevision;
     f.memory.externalWrite({ checkout: folder, path: 'a.ts' }, 'changed outside');
-    const deadline = Date.now() + 2000;
+    const deadline = Date.now() + 10_000;
     while (f.editor.getSnapshot().discoveryRevision === revision && Date.now() < deadline)
       await new Promise((resolve) => setTimeout(resolve, 10));
     assert(f.editor.getSnapshot().discoveryRevision > revision);

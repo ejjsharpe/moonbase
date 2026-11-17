@@ -22,8 +22,10 @@ async function open(page: Page) {
   // Expanding the activity can move the reader off the end.
   const jump = page.getByRole('button', { name: 'Jump to latest', exact: true });
   // It can also settle back by itself between seeing the button and clicking it.
-  if (await jump.isVisible()) await jump.click({ timeout: 2000 }).catch(() => undefined);
-  await expect(jump).toBeHidden();
+  await expect(async () => {
+    if (await jump.isVisible()) await jump.click({ timeout: 1000 }).catch(() => undefined);
+    await expect(jump).toBeHidden({ timeout: 1000 });
+  }).toPass();
 }
 const transcript = (page: Page) =>
   page.getByRole('region', { name: 'Chat transcript', exact: true });
@@ -140,7 +142,7 @@ test.describe('the virtualized transcript', () => {
     expect(most).toBeGreaterThan(3);
     expect(most).toBeLessThan(40);
     await expect(page.locator('[data-transcript-entry]').first()).toBeAttached();
-    expect(await page.locator('[data-transcript-entry]').count()).toBeLessThan(40);
+    await expect.poll(() => page.locator('[data-transcript-entry]').count()).toBeLessThan(40);
   });
 
   test('opens at the end and follows while the live row grows', async ({ page }) => {
@@ -2415,7 +2417,7 @@ test('scrolling and live progress re-render only the rows they change', async ({
   await open(page);
   await settle(page);
   expect((await rows.take()).length).toBeGreaterThan(0);
-  expect(await page.locator('[data-transcript-entry]').count()).toBeGreaterThan(3);
+  await expect.poll(() => page.locator('[data-transcript-entry]').count()).toBeGreaterThan(3);
   await transcript(page).hover();
   for (let i = 0; i < 12; i++) {
     await page.mouse.wheel(0, -120);

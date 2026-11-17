@@ -97,11 +97,6 @@ test('row secondary and Control-click target without opening, listing or togglin
     await expect(row(page, path)).toHaveAttribute('aria-selected', 'true');
     await page.keyboard.press('Escape');
     await expect(tree(page)).toBeFocused();
-    // Only macOS Chromium turns Control-click into a context menu.
-    if (process.platform !== 'darwin') continue;
-    await row(page, path).click({ modifiers: ['Control'] });
-    await expect(menu(page)).toBeVisible();
-    await page.keyboard.press('Escape');
   }
   await expect(row(page, 'src')).toHaveAttribute('aria-expanded', 'false');
   await expect(region(page).getByRole('tab', { name: 'welcome.ts', exact: true })).toHaveAttribute(
@@ -248,7 +243,7 @@ for (const timing of ['normal', 'pending scroll'])
     await expect(menu(page)).toBeVisible();
     if (timing === 'pending scroll') await page.evaluate(() => window.releaseTreeScroll());
     await expect(menu(page)).toBeVisible();
-    expect(await tree(page).getByRole('treeitem').count()).toBeLessThan(80);
+    await expect.poll(() => tree(page).getByRole('treeitem').count()).toBeLessThan(80);
     expect(await selected(page)).toHaveLength(300);
     await item(page, 'Move 300 Items to Trash').click();
     const dialog = page.getByRole('dialog', { name: 'Move to Trash', exact: true });

@@ -1,3 +1,4 @@
+import { waitForExit } from '../fixtures/app-fixture.ts';
 import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
 import {
   expectSaveEnabled,
@@ -82,7 +83,7 @@ async function launch(
       startupFailure === 'editor'
         ? page.getByRole('alert', { name: 'Workbench startup failed' })
         : page.getByRole('button', { name: 'Open checkout', exact: true }),
-    ).toBeVisible();
+    ).toBeVisible({ timeout: 30_000 });
   } catch (error) {
     await stop(app, true);
     throw error;
@@ -170,13 +171,17 @@ const recovery = (p: Page) => recoveryState(p);
 async function stop(app: ElectronApplication, fault = false) {
   const child = children.get(app)!;
   if (child.exitCode !== null || child.signalCode !== null) return;
-  const pids = await app.evaluate(({ app }) => app.getAppMetrics().map((m) => m.pid));
+  // An app already closing (a test that failed mid-Quit) is waited for, so the test's own
+  // failure is what gets reported, not this cleanup's.
+  const pids = await app
+    .evaluate(({ app }) => app.getAppMetrics().map((m) => m.pid))
+    .catch(() => [] as number[]);
   if (fault) {
     const window = app.windows()[0];
     if (window) await disconnectHost(window).catch(() => {});
-    await app.evaluate(({ app }) => app.exit(0));
-  } else await app.evaluate(({ app }) => app.quit());
-  await until(async () => child.exitCode !== null || child.signalCode !== null, Boolean);
+    await app.evaluate(({ app }) => app.exit(0)).catch(() => {});
+  } else await app.evaluate(({ app }) => app.quit()).catch(() => {});
+  await waitForExit(child);
   for (const pid of pids)
     await until(async () => {
       try {
@@ -225,9 +230,6 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     await p.keyboard.press('ArrowDown');
     await expect(projectTab(p)).toBeFocused();
     await p.keyboard.press('Enter');
-    await p.evaluate(
-      () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
-    );
     await expect(projectTab(p)).toBeFocused();
     await expect(projectTab(p)).toHaveAttribute('aria-selected', 'true');
     const editorHasFocus = () =>
@@ -376,6 +378,10 @@ for (const change of ['external', 'write-failure'])
       await connect(p);
       await create(p, 'Preservation fence');
       await p.getByLabel('Message', { exact: true }).fill('preserved chat draft');
+      // The draft's own save must land first, or it could overwrite the controlled change below.
+      await expect
+        .poll(() => p.evaluate(() => localStorage.getItem('moonbase.chat.remote.v2')))
+        .toContain('preserved chat draft');
       const prior = await p.evaluate(() => localStorage.getItem('moonbase.chat.remote.v2'));
       await p.evaluate((change) => {
         if (change === 'external')
@@ -438,7 +444,7 @@ test('captured Quit keeps chat/newer drafts and editor conflicts usable; Cancel 
     await projectTab(p).click();
     await app.evaluate(({ app }) => app.quit());
     await p.getByRole('dialog').getByRole('button', { name: 'Discard', exact: true }).click();
-    await until(async () => children.get(app)!.exitCode !== null, Boolean);
+    await waitForExit(children.get(app)!);
     current = undefined;
     expect(await readFile(join(f.cwd, 'a.ts'), 'utf8')).toBe('external conflicting change');
     const next = await launch(f);
@@ -507,7 +513,7 @@ if (!packaged)
       // The discard committed and only its reply was lost: the editor reads the store, the
       // Discard stands, and Quit goes on.
       const child = children.get(app)!;
-      await until(async () => child.exitCode !== null || child.signalCode !== null, Boolean);
+      await waitForExit(child);
       expect(await readFile(join(f.cwd, 'a.ts'), 'utf8')).toBe('local dirty draft');
       expect(errors).toEqual([]);
       current = undefined;
@@ -990,7 +996,7 @@ if (!packaged) {
           }, report);
           const child = app.process();
           await app.evaluate(({ app }) => app.quit());
-          await until(async () => child.exitCode !== null || child.signalCode !== null, Boolean);
+          await waitForExit(child);
           expect(child.exitCode).toBe(1);
           expect(await readFile(report, 'utf8')).toContain(
             'Controlled editor recovery initialization failure',
@@ -1018,19 +1024,27 @@ if (!packaged) {
         await connect(p);
         await create(p, 'Consent handoff');
         await p.getByLabel('Message', { exact: true }).fill('preserved consent draft');
+        await expect
+          .poll(() => p.evaluate(() => localStorage.getItem('moonbase.chat.remote.v2')))
+          .toContain('preserved consent draft');
         const before = await p.evaluate(() => localStorage.getItem('moonbase.chat.remote.v2'));
         const report = join(f.directory, 'handoff.json');
         await app.evaluate(
           ({ app, BrowserWindow, dialog }, { report, answer }) => {
             const contents = BrowserWindow.getAllWindows()[0].webContents;
+            let markHeld!: () => void;
             globalThis.applicationHandoff = {
               actions: [],
               pickers: 0,
               release: null,
               held: false,
+              whenHeld: null as unknown as Promise<void>,
               quitId: null,
               obsoleteAcknowledgments: 0,
             };
+            globalThis.applicationHandoff.whenHeld = new Promise<void>((resolve) => {
+              markHeld = resolve;
+            });
             dialog.showOpenDialog = (async () => {
               globalThis.applicationHandoff.pickers++;
               return { canceled: true, filePaths: [] };
@@ -1052,6 +1066,7 @@ if (!packaged) {
               }
               if (action.action === 'dispose' && !globalThis.applicationHandoff.held) {
                 globalThis.applicationHandoff.held = true;
+                markHeld();
                 globalThis.applicationHandoff.release = () => send(action);
                 return;
               }
@@ -1067,7 +1082,8 @@ if (!packaged) {
         );
         const child = app.process();
         await app.evaluate(({ app }) => app.quit());
-        await expect.poll(() => app.evaluate(() => globalThis.applicationHandoff.held)).toBe(true);
+        // Event-driven: preparing the quit (saving drafts) takes as long as the machine needs.
+        await app.evaluate(() => globalThis.applicationHandoff.whenHeld);
         await expect(p.getByRole('status').filter({ hasText: 'Closing workbench' })).toBeVisible();
         await app.evaluate(({ app }) => app.quit());
         await p.evaluate(() => {
@@ -1095,7 +1111,7 @@ if (!packaged) {
         ).toEqual([]);
         if (handoff === 'reload') expect(await reloadOutcome(app)).toBe('reload');
         else await app.evaluate(() => globalThis.applicationHandoff.release?.());
-        await until(async () => child.exitCode !== null || child.signalCode !== null, Boolean);
+        await waitForExit(child);
         expect(child.exitCode).toBe(0);
         const result = JSON.parse(await readFile(report, 'utf8')) as {
           actions: string[];
@@ -1127,6 +1143,7 @@ declare global {
     pickers: number;
     release: (() => void) | null;
     held: boolean;
+    whenHeld: Promise<void>;
     quitId: string | null;
     obsoleteAcknowledgments: number;
   };

@@ -206,6 +206,7 @@ test('local chat runs in the daemon: setup, picker folders, tools, @ search; Qui
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
     await expect.poll(() => readFauxCalls(profile.daemon)).toBe(5);
     // Quit asks nothing about local agents and leaves them running.
+    const exited = waitForExit(child);
     await app.evaluate(({ dialog, app }, dialogs) => {
       dialog.showMessageBox = (async (_window, options) => {
         process.getBuiltinModule('fs').appendFileSync(dialogs, JSON.stringify(options) + '\n');
@@ -213,7 +214,8 @@ test('local chat runs in the daemon: setup, picker folders, tools, @ search; Qui
       }) as typeof dialog.showMessageBox;
       app.quit();
     }, dialogs);
-    await expect.poll(() => child.exitCode).toBe(0);
+    await exited;
+    expect(child.exitCode).toBe(0);
     await expect(access(dialogs)).rejects.toThrow();
     expect(isAlive(pid)).toBe(true);
     await writeFile(release, '');

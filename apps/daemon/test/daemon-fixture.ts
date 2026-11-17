@@ -109,7 +109,8 @@ export function startDaemon(
     errors = '';
   child.stdout.on('data', (bytes) => (output += bytes));
   child.stderr.on('data', (bytes) => (errors += bytes));
-  const exited = once(child, 'exit') as Promise<[number | null, NodeJS.Signals | null]>;
+  // 'close', not 'exit': a daemon that stops at once must still have its ready line read first.
+  const exited = once(child, 'close') as Promise<[number | null, NodeJS.Signals | null]>;
   const ready = new Promise<{ port: number; host: { hostId: string; storeId: string } }>(
     (resolve, reject) => {
       const data = () => {

@@ -82,9 +82,7 @@ async function quit(app: ElectronApplication) {
   const child = children.get(app)!,
     pids = await app.evaluate(({ app }) => app.getAppMetrics().map((value) => value.pid));
   await app.evaluate(({ app }) => app.quit());
-  await expect
-    .poll(() => child.exitCode !== null || child.signalCode !== null, { timeout: 15000 })
-    .toBe(true);
+  await waitForExit(child);
   expect(child.exitCode).toBe(0);
   for (const pid of pids)
     await until(async () => {
@@ -103,7 +101,7 @@ async function cleanup(app: ElectronApplication | undefined, host?: Host) {
       // The journey did not finish: release the test connection before forcing the exit.
       const window = app.windows()[0];
       if (window) await disconnectHost(window).catch(() => {});
-      await app.evaluate(({ app }) => app.exit(1));
+      await app.evaluate(({ app }) => app.exit(1)).catch(() => {});
       await waitForExit(child);
     }
   } finally {

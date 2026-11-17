@@ -116,7 +116,9 @@ async function launch() {
       console.log('Renderer console:', message.text());
     }
   });
-  await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
   await app.evaluate(({ dialog }, root) => {
     dialog.showOpenDialog = (async () => ({
       canceled: false,

@@ -937,7 +937,7 @@ test('EOF patch sources without a terminal newline stay exact in Copy, parsed or
   await expect.poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1))).toBe(valid);
   await expect(fallback).toContainText('Malformed or unsupported');
   await expect(fallback.getByRole('table')).toHaveCount(0);
-  expect(await fallback.locator('pre').textContent()).toBe(truncated);
+  await expect.poll(() => fallback.locator('pre').textContent()).toBe(truncated);
   await fallback.getByRole('button', { name: 'Copy patch', exact: true }).click();
   await expect
     .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
@@ -995,10 +995,10 @@ test('historical patches retain real coordinates, malformed/numbered/large fallb
     await large.getByRole('button', { name: /Read more/ }).click();
   await expect(large).toContainText('Large patch');
   await large.getByRole('button', { name: 'Next source', exact: true }).click();
-  expect(await large.locator('pre').evaluate((node) => node.textContent!.isWellFormed())).toBe(
-    true,
-  );
   await expect(large).toContainText('Source 15,999');
+  await expect
+    .poll(() => large.locator('pre').evaluate((node) => node.textContent!.isWellFormed()))
+    .toBe(true);
   await large.getByRole('button', { name: 'Copy patch', exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1))).toBe(huge);
 });

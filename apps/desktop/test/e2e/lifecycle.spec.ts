@@ -1,3 +1,4 @@
+import { waitForExit } from '../fixtures/app-fixture.ts';
 import { findTestBun, prepareDaemonData, stopDaemon } from '../fixtures/faux-daemon.mjs';
 import {
   expectSaveEnabled,
@@ -74,7 +75,9 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
         packaged
           ? Promise.resolve([] as number[])
           : current.evaluate(() => globalThis.desktopTest.interrupted);
-      await expect(p.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible();
+      await expect(p.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible({
+        timeout: 30_000,
+      });
       await p.evaluate(() => {
         Object.assign(window, { lifecycleDocument: crypto.randomUUID() });
       });
@@ -133,7 +136,8 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
           `void ${callMainScript('getChat', { backendId: 'remote', input: { target: state.selected } })}`,
         );
         await until(f.stats, (s) => s.heldReplies.includes('getChat'));
-        if (!packaged) waitId = (await running()).findLast(({ tag }) => tag === 'getChat')!.seq;
+        if (!packaged)
+          waitId = (await running()).filter(({ tag }) => tag === 'getChat').at(-1)!.seq;
       }
       if (crash) {
         await mkdir(join(f.directory, 'crash-dumps'));
@@ -222,7 +226,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
         ))
           pids.add(pid);
         await current.evaluate(({ app }) => app.quit());
-        await until(async () => child!.exitCode !== null || child!.signalCode !== null, Boolean);
+        await waitForExit(child);
         app = undefined;
         return;
       }
@@ -232,14 +236,14 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
           await p.getByRole('textbox', { name: 'a.ts editor', exact: true }).focus();
           await p.keyboard.press('End');
         }
-        const outcome = await current.evaluate(async ({ BrowserWindow }, fresh) => {
+        if (mode === 'fresh-veto') {
+          await current.evaluate(({ BrowserWindow }) =>
+            BrowserWindow.getAllWindows()[0].webContents.insertText(' fresh visible tail'),
+          );
+          await expect(p.locator('.view-lines')).toContainText('fresh visible tail');
+        }
+        const outcome = await current.evaluate(async ({ BrowserWindow }) => {
           const contents = BrowserWindow.getAllWindows()[0].webContents;
-          if (fresh) {
-            await contents.insertText(' fresh visible tail');
-            await contents.executeJavaScript(
-              'new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))',
-            );
-          }
           const visible = await contents.executeJavaScript(
             "document.querySelector('.view-lines')?.textContent?.replace(/\\u00a0/g, ' ')",
           );
@@ -255,7 +259,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
             contents.once('did-finish-load', loaded);
             contents.reload();
           });
-        }, mode === 'fresh-veto');
+        });
         if (mode === 'fresh-veto') expect(outcome.visible).toContain('fresh visible tail');
         expect(outcome.outcome).toBe('veto');
       } else
@@ -265,10 +269,6 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
             BrowserWindow.getAllWindows()[0].webContents.reload(),
           ),
         ]);
-      await p.evaluate(
-        () =>
-          new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
-      );
       if (veto) {
         expect(
           await p.evaluate(
@@ -326,7 +326,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
         await disconnectHost(p);
         await current.evaluate(({ app }) => app.exit(0));
       } else await current.evaluate(({ app }) => app.quit());
-      await until(async () => child!.exitCode !== null || child!.signalCode !== null, Boolean);
+      await waitForExit(child);
       app = undefined;
     } finally {
       try {
@@ -337,10 +337,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
             const window = app.windows()[0];
             if (window) await disconnectHost(window).catch(() => {});
             await app.evaluate(({ app }) => app.exit(0));
-            await until(
-              async () => child!.exitCode !== null || child!.signalCode !== null,
-              Boolean,
-            );
+            await waitForExit(child);
             const records = (await readFile(f.log, 'utf8').catch(() => ''))
               .split('\n')
               .filter(Boolean)

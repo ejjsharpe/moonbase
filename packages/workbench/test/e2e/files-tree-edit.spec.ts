@@ -358,13 +358,13 @@ test('keys typed in the name field stay out of the tree', async ({ page }) => {
   const input = field(page, 'Rename');
   for (const key of ['ArrowDown', 'ArrowUp', 'End', 'Home', 'ArrowRight', 'ArrowLeft', 'F2', ' '])
     await input.press(key);
-  await input.press('Meta+a');
+  await input.press('ControlOrMeta+a');
   await input.pressSequentially('x');
   await expect(input).toHaveValue('x');
   await input.press('Backspace');
-  await input.press('Meta+Backspace');
+  await input.press('ControlOrMeta+Backspace');
   await input.press('Shift+F10');
-  await input.press('Meta+v');
+  await input.press('ControlOrMeta+v');
   await expect(input).toHaveValue('');
   await expect(input).toBeFocused();
   await expect(menu(page)).toHaveCount(0);

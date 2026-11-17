@@ -325,11 +325,11 @@ test('⌘Z undoes an inline rename, but not while the name is typed', async ({ p
   // In the name field, ⌘Z is the field's own: it brings back the cleared name, and the rename
   // stays, even once an undo would have had time to run.
   await tree(page).press('F2');
-  await input.press('Meta+a');
+  await input.press('ControlOrMeta+a');
   await input.press('Backspace');
   await expect(input).toHaveValue('');
   const before = await mutations(page);
-  await input.press('Meta+z');
+  await input.press('ControlOrMeta+z');
   await expect(input).toHaveValue('NOTES.md');
   await settle(page);
   expect(await mutations(page)).toBe(before);

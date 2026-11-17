@@ -2497,13 +2497,11 @@ test('the sidebar key follows the layout: ⌘ with the key that types B, not the
   const press = (key: string, code: string) =>
     page.evaluate(
       ([key, code]) => {
-        const mac = navigator.platform.startsWith('Mac');
         return !document.body.dispatchEvent(
           new KeyboardEvent('keydown', {
             key,
             code,
-            metaKey: mac,
-            ctrlKey: !mac,
+            metaKey: true,
             bubbles: true,
             cancelable: true,
           }),
