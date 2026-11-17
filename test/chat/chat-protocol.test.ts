@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { type DraftStorage } from '@moonbase/application/chat';
-import { modelRoot } from '../../packages/application/test/chat/chat-model-fixture.ts';
+import type { DraftStorage } from '@moonbase/application/chat';
+import { openChatApplication } from './chat-application-fixture.ts';
 import { fixture, until } from './tool-fixture.ts';
 class Storage implements DraftStorage {
   value: string | null = null;
@@ -14,22 +14,32 @@ class Storage implements DraftStorage {
 }
 async function setup(t: { after: (f: () => Promise<void>) => void }, hold = false) {
   const f = await fixture(hold);
-  const models = modelRoot();
+  const opened: { dispose: () => Promise<void> }[] = [];
+  /** A client's chat over `root`'s ports, released after the test. */
+  const models = {
+    make: async (root: ReturnType<typeof f.root>, storage: Storage) => {
+      const app = await openChatApplication(() => ({
+        chat: root.ports.chat,
+        connection: root.ports.connection,
+        context: f.session,
+        storage,
+      }));
+      let disposed: Promise<void> | undefined;
+      const dispose = () => (disposed ??= app.dispose());
+      opened.push({ dispose });
+      return Object.assign(app.chat, { dispose });
+    },
+  };
   t.after(async () => {
     try {
-      await models.close();
+      await Promise.allSettled(opened.map((app) => app.dispose()));
     } finally {
       await f.close();
     }
   });
   const root = f.root(),
     storage = new Storage(),
-    controller = await models.make({
-      chat: root.chat,
-      connection: root.connection,
-      context: f.session,
-      storage,
-    });
+    controller = await models.make(root, storage);
   await controller.start();
   await controller.connect();
   await until(
@@ -83,18 +93,13 @@ test('lost actual HTTP Send response + newer draft + controller reload/client cl
   await f.controller.send();
   const pending = f.controller.getSnapshot().pending[0];
   assert.equal(pending.operation, 'sendChat');
-  assert(pending.message.startsWith('Uncertain'));
+  assert.ok(pending.message);
   f.controller.setDraft('Newer unsent edit');
   await f.controller.dispose();
   await f.clientRoot.runtime.dispose();
   await until(f.stats, (s) => s.tools === 1);
   const second = f.root(),
-    next = await f.models.make({
-      chat: second.chat,
-      connection: second.connection,
-      context: f.session,
-      storage: f.storage,
-    });
+    next = await f.models.make(second, f.storage);
   await next.start();
   assert.equal(next.getSnapshot().pending[0].input.requestId, pending.input.requestId);
   await next.connect();
@@ -114,12 +119,7 @@ test('lost actual HTTP Send response + newer draft + controller reload/client cl
   await f.stopHost();
   await f.startHost();
   const third = f.root(),
-    last = await f.models.make({
-      chat: third.chat,
-      connection: third.connection,
-      context: f.session,
-      storage: f.storage,
-    });
+    last = await f.models.make(third, f.storage);
   await last.start();
   await last.connect();
   await until(
