@@ -6,7 +6,8 @@ import type { ChatTarget } from '@moonbase/contracts/chat';
 export class LocalPiControl extends Context.Service<
   LocalPiControl,
   {
-    setAdmissionsOpen(open: boolean): void;
+    /** Closing refuses new mutations as `quitting`; opening admits them again. */
+    setAdmissionsOpen(open: boolean): Effect.Effect<void>;
     hasActiveWork(): Effect.Effect<boolean, ChatError>;
     /** Clears `ownFolder` once a chat's own folder has become a project where it is. */
     markFolderAsProject(target: ChatTarget): Effect.Effect<void, ChatError>;

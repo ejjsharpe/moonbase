@@ -7,9 +7,8 @@ import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
 const slugLength = 40;
 
 /** `2026-11-08-tidy-the-composer-a1b2c3d4`: the local date, the title's first words and a short id. */
-function nameChatFolder(title: string) {
-  const date = new Date(),
-    id = randomBytes(4).toString('hex');
+function nameChatFolder(title: string, date: Date) {
+  const id = randomBytes(4).toString('hex');
   const day = [date.getFullYear(), date.getMonth() + 1, date.getDate()]
     .map((part) => String(part).padStart(2, '0'))
     .join('-');
@@ -45,16 +44,17 @@ async function isInsideGitCheckout(folder: string) {
 }
 
 /**
- * A new, empty, private folder under `parent` for a chat without a project, named for `title`.
+ * A new, empty, private folder under `parent` for a chat without a project, named for `title` and
+ * the local day of `now`.
  * Refused inside a Git checkout, where the agent's Git commands would act on that repository.
  */
-export async function makeChatFolder(parent: string, title: string) {
+export async function makeChatFolder(parent: string, title: string, now: Date) {
   if (await isInsideGitCheckout(parent))
     throw new ChatUnavailableError({ reason: 'own-folder-in-checkout' });
   try {
     await mkdir(parent, { recursive: true, mode: 0o700 });
     // The random suffix makes a taken name a failure to report, not one to retry.
-    const folder = join(parent, nameChatFolder(title));
+    const folder = join(parent, nameChatFolder(title, now));
     await mkdir(folder, { mode: 0o700 });
     return await realpath(folder);
   } catch {

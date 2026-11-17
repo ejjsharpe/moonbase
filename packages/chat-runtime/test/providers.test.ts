@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ManagedRuntime } from 'effect';
+import { Layer, ManagedRuntime } from 'effect';
+import { TestClock } from 'effect/testing';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { makeProviderSetupClient } from '@moonbase/application/chat/clients';
@@ -364,14 +365,12 @@ test('one sign-in per provider at a time, and owners that went quiet or exceed t
             },
     });
   }
-  let time = 0;
   const runtime = ManagedRuntime.make(
-    ProviderSetupLive({
-      models,
-      deviceId: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',
-      now: () => time,
-    }),
+    ProviderSetupLive({ models, deviceId: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa' }).pipe(
+      Layer.provideMerge(TestClock.layer()),
+    ),
   );
+  const advance = (ms: number) => runtime.runPromise(TestClock.adjust(ms));
   t.after(() => runtime.dispose());
   const owner = (id: string) => makeProviderSetupClient(runtime, id);
   const flowOf = async (id: string) => (await owner(id).command('getProviders', {})).flow;
@@ -390,14 +389,14 @@ test('one sign-in per provider at a time, and owners that went quiet or exceed t
   // An owner unheard from for the inactivity window loses its flow; one still polling keeps it,
   // and reading its sign-in URL counts as polling.
   const providers = await runtime.runPromise(ProviderSetupService);
-  time += inactiveProviderOwnerMs - 1;
+  await advance(inactiveProviderOwnerMs - 1);
   assert.equal((await flowOf('restarted'))?.id, taken.flow!.id);
-  time += inactiveProviderOwnerMs - 1;
+  await advance(inactiveProviderOwnerMs - 1);
   assert.equal(
     await runtime.runPromise(providers.getProviderUrl('restarted', taken.flow!.id)),
     'https://auth.openai.com/oauth/authorize?state=controlled',
   );
-  time += 1;
+  await advance(1);
   assert.equal(await flowOf('observer'), null);
   assert.equal((await flowOf('restarted'))?.state, 'running');
   assert.deepEqual(aborted.sort(), ['google', 'openai']);
@@ -406,10 +405,10 @@ test('one sign-in per provider at a time, and owners that went quiet or exceed t
 
   // At most 64 owners hold a flow; the least recently used go first.
   for (let index = 0; index < 70; index++) {
-    time += 1;
+    await advance(1);
     await owner(`document-${index}`).command('startProviderLogin', { providerId: 'anthropic' });
   }
-  time += 1;
+  await advance(1);
   assert.equal(await flowOf('document-0'), null);
   assert.equal(await flowOf('restarted'), null);
   assert.equal((await flowOf('document-69'))?.state, 'running');

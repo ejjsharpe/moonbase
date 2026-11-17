@@ -4,19 +4,22 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ManagedRuntime } from 'effect';
+import { Effect, Layer, ManagedRuntime, type Duration, type Scope } from 'effect';
+import { TestClock } from 'effect/testing';
+import * as NodeServices from '@effect/platform-node/NodeServices';
+import type { ChildProcessSpawner } from 'effect/process';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient } from '@moonbase/application/chat/clients';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
 import {
-  ChatFileIndex,
+  ListingError,
+  makeChatFileIndex,
+  type ChatFileIndexOptions,
   type ChatFileListingRun,
-  type ChatFileListingTiming,
 } from '../src/files.ts';
-import { LocalPiRuntimeLive } from '../src/index.ts';
-import { fixture, isRunning, session } from './runtime-fixture.ts';
+import { fixture, isRunning, localPiRuntime, session } from './runtime-fixture.ts';
 
 const which = (name: string) => {
   try {
@@ -50,6 +53,40 @@ async function folder(t: { after: (fn: () => Promise<void>) => void }, git = tru
   return root;
 }
 const paths = (result: { matches: { path: string }[] }) => result.matches.map((m) => m.path);
+/** Runs a test program on the platform's services and a TestClock the test moves. */
+const runIndexTest = <A, E>(
+  program: Effect.Effect<A, E, Scope.Scope | ChildProcessSpawner.ChildProcessSpawner>,
+) =>
+  Effect.runPromise(
+    program.pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, TestClock.layer()))),
+  );
+/** An index over `options` whose searches the test awaits as promises, on a TestClock. */
+const withIndex = <A>(
+  options: ChatFileIndexOptions,
+  use: (index: {
+    find: (cwd: string, query: string) => Promise<FindResult>;
+    /** Moves the TestClock the index's budgets and freshness run on. */
+    advance: (duration: Duration.Input) => Promise<void>;
+  }) => Promise<A>,
+) =>
+  runIndexTest(
+    Effect.gen(function* () {
+      const index = yield* makeChatFileIndex(options);
+      const run = Effect.runPromiseWith(yield* Effect.context<never>());
+      return yield* Effect.promise(() =>
+        use({
+          find: (cwd, query) => run(index.find(cwd, query)),
+          advance: (duration) => run(TestClock.adjust(duration)),
+        }),
+      );
+    }),
+  );
+type FindResult = {
+  query: string;
+  matches: { path: string; positions: number[] }[];
+  partial: boolean;
+};
+const missingCommand = () => new ListingError({ reason: 'missing', output: Buffer.alloc(0) });
 const expected = [
   '.env.example',
   '.gitignore',
@@ -60,17 +97,18 @@ const expected = [
 
 test('without ripgrep, Git lists tracked and unignored files, never dependencies or ignored files', async (t) => {
   const root = await folder(t);
-  const index = new ChatFileIndex({ ripgrepExecutable: missing });
-  const all = await index.find(root, '');
-  // An empty query lists the shallowest files first.
-  assert.deepEqual(paths(all), expected);
-  assert.equal(all.partial, false);
-  const found = await index.find(root, 'mainp');
-  assert.deepEqual(paths(found), []);
-  const main = await index.find(root, 'appmain');
-  assert.equal(main.matches[0]?.path, 'src/app/main.ts');
-  assert.deepEqual(main.query, 'appmain');
-  assert(main.matches[0].positions.length > 0);
+  await withIndex({ ripgrepExecutable: missing }, async (index) => {
+    const all = await index.find(root, '');
+    // An empty query lists the shallowest files first.
+    assert.deepEqual(paths(all), expected);
+    assert.equal(all.partial, false);
+    const found = await index.find(root, 'mainp');
+    assert.deepEqual(paths(found), []);
+    const main = await index.find(root, 'appmain');
+    assert.equal(main.matches[0]?.path, 'src/app/main.ts');
+    assert.deepEqual(main.query, 'appmain');
+    assert(main.matches[0]!.positions.length > 0);
+  });
 });
 
 // CI provides ripgrep, so there a missing one fails rather than skips.
@@ -78,80 +116,95 @@ const skipRipgrep = !ripgrep && !process.env.CI && 'ripgrep is not installed';
 test('ripgrep lists the same files with its ignore rules', { skip: skipRipgrep }, async (t) => {
   assert(ripgrep, 'Set MOONBASE_TEST_RIPGREP to the ripgrep scripts/prepare-ripgrep.mjs prepares.');
   const root = await folder(t);
-  const index = new ChatFileIndex({ ripgrepExecutable: ripgrep });
-  assert.deepEqual(paths(await index.find(root, '')), expected);
-  assert.equal((await index.find(root, 'rdme')).matches[0]?.path, 'README.md');
+  await withIndex({ ripgrepExecutable: ripgrep }, async (index) => {
+    assert.deepEqual(paths(await index.find(root, '')), expected);
+    assert.equal((await index.find(root, 'rdme')).matches[0]?.path, 'README.md');
+  });
 });
 
 test('search fails clearly when neither ripgrep nor a Git checkout is available', async (t) => {
   const root = await folder(t, false);
-  const index = new ChatFileIndex({ ripgrepExecutable: missing });
-  await assert.rejects(index.find(root, ''), {
-    _tag: 'ChatUnavailableError',
-    reason: 'file-search',
-  });
+  await withIndex({ ripgrepExecutable: missing }, (index) =>
+    assert.rejects(index.find(root, ''), {
+      _tag: 'ChatUnavailableError',
+      reason: 'file-search',
+    }),
+  );
   // Without the command-line tools, macOS's Git stub would offer to install them: it never runs.
   const runs: string[] = [];
-  const withoutGit = new ChatFileIndex({
-    run: async (executable) => {
-      runs.push(executable);
-      throw Object.assign(Error('missing'), { code: 'ENOENT' });
+  const checkout = await folder(t);
+  await withIndex(
+    {
+      run: (executable) => {
+        runs.push(executable);
+        return Effect.fail(missingCommand());
+      },
+      canRunGit: Effect.succeed(false),
     },
-    canRunGit: async () => false,
-  });
-  await assert.rejects(withoutGit.find(await folder(t), ''), {
-    _tag: 'ChatUnavailableError',
-    reason: 'file-search',
-  });
+    (index) =>
+      assert.rejects(index.find(checkout, ''), {
+        _tag: 'ChatUnavailableError',
+        reason: 'file-search',
+      }),
+  );
   assert.deepEqual(runs, ['rg']);
 });
 
 test('one listing serves a burst of queries; it is refreshed later and a failure is not kept', async () => {
-  let now = 0,
-    runs = 0,
+  let runs = 0,
     fail = false;
-  const run: ChatFileListingRun = async () => {
-    runs++;
-    if (fail) throw Object.assign(Error('crashed'), { code: 2 });
-    return Buffer.from('b.ts\0./a.ts\0a.ts\0dir/c"quoted.ts\0dir/nested/d.ts\0');
-  };
-  const index = new ChatFileIndex({ run, now: () => now });
-  const [first, second] = await Promise.all([index.find('/work', ''), index.find('/work', 'd')]);
-  assert.equal(runs, 1);
-  // Duplicates collapse, and a path that cannot be a mention is not offered.
-  assert.deepEqual(paths(first), ['a.ts', 'b.ts', 'dir/nested/d.ts']);
-  assert.equal(second.matches[0]?.path, 'dir/nested/d.ts');
-  now += 4_000;
-  await index.find('/work', 'a');
-  assert.equal(runs, 1);
-  now += 2_000;
-  fail = true;
-  await assert.rejects(index.find('/work', 'a'));
-  fail = false;
-  await index.find('/work', 'a');
-  assert.equal(runs, 3);
+  const run: ChatFileListingRun = () =>
+    Effect.suspend(() => {
+      runs++;
+      if (fail)
+        return Effect.fail(
+          new ListingError({ reason: 'exited', status: 3, output: Buffer.alloc(0) }),
+        );
+      return Effect.succeed({
+        bytes: Buffer.from('b.ts\0./a.ts\0a.ts\0dir/c"quoted.ts\0dir/nested/d.ts\0'),
+        truncated: false,
+      });
+    });
+  await withIndex({ run }, async (index) => {
+    const [first, second] = await Promise.all([index.find('/work', ''), index.find('/work', 'd')]);
+    assert.equal(runs, 1);
+    // Duplicates collapse, and a path that cannot be a mention is not offered.
+    assert.deepEqual(paths(first), ['a.ts', 'b.ts', 'dir/nested/d.ts']);
+    assert.equal(second.matches[0]?.path, 'dir/nested/d.ts');
+    await index.advance('4 seconds');
+    await index.find('/work', 'a');
+    assert.equal(runs, 1);
+    await index.advance('2 seconds');
+    fail = true;
+    await assert.rejects(index.find('/work', 'a'));
+    fail = false;
+    await index.find('/work', 'a');
+    assert.equal(runs, 3);
+  });
 });
 
 test('a listing cut short by its size or time budget is searched partially', async () => {
-  for (const failure of [{ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }, { killed: true }]) {
-    const index = new ChatFileIndex({
-      run: async () => {
-        // The budget stopped the listing partway through an entry.
-        throw Object.assign(Error('stopped'), failure, { stdout: Buffer.from('a.ts\0b.ts\0c.t') });
-      },
-    });
-    const result = await index.find('/work', '');
-    assert.deepEqual(paths(result), ['a.ts', 'b.ts']);
-    assert.equal(result.partial, true);
-  }
+  // The budget stopped the listing partway through an entry.
+  await withIndex(
+    { run: () => Effect.succeed({ bytes: Buffer.from('a.ts\0b.ts\0c.t'), truncated: true }) },
+    async (index) => {
+      const result = await index.find('/work', '');
+      assert.deepEqual(paths(result), ['a.ts', 'b.ts']);
+      assert.equal(result.partial, true);
+    },
+  );
 });
 
 test('results stop at 50 and say they are partial', async () => {
   const files = Array.from({ length: 80 }, (_, n) => `file${String(n).padStart(2, '0')}.ts`);
-  const index = new ChatFileIndex({ run: async () => Buffer.from(files.join('\0')) });
-  const result = await index.find('/work', 'file');
-  assert.equal(result.matches.length, 50);
-  assert.equal(result.partial, true);
+  await withIndex(
+    { run: () => Effect.succeed({ bytes: Buffer.from(files.join('\0')), truncated: false }) },
+    async (index) => {
+      const result = await index.find('/work', 'file');
+      assert.equal(result.matches.length, 50);
+      assert.equal(result.partial, true);
+    },
+  );
 });
 
 test('a local chat searches its own folder; a new chat only an approved one', async (t) => {
@@ -161,7 +214,7 @@ test('a local chat searches its own folder; a new chat only an approved one', as
     models = createModels();
   models.setProvider(faux.provider);
   const runtime = ManagedRuntime.make(
-    LocalPiRuntimeLive({
+    localPiRuntime({
       ...session,
       databasePath: join(approved, '..', `${approved.split('/').at(-1)}.sqlite`),
       models,
@@ -246,28 +299,11 @@ async function waitForPid(path: string) {
   }
   assert.fail('The listing never started its child');
 }
-const stopGraceMs = 200;
-/**
- * A listing time budget the test ends. `expire` ends every running budget once the stalled
- * listing in `bin` has printed, which it does before it records its child.
- */
-function endedBudget(bin: string) {
-  const running = new Set<() => void>();
-  const timing: ChatFileListingTiming = {
-    stopGraceMs,
-    budget: (expire) => {
-      running.add(expire);
-      return () => running.delete(expire);
-    },
-  };
-  return {
-    timing,
-    async expire() {
-      await waitForPid(join(bin, 'children'));
-      assert(running.size, 'No listing budget was running');
-      for (const expire of running) expire();
-    },
-  };
+const stopGrace = '200 millis';
+/** Ends a stalled listing's time budget once the listing in `bin` has printed and started its child. */
+async function expireBudget(bin: string, advance: (duration: Duration.Input) => Promise<void>) {
+  await waitForPid(join(bin, 'children'));
+  await advance('10 seconds');
 }
 /** The listing and its child are gone once the search returns: the whole group was stopped. */
 async function assertListingStopped(bin: string) {
@@ -284,17 +320,20 @@ test('a cancelled search returns at once, and its stalled listing is stopped at 
   const root = await folder(t, false),
     bin = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-files-bin-')));
   const pids = join(bin, 'pids'),
-    stalled = await writeStalledListing(bin, 'rg'),
-    budget = endedBudget(bin);
+    stalled = await writeStalledListing(bin, 'rg');
+  // The runtime's clock is a TestClock the test moves to end the listing's budget.
   const runtime = ManagedRuntime.make(
-    LocalPiRuntimeLive({
-      ...session,
-      databasePath: join(bin, 'chat.sqlite'),
-      models: createModels(),
-      ripgrepExecutable: stalled,
-      fileListingTiming: budget.timing,
-      approveFolder: async () => {},
-    }),
+    Layer.merge(
+      localPiRuntime({
+        ...session,
+        databasePath: join(bin, 'chat.sqlite'),
+        models: createModels(),
+        ripgrepExecutable: stalled,
+        fileListingTiming: { stopGrace },
+        approveFolder: async () => {},
+      }),
+      TestClock.layer(),
+    ),
   );
   t.after(async () => {
     try {
@@ -307,19 +346,14 @@ test('a cancelled search returns at once, and its stalled listing is stopped at 
     input = { session, cwd: root, query: '' };
   const abort = new AbortController(),
     cancelled = client.command('findChatFiles', input, { signal: abort.signal });
-  let pid: number | undefined;
-  for (let i = 0; i < 500 && !pid; i++) {
-    pid = await readPid(pids);
-    if (!pid) await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  assert(pid, 'The listing never started');
+  const pid = await waitForPid(pids);
   abort.abort();
   // The listing stays stalled until its budget, so a rejection means cancelling did not wait for it.
   await assert.rejects(cancelled, { code: 'Cancelled' });
   // The listing is shared, so cancelling one search leaves it to finish for the next.
   assert(isRunning(pid));
   const searched = client.command('findChatFiles', input);
-  await budget.expire();
+  await expireBudget(bin, (duration) => runtime.runPromise(TestClock.adjust(duration)));
   const result = await searched;
   assert.deepEqual(paths(result), ['README.md', 'src/app/main.ts']);
   assert.equal(result.partial, true);
@@ -331,17 +365,17 @@ test('a stalled Git listing is stopped with its children at its time budget', as
   const root = await folder(t),
     bin = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-files-bin-')));
   t.after(() => rm(bin, { recursive: true, force: true }));
-  const budget = endedBudget(bin);
-  const index = new ChatFileIndex({
-    ripgrepExecutable: missing,
-    gitExecutable: await writeStalledListing(bin, 'git'),
-    timing: budget.timing,
-  });
-  const searched = index.find(root, '');
-  await budget.expire();
-  const result = await searched;
-  assert.deepEqual(paths(result), ['README.md', 'src/app/main.ts']);
-  assert.equal(result.partial, true);
+  const gitExecutable = await writeStalledListing(bin, 'git');
+  await withIndex(
+    { ripgrepExecutable: missing, gitExecutable, timing: { stopGrace } },
+    async (index) => {
+      const searched = index.find(root, '');
+      await expireBudget(bin, index.advance);
+      const result = await searched;
+      assert.deepEqual(paths(result), ['README.md', 'src/app/main.ts']);
+      assert.equal(result.partial, true);
+    },
+  );
   await assertListingStopped(bin);
 });
 
@@ -350,17 +384,17 @@ test('a listing that ignores SIGTERM, or whose child holds its output, is killed
   const search = async (options: { ignoresTerm?: boolean; childHoldsOutput?: boolean }) => {
     const bin = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-files-bin-')));
     t.after(() => rm(bin, { recursive: true, force: true }));
-    const budget = endedBudget(bin);
-    const index = new ChatFileIndex({
-      ripgrepExecutable: missing,
-      gitExecutable: await writeStalledListing(bin, 'git', options),
-      timing: budget.timing,
-    });
-    const searched = index.find(root, '');
-    await budget.expire();
-    const result = await searched;
-    assert.deepEqual(paths(result), ['README.md', 'src/app/main.ts']);
-    assert.equal(result.partial, true);
+    const gitExecutable = await writeStalledListing(bin, 'git', options);
+    await withIndex(
+      { ripgrepExecutable: missing, gitExecutable, timing: { stopGrace } },
+      async (index) => {
+        const searched = index.find(root, '');
+        await expireBudget(bin, index.advance);
+        const result = await searched;
+        assert.deepEqual(paths(result), ['README.md', 'src/app/main.ts']);
+        assert.equal(result.partial, true);
+      },
+    );
     await assertListingStopped(bin);
   };
   // Both wait out the same grace, so they run together.
@@ -373,12 +407,12 @@ test('disposing the runtime stops its running listings and waits for them to exi
   const pids = join(bin, 'pids'),
     stalled = await writeStalledListing(bin, 'rg', { ignoresTerm: true, childHoldsOutput: true });
   const runtime = ManagedRuntime.make(
-    LocalPiRuntimeLive({
+    localPiRuntime({
       ...session,
       databasePath: join(bin, 'chat.sqlite'),
       models: createModels(),
       ripgrepExecutable: stalled,
-      fileListingTiming: { stopGraceMs },
+      fileListingTiming: { stopGrace },
       approveFolder: async () => {},
     }),
   );

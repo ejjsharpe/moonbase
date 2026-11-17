@@ -1,6 +1,6 @@
 import { chmodSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createKeyFileSource } from '@moonbase/chat-runtime/credentials';
+import { makeKeyFileSource } from '@moonbase/chat-runtime/credentials';
 import { runDaemon } from '../src/daemon.ts';
 import { readDirectoryArgument } from '../src/data-directory.ts';
 import { describeFailure } from '../src/failure.ts';
@@ -50,7 +50,7 @@ try {
     providers: (settings) => ({
       ...createFauxProviders(directory),
       ...(settings.credentialKey?.source === 'file'
-        ? { keySource: createKeyFileSource(settings.credentialKey.path) }
+        ? { keySource: makeKeyFileSource(settings.credentialKey.path) }
         : {}),
     }),
     ...(script.idleMs ? { idleMs: script.idleMs } : {}),

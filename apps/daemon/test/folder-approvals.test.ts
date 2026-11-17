@@ -210,7 +210,7 @@ test('a host-mode daemon allows its roots and folders under them, and refuses es
         LocalHostLive({ host, folders, chatFolders: join(base, 'chats') }).pipe(
           Layer.provide(
             Layer.succeed(LocalPiControl, {
-              setAdmissionsOpen() {},
+              setAdmissionsOpen: () => Effect.void,
               hasActiveWork: () => Effect.succeed(false),
               markFolderAsProject: (target) => Effect.sync(() => void marked.push(target)),
             }),

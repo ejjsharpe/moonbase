@@ -5,7 +5,7 @@ import { chmod, mkdir, readFile, rename, rm, stat, symlink, writeFile } from 'no
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Effect, Fiber, Layer, ManagedRuntime, Stream } from 'effect';
-import { createKeyFileSource } from '@moonbase/chat-runtime/credentials';
+import { makeKeyFileSource } from '@moonbase/chat-runtime/credentials';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
 import { makeConnectionClient } from '@moonbase/application/chat/clients';
 import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
@@ -75,7 +75,7 @@ async function startDaemon(
     providers: (loaded) => ({
       ...createFauxProviders(directory),
       ...(loaded.credentialKey?.source === 'file'
-        ? { keySource: createKeyFileSource(loaded.credentialKey.path) }
+        ? { keySource: makeKeyFileSource(loaded.credentialKey.path) }
         : {}),
     }),
   }).then(

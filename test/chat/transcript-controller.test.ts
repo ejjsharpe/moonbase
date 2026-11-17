@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { ManagedRuntime } from 'effect';
+import { Layer, ManagedRuntime } from 'effect';
+import * as NodeServices from '@effect/platform-node/NodeServices';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
@@ -42,7 +43,9 @@ test('public local controller receives successive Pi text before held completion
   };
   const session = { host: { hostId: 'local-controller', storeId: 'temporary' }, actorId: 'actor' };
   const runtime = ManagedRuntime.make(
-    LocalPiRuntimeLive({ ...session, databasePath: join(directory, 'chat.sqlite'), models }),
+    LocalPiRuntimeLive({ ...session, databasePath: join(directory, 'chat.sqlite'), models }).pipe(
+      Layer.provide(NodeServices.layer),
+    ),
   );
   const client = makeChatClient(runtime);
   const gate = Promise.withResolvers<void>(),

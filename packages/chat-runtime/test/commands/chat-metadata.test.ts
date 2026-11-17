@@ -78,10 +78,10 @@ test('settling refuses foreign targets and waits for open admissions', async (t)
   // The fixture's local runtime provides the control beside the chat service.
   const local = f.runtime as unknown as ManagedRuntime.ManagedRuntime<LocalPiControl, never>;
   const control = await local.runPromise(LocalPiControl);
-  control.setAdmissionsOpen(false);
+  await local.runPromise(control.setAdmissionsOpen(false));
   await assert.rejects(f.client.command('settleChat', { target, settled: true }), {
     code: 'Unavailable',
   });
-  control.setAdmissionsOpen(true);
+  await local.runPromise(control.setAdmissionsOpen(true));
   assert.equal((await listed(f.client, target))?.settledAt, undefined);
 });

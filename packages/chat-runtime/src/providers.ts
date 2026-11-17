@@ -1,10 +1,18 @@
 import { randomUUID } from 'node:crypto';
-import { Context, Effect, Layer } from 'effect';
-import { readOnChange } from '@moonbase/effect/changes';
-import { getSupportedThinkingLevels, type Models } from '@earendil-works/pi-ai/models';
-type Interaction = Parameters<Models['login']>[2];
-type AuthPrompt = Parameters<Interaction['prompt']>[0];
-type AuthEvent = Parameters<Interaction['notify']>[0];
+import {
+  Cause,
+  Clock,
+  Deferred,
+  Effect,
+  Exit,
+  FiberMap,
+  FiberSet,
+  Layer,
+  Ref,
+  Stream,
+  SubscriptionRef,
+} from 'effect';
+import type { Models } from '@earendil-works/pi-ai/models';
 import { ProviderSetupService, type ProviderSetupHandlers } from '@moonbase/contracts/services';
 import type { ProviderCommand, ProviderInput, ProviderState } from '@moonbase/contracts/providers';
 import { decodeProviderOutput, readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
@@ -13,56 +21,38 @@ import {
   ProviderSetupRefusedError,
   ProviderSetupUnavailableError,
 } from '@moonbase/contracts/provider-errors';
-import type { ChatReasoningEffort } from '@moonbase/contracts/chat';
+import { isClaudeCodeSignIn, isLocalProvider, listProviders } from './provider-catalog.ts';
 
-// Moonbase defaults for the pinned catalog; explicit user preferences take precedence.
-const defaultModels: Record<string, { modelId: string; reasoningEffort: ChatReasoningEffort }> = {
-  openai: { modelId: 'gpt-6.1-sol', reasoningEffort: 'medium' },
-  'openai-api-key': { modelId: 'gpt-6.1-sol', reasoningEffort: 'medium' },
-  anthropic: { modelId: 'claude-opus-5-5', reasoningEffort: 'high' },
-  google: { modelId: 'gemini-3.8-flash', reasoningEffort: 'medium' },
-  openrouter: { modelId: 'openai/gpt-6.1-sol', reasoningEffort: 'medium' },
-  'claude-code': { modelId: 'claude-opus-5-5', reasoningEffort: 'high' },
-};
+export { localProviderIds } from './provider-catalog.ts';
 
-export const localProviderIds = [
-  'openai',
-  'openai-api-key',
-  'anthropic',
-  'google',
-  'openrouter',
-  'claude-code',
-] as const;
-const authKinds: Partial<Record<string, 'oauth' | 'claude_code'>> = {
-  openai: 'oauth',
-  'claude-code': 'claude_code',
-};
-const names: Partial<Record<string, string>> = {
-  openai: 'ChatGPT subscription',
-  google: 'Google Gemini',
-  'claude-code': 'Claude subscription',
-};
+type Interaction = Parameters<Models['login']>[2];
+type AuthPrompt = Parameters<Interaction['prompt']>[0];
+type AuthEvent = Parameters<Interaction['notify']>[0];
+
+const refusal = (reason: ProviderSetupRefusedError['reason']) =>
+  new ProviderSetupRefusedError({ reason });
 /** Refuses the request for `reason`, before it changes anything. */
-function refuse(reason: ProviderSetupRefusedError['reason']): never {
-  throw new ProviderSetupRefusedError({ reason });
-}
+const refuse = (reason: ProviderSetupRefusedError['reason']) => Effect.fail(refusal(reason));
 const unavailable = () => new ProviderSetupUnavailableError({ reason: 'setup' });
 /** A provider setup failure safe to show; any other failure is hidden as unavailable. */
 const safeError = (error: unknown) => (isProviderSetupError(error) ? error : unavailable());
-type Flow = {
-  state: NonNullable<ProviderState['flow']>;
-  /** When its owner last used provider setup. */
-  usedAt: number;
-  abort: AbortController;
-  completion: Promise<void>;
-  url?: string;
-  answer?: {
-    id: string;
-    resolve(value: string): void;
-    reject(error: unknown): void;
-    options?: readonly string[];
-  };
+/** How a prompt Pi is waiting on ends when its flow, or Pi, stops waiting for it. */
+const cancelled = () => new Error('Cancelled');
+
+type FlowState = NonNullable<ProviderState['flow']>;
+/** The prompt a flow waits on: its answer completes `answer`. */
+type Prompt = { id: string; options?: readonly string[]; answer: Deferred.Deferred<string> };
+type Flow = { state: FlowState; url?: string; prompt?: Prompt };
+/** Every owner's flow, the latest start each owner asked for, and the released owners. */
+type Setup = {
+  owners: ReadonlyMap<string, Flow>;
+  revisions: ReadonlyMap<string, number>;
+  /** In the order they were released, oldest first. */
+  released: ReadonlySet<string>;
+  /** Counts changes that leave the rest alone, such as a sign-out. */
+  version: number;
 };
+
 export type ProviderSetupConfiguration = {
   models: Models;
   /**
@@ -73,399 +63,455 @@ export type ProviderSetupConfiguration = {
   deviceId: string;
   /** Why the auth check made with `signal` couldn't tell whether a provider is configured, if it says. */
   getCheckProblem?(providerId: string, signal: AbortSignal): string | undefined;
-  /** The current time in milliseconds; `Date.now` by default. */
-  now?(): number;
 };
 /** An owner unheard from this long loses its flow, as when its client stopped without releasing it. */
 export const inactiveProviderOwnerMs = 30 * 60 * 1000;
 /** How many owners may hold a flow, and how many released owners stay refused. */
 const maximumOwners = 64;
 const maximumReleasedOwners = 256;
-/** Fits provider-supplied text to the status contract: no NULs or lone surrogates, at most 512 bytes. */
-function boundText(value: string) {
-  let text = '',
-    bytes = 0;
-  for (const character of value.replace(/[\0\ud800-\udfff]/gu, '')) {
-    bytes += new TextEncoder().encode(character).length;
-    if (bytes > 512) break;
-    text += character;
-  }
-  return text;
-}
 
-/** Tells a server when any owner's provider setup state may have changed, so it can push it. */
-export class ProviderSetupChanges extends Context.Service<
-  ProviderSetupChanges,
-  { subscribe(listener: () => void): () => void }
->()('moonbase/ProviderSetupChanges') {}
+const validateProviderUrl = (value: string) => {
+  const url = readProviderSignInUrl(value);
+  if (url === undefined) throw refusal('unsupported-sign-in-url');
+  return url;
+};
+/** Fails once `signal` aborts; never, without one. */
+const whenAborted = (signal: AbortSignal | undefined) =>
+  signal
+    ? Effect.callback<never, Error>((resume) => {
+        const abort = () => resume(Effect.fail(cancelled()));
+        if (signal.aborted) return abort();
+        signal.addEventListener('abort', abort, { once: true });
+        return Effect.sync(() => signal.removeEventListener('abort', abort));
+      })
+    : Effect.never;
+/**
+ * Pi's sign-in, aborted by interruption, which then waits for it to settle: a provider's loopback
+ * callback (ChatGPT's 127.0.0.1:1455) serves the next flow only once the last one has let go.
+ */
+const runSignIn = (start: (signal: AbortSignal) => Promise<unknown>) =>
+  Effect.callback<void, unknown>((resume, signal) => {
+    const settled = Deferred.makeUnsafe<void>();
+    let login: Promise<unknown>;
+    try {
+      login = start(signal);
+    } catch (error) {
+      login = Promise.reject(error);
+    }
+    login.then(
+      () => {
+        Deferred.doneUnsafe(settled, Exit.void);
+        resume(Effect.void);
+      },
+      (error: unknown) => {
+        Deferred.doneUnsafe(settled, Exit.void);
+        resume(Effect.fail(error));
+      },
+    );
+    return Deferred.await(settled);
+  });
+
+const withFlow = (setup: Setup, owner: string, flow: Flow): Setup => ({
+  ...setup,
+  owners: new Map(setup.owners).set(owner, flow),
+});
+const isRunning = (flow: Flow | undefined, id: string): flow is Flow =>
+  flow?.state.id === id && flow.state.state === 'running';
 
 /** Provider callbacks remain privileged; only status and live prompt identities leave this layer. */
 export const ProviderSetupLive = (
   config: ProviderSetupConfiguration,
-): Layer.Layer<ProviderSetupService | ProviderSetupChanges> =>
-  Layer.effectContext(
+): Layer.Layer<ProviderSetupService> =>
+  Layer.effect(
+    ProviderSetupService,
     Effect.gen(function* () {
-      const listeners = new Set<() => void>();
-      /** A flow, an owner or a sign-in changed; reading state never calls it. */
-      const changed = () => {
-        for (const listener of listeners) listener();
-      };
-      const owners = new Map<string, Flow>();
-      const revisions = new Map<string, number>();
-      const released = new Set<string>();
-      const now = config.now ?? Date.now;
-      const validateProviderUrl = (value: string) =>
-        readProviderSignInUrl(value) ?? refuse('unsupported-sign-in-url');
-      const cancelFlow = async (flow: Flow) => {
-        flow.abort.abort();
-        flow.answer?.reject(new Error('Cancelled'));
-        await flow.completion;
-      };
-      const cancel = async (owner: string, flowId?: string) => {
-        const flow = owners.get(owner);
-        if (!flow) {
-          if (flowId) refuse('sign-in-inactive');
-          return;
-        }
-        if (flowId && flow.state.id !== flowId) refuse('sign-in-inactive');
-        await cancelFlow(flow);
-      };
+      // Pi's prompts wait on Effects; its callbacks get Promises from here.
+      const runForPi = yield* FiberSet.makeRuntimePromise<never>();
+      const setup = yield* SubscriptionRef.make<Setup>({
+        owners: new Map(),
+        revisions: new Map(),
+        released: new Set(),
+        version: 0,
+      });
+      /** When each owner holding a flow last used provider setup; reading it changes nothing. */
+      const usage = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
+      // Each owner's running sign-in; closing the layer interrupts each and waits for Pi to settle.
+      const flows = yield* FiberMap.make<string, void>();
+      const changed = SubscriptionRef.update(setup, (s) => ({ ...s, version: s.version + 1 }));
+      const updateFlow = (owner: string, id: string, change: (flow: Flow) => Flow) =>
+        SubscriptionRef.update(setup, (s) => {
+          const flow = s.owners.get(owner);
+          return flow?.state.id === id ? withFlow(s, owner, change(flow)) : s;
+        });
+      const isLive = (owner: string, id: string, signal: AbortSignal) =>
+        !signal.aborted && isRunning(SubscriptionRef.getUnsafe(setup).owners.get(owner), id);
+
+      /** Cancels the owner's flow, if it runs, and waits for its sign-in to settle. */
+      const cancelFlow = (owner: string) =>
+        SubscriptionRef.update(setup, (s) => {
+          const flow = s.owners.get(owner);
+          return flow?.state.state === 'running'
+            ? withFlow(s, owner, settleFlow(flow, 'cancelled'))
+            : s;
+        }).pipe(Effect.andThen(FiberMap.remove(flows, owner)));
+      const cancel = (owner: string, flowId?: string) =>
+        Effect.gen(function* () {
+          const flow = (yield* SubscriptionRef.get(setup)).owners.get(owner);
+          if (flowId && flow?.state.id !== flowId) return yield* refuse('sign-in-inactive');
+          yield* cancelFlow(owner);
+        });
       /** Forgets an owner's flow, cancelling it. */
-      const dropOwner = async (owner: string) => {
-        const flow = owners.get(owner);
-        owners.delete(owner);
-        revisions.delete(owner);
-        if (flow) await cancelFlow(flow);
-        if (flow) changed();
-      };
+      const dropOwner = (owner: string) =>
+        SubscriptionRef.update(setup, (s) => {
+          const owners = new Map(s.owners),
+            revisions = new Map(s.revisions);
+          owners.delete(owner);
+          revisions.delete(owner);
+          return { ...s, owners, revisions };
+        }).pipe(
+          Effect.andThen(
+            Ref.update(usage, (used) => {
+              const next = new Map(used);
+              next.delete(owner);
+              return next;
+            }),
+          ),
+          Effect.andThen(FiberMap.remove(flows, owner)),
+        );
       /**
        * Marks `owner` as heard from and drops other owners that went quiet or exceed the bound,
        * least recently used first, so a daemon outliving its clients does not keep their flows.
        */
-      const sweepOwners = async (owner: string) => {
-        const time = now();
-        const flow = owners.get(owner);
-        if (flow) flow.usedAt = time;
-        const others = [...owners]
-          .filter(([other]) => other !== owner)
-          .sort(([, a], [, b]) => b.usedAt - a.usedAt);
-        const stale = others.filter(
-          ([, flow], index) =>
-            time - flow.usedAt >= inactiveProviderOwnerMs || index >= maximumOwners - 1,
-        );
-        await Promise.all(stale.map(([other]) => dropOwner(other)));
-      };
-      yield* Effect.addFinalizer(() =>
-        Effect.promise(async () => {
-          await Promise.all([...owners.keys()].map((owner) => cancel(owner)));
-          owners.clear();
-        }),
-      );
-      const getStatus = async (owner: string): Promise<ProviderState> => ({
-        providers: await Promise.all(
-          localProviderIds.map(async (id) => {
-            const provider = config.models.getProvider(id);
-            if (!provider) throw unavailable();
-            const models = provider.getModels().map((model) => {
-              const reasoningEfforts = getSupportedThinkingLevels(model);
-              const preferredEffort = defaultModels[id]!.reasoningEffort;
-              let defaultReasoningEffort = reasoningEfforts[0]!;
-              if (reasoningEfforts.includes('medium')) defaultReasoningEffort = 'medium';
-              if (reasoningEfforts.includes(preferredEffort))
-                defaultReasoningEffort = preferredEffort;
-              return {
-                modelId: model.id,
-                name: model.name,
-                reasoningEfforts,
-                defaultReasoningEffort,
-              };
-            });
-            const defaultModel = models.find(
-              (model) => model.modelId === defaultModels[id]!.modelId,
+      const sweepOwners = (owner: string) =>
+        Effect.gen(function* () {
+          const time = yield* Clock.currentTimeMillis;
+          const { owners } = yield* SubscriptionRef.get(setup);
+          const used = yield* Ref.updateAndGet(usage, (used) =>
+            owners.has(owner) ? new Map(used).set(owner, time) : used,
+          );
+          const usedAt = (other: string) => used.get(other) ?? 0;
+          const stale = [...owners.keys()]
+            .filter((other) => other !== owner)
+            .sort((a, b) => usedAt(b) - usedAt(a))
+            .filter(
+              (other, index) =>
+                time - usedAt(other) >= inactiveProviderOwnerMs || index >= maximumOwners - 1,
             );
-            return {
-              id,
-              name: names[id] ?? provider.name,
-              auth: authKinds[id] ?? ('api_key' as const),
-              ...(await (async () => {
-                // Pi hands this signal to the provider's check, which keys its problem by it.
-                const signal = new AbortController().signal,
-                  auth = await config.models.checkAuth(id, { signal }),
-                  problem = !auth && config.getCheckProblem?.(id, signal);
-                return problem
-                  ? { configured: false, problem: boundText(problem) }
-                  : { configured: !!auth };
-              })()),
-              models,
-              ...(defaultModel
-                ? {
-                    defaultModel: {
-                      model: { provider: id, modelId: defaultModel.modelId },
-                      reasoningEffort: defaultModel.defaultReasoningEffort,
-                    },
-                  }
-                : {}),
-            };
+          yield* Effect.forEach(stale, dropOwner, { concurrency: 'unbounded', discard: true });
+        });
+      const requireHeld = (owner: string) =>
+        Effect.flatMap(SubscriptionRef.get(setup), (s) =>
+          s.released.has(owner) ? refuse('owner-released') : Effect.void,
+        );
+      const getCurrentFlow = (owner: string, id: string) =>
+        Effect.flatMap(SubscriptionRef.get(setup), (s) => {
+          const flow = s.owners.get(owner);
+          return isRunning(flow, id) ? Effect.succeed(flow) : refuse('sign-in-inactive');
+        });
+      const getProviderUrl = (owner: string, flowId: string) =>
+        requireHeld(owner).pipe(
+          Effect.andThen(getCurrentFlow(owner, flowId)),
+          Effect.flatMap((flow) =>
+            flow.url
+              ? Effect.try({ try: () => validateProviderUrl(flow.url!), catch: (error) => error })
+              : refuse('no-sign-in-url'),
+          ),
+        );
+
+      /** Shows Pi's prompt as the flow's, until it is answered or the flow stops waiting. */
+      const askPrompt = (owner: string, id: string, prompt: AuthPrompt, signal: AbortSignal) =>
+        Effect.gen(function* () {
+          const answer = yield* Deferred.make<string>();
+          const promptId = randomUUID();
+          const shown = yield* SubscriptionRef.modify(setup, (s): [boolean, Setup] => {
+            const flow = s.owners.get(owner);
+            if (!isRunning(flow, id) || signal.aborted || prompt.signal?.aborted) return [false, s];
+            const options = prompt.type === 'select' ? prompt.options : [];
+            return [
+              true,
+              withFlow(s, owner, {
+                ...flow,
+                prompt: {
+                  id: promptId,
+                  answer,
+                  ...(prompt.type === 'select' ? { options: options.map(({ id }) => id) } : {}),
+                },
+                state: {
+                  ...flow.state,
+                  prompt: {
+                    id: promptId,
+                    type: prompt.type,
+                    message: prompt.message,
+                    options: options.map(({ id, label }) => ({ id, label })),
+                  },
+                },
+              }),
+            ];
+          });
+          if (!shown) return yield* Effect.fail(cancelled());
+          return yield* Effect.raceFirst(
+            Deferred.await(answer),
+            Effect.raceFirst(whenAborted(signal), whenAborted(prompt.signal)),
+          ).pipe(
+            Effect.ensuring(
+              updateFlow(owner, id, (flow) =>
+                flow.prompt?.id === promptId
+                  ? { ...flow, prompt: undefined, state: { ...flow.state, prompt: null } }
+                  : flow,
+              ),
+            ),
+          );
+        });
+      const notify = (owner: string, id: string, event: AuthEvent, signal: AbortSignal) => {
+        if (!isLive(owner, id, signal)) return;
+        // An unsupported URL fails Pi's sign-in, as the refusal it is.
+        const url = event.type === 'auth_url' ? validateProviderUrl(event.url) : undefined;
+        void runForPi(
+          updateFlow(owner, id, (flow) =>
+            url === undefined
+              ? {
+                  ...flow,
+                  state: { ...flow.state, message: 'Waiting for the provider to finish sign-in…' },
+                }
+              : {
+                  ...flow,
+                  url,
+                  state: {
+                    ...flow.state,
+                    canOpenUrl: true,
+                    message: 'Open the provider sign-in page to continue.',
+                  },
+                },
+          ),
+        ).catch(() => {});
+      };
+      const signIn = (owner: string, id: string, providerId: string) =>
+        Effect.gen(function* () {
+          // Cancelled before it started.
+          if (!isRunning(SubscriptionRef.getUnsafe(setup).owners.get(owner), id))
+            return yield* Effect.interrupt;
+          yield* runSignIn((signal) =>
+            config.models.login(
+              providerId,
+              providerId === 'openai' ? 'oauth' : 'api_key',
+              {
+                signal,
+                prompt: (prompt) => runForPi(askPrompt(owner, id, prompt, signal)),
+                notify: (event) => notify(owner, id, event, signal),
+              },
+              { agentName: 'Moonbase', getDeviceId: () => config.deviceId },
+            ),
+          );
+        }).pipe(
+          Effect.onExit((exit) => {
+            let outcome: 'completed' | 'cancelled' | 'failed' = 'completed';
+            if (Exit.isFailure(exit))
+              outcome = Cause.hasInterrupts(exit.cause) ? 'cancelled' : 'failed';
+            // A flow cancelled while Pi settled already says so.
+            return updateFlow(owner, id, (flow) =>
+              flow.state.state === 'running' ? settleFlow(flow, outcome) : flow,
+            );
           }),
-        ),
-        flow: owners.get(owner)?.state ?? null,
-      });
-      function getCurrentFlow(owner: string, id: string) {
-        const flow = owners.get(owner);
-        if (!flow || flow.state.id !== id || flow.state.state !== 'running')
-          return refuse('sign-in-inactive');
-        return flow;
-      }
-      function getProviderUrl(owner: string, flowId: string) {
-        if (released.has(owner)) refuse('owner-released');
-        const flow = getCurrentFlow(owner, flowId);
-        if (!flow.url) refuse('no-sign-in-url');
-        return validateProviderUrl(flow.url!);
-      }
-      const invoke = async <K extends ProviderCommand>(
+        );
+
+      /** Starts the owner's sign-in once no other owner's runs for the provider; its flow's id. */
+      const startFlow = (owner: string, providerId: string) =>
+        Effect.gen(function* () {
+          if (!isLocalProvider(providerId)) return yield* refuse('unknown-provider');
+          if (isClaudeCodeSignIn(providerId)) return yield* refuse('claude-code-sign-in');
+          const revision = yield* SubscriptionRef.modify(setup, (s): [number, Setup] => {
+            const next = (s.revisions.get(owner) ?? 0) + 1;
+            return [next, { ...s, revisions: new Map(s.revisions).set(owner, next) }];
+          });
+          yield* cancelFlow(owner);
+          const id = randomUUID();
+          const time = yield* Clock.currentTimeMillis;
+          // One sign-in per provider at a time: a provider's loopback callback (ChatGPT's
+          // 127.0.0.1:1455) serves only one flow, and an abandoned client's flow must not hold it.
+          // A newer start or a release while waiting supersedes this one.
+          for (;;) {
+            const step = yield* SubscriptionRef.modify(
+              setup,
+              (s): [{ superseded: true } | { contenders: string[] }, Setup] => {
+                if (s.released.has(owner) || s.revisions.get(owner) !== revision)
+                  return [{ superseded: true }, s];
+                const contenders = [...s.owners]
+                  .filter(
+                    ([other, flow]) =>
+                      other !== owner &&
+                      flow.state.providerId === providerId &&
+                      flow.state.state === 'running',
+                  )
+                  .map(([other]) => other);
+                if (contenders.length) return [{ contenders }, s];
+                const state: FlowState = {
+                  id,
+                  providerId,
+                  state: 'running',
+                  message: 'Complete provider setup.',
+                  canOpenUrl: false,
+                  prompt: null,
+                };
+                return [{ contenders }, withFlow(s, owner, { state })];
+              },
+            );
+            if ('superseded' in step) return yield* refuse('sign-in-superseded');
+            if (!step.contenders.length) break;
+            yield* Effect.forEach(step.contenders, cancelFlow, {
+              concurrency: 'unbounded',
+              discard: true,
+            });
+          }
+          yield* Ref.update(usage, (used) => new Map(used).set(owner, time));
+          yield* FiberMap.run(flows, owner, signIn(owner, id, providerId));
+          return id;
+        });
+
+      const getStatus = (
+        owner: string,
+        operation: ProviderCommand,
+      ): Effect.Effect<ProviderState, unknown> =>
+        Effect.gen(function* () {
+          const providers = yield* listProviders(config.models, config.getCheckProblem);
+          const flow = (yield* SubscriptionRef.get(setup)).owners.get(owner)?.state ?? null;
+          // The state carries the provider SDK's catalog and sign-in prompts, which enter here.
+          return yield* Effect.try({
+            try: () => decodeProviderOutput(operation, { providers, flow }),
+            catch: (error) => error,
+          });
+        });
+      const invoke = <K extends ProviderCommand>(
         owner: string,
         operation: K,
         value: ProviderInput<K>,
-      ): Promise<ProviderState> => {
-        if (released.has(owner)) refuse('owner-released');
-        await sweepOwners(owner);
-        let startedFlow: Flow | undefined;
-        if (operation === 'startProviderLogin') {
-          const { providerId } = value as ProviderInput<'startProviderLogin'>;
-          if (!localProviderIds.includes(providerId as (typeof localProviderIds)[number]))
-            refuse('unknown-provider');
-          if (authKinds[providerId] === 'claude_code') refuse('claude-code-sign-in');
-          const revision = (revisions.get(owner) ?? 0) + 1;
-          revisions.set(owner, revision);
-          await cancel(owner);
-          if (released.has(owner) || revisions.get(owner) !== revision)
-            refuse('sign-in-superseded');
-          // One sign-in per provider at a time: a provider's loopback callback (ChatGPT's
-          // 127.0.0.1:1455) serves only one flow, and an abandoned client's flow must not hold it.
-          for (;;) {
-            const contenders = [...owners].filter(
-              ([other, flow]) =>
-                other !== owner &&
-                flow.state.providerId === providerId &&
-                flow.state.state === 'running',
+      ): Effect.Effect<ProviderState, unknown> =>
+        Effect.gen(function* () {
+          yield* requireHeld(owner);
+          yield* sweepOwners(owner);
+          let started: string | undefined;
+          if (operation === 'startProviderLogin') {
+            const { providerId } = value as ProviderInput<'startProviderLogin'>;
+            started = yield* startFlow(owner, providerId);
+          } else if (operation === 'answerProviderPrompt') {
+            const { flowId, promptId, answer } = value as ProviderInput<'answerProviderPrompt'>;
+            // The prompt is taken in the same step that checks it, so it is answered once.
+            const taken = yield* SubscriptionRef.modify(
+              setup,
+              (s): [Prompt | ProviderSetupRefusedError, Setup] => {
+                const flow = s.owners.get(owner);
+                if (!isRunning(flow, flowId)) return [refusal('sign-in-inactive'), s];
+                const pending = flow.prompt;
+                if (!pending || pending.id !== promptId) return [refusal('prompt-obsolete'), s];
+                if (!answer.trim() || (pending.options && !pending.options.includes(answer)))
+                  return [refusal('invalid-answer'), s];
+                return [
+                  pending,
+                  withFlow(s, owner, {
+                    ...flow,
+                    prompt: undefined,
+                    state: { ...flow.state, prompt: null },
+                  }),
+                ];
+              },
             );
-            if (!contenders.length) break;
-            await Promise.all(contenders.map(([, flow]) => cancelFlow(flow)));
-            if (released.has(owner) || revisions.get(owner) !== revision)
-              refuse('sign-in-superseded');
-          }
-          const abort = new AbortController();
-          const flow: Flow = {
-            state: {
-              id: randomUUID(),
-              providerId,
-              state: 'running',
-              message: 'Complete provider setup.',
-              canOpenUrl: false,
-              prompt: null,
-            },
-            usedAt: now(),
-            abort,
-            completion: Promise.resolve(),
-          };
-          owners.set(owner, flow);
-          startedFlow = flow;
-          const live = () => owners.get(owner) === flow && !abort.signal.aborted;
-          const prompt = (prompt: AuthPrompt): Promise<string> =>
-            new Promise((resolve, reject) => {
-              if (!live() || prompt.signal?.aborted) {
-                reject(Error('Cancelled'));
-                return;
-              }
-              const id = randomUUID();
-              const close = () => {
-                abort.signal.removeEventListener('abort', cancelled);
-                prompt.signal?.removeEventListener('abort', cancelled);
-                if (flow.answer?.id === id) {
-                  flow.answer = undefined;
-                  flow.state = { ...flow.state, prompt: null };
-                  changed();
-                }
-              };
-              const cancelled = () => {
-                close();
-                reject(Error('Cancelled'));
-              };
-              flow.answer = {
-                id,
-                ...(prompt.type === 'select'
-                  ? { options: prompt.options.map((option) => option.id) }
-                  : {}),
-                resolve: (value) => {
-                  close();
-                  resolve(value);
-                },
-                reject: (error) => {
-                  close();
-                  reject(error);
-                },
-              };
-              flow.state = {
-                ...flow.state,
-                prompt: {
-                  id,
-                  type: prompt.type,
-                  message: prompt.message,
-                  options:
-                    prompt.type === 'select'
-                      ? prompt.options.map(({ id, label }) => ({ id, label }))
-                      : [],
-                },
-              };
-              abort.signal.addEventListener('abort', cancelled, { once: true });
-              prompt.signal?.addEventListener('abort', cancelled, { once: true });
-              changed();
+            if (taken instanceof ProviderSetupRefusedError) return yield* Effect.fail(taken);
+            yield* Deferred.succeed(taken.answer, answer);
+          } else if (operation === 'cancelProviderLogin') {
+            yield* cancel(owner, (value as ProviderInput<'cancelProviderLogin'>).flowId);
+          } else if (operation === 'openProviderUrl') {
+            const url = yield* getProviderUrl(
+              owner,
+              (value as ProviderInput<'openProviderUrl'>).flowId,
+            );
+            const { openUrl } = config;
+            if (!openUrl)
+              return yield* Effect.fail(
+                new ProviderSetupUnavailableError({ reason: 'client-opens-links' }),
+              );
+            yield* Effect.tryPromise({ try: () => openUrl(url), catch: (error) => error });
+          } else if (operation === 'logoutProvider') {
+            const { providerId } = value as ProviderInput<'logoutProvider'>;
+            if (!isLocalProvider(providerId)) return yield* refuse('unknown-provider');
+            if (isClaudeCodeSignIn(providerId)) return yield* refuse('claude-code-sign-in');
+            yield* cancel(owner);
+            yield* Effect.tryPromise({
+              try: () => config.models.logout(providerId),
+              catch: (error) => error,
             });
-          const notify = (event: AuthEvent) => {
-            if (!live()) return;
-            if (event.type === 'auth_url') {
-              flow.url = validateProviderUrl(event.url);
-              flow.state = {
-                ...flow.state,
-                canOpenUrl: true,
-                message: 'Open the provider sign-in page to continue.',
-              };
-            } else
-              flow.state = {
-                ...flow.state,
-                message: 'Waiting for the provider to finish sign-in…',
-              };
-            changed();
-          };
-          flow.completion = config.models
-            .login(
-              providerId,
-              providerId === 'openai' ? 'oauth' : 'api_key',
-              { signal: abort.signal, prompt, notify },
-              { agentName: 'Moonbase', getDeviceId: () => config.deviceId },
-            )
-            .then(
-              () => {
-                flow.state = {
-                  ...flow.state,
-                  state: 'completed',
-                  prompt: null,
-                  canOpenUrl: false,
-                  message: 'Provider is configured.',
-                };
-              },
-              () => {
-                flow.state = {
-                  ...flow.state,
-                  state: abort.signal.aborted ? 'cancelled' : 'failed',
-                  prompt: null,
-                  canOpenUrl: false,
-                  message: abort.signal.aborted ? 'Setup cancelled.' : unavailable().message,
-                };
-              },
-            )
-            .finally(() => {
-              flow.answer = undefined;
-              flow.url = undefined;
-              changed();
-            });
-        } else if (operation === 'answerProviderPrompt') {
-          const { flowId, promptId, answer } = value as ProviderInput<'answerProviderPrompt'>;
-          const flow = getCurrentFlow(owner, flowId),
-            pending = flow.answer;
-          if (!pending || pending.id !== promptId) refuse('prompt-obsolete');
-          if (!answer.trim() || (pending.options && !pending.options.includes(answer)))
-            refuse('invalid-answer');
-          pending.resolve(answer);
-        } else if (operation === 'cancelProviderLogin') {
-          await cancel(owner, (value as ProviderInput<'cancelProviderLogin'>).flowId);
-        } else if (operation === 'openProviderUrl') {
-          const url = getProviderUrl(owner, (value as ProviderInput<'openProviderUrl'>).flowId);
-          if (!config.openUrl)
-            throw new ProviderSetupUnavailableError({ reason: 'client-opens-links' });
-          await config.openUrl(url);
-        } else if (operation === 'logoutProvider') {
-          const { providerId } = value as ProviderInput<'logoutProvider'>;
-          if (!localProviderIds.includes(providerId as (typeof localProviderIds)[number]))
-            refuse('unknown-provider');
-          if (authKinds[providerId] === 'claude_code') refuse('claude-code-sign-in');
-          await cancel(owner);
-          await config.models.logout(providerId);
-        }
-        if (operation !== 'getProviders' && operation !== 'openProviderUrl') changed();
-        try {
-          // The state carries the provider SDK's catalog and sign-in prompts, which enter here.
-          return decodeProviderOutput(operation, await getStatus(owner));
-        } catch (error) {
-          if (startedFlow) {
-            await cancelFlow(startedFlow);
-            if (owners.get(owner) === startedFlow) owners.delete(owner);
           }
-          throw error;
-        }
-      };
-      const service: ProviderSetupService['Service'] = {
+          if (operation !== 'getProviders' && operation !== 'openProviderUrl') yield* changed;
+          return yield* getStatus(owner, operation).pipe(
+            Effect.tapError(() =>
+              started === undefined
+                ? Effect.void
+                : Effect.gen(function* () {
+                    if ((yield* SubscriptionRef.get(setup)).owners.get(owner)?.state.id !== started)
+                      return;
+                    yield* cancelFlow(owner);
+                    yield* SubscriptionRef.update(setup, (s) => {
+                      if (s.owners.get(owner)?.state.id !== started) return s;
+                      const owners = new Map(s.owners);
+                      owners.delete(owner);
+                      return { ...s, owners };
+                    });
+                  }),
+            ),
+          );
+        });
+
+      const operations: readonly ProviderCommand[] = [
+        'getProviders',
+        'startProviderLogin',
+        'answerProviderPrompt',
+        'cancelProviderLogin',
+        'openProviderUrl',
+        'logoutProvider',
+      ];
+      return {
         forOwner: (owner) =>
           Object.fromEntries(
-            [
-              'getProviders',
-              'startProviderLogin',
-              'answerProviderPrompt',
-              'cancelProviderLogin',
-              'openProviderUrl',
-              'logoutProvider',
-            ].map((operation) => [
+            operations.map((operation) => [
               operation,
-              (input: never) =>
-                Effect.tryPromise({
-                  try: () => invoke(owner, operation as ProviderCommand, input),
-                  catch: safeError,
-                }),
+              (input: never) => invoke(owner, operation, input).pipe(Effect.mapError(safeError)),
             ]),
           ) as ProviderSetupHandlers,
         releaseOwner: (owner) =>
-          Effect.tryPromise({
-            try: async () => {
-              released.add(owner);
-              for (const old of released) {
-                if (released.size <= maximumReleasedOwners) break;
-                released.delete(old);
-              }
-              await dropOwner(owner);
-            },
-            catch: unavailable,
-          }),
+          SubscriptionRef.update(setup, (s) => {
+            const released = new Set(s.released);
+            released.add(owner);
+            for (const old of released) {
+              if (released.size <= maximumReleasedOwners) break;
+              released.delete(old);
+            }
+            return { ...s, released };
+          }).pipe(Effect.andThen(dropOwner(owner)), Effect.andThen(changed)),
         watch: (owner) =>
-          readOnChange(
-            (listener) => {
-              listeners.add(listener);
-              return () => {
-                listeners.delete(listener);
-              };
-            },
-            () => invoke(owner, 'getProviders', {} as never),
-            safeError,
+          SubscriptionRef.changes(setup).pipe(
+            // Changes during a read start one more; a consumer behind holds only the latest.
+            Stream.buffer({ capacity: 1, strategy: 'sliding' }),
+            Stream.mapEffect(() => invoke(owner, 'getProviders', {} as never)),
+            Stream.mapError(safeError),
+            Stream.buffer({ capacity: 1, strategy: 'sliding' }),
           ),
         getProviderUrl: (owner, flowId) =>
-          Effect.tryPromise({
-            try: async () => {
-              if (released.has(owner)) refuse('owner-released');
-              // Reading the URL is use: the owner keeps its flow as when it polls.
-              await sweepOwners(owner);
-              return getProviderUrl(owner, flowId);
-            },
-            catch: safeError,
-          }),
-      };
-      return Context.make(ProviderSetupService, service).pipe(
-        Context.add(ProviderSetupChanges, {
-          subscribe: (listener) => {
-            listeners.add(listener);
-            return () => {
-              listeners.delete(listener);
-            };
-          },
-        }),
-      );
+          requireHeld(owner).pipe(
+            // Reading the URL is use: the owner keeps its flow as when it polls.
+            Effect.andThen(sweepOwners(owner)),
+            Effect.andThen(getProviderUrl(owner, flowId)),
+            Effect.mapError(safeError),
+          ),
+      } satisfies ProviderSetupService['Service'];
     }),
   );
+
+/** A flow whose sign-in ended `as`: nothing left to answer or open. */
+function settleFlow(flow: Flow, as: 'completed' | 'cancelled' | 'failed'): Flow {
+  const messages = {
+    completed: 'Provider is configured.',
+    cancelled: 'Setup cancelled.',
+    failed: unavailable().message,
+  };
+  return {
+    state: { ...flow.state, state: as, prompt: null, canOpenUrl: false, message: messages[as] },
+  };
+}

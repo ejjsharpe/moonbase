@@ -51,6 +51,7 @@
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "1.4.0",
+    "@effect/platform-node": "4.1.0",
     "@moonbase/effect": "workspace:*",
     "@types/mdast": "4.0.4",
     "electron": "45.1.0",

@@ -1,5 +1,6 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { Effect } from 'effect';
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -85,7 +86,7 @@ export function createFauxProviders(directory: string): DaemonProviders {
     provider.setResponses(Array.from({ length: 256 }, () => (_context, options) => step(options)));
   script(faux);
   return {
-    keySource: createMemoryKeySource(),
+    keySource: Effect.succeed(createMemoryKeySource()),
     installProviders: (models) => {
       models.setProvider(faux.provider);
       // Every provider setup offers is faux too: sign-ins prompt and store a credential, and none

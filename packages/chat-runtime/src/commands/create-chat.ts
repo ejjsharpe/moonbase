@@ -2,21 +2,57 @@ import { realpath, rmdir, stat } from 'node:fs/promises';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import { configure } from '@earendil-works/pi-durable';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/models';
+import { DateTime, Effect } from 'effect';
 import type { ChatInput, ChatOutput } from '@moonbase/contracts/chat';
 import { InvalidChatRequestError, type ChatError } from '@moonbase/contracts/chat-errors';
 import { UncertainError } from '@moonbase/contracts/errors';
 import { RequestReusedError } from '@moonbase/contracts/host-errors';
 import { makeChatFolder } from '../chat-folders.ts';
-import { Metadata, Request, key, type ChatSettings } from '../documents.ts';
+import { summarizeConversation } from '../chat-list/list-chats.ts';
+import {
+  Metadata,
+  Request,
+  getSettings,
+  key,
+  readOwnedMetadata,
+  type ChatSettings,
+} from '../documents.ts';
 import { decodeStoredRequest } from '../stored-records.ts';
 import type { Host } from './chat-host.ts';
+import { callHarness } from './harness-call.ts';
 import { safeError } from './safe-error.ts';
 
-export async function createChat(
+/** Creates a chat once per request; a retry of the request returns the chat it made. */
+export function createChat(
   host: Host,
   d: ChatInput<'createChat'>,
+): Effect.Effect<ChatOutput<'createChat'>, ChatError> {
+  return Effect.gen(function* () {
+    yield* host.checkSession(d.session);
+    const now = yield* DateTime.now;
+    return yield* callHarness(() => createOnce(host, d, now), true);
+  });
+}
+const summarize = (
+  host: Host,
+  conversationId: string,
+  meta: Parameters<typeof getSettings>[0] & {
+    title: string;
+    createdAt: string;
+    settledAt?: string;
+  },
+) =>
+  summarizeConversation(
+    { host: host.config.host, actorId: host.config.actorId },
+    conversationId,
+    meta,
+    getSettings(meta),
+  );
+async function createOnce(
+  host: Host,
+  d: ChatInput<'createChat'>,
+  now: DateTime.Utc,
 ): Promise<ChatOutput<'createChat'>> {
-  host.session(d.session);
   const binding = JSON.stringify({ operation: 'createChat', ...d });
   const existing = await host.harness.snapshot(
     Request,
@@ -29,9 +65,13 @@ export async function createChat(
     if (existing.conversationId)
       return {
         requestId: d.requestId,
-        conversation: host.summary(
+        conversation: summarize(
+          host,
           existing.conversationId,
-          await host.metadata({ ...d.session, conversationId: existing.conversationId }),
+          await readOwnedMetadata(host.harness, host.identity, {
+            ...d.session,
+            conversationId: existing.conversationId,
+          }),
         ),
       };
   }
@@ -55,7 +95,7 @@ export async function createChat(
   await host.config.approveCreation?.(requested);
   if (requested.cwd !== undefined) settings = { ...requested, cwd: requested.cwd };
   else {
-    ownFolder = await makeChatFolder(host.config.chatFolders!, d.title);
+    ownFolder = await makeChatFolder(host.config.chatFolders!, d.title, DateTime.toDate(now));
     settings = { ...requested, cwd: ownFolder, ownFolder: true };
   }
   let conversationId: string,
@@ -87,7 +127,7 @@ export async function createChat(
       await tx.doc(Metadata, conversation.id, 'metadata', {
         identity: host.identity,
         title: d.title,
-        createdAt: new Date().toISOString(),
+        createdAt: DateTime.formatIso(now),
         settings,
       });
       request.conversationId = String(conversation.id);
@@ -106,9 +146,10 @@ export async function createChat(
   try {
     return {
       requestId: d.requestId,
-      conversation: host.summary(
+      conversation: summarize(
+        host,
         conversationId,
-        await host.metadata({ ...d.session, conversationId }),
+        await readOwnedMetadata(host.harness, host.identity, { ...d.session, conversationId }),
       ),
     };
   } catch {
