@@ -589,6 +589,10 @@ for (const [mode, action] of [
         );
         await assert.rejects(f.endpoint(), failure('Unavailable'));
         await f.client.command('disconnect', { connectionId: first.connectionId! });
+        // A helper that outlives SIGTERM keeps the failed attempt cleaning up, so this Disconnect
+        // arrived during it and ends the connection disconnected.
+        if (mode !== 'held-stderr')
+          assert.equal((await f.client.command('getConnection', {})).state, 'disconnected');
       } else if (action === 'disconnect') {
         await f.client.command('disconnect', { connectionId: first.connectionId! });
         await assert.rejects(f.endpoint(), failure('Unavailable'));

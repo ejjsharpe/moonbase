@@ -215,9 +215,11 @@ export function SshLive(input: SshConfiguration, options: SshOptions) {
                   ? [
                       undefined,
                       Option.some({
-                        snapshot: failure
-                          ? failed(g, failure)
-                          : { profile, state: 'disconnected', connectionId: null },
+                        // A Disconnect that arrived while a failed attempt cleaned up wins.
+                        snapshot:
+                          failure && s.snapshot.state !== 'disconnecting'
+                            ? failed(g, failure)
+                            : { profile, state: 'disconnected', connectionId: null },
                       }),
                     ]
                   : [undefined, Option.none()],
