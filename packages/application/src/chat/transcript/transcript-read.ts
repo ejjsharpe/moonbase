@@ -1,3 +1,4 @@
+import { ApplicationError } from '@moonbase/contracts/errors';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import type {
   ChatClient,
@@ -124,7 +125,22 @@ export function iterateTranscriptSource(
       ? { source: options.source, selection: options.selection }
       : { source: options.source },
   );
-  return iterateSource({ ...options, ...captured });
+  return toLegacyFailures(iterateSource({ ...options, ...captured }));
+}
+/**
+ * Legacy (until CL-24): Electron main, this reader's one consumer, still reads `ApplicationError`
+ * codes, so a read failure reaches it as the `ApplicationError` its code and message always were.
+ */
+async function* toLegacyFailures(
+  chunks: AsyncGenerator<TranscriptChunk>,
+): AsyncGenerator<TranscriptChunk> {
+  try {
+    yield* chunks;
+  } catch (error) {
+    if (error instanceof TranscriptReadError)
+      throw new ApplicationError({ code: error.code, message: error.message });
+    throw error;
+  }
 }
 async function* iterateSource(
   options: TranscriptIterationOptions,
