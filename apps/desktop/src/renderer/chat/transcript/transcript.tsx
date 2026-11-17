@@ -487,16 +487,18 @@ function TranscriptList({
    * Settles a dataset that opens at its end on the end as the page measures it. The list scrolls
    * there from estimated row sizes and corrects itself only after a fallback delay, so it would
    * rest short of the end meanwhile. Done once the end holds for two frames; a streaming reply
-   * moves it every frame, so after a second the list's own following carries on.
+   * moves it every frame, so after a second the list's own following carries on. A jump or
+   * restore replacing the dataset meanwhile opens at its own place, so settling stops there.
    */
   const settleEnd = useCallback(() => {
     cancelAnimationFrame(holdFrame.current);
+    const { dataset } = current.current;
     let frames = 0,
       still = 0;
     const settle = () => {
       const ref = list.current,
         node = ref?.getScrollableNode();
-      if (!ref || !node) return;
+      if (!ref || !node || current.current.dataset !== dataset) return;
       const end = node.scrollHeight - node.clientHeight;
       if (Math.abs(end - node.scrollTop) >= 1) {
         still = 0;
