@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { createMoonbaseApplication, type MoonbaseApplication } from '@moonbase/application';
+import { Effect } from 'effect';
+import { makeApplication } from '../../runtime/application-fixture.ts';
 import type { TranscriptView } from '@moonbase/application/chat';
 import type { ChatSnapshot, ChatTranscriptSource } from '@moonbase/contracts/chat';
 import { transcriptFixture, transcriptController, digest, part } from './transcript-fixture.ts';
@@ -36,17 +37,6 @@ function publishLive(
   f.publish(snapshot);
   return { source, descriptor, snapshot };
 }
-async function cleanupSettled(app: MoonbaseApplication) {
-  if (!app.getSnapshot().cleanup.pending.length) return;
-  await new Promise<void>((resolve) => {
-    const off = app.subscribe(() => {
-      if (!app.getSnapshot().cleanup.pending.length) {
-        off();
-        resolve();
-      }
-    });
-  });
-}
 
 test('application restores the live row and expansions across panel and named-controller replacement, never restart', async () => {
   const a = transcriptFixture(64),
@@ -55,35 +45,36 @@ test('application restores the live row and expansions across panel and named-co
   publishLive(b);
   const options = {
     chatTargets: [
-      { id: 'A', label: 'A', acquire: async () => a.dependencies },
-      { id: 'B', label: 'B', acquire: async () => b.dependencies },
+      { id: 'A', label: 'A', acquire: Effect.sync(() => a.dependencies) },
+      { id: 'B', label: 'B', acquire: Effect.sync(() => b.dependencies) },
     ],
   };
   const view: TranscriptView = {
     anchor: { key: 'live:submission', offset: -17.5 },
     expanded: ['thought', 'tool'],
   };
-  const app = await createMoonbaseApplication(options);
+  const app = makeApplication(options);
+  await app.start();
   try {
-    let chat = app.chat!;
+    let chat = (await app.chat())!;
     await chat.start();
     await chat.select(a.target);
     assert.equal(chat.backendId, 'A');
     chat.setTranscriptView(view);
     const raw = a.storage.value;
-    assert(app.closeChat());
-    await cleanupSettled(app);
-    chat = (await app.openChat())!;
+    assert(await app.app((a) => a.closeChat));
+    await app.cleanupSettled();
+    chat = (await app.app((a) => a.openChat))!;
     await chat.start();
     assert.deepEqual(chat.getSnapshot().transcript.view, view);
     assert.equal(a.calls.filter((call) => call.operation === 'getChatHistoryAround').length, 0);
-    chat = (await app.selectChatTarget('B'))!;
+    chat = (await app.app((a) => a.selectChatTarget('B')))!;
     await chat.start();
     await chat.select(b.target);
     assert.equal(chat.backendId, 'B');
     assert.equal(chat.getSnapshot().transcript.view.anchor, null, 'each backend has its own view');
     chat.setTranscriptView({ anchor: { key: 'entry:e40', offset: 0 }, expanded: [] });
-    chat = (await app.selectChatTarget('A'))!;
+    chat = (await app.app((a) => a.selectChatTarget('A')))!;
     await chat.start();
     assert.deepEqual(chat.getSnapshot().transcript.view, view);
     assert.equal(a.storage.value, raw);
@@ -91,13 +82,15 @@ test('application restores the live row and expansions across panel and named-co
   } finally {
     await app.dispose();
   }
-  const restarted = await createMoonbaseApplication(options);
+  const restarted = makeApplication(options);
+  await restarted.start();
+  const reopened = (await restarted.chat())!;
   try {
-    await restarted.chat!.start();
-    assert.equal(restarted.chat!.getSnapshot().selected!.conversationId, a.target.conversationId);
-    assert.equal(restarted.chat!.getSnapshot().transcript.view.anchor, null);
-    assert.deepEqual(restarted.chat!.getSnapshot().transcript.view.expanded, []);
-    assert.equal(restarted.chat!.getSnapshot().transcript.atLatest, true);
+    await reopened.start();
+    assert.equal(reopened.getSnapshot().selected!.conversationId, a.target.conversationId);
+    assert.equal(reopened.getSnapshot().transcript.view.anchor, null);
+    assert.deepEqual(reopened.getSnapshot().transcript.view.expanded, []);
+    assert.equal(reopened.getSnapshot().transcript.atLatest, true);
   } finally {
     await restarted.dispose();
   }

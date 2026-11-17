@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { makeWorkspaceClient } from './workspace-client-fixture.ts';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { fixture, rejects } from './workspace-fixture.ts';
@@ -215,7 +215,7 @@ test('a plain folder opens, and a folder inside a repository is refused, with a 
       gitExecutable: git,
     }),
   );
-  const client = makeEditorClient(runtime);
+  const client = makeWorkspaceClient(runtime);
   try {
     const root = folder(f);
     // In the user's locale the English text a locale-dependent check expects is gone.

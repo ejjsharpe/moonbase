@@ -35,16 +35,17 @@ const exists = (page: Page, path: string) =>
 /** Holds the first editor's next mutation until `release()`. */
 async function holdNextMutation(page: Page) {
   await page.evaluate(() => {
-    const editor = window.demo.first,
-      mutate = editor.mutate.bind(editor);
+    const { client } = window.demo,
+      command = client.command;
     delete document.body.dataset.mutationReply;
-    editor.mutate = async (input) => {
-      editor.mutate = mutate;
+    client.command = async (name, input, options) => {
+      if (name !== 'mutate') return command(name, input, options);
+      client.command = command;
       await new Promise<void>((resolve) => {
         window.addEventListener('release-mutation', () => resolve(), { once: true });
         document.body.dataset.mutationReply = 'waiting';
       });
-      return mutate(input);
+      return command(name, input, options);
     };
   });
   return {
@@ -492,9 +493,11 @@ test('an edit ends with its checkout, and a late reply after disposal opens noth
   const second = page.getByRole('region', { name: 'Second editor', exact: true });
   await page.evaluate(() => {
     const editor = window.demo.second,
-      mutate = editor.mutate.bind(editor);
-    editor.mutate = async (input) => {
-      const result = await mutate(input);
+      { client } = window.demo,
+      command = client.command;
+    client.command = async (name, input, options) => {
+      const result = await command(name, input, options);
+      if (name !== 'mutate') return result;
       await new Promise<void>((resolve) => {
         window.addEventListener('release-create', () => resolve(), { once: true });
         document.body.dataset.createReply = 'waiting';

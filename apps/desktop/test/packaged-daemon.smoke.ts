@@ -12,7 +12,7 @@ import {
   makeChatClient,
   makeConnectionClient,
   makeProviderSetupClient,
-} from '@moonbase/application/runtime/clients';
+} from '@moonbase/application/chat/clients';
 import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
 import { RemoteDaemonLive, RemoteWorkspaceHostLive } from '@moonbase/daemon-protocol/remote';
 import { findDaemonCommand } from '../src/main/daemon/daemon-command.ts';

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { getParentPath, getPathName } from '@moonbase/contracts/paths';
 import type { CheckoutTarget, DirectoryListing } from '@moonbase/contracts/workspace';
-import { checkoutKey, readOwn, type EditorController } from '@moonbase/application/editor';
+import { checkoutKey, readOwn } from '@moonbase/application/editor';
 import { editMutations, type TreeEditKind } from './file-commands.ts';
-import { copyName } from './file-clipboard.ts';
+import { copyName } from './paste-plan.ts';
 import type { NameCommit } from './files-tree-name.tsx';
 import {
   isListedDirectory,
@@ -14,6 +14,7 @@ import {
 import { listFoldersToExpand, type MoveRecord } from './files-tree-drop.ts';
 import { canRefocus, type TreeFocus } from './use-tree-focus.ts';
 import type { RunMutation } from '../mutation-runner.tsx';
+import type { EditorActions } from '../editor-actions.ts';
 
 /**
  * A name being typed in the tree: renaming or duplicating `path`, or creating in folder `path`.
@@ -55,7 +56,7 @@ const isCreate = (edit: TreeEdit) =>
  * `editPath` the row showing the field.
  */
 export function useTreeEdit({
-  controller,
+  actions,
   checkout,
   listings,
   expanded,
@@ -68,7 +69,7 @@ export function useTreeEdit({
   createRequest,
   onCreateRequestTaken,
 }: {
-  controller: EditorController;
+  actions: EditorActions;
   checkout: CheckoutTarget;
   listings: Readonly<Record<string, DirectoryListing>>;
   expanded: ReadonlySet<string>;
@@ -109,20 +110,19 @@ export function useTreeEdit({
   }, [sourceGone]);
   /** Starts typing a name: expands a folder created in, and selects an entry renamed. */
   function startEdit(kind: TreeEditKind, path: string) {
-    const current = readOwn(controller.getSnapshot().recovery.views, checkout.checkoutId)?.tree;
+    const current = readOwn(actions.getSnapshot().recovery.views, checkout.checkoutId)?.tree;
     if (!current) return;
     if (kind === 'create-file' || kind === 'create-directory') {
       const opening = listFoldersToExpand(path).filter(
         (folder) => !current.expanded.includes(folder),
       );
-      if (opening.length)
-        controller.tree(checkout, { expanded: [...current.expanded, ...opening] });
-      for (const folder of opening) void controller.list(checkout, folder).catch(controller.report);
+      if (opening.length) actions.tree(checkout, { expanded: [...current.expanded, ...opening] });
+      for (const folder of opening) void actions.list(checkout, folder).catch(actions.report);
     } else {
       setAnchor(path);
-      controller.tree(checkout, { focus: path, selected: [path] });
+      actions.tree(checkout, { focus: path, selected: [path] });
     }
-    const started = readOwn(controller.getSnapshot().recovery.views, checkout.checkoutId)!.tree;
+    const started = readOwn(actions.getSnapshot().recovery.views, checkout.checkoutId)!.tree;
     setEdit({
       kind,
       path,
@@ -139,7 +139,7 @@ export function useTreeEdit({
   function endEdit(ended: TreeEdit, focusPath: string | undefined, focusTree: boolean) {
     setEdit((current) => (current?.id === ended.id ? null : current));
     if (!mounted.current) return;
-    const now = readOwn(controller.getSnapshot().recovery.views, checkout.checkoutId)?.tree;
+    const now = readOwn(actions.getSnapshot().recovery.views, checkout.checkoutId)?.tree;
     const untouched =
       !!now &&
       now.focus === ended.focus &&
@@ -148,9 +148,9 @@ export function useTreeEdit({
     if (focusPath && untouched)
       try {
         setAnchor(focusPath);
-        controller.tree(checkout, { focus: focusPath, selected: [focusPath] });
+        actions.tree(checkout, { focus: focusPath, selected: [focusPath] });
       } catch (error) {
-        controller.report(error);
+        actions.report(error);
       }
     if (focusTree && focus.focusStayed()) focus.refocusTree();
   }
@@ -174,7 +174,7 @@ export function useTreeEdit({
     };
     const invalid = (message: string) => {
       if (enter) return message;
-      controller.report(message);
+      actions.report(message);
       return end();
     };
     // Names are taken as typed, spaces included, but one of only spaces is no name.
@@ -202,9 +202,9 @@ export function useTreeEdit({
       if (current.kind === 'rename')
         onMoved({ kind: 'rename', moves: [{ from: current.path, to: destination, directory }] });
       if (current.kind === 'create-file' && mounted.current)
-        void controller
+        void actions
           .open({ checkout, path: destination }, { view: 'file', intent: 'keep' })
-          .catch(controller.report);
+          .catch(actions.report);
       return end(destination);
     }
     if (error) return error;

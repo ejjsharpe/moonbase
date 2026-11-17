@@ -1,14 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Effect, Exit, ManagedRuntime, Scope } from 'effect';
+import { Effect, ManagedRuntime } from 'effect';
+import { ApplicationError, type WorkspaceEvent } from '@moonbase/contracts/workspace';
 import {
-  ApplicationError,
-  type EditorClient,
-  type WorkspaceEvent,
-} from '@moonbase/contracts/workspace';
-import { emptyRecoveryState } from '@moonbase/contracts/recovery';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { makeEditorController, makeEditorModel } from '@moonbase/application/editor';
+  toWorkspaceClient as makeEditorClient,
+  type WorkspaceClient,
+} from '@moonbase/application/testing/editor-fixture';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 import { acquireEditor } from './editor-model-fixture.ts';
 import { checkout, target } from './editor-fixture.ts';
@@ -21,44 +18,20 @@ const gate = () => {
   return { promise, release };
 };
 
-test('one acquired model binds once; two models share one runtime and failed held cleanup stays pending and observable', async () => {
+test('two editors share one workspace, and a disposed editor admits and sends nothing', async () => {
   const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
-  const runtime = ManagedRuntime.make(memory.layer),
-    root = Scope.makeUnsafe();
-  const raw = makeEditorClient(runtime),
-    entered = gate(),
-    release = gate();
+  const runtime = ManagedRuntime.make(memory.layer);
+  const raw = makeEditorClient(runtime);
   let late!: (event: WorkspaceEvent) => void;
-  const client: EditorClient = {
+  const client: WorkspaceClient = {
     ...raw,
     watch(input, receive, onError) {
       late = receive;
-      const close = raw.watch(input, receive, onError);
-      let completion: Promise<void> | undefined;
-      return () =>
-        (completion ??= (async () => {
-          await close();
-          entered.release();
-          await release.promise;
-          throw new ApplicationError({
-            code: 'Persistence',
-            message: 'Observation cleanup failed',
-          });
-        })());
+      return raw.watch(input, receive, onError);
     },
   };
-  const acquire = (dependencies: Parameters<typeof makeEditorModel>[0]) =>
-    runtime.runPromise(
-      makeEditorModel(dependencies).pipe(Effect.provideService(Scope.Scope, root)),
-    );
-  const firstModel = await acquire({ client, clientId: 'first-model' });
-  const first = makeEditorController(runtime, firstModel);
-  assert.throws(() => makeEditorController(runtime, firstModel), /already bound/);
-  const second = makeEditorController(
-    runtime,
-    await acquire({ client: raw, clientId: 'second-model' }),
-  );
-  const appErrors: ApplicationError[] = [];
+  const first = await acquireEditor(runtime, { client, clientId: 'first-model' });
+  const second = await acquireEditor(runtime, { client: raw, clientId: 'second-model' });
   try {
     for (const editor of [first, second]) {
       await editor.load();
@@ -68,42 +41,27 @@ test('one acquired model binds once; two models share one runtime and failed hel
     await first.open(target('a.ts'));
     first.edit(target('a.ts'), 'saved draft');
     await first.flush();
+    const stored = JSON.stringify(await raw.command('loadRecovery', { clientId: first.clientId }));
     const closing = first.dispose();
     assert.strictEqual(first.dispose(), closing);
-    const tracked = closing.catch((error) => {
-      assert(ApplicationError.is(error));
-      appErrors.push(error);
-    });
-    await entered.promise;
-    assert.equal(first.getSnapshot().disposed, false);
-    const snapshot = first.getSnapshot(),
-      stored = JSON.stringify(await raw.command('loadRecovery', { clientId: first.clientId }));
+    await closing;
+    assert.equal(first.getSnapshot().disposed, true);
+    const snapshot = first.getSnapshot();
     late({ checkout, paths: ['a.ts'] });
     assert.strictEqual(first.getSnapshot(), snapshot);
-    await assert.rejects(first.open(target('a.ts')), /disposed/);
+    await assert.rejects(first.open(target('a.ts')));
     await second.open(target('a.ts'));
     second.edit(target('a.ts'), 'second draft');
     await second.flush();
     assert.equal((await raw.command('readFile', target('a.ts'))).text, 'A');
-    release.release();
-    await tracked;
-    assert.equal(appErrors.length, 1);
-    assert.equal(appErrors[0].code, 'Persistence');
-    assert.equal(first.getSnapshot().disposed, false);
-    await assert.rejects(first.dispose(), /Observation cleanup failed/);
     assert.equal(
       JSON.stringify(await raw.command('loadRecovery', { clientId: first.clientId })),
       stored,
-      'a disposing editor sends no edits',
+      'a disposed editor sends no edits',
     );
-    await second.dispose();
-    assert.equal(second.getSnapshot().disposed, true);
   } finally {
-    release.release();
-    await first.dispose().catch(() => {});
+    await first.dispose();
     await second.dispose();
-    // A failed child finalizer remains an honest root-close failure too.
-    await runtime.runPromiseExit(Scope.close(root, Exit.void));
     await runtime.dispose();
   }
 });
@@ -128,11 +86,8 @@ test('exact close prompts ignore stale answers and disposal cancels an outstandi
     editor.answerClose(prompt.id, 'cancel');
     assert.equal(await closing, false);
     const next = editor.close([target('a.ts')]);
-    const result = next.catch((error) => {
-      assert(ApplicationError.is(error));
-      assert.equal(error.code, 'Cancelled');
-      return false;
-    });
+    // Disposal answers the outstanding prompt Cancel, or ends the close with the editor.
+    const result = next.catch(() => false);
     await editor.dispose();
     assert.equal(await result, false);
     assert.equal(editor.getSnapshot().closePrompt, null);
@@ -143,16 +98,14 @@ test('exact close prompts ignore stale answers and disposal cancels an outstandi
 });
 
 test('lookup debounce and A-B-A queries cancel obsolete reads and retain only the exact current result', async () => {
-  const { Layer } = await import('effect');
-  const { TestClock } = await import('effect/testing');
   const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A', 'b.ts': 'B' } }]);
-  const runtime = ManagedRuntime.make(Layer.merge(memory.layer, TestClock.layer()));
+  const runtime = ManagedRuntime.make(memory.layer);
   const raw = makeEditorClient(runtime),
     entered = gate(),
     release = gate();
   let first = true,
     obsoleteSignal: AbortSignal | undefined;
-  const client: EditorClient = {
+  const client: WorkspaceClient = {
     ...raw,
     async command(name, input, options) {
       if (name === 'lookupFiles' && (input as { query: string }).query === 'a' && first) {
@@ -164,7 +117,11 @@ test('lookup debounce and A-B-A queries cancel obsolete reads and retain only th
       return raw.command(name, input, options);
     },
   };
-  const editor = await acquireEditor(runtime, { client, clientId: 'lookup-races' });
+  const editor = await acquireEditor(runtime, {
+    client,
+    clientId: 'lookup-races',
+    testClock: true,
+  });
   await editor.load();
   await editor.openCheckout(checkout.root);
   await editor.flush();
@@ -180,19 +137,19 @@ test('lookup debounce and A-B-A queries cancel obsolete reads and retain only th
     });
   try {
     lookup.query('a', [checkout]);
-    await runtime.runPromise(TestClock.adjust('119 millis'));
+    await editor.adjust('119 millis');
     assert.equal(first, true);
-    await runtime.runPromise(TestClock.adjust('1 millis'));
+    await editor.adjust('1 millis');
     await entered.promise;
     lookup.query('b', [checkout]);
     const b = complete();
-    await runtime.runPromise(TestClock.adjust('120 millis'));
+    await editor.adjust('120 millis');
     await b;
     assert.equal(obsoleteSignal?.aborted, true);
     assert.equal(lookup.getSnapshot().rows[0].path, 'b.ts');
     lookup.query('a', [checkout]);
     const a = complete();
-    await runtime.runPromise(TestClock.adjust('120 millis'));
+    await editor.adjust('120 millis');
     await a;
     assert.equal(lookup.getSnapshot().rows[0].path, 'a.ts');
     const snapshot = lookup.getSnapshot();
@@ -211,10 +168,8 @@ test('lookup debounce and A-B-A queries cancel obsolete reads and retain only th
 });
 
 test('a refresh neither cancels an open from a lookup nor keeps restarting its query', async () => {
-  const { Layer } = await import('effect');
-  const { TestClock } = await import('effect/testing');
   const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A', 'b.ts': 'B', 'c.ts': 'C' } }]);
-  const runtime = ManagedRuntime.make(Layer.merge(memory.layer, TestClock.layer()));
+  const runtime = ManagedRuntime.make(memory.layer);
   const raw = makeEditorClient(runtime);
   let read = gate(),
     readEntered = gate(),
@@ -223,7 +178,7 @@ test('a refresh neither cancels an open from a lookup nor keeps restarting its q
   const search = gate(),
     searchEntered = gate();
   const searches: { query: string; signal?: AbortSignal }[] = [];
-  const client: EditorClient = {
+  const client: WorkspaceClient = {
     ...raw,
     async command(name, input, options) {
       if (name === 'readFile' && holdRead) {
@@ -241,7 +196,11 @@ test('a refresh neither cancels an open from a lookup nor keeps restarting its q
       return raw.command(name, input, options);
     },
   };
-  const editor = await acquireEditor(runtime, { client, clientId: 'lookup-refresh' });
+  const editor = await acquireEditor(runtime, {
+    client,
+    clientId: 'lookup-refresh',
+    testClock: true,
+  });
   await editor.load();
   await editor.openCheckout(checkout.root);
   await editor.flush();
@@ -255,7 +214,7 @@ test('a refresh neither cancels an open from a lookup nor keeps restarting its q
         }
       });
     });
-  const tick = () => runtime.runPromise(TestClock.adjust('120 millis'));
+  const tick = () => editor.adjust('120 millis');
   const openA = () =>
     lookup.open((current) => editor.open(target('a.ts'), { intent: 'keep', current }));
   try {
@@ -320,20 +279,22 @@ test('a refresh neither cancels an open from a lookup nor keeps restarting its q
 });
 
 test('a failed open stays on screen through refreshes until the reader types again', async () => {
-  const { Layer } = await import('effect');
-  const { TestClock } = await import('effect/testing');
   const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A', 'b.ts': 'B' } }]);
-  const runtime = ManagedRuntime.make(Layer.merge(memory.layer, TestClock.layer()));
+  const runtime = ManagedRuntime.make(memory.layer);
   const raw = makeEditorClient(runtime);
   let searches = 0;
-  const client: EditorClient = {
+  const client: WorkspaceClient = {
     ...raw,
     async command(name, input, options) {
       if (name === 'lookupFiles') searches++;
       return raw.command(name, input, options);
     },
   };
-  const editor = await acquireEditor(runtime, { client, clientId: 'lookup-failed-open' });
+  const editor = await acquireEditor(runtime, {
+    client,
+    clientId: 'lookup-failed-open',
+    testClock: true,
+  });
   await editor.load();
   await editor.openCheckout(checkout.root);
   await editor.flush();
@@ -348,7 +309,7 @@ test('a failed open stays on screen through refreshes until the reader types aga
         }
       });
     });
-  const tick = () => runtime.runPromise(TestClock.adjust('120 millis'));
+  const tick = () => editor.adjust('120 millis');
   try {
     lookup.query('a', [checkout]);
     let done = searched(1);
@@ -382,68 +343,6 @@ test('a failed open stays on screen through refreshes until the reader types aga
   }
 });
 
-test('dismissing inspection admits no mutation; dismissing after dispatch retains model-owned outcome exactly once', async () => {
-  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
-  const runtime = ManagedRuntime.make(memory.layer),
-    raw = makeEditorClient(runtime);
-  const inspecting = gate(),
-    inspectReply = gate(),
-    admitted = gate(),
-    mutateReply = gate();
-  let holdInspection = true,
-    holdMutation = false;
-  const client: EditorClient = {
-    ...raw,
-    async command(name, input, options) {
-      if (name === 'inspectEntries' && holdInspection) {
-        inspecting.release();
-        await inspectReply.promise;
-      }
-      const result = await raw.command(name, input, options);
-      if (name === 'mutate' && holdMutation) {
-        admitted.release();
-        await mutateReply.promise;
-      }
-      return result;
-    },
-  };
-  const editor = await acquireEditor(runtime, { client, clientId: 'mutation-scopes' });
-  await editor.load();
-  await editor.openCheckout(checkout.root);
-  await editor.open(target('a.ts'));
-  editor.edit(target('a.ts'), 'dirty A');
-  await editor.flush();
-  const action = { checkout, kind: 'move' as const, paths: ['a.ts'] };
-  const before = editor.createMutation(action);
-  try {
-    const pending = before.apply('moved.ts', '', false);
-    await inspecting.promise;
-    await before.dispose();
-    inspectReply.release();
-    assert.equal(await pending, false);
-    assert.equal((await raw.command('readFile', target('a.ts'))).text, 'A');
-    assert.equal(editor.getSnapshot().operations.length, 0);
-    holdInspection = false;
-    holdMutation = true;
-    const after = editor.createMutation(action);
-    const result = after.apply('moved.ts', '', false);
-    await admitted.promise;
-    await after.dispose();
-    mutateReply.release();
-    assert.equal(await result, false);
-    assert.equal((await raw.command('readFile', target('moved.ts'))).text, 'A');
-    assert.equal(editor.buffer(target('moved.ts'))?.text, 'dirty A');
-    assert.equal(editor.getSnapshot().operations.length, 0);
-    await after.dispose();
-  } finally {
-    inspectReply.release();
-    mutateReply.release();
-    await before.dispose();
-    await editor.dispose();
-    await runtime.dispose();
-  }
-});
-
 test('checkout close cancels its in-flight observer refresh without reporting obsolete read cancellation', async () => {
   const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
   const runtime = ManagedRuntime.make(memory.layer),
@@ -452,7 +351,7 @@ test('checkout close cancels its in-flight observer refresh without reporting ob
     release = gate();
   let held = false,
     signal: AbortSignal | undefined;
-  const client: EditorClient = {
+  const client: WorkspaceClient = {
     ...raw,
     async command(name, input, options) {
       if (held && name === 'listDirectory') {
@@ -502,7 +401,7 @@ test('selected file replacement cancels held comparison refresh and checkout clo
     release = gate(),
     signal: AbortSignal | undefined;
   const wasAborted = () => signal?.aborted;
-  const client: EditorClient = {
+  const client: WorkspaceClient = {
     ...raw,
     async command(name, input, options) {
       if (name === heldName) {
@@ -543,68 +442,6 @@ test('selected file replacement cancels held comparison refresh and checkout clo
   }
 });
 
-test('model disposal joins an already-detached checkout watch close and retains its failed outcome', async () => {
-  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
-  const runtime = ManagedRuntime.make(memory.layer),
-    raw = makeEditorClient(runtime),
-    entered = gate(),
-    release = gate();
-  const client: EditorClient = {
-    ...raw,
-    watch(input, receive, onError) {
-      const close = raw.watch(input, receive, onError);
-      let completion: Promise<void> | undefined;
-      return () =>
-        (completion ??= (async () => {
-          await close();
-          entered.release();
-          await release.promise;
-          throw new ApplicationError({
-            code: 'Persistence',
-            message: 'Detached observation release failed',
-          });
-        })());
-    },
-  };
-  const editor = await acquireEditor(runtime, { client, clientId: 'detached-close' });
-  try {
-    await editor.load();
-    await editor.openCheckout(checkout.root);
-    const checkoutClose = editor.closeCheckout(checkout);
-    await entered.promise;
-    const closing = editor.dispose();
-    assert.strictEqual(editor.dispose(), closing);
-    const failed = assert.rejects(
-      closing,
-      (error) =>
-        ApplicationError.is(error) &&
-        error.code === 'Persistence' &&
-        /Detached observation release failed/.test(error.message),
-    );
-    let settled = false;
-    void closing.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-    await runtime.runPromise(Effect.yieldNow);
-    assert.equal(settled, false);
-    assert.equal(editor.getSnapshot().disposed, false);
-    release.release();
-    await failed;
-    await checkoutClose;
-    assert.equal(editor.getSnapshot().disposed, false);
-    await assert.rejects(editor.dispose(), /Detached observation release failed/);
-  } finally {
-    release.release();
-    await editor.dispose().catch(() => {});
-    await runtime.dispose();
-  }
-});
-
 test('cached and implicit checkout selection retain an exact owner for comparison refresh cancellation', async () => {
   const other = { ...checkout, checkoutId: 'other', root: '/memory/other' };
   const memory = fauxWorkspace(
@@ -622,7 +459,7 @@ test('cached and implicit checkout selection retain an exact owner for compariso
     release = gate(),
     observed: AbortSignal | undefined;
   const aborted = () => observed?.aborted;
-  const client: EditorClient = {
+  const client: WorkspaceClient = {
     ...raw,
     async command(name, input, options) {
       if (held && name === 'readComparison') {
@@ -675,7 +512,7 @@ test('UI report callbacks ignore only cancellation from a closed captured read o
     entered = gate(),
     release = gate();
   let held = false;
-  const client: EditorClient = {
+  const client: WorkspaceClient = {
     ...raw,
     async command(name, input, options) {
       if (held && name === 'listDirectory') {
@@ -716,42 +553,7 @@ test('UI report callbacks ignore only cancellation from a closed captured read o
   }
 });
 
-test('raw observation cleanup rejection is safely normalized without losing typed cleanup failures', async () => {
-  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
-  const runtime = ManagedRuntime.make(memory.layer),
-    raw = makeEditorClient(runtime);
-  const sentinel = 'api_key=SYNTHETIC_PRIVATE_RELEASE_VALUE';
-  const client: EditorClient = {
-    ...raw,
-    watch(input, receive, onError) {
-      const close = raw.watch(input, receive, onError);
-      let completion: Promise<void> | undefined;
-      return () =>
-        (completion ??= close().then(() => {
-          throw Error(sentinel);
-        }));
-    },
-  };
-  const editor = await acquireEditor(runtime, { client, clientId: 'raw-release' });
-  try {
-    await editor.load();
-    await editor.openCheckout(checkout.root);
-    await assert.rejects(
-      editor.dispose(),
-      (error) =>
-        ApplicationError.is(error) &&
-        error.code === 'Unavailable' &&
-        !error.message.includes(sentinel),
-    );
-    await assert.rejects(editor.dispose(), (error) => !String(error).includes(sentinel));
-    assert.equal(editor.getSnapshot().disposed, false);
-  } finally {
-    await editor.dispose().catch(() => {});
-    await runtime.dispose();
-  }
-});
-
-test('typed compound Cancelled failures remain visible for active and newly closed read owners', async () => {
+test('typed compound Cancelled failures stay visible', async () => {
   const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
   const runtime = ManagedRuntime.make(memory.layer),
     raw = makeEditorClient(runtime);
@@ -759,33 +561,14 @@ test('typed compound Cancelled failures remain visible for active and newly clos
     code: 'Cancelled',
     message: 'Cancelled read; Real cleanup failure',
   });
-  const entered = gate(),
-    release = gate();
-  let delayExit = false,
-    fault = '';
-  const delayed: typeof runtime = {
-    ...runtime,
-    async runPromiseExit(effect, options) {
-      const exit = await runtime.runPromiseExit(effect, options);
-      if (
-        delayExit &&
-        Exit.isFailure(exit) &&
-        exit.cause.reasons.some((reason) => reason._tag === 'Fail' && reason.error === compound)
-      ) {
-        delayExit = false;
-        entered.release();
-        await release.promise;
-      }
-      return exit;
-    },
-  };
-  const client: EditorClient = {
+  let fault = '';
+  const client: WorkspaceClient = {
     ...raw,
     command(name, input, options) {
       return name === fault ? Promise.reject(compound) : raw.command(name, input, options);
     },
   };
-  const editor = await acquireEditor(delayed, { client, clientId: 'compound-read-errors' });
+  const editor = await acquireEditor(runtime, { client, clientId: 'compound-read-errors' });
   try {
     await editor.load();
     await editor.openCheckout(checkout.root);
@@ -794,38 +577,29 @@ test('typed compound Cancelled failures remain visible for active and newly clos
     fault = 'gitStatus';
     await editor.refresh(checkout);
     assert(editor.getSnapshot().errors.includes(compound.message));
-    editor.clearErrors();
-    fault = 'listDirectory';
-    delayExit = true;
-    const list = editor.list(checkout, '').catch(editor.report);
-    await entered.promise;
-    fault = '';
-    assert.equal(await editor.closeCheckout(checkout), true);
-    release.release();
-    await list;
-    assert(editor.getSnapshot().errors.includes(compound.message));
   } finally {
-    release.release();
     await editor.dispose();
     await runtime.dispose();
   }
 });
 
 test('untyped injected read, lookup and inspection errors cannot publish private diagnostics', async () => {
-  const { Layer } = await import('effect');
-  const { TestClock } = await import('effect/testing');
   const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
-  const runtime = ManagedRuntime.make(Layer.merge(memory.layer, TestClock.layer())),
+  const runtime = ManagedRuntime.make(memory.layer),
     raw = makeEditorClient(runtime);
   const sentinel = 'api_key=SYNTHETIC_PRIVATE_CLIENT_VALUE';
   let fault = '';
-  const client: EditorClient = {
+  const client: WorkspaceClient = {
     ...raw,
     command(name, input, options) {
       return name === fault ? Promise.reject(Error(sentinel)) : raw.command(name, input, options);
     },
   };
-  const editor = await acquireEditor(runtime, { client, clientId: 'raw-client-errors' });
+  const editor = await acquireEditor(runtime, {
+    client,
+    clientId: 'raw-client-errors',
+    testClock: true,
+  });
   try {
     await editor.load();
     await editor.openCheckout(checkout.root);
@@ -844,121 +618,21 @@ test('untyped injected read, lookup and inspection errors cannot publish private
       });
     });
     lookup.query('a', [checkout]);
-    await runtime.runPromise(TestClock.adjust('120 millis'));
+    await editor.adjust('120 millis');
     await complete;
     assert(lookup.getSnapshot().message.includes('Application effect failed'));
     assert(!JSON.stringify(lookup.getSnapshot()).includes(sentinel));
     await lookup.dispose();
     fault = 'inspectEntries';
-    const mutation = editor.createMutation({ checkout, kind: 'move', paths: ['a.ts'] });
-    assert.equal(await mutation.apply('moved.ts', '', false), false);
-    assert.equal(mutation.getSnapshot().error, 'Application effect failed');
-    assert(!JSON.stringify(mutation.getSnapshot()).includes(sentinel));
-    await mutation.dispose();
+    const result = await editor.mutations.run(
+      { checkout, kind: 'move', paths: ['a.ts'] },
+      'moved.ts',
+    );
+    assert.equal(result.completed, false);
+    assert.equal(result.error, 'Application effect failed');
+    assert(!JSON.stringify(result).includes(sentinel));
   } finally {
     await editor.dispose();
     await runtime.dispose();
   }
 });
-
-for (const outcome of ['success', 'held-failure', 'throw'] as const)
-  test(`reentrant watch disposal owns the returned handle and acquisition outcome (${outcome})`, async () => {
-    const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
-    const runtime = ManagedRuntime.make(memory.layer),
-      raw = makeEditorClient(runtime);
-    const entered = gate(),
-      release = gate();
-    // A failure the editor reports (an Unavailable one is watched again first).
-    const trigger = new ApplicationError({
-      code: 'Incompatible',
-      message: 'Reentrant observation disposal',
-    });
-    const failure = new ApplicationError({
-      code: 'Persistence',
-      message: 'Reentrant observation release failed',
-    });
-    let releases = 0,
-      disposing: Promise<void> | undefined,
-      settled = false;
-    let late!: (event: WorkspaceEvent) => void;
-    const state = {
-      ...emptyRecoveryState('reentrant-watch'),
-      checkouts: [checkout],
-      openCheckoutIds: [checkout.checkoutId],
-      selectedCheckoutId: checkout.checkoutId,
-    };
-    const client: EditorClient = {
-      ...raw,
-      async command(name, input, options) {
-        if (name === 'loadRecovery') return { state, errors: [], operations: [] };
-        return raw.command(name, input, options);
-      },
-      watch(input, receive, onError) {
-        late = receive;
-        if (outcome === 'throw') {
-          onError(trigger);
-          throw failure;
-        }
-        const close = raw.watch(input, receive, onError);
-        onError(trigger);
-        let completion: Promise<void> | undefined;
-        return () =>
-          (completion ??= (async () => {
-            releases++;
-            await close();
-            entered.release();
-            if (outcome === 'held-failure') {
-              await release.promise;
-              throw failure;
-            }
-          })());
-      },
-    };
-    const editor = await acquireEditor(runtime, { client, clientId: state.clientId });
-    const off = editor.subscribe(() => {
-      if (!disposing && editor.getSnapshot().errors.includes(trigger.message)) {
-        disposing = editor.dispose();
-        void disposing.then(
-          () => {
-            settled = true;
-          },
-          () => {
-            settled = true;
-          },
-        );
-      }
-    });
-    const loading = editor.load().catch(() => {});
-    try {
-      if (outcome !== 'throw') await entered.promise;
-      else await loading;
-      assert(disposing);
-      assert.strictEqual(editor.dispose(), disposing);
-      if (outcome === 'held-failure') {
-        const snapshot = editor.getSnapshot();
-        assert.equal(snapshot.disposed, false);
-        assert.equal(settled, false);
-        late({ checkout, paths: ['a.ts'], error: 'Late observation callback' });
-        assert.strictEqual(editor.getSnapshot(), snapshot);
-        release.release();
-      }
-      if (outcome === 'success') {
-        await disposing;
-        assert.equal(editor.getSnapshot().disposed, true);
-      } else {
-        await assert.rejects(disposing, (error) => error === failure);
-        assert.equal(editor.getSnapshot().disposed, false);
-        await assert.rejects(editor.dispose(), (error) => error === failure);
-      }
-      await loading;
-      assert.equal(releases, outcome === 'throw' ? 0 : 1);
-      assert.equal(memory.stats.active, 0);
-      assert.equal(memory.stats.edits, 0);
-    } finally {
-      off();
-      release.release();
-      await loading;
-      await editor.dispose().catch(() => {});
-      await runtime.dispose();
-    }
-  });

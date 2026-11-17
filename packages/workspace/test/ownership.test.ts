@@ -9,8 +9,8 @@ import { Effect, Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import type { RecoveryState } from '@moonbase/contracts/recovery';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
-import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
+import { makeWorkspaceClient } from './workspace-client-fixture.ts';
+import { runApplicationEffect } from '@moonbase/application/chat/promises';
 import { reconcile } from '../src/client/reconcile.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { recordWatchDeliveries, startOnTestClock } from './watch-fixture.ts';
@@ -88,7 +88,7 @@ test('unclaimed references expire in their owning scope and cannot be imported a
       Layer.provideMerge(TestClock.layer()),
     ),
   );
-  const client = makeEditorClient(runtime);
+  const client = makeWorkspaceClient(runtime);
   try {
     const checkout = await client.command('openCheckout', { root: f.root });
     writeFileSync(join(f.base, 'external'), 'native bytes');
@@ -413,7 +413,7 @@ test('private configuration rejects unsafe shapes before creating a state direct
       const runtime = ManagedRuntime.make(WorkspaceLive(value as never));
       try {
         await assert.rejects(
-          makeEditorClient(runtime).command('loadRecovery', { clientId: 'alice' }),
+          makeWorkspaceClient(runtime).command('loadRecovery', { clientId: 'alice' }),
           (error: unknown) => {
             assert(isError('InvalidInput')(error));
             assert(!String(error).includes('private-secret'));

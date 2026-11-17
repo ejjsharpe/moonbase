@@ -4,20 +4,21 @@ import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { space } from '@moonbase/ui/tokens.stylex';
 import type { FileTarget } from '@moonbase/contracts/workspace';
-import { fileKey, type EditorController, type EditorSnapshot } from '@moonbase/application/editor';
+import { fileKey, type EditorSnapshot } from '@moonbase/application/editor';
+import type { EditorActions } from '../editor-actions.ts';
 
 /**
  * What stands between the active file and its editor: a save whose result is unconfirmed, a
  * change on disk that conflicts with the edits, or a file that couldn't be opened.
  */
 export function FileNotices({
-  controller,
+  actions,
   state,
   target,
   buffer,
   run,
 }: {
-  controller: EditorController;
+  actions: EditorActions;
   state: EditorSnapshot;
   target: FileTarget;
   buffer: EditorSnapshot['buffers'][number] | undefined;
@@ -31,7 +32,7 @@ export function FileNotices({
           <Button
             {...stylex.props(controls.button)}
             disabled={state.preserving}
-            onClick={() => run(controller.save(target))}>
+            onClick={() => run(actions.save(target))}>
             Retry Save
           </Button>
         </p>
@@ -42,22 +43,20 @@ export function FileNotices({
           <div {...stylex.props(styles.toolbar)}>
             <Button
               {...stylex.props(controls.button)}
-              onClick={() => run(controller.open(target, { view: 'conflict' }))}>
+              onClick={() => run(actions.open(target, { view: 'conflict' }))}>
               Compare
             </Button>
             <Button
               {...stylex.props(controls.button)}
-              onClick={() => run(controller.save(target, true))}>
+              onClick={() => run(actions.save(target, true))}>
               Overwrite observed version
             </Button>
-            <Button
-              {...stylex.props(controls.button)}
-              onClick={() => run(controller.reload(target))}>
+            <Button {...stylex.props(controls.button)} onClick={() => run(actions.reload(target))}>
               Reload
             </Button>
             <Button
               {...stylex.props(controls.button)}
-              onClick={() => controller.cancelConflict(target)}>
+              onClick={() => actions.cancelConflict(target)}>
               Cancel
             </Button>
           </div>
@@ -66,7 +65,7 @@ export function FileNotices({
       {!buffer && !state.comparisons[fileKey(target)] && (
         <p role="status" {...stylex.props(controls.alert)}>
           File unavailable; retained tab and recovery references remain.{' '}
-          <Button {...stylex.props(controls.button)} onClick={() => run(controller.open(target))}>
+          <Button {...stylex.props(controls.button)} onClick={() => run(actions.open(target))}>
             Retry file
           </Button>
         </p>

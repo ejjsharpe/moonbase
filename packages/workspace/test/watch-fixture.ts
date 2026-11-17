@@ -5,7 +5,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { join, resolve } from 'node:path';
 import { Layer, ManagedRuntime, type Duration } from 'effect';
 import { TestClock } from 'effect/testing';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { makeWorkspaceClient } from './workspace-client-fixture.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 
 /**
@@ -20,7 +20,7 @@ export function startOnTestClock(dataDirectory: string) {
   );
   return {
     runtime,
-    client: makeEditorClient(runtime),
+    client: makeWorkspaceClient(runtime),
     advance: (duration: Duration.Input) => runtime.runPromise(TestClock.adjust(duration)),
   };
 }

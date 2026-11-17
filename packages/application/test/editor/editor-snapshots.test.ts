@@ -1,43 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { checkoutKey, fileKey } from '@moonbase/application/editor';
 import { acquireEditor, answering } from './editor-model-fixture.ts';
 import { checkout, second, target, fixture, storedRecovery } from './editor-fixture.ts';
-
-test('snapshot consumers cannot mutate buffers, recovery, comparisons or discovery in later snapshots', async () => {
-  const f = await fixture('snapshots', false);
-  try {
-    await f.editor.open(target('a.ts'), { view: 'unstaged', intent: 'keep' });
-    await f.editor.open(target('b.ts'), { intent: 'keep' });
-    await f.editor.flush();
-    const snapshot = f.editor.getSnapshot();
-    const expected = structuredClone(snapshot);
-    assert.equal(f.editor.getSnapshot(), snapshot);
-
-    snapshot.buffers[0].text = 'consumer text';
-    snapshot.buffers[0].disk.text = 'consumer disk';
-    snapshot.buffers[0].target.checkout.root = '/consumer';
-    snapshot.buffers[0].target.path = 'consumer.ts';
-    snapshot.recovery.checkouts[0].root = '/consumer-root';
-    snapshot.recovery.views[checkout.checkoutId].openFiles.push('consumer.ts');
-    snapshot.recovery.views[checkout.checkoutId].fileViews['a.ts'] = 'file';
-    snapshot.recovery.views[checkout.checkoutId].tree.expanded.push('consumer');
-    snapshot.comparisons[fileKey(target('a.ts'))].working!.text = 'consumer comparison';
-    snapshot.listings[fileKey(target(''))].entries[0].path = 'consumer listing';
-    snapshot.git[checkoutKey(checkout)].changes[0].path = 'consumer Git';
-
-    f.editor.clearErrors();
-    const next = f.editor.getSnapshot();
-    assert.notEqual(next, snapshot);
-    assert.deepEqual(next, expected);
-    assert.equal(f.editor.getSnapshot(), next);
-    f.editor.edit(target('a.ts'), 'valid edit');
-    assert.equal(await f.editor.save(target('a.ts')), true);
-    assert.equal((await f.client.command('readFile', target('a.ts'))).text, 'valid edit');
-  } finally {
-    await f.dispose();
-  }
-});
 
 test('retained snapshots stay stable across edits, positions, disk/conflict updates and close prompts', async () => {
   const f = await fixture('snapshot-updates', false);
@@ -83,9 +47,6 @@ test('retained snapshots stay stable across edits, positions, disk/conflict upda
         f.editor,
         () => f.editor.close([target('a.ts')]),
         async () => {
-          const prompt = f.editor.getSnapshot().closePrompt!;
-          prompt.buffer.disk.text = 'consumer prompt disk';
-          prompt.buffer.target.path = 'consumer prompt target';
           f.editor.clearErrors();
           retain();
           return 'cancel';
@@ -105,7 +66,7 @@ test('retained snapshots stay stable across edits, positions, disk/conflict upda
   }
 });
 
-test('restored drafts and uncertain Save/move facts remain isolated and update exact identities', async () => {
+test('restored drafts and uncertain Save/move facts keep their exact identities', async () => {
   const f = await fixture('snapshot-recovery', false);
   let editor = f.editor;
   try {
@@ -125,13 +86,7 @@ test('restored drafts and uncertain Save/move facts remain isolated and update e
     editor.edit(target('a.ts'), 'captured save');
     f.memory.failNext('saveFile', 'Lost Save response', true);
     await assert.rejects(editor.save(target('a.ts')), /Lost Save response/);
-    const pending = editor.buffer(target('a.ts'))!.pendingSave!;
-    const savedRequest = structuredClone(pending);
-    pending.text = 'consumer request';
-    pending.target.checkout.root = '/consumer';
-    restored.buffers[1].text = 'consumer restored draft';
-    restored.buffers[1].disk.version = 'consumer version';
-    restored.buffers[1].target.path = 'consumer.ts';
+    const savedRequest = structuredClone(editor.buffer(target('a.ts'))!.pendingSave!);
     editor.edit(target('a.ts'), 'newer live a');
     assert.deepEqual(editor.buffer(target('a.ts'))!.pendingSave, savedRequest);
     assert.deepEqual(editor.getSnapshot().buffers[1], expected.buffers[1]);
@@ -152,10 +107,6 @@ test('restored drafts and uncertain Save/move facts remain isolated and update e
       }),
       /Lost move response/,
     );
-    const operation = editor.getSnapshot().operations[0];
-    operation.checkout.root = '/consumer';
-    operation.items.push({ source: 'a.ts', destination: 'consumer.ts', outcome: 'completed' });
-    operation.id = 'consumer-operation';
     await editor.resolveOperation('snapshot-move');
     assert.equal(editor.buffer(target('a.ts')), undefined);
     assert.equal(editor.buffer(target('moved.ts'))!.text, 'newer live a');

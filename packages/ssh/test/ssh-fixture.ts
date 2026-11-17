@@ -19,7 +19,7 @@ import { CancelledError } from '@moonbase/contracts/errors';
 import type { ChatHostEndpoint } from '@moonbase/contracts/services';
 import type { ChatHostHealth } from '@moonbase/contracts/host';
 import { ConnectionService } from '@moonbase/contracts/services';
-import { makeConnectionClient } from '@moonbase/application/runtime/clients';
+import { makeConnectionClient } from '@moonbase/application/chat/clients';
 import { SshLive, type SshConfiguration, type SshOptions } from '@moonbase/ssh';
 /** An error with the legacy code `code`, as clients see it. */
 export const failure = (code: ApplicationError['code']) => (e: unknown) => {

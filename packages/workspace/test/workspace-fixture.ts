@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { Effect, ManagedRuntime } from 'effect';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
 import { isWorkspaceHostError, toWireError } from '@moonbase/contracts/workspace-host-errors';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { makeWorkspaceClient } from './workspace-client-fixture.ts';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { initRepository } from './repository-fixture.ts';
@@ -25,7 +25,7 @@ export function fixture() {
           : {}),
       }),
     );
-    return { runtime, client: makeEditorClient(runtime) };
+    return { runtime, client: makeWorkspaceClient(runtime) };
   };
   const instance = start();
   return {

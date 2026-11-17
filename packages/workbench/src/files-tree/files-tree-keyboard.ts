@@ -1,13 +1,13 @@
 import type { KeyboardEvent, RefObject } from 'react';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import type { EditorController } from '@moonbase/application/editor';
 import type { FileCommand } from './file-commands.ts';
 import { isCommandKey, shortcutCommand } from '../shortcuts.ts';
 import type { VisibleRow } from './files-tree-rows.ts';
+import type { EditorActions } from '../editor-actions.ts';
 
 /** What the tree's keyboard and pointer selection read and act on. */
 export type TreeNavigation = {
-  controller: EditorController;
+  actions: EditorActions;
   checkout: CheckoutTarget;
   rows: readonly VisibleRow[];
   focusIndex: number;
@@ -37,8 +37,7 @@ export function handleTreeKeyDown(event: KeyboardEvent<HTMLElement>, navigation:
     navigation.undo();
     return;
   }
-  const { controller, checkout, rows, focusIndex, selection, expanded, anchor, toggle } =
-    navigation;
+  const { actions, checkout, rows, focusIndex, selection, expanded, anchor, toggle } = navigation;
   const row = rows[focusIndex];
   if (!row) return;
   let next = focusIndex;
@@ -67,7 +66,7 @@ export function handleTreeKeyDown(event: KeyboardEvent<HTMLElement>, navigation:
       ? rows.slice(Math.min(start, next), Math.max(start, next) + 1).map((row) => row.path)
       : [rows[next].path];
     if (!event.shiftKey) anchor.current = rows[next].path;
-    controller.tree(checkout, { focus: rows[next].path, selected });
+    actions.tree(checkout, { focus: rows[next].path, selected });
   } else if (event.key === 'ArrowRight' && row.directory) {
     anchor.current = null;
     event.preventDefault();
@@ -76,7 +75,7 @@ export function handleTreeKeyDown(event: KeyboardEvent<HTMLElement>, navigation:
     anchor.current = null;
     event.preventDefault();
     if (row.directory && expanded.has(row.path)) toggle(row.path);
-    else controller.tree(checkout, { focus: row.path.split('/').slice(0, -1).join('/') });
+    else actions.tree(checkout, { focus: row.path.split('/').slice(0, -1).join('/') });
   } else if (shortcutCommand(event)) {
     event.preventDefault();
     const paths = selection.includes(row.path) ? [...selection] : [row.path];
@@ -88,7 +87,7 @@ export function handleTreeKeyDown(event: KeyboardEvent<HTMLElement>, navigation:
     event.preventDefault();
     if (row.directory) toggle(row.path);
     else
-      void controller.open(
+      void actions.open(
         { checkout, path: row.path },
         { view: 'file', intent: event.key === ' ' ? 'preview' : 'keep' },
       );
@@ -96,7 +95,7 @@ export function handleTreeKeyDown(event: KeyboardEvent<HTMLElement>, navigation:
     if (navigation.cancelCut()) event.preventDefault();
   } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a') {
     event.preventDefault();
-    controller.tree(checkout, { selected: rows.map((row) => row.path) });
+    actions.tree(checkout, { selected: rows.map((row) => row.path) });
   }
 }
 
@@ -105,7 +104,7 @@ export function handleTreeKeyDown(event: KeyboardEvent<HTMLElement>, navigation:
  * (⌘-click), added to or removed from the selection.
  */
 export function handleRowClick(navigation: TreeNavigation, row: VisibleRow, additive: boolean) {
-  const { controller, checkout, selection, anchor, toggle } = navigation;
+  const { actions, checkout, selection, anchor, toggle } = navigation;
   anchor.current = row.path;
   let selected = [row.path];
   if (additive)
@@ -116,8 +115,8 @@ export function handleRowClick(navigation: TreeNavigation, row: VisibleRow, addi
     toggle(row.path, true);
     return;
   }
-  controller.tree(checkout, { focus: row.path, selected });
+  actions.tree(checkout, { focus: row.path, selected });
   if (!additive) {
-    void controller.open({ checkout, path: row.path }, { view: 'file', intent: 'preview' });
+    void actions.open({ checkout, path: row.path }, { view: 'file', intent: 'preview' });
   }
 }

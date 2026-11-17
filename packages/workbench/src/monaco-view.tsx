@@ -3,14 +3,9 @@ import * as monaco from 'monaco-editor';
 import * as stylex from '@stylexjs/stylex';
 import { workbench } from '@moonbase/ui/workbench';
 import { colors, syntax, type } from '@moonbase/ui/tokens.stylex';
-import {
-  checkoutKey,
-  fileKey,
-  readOwn,
-  type EditorController,
-  type EditorSnapshot,
-} from '@moonbase/application/editor';
+import { checkoutKey, fileKey, readOwn, type EditorSnapshot } from '@moonbase/application/editor';
 import type { FileTarget, FileView } from '@moonbase/contracts/workspace';
+import type { EditorActions } from './editor-actions.ts';
 
 /** A one-shot request to put the cursor on a match, made after opening its file. */
 export type EditorReveal = {
@@ -48,7 +43,7 @@ export type MonacoViewHandle = {
 /** The composition root supplies Monaco's worker environment before mounting. */
 export function MonacoView({
   ref,
-  controller,
+  actions,
   state,
   target,
   mode,
@@ -57,7 +52,7 @@ export function MonacoView({
   onRevealed,
 }: {
   ref?: Ref<MonacoViewHandle>;
-  controller: EditorController;
+  actions: EditorActions;
   state: EditorSnapshot;
   target?: FileTarget;
   mode: FileView;
@@ -141,7 +136,7 @@ export function MonacoView({
       }
       ownedModels.clear();
     };
-  }, [controller]);
+  }, [actions]);
   useLayoutEffect(() => {
     for (const buffer of state.disposed ? [] : state.buffers) {
       const key = fileKey(buffer.target);
@@ -152,7 +147,7 @@ export function MonacoView({
           undefined,
           monaco.Uri.from({
             scheme: 'moonbase',
-            authority: controller.instanceId,
+            authority: actions.clientId,
             path:
               '/' +
               encodeURIComponent(checkoutKey(buffer.target.checkout)) +
@@ -161,16 +156,15 @@ export function MonacoView({
           }),
         );
         const listener = model.onDidChangeContent(() => {
-          const current = controller.buffer(buffer.target),
+          const current = actions.buffer(buffer.target),
             text = model.getValue(undefined, true);
-          if (current && current.text !== text) {
-            try {
-              controller.edit(buffer.target, text);
-            } catch (error) {
-              controller.report(error);
-              model.setValue(current.text);
-            }
-          }
+          if (current && current.text !== text)
+            void actions.edit(buffer.target, text).catch((error) => {
+              actions.report(error);
+              // The refused text goes; the buffer's stays.
+              const kept = actions.buffer(buffer.target);
+              if (kept && model.getValue(undefined, true) !== kept.text) model.setValue(kept.text);
+            });
         });
         entry = { model, listener };
         models.current.set(key, entry);
@@ -204,7 +198,7 @@ export function MonacoView({
     ) => {
       const position = readOwn(
         readOwn(
-          readOwn(controller.getSnapshot().recovery.views, target.checkout.checkoutId)?.positions,
+          readOwn(actions.getSnapshot().recovery.views, target.checkout.checkoutId)?.positions,
           target.path,
         ),
         selected,
@@ -219,14 +213,14 @@ export function MonacoView({
         try {
           const cursor = editor.getPosition();
           if (cursor)
-            controller.position(target, selected, {
+            actions.position(target, selected, {
               line: cursor.lineNumber,
               column: cursor.column,
               top: editor.getScrollTop(),
               left: editor.getScrollLeft(),
             });
         } catch (error) {
-          controller.report(error);
+          actions.report(error);
         }
       };
       const cursor = editor.onDidChangeCursorPosition(record),
@@ -246,7 +240,7 @@ export function MonacoView({
       minimap: { enabled: false },
       padding: { top: 16, bottom: 16 },
       editContext: false,
-      readOnly: !working || controller.getSnapshot().preserving,
+      readOnly: !working || actions.getSnapshot().preserving,
       ariaLabel: target.path + ' editor',
     };
     let release: () => void;
@@ -302,12 +296,12 @@ export function MonacoView({
     releaseView.current = cleanup;
     return cleanup;
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- Recreate the view only for identity/mode/baseline changes; buffer edits sync through the existing model above.
-  }, [controller, key, mode, hasBuffer, comparison?.original, comparison?.title, state.disposed]);
+  }, [actions, key, mode, hasBuffer, comparison?.original, comparison?.title, state.disposed]);
   useLayoutEffect(() => {
     const editor = mounted.current;
     if (!editor || !target) return;
     const positions = readOwn(
-      readOwn(controller.getSnapshot().recovery.views, target.checkout.checkoutId)?.positions,
+      readOwn(actions.getSnapshot().recovery.views, target.checkout.checkoutId)?.positions,
       target.path,
     );
     const modified = readOwn(positions, mode),
@@ -326,7 +320,7 @@ export function MonacoView({
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- Restore visibility on the same view identities as creation; typing must not relayout the editor.
   }, [
     visible,
-    controller,
+    actions,
     key,
     mode,
     hasBuffer,
@@ -367,7 +361,7 @@ export function MonacoView({
     <div
       ref={container}
       {...stylex.props(workbench.editor)}
-      data-editor-instance={controller.instanceId}
+      data-editor-instance={actions.clientId}
     />
   );
 }

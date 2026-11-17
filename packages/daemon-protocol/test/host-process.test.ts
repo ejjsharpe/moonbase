@@ -12,7 +12,7 @@ import { randomBytes } from 'node:crypto';
 import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import { ConnectionService } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/workspace';
-import { makeChatClient } from '@moonbase/application/runtime/clients';
+import { makeChatClient } from '@moonbase/application/chat/clients';
 import { DaemonRpcLinkLive, RemoteChatLive } from '../src/client/remote.ts';
 import { createRequire } from 'node:module';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
@@ -227,7 +227,7 @@ test('compiled remote entry runs on Electron against the separate production hos
   const source = `import {readFileSync} from 'node:fs';
     import {Effect,Layer,ManagedRuntime,Stream} from 'effect';
     import { ConnectionService, LocalHostService } from '@moonbase/contracts/services';
-    import {makeChatClient} from '@moonbase/application/runtime/clients';
+    import {makeChatClient} from '@moonbase/application/chat/clients';
     import {DaemonRpcLinkLive,RemoteChatLive} from './src/client/remote.ts';
     async function main(){
       const config=JSON.parse(readFileSync(process.argv[2],'utf8'));

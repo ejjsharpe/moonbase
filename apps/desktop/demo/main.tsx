@@ -1,11 +1,23 @@
-import { createMoonbaseApplication } from '@moonbase/application';
+import {
+  MoonbaseApplication,
+  makeApplicationAtoms,
+  type ChatHostOptions,
+} from '@moonbase/application';
+import type { ChatRunner } from '@moonbase/application/chat';
+import { editorLayer } from '@moonbase/application/editor';
 import { installTranscriptDemo } from './transcript.ts';
 import { chatCapabilities } from './chat.ts';
 import { createRoot } from 'react-dom/client';
 import { createRef, StrictMode, useState } from 'react';
-import { ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { Context, Effect, Layer, ManagedRuntime } from 'effect';
+import * as AtomRegistry from 'effect/reactivity/AtomRegistry';
+import { RegistryContext } from '@effect/atom-react';
+import { WorkspaceService } from '@moonbase/contracts/services';
+import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
+import type { CommandInput, CommandOutput, WorkspaceCommand } from '@moonbase/contracts/workspace';
+import { makeEditorActions, makeWorkbenchEditor } from '@moonbase/workbench';
 import { DesktopShell, type DesktopShellHandle } from '../src/renderer/shell/desktop-shell.tsx';
+import type { DesktopApplication } from '../src/renderer/shell/desktop-application.ts';
 import { configureMonacoWorkers } from '@moonbase/workbench/workers';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
@@ -94,9 +106,70 @@ const memory = fauxWorkspace([
     { 'welcome.ts': "export const greeting = 'Hello from a worktree';\n" },
   ),
 ]);
-// One demo composition root. Feature packages do not construct runtimes.
-const runtime = ManagedRuntime.make(memory.layer),
-  client = makeEditorClient(runtime);
+// The demo's views share one atom registry; each editor and its application is a window's.
+const registry = AtomRegistry.make();
+/** One window's composition root: the editor over the shared memory workspace, and its chat. */
+async function makeDemoWindow(clientId: string, chat: Omit<ChatHostOptions, 'runner'> = {}) {
+  const runner: ChatRunner = {
+    runPromiseExit: (effect, options) => runtime.runPromiseExit(effect, options),
+  };
+  const runtime = ManagedRuntime.make(
+    Layer.provideMerge(
+      MoonbaseApplication.layer({ ...chat, runner }),
+      Layer.provideMerge(editorLayer({ clientId }), demoWorkspace),
+    ),
+  );
+  const context = await runtime.context();
+  const service = Context.get(context, MoonbaseApplication);
+  await runtime.runPromise(service.start);
+  const run = <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect);
+  const application: DesktopApplication = {
+    service,
+    atoms: makeApplicationAtoms(service),
+    run,
+    runSync: (effect) => runtime.runSync(effect),
+  };
+  const editor = makeWorkbenchEditor(context, run);
+  return {
+    runtime,
+    application,
+    editor,
+    actions: makeEditorActions(editor, registry),
+    dispose: () => run(service.release).finally(() => runtime.dispose()),
+  };
+}
+const workspace = Effect.runSync(
+  Effect.map(WorkspaceService, (service) => service).pipe(Effect.provide(memory.layer)),
+);
+/**
+ * The memory workspace's commands, as the browser tests drive them. The editors call through it,
+ * so a test may wrap `command` to hold or answer one.
+ */
+const client = {
+  command: <K extends WorkspaceCommand>(
+    operation: K,
+    input: CommandInput<K>,
+    _options?: { signal?: AbortSignal },
+  ) =>
+    Effect.runPromise(
+      (
+        workspace[operation] as (input: CommandInput<K>) => Effect.Effect<CommandOutput<K>, unknown>
+      )(input),
+    ),
+};
+const demoWorkspace = Layer.succeed(
+  WorkspaceService,
+  new Proxy(workspace, {
+    get: (target, name: string) =>
+      name === 'watch' || name === 'watchRecovery'
+        ? target[name]
+        : (input: never) =>
+            Effect.tryPromise({
+              try: () => client.command(name as WorkspaceCommand, input),
+              catch: (error) => error as WorkspaceError,
+            }),
+  }),
+);
 const chat = chatCapabilities(
   new URLSearchParams(location.search).has('local'),
   new URLSearchParams(location.search).has('activity'),
@@ -105,32 +178,33 @@ const transcriptDemo = new URLSearchParams(location.search).has('transcript')
   ? await installTranscriptDemo(chat)
   : null;
 let failChat = new URLSearchParams(location.search).has('fail-chat');
-const firstApplication = await createMoonbaseApplication({
-    editors: [{ client, clientId: 'demo-first' }],
+const firstWindow = await makeDemoWindow(
+    'demo-first',
     // `&hosts` names two hosts for the same demo chat, so Settings offers Use.
-    ...(new URLSearchParams(location.search).has('hosts')
+    new URLSearchParams(location.search).has('hosts')
       ? {
           chatTargets: ['This Mac', 'Studio'].map((label) => ({
             id: label.toLowerCase().replace(' ', '-'),
             label,
-            acquire: async () => chat.dependencies,
+            acquire: Effect.sync(() => chat.dependencies),
           })),
         }
       : {
-          chat: async () => {
-            if (failChat) throw Error('Controlled Chat initialization failure');
-            return new URLSearchParams(location.search).has('chat') ||
-              new URLSearchParams(location.search).has('local')
-              ? chat.dependencies
-              : null;
-          },
-        }),
-  }),
-  secondApplication = await createMoonbaseApplication({
-    editors: [{ client, clientId: 'demo-second' }],
-  }),
-  first = firstApplication.editors[0]!,
-  second = secondApplication.editors[0]!;
+          chat: Effect.suspend(() => {
+            if (failChat) return Effect.fail(Error('Controlled Chat initialization failure'));
+            return Effect.succeed(
+              new URLSearchParams(location.search).has('chat') ||
+                new URLSearchParams(location.search).has('local')
+                ? chat.dependencies
+                : null,
+            );
+          }),
+        },
+  ),
+  secondWindow = await makeDemoWindow('demo-second'),
+  first = firstWindow.actions,
+  second = secondWindow.actions;
+const firstApplication = firstWindow.application.service;
 const firstHandle = createRef<DesktopShellHandle>();
 await Promise.all(
   [first, second].map(async (editor) => {
@@ -172,9 +246,7 @@ const styles = stylex.create({
 // Like main, a project checkout's chat worktree is a new linked worktree beside it, which then
 // lists in the project's worktree switcher; other demo folders only record the request.
 async function createChatWorktree(root: string, branch: string) {
-  const checkout = firstApplication.editors[0]
-    ?.getSnapshot()
-    ?.recovery.checkouts.find((target) => target.root === root);
+  const checkout = first.getSnapshot().recovery.checkouts.find((target) => target.root === root);
   if (!checkout) return chat.createWorktree(root, branch);
   chat.worktrees.push(`${root} ${branch}`);
   const created = await client.command('createWorktree', {
@@ -193,7 +265,8 @@ function Demo() {
     return (
       <main {...stylex.props(workbench.document, styles.app)}>
         <DesktopShell
-          application={firstApplication}
+          application={firstWindow.application}
+          editor={firstWindow.editor}
           transcriptNative={transcriptDemo ? () => transcriptDemo.native : undefined}
           chooseChatFolder={async () => '/demo/moonbase'}
           recentChatFolders={async () =>
@@ -263,7 +336,7 @@ function Demo() {
           {...stylex.props(controls.button)}
           onClick={() => {
             setDisposed(true);
-            void secondApplication.dispose().catch((error) => setCleanupError(String(error)));
+            void secondWindow.dispose().catch((error: unknown) => setCleanupError(String(error)));
           }}>
           Dispose second editor
         </Button>
@@ -273,7 +346,8 @@ function Demo() {
         <section aria-label="First editor" hidden={!visible} {...stylex.props(styles.editor)}>
           <DesktopShell
             ref={firstHandle}
-            application={firstApplication}
+            application={firstWindow.application}
+            editor={firstWindow.editor}
             transcriptNative={transcriptDemo ? () => transcriptDemo.native : undefined}
             selectCheckout={() => window.demo.selectCheckout()}
             selectClipboardImports={(checkout) => window.demo.selectClipboardImports(checkout)}
@@ -292,7 +366,7 @@ function Demo() {
         </section>
         {!disposed && (
           <section aria-label="Second editor" {...stylex.props(styles.editor, styles.second)}>
-            <DesktopShell application={secondApplication} />
+            <DesktopShell application={secondWindow.application} editor={secondWindow.editor} />
           </section>
         )}
       </div>
@@ -304,22 +378,50 @@ const longTranscript = new URLSearchParams(location.search).get('long');
 if (transcriptDemo && longTranscript !== null)
   await transcriptDemo.long(Number(longTranscript) || undefined);
 if (transcriptDemo && new URLSearchParams(location.search).has('reading')) {
-  await firstApplication.chat!.start();
-  await firstApplication.chat!.select(chat.target);
-  firstApplication.chat!.setTranscriptView({
+  const controller = (await firstWindow.application.run(firstApplication.chat.open))!;
+  await controller.start();
+  await controller.select(chat.target);
+  controller.setTranscriptView({
     anchor: { key: 'entry:reading-179', offset: 0 },
     expanded: [],
   });
 }
 createRoot(document.getElementById('root')!).render(
-  new URLSearchParams(location.search).has('strict') ? (
-    <StrictMode>
+  <RegistryContext.Provider value={registry}>
+    {new URLSearchParams(location.search).has('strict') ? (
+      <StrictMode>
+        <Demo />
+      </StrictMode>
+    ) : (
       <Demo />
-    </StrictMode>
-  ) : (
-    <Demo />
-  ),
+    )}
+  </RegistryContext.Provider>,
 );
+/** The first window's application, as the browser tests read and drive it. */
+const application = {
+  service: firstApplication,
+  /** The chat it shows now. */
+  get chat() {
+    return registry.get(firstWindow.application.atoms.chat);
+  },
+  getSnapshot: () => registry.get(firstWindow.application.atoms.snapshot),
+  canUnload: () => firstWindow.runtime.runSync(firstApplication.canUnload),
+  /** Holds the next chat target switch until the returned callback releases it. */
+  holdNextSwitch() {
+    const gate = Promise.withResolvers<void>();
+    const select = firstApplication.chat.select;
+    Object.assign(firstApplication.chat, {
+      select: (id: string) => {
+        Object.assign(firstApplication.chat, { select });
+        return Effect.andThen(
+          Effect.promise(() => gate.promise),
+          select(id),
+        );
+      },
+    });
+    return gate.resolve;
+  },
+};
 declare global {
   interface Window {
     demo: {
@@ -328,7 +430,7 @@ declare global {
       checkout: typeof checkout;
       memory: typeof memory;
       workbench(): DesktopShellHandle;
-      application: typeof firstApplication;
+      application: typeof application;
       chat: typeof chat;
       transcript: typeof transcriptDemo;
       retryChat(): void;
@@ -341,14 +443,13 @@ declare global {
       modelCount(): number;
       diffReady(): boolean;
       client: typeof client;
-      runtime: typeof runtime;
     };
   }
 }
 window.demo = {
   first,
   second,
-  application: firstApplication,
+  application,
   chat,
   transcript: transcriptDemo,
   retryChat: () => {
@@ -366,14 +467,11 @@ window.demo = {
   diffReady: () =>
     monaco.editor.getDiffEditors().every((editor) => editor.getLineChanges() !== null),
   client,
-  runtime,
 };
 window.addEventListener(
   'pagehide',
   () => {
-    void Promise.allSettled([firstApplication.dispose(), secondApplication.dispose()]).finally(() =>
-      runtime.dispose(),
-    );
+    void Promise.allSettled([firstWindow.dispose(), secondWindow.dispose()]);
   },
   { once: true },
 );

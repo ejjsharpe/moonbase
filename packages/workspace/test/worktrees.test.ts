@@ -12,7 +12,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { makeWorkspaceClient } from './workspace-client-fixture.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { fixture, rejects } from './workspace-fixture.ts';
 
@@ -419,7 +419,7 @@ function withGit(
       gitExecutable: git,
     }),
   );
-  return { runtime, client: makeEditorClient(runtime) };
+  return { runtime, client: makeWorkspaceClient(runtime) };
 }
 const waitFor = async (path: string) => {
   while (!existsSync(path)) await new Promise((resolve) => setTimeout(resolve, 10));

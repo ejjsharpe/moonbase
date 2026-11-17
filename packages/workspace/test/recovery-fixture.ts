@@ -15,11 +15,10 @@ import { ManagedRuntime } from 'effect';
 import {
   ApplicationError,
   type CheckoutTarget,
-  type EditorClient,
   type FileDocument,
 } from '@moonbase/contracts/workspace';
 import type { RecoveryLayout, RecoveryState } from '@moonbase/contracts/recovery';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { makeWorkspaceClient, type WorkspaceClient } from './workspace-client-fixture.ts';
 import { isWorkspaceHostError, toWireError } from '@moonbase/contracts/workspace-host-errors';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { initRepository } from './repository-fixture.ts';
@@ -36,7 +35,7 @@ export function fixture() {
     const runtime = ManagedRuntime.make(
       WorkspaceLive({ dataDirectory, hostId: 'review-host', filesystemHelper }),
     );
-    return { runtime, client: makeEditorClient(runtime) };
+    return { runtime, client: makeWorkspaceClient(runtime) };
   };
   const wrapper = (body: string) => {
     const path = join(base, 'helper-' + Math.random());
@@ -68,7 +67,7 @@ export const bufferIdOf = (target: Target) =>
  * its text over its disk.
  */
 export async function seed(
-  client: Pick<EditorClient, 'command'>,
+  client: Pick<WorkspaceClient, 'command'>,
   clientId: string,
   drafts: SeedDraft[],
   layout: Partial<RecoveryLayout> = {},

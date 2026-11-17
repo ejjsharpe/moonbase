@@ -4,12 +4,9 @@ import { controls } from '@moonbase/ui/controls';
 import { gitStatusHues, gitStatusUI } from '@moonbase/ui/files';
 import { workbench } from '@moonbase/ui/workbench';
 import type { CheckoutTarget, FileTarget, FileView } from '@moonbase/contracts/workspace';
-import {
-  checkoutKey,
-  type EditorController,
-  type EditorSnapshot,
-} from '@moonbase/application/editor';
+import { checkoutKey, type EditorSnapshot } from '@moonbase/application/editor';
 import { gitStatusMarks } from '../files-tree/files-tree-status.ts';
+import type { EditorActions } from '../editor-actions.ts';
 
 // A conflicted path opens as its file, where its conflict markers are resolved; one both sides
 // deleted has no file to open, and is resolved in Git.
@@ -25,14 +22,14 @@ const changeAreas = [
  * comparison, with the shown one marked.
  */
 export function ChangesView({
-  controller,
+  actions,
   state,
   checkout,
   target,
   mode,
   run,
 }: {
-  controller: EditorController;
+  actions: EditorActions;
   state: EditorSnapshot;
   checkout: CheckoutTarget;
   /** The active file, and the view it shows in. */
@@ -89,7 +86,7 @@ export function ChangesView({
                       )}
                       onClick={() =>
                         run(
-                          controller.open(
+                          actions.open(
                             { checkout, path: change.path },
                             { view, intent: 'preview' },
                           ),

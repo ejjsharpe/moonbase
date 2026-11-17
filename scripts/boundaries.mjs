@@ -153,9 +153,7 @@ export function checkBoundaries({ files, packages }) {
       if (processRoots.has(path)) {
         if (
           edge.specifier.startsWith('@moonbase/application') &&
-          !/^@moonbase\/application\/runtime\/(?:clients|handlers|effect-client)$/.test(
-            edge.specifier,
-          )
+          !/^@moonbase\/application\/chat\/(?:clients|promises)$/.test(edge.specifier)
         )
           reject(
             path,

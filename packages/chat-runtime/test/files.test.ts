@@ -10,7 +10,7 @@ import * as NodeServices from '@effect/platform-node/NodeServices';
 import type { ChildProcessSpawner } from 'effect/process';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
-import { makeChatClient } from '@moonbase/application/runtime/clients';
+import { makeChatClient } from '@moonbase/application/chat/clients';
 import { ApplicationError } from '@moonbase/contracts/workspace';
 import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
 import {

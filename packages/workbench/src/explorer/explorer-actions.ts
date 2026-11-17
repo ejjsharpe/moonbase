@@ -1,14 +1,15 @@
 import type { RefObject } from 'react';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { readOwn, type EditorController, type MutationAction } from '@moonbase/application/editor';
+import { readOwn, type MutationAction } from '@moonbase/application/editor';
 import type { FollowedFiles } from '../files-tree/use-follow-active-file.ts';
-import type { useMoveUndo } from '../files-tree/move-undo.ts';
+import type { useMoveUndo } from '../files-tree/use-move-undo.ts';
 import { formatKeys } from '../shortcuts.ts';
 import type { ExplorerAction } from './explorer-menu.tsx';
+import type { EditorActions } from '../editor-actions.ts';
 
 /** What the explorer's "…" menu acts on and through. */
 export type ExplorerActionContext = {
-  controller: EditorController;
+  actions: EditorActions;
   checkout: CheckoutTarget;
   preserving: boolean;
   /** Whether a file is active, to reveal. */
@@ -36,7 +37,7 @@ export type ExplorerActionContext = {
  * settings, Go to File and Refresh.
  */
 export function listExplorerActions({
-  controller,
+  actions,
   checkout,
   preserving,
   hasActiveFile,
@@ -98,7 +99,7 @@ export function listExplorerActions({
     {
       label: 'Collapse All Folders',
       icon: 'collapseAll',
-      run: () => controller.tree(checkout, { expanded: [] }),
+      run: () => actions.tree(checkout, { expanded: [] }),
     },
     { label: 'Reveal Active File', icon: 'reveal', disabled: !hasActiveFile, run: revealActive },
     {
@@ -106,10 +107,10 @@ export function listExplorerActions({
       icon: 'follow',
       checked: following,
       run: () => {
-        const follow = !(controller.getSnapshot().recovery.followActiveFile ?? true);
+        const follow = !(actions.getSnapshot().recovery.followActiveFile ?? true);
         // Turning it on reveals each checkout's active file, followed or not.
         if (follow) for (const key of followed.keys()) followed.set(key, null);
-        controller.setFollowActiveFile(follow);
+        actions.setFollowActiveFile(follow);
       },
     },
     {
@@ -117,13 +118,13 @@ export function listExplorerActions({
       icon: 'filter',
       checked: hideIgnoredFiles,
       run: () =>
-        controller.tree(checkout, {
-          hideIgnoredFiles: !readOwn(controller.getSnapshot().recovery.views, checkout.checkoutId)
+        actions.tree(checkout, {
+          hideIgnoredFiles: !readOwn(actions.getSnapshot().recovery.views, checkout.checkoutId)
             ?.tree.hideIgnoredFiles,
         }),
     },
     'separator',
     { label: 'Go to File…', icon: 'search', keys: '⌘P', run: openGoTo },
-    { label: 'Refresh', icon: 'refresh', run: () => run(controller.refresh(checkout)) },
+    { label: 'Refresh', icon: 'refresh', run: () => run(actions.refresh(checkout)) },
   ];
 }

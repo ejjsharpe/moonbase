@@ -5,7 +5,7 @@ import { Layer, ManagedRuntime } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
-import { makeChatClient } from '@moonbase/application/runtime/clients';
+import { makeChatClient } from '@moonbase/application/chat/clients';
 import { type Registry } from '@earendil-works/pi-durable';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { ChatService } from '@moonbase/contracts/services';

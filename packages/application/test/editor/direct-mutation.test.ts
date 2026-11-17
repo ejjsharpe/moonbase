@@ -1,15 +1,30 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { EditorController, EditorMutation, ReplacePrompt } from '@moonbase/application/editor';
+import type { ReplacePrompt } from '@moonbase/application/editor';
+import type { EditorDriver } from './editor-model-fixture.ts';
+import type { WorkspaceOperation } from '@moonbase/contracts/workspace';
+import type { WorkspaceClient } from '@moonbase/application/testing/editor-fixture';
+import { acquireEditor } from './editor-model-fixture.ts';
 import { checkout, fixture, target } from './editor-fixture.ts';
 
 /**
- * The fixture's editor with each mutation its `runMutation` creates counted as it is disposed, and
- * each replace prompt recorded in `asked` and answered with `reply` (left pending while null), so
- * an unexpected prompt fails a test instead of hanging it.
+ * The fixture's editor (over `wrap`'s client, if given) with each replace prompt recorded in
+ * `asked` and answered with `reply` (left pending while null), so an unexpected prompt fails a
+ * test instead of hanging it.
  */
-async function counted() {
-  const f = await fixture();
+async function counted(wrap?: (client: WorkspaceClient) => WorkspaceClient) {
+  const fixed = await fixture();
+  let f = fixed;
+  if (wrap) {
+    await fixed.editor.dispose();
+    const editor = await acquireEditor(fixed.runtime, {
+      client: wrap(fixed.client),
+      clientId: fixed.editor.clientId,
+    });
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    f = { ...fixed, editor, dispose: () => editor.dispose().then(fixed.dispose) };
+  }
   const replies = { reply: false as boolean | null, asked: [] as string[][] };
   const seen = new Set<string>();
   f.editor.subscribe(() => {
@@ -20,24 +35,12 @@ async function counted() {
     const reply = replies.reply;
     if (reply !== null) queueMicrotask(() => f.editor.mutations.answer(prompt.id, reply));
   });
-  const disposals: number[] = [];
-  const createMutation = f.editor.createMutation.bind(f.editor);
-  f.editor.createMutation = (action): EditorMutation => {
-    const mutation = createMutation(action),
-      index = disposals.push(0) - 1,
-      dispose = mutation.dispose.bind(mutation);
-    mutation.dispose = () => {
-      disposals[index]++;
-      return dispose();
-    };
-    return mutation;
-  };
   const read = async (path: string) => (await f.client.command('readFile', target(path))).text;
-  return Object.assign(replies, { ...f, disposals, read });
+  return Object.assign(replies, { ...f, read });
 }
 
 /** Resolves with the next replace prompt `editor` publishes. */
-function nextPrompt(editor: EditorController) {
+function nextPrompt(editor: EditorDriver) {
   return new Promise<ReplacePrompt>((resolve) => {
     const check = () => {
       const prompt = editor.getSnapshot().replacePrompt;
@@ -73,7 +76,6 @@ test('a direct mutation completes without consent when nothing is replaced', asy
     );
     assert.equal(await f.read('moved.ts'), 'const a = 1;');
     assert.deepEqual(f.asked, []);
-    assert.deepEqual(f.disposals, [1]);
   } finally {
     await f.dispose();
   }
@@ -100,7 +102,6 @@ test('several entries move into a folder and back to the root as one batch each'
     assert.equal(await f.read('c.ts'), 'third');
     assert.equal(f.editor.buffer(target('a.ts'))?.text, 'unsaved');
     assert.equal(f.editor.buffer(target('folder/a.ts')), undefined);
-    assert.deepEqual(f.disposals, [1, 1]);
   } finally {
     await f.dispose();
   }
@@ -118,7 +119,6 @@ test('a direct mutation asks before replacing and applies only with consent', as
     assert.deepEqual(f.asked, [['b.ts'], ['b.ts']]);
     assert.equal(f.editor.getSnapshot().replacePrompt, null);
     assert.equal(f.editor.getSnapshot().mutating, false);
-    assert.deepEqual(f.disposals, [1, 1]);
   } finally {
     await f.dispose();
   }
@@ -133,14 +133,12 @@ test('a direct mutation returns its failure instead of throwing', async () => {
     );
     assert.equal(result.completed, false);
     assert.notEqual(result.error, '');
-    assert.deepEqual(f.disposals, [1]);
     // A checkout that isn't open is refused before anything is created.
     const closed = { ...checkout, checkoutId: 'closed', root: '/memory/closed' };
     assert.deepEqual(
       await f.editor.mutations.run({ checkout: closed, kind: 'create-file', paths: [] }, 'new.ts'),
       unavailable,
     );
-    assert.deepEqual(f.disposals, [1]);
   } finally {
     await f.dispose();
   }
@@ -160,7 +158,6 @@ test('one direct mutation runs at a time; another is refused until it ends', asy
     f.editor.mutations.answer(prompt.id, false);
     assert.deepEqual(await running, declined);
     assert.equal(f.editor.mutations.admits(copy), true);
-    assert.deepEqual(f.disposals, [1]);
   } finally {
     await f.dispose();
   }
@@ -175,7 +172,6 @@ test('disposing the editor while it asks declines the mutation and disposes it o
     await f.editor.dispose();
     assert.deepEqual(await running, declined);
     assert.equal(await f.read('b.ts'), 'second');
-    assert.deepEqual(f.disposals, [1]);
   } finally {
     await f.dispose();
   }
@@ -200,29 +196,39 @@ test('a move may change only its name’s case, and a copy onto its source is re
         { completed: false, error: 'Choose a different name from the original.', items: [] },
       );
     assert.equal(await f.read('b.ts'), 'second');
-    assert.deepEqual(f.disposals, [1, 1, 1]);
   } finally {
     await f.dispose();
   }
 });
 
 test('a batch import with known names asks before replacing what they would land on', async () => {
-  const f = await counted();
-  try {
-    const dispatched: Parameters<typeof f.editor.mutate>[0][] = [];
-    // The faux workspace has no native file authority; record what would be imported.
-    f.editor.mutate = async (input) => {
-      dispatched.push(structuredClone(input));
-      return {
-        id: input.id!,
-        clientId: 'editor-one',
-        checkout: input.checkout,
-        kind: input.kind,
+  const dispatched: WorkspaceOperation[] = [];
+  // The faux workspace has no native file authority; record what would be imported.
+  const f = await counted((client) => ({
+    ...client,
+    command: (name, input, options) => {
+      // The store never journalled the recorded imports, so their acknowledgement is too.
+      if (
+        name === 'acknowledgeOperation' &&
+        dispatched.some((operation) => operation.id === (input as { id: string }).id)
+      )
+        return Promise.resolve(undefined as never);
+      if (name !== 'mutate' || (input as WorkspaceOperation).kind !== 'import')
+        return client.command(name, input, options);
+      const operation = input as WorkspaceOperation;
+      dispatched.push(structuredClone(operation));
+      return Promise.resolve({
+        id: operation.id,
+        clientId: operation.clientId,
+        checkout: operation.checkout,
+        kind: operation.kind,
         outcome: 'completed',
         recoveryChanges: [],
         items: [],
-      };
-    };
+      } as never);
+    },
+  }));
+  try {
     const action = {
       checkout,
       kind: 'import' as const,
@@ -235,7 +241,7 @@ test('a batch import with known names asks before replacing what they would land
     assert.equal(dispatched.length, 0);
     f.reply = true;
     const result = await f.editor.mutations.run(action, 'folder');
-    assert.equal(result.completed, true);
+    assert.equal(result.completed, true, result.error);
     assert.deepEqual(f.asked, [['folder/nested.ts'], ['folder/nested.ts']]);
     assert.equal(dispatched.length, 1);
     assert.equal(dispatched[0].destination, 'folder');
@@ -258,7 +264,6 @@ test('a batch import with known names asks before replacing what they would land
     });
     assert.equal(dispatched.length, 2);
     assert.deepEqual(f.asked, [['folder/nested.ts'], ['folder/nested.ts']]);
-    assert.deepEqual(f.disposals, [1, 1, 1, 1]);
   } finally {
     await f.dispose();
   }

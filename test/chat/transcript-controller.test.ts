@@ -9,8 +9,8 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
-import { createMoonbaseApplication } from '@moonbase/application';
-import { makeChatClient } from '@moonbase/application/runtime/clients';
+import { openChatApplication } from './chat-application-fixture.ts';
+import { makeChatClient } from '@moonbase/application/chat/clients';
 import type { ChatState } from '@moonbase/application/chat';
 import { controlledHostFixture, until } from './controlled-host-fixture.ts';
 
@@ -51,25 +51,23 @@ test('public local controller receives successive Pi text before held completion
   const gate = Promise.withResolvers<void>(),
     entered = Promise.withResolvers<void>();
   let hold = false;
-  const app = await createMoonbaseApplication({
-    chat: async () => ({
-      mode: 'local',
-      context: session,
-      storage: storage(),
-      chat: {
-        watch: client.watch,
-        watchChatList: client.watchChatList,
-        async command(operation, input, options) {
-          if (hold && operation === 'getChatTranscriptContent') {
-            entered.resolve();
-            await gate.promise;
-          }
-          return client.command(operation, input, options);
-        },
+  const app = await openChatApplication(() => ({
+    mode: 'local',
+    context: session,
+    storage: storage(),
+    chat: {
+      watch: client.watch,
+      watchChatList: client.watchChatList,
+      async command(operation, input, options) {
+        if (hold && operation === 'getChatTranscriptContent') {
+          entered.resolve();
+          await gate.promise;
+        }
+        return client.command(operation, input, options);
       },
-    }),
-  });
-  const controller = app.chat!;
+    },
+  }));
+  const controller = app.chat;
   try {
     await controller.start();
     await controller.create('Local progressive', {
@@ -144,22 +142,20 @@ test('public local controller receives successive Pi text before held completion
 test('public remote controller consumes authenticated successive replacements before held completion without additional history/content reads', async (t) => {
   const fixture = await controlledHostFixture(new URL('./faux-stream.mjs', import.meta.url), true);
   const root = fixture.root();
-  const app = await createMoonbaseApplication({
-    chat: async () => ({
-      chat: root.chat,
-      // The remote host is the daemon in host mode: local-mode chats over a connection.
-      mode: 'local',
-      connection: root.connection,
-      context: fixture.session,
-      storage: storage(),
-    }),
-  });
+  const app = await openChatApplication(() => ({
+    chat: root.chat,
+    // The remote host is the daemon in host mode: local-mode chats over a connection.
+    mode: 'local',
+    connection: root.connection,
+    context: fixture.session,
+    storage: storage(),
+  }));
   t.after(async () => {
     fixture.release();
     await app.dispose();
     await fixture.close();
   });
-  const controller = app.chat!;
+  const controller = app.chat;
   await controller.start();
   await controller.connect();
   await until(
@@ -213,23 +209,21 @@ test('two clients of one daemon see the same chat list changes and streamed text
   const open = async () => {
     const root = fixture.root(),
       calls = { listings: 0 };
-    const app = await createMoonbaseApplication({
-      chat: async () => ({
-        // Counts this client's own listings.
-        chat: {
-          ...root.chat,
-          command: (operation, input, options) => {
-            if (operation === 'listChats') calls.listings++;
-            return root.chat.command(operation, input, options);
-          },
+    const app = await openChatApplication(() => ({
+      // Counts this client's own listings.
+      chat: {
+        ...root.chat,
+        command: (operation, input, options) => {
+          if (operation === 'listChats') calls.listings++;
+          return root.chat.command(operation, input, options);
         },
-        mode: 'local',
-        connection: root.connection,
-        context: fixture.session,
-        storage: storage(),
-      }),
-    });
-    const controller = app.chat!;
+      },
+      mode: 'local',
+      connection: root.connection,
+      context: fixture.session,
+      storage: storage(),
+    }));
+    const controller = app.chat;
     await controller.start();
     await controller.connect();
     await until(

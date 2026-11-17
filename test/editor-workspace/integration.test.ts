@@ -5,7 +5,11 @@ import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } 
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Effect } from 'effect';
-import type { EditorClient, FileTarget } from '@moonbase/contracts/workspace';
+import type { FileTarget } from '@moonbase/contracts/workspace';
+import {
+  mutateReplying,
+  type WorkspaceClient as EditorClient,
+} from '@moonbase/application/testing/editor-fixture';
 import { checkoutKey, fileKey } from '@moonbase/application/editor';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
 import { answering, code, fixture, listDrafts, listTabs } from './editor-workspace-fixture.ts';
@@ -26,18 +30,16 @@ for (const [kind, source, collision] of [
       await editor.open(unrelated, { intent: 'keep' });
       editor.edit(unrelated, 'UNSAVED\n');
       if (collision) writeFileSync(join(f.roots[0], 'dest', collision), 'REPLACE\n');
-      const workflow = editor.createMutation({ checkout, kind, paths: [source, 'folder'] });
-      try {
-        assert.equal(await workflow.apply('dest', '', false), !collision);
-        assert.equal(workflow.getSnapshot().error, '');
-        assert.deepEqual(
-          workflow.getSnapshot().replacements?.map((entry) => entry.target.path),
-          collision ? ['dest/' + collision] : [],
+      {
+        const { result, asked } = await mutateReplying(
+          editor,
+          { checkout, kind, paths: [source, 'folder'] },
+          'dest',
+          true,
         );
-        if (collision) {
-          assert.equal(readFileSync(join(f.roots[0], 'dest', collision), 'utf8'), 'REPLACE\n');
-          assert.equal(await workflow.apply('dest', '', true), true, workflow.getSnapshot().error);
-        }
+        assert.equal(result.error, '');
+        assert.equal(result.completed, true);
+        assert.deepEqual(asked, collision ? [['dest/' + collision]] : []);
         assert.equal(readFileSync(join(f.roots[0], 'dest', source), 'utf8'), 'B\n');
         assert.equal(readFileSync(join(f.roots[0], 'dest/folder/nested.ts'), 'utf8'), 'NESTED\n');
         assert.equal(readFileSync(join(f.roots[0], 'dest/unrelated.ts'), 'utf8'), 'RETAIN\n');
@@ -51,8 +53,6 @@ for (const [kind, source, collision] of [
           sources.entries.some((entry) => entry.path === 'folder'),
           kind === 'copy',
         );
-      } finally {
-        await workflow.dispose();
       }
     } finally {
       await f.close();
@@ -70,16 +70,16 @@ for (const kind of ['move', 'copy'] as const)
       writeFileSync(join(f.roots[0], target.path), 'RETAIN\n');
       await editor.open(target, { intent: 'keep' });
       editor.edit(target, 'UNSAVED\n');
-      const workflow = editor.createMutation({ checkout, kind, paths: ['b.ts', 'folder'] });
-      try {
-        assert.equal(await workflow.apply('dest', '', false), false);
-        assert.equal(await workflow.apply('dest', '', true), false);
-        assert.match(workflow.getSnapshot().error, /Replacement has open buffers/);
-        assert.equal(editor.buffer(target)?.text, 'UNSAVED\n');
-        assert.equal(readFileSync(join(f.roots[0], target.path), 'utf8'), 'RETAIN\n');
-      } finally {
-        await workflow.dispose();
-      }
+      const { result } = await mutateReplying(
+        editor,
+        { checkout, kind, paths: ['b.ts', 'folder'] },
+        'dest',
+        true,
+      );
+      assert.equal(result.completed, false);
+      assert.match(result.error, /Replacement has open buffers/);
+      assert.equal(editor.buffer(target)?.text, 'UNSAVED\n');
+      assert.equal(readFileSync(join(f.roots[0], target.path), 'utf8'), 'RETAIN\n');
     } finally {
       await f.close();
     }

@@ -19,7 +19,7 @@ import { NodeSqliteDatabase } from '@earendil-works/chord/sqlite/node';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { Effect, Layer } from 'effect';
-import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
+import { runApplicationEffect } from '@moonbase/application/chat/promises';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
 import { ChatService } from '@moonbase/contracts/services';
 import { session, delay, until, fixture, localPiRuntime } from './runtime-fixture.ts';

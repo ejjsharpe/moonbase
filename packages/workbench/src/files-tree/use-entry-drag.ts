@@ -9,11 +9,7 @@ import {
 import * as stylex from '@stylexjs/stylex';
 import { filesUI } from '@moonbase/ui/files';
 import type { CheckoutTarget, DirectoryListing } from '@moonbase/contracts/workspace';
-import {
-  checkoutKey,
-  type EditorController,
-  type MutationAction,
-} from '@moonbase/application/editor';
+import { checkoutKey, type MutationAction } from '@moonbase/application/editor';
 import {
   entriesType,
   findDropFolder,
@@ -28,10 +24,11 @@ import {
   type TreeDrag,
 } from './files-tree-drop.ts';
 import { isListedDirectory, type VisibleRow } from './files-tree-rows.ts';
-import { selectEntries } from './move-undo.ts';
+import { selectEntries } from './select-entries.ts';
 import type { DropTarget } from './use-drop-target.ts';
 import type { TreeFocus } from './use-tree-focus.ts';
 import type { RunMutation } from '../mutation-runner.tsx';
+import type { EditorActions } from '../editor-actions.ts';
 
 /**
  * The drag a files tree in this document started, until it ends. A tree accepts only its own:
@@ -61,7 +58,7 @@ function setCountImage(dataTransfer: DataTransfer, count: number) {
  * source row unmounts. The handlers ignore drags of anything but the tree's entries.
  */
 export function useEntryDrag({
-  controller,
+  actions,
   checkout,
   listings,
   selection,
@@ -77,7 +74,7 @@ export function useEntryDrag({
   findRowAt,
   closeMenu,
 }: {
-  controller: EditorController;
+  actions: EditorActions;
   checkout: CheckoutTarget;
   listings: Readonly<Record<string, DirectoryListing>>;
   selection: readonly string[];
@@ -140,7 +137,7 @@ export function useEntryDrag({
   function planDropInto(folder: string) {
     if (editing || dialogOpen) return null;
     const paths = planDrop(activeDrag, {
-      source: controller.instanceId,
+      source: actions.clientId,
       checkout: checkoutIdentity,
       folder,
     });
@@ -173,9 +170,9 @@ export function useEntryDrag({
       });
     if (!mounted.current) return;
     try {
-      selectEntries(controller, checkout, landed);
+      selectEntries(actions, checkout, landed);
     } catch (error) {
-      controller.report(error);
+      actions.report(error);
     }
     setAnchor(landed[0]);
     focus.refocusTree();
@@ -193,14 +190,14 @@ export function useEntryDrag({
       const paths = selectDraggedPaths(row.path, selection);
       if (paths.length > maxDraggedEntries) {
         event.preventDefault();
-        controller.report(`Drag at most ${maxDraggedEntries} items at a time.`);
+        actions.report(`Drag at most ${maxDraggedEntries} items at a time.`);
         return;
       }
       if (editing || dialogOpen || !canRequestMutation({ checkout, kind: 'move', paths })) {
         event.preventDefault();
         return;
       }
-      const drag = { source: controller.instanceId, checkout: checkoutIdentity, paths };
+      const drag = { source: actions.clientId, checkout: checkoutIdentity, paths };
       event.dataTransfer.setData(entriesType, JSON.stringify(drag));
       // Dropped into the editor or a chat, the drag is its paths as text.
       event.dataTransfer.setData('text/plain', paths.join('\n'));
@@ -226,10 +223,7 @@ export function useEntryDrag({
       // Other drags pass through to the app.
       if (!isEntryDrag(event)) return;
       target.stayInDrag();
-      if (
-        activeDrag?.source !== controller.instanceId ||
-        activeDrag.checkout !== checkoutIdentity
-      ) {
+      if (activeDrag?.source !== actions.clientId || activeDrag.checkout !== checkoutIdentity) {
         event.dataTransfer.dropEffect = 'none';
         return;
       }

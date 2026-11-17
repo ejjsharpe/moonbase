@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { ManagedRuntime, Layer } from 'effect';
-import { makeChatClient, makeProviderSetupClient } from '@moonbase/application/runtime/clients';
+import { makeChatClient, makeProviderSetupClient } from '@moonbase/application/chat/clients';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { LocalPiRuntimeLive } from './src/index.ts';
 import { createLocalModels } from './src/local-models.ts';

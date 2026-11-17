@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { Effect, Fiber, Layer, ManagedRuntime, Stream } from 'effect';
 import { makeKeyFileSource } from '@moonbase/chat-runtime/credentials';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
-import { makeConnectionClient } from '@moonbase/application/runtime/clients';
+import { makeConnectionClient } from '@moonbase/application/chat/clients';
 import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
 import { EndpointConnectionLive, RemoteWorkspaceHostLive } from '@moonbase/daemon-protocol/remote';
 import { runDaemon, type DaemonExit } from '../../src/daemon.ts';

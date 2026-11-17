@@ -4,9 +4,13 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Effect, Layer, ManagedRuntime, Scope } from 'effect';
-import { makeConnectionClient, makeEditorClient } from '@moonbase/application/runtime/clients';
-import { makeEditorController, makeEditorModel } from '@moonbase/application/editor';
+import { Layer, ManagedRuntime } from 'effect';
+import { makeConnectionClient } from '@moonbase/application/chat/clients';
+import {
+  acquireEditorDriver,
+  mutateReplying,
+  toWorkspaceClient,
+} from '@moonbase/application/testing/editor-fixture';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
 import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
 import { RemoteWorkspaceHostLive } from '@moonbase/daemon-protocol/remote';
@@ -68,12 +72,10 @@ test("two clients of one daemon share a checkout: a move re-paths the other draf
       WorkspaceRecoveryLive({ dataDirectory: join(base, name), installationId: name }, host),
     );
     disposers.push(() => runtime.dispose());
-    const model = await runtime.runPromise(
-      makeEditorModel({ client: makeEditorClient(runtime), clientId: name }).pipe(
-        Effect.provideService(Scope.Scope, runtime.scope),
-      ),
-    );
-    const editor = makeEditorController(runtime, model);
+    const editor = await acquireEditorDriver({
+      client: toWorkspaceClient(runtime),
+      clientId: name,
+    });
     disposers.push(() => editor.dispose());
     await editor.load();
     return editor;
@@ -94,12 +96,13 @@ test("two clients of one daemon share a checkout: a move re-paths the other draf
 
   // A moves the file B has an unsaved draft of; the draft follows it and keeps its text.
   mkdirSync(join(project, 'dest'));
-  const move = a.createMutation({ checkout, kind: 'move', paths: ['b.ts'] });
-  try {
-    assert.equal(await move.apply('dest/b.ts', '', false), true, move.getSnapshot().error);
-  } finally {
-    await move.dispose();
-  }
+  const { result: move } = await mutateReplying(
+    a,
+    { checkout, kind: 'move', paths: ['b.ts'] },
+    'dest/b.ts',
+    false,
+  );
+  assert.equal(move.completed, true, move.error);
   const moved = { checkout, path: 'dest/b.ts' };
   await until(
     async () => {

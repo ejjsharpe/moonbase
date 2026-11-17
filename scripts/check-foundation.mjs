@@ -77,10 +77,10 @@ const typeOnly = await build({
   absWorkingDir: root,
   stdin: {
     contents: `
-      import type { EditorClient } from '@moonbase/contracts/workspace';
+      import type { CheckoutTarget } from '@moonbase/contracts/workspace';
       import type { ChatClient } from '@moonbase/contracts/chat';
       import type { ConnectionClient } from '@moonbase/contracts/connection';
-      export type Clients = [EditorClient, ChatClient, ConnectionClient];
+      export type Clients = [CheckoutTarget, ChatClient, ConnectionClient];
     `,
     resolveDir: root,
     loader: 'ts',

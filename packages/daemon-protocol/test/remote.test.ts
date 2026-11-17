@@ -10,7 +10,7 @@ import {
   type VerifiedChatEndpoint,
 } from '@moonbase/contracts/services';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { makeChatClient } from '@moonbase/application/runtime/clients';
+import { makeChatClient } from '@moonbase/application/chat/clients';
 import { DaemonRpcLinkLive, RemoteChatLive, RemoteLocalHostLive } from '../src/client/remote.ts';
 import { serveChat } from '../src/server/server.ts';
 import { refusingDaemon } from './served-services.ts';

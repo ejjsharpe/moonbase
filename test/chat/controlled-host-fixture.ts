@@ -9,7 +9,7 @@ import {
   makeChatClient,
   makeConnectionClient,
   makeProviderSetupClient,
-} from '@moonbase/application/runtime/clients';
+} from '@moonbase/application/chat/clients';
 import { RemoteDaemonLive } from '@moonbase/daemon-protocol/remote';
 import { LocalHostService } from '@moonbase/contracts/services';
 import { SshLive } from '@moonbase/ssh';

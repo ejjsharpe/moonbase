@@ -1,0 +1,45 @@
+import { useContext, useMemo } from 'react';
+import type { Effect } from 'effect';
+import { RegistryContext, useAtomValue } from '@effect/atom-react';
+import {
+  describeApplicationFailure,
+  type ApplicationAtoms,
+  type MoonbaseApplicationShape,
+} from '@moonbase/application';
+
+/** The application as the shell uses it: its service, atoms over it, and the root's runners. */
+export type DesktopApplication = {
+  readonly service: MoonbaseApplicationShape;
+  readonly atoms: ApplicationAtoms;
+  /** Runs an Effect on the renderer's root runtime, rejecting with its failure. */
+  readonly run: <A, E>(effect: Effect.Effect<A, E>) => Promise<A>;
+  /** Runs a synchronous Effect on the root runtime, as `beforeunload` and Close need. */
+  readonly runSync: <A, E>(effect: Effect.Effect<A, E>) => A;
+};
+
+/**
+ * The application's lifecycle and the chat it shows, subscribed, with its actions as the shell
+ * calls them. Presentation glue: the services decide everything.
+ */
+export function useDesktopApplication(application: DesktopApplication) {
+  const registry = useContext(RegistryContext);
+  const lifecycle = useAtomValue(application.atoms.snapshot);
+  const chat = useAtomValue(application.atoms.chat);
+  const actions = useMemo(() => {
+    const { service, run, runSync } = application;
+    return {
+      /** The lifecycle now, for a callback. */
+      getSnapshot: () => registry.get(application.atoms.snapshot),
+      getChat: () => registry.get(application.atoms.chat),
+      openChat: () => run(service.chat.open),
+      /** Closes the chat if its drafts are kept; false when it can't close now. */
+      closeChat: () => runSync(service.chat.close),
+      selectChatTarget: (id: string) => run(service.chat.select(id)),
+      prepareQuit: () => run(service.prepareQuit),
+      reportCleanup: (error: unknown) => void run(service.reportCleanup(error)),
+      describe: describeApplicationFailure,
+    };
+  }, [application, registry]);
+  return { lifecycle, chat, ...actions };
+}
+export type DesktopApplicationView = ReturnType<typeof useDesktopApplication>;

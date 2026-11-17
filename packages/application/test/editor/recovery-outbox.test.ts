@@ -2,9 +2,8 @@ import { acquireEditor, answering } from './editor-model-fixture.ts';
 import { holding, storedRecovery } from './editor-fixture.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Effect, Layer, ManagedRuntime } from 'effect';
-import { TestClock } from 'effect/testing';
-import { makeEditorClient } from '@moonbase/application/runtime/clients';
+import { Effect, ManagedRuntime } from 'effect';
+import { toWorkspaceClient as makeEditorClient } from '@moonbase/application/testing/editor-fixture';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 
@@ -26,12 +25,10 @@ async function fixture(testClock = false) {
   const memory = fauxWorkspace([
       { checkout, files: { 'a.ts': 'disk', 'b.ts': 'other', 'c.ts': 'third' } },
     ]),
-    runtime = ManagedRuntime.make(
-      testClock ? Layer.merge(memory.layer, TestClock.layer()) : memory.layer,
-    ),
+    runtime = ManagedRuntime.make(memory.layer),
     raw = makeEditorClient(runtime);
   const { client, sent, hold } = holding(raw);
-  const editor = await acquireEditor(runtime, { client, clientId: 'outbox' });
+  const editor = await acquireEditor(runtime, { client, clientId: 'outbox', testClock });
   await editor.load();
   await editor.openCheckout(checkout.root);
   await editor.open(target, { intent: 'keep' });
@@ -343,7 +340,7 @@ test('a Discard whose reply is lost, and not committed, keeps the draft shown an
     assert.equal(done, false);
     assert.equal(f.editor.buffer(target)?.text, 'kept');
     // The debounce's send after the veto has nothing to send, and leaves the failure shown.
-    await f.runtime.runPromise(TestClock.adjust('1 second'));
+    await f.editor.adjust('1 second');
     for (let turn = 0; turn < 10; turn++) await f.runtime.runPromise(Effect.yieldNow).then(tick);
     assert.equal(f.editor.getSnapshot().recoveryFailed, true);
     assert.equal((await f.stored()).drafts[0]?.text, 'kept');
@@ -421,3 +418,35 @@ for (const kind of ['close', 'quit', 'reload'] as const)
       await f.dispose();
     }
   });
+
+test("a lost Discard reply behind another buffer's held draft still reopens the reloaded tab", async () => {
+  const f = await fixture();
+  const hold = f.hold('saveFile');
+  try {
+    await f.editor.open(other, { intent: 'keep' });
+    f.editor.edit(target, 'dirty');
+    await f.editor.flush();
+    // b.ts saves, so its newer draft waits first in the queue until the Save settles.
+    f.editor.edit(other, 'saving');
+    const saving = f.editor.save(other);
+    await hold.entered;
+    f.editor.edit(other, 'typed during the Save');
+    // Reload's Discard commits but its reply is lost; the store then shows it committed.
+    f.memory.failNext('closeTab', 'Reply lost', true, 'Uncertain');
+    f.memory.externalWrite(target, 'reloaded');
+    assert.equal(await f.editor.reload(target), true);
+    hold.release();
+    await saving;
+    await f.editor.flush();
+    assert.equal(f.editor.buffer(target)?.text, 'reloaded');
+    const stored = await f.stored();
+    assert.deepEqual(stored.tabs(checkout.checkoutId).sort(), ['a.ts', 'b.ts']);
+    assert.deepEqual(
+      stored.drafts.map((draft) => [draft.target.path, draft.text]),
+      [['b.ts', 'typed during the Save']],
+    );
+  } finally {
+    hold.release();
+    await f.dispose();
+  }
+});

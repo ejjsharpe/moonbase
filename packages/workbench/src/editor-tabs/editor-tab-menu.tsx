@@ -5,10 +5,11 @@ import { overlays } from '@moonbase/ui/overlays';
 import { workbench } from '@moonbase/ui/workbench';
 import { Icon } from '@moonbase/ui/icons';
 import type { FileTarget, FileView } from '@moonbase/contracts/workspace';
-import type { EditorController, EditorSnapshot } from '@moonbase/application/editor';
+import type { EditorSnapshot } from '@moonbase/application/editor';
 
 type Buffer = EditorSnapshot['buffers'][number];
 import type { FocusReturn } from '../focus-return.ts';
+import type { EditorActions } from '../editor-actions.ts';
 
 const closeLabels = ['Close', 'Close Others', 'Close to the Right', 'Close All'] as const;
 
@@ -18,7 +19,7 @@ const closeLabels = ['Close', 'Close Others', 'Close to the Right', 'Close All']
  * focus to the tab strip.
  */
 export function EditorTabMenu({
-  controller,
+  actions,
   preserving,
   file,
   buffer: current,
@@ -31,7 +32,7 @@ export function EditorTabMenu({
   closeFiles,
   withFocus,
 }: {
-  controller: EditorController;
+  actions: EditorActions;
   preserving: boolean;
   file: FileTarget;
   buffer: Buffer | undefined;
@@ -64,7 +65,7 @@ export function EditorTabMenu({
               event.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
           }}
           {...stylex.props(overlays.popup, overlays.options)}>
-          <Menu.Item {...stylex.props(overlays.option)} onClick={() => controller.keepOpen(file)}>
+          <Menu.Item {...stylex.props(overlays.option)} onClick={() => actions.keepOpen(file)}>
             Keep Open
           </Menu.Item>
           {closeLabels.map((label) => (
@@ -77,18 +78,18 @@ export function EditorTabMenu({
           ))}
           <Menu.Item
             {...stylex.props(overlays.option)}
-            onClick={() => controller.reorder(checkout, path, openFiles.indexOf(path) - 1)}>
+            onClick={() => actions.reorder(checkout, path, openFiles.indexOf(path) - 1)}>
             Move tab left
           </Menu.Item>
           <Menu.Item
             {...stylex.props(overlays.option)}
-            onClick={() => controller.reorder(checkout, path, openFiles.indexOf(path) + 1)}>
+            onClick={() => actions.reorder(checkout, path, openFiles.indexOf(path) + 1)}>
             Move tab right
           </Menu.Item>
           <Menu.Item
             {...stylex.props(overlays.option)}
             disabled={!current || current.saving || preserving}
-            onClick={() => run(controller.save(file))}>
+            onClick={() => run(actions.save(file))}>
             {current?.pendingSave ? 'Retry Save' : 'Save'}
           </Menu.Item>
           <Menu.SubmenuRoot>
@@ -101,7 +102,7 @@ export function EditorTabMenu({
                   <Menu.RadioGroup
                     aria-label="File view"
                     value={fileView}
-                    onValueChange={(view: FileView) => run(controller.open(file, { view }))}>
+                    onValueChange={(view: FileView) => run(actions.open(file, { view }))}>
                     {(git
                       ? (['file', 'staged', 'unstaged', 'untracked'] as const)
                       : (['file'] as const)
@@ -135,7 +136,7 @@ export function EditorTabMenu({
           </Menu.SubmenuRoot>
           <Menu.Item
             {...stylex.props(overlays.option)}
-            onClick={() => run(controller.reopen(checkout))}>
+            onClick={() => run(actions.reopen(checkout))}>
             Reopen Closed Files
           </Menu.Item>
         </Menu.Popup>

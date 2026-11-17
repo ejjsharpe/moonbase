@@ -19,7 +19,7 @@ import { Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
-import { makeChatClient, makeProviderSetupClient } from '@moonbase/application/runtime/clients';
+import { makeChatClient, makeProviderSetupClient } from '@moonbase/application/chat/clients';
 import {
   ChatService,
   ConnectionService,

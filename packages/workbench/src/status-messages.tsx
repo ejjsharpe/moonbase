@@ -1,19 +1,20 @@
 import * as stylex from '@stylexjs/stylex';
 import { Button } from '@base-ui/react/button';
 import { controls } from '@moonbase/ui/controls';
-import type { EditorController, EditorSnapshot } from '@moonbase/application/editor';
+import type { EditorSnapshot } from '@moonbase/application/editor';
+import type { EditorActions } from './editor-actions.ts';
 
 /**
  * The editor's alerts: its latest error, recent edits not yet kept for recovery, and file
  * operations whose outcome needs resolving.
  */
 export function StatusMessages({
-  controller,
+  actions,
   state,
   retryRecovery,
   run,
 }: {
-  controller: EditorController;
+  actions: EditorActions;
   state: EditorSnapshot;
   retryRecovery: () => void;
   run: (work: Promise<unknown>) => void;
@@ -23,7 +24,7 @@ export function StatusMessages({
       {!!state.errors.length && (
         <div role="alert" {...stylex.props(controls.status, controls.alert)}>
           {state.errors.at(-1)}{' '}
-          <Button {...stylex.props(controls.button)} onClick={() => controller.clearErrors()}>
+          <Button {...stylex.props(controls.button)} onClick={() => actions.clearErrors()}>
             Dismiss error
           </Button>
         </div>
@@ -44,7 +45,7 @@ export function StatusMessages({
           {operation.kind}: {operation.outcome}. {operation.message}
           <Button
             {...stylex.props(controls.button)}
-            onClick={() => run(controller.resolveOperation(operation.id, operation.clientId))}>
+            onClick={() => run(actions.resolveOperation(operation.id, operation.clientId))}>
             Resolve operation status
           </Button>
         </p>

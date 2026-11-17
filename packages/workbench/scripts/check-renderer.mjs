@@ -22,11 +22,13 @@ const prohibited = inputs.filter((path) =>
   ),
 );
 assert.deepEqual(prohibited, [], 'Privileged or reference application code reached renderer entry');
-assert(inputs.some((path) => path.endsWith('application/src/editor/editor.ts')));
+assert(inputs.some((path) => path.endsWith('application/src/editor/editor-layer.ts')));
 assert(inputs.some((path) => path.endsWith('contracts/src/errors.ts')));
 assert.deepEqual(
   inputs.filter((path) =>
-    /application[/\\]src[/\\]runtime[/\\](?:handlers|clients)\.ts$/.test(path),
+    /application[/\\]src[/\\](?:runtime[/\\]|chat[/\\]chat-(?:handlers|clients|promises)\.ts$)/.test(
+      path,
+    ),
   ),
   [],
 );

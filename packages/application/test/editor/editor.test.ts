@@ -1,19 +1,16 @@
+import { getFailureCode } from '@moonbase/application/editor';
 import { acquireEditor, answering } from './editor-model-fixture.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Effect } from 'effect';
-import {
-  ApplicationError,
-  type CheckoutTarget,
-  type EditorClient,
-  type CommandInput,
-} from '@moonbase/contracts/workspace';
+import { type CheckoutTarget, type CommandInput } from '@moonbase/contracts/workspace';
 import { checkoutKey, fileKey, type CloseChoice } from '@moonbase/application/editor';
 import type { RecoveryState } from '@moonbase/contracts/recovery';
+import type { WorkspaceClient } from '@moonbase/application/testing/editor-fixture';
 import { checkout, second, target, fixture } from './editor-fixture.ts';
 
 /** A client's recovery as the store holds it. */
-const storedRecovery = async (client: EditorClient, clientId: string) =>
+const storedRecovery = async (client: WorkspaceClient, clientId: string) =>
   (await client.command('loadRecovery', { clientId })).state;
 /** The drafts a recovery holds, as the file each is for, its text and its baseline. */
 const draftsOf = (state: RecoveryState) =>
@@ -32,7 +29,7 @@ test('memory inspection rejects empty and oversized selections like the producti
     for (const paths of [[], Array(257).fill('a.ts')])
       await assert.rejects(
         f.client.command('inspectEntries', { checkout, paths }),
-        (error) => ApplicationError.is(error) && error.code === 'InvalidInput',
+        (error) => getFailureCode(error) === 'InvalidInput',
       );
     assert.equal(
       (await f.client.command('inspectEntries', { checkout, paths: ['a.ts'] })).length,
@@ -458,7 +455,7 @@ test('incompatible recovered operation evidence never rebinds equal checkout/pat
     f.editor.edit(target('a.ts'), 'retained');
     await f.editor.flush();
     await f.editor.dispose();
-    const client: EditorClient = {
+    const client: WorkspaceClient = {
       ...f.client,
       async command(name, input, options) {
         const result = await f.client.command(name, input, options);
@@ -526,7 +523,7 @@ test('pending commands retain newer live text and close cannot cross an unresolv
     delayed = new Promise<void>((resolve) => {
       release = resolve;
     });
-  const client: EditorClient = {
+  const client: WorkspaceClient = {
     ...f.client,
     async command(name, input, options) {
       const result = await f.client.command(name, input, options);
@@ -693,7 +690,7 @@ test('stale file activation cannot replace a later successful comparison', async
   const wait = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const client: EditorClient = {
+  const client: WorkspaceClient = {
     ...f.client,
     async command(name, input, options) {
       if (name === 'readFile' && (input as CommandInput<'readFile'>).path === 'b.ts') {
@@ -871,7 +868,7 @@ for (const kind of ['move', 'copy'] as const)
       wait = new Promise<void>((resolve) => {
         release = resolve;
       });
-    const client: EditorClient = {
+    const client: WorkspaceClient = {
       ...f.client,
       watch: () => async () => {},
       async command(name, input, options) {
@@ -961,7 +958,7 @@ for (const origin of ['own', 'foreign'] as const)
       wait = new Promise<void>((resolve) => {
         release = resolve;
       });
-    const client: EditorClient = {
+    const client: WorkspaceClient = {
       ...f.client,
       watch: () => async () => {},
       async command(name, input, options) {
@@ -1358,7 +1355,7 @@ test('definitive rejected mutation releases pending state and leaves Save, Close
         replacements: sources,
         destination: 'a.ts',
       }),
-      (error) => ApplicationError.is(error) && error.code === 'InvalidInput',
+      (error) => getFailureCode(error) === 'InvalidInput',
     );
     assert.equal(f.memory.stats.mutations, 0);
     assert.equal(f.editor.getSnapshot().operations.length, 0);

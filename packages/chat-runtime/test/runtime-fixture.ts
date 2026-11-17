@@ -6,7 +6,7 @@ import * as NodeServices from '@effect/platform-node/NodeServices';
 import { isChatError } from '@moonbase/contracts/chat-errors';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
-import { makeChatClient } from '@moonbase/application/runtime/clients';
+import { makeChatClient } from '@moonbase/application/chat/clients';
 import { type Registry } from '@earendil-works/pi-durable';
 import { LocalPiRuntimeLive, type LocalPiRuntimeConfiguration } from '../src/index.ts';
 
