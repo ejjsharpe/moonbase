@@ -173,10 +173,11 @@ test('a local chat without a project runs in a new, empty folder of its own', as
     ...session,
     databasePath: join(root, 'local.sqlite'),
     models,
-    approveCreation: async (settings: unknown) => {
-      approvals.push(settings);
-      if (refuse) throw new Error('refused');
-    },
+    approveCreation: (settings: unknown) =>
+      Effect.suspend(() => {
+        approvals.push(settings);
+        return refuse ? Effect.fail(new Error('refused')) : Effect.void;
+      }),
   };
   let runtime = ManagedRuntime.make(localPiRuntime(config));
   t.after(async () => {

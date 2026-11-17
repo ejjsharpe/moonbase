@@ -1,4 +1,4 @@
-import { Cause, Effect, FiberSet, Layer, Queue, Semaphore } from 'effect';
+import { Cause, Effect, FiberSet, Layer, Queue, type Scope, Semaphore } from 'effect';
 import * as Socket from 'effect/socket/Socket';
 import * as SocketServer from 'effect/socket/SocketServer';
 import * as NetAddress from 'effect/net/NetAddress';
@@ -25,8 +25,8 @@ export type RpcConnectionOptions = {
   messageBytes: number;
   /** Reply bytes waiting to be written past which the daemon stops reading the connection. */
   queuedBytes: number;
-  /** Called once a connection opens; what it returns, once that closes. */
-  track?(): () => void;
+  /** Held in each connection's scope, from when it opens until it closes. */
+  track?: Effect.Effect<void, never, Scope.Scope>;
 };
 
 /**
@@ -50,6 +50,8 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
     /** One connection's Socket over its Bun WebSocket. */
     const connect = (ws: BunWebSocket<RpcSocketData>) =>
       Effect.gen(function* () {
+        // Counted in this connection's scope, until it closes.
+        if (options.track) yield* options.track;
         const inbound = yield* Queue.unbounded<string | Uint8Array, Socket.SocketError>();
         // Holds a mark while a message arrived since the idle wait last took one.
         const activity = yield* Queue.sliding<void>(1);
@@ -169,12 +171,6 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
           }),
         ),
       );
-    // What ends each open connection's tracking, run once when it closes.
-    const untrack = new Map<BunWebSocket<RpcSocketData>, () => void>();
-    const release = (ws: BunWebSocket<RpcSocketData>) => {
-      untrack.get(ws)?.();
-      untrack.delete(ws);
-    };
 
     const server = SocketServer.SocketServer.of({
       address: NetAddress.inetAddressFromIpStringUnsafe('127.0.0.1', 0),
@@ -189,7 +185,6 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
       Effect.sync(() => {
         for (const ws of sockets) {
           ws.close(closeCodes.goingAway);
-          release(ws);
         }
         sockets.clear();
       }),
@@ -215,7 +210,6 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
       open(ws: BunWebSocket<RpcSocketData>) {
         if (pending > 0) pending--;
         sockets.add(ws);
-        if (options.track) untrack.set(ws, options.track());
         run(connect(ws));
       },
       message(ws: BunWebSocket<RpcSocketData>, message: string | Uint8Array) {
@@ -227,7 +221,6 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
       },
       close(ws: BunWebSocket<RpcSocketData>, code: number) {
         sockets.delete(ws);
-        release(ws);
         ws.data.connection?.closed(code);
       },
     };

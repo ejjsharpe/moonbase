@@ -348,7 +348,7 @@ test('a mutation whose connection drops or whose reply is late is Uncertain, is 
   let closeTimedOut = false;
   const daemon = await serveWorkspace(t, files.service, {
     closeMs: 5_000,
-    onCloseTimeout: () => void (closeTimedOut = true),
+    onCloseTimeout: Effect.sync(() => void (closeTimedOut = true)),
   });
   const client = await remoteWorkspace(t, daemon, true);
   const { workspace, run } = client;

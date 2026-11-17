@@ -57,9 +57,10 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
       databasePath: join(dir, 'chat.sqlite'),
       models,
       // A chat may search only this folder before it exists.
-      approveFolder: async (cwd) => {
-        if (cwd !== dir) throw new FolderRefusedError({ refusal: 'not-approved', use: 'search' });
-      },
+      approveFolder: (cwd) =>
+        cwd === dir
+          ? Effect.void
+          : Effect.fail(new FolderRefusedError({ refusal: 'not-approved', use: 'search' })),
     }).pipe(Layer.provide(NodeServices.layer)),
   );
   const settings = { cwd: dir, model: { provider: faux.provider.id, modelId: faux.getModel().id } };
@@ -605,29 +606,26 @@ async function setupLocal(t: { after: (fn: () => Promise<void>) => void }) {
   const approved = new Set<string>();
   const folders: FolderApprovals = {
     refusal: 'not-approved',
-    has: async (path) => approved.has(path),
-    approve: async (path) => {
-      const real = await realpath(path).catch(() => {
-        throw new FolderMissingError();
-      });
-      approved.add(real);
-      return real;
-    },
-    touch: async () => {},
-    listRecent: async () => [...approved].reverse(),
+    has: (path) => Effect.sync(() => approved.has(path)),
+    approve: (path) =>
+      Effect.tryPromise({ try: () => realpath(path), catch: () => new FolderMissingError() }).pipe(
+        Effect.tap((real) => Effect.sync(() => approved.add(real))),
+      ),
+    touch: () => Effect.void,
+    listRecent: () => Effect.sync(() => [...approved].reverse()),
   };
   const chatFolders = join(dir, 'chats');
-  const requireApproved = async (path: string) => {
-    if (!(await folders.has(path))) throw new FolderRefusedError({ refusal: 'not-approved' });
-  };
+  const requireApproved = (path: string) =>
+    Effect.flatMap(folders.has(path), (has) =>
+      has ? Effect.void : Effect.fail(new FolderRefusedError({ refusal: 'not-approved' })),
+    );
   const local = LocalPiRuntimeLive({
     ...localSession,
     databasePath: join(dir, 'chat.sqlite'),
     chatFolders,
     models,
-    approveCreation: async (settings) => {
-      if (settings.cwd !== undefined) await requireApproved(settings.cwd);
-    },
+    approveCreation: (settings) =>
+      settings.cwd === undefined ? Effect.void : requireApproved(settings.cwd),
     approveFolder: requireApproved,
   }).pipe(Layer.provide(NodeServices.layer));
   const runtime = ManagedRuntime.make(

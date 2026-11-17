@@ -9,7 +9,6 @@ import {
 import { isSameChatHost } from '@moonbase/contracts/chat-validation';
 import { UnauthorizedError } from '@moonbase/contracts/errors';
 import {
-  FolderMissingError,
   FolderRefusedError,
   FoldersUnavailableError,
   isFolderError,
@@ -36,8 +35,6 @@ export const LocalHostLive = (
     LocalHostService,
     Effect.gen(function* () {
       const control = yield* LocalPiControl;
-      const failure = (error: unknown): FolderError =>
-        isFolderError(error) ? error : new FoldersUnavailableError();
       const handle =
         <K extends LocalHostCommand, A>(
           operation: K,
@@ -50,34 +47,34 @@ export const LocalHostLive = (
               ? run(input)
               : Effect.fail(new UnauthorizedError({ operation }));
           });
-      const promise = <A>(run: () => Promise<A>) => Effect.tryPromise({ try: run, catch: failure });
       return {
         approveFolder: handle('approveFolder', ({ requestId, path, recent }) =>
-          promise(async () => {
-            const approved = await config.folders
-              .approve(path, { recent: recent ?? true })
-              .catch((error: unknown) => {
-                throw isFolderError(error) ? error : new FolderMissingError();
-              });
-            return { requestId, path: approved };
-          }),
+          Effect.map(config.folders.approve(path, { recent: recent ?? true }), (approved) => ({
+            requestId,
+            path: approved,
+          })),
         ),
         listRecentFolders: handle('listRecentFolders', () =>
-          promise(async () => ({ folders: await config.folders.listRecent() })),
+          Effect.map(config.folders.listRecent(), (folders) => ({ folders })),
         ),
         checkChatFolder: handle('checkChatFolder', ({ path }) =>
-          promise(() => checkChatFolder(config.chatFolders, path)),
+          Effect.tryPromise({
+            try: () => checkChatFolder(config.chatFolders, path),
+            catch: (error): FolderError =>
+              isFolderError(error) ? error : new FoldersUnavailableError(),
+          }),
         ),
         checkApprovedFolder: handle('checkApprovedFolder', ({ path }) =>
-          promise(async () => {
-            if (!(await config.folders.has(path)))
-              throw new FolderRefusedError({ refusal: config.folders.refusal });
-          }),
+          Effect.flatMap(config.folders.has(path), (approved) =>
+            approved
+              ? Effect.void
+              : Effect.fail(new FolderRefusedError({ refusal: config.folders.refusal })),
+          ),
         ),
         listHostFolders: handle('listHostFolders', () => {
           const { listFolders } = config.folders;
           return listFolders
-            ? promise(async () => ({ folders: await listFolders() }))
+            ? Effect.map(listFolders(), (folders) => ({ folders }))
             : Effect.fail(new IncompatibleHostError({ reason: 'no-roots' }));
         }),
         getActiveWork: handle('getActiveWork', () =>
