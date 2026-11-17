@@ -203,7 +203,7 @@ export function fauxWorkspace(seeds: Seed[]) {
         const result: SaveResult =
           disk.version !== input.expectedVersion
             ? { kind: 'conflict', disk }
-            : { kind: 'saved', disk: document(input.text), recoveryChanges: [] };
+            : { kind: 'saved', disk: document(input.text) };
         saves.set(key, { payload, result });
         if (result.kind === 'saved') {
           entries(input.target.checkout).set(input.target.path, {
@@ -471,7 +471,6 @@ export function fauxWorkspace(seeds: Seed[]) {
         const result: OperationResult = {
           id: operation.id,
           clientId: operation.clientId,
-          recoveryChanges: [],
           checkout: operation.checkout,
           kind: operation.kind,
           outcome: 'completed',

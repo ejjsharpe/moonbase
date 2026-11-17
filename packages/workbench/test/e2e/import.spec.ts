@@ -35,7 +35,6 @@ async function setup(page: Page) {
       return {
         ...input,
         items: [],
-        recoveryChanges: [],
         outcome: 'completed',
       };
     };

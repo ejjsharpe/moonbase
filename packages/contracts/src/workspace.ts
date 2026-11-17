@@ -21,7 +21,6 @@ export type Comparison = typeof Contracts.ComparisonSchema.Type;
 export type LookupMatch = typeof Contracts.LookupMatchSchema.Type;
 export type TextMatch = typeof Contracts.TextMatchSchema.Type;
 export type TextSearchFile = typeof Contracts.TextSearchFileSchema.Type;
-export type RecoveryChange = typeof Contracts.RecoveryChangeSchema.Type;
 export type EntryReference = typeof Contracts.EntryReferenceSchema.Type;
 export type WorkspaceOperation = typeof Contracts.WorkspaceOperationSchema.Type;
 export type OperationResult = typeof Contracts.OperationResultSchema.Type;
