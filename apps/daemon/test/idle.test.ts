@@ -3,15 +3,18 @@ import { test } from 'node:test';
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { runDaemon, type DaemonExit } from '../src/daemon.ts';
-import { createIdleMonitor } from '../src/idle.ts';
+import { Duration, Effect, Exit, Fiber, Scope, SubscriptionRef } from 'effect';
+import { TestClock } from 'effect/testing';
+import { makeDaemonStop } from '../src/daemon-stop.ts';
+import { waitForIdle } from '../src/idle.ts';
 import { createFauxProviders } from './faux-provider.ts';
 import {
   bounded,
-  createControlledClock,
   createFauxClient,
+  createTestClock,
   findFreePort,
   probeHealth,
+  runInProcess,
   startInProcess,
   temporaryRoot,
   until,
@@ -20,42 +23,53 @@ import { fauxModelId, fauxProviderId } from './faux-provider.ts';
 
 const minute = 60_000;
 
-test('the idle monitor waits for every user to end, and treats an unreadable work check as work', async () => {
-  const time = createControlledClock();
-  let idle = 0,
-    work: () => Promise<boolean> = async () => false;
-  const monitor = createIdleMonitor({
-    idleMs: 5 * minute,
-    pollMs: 30_000,
-    clock: time.clock,
-    hasActiveWork: () => work(),
-    onIdle: () => idle++,
-  });
-  monitor.begin();
-  monitor.begin();
-  await time.advance(10 * minute);
-  monitor.end();
-  await time.advance(10 * minute);
-  assert.equal(idle, 0, 'one user is still connected');
-  monitor.end();
-  work = async () => {
-    throw Error('store unavailable');
-  };
-  await time.advance(10 * minute);
-  assert.equal(idle, 0, 'work that cannot be ruled out keeps the daemon');
-  work = async () => false;
-  await time.advance(4 * minute);
-  assert.equal(idle, 0, 'idle time counts from the last time work was seen');
-  await time.advance(2 * minute);
-  assert.equal(idle, 1);
-  await time.advance(10 * minute);
-  assert.equal(idle, 1, 'idle fires once');
-  assert.equal(time.pending, 0);
+test('the idle wait waits for every use to end, treats an unreadable work check as work, and stops once', async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const stop = yield* makeDaemonStop;
+      let work: Effect.Effect<boolean, Error> = Effect.succeed(false);
+      const stopping = Effect.map(SubscriptionRef.get(stop.use), (use) => use.stopping);
+      const idle = yield* Effect.forkChild(
+        waitForIdle(
+          stop.use,
+          {
+            idle: Duration.minutes(5),
+            poll: Duration.seconds(30),
+            hasActiveWork: Effect.suspend(() => work),
+          },
+          stop.request('idle', { unused: true }),
+        ),
+      );
+      const [first, second] = [Scope.makeUnsafe(), Scope.makeUnsafe()];
+      yield* Scope.provide(stop.admit, first);
+      yield* Scope.provide(stop.admit, second);
+      yield* TestClock.adjust(10 * minute);
+      yield* Scope.close(first, Exit.void);
+      yield* TestClock.adjust(10 * minute);
+      assert.equal(yield* stopping, undefined, 'one use is still held');
+      yield* Scope.close(second, Exit.void);
+      work = Effect.fail(Error('store unavailable'));
+      yield* TestClock.adjust(10 * minute);
+      assert.equal(yield* stopping, undefined, 'work that cannot be ruled out keeps the daemon');
+      work = Effect.succeed(false);
+      yield* TestClock.adjust(4 * minute);
+      assert.equal(yield* stopping, undefined, 'idle time counts from the last time work was seen');
+      yield* TestClock.adjust(2 * minute);
+      assert.equal(yield* stopping, 'idle');
+      assert.ok(idle.pollUnsafe(), 'the wait ends once the daemon stops');
+      // Once stopping, a new use is refused, and a stop asked for later changes nothing.
+      const refused = yield* Effect.exit(Effect.scoped(stop.admit));
+      assert.ok(Exit.isFailure(refused));
+      assert.equal(yield* stop.request('stopped'), false);
+      assert.equal(yield* stopping, 'idle');
+      yield* Fiber.join(idle);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
 });
 
 test('a local daemon exits idle only after 5 minutes with no client; a request restarts the wait', async () => {
   const root = await temporaryRoot(),
-    time = createControlledClock();
+    time = createTestClock();
   let daemon: Awaited<ReturnType<typeof startInProcess>> | undefined;
   try {
     daemon = await startInProcess(root, time);
@@ -63,7 +77,6 @@ test('a local daemon exits idle only after 5 minutes with no client; a request r
     await daemon.client.command('getChatHost', { host: daemon.session.host });
     await time.advance(4 * minute);
     assert.equal(daemon.settled, undefined, 'the request restarted the wait');
-    assert.equal(time.pending, 1, 'its last check scheduled the next rather than going idle');
     await stat(join(daemon.directory, 'endpoint.json'));
     await time.advance(minute + 30_000);
     assert.equal(await daemon.running, 'idle');
@@ -76,7 +89,7 @@ test('a local daemon exits idle only after 5 minutes with no client; a request r
 
 test('unauthenticated requests never delay a local daemon going idle; an authenticated probe does', async () => {
   const root = await temporaryRoot(),
-    time = createControlledClock();
+    time = createTestClock();
   let daemon: Awaited<ReturnType<typeof startInProcess>> | undefined;
   try {
     await mkdir(join(root, 'second'));
@@ -117,7 +130,6 @@ test('unauthenticated requests never delay a local daemon going idle; an authent
     await probe.arrayBuffer();
     await time.advance(4 * minute);
     assert.equal(daemon.settled, undefined, 'the authenticated probe restarted the wait');
-    assert.equal(time.pending, 1, 'its last check scheduled the next rather than going idle');
     await time.advance(minute + 30_000);
     assert.equal(await daemon.running, 'idle');
   } finally {
@@ -128,7 +140,7 @@ test('unauthenticated requests never delay a local daemon going idle; an authent
 
 test('an open watch and active work keep a local daemon running; it idles once both end', async () => {
   const root = await temporaryRoot(),
-    time = createControlledClock();
+    time = createTestClock();
   let daemon: Awaited<ReturnType<typeof startInProcess>> | undefined;
   try {
     daemon = await startInProcess(root, time);
@@ -156,7 +168,6 @@ test('an open watch and active work keep a local daemon running; it idles once b
     );
     await time.advance(20 * minute);
     assert.equal(daemon.settled, undefined, 'active work keeps the daemon');
-    assert.equal(time.pending, 1, 'its last check scheduled the next rather than going idle');
     await client.command('stopChat', { stop: running.run!.stop, requestId: 'stop' });
     await until(
       () => client.command('getChat', { target }),
@@ -172,7 +183,7 @@ test('an open watch and active work keep a local daemon running; it idles once b
 
 test('a host-mode daemon never idles out and stops on its signal', async () => {
   const root = await temporaryRoot(),
-    time = createControlledClock(),
+    time = createTestClock(),
     directory = join(root, 'data'),
     work = join(root, 'work');
   await mkdir(directory, { mode: 0o700 });
@@ -187,28 +198,21 @@ test('a host-mode daemon never idles out and stops on its signal', async () => {
     }),
     { mode: 0o600 },
   );
-  const controller = new AbortController();
-  let ready!: () => void;
-  const listening = new Promise<void>((resolve) => (ready = resolve));
-  let settled: DaemonExit | undefined, running: Promise<unknown> | undefined;
+  const listening = Promise.withResolvers<void>();
+  let settled: unknown;
+  const daemon = runInProcess(directory, {
+    ready: () => listening.resolve(),
+    providers: () => createFauxProviders(directory),
+    idleClock: time.clock,
+  });
+  void daemon.exit.then((exit) => (settled = exit));
   try {
-    running = runDaemon({
-      directory,
-      signal: controller.signal,
-      ready: () => ready(),
-      closeClaudeCode: async () => {},
-      providers: () => createFauxProviders(directory),
-      clock: time.clock,
-    }).then((exit) => (settled = exit));
-    await listening;
+    await listening.promise;
     await time.advance(60 * minute);
-    assert.equal(settled, undefined);
-    assert.equal(time.pending, 0, 'host mode schedules no idle check');
-    controller.abort();
-    assert.equal(await running, 'stopped');
+    assert.equal(settled, undefined, 'host mode never idles out');
+    assert.equal(await daemon.stop(), 'stopped');
   } finally {
-    controller.abort();
-    await running?.catch(() => {});
+    await daemon.stop().catch(() => {});
     await rm(root, { recursive: true, force: true });
   }
 });

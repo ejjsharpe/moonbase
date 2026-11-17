@@ -4,8 +4,7 @@ import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { makeKeyFileSource } from '@moonbase/chat-runtime/credentials';
-import { runDaemon } from '../src/daemon.ts';
-import { createControlledClock, startInProcess, temporaryRoot } from './daemon-fixture.ts';
+import { createTestClock, runInProcess, startInProcess, temporaryRoot } from './daemon-fixture.ts';
 import { createFauxProviders } from './faux-provider.ts';
 
 const minute = 60_000;
@@ -54,7 +53,7 @@ function recordShutdown(directory: () => string, port: () => number) {
 for (const exit of ['stopped', 'idle'] as const)
   test(`a daemon ${exit === 'idle' ? 'going idle' : 'told to stop'} closes the server, then the runtime, then Claude Code, then removes endpoint.json`, async () => {
     const root = await temporaryRoot(),
-      time = createControlledClock();
+      time = createTestClock();
     let daemon: Awaited<ReturnType<typeof startInProcess>> | undefined;
     const shutdown = recordShutdown(
       () => daemon!.directory,
@@ -77,22 +76,22 @@ for (const exit of ['stopped', 'idle'] as const)
 
 test('a daemon stopped before it listens never announces itself, and still cleans up', async () => {
   const root = await temporaryRoot(),
-    directory = join(root, 'data'),
-    controller = new AbortController();
-  controller.abort();
+    directory = join(root, 'data');
   let ready = 0,
     closed = 0;
   try {
-    const exit = await runDaemon({
-      directory,
-      signal: controller.signal,
+    // Interrupted as a signal would, once it has read its settings.
+    const daemon: ReturnType<typeof runInProcess> = runInProcess(directory, {
       ready: () => ready++,
-      closeClaudeCode: async () => {
+      closeClaudeCode: () => {
         closed++;
       },
-      providers: () => createFauxProviders(directory),
+      providers: () => {
+        void daemon.stop();
+        return createFauxProviders(directory);
+      },
     });
-    assert.equal(exit, 'stopped');
+    assert.equal(await daemon.exit, 'stopped');
     assert.equal(ready, 0);
     assert.equal(closed, 1);
     assert.equal(await exists(join(directory, 'endpoint.json')), false);
@@ -109,13 +108,10 @@ async function prepareDirectory(root: string, files: Record<string, string>) {
   return directory;
 }
 const failToStart = (directory: string, providers = () => createFauxProviders(directory)) =>
-  runDaemon({
-    directory,
-    signal: new AbortController().signal,
+  runInProcess(directory, {
     ready: () => assert.fail('the daemon must not become ready'),
-    closeClaudeCode: async () => {},
     providers,
-  });
+  }).exit;
 
 test('a stale endpoint.json from a crashed daemon is removed once the lock is taken', async () => {
   const root = await temporaryRoot();
@@ -173,22 +169,13 @@ test('a local daemon refuses an insecure credential key file at startup, and cre
 
     // A missing key file is fine at startup; nothing creates it until a sign-in needs it.
     await rm(keyPath);
-    const controller = new AbortController();
-    let ready!: () => void;
-    const listening = new Promise<void>((resolve) => (ready = resolve));
-    const running = runDaemon({
-      directory,
-      signal: controller.signal,
-      ready: () => ready(),
-      closeClaudeCode: async () => {},
-      providers: local,
-    });
+    const listening = Promise.withResolvers<void>();
+    const running = runInProcess(directory, { ready: () => listening.resolve(), providers: local });
     try {
-      await listening;
+      await listening.promise;
       assert.equal(await exists(keyPath), false);
     } finally {
-      controller.abort();
-      assert.equal(await running, 'stopped');
+      assert.equal(await running.stop(), 'stopped');
     }
   } finally {
     await rm(root, { recursive: true, force: true });
