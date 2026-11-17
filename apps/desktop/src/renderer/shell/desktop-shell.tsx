@@ -24,6 +24,7 @@ import { ChatView } from '../chat/view.tsx';
 import { checkoutName } from '@moonbase/ui/projects';
 import { homePath } from '../components/folder-menu.tsx';
 import { readOwn } from '@moonbase/application/editor';
+import { findComposerPlace } from '@moonbase/application/chat';
 import { Icon } from '@moonbase/ui/icons';
 import {
   isFileDropTaken,
@@ -132,6 +133,14 @@ function ownsPageKeys(element: HTMLElement | null) {
 /** The window's shortcut on the editor's cheat sheet. */
 const windowShortcuts = [{ label: 'Project chats', keys: 'Meta+J' }];
 const railWidth = (collapsed: boolean) => (collapsed ? 0 : 52);
+/** Focuses the composer's message with the caret at its end, once it has drawn. */
+const focusMessageEnd = () =>
+  requestAnimationFrame(() => {
+    const input = document.getElementById('message');
+    if (!(input instanceof HTMLTextAreaElement)) return;
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  });
 const dockDefaultWidth = 400,
   dockMinWidth = 320;
 
@@ -155,13 +164,11 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
 ) {
   const application = useDesktopApplication(desktopApplication),
     controller = useEditorActions(editor),
-    { lifecycle, chat } = application,
+    { lifecycle, chat, composer } = application,
     state = useAtomValue(editor.atoms.snapshot);
   const [destination, setDestination] = useState<'project' | 'chat'>('chat');
   const [dockOpen, setDockOpen] = useState(true);
   const [resizingDock, setResizingDock] = useState(false);
-  // Files the tree asked to mention in the dock's chat, until the dock takes them.
-  const [chatMention, setChatMention] = useState<{ id: number; files: string[] } | null>(null);
   const [settings, setSettings] = useState<SettingsSection | null>(null);
   const [projectWorktrees, setProjectWorktrees] = useState<{
     checkoutId: string;
@@ -901,13 +908,17 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
               copyPaths={copyPaths}
               revealPath={revealPath}
               mentionInChat={
-                chat
+                chat && composer && selected
                   ? (checkout, paths) => {
                       setDockOpen(true);
-                      setChatMention((current) => ({
-                        id: (current?.id ?? 0) + 1,
-                        files: paths.map((path) => `${checkout.root}/${path}`),
-                      }));
+                      // The dock's chat takes them, relative to its folder, then has focus.
+                      const place = findComposerPlace(selected.root, chat.getSnapshot().remote);
+                      const files = paths.map((path) => `${checkout.root}/${path}`);
+                      run(
+                        desktopApplication
+                          .run(composer.mention(place, files))
+                          .then(focusMessageEnd),
+                      );
                     }
                   : undefined
               }
@@ -973,6 +984,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                       <ChatView
                         key={`${lifecycle.chatTargetId}:${selected.checkoutId}`}
                         controller={chat}
+                        composer={composer!}
+                        runner={desktopApplication}
                         chooseFolder={chooseChatFolder}
                         recentFolders={
                           recentChatFolders &&
@@ -1009,9 +1022,6 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                             }
                           },
                           collapse: () => showDock(false),
-                          mention: chatMention,
-                          mentionHandled: (id) =>
-                            setChatMention((current) => (current?.id === id ? null : current)),
                         }}
                       />
                     ) : null}
@@ -1052,6 +1062,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
             <ChatView
               key={lifecycle.chatTargetId}
               controller={chat}
+              composer={composer!}
+              runner={desktopApplication}
               titleBar={chatTitle}
               sidebarHidden={sidebarHidden}
               chooseFolder={chooseChatFolder}

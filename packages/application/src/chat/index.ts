@@ -28,3 +28,33 @@ export type {
   TranscriptManifestState,
   TranscriptContentState,
 } from './transcript/transcript-state.ts';
+
+export {
+  ChatComposers,
+  type ChatComposer,
+  type ComposerChat,
+  type CreateWorktree,
+} from './composer/composer-service.ts';
+export { composerAtoms } from './composer/composer-atoms.ts';
+export {
+  findChatFolder,
+  findComposerPlace,
+  findMentionClash,
+  findSelectedChat,
+  isMessageFor,
+  readChoices,
+  type ChatComposerSnapshot,
+  type ComposerChoices,
+  type ComposerMessage,
+  type ComposerPlace,
+} from './composer/composer.ts';
+export {
+  appendMentions,
+  findMentionQuery,
+  findMentionRanges,
+  insertMention,
+  rebaseMentions,
+  removeMentionBefore,
+  type MentionQuery,
+} from './composer/mention-text.ts';
+export { chatWorktreeBranch } from './composer/worktree-branch.ts';

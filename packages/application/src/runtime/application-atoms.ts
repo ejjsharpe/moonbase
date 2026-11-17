@@ -11,6 +11,8 @@ export function makeApplicationAtoms(application: MoonbaseApplicationShape) {
       toApplicationSnapshot(get(phase), get(chat), application.chat.targets),
     ),
     chat: Atom.readable((get) => get(chat).controller),
+    /** The open chat's composer, made beside its controller. */
+    composer: Atom.readable((get) => get(chat).composer),
   };
 }
 export type ApplicationAtoms = ReturnType<typeof makeApplicationAtoms>;

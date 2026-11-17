@@ -5,6 +5,7 @@ import { EditorLoader } from '../editor/editor-loader.ts';
 import type { EditorFailure } from '../editor/editor-errors.ts';
 import type { ChatController } from '../chat/index.ts';
 import { ChatHost, type ChatHostOptions, type ChatHostState } from './chat-host-service.ts';
+import { ChatComposers } from '../chat/composer/composer-service.ts';
 import {
   ApplicationLifecycleError,
   areChatTargetsValid,
@@ -212,7 +213,10 @@ export class MoonbaseApplication extends Context.Service<
     );
     return Layer.provideMerge(
       application,
-      Layer.provideMerge(ChatHost.layer(options), Layer.effectDiscard(validate(options))),
+      Layer.provideMerge(
+        Layer.provide(ChatHost.layer(options), ChatComposers.layer),
+        Layer.effectDiscard(validate(options)),
+      ),
     );
   };
 }

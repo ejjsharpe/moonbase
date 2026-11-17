@@ -16,6 +16,8 @@ export type DesktopApplication = {
   /** Runs a synchronous Effect on the root runtime, as `beforeunload` and Close need. */
   readonly runSync: <A, E>(effect: Effect.Effect<A, E>) => A;
 };
+/** The root's runners, for views that run actions of their own. */
+export type DesktopRunner = Pick<DesktopApplication, 'run' | 'runSync'>;
 
 /**
  * The application's lifecycle and the chat it shows, subscribed, with its actions as the shell
@@ -25,6 +27,7 @@ export function useDesktopApplication(application: DesktopApplication) {
   const registry = useContext(RegistryContext);
   const lifecycle = useAtomValue(application.atoms.snapshot);
   const chat = useAtomValue(application.atoms.chat);
+  const composer = useAtomValue(application.atoms.composer);
   const actions = useMemo(() => {
     const { service, run, runSync } = application;
     return {
@@ -40,6 +43,6 @@ export function useDesktopApplication(application: DesktopApplication) {
       describe: describeApplicationFailure,
     };
   }, [application, registry]);
-  return { lifecycle, chat, ...actions };
+  return { lifecycle, chat, composer, ...actions };
 }
 export type DesktopApplicationView = ReturnType<typeof useDesktopApplication>;
