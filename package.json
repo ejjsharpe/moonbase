@@ -16,6 +16,7 @@
     "lint:fix": "bun run lint --fix --ignore-pattern \"packages/ui/**\"",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
+    "check:fast": "node scripts/check-fast.mjs",
     "check": "nx affected -t typecheck test && bun run lint && bun run format:check && bun run check:foundation"
   },
   "trustedDependencies": [
