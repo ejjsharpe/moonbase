@@ -27,9 +27,6 @@ type MergedOperation = {
   fresh: OperationResult['items'];
   changed: boolean;
 };
-export const dedupeChanges = (changes: OperationResult['recoveryChanges']) => [
-  ...new Map(changes.map((change) => [canonical(change), change])).values(),
-];
 
 /** Takes the host's items and outcome into the client's record, ahead of publishing it. */
 export function adoptHostResult(record: OperationRecord, host: HostOperationResult) {
@@ -177,10 +174,6 @@ export function recordPublicationFailure(
   record.result.message = record.publicationError;
   try {
     const committed = context.store.get<OperationRecord>('operations', id);
-    record.result.recoveryChanges = dedupeChanges([
-      ...(committed?.result.recoveryChanges ?? []),
-      ...record.result.recoveryChanges,
-    ]);
     record.publishedItems = [
       ...new Set([...(committed?.publishedItems ?? []), ...(record.publishedItems ?? [])]),
     ];
@@ -228,17 +221,12 @@ export function applyOperations(
       if (replaced.length) pruneReplacedBuffers(context, client);
       if (JSON.stringify(state) !== body) {
         store.writeInternalRecovery(client, revision, state);
-        const change = { clientId: client, previousRevision: revision, revision: revision + 1 };
-        for (const m of fresh) m.updated.result.recoveryChanges.push(change);
         revision++;
       }
     }
     for (const m of relevant) m.updated.publicationRevisions[client] = revision;
   }
-  for (const m of changed) {
-    m.updated.result.recoveryChanges = dedupeChanges(m.updated.result.recoveryChanges);
-    context.putOperation(m.id, m.updated);
-  }
+  for (const m of changed) context.putOperation(m.id, m.updated);
   return merged;
 }
 
@@ -305,15 +293,7 @@ function mergeOperation(
     publicationRevisions: { ...record.publicationRevisions, ...committed?.publicationRevisions },
     acknowledgedBy: [...new Set([...(committed?.acknowledgedBy ?? []), ...record.acknowledgedBy])],
     publishedItems: [...published, ...fresh.map(canonical)],
-    result: {
-      ...record.result,
-      items: mergedItems,
-      outcome,
-      recoveryChanges: [
-        ...(committed?.result.recoveryChanges ?? []),
-        ...record.result.recoveryChanges,
-      ],
-    },
+    result: { ...record.result, items: mergedItems, outcome },
   };
   delete updated.publicationError;
   if (

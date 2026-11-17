@@ -55,10 +55,8 @@ const operation = {
   sources: [entry],
   destination: 'copy.txt',
 };
-const receipt = { clientId: 'client', requestId: 'publication', previousRevision: 1, revision: 2 };
 const result = {
   ...operation,
-  recoveryChanges: [receipt],
   outcome: 'completed' as const,
   items: [{ source: target.path, destination: 'copy.txt', outcome: 'completed' as const }],
 };
@@ -91,13 +89,7 @@ const inputs = {
 const outputs = {
   openCheckout: checkout,
   readFile: disk,
-  saveFile: {
-    kind: 'saved',
-    disk,
-    recoveryChanges: [receipt],
-    persistencePending: false,
-    message: '',
-  },
+  saveFile: { kind: 'saved', disk, persistencePending: false, message: '' },
   listDirectory: {
     entries: [{ path: target.path, directory: false, ignored: false }],
     partial: false,
@@ -143,22 +135,12 @@ for (const operation of Object.keys(inputs) as FileCommand[]) {
             clientId: result.clientId,
             checkout,
             kind: result.kind,
-            recoveryChanges: result.recoveryChanges.map(
-              ({ clientId, previousRevision, revision }) => ({
-                clientId,
-                previousRevision,
-                revision,
-              }),
-            ),
             outcome: result.outcome,
             items: result.items,
           }
         : outputs[operation];
-    // Receipts used as recovery changes deliberately project their request ID.
-    const actual = decodeWorkspaceOutput(operation, outputs[operation]);
-    if (operation === 'saveFile')
-      assert.equal(decodeWorkspaceOutput('saveFile', actual).kind, 'saved');
-    else assert.deepEqual(actual, expected);
+    // An operation's result projects away the request's sources and destination.
+    assert.deepEqual(decodeWorkspaceOutput(operation, outputs[operation]), expected);
     assert.throws(
       () => decodeWorkspaceInput(operation, { ...inputs[operation], unknown: 'secret' }),
       (e) => ApplicationError.is(e) && e.code === 'InvalidInput' && !e.message.includes('secret'),

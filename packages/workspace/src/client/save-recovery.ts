@@ -65,7 +65,7 @@ export function applySaveStatus(record: SaveRecord, status: SaveStatus, notStart
       return false;
     }
     const disk = { text: record.input.text, version: status.version };
-    record.result = { kind: 'saved', disk, recoveryChanges: [] };
+    record.result = { kind: 'saved', disk };
   } else if (status.kind === 'conflict') record.result = { kind: 'conflict', disk: status.disk };
   else if (status.kind === 'not-started') notStarted.add(saveKey(record.input));
   else {
@@ -186,14 +186,10 @@ export const publishSaves = (
         // The stored record says how far the save got; its text is the one it was reserved with.
         const base = fromStoredSave(committed, record.input.text, record.baseline.text);
         if (base.state === 'settled' || base.state === 'done')
-          return { id, record, committed, updated: base, changed: false };
+          return { id, record, committed, updated: base };
         const result: SaveResult | undefined =
           record.result?.kind === 'saved'
-            ? {
-                kind: 'saved',
-                disk: record.result.disk,
-                recoveryChanges: record.result.recoveryChanges,
-              }
+            ? { kind: 'saved', disk: record.result.disk }
             : record.result;
         const restores =
           restore &&
@@ -247,20 +243,12 @@ export const publishSaves = (
           ...(result ? { result } : {}),
           ...(record.message === undefined ? {} : { message: record.message }),
         };
-        return { id, record, committed, updated, changed: drafted };
+        return { id, record, committed, updated };
       });
       if (changed) store.writeInternalRecovery(clientId, revision, state);
       const settling = updates.filter((u) => u.updated.state !== 'sent').map((u) => u.id);
       for (const disk of replaced) store.keepBaseline(clientId, disk, settling);
       for (const entry of updates) {
-        if (changed && entry.changed && entry.updated.result?.kind === 'saved')
-          entry.updated.result = {
-            ...entry.updated.result,
-            recoveryChanges: [
-              ...entry.updated.result.recoveryChanges,
-              { clientId, previousRevision: revision, revision: revision + 1 },
-            ],
-          };
         if (!same(entry.committed, toStoredSave(entry.updated)))
           store.writeSave(entry.id, entry.updated);
       }

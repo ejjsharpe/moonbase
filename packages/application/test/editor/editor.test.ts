@@ -466,7 +466,6 @@ test('incompatible recovered operation evidence never rebinds equal checkout/pat
             {
               id: 'foreign',
               clientId: 'origin',
-              recoveryChanges: [],
               checkout: { ...checkout, hostId: 'impostor' },
               kind: 'move',
               outcome: 'completed',
@@ -1302,7 +1301,7 @@ test('pre-existing persisted replacement drafts survive a foreign move and contr
     const before = await f.client.command('loadRecovery', { clientId: f.editor.clientId });
     const sources = await f.client.command('inspectEntries', { checkout, paths: ['a.ts'] });
     const replacements = await f.client.command('inspectEntries', { checkout, paths: ['b.ts'] });
-    const result = await f.client.command('mutate', {
+    await f.client.command('mutate', {
       id: 'persisted-replace',
       clientId: 'foreign',
       checkout,
@@ -1314,10 +1313,6 @@ test('pre-existing persisted replacement drafts survive a foreign move and contr
     const pending = await f.client.command('loadRecovery', { clientId: f.editor.clientId });
     assert.deepEqual(draftsOf(pending.state), draftsOf(before.state));
     assert.equal(pending.operations.length, 1);
-    assert.equal(
-      result.recoveryChanges.some((change) => change.clientId === f.editor.clientId),
-      false,
-    );
     await f.editor.dispose();
     const restored = await acquireEditor(f.runtime, {
       client: f.client,

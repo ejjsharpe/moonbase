@@ -94,7 +94,6 @@ async function setup(page: Page) {
         });
       return {
         ...input,
-        recoveryChanges: [],
         outcome: 'completed',
         items: destinations.map((destination, index) => ({
           source: names[index],
