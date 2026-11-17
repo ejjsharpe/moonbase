@@ -111,27 +111,41 @@ test('native Reload retains text painted before ordinary recovery debounce @pack
       .toBe('local dirty draft');
     await editor().focus();
     await editor().press('End');
-    await page.evaluate(() =>
-      document.addEventListener(
-        'input',
-        () => Object.assign(window, { reloadInputAt: performance.now() }),
-        { capture: true },
-      ),
-    );
-    await app.evaluate(async ({ BrowserWindow }) => {
-      const contents = BrowserWindow.getAllWindows()[0].webContents;
-      await contents.insertText(' fresh visible tail');
-      await contents.executeJavaScript(
-        'new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))',
-      );
+    // The page's delayed timers wait until Reload, so the recovery debounce can't send the tail
+    // before then however slowly the page paints. Zero-delay timers, the runtime's own yields,
+    // still run.
+    await page.evaluate(() => {
+      const setTimer = window.setTimeout,
+        clearTimer = window.clearTimeout,
+        held = new Map<number, () => number>(),
+        started = new Map<number, number>();
+      let next = -1;
+      window.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+        if (!delay || delay <= 0) return setTimer(handler, delay, ...args);
+        const id = next--;
+        held.set(id, () => setTimer(handler, delay, ...args));
+        return id;
+      }) as typeof window.setTimeout;
+      // A held timer cleared after it started clears the timer it became.
+      window.clearTimeout = ((id?: number) => {
+        if (id !== undefined && held.delete(id)) return;
+        clearTimer(started.get(id!) ?? id);
+      }) as typeof window.clearTimeout;
+      Object.assign(window, {
+        releaseTimers: () => {
+          window.setTimeout = setTimer;
+          for (const [id, start] of held) started.set(id, start());
+          held.clear();
+        },
+      });
     });
-    const shown = await page.evaluate(() => ({
-      text: document.querySelector('.view-lines')?.textContent?.replace(/\u00a0/g, ' '),
-      elapsed: performance.now() - (window as unknown as { reloadInputAt: number }).reloadInputAt,
-    }));
-    const before = shown;
-    expect(before.text).toContain('fresh visible tail');
-    expect(before.elapsed).toBeLessThan(150);
+    await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.insertText(' fresh visible tail'),
+    );
+    await expect(page.locator('.view-lines')).toContainText('fresh visible tail');
+    // Painted, and not yet in the recovery store: Reload alone has to keep it.
+    expect(draftsOf((await recovery()).state)[0]?.text).toBe('local dirty draft');
+    await page.evaluate(() => (window as unknown as { releaseTimers(): void }).releaseTimers());
     const outcome = await reload();
     const project = page
       .getByRole('tablist', { name: 'Workbench views', exact: true })
