@@ -15,7 +15,7 @@ import {
   instrumentTranscriptReads,
   seedTranscriptHistory,
   seedTranscriptLongText,
-} from '../../packages/chat-runtime/test/transcript-history-fixture.ts';
+} from '../../packages/chat-runtime/test/transcript/transcript-history-fixture.ts';
 import { scaledTranscriptLimits as limits } from '../../packages/application/test/chat/transcript/transcript-limits-fixture.ts';
 
 /**

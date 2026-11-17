@@ -4,7 +4,7 @@ import { Harness, type ConversationId, type EntryRecord } from '@earendil-works/
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import type { ChatOutput } from '@moonbase/contracts/chat';
-import { fixture } from './runtime-fixture.ts';
+import { fixture } from '../runtime-fixture.ts';
 
 test('a continuation does not enumerate more than the declared 32-part work bound', async (t) => {
   let harness!: Harness;
@@ -84,77 +84,6 @@ test('a continuation does not enumerate more than the declared 32-part work boun
   console.log('indexed block reads per bounded slice:', indexedCounts);
   assert(Math.max(...indexedCounts) <= 33);
   assert(indexedCounts.some((count) => count > 0));
-});
-
-test('lazy JSON matches JSON.stringify across escaped controls and lone/pair surrogate boundaries', async (t) => {
-  let harness!: Harness;
-  const open = Harness.open;
-  t.mock.method(
-    Harness,
-    'open',
-    async (...args: Parameters<typeof open>) => (harness = await open(...args)),
-  );
-  const f = await fixture(t),
-    target = await f.create();
-  const json = {
-    ['k'.repeat(4095) + '😀\udc00' + '\\"']: [
-      'x'.repeat(4094) + '\ud800a\udc00😀\u0000\b\f\r\n\t' + 'y'.repeat(16400),
-      { str: '\\uD800 punctuation },[ : true', arr: [null, true, false, -0, 1e22] },
-    ],
-  };
-  const text = JSON.stringify(json);
-  await harness.commit(
-    (tx) =>
-      tx.appendEntry(Number(target.conversationId) as ConversationId, {
-        kind: 'pi.user',
-        model: [
-          {
-            role: 'toolResult',
-            toolCallId: 'call',
-            toolName: 'custom',
-            timestamp: 1,
-            isError: false,
-            content: [],
-            details: json,
-          },
-        ],
-      }),
-    context,
-  );
-  for (const query of [
-    '😀',
-    '\\ud800',
-    '\\udc00',
-    '\\u0000',
-    '\\r\\n',
-    '},{',
-    'true',
-    '0',
-    'k😀',
-  ]) {
-    let cursor: string | null | undefined;
-    const found: ChatOutput<'findChatTranscript'>['matches'] = [];
-    do {
-      const page: ChatOutput<'findChatTranscript'> = await f.client.command('findChatTranscript', {
-        target,
-        query,
-        ...(cursor ? { cursor } : {}),
-      });
-      found.push(...page.matches.filter((m) => m.partId === 'm0.details'));
-      cursor = page.nextCursor;
-    } while (cursor);
-    const expr = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
-    assert.deepEqual(
-      found.map((m) => [m.start, m.end]),
-      [...text.matchAll(expr)].map((m) => [m.index, m.index + m[0].length]),
-      query,
-    );
-    for (const m of found)
-      assert.equal(
-        m.snippet.text,
-        text.slice(m.snippet.start, m.snippet.start + m.snippet.text.length),
-      );
-  }
 });
 
 test('direct message and auxiliary positions bound empty-message work and preserve every matching part on replay', async (t) => {

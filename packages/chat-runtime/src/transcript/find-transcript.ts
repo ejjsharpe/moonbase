@@ -8,14 +8,16 @@ import {
   type ChatInput,
   type ChatOutput,
 } from '@moonbase/contracts/chat';
+import { hashJson } from '../hash-json.ts';
+import { getEntryTextValues } from './message-values.ts';
+import { scanAdjacentEntry } from './saved-entries.ts';
 import {
-  getEntryTextValues,
-  hashJson,
-  openCursor,
-  scanAdjacentEntry,
-  sealCursor,
-} from './transcript.ts';
-import { maximumFindPathChars, maximumFindPathDepth, type TranscriptCursor } from './cursors.ts';
+  maximumFindPathChars,
+  maximumFindPathDepth,
+  openTranscriptCursor,
+  writeCursor,
+  type TranscriptCursor,
+} from '../cursors.ts';
 import { checkChatReplySize } from '@moonbase/contracts/chat-validation';
 import { InvalidChatRequestError } from '@moonbase/contracts/chat-errors';
 
@@ -146,6 +148,12 @@ async function readWindow(
     if (++count % tokensPerTurn === 0) await setImmediate();
     const offset =
       JSON.stringify(token.path) === JSON.stringify(position.path) ? position.offset : 0;
+    // Find only resumes between characters; an offset inside a surrogate pair is forged.
+    if (
+      /[\ud800-\udbff]/.test(token.text[offset - 1] ?? '') &&
+      /[\udc00-\udfff]/.test(token.text[offset] ?? '')
+    )
+      throw new InvalidChatRequestError({ problem: 'transcript-cursor' });
     const end = alignBoundary(
       token.text,
       Math.min(token.text.length, offset + limit - text.length),
@@ -182,7 +190,7 @@ export async function findTranscript(
 ): Promise<ChatOutput<'findChatTranscript'>> {
   const { target, query } = input;
   const binding = hashJson({ operation: 'findChatTranscript', target, query });
-  const cursor = input.cursor ? openCursor(harness, input.cursor, 'find', binding) : undefined;
+  const cursor = input.cursor ? openTranscriptCursor(input.cursor, 'find', binding) : undefined;
   const upper = cursor
     ? (cursor.upper ?? null)
     : String((await scanAdjacentEntry(harness, target, 'older'))?.id ?? '') || null;
@@ -200,7 +208,7 @@ export async function findTranscript(
     bytes: 0,
   };
   let next = cursor ?? start;
-  const startCursor = sealCursor(harness, start);
+  const startCursor = writeCursor(start);
   const matches: ChatOutput<'findChatTranscript'>['matches'] = [];
   const expression = getChatFindExpression(query);
   const subtrees = getSubtreeCache(harness);
@@ -216,7 +224,7 @@ export async function findTranscript(
       upperEntryId: upper,
       matches,
       progress: { entries: next.entries ?? 0, bytes: next.bytes ?? 0 },
-      nextCursor: complete ? null : sealCursor(harness, next),
+      nextCursor: complete ? null : writeCursor(next),
     });
   while (
     upper &&
