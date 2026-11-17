@@ -133,6 +133,32 @@ test('a vetoed Quit restores admissions; a consented one fences the editor and t
   }
 });
 
+test('a failed final chat write restores admissions without reversing a completed editor Discard', async () => {
+  const chat = fauxChat();
+  const f = makeApplication({ editor: true, chat: Effect.succeed(chat.dependencies) });
+  try {
+    await f.start();
+    await f.editor.openCheckout();
+    await f.editor.open();
+    await f.editor.edit('discarded');
+    // The first write keeps the drafts before the editor asks; the final one, after, fails.
+    let writes = 0;
+    chat.storage.write = () => {
+      if (++writes === 2) throw Error('private-storage-diagnostic');
+    };
+    const quit = f.prepareQuit();
+    await f.editor.answer((await f.editor.closePrompt())!.id, 'discard');
+    assert.equal(await quit, false);
+    assert.equal((await f.snapshot()).phase, 'live');
+    assert.equal(await f.editor.admissionsOpen(), true);
+    assert.equal(await f.editor.text(), 'original', 'the Discard stands');
+    await f.editor.edit('new edit');
+    assert.equal(await f.editor.text(), 'new edit');
+  } finally {
+    await f.dispose();
+  }
+});
+
 for (const fails of [false, true])
   test(`a closed chat owns its release, which blocks reopening until it ends (release fails: ${fails})`, async () => {
     const chat = fauxChat(),
