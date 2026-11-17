@@ -4,8 +4,9 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { Effect } from 'effect';
 import { CredentialStoreError } from '@moonbase/contracts/provider-errors';
-import { createCredentialStore } from '../src/credentials.ts';
+import { makeCredentialsFixture } from './credentials-fixture.ts';
 
 test('credential persistence encrypts privately, serializes refresh and retains originals on encryption/storage failure', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'moonbase-credentials-')),
@@ -13,20 +14,26 @@ test('credential persistence encrypts privately, serializes refresh and retains 
   t.after(() => rm(directory, { recursive: true, force: true }));
   let available = true,
     broken = false;
-  const store = createCredentialStore(directory, {
-    available: async () => available,
-    encrypt: async (text) => {
-      if (broken) throw Error('private secret diagnostic');
-      const iv = randomBytes(12),
-        cipher = createCipheriv('aes-256-gcm', key, iv);
-      return Buffer.concat([iv, cipher.update(text), cipher.final(), cipher.getAuthTag()]);
-    },
-    decrypt: async (bytes) => {
-      const data = Buffer.from(bytes),
-        decipher = createDecipheriv('aes-256-gcm', key, data.subarray(0, 12));
-      decipher.setAuthTag(data.subarray(-16));
-      return Buffer.concat([decipher.update(data.subarray(12, -16)), decipher.final()]).toString();
-    },
+  // A failure inside the encryption is its own (a defect here); the store discloses none of it.
+  const store = await makeCredentialsFixture(t).store(directory, {
+    available: Effect.sync(() => available),
+    encrypt: (text) =>
+      Effect.sync(() => {
+        if (broken) throw Error('private secret diagnostic');
+        const iv = randomBytes(12),
+          cipher = createCipheriv('aes-256-gcm', key, iv);
+        return Buffer.concat([iv, cipher.update(text), cipher.final(), cipher.getAuthTag()]);
+      }),
+    decrypt: (bytes) =>
+      Effect.sync(() => {
+        const data = Buffer.from(bytes),
+          decipher = createDecipheriv('aes-256-gcm', key, data.subarray(0, 12));
+        decipher.setAuthTag(data.subarray(-16));
+        return Buffer.concat([
+          decipher.update(data.subarray(12, -16)),
+          decipher.final(),
+        ]).toString();
+      }),
   });
   const original = { type: 'api_key' as const, key: 'transient-api-secret' };
   await store.modify('openai-api-key', async () => original);
@@ -112,20 +119,25 @@ test('pinned SDK refresh serializes encrypted credentials and persists rotated C
     key = randomBytes(32);
   t.after(() => rm(directory, { recursive: true, force: true }));
   let encryptionBroken = false;
-  const store = createCredentialStore(directory, {
-    available: async () => true,
-    encrypt: async (plain) => {
-      if (encryptionBroken) throw Error('Private encryption diagnostic');
-      const iv = randomBytes(12),
-        cipher = createCipheriv('aes-256-gcm', key, iv);
-      return Buffer.concat([iv, cipher.update(plain), cipher.final(), cipher.getAuthTag()]);
-    },
-    decrypt: async (bytes) => {
-      const data = Buffer.from(bytes),
-        decipher = createDecipheriv('aes-256-gcm', key, data.subarray(0, 12));
-      decipher.setAuthTag(data.subarray(-16));
-      return Buffer.concat([decipher.update(data.subarray(12, -16)), decipher.final()]).toString();
-    },
+  const store = await makeCredentialsFixture(t).store(directory, {
+    available: Effect.succeed(true),
+    encrypt: (plain) =>
+      Effect.sync(() => {
+        if (encryptionBroken) throw Error('Private encryption diagnostic');
+        const iv = randomBytes(12),
+          cipher = createCipheriv('aes-256-gcm', key, iv);
+        return Buffer.concat([iv, cipher.update(plain), cipher.final(), cipher.getAuthTag()]);
+      }),
+    decrypt: (bytes) =>
+      Effect.sync(() => {
+        const data = Buffer.from(bytes),
+          decipher = createDecipheriv('aes-256-gcm', key, data.subarray(0, 12));
+        decipher.setAuthTag(data.subarray(-16));
+        return Buffer.concat([
+          decipher.update(data.subarray(12, -16)),
+          decipher.final(),
+        ]).toString();
+      }),
   });
   const scopes = ['openid', 'offline_access', 'chatgpt.tokens.use.direct'];
   await store.modify('openai', async () => ({

@@ -3,8 +3,7 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/application-error.ts",
-    "./changes": "./src/changes.ts"
+    ".": "./src/application-error.ts"
   },
   "scripts": {
     "typecheck": "bun check --no-script -p tsconfig.json",

@@ -1,6 +1,8 @@
 import { realpath, stat } from 'node:fs/promises';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import type { EntryId, Harness, TaskInspection } from '@earendil-works/pi-durable';
+import { Effect } from 'effect';
+import type { ChatError } from '@moonbase/contracts/chat-errors';
 import type {
   ChatHistoryPage,
   ChatRun,
@@ -8,6 +10,7 @@ import type {
   ChatSummary,
   ChatTarget,
 } from '@moonbase/contracts/chat';
+import { callHarness } from '../commands/harness-call.ts';
 import { getScanCursorScope, writeScanCursor } from '../cursors.ts';
 import { historyPageBytes } from '../page-limits.ts';
 import { previewText } from '../text.ts';
@@ -40,17 +43,14 @@ type SnapshotInput = {
   cache?: SnapshotCache;
   signal?: AbortSignal;
 };
-export async function projectSnapshot(
+/** A chat's snapshot, read again (twice at most) when a nested tool's source ends under the read. */
+export function projectSnapshot(
   harness: Harness,
-  input: SnapshotInput,
-): Promise<ChatSnapshot> {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await projectSnapshotOnce(harness, input);
-    } catch (error) {
-      if (!isNestedSourceEnded(error) || attempt === 2) throw error;
-    }
-  }
+  input: Omit<SnapshotInput, 'signal'>,
+): Effect.Effect<ChatSnapshot, ChatError> {
+  return callHarness((signal) => projectSnapshotOnce(harness, { ...input, signal })).pipe(
+    Effect.retry({ times: 2, while: isNestedSourceEnded }),
+  );
 }
 async function projectSnapshotOnce(
   harness: Harness,

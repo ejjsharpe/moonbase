@@ -7,7 +7,7 @@ import { ManagedRuntime } from 'effect';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { ChatService } from '@moonbase/contracts/services';
 import { IncompatibleHostError } from '@moonbase/contracts/host-errors';
-import { LocalPiRuntimeLive } from '../src/index.ts';
+import { localPiRuntime } from './runtime-fixture.ts';
 
 const session = { host: { hostId: 'version-host', storeId: 'version-store' }, actorId: 'owner' };
 type Versions = Partial<Record<'node' | 'bun' | 'electron', string>>;
@@ -23,7 +23,7 @@ async function openStore(versions?: Versions) {
       value: { ...process.versions, bun: undefined, electron: undefined, ...versions },
     });
   const runtime = ManagedRuntime.make(
-    LocalPiRuntimeLive({ ...session, models: createModels(), databasePath }),
+    localPiRuntime({ ...session, models: createModels(), databasePath }),
   );
   try {
     await runtime.runPromise(ChatService);

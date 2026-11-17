@@ -1,7 +1,8 @@
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ManagedRuntime } from 'effect';
+import { Layer, ManagedRuntime } from 'effect';
+import * as NodeServices from '@effect/platform-node/NodeServices';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient } from '@moonbase/application/chat/clients';
@@ -46,7 +47,7 @@ export async function fixture(
     databasePath: config.databasePath,
     models,
     registry,
-  });
+  }).pipe(Layer.provide(NodeServices.layer));
   const runtime = ManagedRuntime.make(layer);
   t.after(async () => {
     try {

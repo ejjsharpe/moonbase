@@ -1,5 +1,6 @@
 import { readFile, appendFile } from 'node:fs/promises';
-import { Effect, ManagedRuntime, Stream } from 'effect';
+import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
+import * as NodeServices from '@effect/platform-node/NodeServices';
 import { ChatService } from '@moonbase/contracts/services';
 import { createModels } from '@earendil-works/pi-ai/models';
 import {
@@ -62,7 +63,7 @@ const runtime = ManagedRuntime.make(
     databasePath: config.databasePath,
     models,
     registry,
-  }),
+  }).pipe(Layer.provide(NodeServices.layer)),
 );
 let ended;
 const done = new Promise((resolve) => (ended = resolve));

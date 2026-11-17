@@ -5,15 +5,12 @@ import { randomBytes } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import {
-  createCredentialStore,
-  createKeyEncryption,
-  createKeychainKeySource,
-  type KeychainKeySourceOptions,
-} from '@moonbase/chat-runtime/credentials';
+import { ChildProcessSpawner, type ChildProcess } from 'effect/process';
+import { makeKeychainKeySource } from '@moonbase/chat-runtime/credentials';
+import { makeCredentialsFixture } from '../credentials-fixture.ts';
 
 const secret = { type: 'api_key' as const, key: 'sk-private-credential-value' };
-type Spawned = { command: string; args: readonly string[]; env: NodeJS.ProcessEnv };
+type Spawned = { command: string; args: readonly string[]; env: Record<string, unknown> };
 
 /** Runs one `security -i` command; the throwaway keychain password goes on stdin, never argv. */
 function runSecurity(line: string) {
@@ -68,36 +65,36 @@ test(
       await runSecurity(`create-keychain -p "${randomBytes(24).toString('hex')}" "${keychain}"`),
       0,
     );
-    const spawned: Spawned[] = [],
-      observed: NonNullable<KeychainKeySourceOptions['spawn']> = (command, args, options) => {
-        spawned.push({ command, args: [...args], env: { ...options.env } });
-        return spawn(command, args, options) as never;
-      };
-    const source = createKeychainKeySource({ storeId: 'store-1', keychain, spawn: observed });
-    assert.equal(await source.load(), undefined);
-    const key = await source.create(),
+    // The real spawner runs the real `security`; this only records what it was asked to run.
+    const spawned: Spawned[] = [];
+    const f = makeCredentialsFixture(t, (real) =>
+      ChildProcessSpawner.make((command) => {
+        const { options, args } = command as ChildProcess.StandardCommand;
+        spawned.push({
+          command: (command as ChildProcess.StandardCommand).command,
+          args: [...args].map(String),
+          env: { ...options.env },
+        });
+        return real.spawn(command);
+      }),
+    );
+    const makeSource = (storeId: string) => f.run(makeKeychainKeySource({ storeId, keychain }));
+    const source = await makeSource('store-1');
+    assert.equal(await f.run(source.load), undefined);
+    const key = await f.run(source.create),
       encoded = Buffer.from(key).toString('base64');
-    const later = createKeychainKeySource({ storeId: 'store-1', keychain, spawn: observed });
-    assert.deepEqual(await later.load(), key);
-    assert.deepEqual(await later.create(), key);
-    assert.equal(
-      await createKeychainKeySource({ storeId: 'store-2', keychain, spawn: observed }).load(),
-      undefined,
-    );
+    const later = await makeSource('store-1');
+    assert.deepEqual(await f.run(later.load), key);
+    assert.deepEqual(await f.run(later.create), key);
+    assert.equal(await f.run((await makeSource('store-2')).load), undefined);
     const credentials = join(directory, 'credentials');
-    await createCredentialStore(credentials, createKeyEncryption(source)).modify(
-      'openai-api-key',
-      async () => secret,
-    );
-    assert.deepEqual(
-      await createCredentialStore(credentials, createKeyEncryption(later)).read('openai-api-key'),
-      secret,
-    );
+    await (await f.keyedStore(credentials, source)).modify('openai-api-key', async () => secret);
+    assert.deepEqual(await (await f.keyedStore(credentials, later)).read('openai-api-key'), secret);
     assert(spawned.length >= 6);
     for (const { command, args, env } of spawned) {
       assert.equal(command, '/usr/bin/security');
       assert.deepEqual(args, ['-i']);
-      for (const value of Object.values(env)) assert(!value?.includes(encoded));
+      for (const value of Object.values(env)) assert(!String(value).includes(encoded));
     }
   },
 );

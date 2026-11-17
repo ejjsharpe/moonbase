@@ -1,12 +1,21 @@
-import { execFile, spawn } from 'node:child_process';
-import { ChatUnavailableError } from '@moonbase/contracts/chat-errors';
+import { Cache, Cause, Effect, Exit, Fiber, FiberSet, type Scope } from 'effect';
+import { ChildProcess, ChildProcessSpawner } from 'effect/process';
+import { ChatUnavailableError, type ChatError } from '@moonbase/contracts/chat-errors';
 import { chatFileMatchLimit, isChatMentionPath, type ChatOutput } from '@moonbase/contracts/chat';
 import { matchPath, compareMatches } from '@moonbase/contracts/lookup';
+import {
+  defaultListingTiming,
+  makeRunListing,
+  type ChatFileListingRun,
+  type ChatFileListingTiming,
+} from './file-listing.ts';
+
+export type { ChatFileListingRun, ChatFileListingTiming, ListingOutput } from './file-listing.ts';
+export { ListingError } from './file-listing.ts';
 
 /** The most files one listing ranks; a larger folder is searched partially. */
 export const chatFileCandidateLimit = 20000;
-const listingBytes = 32 * 1024 * 1024,
-  freshMs = 5_000,
+const fresh = '5 seconds',
   retainedFolders = 4,
   rankingCells = 16 * 1024 * 1024;
 // Matches the editor's lookup exclusions, so both offer the same files.
@@ -24,131 +33,22 @@ const excluded = [
 
 type Listing = { files: string[]; partial: boolean };
 /**
- * Runs a listing command in the folder; tests inject one. A failure carries the output so far as
- * `stdout`, with `killed` set when the timeout stopped it. `signal` aborts when the index closes;
- * the promise then settles once the command has exited.
- */
-export type ChatFileListingRun = (
-  executable: string,
-  args: string[],
-  cwd: string,
-  signal: AbortSignal,
-) => Promise<Buffer>;
-type ListingFailure = { code?: unknown; killed?: boolean; stdout?: Buffer };
-
-/** Starts one listing's time budget, calling `expire` when it runs out; returns what clears it. */
-export type ChatFileListingBudget = (expire: () => void) => () => void;
-/**
- * A listing's time budget, and how long a stopped one's process group has to exit after SIGTERM
- * before SIGKILL.
- */
-export type ChatFileListingTiming = { budget: ChatFileListingBudget; stopGraceMs: number };
-const listingMs = 10_000;
-const defaultTiming: ChatFileListingTiming = {
-  budget: (expire) => {
-    const timer = setTimeout(expire, listingMs);
-    return () => clearTimeout(timer);
-  },
-  stopGraceMs: 2_000,
-};
-const isGroupAlive = (group: number) => {
-  try {
-    process.kill(-group, 0);
-    return true;
-  } catch (error) {
-    return (error as { code?: unknown }).code === 'EPERM';
-  }
-};
-const signalGroup = (group: number, signal: NodeJS.Signals) => {
-  try {
-    process.kill(-group, signal);
-  } catch {
-    // The group already exited.
-  }
-};
-/** Waits for every process in a stopped group to exit; its SIGKILL comes from `stop`'s timer. */
-async function awaitGroupExit(group: number, stoppedAt: number, stopGraceMs: number) {
-  while (isGroupAlive(group) && Date.now() - stoppedAt < stopGraceMs * 2)
-    await new Promise((resolve) => setTimeout(resolve, 10));
-}
-
-// Its own process group, so a listing stopped by its budget takes any children with it. The
-// negative-PID kill is needed: a spawn signal or timeout reaches only the group leader.
-const makeRunListing =
-  ({ budget, stopGraceMs }: ChatFileListingTiming): ChatFileListingRun =>
-  (executable, args, cwd, signal) =>
-    new Promise((resolve, reject) => {
-      if (signal.aborted) return reject(Error('The file index is closed'));
-      const child = spawn(executable, args, {
-        cwd,
-        detached: true,
-        stdio: ['ignore', 'pipe', 'ignore'],
-      });
-      const chunks: Buffer[] = [];
-      let length = 0,
-        settled = false,
-        stoppedAt: number | undefined,
-        escalation: NodeJS.Timeout | undefined,
-        failure: Record<string, unknown> | undefined;
-      const settle = (error?: Error) => {
-        if (settled) return;
-        settled = true;
-        clearBudget();
-        clearTimeout(escalation);
-        signal.removeEventListener('abort', stopOnClose);
-        const stdout = Buffer.concat(chunks);
-        if (error) reject(Object.assign(error, { stdout }));
-        else resolve(stdout);
-      };
-      const stop = (reason: Record<string, unknown>) => {
-        if (stoppedAt !== undefined || child.pid === undefined) return;
-        failure = reason;
-        stoppedAt = Date.now();
-        signalGroup(child.pid, 'SIGTERM');
-        // Armed here, not on exit: a group that ignores SIGTERM may never exit or close its output.
-        escalation = setTimeout(() => signalGroup(child.pid!, 'SIGKILL'), stopGraceMs);
-      };
-      const clearBudget = budget(() => stop({ killed: true }));
-      const stopOnClose = () => stop({ closed: true });
-      signal.addEventListener('abort', stopOnClose, { once: true });
-      // Output still arriving after a stop is kept, up to the size budget: what the listing printed
-      // before its budget ran out is its partial listing, however late this process reads it.
-      child.stdout!.on('data', (chunk: Buffer) => {
-        if (length >= listingBytes) return;
-        if (length + chunk.length > listingBytes) {
-          chunks.push(chunk.subarray(0, listingBytes - length));
-          length = listingBytes;
-          return stop({ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' });
-        }
-        chunks.push(chunk);
-        length += chunk.length;
-      });
-      child.once('error', (error) => {
-        if (child.pid !== undefined) signalGroup(child.pid, 'SIGKILL');
-        settle(error);
-      });
-      child.once('close', async (code, exitSignal) => {
-        if (stoppedAt !== undefined) await awaitGroupExit(child.pid!, stoppedAt, stopGraceMs);
-        if (failure) return settle(Object.assign(Error('The file listing was stopped'), failure));
-        if (code === 0) return settle();
-        settle(Object.assign(Error(`${executable} exited with ${code ?? exitSignal}`), { code }));
-      });
-    });
-/**
  * Whether Git can run without side effects. On macOS without the Xcode command-line tools,
  * `/usr/bin/git` is a stub that offers to install them; `xcode-select -p` only asks.
  */
-const checkGit = () =>
-  process.platform !== 'darwin'
-    ? Promise.resolve(true)
-    : new Promise<boolean>((resolve) =>
-        execFile('/usr/bin/xcode-select', ['-p'], { timeout: 5000 }, (error) => resolve(!error)),
-      );
-const isNotFound = (error: unknown) => (error as ListingFailure).code === 'ENOENT';
-/** A listing cut short by its size or time budget: what it printed is a partial listing. */
-const isTruncated = (error: unknown) =>
-  (error as ListingFailure).code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ||
-  !!(error as ListingFailure).killed;
+const checkGit = Effect.gen(function* () {
+  if (process.platform !== 'darwin') return true;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  return yield* spawner
+    .exitCode(
+      ChildProcess.make('/usr/bin/xcode-select', ['-p'], { stdout: 'ignore', stderr: 'ignore' }),
+    )
+    .pipe(
+      Effect.timeout('5 seconds'),
+      Effect.map((code) => code === 0),
+      Effect.orElseSucceed(() => false),
+    );
+});
 /** The complete NUL-terminated entries of a listing; a truncated one may end mid-entry. */
 const splitListing = (bytes: Buffer, truncated: boolean) => {
   const end = truncated ? bytes.lastIndexOf(0) + 1 : bytes.length;
@@ -162,143 +62,127 @@ const splitListing = (bytes: Buffer, truncated: boolean) => {
 const countSegments = (path: string) => path.split('/').length;
 const makeUnavailableError = () => new ChatUnavailableError({ reason: 'file-search' });
 
+export type ChatFileIndexOptions = {
+  ripgrepExecutable?: string;
+  gitExecutable?: string;
+  /** Replaces the listing process; tests inject one. */
+  run?: ChatFileListingRun;
+  /** Overrides the listing time budget and stop grace; tests shorten them. */
+  timing?: Partial<ChatFileListingTiming>;
+  /** Whether Git may run; on macOS, whether the command-line tools are installed. */
+  canRunGit?: Effect.Effect<boolean>;
+};
+/** Ranks a folder's files for a mention query. */
+export type ChatFileIndex = {
+  find(cwd: string, query: string): Effect.Effect<ChatOutput<'findChatFiles'>, ChatError>;
+};
+
 /**
  * Lists a working folder's files the way coding agents do: ripgrep's ignore rules when ripgrep is
  * installed, otherwise Git's tracked and unignored files, when Git can run without prompting to
  * install anything. The listing is the agent's view of the folder, so it runs on the chat's host.
+ * One listing per folder serves the searches of the next few seconds; it runs as the index's own
+ * work, so a search that is cancelled leaves it running for the others, and closing the index
+ * stops it and waits for its process group.
  */
-export class ChatFileIndex {
-  private readonly ripgrep: string;
-  private readonly git: string;
-  private readonly run: ChatFileListingRun;
-  private readonly canRunGit: () => Promise<boolean>;
-  private readonly now: () => number;
-  private readonly listings = new Map<string, { at: number; listing: Promise<Listing> }>();
-  private readonly closing = new AbortController();
-  private readonly running = new Set<Promise<unknown>>();
-  constructor(
-    options: {
-      ripgrepExecutable?: string;
-      gitExecutable?: string;
-      run?: ChatFileListingRun;
-      /** Overrides the listing time budget and stop grace; tests end and shorten them. */
-      timing?: Partial<ChatFileListingTiming>;
-      /** Whether Git may run; on macOS, whether the command-line tools are installed. */
-      canRunGit?: () => Promise<boolean>;
-      now?: () => number;
-    } = {},
-  ) {
-    this.ripgrep = options.ripgrepExecutable ?? 'rg';
-    this.git = options.gitExecutable ?? 'git';
-    this.run = options.run ?? makeRunListing({ ...defaultTiming, ...options.timing });
-    this.canRunGit = options.canRunGit ?? checkGit;
-    this.now = options.now ?? Date.now;
-  }
-  private list(cwd: string): Promise<Listing> {
-    const retained = this.listings.get(cwd);
-    if (retained && this.now() - retained.at < freshMs) return retained.listing;
-    // One shared listing per folder; a caller's cancellation never aborts another caller's search.
-    const listing = this.enumerate(cwd);
-    this.listings.delete(cwd);
-    this.listings.set(cwd, { at: this.now(), listing });
-    for (const folder of this.listings.keys())
-      if (this.listings.size > retainedFolders) this.listings.delete(folder);
-    listing.catch(() => {
-      if (this.listings.get(cwd)?.listing === listing) this.listings.delete(cwd);
+export const makeChatFileIndex = (
+  options: ChatFileIndexOptions = {},
+): Effect.Effect<ChatFileIndex, never, Scope.Scope | ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const ripgrep = options.ripgrepExecutable ?? 'rg';
+    const git = options.gitExecutable ?? 'git';
+    const run = options.run ?? makeRunListing({ ...defaultListingTiming, ...options.timing });
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const canRunGit =
+      options.canRunGit ??
+      Effect.provideService(checkGit, ChildProcessSpawner.ChildProcessSpawner, spawner);
+    const enumerate = (cwd: string): Effect.Effect<Listing, ChatError> =>
+      Effect.gen(function* () {
+        const args = ['--files', '--hidden', '--null', '--no-config', '--threads', '1'];
+        for (const name of excluded) args.push('--glob', '!**/' + name);
+        const output = yield* run(ripgrep, args, cwd).pipe(
+          Effect.catch((error) => {
+            // ripgrep exits 1 when nothing matched, or 2 with partial output after unreadable
+            // entries.
+            if (error.status === 1)
+              return Effect.succeed({ bytes: Buffer.alloc(0), truncated: false });
+            if (error.status === 2 && error.output.length)
+              return Effect.succeed({ bytes: error.output, truncated: true });
+            if (error.reason !== 'missing') return Effect.fail(makeUnavailableError());
+            return Effect.flatMap(canRunGit, (allowed) =>
+              allowed
+                ? Effect.mapError(
+                    run(git, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], cwd),
+                    makeUnavailableError,
+                  )
+                : Effect.fail(makeUnavailableError()),
+            );
+          }),
+        );
+        // A file whose path cannot be a mention (quotes, control characters) is never offered.
+        const files = [...new Set(splitListing(output.bytes, output.truncated))].filter(
+          (path) =>
+            isChatMentionPath(path) &&
+            !path.split('/').some((segment) => excluded.includes(segment)),
+        );
+        files.sort((a, b) => countSegments(a) - countSegments(b) || a.localeCompare(b));
+        return {
+          files: files.slice(0, chatFileCandidateLimit),
+          partial: output.truncated || files.length > chatFileCandidateLimit,
+        };
+      });
+    const listings = yield* FiberSet.make<Listing, ChatError>();
+    // Holds each folder's listing fiber, so the listing outlives a search that stops waiting.
+    const cache = yield* Cache.make<string, Fiber.Fiber<Listing, ChatError>>({
+      capacity: retainedFolders,
+      timeToLive: fresh,
+      lookup: (cwd) => FiberSet.run(listings, enumerate(cwd)),
     });
-    return listing;
-  }
-  /** Runs one listing command; output cut short by its budget is kept as a partial listing. */
-  private async runPartial(executable: string, args: string[], cwd: string) {
-    try {
-      const run = this.run(executable, args, cwd, this.closing.signal);
-      const forget = () => this.running.delete(run);
-      this.running.add(run);
-      run.then(forget, forget);
-      return { bytes: await run, truncated: false };
-    } catch (error) {
-      const stdout = (error as ListingFailure).stdout;
-      if (isTruncated(error) && stdout) return { bytes: stdout, truncated: true };
-      throw error;
-    }
-  }
-  private async enumerate(cwd: string): Promise<Listing> {
-    const args = ['--files', '--hidden', '--null', '--no-config', '--threads', '1'];
-    for (const name of excluded) args.push('--glob', '!**/' + name);
-    let output: { bytes: Buffer; truncated: boolean };
-    try {
-      output = await this.runPartial(this.ripgrep, args, cwd);
-    } catch (error) {
-      // ripgrep exits 1 when nothing matched, or 2 with partial output after unreadable entries.
-      const stdout = (error as ListingFailure).stdout;
-      const status = (error as ListingFailure).code;
-      if (status === 1) output = { bytes: Buffer.alloc(0), truncated: false };
-      else if (status === 2 && stdout?.length) output = { bytes: stdout, truncated: true };
-      else if (!isNotFound(error) || !(await this.canRunGit())) throw makeUnavailableError();
-      else
-        try {
-          output = await this.runPartial(
-            this.git,
-            ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
-            cwd,
-          );
-        } catch {
-          throw makeUnavailableError();
-        }
-    }
-    // A file whose path cannot be a mention (quotes, control characters) is never offered.
-    const files = [...new Set(splitListing(output.bytes, output.truncated))].filter(
-      (path) =>
-        isChatMentionPath(path) && !path.split('/').some((segment) => excluded.includes(segment)),
-    );
-    files.sort((a, b) => countSegments(a) - countSegments(b) || a.localeCompare(b));
+    const list = (cwd: string) =>
+      Effect.gen(function* () {
+        const listing = yield* Cache.get(cache, cwd);
+        const exit = yield* Fiber.await(listing);
+        if (Exit.isSuccess(exit)) return exit.value;
+        // A failure is not kept: the next search lists again.
+        yield* Cache.invalidateWhen(cache, cwd, (cached) => cached === listing);
+        // A listing the closing index stopped fails like any other.
+        return yield* Cause.hasInterruptsOnly(exit.cause)
+          ? Effect.fail(makeUnavailableError())
+          : Effect.failCause(exit.cause);
+      });
     return {
-      files: files.slice(0, chatFileCandidateLimit),
-      partial: output.truncated || files.length > chatFileCandidateLimit,
+      find: (cwd, query) => Effect.map(list(cwd), (listing) => rankFiles(listing, query)),
     };
-  }
-  /** Stops running listings and waits for their process groups to exit; later searches fail. */
-  async close() {
-    this.closing.abort();
-    await Promise.allSettled(this.running);
-  }
-  /** Ranks files with the editor's fuzzy matcher; an empty query lists the shallowest files. */
-  async find(
-    cwd: string,
-    query: string,
-    signal?: AbortSignal,
-  ): Promise<ChatOutput<'findChatFiles'>> {
-    const listing = await this.list(cwd);
-    signal?.throwIfAborted();
-    if (!query.trim())
-      return {
-        query,
-        matches: listing.files
-          .slice(0, chatFileMatchLimit)
-          .map((path) => ({ path, positions: [] })),
-        partial: listing.partial || listing.files.length > chatFileMatchLimit,
-      };
-    let partial = listing.partial;
-    const matches = [];
-    let cells = 0;
-    for (const path of listing.files) {
-      // The same ranking budget as the editor's lookup.
-      cells += path.length * query.length;
-      if (cells > rankingCells) {
-        partial = true;
-        break;
-      }
-      const match = matchPath(path, query);
-      if (match) matches.push(match);
-    }
-    matches.sort(compareMatches);
-    if (matches.length > chatFileMatchLimit) partial = true;
+  });
+
+/** Ranks files with the editor's fuzzy matcher; an empty query lists the shallowest files. */
+function rankFiles(listing: Listing, query: string): ChatOutput<'findChatFiles'> {
+  if (!query.trim())
     return {
       query,
-      matches: matches
-        .slice(0, chatFileMatchLimit)
-        .map((match) => ({ path: match.path, positions: match.positions })),
-      partial,
+      matches: listing.files.slice(0, chatFileMatchLimit).map((path) => ({ path, positions: [] })),
+      partial: listing.partial || listing.files.length > chatFileMatchLimit,
     };
+  let partial = listing.partial;
+  const matches = [];
+  let cells = 0;
+  for (const path of listing.files) {
+    // The same ranking budget as the editor's lookup.
+    cells += path.length * query.length;
+    if (cells > rankingCells) {
+      partial = true;
+      break;
+    }
+    const match = matchPath(path, query);
+    if (match) matches.push(match);
   }
+  matches.sort(compareMatches);
+  if (matches.length > chatFileMatchLimit) partial = true;
+  return {
+    query,
+    matches: matches
+      .slice(0, chatFileMatchLimit)
+      .map((match) => ({ path: match.path, positions: match.positions })),
+    partial,
+  };
 }

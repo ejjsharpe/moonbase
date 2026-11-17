@@ -13,5 +13,8 @@
       "@moonbase/daemon-protocol",
       "@moonbase/daemon"
     ]
+  },
+  "devDependencies": {
+    "@effect/platform-node": "4.1.0"
   }
 }

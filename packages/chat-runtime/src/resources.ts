@@ -4,7 +4,7 @@ import { openNodeSqliteDatabase } from '@earendil-works/chord/sqlite/node';
 import { Harness, createRegistry, type ConversationId } from '@earendil-works/pi-durable';
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
-import { Cause, Effect, Exit, FiberSet, Ref, Scope } from 'effect';
+import { Cause, Effect, Exit, FiberSet, PubSub, Ref, Scope } from 'effect';
 import { releaseResource } from '@moonbase/effect';
 import {
   ChatStoreMismatchError,
@@ -13,6 +13,7 @@ import {
 } from '@moonbase/contracts/chat-errors';
 import { IncompatibleHostError } from '@moonbase/contracts/host-errors';
 import { Host } from './commands/chat-host.ts';
+import { makeChatFileIndex } from './files.ts';
 import { safeError } from './commands/safe-error.ts';
 import { Store, readOwnedMetadata, getSettings } from './documents.ts';
 import type { LocalPiRuntimeConfiguration, RetainedWork } from './runtime-types.ts';
@@ -134,7 +135,9 @@ export function openHost(config: LocalPiRuntimeConfiguration) {
     databaseOwned = false;
     const aborts = yield* retainedWork('abort');
     const registry = config.registry ?? createRegistry();
-    let host: Host | undefined = undefined;
+    const statuses = yield* Effect.acquireRelease(PubSub.unbounded<ConversationId>(), (pubsub) =>
+      PubSub.shutdown(pubsub),
+    );
     const harness = yield* Effect.acquireRelease(
       Effect.tryPromise({
         try: () =>
@@ -151,8 +154,7 @@ export function openHost(config: LocalPiRuntimeConfiguration) {
               },
               onReport: (_error, info) => {
                 if (info.type === 'migration_failed' || info.type === 'task_parked')
-                  for (const notify of host?.statusListeners ?? [])
-                    notify(info.task.conversationId);
+                  PubSub.publishUnsafe(statuses, info.task.conversationId);
               },
             },
             context,
@@ -180,27 +182,23 @@ export function openHost(config: LocalPiRuntimeConfiguration) {
         Scope.close(scope, Exit.void),
       ),
       work = yield* Scope.provide(workScope)(FiberSet.make<unknown, ChatError>()),
-      waiters = yield* retainedWork('waiter'),
-      observations = yield* Effect.acquireRelease(Scope.make(), (scope) =>
-        Scope.close(scope, Exit.void),
-      );
-    host = new Host(
-      { ...config, registry },
+      waiters = yield* retainedWork('waiter');
+    // Closed first: its finalizer stops running listings and waits for their process groups.
+    const files = yield* makeChatFileIndex({
+      ripgrepExecutable: config.ripgrepExecutable,
+      ...(config.fileListingTiming ? { timing: config.fileListingTiming } : {}),
+    });
+    const host = yield* Host.make({
+      config: { ...config, registry },
       harness,
       identity,
+      files,
+      statuses,
       work,
       aborts,
       waiters,
-      observations,
-    );
-    const acquired = host;
-    yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
-        acquired.closed = true;
-      }),
-    );
-    yield* Effect.addFinalizer(() => Effect.promise(() => acquired.files.close()));
+    });
     harness.resume();
-    return acquired;
+    return host;
   });
 }

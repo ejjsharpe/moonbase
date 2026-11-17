@@ -1,6 +1,11 @@
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import type { ChatInput, ChatSendReceipt, ChatTarget } from '@moonbase/contracts/chat';
-import { ChatStoreError, InvalidChatRequestError } from '@moonbase/contracts/chat-errors';
+import { Effect } from 'effect';
+import {
+  ChatStoreError,
+  InvalidChatRequestError,
+  type ChatError,
+} from '@moonbase/contracts/chat-errors';
 import { isSameChatTarget } from '@moonbase/contracts/chat-validation';
 import { RequestReusedError } from '@moonbase/contracts/host-errors';
 import { Metadata, Request, cid, key } from '../documents.ts';
@@ -10,8 +15,16 @@ import {
   decodeStoredRequest,
 } from '../stored-records.ts';
 import type { Host } from './chat-host.ts';
+import { callHarness } from './harness-call.ts';
 
-export async function sendChat(host: Host, d: ChatInput<'sendChat'>): Promise<ChatSendReceipt> {
+/** Admits a Send once: a retry of its request reads the first admission and never resubmits. */
+export function sendChat(
+  host: Host,
+  d: ChatInput<'sendChat'>,
+): Effect.Effect<ChatSendReceipt, ChatError> {
+  return callHarness(() => submitSend(host, d), true);
+}
+async function submitSend(host: Host, d: ChatInput<'sendChat'>): Promise<ChatSendReceipt> {
   const binding = JSON.stringify({ operation: 'sendChat', ...d }),
     requestKey = key(d.target.actorId, d.requestId);
   await host.harness.commit(async (tx) => {
@@ -48,14 +61,16 @@ export async function sendChat(host: Host, d: ChatInput<'sendChat'>): Promise<Ch
   );
   return (await lookupSend(host, d.target, d.requestId))!;
 }
-export async function getSend(
+export function getSend(
   host: Host,
   d: ChatInput<'getChatSend'>,
-): Promise<ChatSendReceipt | null> {
-  await host.metadata(d.target);
-  return lookupSend(host, d.target, d.requestId);
+): Effect.Effect<ChatSendReceipt | null, ChatError> {
+  return Effect.andThen(
+    host.metadata(d.target),
+    callHarness(() => lookupSend(host, d.target, d.requestId)),
+  );
 }
-export async function lookupSend(
+async function lookupSend(
   host: Host,
   target: ChatTarget,
   requestId: string,

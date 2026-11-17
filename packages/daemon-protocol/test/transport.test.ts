@@ -16,6 +16,7 @@ import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from 'effect';
+import * as NodeServices from '@effect/platform-node/NodeServices';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient, makeProviderSetupClient } from '@moonbase/application/chat/clients';
@@ -59,7 +60,7 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
       approveFolder: async (cwd) => {
         if (cwd !== dir) throw new FolderRefusedError({ refusal: 'not-approved', use: 'search' });
       },
-    }),
+    }).pipe(Layer.provide(NodeServices.layer)),
   );
   const settings = { cwd: dir, model: { provider: faux.provider.id, modelId: faux.getModel().id } };
   const client = makeChatClient(runtime),
@@ -628,7 +629,7 @@ async function setupLocal(t: { after: (fn: () => Promise<void>) => void }) {
       if (settings.cwd !== undefined) await requireApproved(settings.cwd);
     },
     approveFolder: requireApproved,
-  });
+  }).pipe(Layer.provide(NodeServices.layer));
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
       LocalHostLive({ host: localHost, folders, chatFolders }).pipe(Layer.provideMerge(local)),
@@ -971,7 +972,7 @@ test('a client refuses a chat host that does not advertise local mode, and its l
         ...localSession,
         databasePath: join(dir, 'chat.sqlite'),
         models: createModels(),
-      }),
+      }).pipe(Layer.provide(NodeServices.layer)),
     ),
     scope = Effect.runSync(Scope.make());
   t.after(async () => {

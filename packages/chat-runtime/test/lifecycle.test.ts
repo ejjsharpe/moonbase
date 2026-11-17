@@ -17,12 +17,12 @@ import { Harness, createRegistry, defineExtension, defineTool } from '@earendil-
 import { Type } from 'typebox';
 import { NodeSqliteDatabase } from '@earendil-works/chord/sqlite/node';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import { LocalPiRuntimeLive } from '../src/index.ts';
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { Effect, Layer } from 'effect';
 import { runApplicationEffect } from '@moonbase/application/chat/promises';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
-import { session, delay, until, fixture } from './runtime-fixture.ts';
+import { ChatService } from '@moonbase/contracts/services';
+import { session, delay, until, fixture, localPiRuntime } from './runtime-fixture.ts';
 
 test('busy reservation stays visible; view unsubscribe and caller cancellation never Stop admitted work', async (t) => {
   const f = await fixture(t),
@@ -619,9 +619,11 @@ test('root shutdown drains held admission before closing Harness and reopens its
       return fauxAssistantMessage('Shutdown interruption');
     },
   ]);
-  const send = f.client
-    .command('sendChat', { target, requestId: 'shutdown-admission', text: 'Hold admission' })
-    .catch((error: unknown) => error);
+  // Called outside the runtime, so disposing it doesn't cancel the caller: it sees what the Send did.
+  const chat = await f.runtime.runPromise(ChatService);
+  const send = Effect.runPromise(
+    chat.sendChat({ target, requestId: 'shutdown-admission', text: 'Hold admission' }),
+  ).catch((error: unknown) => error);
   await held;
   const closing = f.dispose();
   await delay(10);
@@ -629,6 +631,11 @@ test('root shutdown drains held admission before closing Harness and reopens its
   release();
   await Promise.allSettled([send, closing]);
   await closing;
+  // The Send committed while the store closed: its caller gets the receipt or Uncertain, never a
+  // retryable store failure.
+  const sent = await send;
+  if (sent instanceof Error) assert.equal((sent as { _tag?: string })._tag, 'UncertainError');
+  else assert.equal((sent as { admission?: string }).admission, 'admitted');
   assert(order.indexOf('admitted') < order.indexOf('harness-close'));
   assert(order.includes('closed'));
   mock.restoreAll();
@@ -816,7 +823,7 @@ test('partial acquisition attempts each transferred resource release once and pr
       root,
       Effect.scoped(
         Layer.build(
-          LocalPiRuntimeLive({ ...session, databasePath: join(directory, 'chat.sqlite'), models }),
+          localPiRuntime({ ...session, databasePath: join(directory, 'chat.sqlite'), models }),
         ),
       ).pipe(Effect.mapError(toChatApplicationError)),
     ),

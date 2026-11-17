@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { createKeyFileSource } from '@moonbase/chat-runtime/credentials';
+import { makeKeyFileSource } from '@moonbase/chat-runtime/credentials';
 import { runDaemon } from '../src/daemon.ts';
 import { createControlledClock, startInProcess, temporaryRoot } from './daemon-fixture.ts';
 import { createFauxProviders } from './faux-provider.ts';
@@ -161,7 +161,7 @@ test('a local daemon refuses an insecure credential key file at startup, and cre
     });
     const local = () => ({
       ...createFauxProviders(directory),
-      keySource: createKeyFileSource(keyPath),
+      keySource: makeKeyFileSource(keyPath),
     });
     await writeFile(keyPath, 'not a key', { mode: 0o644 });
     const insecure = await failToStart(directory, local).then(
