@@ -1,4 +1,5 @@
-import type { ChatController, TranscriptViewAnchor } from '@moonbase/application/chat';
+import type { TranscriptViewAnchor } from '@moonbase/application/chat';
+import type { DesktopChat } from '../desktop-chat.ts';
 
 export type ViewSaver = ReturnType<typeof createViewSaver>;
 
@@ -14,7 +15,7 @@ export type ViewSaver = ReturnType<typeof createViewSaver>;
  * pixels, read on each save since a window can move between displays.
  */
 export function createViewSaver(
-  controller: Pick<ChatController, 'getSnapshot' | 'setTranscriptView'>,
+  controller: Pick<DesktopChat, 'getSnapshot' | 'setTranscriptView'>,
   readDevicePixel: () => number,
 ) {
   const conversation = JSON.stringify(controller.getSnapshot().selected);

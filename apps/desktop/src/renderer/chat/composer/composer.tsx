@@ -14,7 +14,6 @@ import {
   isMessageFor,
   readChoices,
   type ChatComposer,
-  type ChatController,
   type ChatState,
 } from '@moonbase/application/chat';
 import type { DesktopRunner } from '../../shell/desktop-application.ts';
@@ -32,6 +31,7 @@ import {
   type ChatCommand,
   type ChatCommandOption,
 } from './commands.ts';
+import type { DesktopChat } from '../desktop-chat.ts';
 
 const noSubscription = () => () => {};
 const noProviders = () => null;
@@ -55,7 +55,7 @@ export function Composer({
   createWorktree,
   setUpProviders,
 }: {
-  controller: ChatController;
+  controller: DesktopChat;
   composer: ChatComposer;
   runner: DesktopRunner;
   state: ChatState;

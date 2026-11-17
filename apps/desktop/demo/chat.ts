@@ -1,17 +1,63 @@
+import { Effect, Queue, Stream } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
-import type { ChatDependencies } from '@moonbase/application/chat';
+import { chatInputSchemas } from '@moonbase/contracts/chat-schema';
+import { providerInputSchemas } from '@moonbase/contracts/providers-schema';
 import type {
-  ChatClient,
+  ChatDependencies,
+  ChatPort,
+  ConnectionPort,
+  ProviderSetupPort,
+} from '@moonbase/application/chat';
+import type {
+  ChatCommand,
   ChatEntry,
+  ChatListUpdate,
   ChatSnapshot,
   ChatSummary,
   ChatCreationSettings,
   ChatTarget,
 } from '@moonbase/contracts/chat';
-import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
+import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { chatFileMatchLimit, type ChatInput, type ChatOutput } from '@moonbase/contracts/chat';
 import { compareMatches, matchPath } from '@moonbase/contracts/lookup';
+
+/** The demo host's answer to each chat command, as a browser test may replace one. */
+export type DemoChatCommands = {
+  [K in ChatCommand]: (
+    input: ChatInput<K>,
+    options: { signal?: AbortSignal },
+  ) => Promise<ChatOutput<K>>;
+};
+type DemoChatCommand = (input: never, options: { signal?: AbortSignal }) => Promise<unknown>;
+
+/** A failure as the chat reads it: an `ApplicationError` as it is, anything else Unavailable. */
+const toApplicationError = (error: unknown) =>
+  ApplicationError.is(error)
+    ? error
+    : new ApplicationError({ code: 'Unavailable', message: 'Application effect failed' });
+const unexpected = (operation: string) => async (): Promise<never> => {
+  throw Error(`Unexpected fake operation: ${operation}`);
+};
+const noTranscript = async (): Promise<never> => {
+  throw new ApplicationError({
+    code: 'Incompatible',
+    message: 'This demo serves no transcript reads.',
+  });
+};
+/** Every provider command but `getProviders`, which the demo answers. */
+const readOnlyProviders = Object.fromEntries(
+  Object.keys(providerInputSchemas).map((operation) => [
+    operation,
+    () =>
+      Effect.fail(
+        new ApplicationError({
+          code: 'InvalidInput',
+          message: 'Demo provider setup is read-only.',
+        }),
+      ),
+  ]),
+);
 
 /** The demo working folder's files, for @ mentions. */
 export const demoFiles = [
@@ -159,162 +205,180 @@ export function chatCapabilities(local = false, activity = false) {
         controls.closed++;
       }));
   };
-  const chat: ChatClient = {
-    async command(operation, input) {
-      calls.push(operation);
-      switch (operation) {
-        case 'getChatHost':
-          return { ...context, mode: 'local' } as never;
-        case 'listChats': {
-          const page = listPage();
-          // `?activity` adds chats after the first listing, which marks only that one as seen;
-          // the open list watches then deliver them.
-          if (activity && !added) {
-            added = true;
-            setTimeout(() => listWatches.forEach((receive) => receive(listPage())));
-          }
-          return page as never;
-        }
-        case 'getChat': {
-          const id = (input as ChatInput<'getChat'>).target.conversationId;
-          const listed =
-            activity && activityChats().find((chat) => chat.target.conversationId === id);
-          const opened = listed
-            ? { ...structuredClone(snapshot), conversation: listed, entries: [] }
-            : structuredClone(snapshot);
-          return { ...opened, conversation: withSettled(opened.conversation) } as never;
-        }
-        case 'createChat': {
-          // The local fixture plays the host; the remote one answers with its saved chat.
-          if (local) {
-            const creation = input as {
-              title: string;
-              settings: ChatCreationSettings;
-            };
-            conversation.title = creation.title;
-            // Like the host, a chat without a project gets a new folder of its own.
-            conversation.cwd = creation.settings.cwd ?? `/demo/chats/chat-${++ownFolders}`;
-            if (creation.settings.cwd) delete conversation.ownFolder;
-            else conversation.ownFolder = true;
-            conversation.model = creation.settings.model.modelId;
-            conversation.reasoningEffort = creation.settings.reasoningEffort;
-          }
-          return { requestId: (input as { requestId: string }).requestId, conversation } as never;
-        }
-        case 'sendChat':
-          sent.push(structuredClone(input as ChatInput<'sendChat'>));
-          settled.delete((input as ChatInput<'sendChat'>).target.conversationId);
-          if (local) {
-            const message = input as { requestId: string; text: string },
-              replyId = message.requestId + '-reply';
-            snapshot.entries.unshift(
-              await makeEntry(
-                target,
-                replyId,
-                'assistant',
-                'I’ll inspect the desktop shell and file sidebar, then check that the editor keeps its buffers and undo history when switching views.',
-              ),
-              await makeEntry(target, message.requestId, 'user', message.text),
-            );
-            snapshot.transcriptBoundary = replyId;
-            controls.receiveChat(structuredClone(snapshot));
-          }
-          return {
-            target,
-            requestId: (input as { requestId: string }).requestId,
-            admission: 'admitted',
-            submissionId: 'submission',
-          } as never;
-        case 'getChatTranscriptContent':
-        case 'findChatTranscript':
-        case 'getChatHistoryAround':
-          throw new ApplicationError({
-            code: 'Incompatible',
-            message: 'This demo serves no transcript reads.',
-          });
-        case 'findChatFiles': {
-          const { query } = input as ChatInput<'findChatFiles'>;
-          const matches = demoFiles
-            .map((path) =>
-              query.trim() ? matchPath(path, query) : { path, score: 0, positions: [] },
-            )
-            .filter((match) => match !== null)
-            .sort(query.trim() ? compareMatches : () => 0)
-            .slice(0, chatFileMatchLimit)
-            .map(({ path, positions }) => ({ path, positions }));
-          return { query, matches, partial: false } as never;
-        }
-        case 'getChatSend':
-          return null as never;
-        case 'stopChat':
-          return { ...input, outcome: 'terminal' } as never;
-        case 'settleChat': {
-          const request = input as ChatInput<'settleChat'>,
-            id = request.target.conversationId;
-          if (!request.settled) settled.delete(id);
-          else if (!settled.has(id)) settled.set(id, new Date().toISOString());
-          const chat =
-            (activity && activityChats().find((c) => c.target.conversationId === id)) ||
-            conversation;
-          return withSettled(chat) as never;
-        }
-        default:
-          throw Error(`Unexpected fake operation: ${operation}`);
+  /** One watch: counted while open, and closed through `controls.release`, once. */
+  const observe = <A>(register: (offer: (value: A) => void) => () => void) =>
+    Stream.callback<A, ApplicationError>((queue) =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          controls.observations++;
+          return register((value) => Queue.offerUnsafe(queue, value));
+        }),
+        (unregister) =>
+          Effect.sync(unregister).pipe(
+            Effect.andThen(Effect.tryPromise({ try: close(), catch: toApplicationError })),
+            Effect.orDie,
+          ),
+      ),
+    );
+  /**
+   * The fake host's answer to each chat command. A browser test may replace one to hold or fail
+   * it; the chat port calls whichever is here when the command runs.
+   */
+  const commands: DemoChatCommands = {
+    getChatHost: async () => ({ ...context, mode: 'local' }),
+    listChats: async () => {
+      const page = listPage();
+      // `?activity` adds chats after the first listing, which marks only that one as seen;
+      // the open list watches then deliver them.
+      if (activity && !added) {
+        added = true;
+        setTimeout(() => listWatches.forEach((receive) => receive(listPage())));
       }
+      return page;
     },
-    watch(_input, receive) {
-      controls.receiveChat = receive;
-      controls.observations++;
-      return close();
+    getChat: async (input) => {
+      const id = input.target.conversationId;
+      const listed = activity && activityChats().find((chat) => chat.target.conversationId === id);
+      const opened = listed
+        ? { ...structuredClone(snapshot), conversation: listed, entries: [] }
+        : structuredClone(snapshot);
+      return { ...opened, conversation: withSettled(opened.conversation) };
     },
+    createChat: async (input) => {
+      // The local fixture plays the host; the remote one answers with its saved chat.
+      if (local) {
+        const creation = input as { title: string; settings: ChatCreationSettings };
+        conversation.title = creation.title;
+        // Like the host, a chat without a project gets a new folder of its own.
+        conversation.cwd = creation.settings.cwd ?? `/demo/chats/chat-${++ownFolders}`;
+        if (creation.settings.cwd) delete conversation.ownFolder;
+        else conversation.ownFolder = true;
+        conversation.model = creation.settings.model.modelId;
+        conversation.reasoningEffort = creation.settings.reasoningEffort;
+      }
+      return { requestId: input.requestId, conversation } as never;
+    },
+    sendChat: async (input) => {
+      sent.push(structuredClone(input));
+      settled.delete(input.target.conversationId);
+      if (local) {
+        const message = input as { requestId: string; text: string },
+          replyId = message.requestId + '-reply';
+        snapshot.entries.unshift(
+          await makeEntry(
+            target,
+            replyId,
+            'assistant',
+            'I’ll inspect the desktop shell and file sidebar, then check that the editor keeps its buffers and undo history when switching views.',
+          ),
+          await makeEntry(target, message.requestId, 'user', message.text),
+        );
+        snapshot.transcriptBoundary = replyId;
+        controls.receiveChat(structuredClone(snapshot));
+      }
+      return {
+        target,
+        requestId: input.requestId,
+        admission: 'admitted',
+        submissionId: 'submission',
+      } as never;
+    },
+    getChatHistory: unexpected('getChatHistory'),
+    getChatTranscriptContent: noTranscript,
+    findChatTranscript: noTranscript,
+    getChatHistoryAround: noTranscript,
+    findChatFiles: async (input) => {
+      const { query } = input;
+      const matches = demoFiles
+        .map((path) => (query.trim() ? matchPath(path, query) : { path, score: 0, positions: [] }))
+        .filter((match) => match !== null)
+        .sort(query.trim() ? compareMatches : () => 0)
+        .slice(0, chatFileMatchLimit)
+        .map(({ path, positions }) => ({ path, positions }));
+      return { query, matches, partial: false };
+    },
+    getChatSend: async () => null,
+    stopChat: async (input) => ({ ...input, outcome: 'terminal' }) as never,
+    settleChat: async (request) => {
+      const id = request.target.conversationId;
+      if (!request.settled) settled.delete(id);
+      else if (!settled.has(id)) settled.set(id, new Date().toISOString());
+      const chat =
+        (activity && activityChats().find((c) => c.target.conversationId === id)) || conversation;
+      return withSettled(chat);
+    },
+  };
+  const chat = {
+    ...Object.fromEntries(
+      (Object.keys(chatInputSchemas) as ChatCommand[]).map((operation) => [
+        operation,
+        (input: never) =>
+          Effect.tryPromise({
+            try: (signal) => {
+              calls.push(operation);
+              return (commands[operation] as DemoChatCommand)(input, { signal });
+            },
+            catch: toApplicationError,
+          }),
+      ]),
+    ),
+    watch: () =>
+      observe<ChatSnapshot>((receive) => {
+        controls.receiveChat = receive;
+        return () => {};
+      }),
     // The list watch delivers the current page after subscribing, then each page `?activity` adds.
-    watchChatList(_input, receive) {
-      const deliver = (list: ChatOutput<'listChats'>) =>
-        receive({ list, changed: [], dropped: 0, reset: false });
-      listWatches.add(deliver);
-      void Promise.resolve().then(() => {
-        if (listWatches.has(deliver)) deliver(listPage());
-      });
-      return async () => {
-        listWatches.delete(deliver);
-      };
-    },
-  };
-  const connection: ConnectionClient = {
-    async command(operation) {
+    watchChatList: () =>
+      observe<ChatListUpdate>((receive) => {
+        const deliver = (list: ChatOutput<'listChats'>) =>
+          receive({ list, changed: [], dropped: 0, reset: false });
+        listWatches.add(deliver);
+        void Promise.resolve().then(() => {
+          if (listWatches.has(deliver)) deliver(listPage());
+        });
+        return () => listWatches.delete(deliver);
+      }),
+  } as unknown as ChatPort;
+  const connect = (operation: string, change: () => void) => () =>
+    Effect.sync(() => {
       calls.push(operation);
-      if (operation === 'connect')
-        connectionState = {
-          state: 'connected',
-          connectionId: 'connection',
-          profile,
-          health: {
-            ...context.host,
-            protocol: chatProtocolVersion,
-            version: '0.1.0',
-            capabilities: ['chat-v0'],
-          },
-        };
-      if (operation === 'disconnect')
-        connectionState = { state: 'disconnected', connectionId: null, profile };
+      change();
       receiveConnection(connectionState);
-      return connectionState as never;
-    },
-    watch(receive) {
-      receiveConnection = receive;
-      controls.observations++;
-      return close();
-    },
-  };
+      return connectionState;
+    });
+  const connection = {
+    getConnection: connect('getConnection', () => {}),
+    connect: connect('connect', () => {
+      connectionState = {
+        state: 'connected',
+        connectionId: 'connection',
+        profile,
+        health: {
+          ...context.host,
+          protocol: chatProtocolVersion,
+          version: '0.1.0',
+          capabilities: ['chat-v0'],
+        },
+      };
+    }),
+    disconnect: connect('disconnect', () => {
+      connectionState = { state: 'disconnected', connectionId: null, profile };
+    }),
+    watch: () =>
+      observe<ConnectionSnapshot>((receive) => {
+        receiveConnection = receive;
+        return () => {};
+      }),
+  } as unknown as ConnectionPort;
   // Every host is a daemon whose chats choose their folder and model; a remote one is connected.
   const dependencies: ChatDependencies = {
     chat,
     ...(local ? {} : { connection }),
     providers: {
-      watch: () => async () => {},
-      command: async (operation: string) => {
-        if (operation !== 'getProviders') throw Error('Demo provider setup is read-only.');
-        return {
+      watch: () => Stream.never,
+      ...readOnlyProviders,
+      getProviders: () =>
+        Effect.succeed({
           providers: [
             {
               id: 'openai',
@@ -376,9 +440,8 @@ export function chatCapabilities(local = false, activity = false) {
               : []),
           ],
           flow: null,
-        };
-      },
-    },
+        }),
+    } as unknown as ProviderSetupPort,
     context,
     storage: {
       read: () => storage.value,
@@ -391,6 +454,7 @@ export function chatCapabilities(local = false, activity = false) {
   };
   return {
     dependencies,
+    commands,
     target,
     snapshot,
     storage,

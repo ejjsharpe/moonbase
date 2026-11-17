@@ -4,12 +4,12 @@ import { Button } from '@base-ui/react/button';
 import { Dialog } from '@base-ui/react/dialog';
 import { Tabs } from '@base-ui/react/tabs';
 import type { DesktopApplicationView } from './desktop-application.ts';
-import type { ChatController } from '@moonbase/application/chat';
 import { controls } from '@moonbase/ui/controls';
 import { colors, radius, shadow, space, type } from '@moonbase/ui/tokens.stylex';
 import { workbench } from '@moonbase/ui/workbench';
 import { ProviderSetup } from '../chat/provider-setup.tsx';
 import { Icon } from '@moonbase/ui/icons';
+import type { DesktopChat } from '../chat/desktop-chat.ts';
 
 export type SettingsSection = 'hosts' | 'providers';
 const noSubscription = () => () => {};
@@ -24,7 +24,7 @@ export function Settings({
   close,
 }: {
   application: DesktopApplicationView;
-  chat: ChatController | null;
+  chat: DesktopChat | null;
   section: SettingsSection;
   onSectionChange(section: SettingsSection): void;
   close(): void;
@@ -93,7 +93,7 @@ function Hosts({
   chat,
 }: {
   application: DesktopApplicationView;
-  chat: ChatController | null;
+  chat: DesktopChat | null;
 }) {
   const { lifecycle } = application;
   const state = useSyncExternalStore(
@@ -211,8 +211,8 @@ function Hosts({
             </p>
           )}
           <p {...stylex.props(styles.para, styles.ids)}>
-            Host {chat.context.host.hostId} · Store {chat.context.host.storeId} · Actor{' '}
-            {chat.context.actorId}
+            Host {chat.session.host.hostId} · Store {chat.session.host.storeId} · Actor{' '}
+            {chat.session.actorId}
           </p>
         </div>
       )}

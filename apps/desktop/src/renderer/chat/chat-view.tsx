@@ -9,7 +9,7 @@ import {
 import * as stylex from '@stylexjs/stylex';
 import { workbench } from '@moonbase/ui/workbench';
 import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
-import type { ChatComposer, ChatController } from '@moonbase/application/chat';
+import type { ChatComposer } from '@moonbase/application/chat';
 import type { DesktopRunner } from '../shell/desktop-application.ts';
 import { FindBar, handleChatFindKeyDown } from './find.tsx';
 import { Transcript } from './transcript/transcript.tsx';
@@ -21,6 +21,7 @@ import { ChatHeader, DockChatHeader } from './chat-header.tsx';
 import { PendingCommands } from './pending-commands.tsx';
 import { Composer } from './composer/composer.tsx';
 import { focusMessage } from './open-chat.ts';
+import type { DesktopChat } from './desktop-chat.ts';
 
 const compactLayout = window.matchMedia('(max-width: 640px)');
 const subscribeLayout = (listener: () => void) => {
@@ -72,7 +73,7 @@ export function ChatView({
   sidebarHidden = false,
   titleBar,
 }: {
-  controller: ChatController;
+  controller: DesktopChat;
   /** The chat's composer, made beside its controller: it outlives this view. */
   composer: ChatComposer;
   /** The renderer root's runners, which the composer's and transcript's actions run on. */

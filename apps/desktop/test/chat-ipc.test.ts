@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { Effect, Fiber, Stream } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatClient, ChatListUpdate } from '@moonbase/contracts/chat';
 import type { ConnectionClient } from '@moonbase/contracts/connection';
@@ -131,17 +132,16 @@ test('a Send keeps its exact payload and Uncertain outcome; provider replies kee
   };
   const { f, calls } = await chatFixture({ providers });
   try {
+    const { chat, providers: setup } = await f.ports('local');
     const input = { target, requestId: 'original', text: 'captured' };
-    await assert.rejects(f.target('local').chat.command('sendChat', input), { code: 'Uncertain' });
+    await assert.rejects(Effect.runPromise(chat.sendChat(input)), { code: 'Uncertain' });
     assert.deepEqual(calls, [{ operation: 'sendChat', input }]);
-    assert.deepEqual(await f.target('local').providers.command('getProviders', {}), {
+    assert.deepEqual(await Effect.runPromise(setup.getProviders({})), {
       providers: [],
       flow: null,
     });
     state = { providers: [], flow: { id: 'incomplete' } };
-    await assert.rejects(f.target('local').providers.command('getProviders', {}), {
-      code: 'Incompatible',
-    });
+    await assert.rejects(Effect.runPromise(setup.getProviders({})), { code: 'Incompatible' });
   } finally {
     await f.dispose();
   }
@@ -152,12 +152,14 @@ test('chat, chat list and connection watches reach the renderer through main and
   const { f, watched } = fixture;
   try {
     const received: unknown[] = [];
-    const remote = f.target('remote');
-    const closes = [
-      remote.chat.watch({ target }, (value) => received.push(value), assert.fail),
-      remote.chat.watchChatList({ session: context }, (value) => received.push(value), assert.fail),
-      remote.connection.watch((value) => received.push(value), assert.fail),
-    ];
+    const remote = await f.ports('remote');
+    const fibers = [
+      remote.chat.watch({ target }),
+      remote.chat.watchChatList({ session: context }),
+      remote.connection.watch(),
+    ].map((stream: Stream.Stream<unknown, unknown>) =>
+      Effect.runFork(Stream.runForEach(stream, (value) => Effect.sync(() => received.push(value)))),
+    );
     await waitFor(() => watched.chat && watched.chatList && watched.connection);
     const list: ChatListUpdate = {
       list: { conversations: [], nextCursor: null },
@@ -180,7 +182,7 @@ test('chat, chat list and connection watches reach the renderer through main and
     watched.connection!(disconnected);
     await waitFor(() => received.length === 2);
     assert.deepEqual(received, [list, disconnected]);
-    await Promise.all(closes.map((close) => close()));
+    await Effect.runPromise(Fiber.interruptAll(fibers));
     await waitFor(() => fixture.closes === 3);
   } finally {
     await f.dispose();
@@ -191,12 +193,10 @@ test('a replaced document ends its chat waits and watches, but never stops a cha
   const fixture = await chatFixture();
   const { f, calls, watched } = fixture;
   try {
-    const waiting = f.target('remote').chat.command('getChatHistory', { target, cursor: 'page' });
+    const remote = await f.ports('remote');
+    const waiting = Effect.runPromise(remote.chat.getChatHistory({ target, cursor: 'page' }));
     void waiting.catch(() => {});
-    f.target('remote').connection.watch(
-      () => {},
-      () => {},
-    );
+    Effect.runFork(Effect.ignore(Stream.runDrain(remote.connection.watch())));
     await waitFor(() => calls.length === 1 && watched.connection);
     // Its waits and watches end with it.
     await f.releaseDocument();

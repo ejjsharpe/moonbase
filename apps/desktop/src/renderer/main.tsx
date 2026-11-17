@@ -9,7 +9,6 @@ import {
   describeApplicationFailure,
   makeApplicationAtoms,
 } from '@moonbase/application';
-import type { ChatRunner } from '@moonbase/application/chat';
 import { EditorAlerts, getFailureCode } from '@moonbase/application/editor';
 import { makeWorkbenchEditor, type WorkbenchEditor } from '@moonbase/workbench';
 import { configureMonacoWorkers } from '@moonbase/workbench/workers';
@@ -42,9 +41,6 @@ function getTargetClients(target: 'local' | 'remote'): ReturnType<typeof makeCha
 }
 // The renderer's one runtime: every request to main runs here, over this document's IPC port,
 // and it holds the workspace, the editor and the application.
-const runner: ChatRunner = {
-  runPromiseExit: (effect, options) => runtime.runPromiseExit(effect, options),
-};
 const runtime = ManagedRuntime.make(makeIpcLayer(window.moonbase));
 /** Where the editor and application live, closed as the document goes, before main is told. */
 const documentScope = Scope.makeUnsafe();
@@ -176,7 +172,7 @@ let isLive = () => false;
 try {
   configureMonacoWorkers();
   const context = await runtime.runPromise(
-    Layer.buildWithScope(makeDocumentLayer(runner, getTargetClients), documentScope),
+    Layer.buildWithScope(makeDocumentLayer(), documentScope),
   );
   const service = Context.get(context, MoonbaseApplication);
   releaseApplication = service.release;

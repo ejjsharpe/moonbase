@@ -4,12 +4,13 @@ import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { Icon } from '@moonbase/ui/icons';
 import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
-import type { ChatController, ChatState } from '@moonbase/application/chat';
+import type { ChatState } from '@moonbase/application/chat';
 import type { ChatSummary } from '@moonbase/contracts/chat';
 import { getChatPlace } from './folder.ts';
 import { DockButtons, dockHeaderStyles } from './chat-header.tsx';
 import { isBusy } from './open-chat.ts';
 import type { ChatDock } from './chat-view.tsx';
+import type { DesktopChat } from './desktop-chat.ts';
 
 /** The project dock's list of the project's chats, with New chat and the dock's own buttons. */
 export function ProjectChatList({
@@ -20,7 +21,7 @@ export function ProjectChatList({
   onChoose,
   onNewChat,
 }: {
-  controller: ChatController;
+  controller: DesktopChat;
   state: ChatState;
   dock: ChatDock;
   /** The chats in the project's folders. */

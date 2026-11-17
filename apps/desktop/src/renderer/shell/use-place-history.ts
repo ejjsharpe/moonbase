@@ -1,10 +1,10 @@
 import { useEffect, useSyncExternalStore } from 'react';
-import type { ChatController } from '@moonbase/application/chat';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { useAtomValue } from '@effect/atom-react';
 import { Effect } from 'effect';
 import { findStep, type Place } from '@moonbase/application';
 import type { DesktopApplication } from './desktop-application.ts';
+import type { DesktopChat } from '../chat/desktop-chat.ts';
 
 const noSubscription = () => () => {};
 
@@ -23,7 +23,7 @@ export function usePlaceHistory({
   report,
 }: {
   application: DesktopApplication;
-  chat: ChatController | null;
+  chat: DesktopChat | null;
   /** The project showing, absent while Agents shows. */
   project: CheckoutTarget | undefined;
   activePath: string | null | undefined;

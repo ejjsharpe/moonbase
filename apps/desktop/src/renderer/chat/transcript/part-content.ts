@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo } from 'react';
-import type { ChatController, TranscriptContentState } from '@moonbase/application/chat';
+import type { TranscriptContentState } from '@moonbase/application/chat';
 import type { ChatTranscriptPart, ChatTranscriptSource } from '@moonbase/contracts/chat';
+import type { DesktopChat } from '../desktop-chat.ts';
 
 /**
  * A part's loaded content: its retained chunks, decoded from `base`, or the summary text when the
@@ -13,7 +14,7 @@ export function usePartContent({
   contents,
   wanted,
 }: {
-  controller: ChatController;
+  controller: DesktopChat;
   source: ChatTranscriptSource;
   part: ChatTranscriptPart;
   /** Loaded content of this part's source. */

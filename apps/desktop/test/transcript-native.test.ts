@@ -5,7 +5,7 @@ import { visit } from 'unist-util-visit';
 import type { Code } from 'mdast';
 import { parseTranscriptMarkdown } from '../src/ipc/transcript-markdown.ts';
 import { MarkdownCache } from '../src/renderer/chat/transcript/markdown-model.ts';
-import { Layer, ManagedRuntime } from 'effect';
+import { Effect, Layer, ManagedRuntime } from 'effect';
 import {
   maximumChatReplyBytes,
   type ChatClient,
@@ -338,7 +338,7 @@ async function fixture(live = false, text = '  **raw**\r\n\t🌔 é\r\n' + 'α'
     chat,
     desktop,
     actions: desktop.target('local').transcript,
-    clients: desktop.target('local'),
+    ports: await desktop.ports('local'),
     async dispose() {
       await desktop.dispose();
       await runtime.runPromise(owner.dispose);
@@ -686,7 +686,7 @@ test('native chunk iteration yields to unrelated IPC without another command que
   const parallel = new Promise<void>((resolve, reject) =>
     setImmediate(() => {
       readDuringCopy = f.writes.length === 0;
-      void f.clients.chat.command('getChat', { target }).then(() => resolve(), reject);
+      void Effect.runPromise(f.ports.chat.getChat({ target })).then(() => resolve(), reject);
     }),
   );
   await copy;

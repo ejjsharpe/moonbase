@@ -4,11 +4,12 @@ import { Input } from '@base-ui/react/input';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { colors, space, type } from '@moonbase/ui/tokens.stylex';
-import type { ChatController, TranscriptFindState } from '@moonbase/application/chat';
+import type { TranscriptFindState } from '@moonbase/application/chat';
+import type { DesktopChat } from './desktop-chat.ts';
 
 /** Opens Find for the conversation `element` belongs to, and focuses an already open field. */
 export function activateChatFind(
-  controller: ChatController,
+  controller: DesktopChat,
   element: Element,
   input: RefObject<HTMLInputElement | null>,
 ) {
@@ -38,7 +39,7 @@ function isFindShortcut(event: KeyboardEvent) {
  */
 export function handleChatFindKeyDown(
   event: KeyboardEvent<HTMLElement>,
-  controller: ChatController,
+  controller: DesktopChat,
   input: RefObject<HTMLInputElement | null>,
 ) {
   const target = event.target;
@@ -72,7 +73,7 @@ export function FindBar({
   state,
   input,
 }: {
-  controller: ChatController;
+  controller: DesktopChat;
   state: TranscriptFindState;
   /** Holds the field, so a repeated Find request can focus it. */
   input: RefObject<HTMLInputElement | null>;

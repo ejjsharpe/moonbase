@@ -595,51 +595,41 @@ test('Quit from Chat reveals exact editor prompts and Cancel returns live admiss
   ).toContain('still editable');
 });
 
-for (const fail of [false, true]) {
-  test(`Chat removal retains ${fail ? 'failing' : 'held'} cleanup visibility and its namespace gate`, async ({
-    page,
-  }) => {
-    await page.goto('/?chat');
-    await project(page).click();
-    await chat(page);
-    await page.evaluate((fail) => {
-      const pending = Promise.withResolvers<void>();
-      window.demo.chat.controls.release = () => pending.promise;
-      window.demo.retryChat = () =>
-        fail ? pending.reject(Error('Controlled observation cleanup failure')) : pending.resolve();
-    }, fail);
-    await tabs(page)
-      .getByRole('button', { name: 'Close Chat panel', exact: true })
-      .locator('..')
-      .hover();
-    await tabs(page).getByRole('button', { name: 'Close Chat panel', exact: true }).click();
-    await expect(tabs(page).getByRole('tab', { name: 'Agents', exact: true })).toHaveCount(0);
-    const reopen = shell(page).getByRole('button', { name: 'Open Chat panel', exact: true });
-    await expect(reopen).toBeDisabled();
-    await expect(shell(page).getByText('Finishing panel cleanup…')).toBeVisible();
-    await expect(input(page)).toBeVisible();
-    await page.evaluate(() => window.demo.retryChat());
-    if (fail) {
-      await expect(
-        shell(page).getByRole('alert', { name: 'Panel cleanup errors', exact: true }),
-      ).toBeVisible();
-      await expect(reopen).toBeDisabled();
-    } else {
-      await expect(reopen).toBeEnabled();
-      await page.evaluate(() => {
-        window.demo.chat.controls.release = async () => {};
-      });
-      await reopen.click();
-      await expect(tabs(page).getByRole('tab', { name: 'Agents', exact: true })).toHaveAttribute(
-        'aria-selected',
-        'true',
-      );
-    }
-    expect(
-      await page.evaluate(() => window.demo.chat.calls.filter((call) => call === 'stopChat')),
-    ).toEqual([]);
+// A watch's close failure is no longer collected into the panel's cleanup errors (D15); a held
+// release still holds reopening until it ends.
+test('Chat removal holds reopening until its cleanup ends', async ({ page }) => {
+  await page.goto('/?chat');
+  await project(page).click();
+  await chat(page);
+  await page.evaluate(() => {
+    const pending = Promise.withResolvers<void>();
+    window.demo.chat.controls.release = () => pending.promise;
+    window.demo.retryChat = () => pending.resolve();
   });
-}
+  await tabs(page)
+    .getByRole('button', { name: 'Close Chat panel', exact: true })
+    .locator('..')
+    .hover();
+  await tabs(page).getByRole('button', { name: 'Close Chat panel', exact: true }).click();
+  await expect(tabs(page).getByRole('tab', { name: 'Agents', exact: true })).toHaveCount(0);
+  const reopen = shell(page).getByRole('button', { name: 'Open Chat panel', exact: true });
+  await expect(reopen).toBeDisabled();
+  await expect(shell(page).getByText('Finishing panel cleanup…')).toBeVisible();
+  await expect(input(page)).toBeVisible();
+  await page.evaluate(() => window.demo.retryChat());
+  await expect(reopen).toBeEnabled();
+  await page.evaluate(() => {
+    window.demo.chat.controls.release = async () => {};
+  });
+  await reopen.click();
+  await expect(tabs(page).getByRole('tab', { name: 'Agents', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  expect(
+    await page.evaluate(() => window.demo.chat.calls.filter((call) => call === 'stopChat')),
+  ).toEqual([]);
+});
 
 test('optional Chat initialization failure remains visible and explicit retry opens the actual shared Chat view', async ({
   page,
@@ -778,14 +768,13 @@ test('first-message recovery shows the captured text, Send identity and effort a
       model: { provider: 'openai', modelId: 'demo-coding' },
       reasoningEffort: 'xhigh',
     });
-    const chat = window.demo.chat.dependencies.chat;
-    const original = chat.command;
-    chat.command = (async (operation, input, options) => {
-      if (operation === 'createChat') throw Error('Controlled lost Create response');
-      return original(operation, input, options);
-    }) as typeof chat.command;
+    const { commands } = window.demo.chat;
+    const original = commands.createChat;
+    commands.createChat = async () => {
+      throw Error('Controlled lost Create response');
+    };
     window.demo.retryChat = () => {
-      chat.command = original;
+      commands.createChat = original;
     };
   });
   await chooseFolderNatively(page);
@@ -1879,16 +1868,16 @@ test('the @ picker picks only from the current query’s matches and leaves IME 
   await chooseFolderNatively(page);
   // The search for `rele` answers only when the test says.
   await page.evaluate(() => {
-    const chat = window.demo.application.chat!,
-      find = chat.findFiles.bind(chat);
+    const { commands } = window.demo.chat,
+      find = commands.findChatFiles;
     const held: (() => void)[] = [];
     Object.assign(window, { answerHeld: () => held.splice(0).forEach((answer) => answer()) });
-    chat.findFiles = (query, options) =>
-      query === 'rele'
+    commands.findChatFiles = (input, options) =>
+      input.query === 'rele'
         ? new Promise((resolve, reject) => {
-            held.push(() => void find(query, options).then(resolve, reject));
+            held.push(() => void find(input, options).then(resolve, reject));
           })
-        : find(query, options);
+        : find(input, options);
   });
   await message.fill('@rel');
   const first = files.getByRole('option').first();
