@@ -129,6 +129,11 @@ export class EditorSaves extends Context.Service<EditorSaves, EditorSavesShape>(
           if (!taken) return false;
           if (taken.newFile) return yield* createFile(taken);
           const request = taken.pendingSave!;
+          // A draft sent while the Save settles could reach the store after it, over the baseline
+          // the Save replaced and that nothing moves again: the buffer's drafts wait for its end.
+          const tab = (yield* buffers.get).tabs.get(fileKey(target));
+          const release = tab ? outbox.releaseDraft(tab.id) : Effect.void;
+          if (tab) yield* outbox.holdDraft(tab.id);
           return yield* Effect.gen(function* () {
             const result = yield* workspace.saveFile(request).pipe(
               Effect.tapError((error) =>
@@ -166,11 +171,12 @@ export class EditorSaves extends Context.Service<EditorSaves, EditorSavesShape>(
               b.conflict = undefined;
               b.pendingSave = undefined;
             });
+            yield* release;
             const saved = [...(yield* buffers.get).buffers.values()].find((b) => b.id === taken.id);
             if (saved) yield* buffers.sendDraft(saved.target);
             yield* Effect.catch(recovery.send, alerts.report);
             return (yield* textOf(taken)) === result.disk.text;
-          }).pipe(Effect.ensuring(settle(taken)));
+          }).pipe(Effect.ensuring(Effect.andThen(release, settle(taken))));
         });
 
       return {

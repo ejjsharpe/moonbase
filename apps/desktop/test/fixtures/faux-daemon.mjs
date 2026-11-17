@@ -107,9 +107,15 @@ export async function stopDaemon(directory, pid) {
   pid ??= await readDaemonPid(directory);
   if (!pid || !isAlive(pid)) return;
   process.kill(pid, 'SIGTERM');
-  for (let waited = 0; isAlive(pid); waited += 25) {
-    if (waited === 15000) process.kill(pid, 'SIGKILL');
-    if (waited > 20000) throw Error('The test daemon did not stop.');
+  const started = Date.now();
+  let killed = false;
+  while (isAlive(pid)) {
+    const waited = Date.now() - started;
+    if (waited > 15000 && !killed) {
+      killed = true;
+      process.kill(pid, 'SIGKILL');
+    }
+    if (waited > 25000) throw Error('The test daemon did not stop.');
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }

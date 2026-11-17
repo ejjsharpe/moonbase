@@ -61,7 +61,7 @@ test('browser shell keeps dirty comparisons, cursor, scroll, Monaco undo and sco
   await input(page).evaluate((element) => element.setAttribute('data-retained-view', 'true'));
   await chat(page);
   await shell(page).getByLabel('Message', { exact: true }).fill('separate chat draft');
-  await shell(page).getByLabel('Message', { exact: true }).press('ControlOrMeta+p');
+  await shell(page).getByLabel('Message', { exact: true }).press('Meta+p');
   // Go to opens from the composer too; dismissing it keeps the draft and its focus.
   await expect(page.getByRole('dialog', { name: 'Go to', exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
@@ -159,7 +159,7 @@ test('project-tab shortcuts use the editor handler after keyboard navigation fro
   await project(page).press('Meta+s');
   await expect.poll(() => page.evaluate(() => window.demo.memory.stats.saves)).toBe(1);
   await expect(project(page)).toBeFocused();
-  await project(page).press('ControlOrMeta+p');
+  await project(page).press('Meta+p');
   await expect(page.getByRole('dialog', { name: 'Go to', exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
   await project(page).focus();
@@ -1168,7 +1168,7 @@ test('the file menu mentions files in the dock’s chat and copies and reveals t
   await tree.getByRole('treeitem', { name: 'README.md', exact: true }).click({ button: 'right' });
   await fileMenu.getByRole('menuitem', { name: 'Copy Path', exact: true }).click();
   await expect(tree).toBeFocused();
-  await tree.press('ControlOrMeta+Alt+r');
+  await tree.press('Meta+Alt+r');
   expect(await page.evaluate(() => [window.demo.copied, window.demo.revealed])).toEqual([
     ['/demo/moonbase/README.md'],
     ['/demo/moonbase/README.md'],
@@ -1458,7 +1458,7 @@ test('⌘P jumps between chats, projects and files, and > runs app commands', as
   await page.goto('/?chat');
   await chat(page);
   const message = shell(page).getByLabel('Message', { exact: true });
-  await message.press('ControlOrMeta+p');
+  await message.press('Meta+p');
   const goTo = page.getByRole('dialog', { name: 'Go to', exact: true });
   await expect(goTo.getByRole('option', { name: 'welcome.ts', exact: true })).toBeVisible();
   await expect(goTo.getByRole('option', { name: 'Conversation', exact: true })).toBeVisible();
@@ -1469,7 +1469,7 @@ test('⌘P jumps between chats, projects and files, and > runs app commands', as
   // A file opened from Agents brings its project into view with the editor focused.
   await expect(project(page)).toHaveAttribute('aria-selected', 'true');
   await expect(input(page)).toBeFocused();
-  await page.keyboard.press('ControlOrMeta+Shift+p');
+  await page.keyboard.press('Meta+Shift+p');
   await expect(goTo.getByRole('option', { name: 'Hide project chats', exact: true })).toContainText(
     '⌘J',
   );
@@ -1479,12 +1479,12 @@ test('⌘P jumps between chats, projects and files, and > runs app commands', as
     'aria-selected',
     'true',
   );
-  await message.press('ControlOrMeta+p');
+  await message.press('Meta+p');
   await goTo.getByRole('combobox').fill('>new chat');
   await page.keyboard.press('Enter');
   await expect(message).toBeFocused();
   await expect(message).toHaveValue('');
-  await message.press('ControlOrMeta+p');
+  await message.press('Meta+p');
   await goTo.getByRole('combobox').fill('conv');
   await expect(goTo.getByRole('option').first()).toHaveAccessibleName('Conversation');
   await page.keyboard.press('Enter');
@@ -1866,7 +1866,7 @@ test('/new starts the new chat from the lines after it and leaves the open chat�
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Start a chat', exact: true })).toBeVisible();
   await message.fill('/new\nCarry this on');
-  await message.press('ControlOrMeta+Enter');
+  await message.press('Meta+Enter');
   await expect(page.getByText('What should we work on?')).toBeVisible();
   await expect(message).toHaveValue('Carry this on');
   // A chat you haven't settled lists under Idle.
@@ -2092,11 +2092,11 @@ test('a chat settles and unsettles from its header or the composer, and a Send u
   await expect(commands.getByRole('option', { name: /^\/settle/ })).toBeVisible();
   await expect(commands.getByRole('option', { name: /^\/unsettle/ })).toHaveCount(0);
   await message.fill('/settle');
-  await message.press('ControlOrMeta+Enter');
+  await message.press('Meta+Enter');
   await expect(unsettle).toBeVisible();
   await expect(message).toHaveValue('');
   await message.fill('/unsettle');
-  await message.press('ControlOrMeta+Enter');
+  await message.press('Meta+Enter');
   await expect(settle).toBeVisible();
   // Sending to a settled chat takes it up again.
   await settle.click();
@@ -2204,9 +2204,7 @@ test('⌘B and the sidebar button hide the main sidebar in projects and Agents, 
   await page.getByRole('tab', { name: 'moonbase · main', exact: true }).click();
   const explorer = page.locator('aside[aria-label="Editor sidebar"]');
   await expect.poll(widthOf(explorer)).toBeGreaterThan(100);
-  await page
-    .getByRole('textbox', { name: 'welcome.ts editor', exact: true })
-    .press('ControlOrMeta+b');
+  await page.getByRole('textbox', { name: 'welcome.ts editor', exact: true }).press('Meta+b');
   await expect.poll(widthOf(explorer)).toBe(0);
   expect(await explorer.evaluate((element) => (element as HTMLElement).inert)).toBe(true);
   await page.getByRole('button', { name: 'Show sidebar', exact: true }).click();
@@ -2220,7 +2218,7 @@ test('⌘B and the sidebar button hide the main sidebar in projects and Agents, 
   await expect.poll(widthOf(list)).toBe(0);
   // The key works with nothing focused, too.
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-  await page.keyboard.press('ControlOrMeta+b');
+  await page.keyboard.press('Meta+b');
   await expect.poll(widthOf(list)).toBeGreaterThan(100);
 });
 
@@ -2235,18 +2233,16 @@ test('⌃⌘S toggles the sidebar and never saves', async ({ page }) => {
   const saves = () => page.evaluate(() => window.demo.memory.stats.saves);
   const before = await saves();
   const explorer = page.locator('aside[aria-label="Editor sidebar"]');
-  // Off a Mac the sidebar's second key is Ctrl+Alt+S.
-  const toggleKeys = process.platform === 'darwin' ? 'Control+Meta+s' : 'Control+Alt+s';
-  await editor.press(toggleKeys);
+  await editor.press('Control+Meta+s');
   await expect.poll(widthOf(explorer)).toBe(0);
   // Focus stays in the editor, so the next keys still work.
   await expect(editor).toBeFocused();
-  await editor.press(toggleKeys);
+  await editor.press('Control+Meta+s');
   await expect.poll(widthOf(explorer)).toBeGreaterThan(100);
   expect(await saves()).toBe(before);
   // Hiding the sidebar from inside it hands focus to the editor.
   await page.getByRole('tree', { name: 'Files', exact: true }).focus();
-  await page.keyboard.press('ControlOrMeta+b');
+  await page.keyboard.press('Meta+b');
   await expect(editor).toBeFocused();
 });
 
@@ -2454,7 +2450,7 @@ test('hiding project chats from inside them hands focus to the project, so the w
   await page.keyboard.press('Meta+j');
   await expect.poll(widthOf(dock)).toBe(400);
   await blur();
-  await page.keyboard.press('ControlOrMeta+p');
+  await page.keyboard.press('Meta+p');
   const goTo = page.getByRole('dialog', { name: 'Go to', exact: true });
   await expect(goTo).toBeVisible();
   await page.keyboard.press('Escape');
@@ -2504,13 +2500,11 @@ test('the sidebar key follows the layout: ⌘ with the key that types B, not the
   const press = (key: string, code: string) =>
     page.evaluate(
       ([key, code]) => {
-        const mac = navigator.platform.startsWith('Mac');
         return !document.body.dispatchEvent(
           new KeyboardEvent('keydown', {
             key,
             code,
-            metaKey: mac,
-            ctrlKey: !mac,
+            metaKey: true,
             bubbles: true,
             cancelable: true,
           }),

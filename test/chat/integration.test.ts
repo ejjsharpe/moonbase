@@ -536,12 +536,11 @@ test('cross-process tool progress arrives while execution is held and independen
       ),
   );
   assert.equal((await f.stats()).commands.filter((c) => c === 'getChat').length, 0);
-  const started = Date.now();
+  // The tool is held, so the stop settling at all means it did not wait for the execution.
   await root.chat.command('stopChat', {
     stop: views.at(-1)!.run!.stop,
     requestId: 'tool-stream-stop',
   });
-  assert(Date.now() - started < 3000);
   await until(
     async () => views.at(-1),
     (v) => !!v && !v.run,

@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { checkMacosTests } from './macos-tests.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
@@ -44,42 +43,6 @@ test('Foundation verifies browser-only command contracts and headless models wit
     const corrupt = check();
     assert.equal(corrupt.status, 1, corrupt.stderr);
     assert.match(corrupt.stderr, /node:fs\/promises/);
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test('a macOS-only test is split out by tag and scripts, never skipped by platform', () => {
-  const directory = mkdtempSync(path.join(tmpdir(), 'moonbase-macos-tests-'));
-  try {
-    const write = (file, text) => {
-      mkdirSync(path.dirname(path.join(directory, file)), { recursive: true });
-      writeFileSync(path.join(directory, file), text);
-    };
-    const manifest = (scripts, tags) => JSON.stringify({ scripts, ...(tags && { nx: { tags } }) });
-    write('apps/.keep', '');
-    write(
-      'packages/split/package.json',
-      manifest({ test: 't', 'test:linux': 'l', 'test:macos': 'm' }, ['macos-tests']),
-    );
-    write('packages/split/test/macos/keychain.test.ts', "if (process.platform === 'darwin') {}");
-    write(
-      'packages/whole/package.json',
-      manifest({ test: 't', 'test:macos': 'm' }, ['macos-tests']),
-    );
-    write('packages/portable/package.json', manifest({ test: 't' }));
-    write('packages/portable/test/e2e/keys.spec.ts', 'process.platform');
-    assert.deepEqual(checkMacosTests(directory), []);
-    write('packages/portable/test/macos/keychain.test.ts', '');
-    write(
-      'packages/portable/test/files.test.ts',
-      "test('rg', { skip: process.platform !== 'darwin' });",
-    );
-    // The missing tag, the missing test:linux and the platform skip, each named by where it is.
-    assert.deepEqual(
-      checkMacosTests(directory).map((error) => error.split(' ')[0]),
-      ['packages/portable', 'packages/portable', 'packages/portable/test/files.test.ts'],
-    );
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

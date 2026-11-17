@@ -21,7 +21,7 @@ Data may be lost between versions while Moonbase is prerelease: a change can sta
 - Code that runs in different processes gets a folder per process: desktop `main/`, `preload/` and `renderer/`, with the IPC contract they share in `ipc/`; workspace `host/` and `client/`, with what they share at `src/`.
 - Client state in `packages/application` is one folder per concept, with `x.ts`, `x-service.ts` and `x-atoms.ts` for its three layers (see its README).
 - Tests sit in each module's `test/`, mirroring `src/` where it has folders. Playwright specs go in `test/e2e/`; desktop's harnesses and faux processes in `test/fixtures/`. Suites that run a real daemon go in the root `test/` folder.
-- Tests that need macOS (the native helper, FSEvents, the Keychain, a daemon serving files) go in the module's `test/macos/`, keeping the name of the file they test; CI runs the rest on Linux. Such a package carries the `macos-tests` Nx tag and `test:linux` and `test:macos` scripts (`packages/workspace` runs wholly on macOS: tag and `test:macos` only). Never skip on `process.platform`; `check:foundation` enforces both.
+- Tests that need macOS (the native helper, FSEvents, the Keychain, a daemon serving files) go in the module's `test/macos/`, keeping the name of the file they test; CI runs the rest on Linux. Such a package carries the `macos-tests` Nx tag and `test:linux` and `test:macos` scripts (`packages/workspace` runs wholly on macOS: tag and `test:macos` only). Don't skip on `process.platform`; move the test to `test/macos/`.
 - Test helpers: `x-fixture.ts` for shared setup, `faux-x` for a fake process or provider, `x-process.ts` for a script a test spawns. A unit test is named after the file it tests (`editor-session.test.ts` for `editor-session.ts`).
 
 ## Effect
@@ -56,8 +56,8 @@ Atoms hold no domain logic, so a headless test or a non-React client can use the
 
 ## Verifying
 
-- While iterating, run the one test file you changed (`bun test <file> -t "<name>"`, or `node --experimental-strip-types --test <file>`), not the package suite.
-- Before you push, run `bunx nx affected -t typecheck test`, `bun run lint`, `bun run format:check` and `bun run check:foundation`. Run a root integration suite you changed, and `bun run test:chat-integration` when you change the daemon or chat wire.
+- While iterating, run the one test file you changed (`bun test <file> -t "<name>"`, or `node --test <file>`), not the package suite.
+- Before you push, run `bun run check` (`nx affected -t typecheck test`, lint, format check and `check:foundation`). Root integration suites are Nx projects (`@moonbase/chat-integration`, `@moonbase/editor-integration`), so `nx affected` runs them; run `bunx nx test @moonbase/chat-integration` when you change the daemon or chat wire.
 - CI runs the affected suites on a PR, and every suite on main.
 - Don't run `bun run test`, the root integration suites or the Playwright projects unless asked. Run only the Playwright project for the surface you touched.
 

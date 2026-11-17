@@ -99,7 +99,8 @@ async function countedEditor(f: Awaited<ReturnType<typeof fixture>>, clientId: s
 }
 /** Waits until every listed entry under these folders has Git's classification. */
 async function waitForClassification(editor: EditorDriver, folders: string[]) {
-  for (let turn = 0; turn < 200; turn++) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
     const listings = editor.getSnapshot().listings;
     if (
       folders.every((folder) =>

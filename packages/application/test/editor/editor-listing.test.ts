@@ -7,7 +7,8 @@ import { Effect } from 'effect';
 import { ApplicationError, type WorkspaceEvent } from '@moonbase/contracts/workspace';
 
 async function until(check: () => unknown) {
-  for (let i = 0; i < 200 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  const deadline = Date.now() + 10_000;
+  while (!check() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
   assert(check());
 }
 

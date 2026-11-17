@@ -5,6 +5,7 @@ import { isRefusal, type EditorFailure } from '../editor-errors.ts';
 import { EditorSession } from '../session/session-service.ts';
 import {
   emptyOutbox,
+  findNextEdit,
   isDraftPending,
   isStructural,
   isTabPending,
@@ -59,6 +60,10 @@ export type RecoveryOutboxShape = {
   readonly discardDraft: (bufferId: string, target: FileTarget) => Effect.Effect<void>;
   readonly updateDraft: (bufferId: string, text: string, disk: FileDocument) => Effect.Effect<void>;
   readonly updateLayout: Effect.Effect<void>;
+  /** Keeps the buffer's queued drafts unsent until `releaseDraft`, as a Save settles. */
+  readonly holdDraft: (bufferId: string) => Effect.Effect<void>;
+  /** Lets the buffer's drafts go, sending them a moment later. */
+  readonly releaseDraft: (bufferId: string) => Effect.Effect<void>;
   /** Sends the next layout even if it is the one last committed: the store's may differ now. */
   readonly forgetLayout: Effect.Effect<void>;
   /** The layout changed: queue it and send once nothing has changed for a moment. */
@@ -144,15 +149,20 @@ export class RecoveryOutbox extends Context.Service<RecoveryOutbox, RecoveryOutb
             }));
           }
           for (;;) {
-            if (!(yield* get).queue.length) break;
+            if (findNextEdit(yield* get) < 0) break;
             yield* sender.ready;
             // Once taken, an edit is sent and recorded, or goes back first if interrupted.
             const outcome = yield* Effect.uninterruptibleMask((restore) =>
               Effect.gen(function* () {
-                const edit = yield* SubscriptionRef.modify(state, (s) => [
-                  s.queue[0],
-                  { ...s, queue: s.queue.slice(1), sending: s.queue[0] },
-                ]);
+                const edit = yield* SubscriptionRef.modify(state, (s) => {
+                  const index = findNextEdit(s);
+                  if (index < 0) return [undefined, s];
+                  const next = s.queue[index];
+                  return [
+                    next,
+                    { ...s, queue: s.queue.filter((_, at) => at !== index), sending: next },
+                  ];
+                });
                 if (!edit) return undefined;
                 const exit = yield* Effect.exit(
                   restore(
@@ -237,6 +247,17 @@ export class RecoveryOutbox extends Context.Service<RecoveryOutbox, RecoveryOutb
           Effect.andThen(closeTab(bufferId, true), openTab(bufferId, target)),
         updateDraft: (bufferId, text, disk) => queue((q) => queueDraft(q, bufferId, text, disk)),
         updateLayout,
+        holdDraft: (bufferId) =>
+          update((s) => (s.held.includes(bufferId) ? s : { ...s, held: [...s.held, bufferId] })),
+        releaseDraft: (bufferId) =>
+          Effect.flatMap(
+            SubscriptionRef.modify(state, (s) =>
+              s.held.includes(bufferId)
+                ? [true, { ...s, held: s.held.filter((id) => id !== bufferId) }]
+                : [false, s],
+            ),
+            (released) => (released ? schedule : Effect.void),
+          ),
         forgetLayout: update((s) => ({ ...s, committedLayout: undefined })),
         changed: Effect.andThen(updateLayout, schedule),
         schedule,

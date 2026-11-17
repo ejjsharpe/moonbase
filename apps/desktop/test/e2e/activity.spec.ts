@@ -885,7 +885,7 @@ test("Find revealing a match in a call's output shows the call's card open, and 
   await expect(chevron).toHaveAttribute('aria-expanded', 'false');
   await expect(result.getByRole('button', { name: /^Activity/ })).toHaveCount(0);
   await page.getByRole('region', { name: 'Chat transcript', exact: true }).focus();
-  await page.keyboard.press('ControlOrMeta+f');
+  await page.keyboard.press('Meta+f');
   await page.getByRole('textbox', { name: 'Find in conversation', exact: true }).fill('needle');
   await expect(result.locator('pre')).toBeVisible();
   await expect
@@ -937,7 +937,7 @@ test('EOF patch sources without a terminal newline stay exact in Copy, parsed or
   await expect.poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1))).toBe(valid);
   await expect(fallback).toContainText('Malformed or unsupported');
   await expect(fallback.getByRole('table')).toHaveCount(0);
-  expect(await fallback.locator('pre').textContent()).toBe(truncated);
+  await expect.poll(() => fallback.locator('pre').textContent()).toBe(truncated);
   await fallback.getByRole('button', { name: 'Copy patch', exact: true }).click();
   await expect
     .poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1)))
@@ -995,10 +995,10 @@ test('historical patches retain real coordinates, malformed/numbered/large fallb
     await large.getByRole('button', { name: /Read more/ }).click();
   await expect(large).toContainText('Large patch');
   await large.getByRole('button', { name: 'Next source', exact: true }).click();
-  expect(await large.locator('pre').evaluate((node) => node.textContent!.isWellFormed())).toBe(
-    true,
-  );
   await expect(large).toContainText('Source 15,999');
+  await expect
+    .poll(() => large.locator('pre').evaluate((node) => node.textContent!.isWellFormed()))
+    .toBe(true);
   await large.getByRole('button', { name: 'Copy patch', exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.demo.transcript!.copied.at(-1))).toBe(huge);
 });
@@ -1182,7 +1182,7 @@ test('a folded run opens for a Find match in it, folds again for that match, and
   const fold = page.locator('[data-transcript-activity-group]');
   await expect(fold).toHaveAttribute('aria-expanded', 'false');
   await transcriptList(page).focus();
-  await page.keyboard.press('ControlOrMeta+f');
+  await page.keyboard.press('Meta+f');
   const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
   await find.fill('needle');
   await expect(fold).toHaveAttribute('aria-expanded', 'true');

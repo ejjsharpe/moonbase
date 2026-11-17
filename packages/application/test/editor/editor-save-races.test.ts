@@ -280,6 +280,40 @@ for (const kind of ['close', 'reload'] as const)
     }
   });
 
+test('text typed while a Save settles is drafted over the text the Save wrote', async () => {
+  const written = held(),
+    reply = held();
+  const f = await fixture((raw) => ({
+    ...raw,
+    async command(name, input, options) {
+      const result = await raw.command(name, input, options);
+      if (name === 'saveFile' && (input as CommandInput<'saveFile'>).target.path === 'a.ts') {
+        written.release();
+        await reply.promise;
+      }
+      return result;
+    },
+  }));
+  try {
+    f.editor.edit(target('a.ts'), 'A');
+    await f.editor.flush();
+    f.editor.edit(target('a.ts'), 'saved A');
+    const saving = f.editor.save(target('a.ts'));
+    await written.promise;
+    f.editor.edit(target('a.ts'), 'typed during Save');
+    await f.editor.flush();
+    reply.release();
+    assert.equal(await saving, false, 'the newer text is still unsaved');
+    await f.editor.flush();
+    const draft = (await f.stored()).drafts.find((d) => d.target.path === 'a.ts')!;
+    assert.equal(draft.text, 'typed during Save');
+    assert.equal(draft.disk.text, 'saved A');
+  } finally {
+    reply.release();
+    await f.dispose();
+  }
+});
+
 test('disposal during a held Save cancels it, releases observations and sends no edits', async () => {
   const admitted = held(),
     reply = held();

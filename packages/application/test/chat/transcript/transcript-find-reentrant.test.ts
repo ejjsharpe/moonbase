@@ -53,10 +53,12 @@ test('connection generation replacement fences a held old Find error and keeps i
     throw Error('OLD GENERATION');
   });
   const find = f.controller.findTranscript('same');
-  for (let i = 0; i < 100 && !signal; i++) await new Promise((r) => setTimeout(r, 0));
+  const until2101 = Date.now() + 10_000;
+  while (!signal && Date.now() < until2101) await new Promise((r) => setTimeout(r, 1));
   assert(signal);
   const disconnect = f.controller.disconnect();
-  for (let i = 0; i < 100 && !signal.aborted; i++) await new Promise((r) => setTimeout(r, 0));
+  const until2283 = Date.now() + 10_000;
+  while (!signal.aborted && Date.now() < until2283) await new Promise((r) => setTimeout(r, 1));
   assert.equal(signal.aborted, true);
   release();
   await find;

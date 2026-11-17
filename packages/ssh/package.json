@@ -10,9 +10,9 @@
     "build": "bun check --no-script -p tsconfig.json",
     "typecheck": "bun check --no-script -p tsconfig.json",
     "lint": "oxlint .",
-    "test": "node --experimental-strip-types --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} test/*.test.ts test/macos/*.test.ts",
-    "test:linux": "node --experimental-strip-types --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} test/*.test.ts",
-    "test:macos": "node --experimental-strip-types --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} test/macos/*.test.ts"
+    "test": "node --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} test/*.test.ts test/macos/*.test.ts",
+    "test:linux": "node --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} test/*.test.ts",
+    "test:macos": "node --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} test/macos/*.test.ts"
   },
   "dependencies": {
     "effect": "4.1.0",

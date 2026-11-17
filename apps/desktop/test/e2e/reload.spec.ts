@@ -91,7 +91,9 @@ test('native Reload retains text painted before ordinary recovery debounce @pack
         }),
     );
   try {
-    await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Open checkout', exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
     await app.evaluate(({ dialog }, root) => {
       dialog.showOpenDialog = (async () => ({
         canceled: false,
@@ -136,13 +138,7 @@ test('native Reload retains text painted before ordinary recovery debounce @pack
       .getByRole('tab', { name: 'checkout · main', exact: true });
     if (outcome === 'reload') await project.click();
     await expect(editor()).toBeVisible();
-    await page.evaluate(
-      () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
-    );
-    const after = await page.evaluate(() =>
-      document.querySelector('.view-lines')?.textContent?.replace(/\u00a0/g, ' '),
-    );
-    expect(after).toContain('fresh visible tail');
+    await expect(page.locator('.view-lines')).toContainText('fresh visible tail');
     // A durable dirty draft must eventually permit an actual reload, without Save or Discard.
     await expect
       .poll(async () => draftsOf((await recovery()).state)[0]?.text)

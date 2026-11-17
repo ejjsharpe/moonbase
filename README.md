@@ -27,17 +27,18 @@ Use Bun 1.4.4 and Node 26.13.0. Native workspace and desktop builds require macO
 
 ```sh
 bun install --frozen-lockfile
+bun run check # affected typecheck and tests, lint, format and foundation
 bun run check:foundation
 bun run typecheck
 bun run lint
 bun run test
 bun run format:check
-bun run test:editor-integration
-bun run test:chat-integration
+bun run --cwd test/editor-workspace test:macos
+bun run --cwd test/chat test
 ```
 
 `check:foundation` also checks that the Electron version pinned in the manifests, the packaging config and the workspace runtime gate agree.
 
-`bun run test` runs three package suites at a time; each runs its files in up to `MOONBASE_TEST_WORKERS` processes (default 4: Bun `--parallel`, Node `--test-concurrency`), as `test:chat-integration` does. PR checks run tests that need macOS (each package's `test/macos/` and all of `packages/workspace`, through `test:macos`) on one macOS runner, and the rest (`test`, or `test:linux` in packages tagged `macos-tests`) on Linux; the browser Playwright suites (`packages/workbench` `test:ui`, `apps/desktop` `test:browser`) run on Linux, and Electron's (`test:native`, `test:package`) on a second macOS runner. A PR runs only the suites of the packages it changes and their dependents; a push to main runs them all. Generated test output goes in ignored `test-results/`, with each Playwright run's per-test timings (`timings.json`); build output goes in `dist/` and `release/`.
+`bun run test` runs three package suites at a time; each runs its files in up to `MOONBASE_TEST_WORKERS` processes (default 4: Bun `--parallel`, Node `--test-concurrency`), as the chat integration suite does. PR checks run tests that need macOS (each package's `test/macos/` and all of `packages/workspace`, through `test:macos`) on one macOS runner, and the rest (`test`, or `test:linux` in packages tagged `macos-tests`) on Linux; the browser Playwright suites (`packages/workbench` `test:ui`, `apps/desktop` `test:browser`) run on Linux, and Electron's (`test:native` and `test:package`, one macOS job each) on two more. A PR runs only the suites of the packages it changes and their dependents; a push to main runs them all. Generated test output goes in ignored `test-results/`, with each Playwright run's per-test timings (`timings.json`); build output goes in `dist/` and `release/`.
 
 PR titles use Conventional Commits, for example `fix(editor): retain drafts`; the `conventional-commits` check enforces this. PRs are squash-merged with the PR title as the commit subject.

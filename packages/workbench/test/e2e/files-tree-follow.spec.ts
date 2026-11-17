@@ -80,7 +80,7 @@ test('Go to and switching tabs reveal the active file in collapsed folders witho
   await page.goto('/');
   await expect(row(page, 'src')).toHaveAttribute('aria-expanded', 'false');
   await region(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }).focus();
-  await page.keyboard.press('ControlOrMeta+p');
+  await page.keyboard.press('Meta+p');
   const goTo = page.getByRole('dialog', { name: 'Go to', exact: true });
   await goTo.getByRole('combobox').fill('example');
   await goTo.getByRole('combobox').press('Enter');
@@ -187,7 +187,7 @@ test('following catches up once the sidebar is shown', async ({ page }) => {
 test('following waits while a dialog is open and catches up once it closes', async ({ page }) => {
   await start(page);
   await region(page).getByRole('textbox', { name: 'welcome.ts editor', exact: true }).focus();
-  await page.keyboard.press('ControlOrMeta+p');
+  await page.keyboard.press('Meta+p');
   const goTo = page.getByRole('dialog', { name: 'Go to', exact: true });
   await expect(goTo).toBeVisible();
   // The modal picker hides the editor from the accessibility tree, so read its state instead.

@@ -20,6 +20,8 @@ export type OutboxState = {
   unsettled: { edit: CloseRequest; reopen: OpenRequest | undefined } | undefined;
   /** The layout last committed, so an unchanged layout is not sent again. */
   committedLayout: string | undefined;
+  /** Buffers whose queued drafts wait for a Save to settle. */
+  held: readonly string[];
 };
 export const emptyOutbox: OutboxState = {
   queue: [],
@@ -27,6 +29,7 @@ export const emptyOutbox: OutboxState = {
   failure: undefined,
   unsettled: undefined,
   committedLayout: undefined,
+  held: [],
 };
 
 /** Edits the store refuses as given, which a resync resolves; a repeat of one this many times stops. */
@@ -73,3 +76,16 @@ export const queueLayout = (queue: readonly RecoveryEditRequest[]): RecoveryEdit
   ...queue.filter((edit) => edit.kind !== 'updateLayout'),
   { kind: 'updateLayout' },
 ];
+
+/**
+ * The next edit to send: the first not held. A held buffer's draft waits for its Save to settle,
+ * since one sent meanwhile could reach the store after the Save, over the baseline the Save
+ * replaced; it goes anyway once its tab opens or closes after it in the queue.
+ */
+export const findNextEdit = (state: OutboxState) =>
+  state.queue.findIndex(
+    (edit, at) =>
+      edit.kind !== 'updateDraft' ||
+      !state.held.includes(edit.bufferId) ||
+      state.queue.slice(at + 1).some((later) => isStructural(later, edit.bufferId)),
+  );

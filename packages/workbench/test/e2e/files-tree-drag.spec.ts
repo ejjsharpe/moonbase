@@ -167,7 +167,7 @@ test('dragging a selected row drags the whole selection as one batch', async ({ 
   await page.goto('/');
   await create(page, 'dest/');
   await row(page, 'README.md').click();
-  await row(page, 'welcome.ts').click({ modifiers: ['ControlOrMeta'] });
+  await row(page, 'welcome.ts').click({ modifiers: ['Meta'] });
   const before = await mutations(page);
   await row(page, 'welcome.ts').dragTo(row(page, 'dest'));
   await expect(row(page, 'dest/README.md')).toBeVisible();
@@ -179,7 +179,7 @@ test('dragging a selected row drags the whole selection as one batch', async ({ 
   await expect(row(page, 'dest/ignored.txt')).toBeVisible();
   expect(await exists(page, 'dest/README.md')).toBe(true);
   await row(page, 'dest/README.md').click();
-  await row(page, 'dest/ignored.txt').click({ modifiers: ['ControlOrMeta'] });
+  await row(page, 'dest/ignored.txt').click({ modifiers: ['Meta'] });
   const box = (await tree(page).boundingBox())!;
   await row(page, 'dest/ignored.txt').dragTo(tree(page), {
     targetPosition: { x: 40, y: box.height - 20 },
@@ -277,7 +277,7 @@ test('⌘Z in the tree undoes a move, and the … menu names what it undoes', as
   await page.goto('/');
   await create(page, 'dest/');
   await row(page, 'README.md').click();
-  await row(page, 'welcome.ts').click({ modifiers: ['ControlOrMeta'] });
+  await row(page, 'welcome.ts').click({ modifiers: ['Meta'] });
   await row(page, 'welcome.ts').dragTo(row(page, 'dest'));
   await expect(row(page, 'dest/welcome.ts')).toBeVisible();
   let menu = await explorerMenu(page);
@@ -287,7 +287,7 @@ test('⌘Z in the tree undoes a move, and the … menu names what it undoes', as
   await page.keyboard.press('Escape');
   // The menu returns focus to its button as it closes.
   await expect(menu).toHaveCount(0);
-  await tree(page).press('ControlOrMeta+z');
+  await tree(page).press('Meta+z');
   await expect(row(page, 'README.md')).toBeVisible();
   await expect(row(page, 'welcome.ts')).toBeVisible();
   expect(await exists(page, 'dest/welcome.ts')).toBe(false);
@@ -337,7 +337,7 @@ test('⌘Z undoes an inline rename, but not while the name is typed', async ({ p
   expect(await exists(page, 'README.md')).toBe(false);
   await input.press('Escape');
   await expect(input).toHaveCount(0);
-  await tree(page).press('ControlOrMeta+z');
+  await tree(page).press('Meta+z');
   await expect.poll(() => exists(page, 'README.md')).toBe(true);
   expect(await mutations(page)).toBe(before + 1);
   await expect(row(page, 'README.md')).toBeVisible();
@@ -363,7 +363,7 @@ test('unsaved text follows a move and its undo', async ({ page }) => {
   expect(await buffer('dest/welcome.ts')).toBe('Unsaved draft\n');
   expect(await buffer('welcome.ts')).toBeUndefined();
   await tree(page).focus();
-  await tree(page).press('ControlOrMeta+z');
+  await tree(page).press('Meta+z');
   await expect(row(page, 'welcome.ts')).toHaveAttribute('aria-label', /unsaved/);
   expect(await buffer('welcome.ts')).toBe('Unsaved draft\n');
   expect(await buffer('dest/welcome.ts')).toBeUndefined();
@@ -404,14 +404,14 @@ test('any other file operation forgets the undo, so ⌘Z never reaches past it',
   await expectNoUndo(page);
   let before = await mutations(page);
   await tree(page).focus();
-  await tree(page).press('ControlOrMeta+z');
+  await tree(page).press('Meta+z');
   await settle(page);
   expect(await mutations(page)).toBe(before);
   expect(await exists(page, 'NOTES.md')).toBe(true);
   // Move to Trash, from its dialog, after a rename.
   await rename(page, 'NOTES.md', 'README.md');
   await row(page, 'dest/welcome.ts').click();
-  await tree(page).press('ControlOrMeta+Backspace');
+  await tree(page).press('Meta+Backspace');
   const trash = page.getByRole('dialog', { name: 'Move to Trash', exact: true });
   await trash.getByRole('button', { name: 'Move to Trash', exact: true }).click();
   await expect(trash).toHaveCount(0);
@@ -419,17 +419,17 @@ test('any other file operation forgets the undo, so ⌘Z never reaches past it',
   await expectNoUndo(page);
   before = await mutations(page);
   await tree(page).focus();
-  await tree(page).press('ControlOrMeta+z');
+  await tree(page).press('Meta+z');
   await settle(page);
   expect(await mutations(page)).toBe(before);
   expect(await exists(page, 'README.md')).toBe(true);
   // A trash cancelled in its dialog changes nothing, and keeps the undo.
   await rename(page, 'README.md', 'NOTES.md');
   await row(page, 'welcome.ts').click();
-  await tree(page).press('ControlOrMeta+Backspace');
+  await tree(page).press('Meta+Backspace');
   await trash.getByRole('button', { name: 'Cancel', exact: true }).click();
   await tree(page).focus();
-  await tree(page).press('ControlOrMeta+z');
+  await tree(page).press('Meta+z');
   await expect(row(page, 'README.md')).toBeVisible();
   expect(await exists(page, 'NOTES.md')).toBe(false);
 });
@@ -438,7 +438,7 @@ test('a batch that fails partway selects and undoes what moved', async ({ page }
   await page.goto('/');
   await create(page, 'dest/');
   await row(page, 'README.md').click();
-  await row(page, 'welcome.ts').click({ modifiers: ['ControlOrMeta'] });
+  await row(page, 'welcome.ts').click({ modifiers: ['Meta'] });
   const stop = await failInBatches(page, 'welcome.ts');
   await row(page, 'welcome.ts').dragTo(row(page, 'dest'));
   // The failure shows, but the host's own message about it never reaches the UI.
@@ -455,7 +455,7 @@ test('a batch that fails partway selects and undoes what moved', async ({ page }
   await page.keyboard.press('Escape');
   // The menu returns focus to its button as it closes.
   await expect(menu).toHaveCount(0);
-  await tree(page).press('ControlOrMeta+z');
+  await tree(page).press('Meta+z');
   await expect(row(page, 'README.md')).toBeVisible();
   expect(await exists(page, 'dest/README.md')).toBe(false);
   await expectNoUndo(page);
@@ -481,13 +481,13 @@ test('an undo whose folders can’t be listed reports it and stays to retry', as
   });
   const before = await mutations(page);
   await tree(page).focus();
-  await tree(page).press('ControlOrMeta+z');
+  await tree(page).press('Meta+z');
   await expect(region(page).getByRole('alert')).toContainText(
     'Can’t undo the move yet: dest couldn’t be listed. Try again.',
   );
   expect(await mutations(page)).toBe(before);
   await page.evaluate(() => (window as unknown as { stopFailing(): void }).stopFailing());
-  await tree(page).press('ControlOrMeta+z');
+  await tree(page).press('Meta+z');
   await expect(row(page, 'welcome.ts')).toBeVisible();
   expect(await exists(page, 'dest/welcome.ts')).toBe(false);
 });

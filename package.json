@@ -4,7 +4,8 @@
   "packageManager": "bun@1.4.4",
   "workspaces": [
     "apps/*",
-    "packages/*"
+    "packages/*",
+    "test/*"
   ],
   "scripts": {
     "typecheck": "nx run-many -t typecheck",
@@ -12,11 +13,10 @@
     "test": "node --test scripts/*.test.mjs && nx run-many -t test --parallel=3",
     "build": "nx run-many -t build",
     "check:foundation": "node scripts/check-foundation.mjs",
-    "test:editor-integration": "bun check --no-script -p test/editor-workspace/tsconfig.json && node packages/workspace/scripts/build-native.mjs && bun test --timeout 60000 ./test/editor-workspace",
-    "test:chat-integration": "bun check --no-script -p test/chat/tsconfig.json && node --experimental-strip-types --test --test-concurrency=${MOONBASE_TEST_WORKERS:-4} test/chat/*.test.ts",
     "lint:fix": "bun run lint --fix --ignore-pattern \"packages/ui/**\"",
     "format": "oxfmt --write .",
-    "format:check": "oxfmt --check ."
+    "format:check": "oxfmt --check .",
+    "check": "nx affected -t typecheck test && bun run lint && bun run format:check && bun run check:foundation"
   },
   "trustedDependencies": [
     "electron",

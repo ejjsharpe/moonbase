@@ -181,9 +181,11 @@ test('the packaged daemon serves a chat from temporary data, and its Claude Code
       text: 'Hello packaged daemon',
     });
     let snapshot: ChatSnapshot | undefined;
-    for (let i = 0; i < 1000; i++) {
+    const replyDeadline = Date.now() + 30_000;
+    for (;;) {
       snapshot = await chat.command('getChat', { target });
       if (!snapshot.run && snapshot.entries.some((entry) => entry.role === 'assistant')) break;
+      if (Date.now() > replyDeadline) throw Error('The packaged daemon never answered.');
       await new Promise((r) => setTimeout(r, 20));
     }
     const helpers = (await readFile(join(root, 'helpers.jsonl'), 'utf8').catch(() => ''))

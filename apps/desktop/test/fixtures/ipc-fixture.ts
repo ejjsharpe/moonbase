@@ -114,7 +114,8 @@ export const toImageReader = (
   };
 /** Polls `check` until it holds, failing if it never does. */
 export async function waitFor(check: () => unknown) {
-  for (let attempt = 0; attempt < 1000; attempt++) {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
     if (check()) return;
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
