@@ -31,7 +31,7 @@ import { focusMessage, focusMessageEnd } from '../chat/open-chat.ts';
 import { Settings, type SettingsSection } from './settings.tsx';
 import { Rail, tabValue } from './rail/rail.tsx';
 import { TitleBar } from './title-bar.tsx';
-import { ProjectDock } from './project-dock.tsx';
+import { defaultDockWidths, ProjectDock } from './project-dock.tsx';
 import { ShellNotices } from './shell-notices.tsx';
 import { AgentsChat } from './agents-chat.tsx';
 import { makeCheckoutActions } from './checkout-actions.ts';
@@ -103,6 +103,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     state = useAtomValue(editor.atoms.snapshot);
   const worktrees = Context.get(editor.context, EditorWorktrees);
   const [destination, setDestination] = useState<'project' | 'chat'>('chat');
+  // Kept here, so the dock comes back at its width after a host switch or chat reopens.
+  const [dockWidths, setDockWidths] = useState(defaultDockWidths);
   const [dockOpen, setDockOpen] = useState(true);
   const [settings, setSettings] = useState<SettingsSection | null>(null);
   // Agents puts the open chat's title and actions here, in place of a header of its own.
@@ -476,6 +478,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
               trailing={
                 chat && composer && selected ? (
                   <ProjectDock
+                    widths={dockWidths}
+                    onWidthsChange={setDockWidths}
                     dock={dock}
                     visible={dockVisible}
                     railCollapsed={railCollapsed}

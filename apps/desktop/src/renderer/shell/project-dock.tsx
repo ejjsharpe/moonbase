@@ -5,6 +5,10 @@ import { ChatView } from '../chat/chat-view.tsx';
 
 const dockDefaultWidth = 400,
   dockMinWidth = 320;
+
+/** The dock's width, and the width Restore returns to; the shell keeps them while the dock goes. */
+export type DockWidths = { width: number; restore: number };
+export const defaultDockWidths: DockWidths = { width: dockDefaultWidth, restore: dockDefaultWidth };
 const railWidth = (collapsed: boolean) => (collapsed ? 0 : 52);
 
 /**
@@ -22,8 +26,12 @@ export function ProjectDock({
   collapse,
   chatKey,
   chat,
+  widths,
+  onWidthsChange,
 }: {
   dock: RefObject<HTMLElement | null>;
+  widths: DockWidths;
+  onWidthsChange(widths: DockWidths): void;
   visible: boolean;
   railCollapsed: boolean;
   /** The project's name, its folders and the folder a new chat starts in. */
@@ -36,9 +44,9 @@ export function ProjectDock({
   /** The chat view's own props. */
   chat: Omit<ComponentProps<typeof ChatView>, 'dock'>;
 }) {
-  const [width, setWidth] = useState(dockDefaultWidth),
-    [restoreWidth, setRestoreWidth] = useState(dockDefaultWidth),
-    [resizing, setResizing] = useState(false);
+  const [resizing, setResizing] = useState(false);
+  const { width, restore: restoreWidth } = widths;
+  const setWidth = (next: number) => onWidthsChange({ width: next, restore: restoreWidth });
   // The dock leaves the explorer and a usable editor beside it.
   const maxWidth = Math.max(dockMinWidth, window.innerWidth - railWidth(railCollapsed) - 560);
   const resize = (next: number) =>
@@ -104,10 +112,7 @@ export function ProjectDock({
             expanded,
             toggleExpanded: () => {
               if (expanded) setWidth(restoreWidth);
-              else {
-                setRestoreWidth(width);
-                setWidth(maxWidth);
-              }
+              else onWidthsChange({ width: maxWidth, restore: width });
             },
             collapse,
           }}
