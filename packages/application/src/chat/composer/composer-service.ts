@@ -249,13 +249,18 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
       const current = chat.getSnapshot();
       const now = current.selected?.conversationId ?? null;
       const leftNewChat = (yield* Ref.getAndSet(selected, now)) === null && now !== null;
-      yield* update((s) => ({
-        ...s,
-        // The folders cover only what the new chat draft mentions, so a sent or emptied one has none.
-        folders: now ? s.folders : keepMentionedFolders(s.folders, current.mentions),
-        // Leaving the new chat for a chat leaves its messages behind: they were about what it would do.
-        message: leftNewChat && s.message?.chat === '' ? null : s.message,
-      }));
+      // The folders cover only what the new chat draft mentions, so a sent or emptied one has none.
+      // Leaving the new chat for a chat leaves its messages behind: they were about what it would
+      // do. The state changes only when one of those does: the chat changes far more often (a
+      // live reply), and each change would draw the composer again.
+      const before = yield* SubscriptionRef.get(state);
+      const folders = now ? before.folders : keepMentionedFolders(before.folders, current.mentions);
+      const message = leftNewChat && before.message?.chat === '' ? null : before.message;
+      if (
+        message !== before.message ||
+        Object.keys(folders).length !== Object.keys(before.folders).length
+      )
+        yield* SubscriptionRef.set(state, { ...before, folders, message });
       // Once a chat exists in a place's worktree, by this send or a retried one, the place starts
       // over in the folder it made the worktree from.
       for (const worktree of Object.values(yield* Ref.get(made))) {
