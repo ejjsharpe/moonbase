@@ -50,6 +50,11 @@ async function connectLoopback(directory: string) {
         code: refused.code,
         message: refused.message,
       };
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+    // Once closed, the connection neither connects again nor hands out its endpoint.
+    const host = (await Effect.runPromise(service.getConnection({}))).profile.expected;
+    assert(Exit.isFailure(await Effect.runPromiseExit(service.connect({ profileId: 'loopback' }))));
+    assert(Exit.isFailure(await Effect.runPromiseExit(service.endpoint({ host }))));
     return {
       step: 'connect',
       initial: initial.state,

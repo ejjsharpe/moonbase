@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
-import { Effect, Layer, Ref, Semaphore, Stream, SubscriptionRef } from 'effect';
+import { Effect, Fiber, FiberSet, Layer, Ref, Semaphore, Stream, SubscriptionRef } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import type { ChatHostHealth } from '@moonbase/contracts/host';
@@ -69,6 +69,9 @@ export function LoopbackConnectionLive(
       const observers = yield* Ref.make(0);
       // Closing the connection forgets the verified endpoint, so its token is never handed out.
       yield* Effect.addFinalizer(() => lock.withPermits(1)(Ref.set(current, undefined)));
+      // Connects run in the layer's scope: closing it interrupts them before the endpoint is
+      // forgotten, and one started after it is refused, so the token is never handed out again.
+      const connects = yield* FiberSet.make<ConnectionSnapshot, ApplicationError>();
       // This connection is still on the legacy error, so a health failure becomes one here.
       const verify = (origin: string, token: string) =>
         checkHostHealth({ origin, token, expected }).pipe(
@@ -145,7 +148,9 @@ export function LoopbackConnectionLive(
           Effect.map(SubscriptionRef.get(state), (snapshot) => structuredClone(snapshot)),
         connect: ({ profileId }) =>
           profileId === loopbackProfileId
-            ? lock.withPermits(1)(connect)
+            ? Effect.flatMap(FiberSet.run(connects, lock.withPermits(1)(connect)), (fiber) =>
+                Fiber.join(fiber).pipe(Effect.onInterrupt(() => Fiber.interrupt(fiber))),
+              )
             : Effect.fail(failure('InvalidInput', 'Choose the loopback connection profile.')),
         disconnect: ({ connectionId }) =>
           lock.withPermits(1)(
