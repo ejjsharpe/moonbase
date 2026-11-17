@@ -59,6 +59,7 @@ import {
   useRetainedCalls,
 } from './transcript-disclosure.ts';
 import { useTranscriptActions, type TranscriptNative } from './transcript-actions.ts';
+import type { DesktopRunner } from '../../shell/desktop-application.ts';
 import { groupBySource } from './stable-props.ts';
 import { TranscriptScroller, revealFindMatch } from './transcript-geometry.ts';
 import { createViewSaver, type ViewSaver } from './transcript-view-saving.ts';
@@ -90,10 +91,13 @@ export function Transcript({
   controller,
   state: latestState,
   native,
+  runner,
 }: {
   controller: ChatController;
   state: ChatState;
   native?: TranscriptNative;
+  /** The renderer root's runners, which the native actions run on. */
+  runner: DesktopRunner;
   /** The open Find bar's field. */
 }) {
   const list = useRef<LegendListRef | null>(null);
@@ -117,7 +121,7 @@ export function Transcript({
     current.current = state;
   }, [state]);
   const [views] = useState(() => createViewSaver(controller, readDevicePixel));
-  const { notice, actions } = useTranscriptActions(native, latestState);
+  const { notice, actions } = useTranscriptActions(native, latestState, runner);
   const [cache] = useState(() => new MarkdownCache());
   useEffect(() => () => cache.clear(), [cache]);
   const [paging, setPaging] = useState<Paging | null>(null);

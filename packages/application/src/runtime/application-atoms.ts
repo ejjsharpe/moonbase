@@ -1,6 +1,7 @@
 import * as Atom from 'effect/reactivity/Atom';
 import type { MoonbaseApplicationShape } from './application-service.ts';
 import { toApplicationSnapshot } from './application-service.ts';
+import { makePlaceHistoryAtoms } from '../place-history/place-history-atoms.ts';
 
 /** Atoms over the application's phase and the chat it shows. */
 export function makeApplicationAtoms(application: MoonbaseApplicationShape) {
@@ -11,6 +12,9 @@ export function makeApplicationAtoms(application: MoonbaseApplicationShape) {
       toApplicationSnapshot(get(phase), get(chat), application.chat.targets),
     ),
     chat: Atom.readable((get) => get(chat).controller),
+    /** The open chat's composer, made beside its controller. */
+    composer: Atom.readable((get) => get(chat).composer),
+    ...makePlaceHistoryAtoms(application.navigation),
   };
 }
 export type ApplicationAtoms = ReturnType<typeof makeApplicationAtoms>;

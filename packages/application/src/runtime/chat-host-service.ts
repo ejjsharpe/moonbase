@@ -8,6 +8,7 @@ import {
   type ChatModel,
   type ChatRunner,
 } from '../chat/index.ts';
+import { ChatComposers, type ChatComposer } from '../chat/composer/composer-service.ts';
 import { getFailureCode } from '../editor/editor-errors.ts';
 import {
   ApplicationLifecycleError,
@@ -22,6 +23,8 @@ export type ChatHostState = {
   status: ApplicationChatStatus;
   error: string | null;
   controller: ChatController | null;
+  /** The open chat's composer, made beside its controller and released with it. */
+  composer: ChatComposer | null;
   /** The chat's release is running; it can't open again until it ends. */
   cleanupPending: boolean;
   /** Releases that failed, newest last: at most 4. */
@@ -37,7 +40,12 @@ export type ChatHostOptions = {
 };
 
 type Opened = Deferred.Deferred<ChatController | null, ApplicationLifecycleError>;
-type ChatInstance = { model: ChatModel; controller: ChatController; scope: Scope.Closeable };
+type ChatInstance = {
+  model: ChatModel;
+  controller: ChatController;
+  composer: ChatComposer;
+  scope: Scope.Closeable;
+};
 /** What the host is doing: each running step, which later callers join, and the open chat. */
 type Steps = {
   current: ChatInstance | null;
@@ -91,6 +99,7 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
       ChatHost,
       Effect.gen(function* () {
         const root = yield* Effect.scope;
+        const composers = yield* ChatComposers;
         const transcriptMemory = new TranscriptViewMemory();
         const targets = options.chatTargets ?? [];
         const configured = !!options.chat || targets.length > 0;
@@ -99,6 +108,7 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
           status: 'unavailable',
           error: null,
           controller: null,
+          composer: null,
           cleanupPending: false,
           cleanupErrors: [],
         });
@@ -177,13 +187,20 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
                 backendId: targetId ?? dependencies.backendId,
                 transcriptMemory,
               }).pipe(Effect.provideService(Scope.Scope, scope));
-              return makeChatController(options.runner, model);
+              const controller = makeChatController(options.runner, model);
+              const composer = yield* composers
+                .make(controller)
+                .pipe(Effect.provideService(Scope.Scope, scope));
+              return { controller, composer };
             }),
           );
           if (Exit.isSuccess(opened) && opened.value && !(yield* releasing)) {
-            const controller = opened.value;
-            yield* step((s) => ({ ...s, current: { model: model!, controller, scope } }));
-            yield* update((s) => ({ ...s, status: 'ready', controller }));
+            const { controller, composer } = opened.value;
+            yield* step((s) => ({
+              ...s,
+              current: { model: model!, controller, composer, scope },
+            }));
+            yield* update((s) => ({ ...s, status: 'ready', controller, composer }));
             return controller;
           }
           if (Exit.isSuccess(opened)) {
@@ -234,7 +251,7 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
             const now = yield* Ref.get(steps);
             if (!kept || now.releasing || now.current !== taken) return false;
             yield* step((s) => ({ ...s, current: null }));
-            yield* update((s) => ({ ...s, status: 'closed', controller: null }));
+            yield* update((s) => ({ ...s, status: 'closed', controller: null, composer: null }));
             yield* Effect.forkIn(Effect.exit(ownCleanup(taken)), root, { startImmediately: true });
             return true;
           }).pipe(
@@ -301,7 +318,7 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
             yield* stopAll;
             const taken = yield* Ref.modify(steps, (s) => [s, { ...s, current: null }]);
             taken.current?.model.setAdmissionsOpen(false);
-            yield* update((s) => ({ ...s, controller: null }));
+            yield* update((s) => ({ ...s, controller: null, composer: null }));
             if (taken.opening) yield* Effect.exit(Deferred.await(taken.opening));
             if (taken.switching) yield* Effect.exit(Deferred.await(taken.switching));
             // An acquisition that finished meanwhile released its own instance.

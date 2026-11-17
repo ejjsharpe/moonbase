@@ -1,14 +1,22 @@
-import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
+import {
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
 import { Tabs } from '@base-ui/react/tabs';
 import { Tooltip } from '@base-ui/react/tooltip';
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
+import { titleBar } from '../title-bar.stylex.ts';
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/react';
 import { checkoutKey } from '@moonbase/application/editor';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { controls } from '@moonbase/ui/controls';
 import { checkoutName, projectHue, projectInitials, projectTiles } from '@moonbase/ui/projects';
-import { styles } from './shell-styles.ts';
+import { colors, radius, rail, type } from '@moonbase/ui/tokens.stylex';
 import { Icon } from '@moonbase/ui/icons';
 import { AnimatedTab } from './animated-tab.tsx';
 import { ProjectOpener } from './project-opener.tsx';
@@ -63,7 +71,8 @@ const peekMargin = 12;
 /** Hovering this long opens a peek; moving between tiles then switches peeks at once. */
 const peekDelay = 140;
 
-export function MainTabs({
+/** The project rail along the window's left edge: Agents, a tile per project, + and Settings. */
+export function Rail({
   checkouts,
   selectedCheckoutId,
   value: selected,
@@ -118,16 +127,13 @@ export function MainTabs({
   // where the rail must stay.
   const [peeking, setPeeking] = useState(false);
   const slot = useRef<HTMLDivElement>(null);
-  const viewFocus = useRef(focusView);
-  useEffect(() => {
-    viewFocus.current = focusView;
-  });
+  const viewFocus = useEffectEvent(focusView);
   if (!collapsed && peeking) setPeeking(false);
   useEffect(() => {
     if (!peeking) return;
     // The sliding rail turns inert, so focus on it goes to the view first.
     const hide = () => {
-      if (slot.current?.contains(document.activeElement)) viewFocus.current();
+      if (slot.current?.contains(document.activeElement)) viewFocus();
       setPeeking(false);
     };
     const move = (event: PointerEvent) => {
@@ -312,7 +318,11 @@ export function MainTabs({
                       reopen={reopenCheckout}
                       browse={openCheckout}
                       disabled={disabled || preserving}
-                    />
+                      trigger={stylex.props(controls.button, styles.railTab)}>
+                      <span aria-hidden="true" {...stylex.props(styles.tile, styles.openTile)}>
+                        <Icon name="plus" />
+                      </span>
+                    </ProjectOpener>
                   ) : (
                     <Peek
                       trigger={
@@ -377,3 +387,169 @@ export function MainTabs({
     </Tooltip.Provider>
   );
 }
+
+const styles = stylex.create({
+  /** The strip along the window's left edge that reveals the hidden rail, below the header row. */
+  railEdge: {
+    position: 'absolute',
+    zIndex: 21,
+    top: titleBar.height,
+    bottom: 0,
+    left: 0,
+    // Wider than macOS's resize edge, which takes the first few pixels.
+    width: 8,
+  },
+  railSlot: {
+    position: 'absolute',
+    zIndex: 20,
+    top: titleBar.height,
+    left: 0,
+    bottom: 0,
+    width: rail.width,
+    transitionProperty: 'transform',
+    transitionDuration: '180ms',
+    transitionTimingFunction: 'cubic-bezier(0.2, 0.8, 0.2, 1)',
+  },
+  // Hidden, it slides in and out quickly, like the Dock.
+  railSlotCollapsed: {
+    transform: 'translateX(-100%)',
+    transitionDuration: '80ms',
+    transitionTimingFunction: 'ease-out',
+  },
+  // Revealed over the panes from the left edge, lifted off them with a shadow.
+  railSlotPeeking: { transform: 'translateX(0)', boxShadow: '12px 0 32px #00000080' },
+  rail: {
+    height: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: rail.gap,
+    paddingTop: 6,
+    paddingBottom: 16,
+    overflowX: 'hidden',
+    overflowY: 'auto',
+    // The rail is part of the frame, with the title bar.
+    backgroundColor: colors.chrome,
+    WebkitAppRegion: 'drag',
+  },
+  railGroup: { display: 'flex', flexDirection: 'column', gap: rail.gap },
+  railRow: {
+    position: 'relative',
+    display: 'flex',
+    flexShrink: 0,
+    paddingInline: rail.gutter,
+    WebkitAppRegion: 'no-drag',
+  },
+  railTab: {
+    position: 'relative',
+    flexGrow: 0,
+    flexShrink: 0,
+    flexBasis: rail.tile,
+    height: rail.tile,
+    padding: 0,
+    borderWidth: 0,
+    borderRadius: rail.tileRadius,
+    color: { default: colors.secondary, ':hover': colors.text },
+    backgroundColor: { default: 'transparent', ':hover:not(:disabled)': 'transparent' },
+  },
+  railTabSelected: { color: colors.text },
+  railDivider: {
+    flexShrink: 0,
+    width: 24,
+    height: 1,
+    marginLeft: `calc((${rail.width} - 24px) / 2)`,
+    backgroundColor: colors.controlBorder,
+  },
+  selectionPill: {
+    position: 'absolute',
+    left: 0,
+    top: `calc((${rail.tile} - 20px) / 2)`,
+    width: 4,
+    height: 20,
+    borderRadius: '0 2px 2px 0',
+    backgroundColor: colors.text,
+  },
+  tile: {
+    width: rail.tile,
+    height: rail.tile,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: rail.tileRadius,
+    fontFamily: type.mono,
+    fontSize: rail.tileText,
+    fontWeight: 700,
+    color: colors.onAccent,
+  },
+  agentsTile: { backgroundColor: colors.accent },
+  railFoot: { marginTop: 'auto' },
+  settingsTile: { color: colors.muted, backgroundColor: 'transparent' },
+  openTile: {
+    color: colors.muted,
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.controlBorder,
+  },
+  // Close sits on the tile's corner and appears while its row is hovered or focused.
+  railClose: {
+    position: 'absolute',
+    top: -6,
+    left: `calc(${rail.gutter} + ${rail.tile} - 10px)`,
+    width: 20,
+    height: 20,
+    padding: 1,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 10,
+    color: { default: colors.secondary, ':hover:not(:disabled)': colors.text },
+    backgroundColor: colors.elevated,
+    opacity: {
+      default: 0,
+      [stylex.when.ancestor(':hover')]: 1,
+      [stylex.when.ancestor(':focus-within')]: 1,
+    },
+    pointerEvents: {
+      default: 'none',
+      [stylex.when.ancestor(':hover')]: 'auto',
+      [stylex.when.ancestor(':focus-within')]: 'auto',
+    },
+  },
+  visuallyHidden: {
+    position: 'absolute',
+    width: 1,
+    height: 1,
+    overflow: 'hidden',
+    clipPath: 'inset(50%)',
+    whiteSpace: 'nowrap',
+  },
+  peekPositioner: { zIndex: 60 },
+  peek: {
+    maxWidth: 340,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 2,
+    padding: '10px 12px',
+    borderRadius: radius.panel,
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: colors.controlBorder,
+    backgroundColor: colors.elevated,
+    boxShadow: '0 14px 36px #00000080',
+    fontFamily: type.ui,
+    fontSize: type.small,
+    lineHeight: 1.45,
+    color: colors.text,
+    pointerEvents: 'none',
+  },
+  peekName: { fontSize: type.body, fontWeight: 600 },
+  peekDetail: { color: colors.secondary },
+  // Nerd Font branch glyph.
+  peekBranch: { '::before': { content: '"\\e0a0  "' } },
+  peekPath: {
+    color: colors.muted,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+});

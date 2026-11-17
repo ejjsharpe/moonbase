@@ -1,12 +1,9 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Popover } from '@base-ui/react/popover';
 import * as stylex from '@stylexjs/stylex';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { controls } from '@moonbase/ui/controls';
 import { overlays } from '@moonbase/ui/overlays';
-import { FolderMenu, folderMenuStyles, homePath } from '../components/folder-menu.tsx';
-import { Icon } from '@moonbase/ui/icons';
-import { styles } from './shell-styles.ts';
+import { FolderMenu, folderMenuStyles, homePath } from '../../components/folder-menu.tsx';
 
 /**
  * The rail's +, when the editor knows projects that are closed: a menu that reopens one without
@@ -17,24 +14,25 @@ export function ProjectOpener({
   reopen,
   browse,
   disabled,
+  trigger,
+  children,
 }: {
   /** Closed checkouts, newest first. The editor approved each when it was first opened. */
   recent: readonly CheckoutTarget[];
   reopen(checkout: CheckoutTarget): void;
   browse(): void;
   disabled: boolean;
+  /** The trigger's style, the rail's tile. */
+  trigger: { className?: string; style?: CSSProperties };
+  /** The trigger's tile. */
+  children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const focusTarget = useRef<HTMLElement>(null);
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger
-        aria-label="Open checkout"
-        disabled={disabled}
-        {...stylex.props(controls.button, styles.railTab)}>
-        <span aria-hidden="true" {...stylex.props(styles.tile, styles.openTile)}>
-          <Icon name="plus" />
-        </span>
+      <Popover.Trigger aria-label="Open checkout" disabled={disabled} {...trigger}>
+        {children}
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Positioner

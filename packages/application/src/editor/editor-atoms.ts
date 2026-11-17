@@ -11,6 +11,7 @@ import { EditorMutations } from './mutation/mutation-service.ts';
 import { EditorPreservation } from './preservation/preservation-service.ts';
 import { EditorLookup } from './lookup/lookup-service.ts';
 import { EditorTextSearch } from './text-search/text-search-service.ts';
+import { EditorWorktrees } from './worktrees/worktrees-service.ts';
 import { makeLookupAtoms } from './lookup/lookup-atoms.ts';
 import { makeTextSearchAtoms } from './text-search/text-search-atoms.ts';
 import { toEditorSnapshot } from './editor-snapshot.ts';
@@ -33,6 +34,7 @@ export function makeEditorAtoms(context: Context.Context<EditorServices>) {
   const buffers = follow(Context.get(context, EditorBuffers).state);
   const mutation = follow(Context.get(context, EditorMutations).state);
   const closePrompt = follow(Context.get(context, EditorPreservation).closePrompt);
+  const worktrees = follow(Context.get(context, EditorWorktrees).state);
   return {
     session,
     views,
@@ -40,6 +42,7 @@ export function makeEditorAtoms(context: Context.Context<EditorServices>) {
     discovery,
     mutation,
     closePrompt,
+    worktrees,
     snapshot: Atom.readable((get) =>
       toEditorSnapshot({
         session: get(session),

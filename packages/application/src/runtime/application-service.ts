@@ -5,6 +5,11 @@ import { EditorLoader } from '../editor/editor-loader.ts';
 import type { EditorFailure } from '../editor/editor-errors.ts';
 import type { ChatController } from '../chat/index.ts';
 import { ChatHost, type ChatHostOptions, type ChatHostState } from './chat-host-service.ts';
+import { ChatComposers } from '../chat/composer/composer-service.ts';
+import {
+  PlaceNavigation,
+  type PlaceNavigationShape,
+} from '../place-history/place-history-service.ts';
 import {
   ApplicationLifecycleError,
   areChatTargetsValid,
@@ -15,6 +20,8 @@ import {
 export type MoonbaseApplicationShape = {
   readonly phase: SubscriptionRef.SubscriptionRef<ApplicationPhase>;
   readonly chat: ChatHost['Service'];
+  /** The places the window has shown, for back and forward. */
+  readonly navigation: PlaceNavigationShape;
   /**
    * Starts the application: loads the editor, then opens the chat. Fails if the editor fails to
    * load, or if a chat-only application's chat can't open.
@@ -78,6 +85,7 @@ export class MoonbaseApplication extends Context.Service<
       MoonbaseApplication,
       Effect.gen(function* () {
         const chat = yield* ChatHost;
+        const navigation = yield* PlaceNavigation;
         const session = yield* Effect.serviceOption(EditorSession);
         const preservation = yield* Effect.serviceOption(EditorPreservation);
         const loader = yield* Effect.serviceOption(EditorLoader);
@@ -131,6 +139,7 @@ export class MoonbaseApplication extends Context.Service<
         return {
           phase,
           chat,
+          navigation,
           start: Effect.gen(function* () {
             if (Option.isNone(loader) && !chat.configured)
               return yield* new ApplicationLifecycleError({ reason: 'nothing-composed' });
@@ -212,7 +221,13 @@ export class MoonbaseApplication extends Context.Service<
     );
     return Layer.provideMerge(
       application,
-      Layer.provideMerge(ChatHost.layer(options), Layer.effectDiscard(validate(options))),
+      Layer.provideMerge(
+        Layer.merge(
+          Layer.provide(ChatHost.layer(options), ChatComposers.layer),
+          PlaceNavigation.layer,
+        ),
+        Layer.effectDiscard(validate(options)),
+      ),
     );
   };
 }

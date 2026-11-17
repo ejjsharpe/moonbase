@@ -10,7 +10,7 @@ import {
   visitPlace,
   type Place,
   type PlaceHistory,
-} from '../src/renderer/shell/history.ts';
+} from '@moonbase/application';
 
 const chatTarget = (conversationId: string) =>
   ({ host: { kind: 'local' }, actorId: 'actor', conversationId }) as unknown as ChatTarget;

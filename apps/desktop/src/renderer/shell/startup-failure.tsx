@@ -1,6 +1,6 @@
 import * as stylex from '@stylexjs/stylex';
 import { workbench } from '@moonbase/ui/workbench';
-import { styles } from './shell-styles.ts';
+import { space } from '@moonbase/ui/tokens.stylex';
 
 export function WorkbenchStartupFailure({ message }: { message: string }) {
   return (
@@ -18,3 +18,7 @@ export function WorkbenchStartupFailure({ message }: { message: string }) {
     </main>
   );
 }
+
+const styles = stylex.create({
+  empty: { padding: space.lg, maxWidth: 740 },
+});

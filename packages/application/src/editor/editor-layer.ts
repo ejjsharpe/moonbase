@@ -15,6 +15,7 @@ import { EditorPreservation } from './preservation/preservation-service.ts';
 import { EditorCheckouts } from './checkouts/checkouts-service.ts';
 import { EditorLookup } from './lookup/lookup-service.ts';
 import { EditorTextSearch } from './text-search/text-search-service.ts';
+import { EditorWorktrees } from './worktrees/worktrees-service.ts';
 import { EditorLoader } from './editor-loader.ts';
 
 export type EditorOptions = {
@@ -42,6 +43,7 @@ export type EditorServices =
   | EditorCheckouts
   | EditorLookup
   | EditorTextSearch
+  | EditorWorktrees
   | EditorLoader;
 
 /**
@@ -71,5 +73,5 @@ export const editorLayer = (options: EditorOptions = {}) => {
     ),
     saves,
   );
-  return Layer.provideMerge(EditorLoader.layer, actions);
+  return Layer.provideMerge(Layer.mergeAll(EditorLoader.layer, EditorWorktrees.layer), actions);
 };

@@ -4,18 +4,16 @@ import { controls } from '@moonbase/ui/controls';
 import { overlays } from '@moonbase/ui/overlays';
 import { colors, radius, space, syntax, type } from '@moonbase/ui/tokens.stylex';
 import { maximumChatMentions, type ChatMention } from '@moonbase/contracts/chat';
-import type {
-  ChatController,
-  ChatFileSearch,
-  ChatFileSearchSnapshot,
-} from '@moonbase/application/chat';
 import {
   findMentionQuery,
   findMentionRanges,
   insertMention,
   removeMentionBefore,
+  type ChatController,
+  type ChatFileSearch,
+  type ChatFileSearchSnapshot,
   type MentionQuery,
-} from './mention-text.ts';
+} from '@moonbase/application/chat';
 import {
   filterCommands,
   filterOptions,
