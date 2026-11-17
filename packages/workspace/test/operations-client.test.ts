@@ -708,7 +708,7 @@ test('restart counts transfer and Trash results by structure regardless of displ
             input,
             publicationRevisions: {},
             acknowledgedBy: [],
-            result: { ...result, items: [], recoveryChanges: [] },
+            result: { ...result, items: [] },
           }),
         );
         host

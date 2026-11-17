@@ -894,7 +894,7 @@ test('files dropped on the tree import into its folder once; elsewhere they impo
         destination: operationInput.destination,
         nativeReferences: operationInput.nativeReferences,
       });
-      return { ...operationInput, recoveryChanges: [], outcome: 'completed', items: [] };
+      return { ...operationInput, outcome: 'completed', items: [] };
     }) as typeof command;
   });
   /** Drops a Finder file named `name` on `selector`, as the OS does. */

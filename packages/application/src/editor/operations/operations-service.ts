@@ -61,7 +61,6 @@ export class EditorOperations extends Context.Service<EditorOperations, EditorOp
               result: {
                 id: operation.id,
                 clientId: operation.clientId,
-                recoveryChanges: [],
                 checkout: operation.checkout,
                 kind: operation.kind,
                 outcome: 'uncertain',

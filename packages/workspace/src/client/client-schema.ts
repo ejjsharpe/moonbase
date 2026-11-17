@@ -7,7 +7,6 @@ import { InvalidRecoveryRequestError } from '@moonbase/contracts/workspace-error
 import { InvalidRequestError } from '@moonbase/contracts/workspace-host-errors';
 import {
   OperationResultSchema,
-  RecoveryChangeSchema,
   WorkspaceIdentifierSchema,
   WorkspaceOperationSchema,
   workspaceInputSchemas,
@@ -62,7 +61,6 @@ export const StoredSaveSchema = struct({
       struct({
         kind: Schema.Literal('saved'),
         version: Schema.String,
-        recoveryChanges: array(RecoveryChangeSchema),
         persistencePending: optional(Schema.Boolean),
         message: optional(Schema.String),
       }),

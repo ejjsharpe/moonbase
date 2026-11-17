@@ -220,7 +220,6 @@ export const makeClientWorkspace = ({
               ? {
                   kind: 'saved',
                   disk: { text: input.text, version: reply.version },
-                  recoveryChanges: [],
                   ...(reply.persistencePending ? { persistencePending: true } : {}),
                   ...(reply.message === undefined ? {} : { message: reply.message }),
                 }
@@ -318,7 +317,6 @@ export const makeClientWorkspace = ({
           result: {
             id: input.id,
             clientId: input.clientId,
-            recoveryChanges: [],
             checkout: input.checkout,
             kind: input.kind,
             outcome: 'uncertain',

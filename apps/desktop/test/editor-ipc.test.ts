@@ -59,7 +59,6 @@ function fakeWorkspace(overrides: Partial<Record<string, (input: never) => unkno
               clientId: 'earlier-client',
               checkout: target,
               kind: 'trash',
-              recoveryChanges: [],
               outcome: 'completed',
               items: [],
             },
