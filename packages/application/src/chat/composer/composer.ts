@@ -3,7 +3,7 @@ import {
   maximumChatMentions,
   type ChatMention,
 } from '@moonbase/contracts/chat';
-import type { ChatState } from '../controller.ts';
+import type { ChatState } from '../chat-state.ts';
 import { appendMentions } from './mention-text.ts';
 
 /** One view of the new chat (Agents, or a project's dock) and the folder it starts in. */

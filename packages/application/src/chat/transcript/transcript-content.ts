@@ -5,11 +5,8 @@ import type {
   ChatTranscriptSelection,
   ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
-import {
-  countDecodedTranscriptBytes,
-  countTranscriptBytes,
-  makeTranscriptFailure,
-} from './transcript-read.ts';
+import { countDecodedTranscriptBytes, countTranscriptBytes } from './transcript-read.ts';
+import { TranscriptReadError } from './transcript-errors.ts';
 import { measureTranscriptValue, type TranscriptContentState } from './transcript-state.ts';
 
 type ContentReply = Extract<ChatOutput<'getChatTranscriptContent'>, { kind: 'content' }>;
@@ -104,7 +101,7 @@ export class TranscriptContentCache {
   /** Appends the next contiguous chunk after `before`, the state the read started from. */
   append(key: string, before: TranscriptContentState, reply: ContentReply) {
     if (reply.offset !== before.loadedBytes)
-      throw makeTranscriptFailure('Transcript content has a missing or overlapping chunk.');
+      throw new TranscriptReadError({ problem: 'chunk-gap' });
     const loadedBytes = reply.offset + countDecodedTranscriptBytes(reply);
     const chunk = {
       source: before.source,

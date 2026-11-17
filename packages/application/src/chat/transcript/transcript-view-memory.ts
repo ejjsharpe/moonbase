@@ -2,7 +2,8 @@ import { LRUCache } from 'lru-cache';
 import { Schema } from 'effect';
 import type { ChatTarget } from '@moonbase/contracts/chat';
 import { struct } from '@moonbase/contracts/schema';
-import { countTranscriptBytes, makeTranscriptFailure } from './transcript-read.ts';
+import { countTranscriptBytes } from './transcript-read.ts';
+import { TranscriptReadError } from './transcript-errors.ts';
 
 /**
  * A reading position: a row (a `TranscriptRow` key), normally the first visible one, and `offset`,
@@ -57,7 +58,7 @@ export function decodeTranscriptView(view: TranscriptView): TranscriptView {
   try {
     decoded = decodeView(view);
   } catch {
-    throw makeTranscriptFailure('Invalid transcript view.');
+    throw new TranscriptReadError({ problem: 'invalid-view' });
   }
   return freeze({
     anchor: decoded.anchor,

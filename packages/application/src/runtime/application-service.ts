@@ -3,7 +3,7 @@ import { EditorPreservation } from '../editor/preservation/preservation-service.
 import { EditorSession } from '../editor/session/session-service.ts';
 import { EditorLoader } from '../editor/editor-loader.ts';
 import type { EditorFailure } from '../editor/editor-errors.ts';
-import type { ChatController } from '../chat/index.ts';
+import type { ChatServices } from '../chat/chat-layer.ts';
 import { ChatHost, type ChatHostOptions, type ChatHostState } from './chat-host-service.ts';
 import { ChatComposers } from '../chat/composer/composer-service.ts';
 import {
@@ -42,13 +42,13 @@ export type MoonbaseApplicationShape = {
   readonly release: Effect.Effect<void, ApplicationLifecycleError>;
   readonly reportCleanup: (error: unknown) => Effect.Effect<void>;
   /** Opens the chat while the application is live. */
-  readonly openChat: Effect.Effect<ChatController | null, ApplicationLifecycleError>;
+  readonly openChat: Effect.Effect<Context.Context<ChatServices> | null, ApplicationLifecycleError>;
   /** Closes the chat, keeping its drafts, while the application is live. */
   readonly closeChat: Effect.Effect<boolean>;
   /** Switches chat targets while the application is live. */
   readonly selectChatTarget: (
     id: string,
-  ) => Effect.Effect<ChatController | null, ApplicationLifecycleError>;
+  ) => Effect.Effect<Context.Context<ChatServices> | null, ApplicationLifecycleError>;
 };
 
 /** Reads the application's snapshot from its phase and the chat it shows. */

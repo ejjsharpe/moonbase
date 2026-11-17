@@ -1,4 +1,3 @@
-import { ApplicationError } from '@moonbase/contracts/errors';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import type {
   ChatClient,
@@ -7,6 +6,7 @@ import type {
   ChatTranscriptSource,
   ChatTranscriptSelection,
 } from '@moonbase/contracts/chat';
+import { TranscriptReadError } from './transcript-errors.ts';
 
 /** A ChatClient read; its boundary has already decoded and bounded the reply. */
 export type TranscriptRead = (
@@ -25,10 +25,6 @@ export type TranscriptChunk = {
 export type TranscriptReadProgress = { parts: number; bytes: number };
 export const countTranscriptBytes = (value: unknown) =>
   new TextEncoder().encode(JSON.stringify(value)).length;
-export const makeTranscriptFailure = (
-  message: string,
-  code: 'Incompatible' | 'Conflict' | 'Cancelled' | 'Unavailable' = 'Incompatible',
-) => new ApplicationError({ code, message });
 
 /** Constant-space cycle detection for opaque manifest continuations. */
 export function trackTranscriptCursor() {
@@ -38,7 +34,7 @@ export function trackTranscriptCursor() {
   return (cursor: string | null, next: string | null) => {
     if (next === null) return;
     if (next === cursor || next === checkpoint)
-      throw makeTranscriptFailure('Transcript cursor did not advance.');
+      throw new TranscriptReadError({ problem: 'cursor-stalled' });
     if (++distance === power) {
       checkpoint = next;
       power *= 2;
@@ -47,9 +43,8 @@ export function trackTranscriptCursor() {
   };
 }
 function checkTranscriptRead(signal?: AbortSignal, isCurrent?: () => boolean) {
-  if (signal?.aborted) throw makeTranscriptFailure('Transcript read cancelled.', 'Cancelled');
-  if (isCurrent && !isCurrent())
-    throw makeTranscriptFailure('Transcript source changed or is stale.', 'Conflict');
+  if (signal?.aborted) throw new TranscriptReadError({ problem: 'cancelled' });
+  if (isCurrent && !isCurrent()) throw new TranscriptReadError({ problem: 'source-changed' });
 }
 /** Cancel the caller's wait even when the reader ignores the signal. */
 function awaitTranscriptRead<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -57,7 +52,7 @@ function awaitTranscriptRead<T>(pending: Promise<T>, signal?: AbortSignal): Prom
   return new Promise((resolve, reject) => {
     const cancel = () => {
       signal.removeEventListener('abort', cancel);
-      reject(makeTranscriptFailure('Transcript read cancelled.', 'Cancelled'));
+      reject(new TranscriptReadError({ problem: 'cancelled' }));
     };
     pending.then(
       (value) => {
@@ -97,12 +92,12 @@ export function checkTranscriptReply(
       ? reply.kind !== 'content' || !areJsonValuesEqual(reply.selection, input.selection)
       : reply.kind !== 'manifest')
   )
-    throw makeTranscriptFailure('Transcript reply does not match the captured selection.');
+    throw new TranscriptReadError({ problem: 'reply-mismatch' });
   if (
     reply.kind === 'manifest' &&
     new Set(reply.parts.map((part) => part.partId)).size !== reply.parts.length
   )
-    throw makeTranscriptFailure('Transcript manifest repeats a part.');
+    throw new TranscriptReadError({ problem: 'manifest-repeats-part' });
   return reply;
 }
 export function countDecodedTranscriptBytes(chunk: Pick<TranscriptChunk, 'encoding' | 'data'>) {
@@ -137,10 +132,7 @@ async function* iterateSource(
   const { read, signal, isCurrent, onProgress } = options;
   const { source, selection } = options;
   if (source.kind === 'live' && !isCurrent)
-    throw makeTranscriptFailure(
-      'Live transcript reads require current observation authority.',
-      'Conflict',
-    );
+    throw new TranscriptReadError({ problem: 'live-authority' });
   const advance = trackTranscriptCursor();
   let manifestCursor: string | null = null,
     parts = 0,
@@ -156,17 +148,14 @@ async function* iterateSource(
             isCurrent,
           ).then((reply) => {
             if (reply.kind !== 'manifest')
-              throw makeTranscriptFailure('Expected a transcript manifest.');
+              throw new TranscriptReadError({ problem: 'expected-manifest' });
             return reply;
           });
     const selections = selection
       ? [selection]
       : manifest!.parts.map((part) => {
           if (part.availability !== 'available')
-            throw makeTranscriptFailure(
-              'Selected transcript content is unavailable.',
-              'Unavailable',
-            );
+            throw new TranscriptReadError({ problem: 'content-unavailable' });
           return { partId: part.partId, bytes: part.bytes, revision: part.revision };
         });
     for (const selected of selections) {
@@ -181,9 +170,9 @@ async function* iterateSource(
           isCurrent,
         );
         if (chunk.kind !== 'content' || chunk.offset !== offset)
-          throw makeTranscriptFailure('Transcript content has a missing or overlapping chunk.');
+          throw new TranscriptReadError({ problem: 'chunk-gap' });
         if (encoding && encoding !== chunk.encoding)
-          throw makeTranscriptFailure('Transcript encoding changed within a selected part.');
+          throw new TranscriptReadError({ problem: 'encoding-changed' });
         encoding = chunk.encoding;
         const size = countDecodedTranscriptBytes(chunk);
         offset += size;
@@ -202,7 +191,7 @@ async function* iterateSource(
         checkTranscriptRead(signal, isCurrent);
       } while (cursor !== null);
       if (offset !== selected.bytes)
-        throw makeTranscriptFailure('Transcript content is incomplete.');
+        throw new TranscriptReadError({ problem: 'content-incomplete' });
       parts++;
     }
     const next: string | null = manifest?.nextCursor ?? null;

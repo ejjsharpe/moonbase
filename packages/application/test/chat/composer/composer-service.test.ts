@@ -6,7 +6,7 @@ import {
   type ChatMention,
   type ChatTarget,
 } from '@moonbase/contracts/chat';
-import { Effect, Scope, SubscriptionRef } from 'effect';
+import { Effect, Queue, Scope, Stream, SubscriptionRef } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import {
   ChatComposers,
@@ -21,8 +21,8 @@ const target = (conversationId: string) =>
 const settings = { model: { provider: 'faux', modelId: 'faux-1' } };
 
 /**
- * A chat controller's draft rules in memory: one draft per chat and one for a new chat. A new chat's
- * send creates a chat in its folder and opens it, as the controller does once the host confirms it.
+ * A chat's draft rules in memory: one draft per chat and one for a new chat. A new chat's send
+ * creates a chat in its folder and opens it, as the chat does once the host confirms it.
  */
 function makeChat(selected: ChatTarget | null = null) {
   const drafts = new Map<string, { text: string; mentions: ChatMention[] }>();
@@ -96,11 +96,25 @@ function makeChat(selected: ChatTarget | null = null) {
 }
 const agents: ComposerPlace = { key: 'agents', initialCwd: '' };
 const dockB: ComposerPlace = { key: 'dock:/b', initialCwd: '/b' };
+/** What the composer uses of the in-memory chat. */
+const toComposerChat = (chat: ReturnType<typeof makeChat>): ComposerChat => ({
+  state: Effect.sync(() => chat.getSnapshot() as never),
+  changes: Stream.callback<void>((queue) =>
+    Effect.acquireRelease(
+      Effect.sync(() => chat.subscribe(() => Queue.offerUnsafe(queue, undefined))),
+      (unsubscribe) => Effect.sync(unsubscribe),
+    ),
+  ),
+  setDraft: (text, mentions) => Effect.sync(() => chat.setDraft(text, mentions)),
+  send: (creation) => Effect.promise(() => chat.send(creation)),
+  closeView: Effect.promise(() => chat.closeView()),
+  select: (next) => Effect.promise(() => chat.select(next)),
+});
 /** A composer for `chat`, in a scope the test leaves open. */
 function composerOf(chat: ReturnType<typeof makeChat>) {
   const composer = Effect.runSync(
     Effect.flatMap(ChatComposers, (composers: ChatComposers['Service']) =>
-      composers.make(chat as never as ComposerChat),
+      composers.make(toComposerChat(chat)),
     ).pipe(
       Effect.provideService(Scope.Scope, Scope.makeUnsafe()),
       Effect.provide(ChatComposers.layer),

@@ -1,4 +1,5 @@
-import { isPathAtOrInside } from '@moonbase/contracts/paths';
+import { getParentPath, getPathName, isPathAtOrInside, joinPath } from '@moonbase/contracts/paths';
+import { compareMatches, matchPath } from '@moonbase/contracts/lookup';
 import { checkoutKey, readOwn } from '../editor/index.ts';
 import { Effect, Layer, Queue, Stream } from 'effect';
 import {
@@ -20,6 +21,9 @@ import {
   type WorkspaceEvent,
   type LookupMatch,
 } from '@moonbase/contracts/workspace';
+
+// The workspace host's own matcher, so lookups rank here as they do on disk.
+const match = (path: string, query: string) => matchPath(path, query) ?? undefined;
 
 type Seed = {
   checkout: CheckoutTarget;
@@ -46,51 +50,6 @@ const pathCheck = (path: string, directory = false) => {
   )
     fail('Invalid relative path.');
 };
-
-// Independent subsequence matching, with quoted contiguous terms and basename/adjacency preference.
-function match(path: string, query: string): LookupMatch | undefined {
-  const value = path.toLocaleLowerCase(),
-    positions: number[] = [];
-  let casing = 0;
-  for (const term of query.matchAll(/"([^"]+)"|(\S+)/g)) {
-    const requested = term[1] ?? term[2],
-      text = requested.toLocaleLowerCase();
-    if (term[1]) {
-      const start = value.indexOf(text);
-      if (start < 0) return;
-      for (let i = 0; i < text.length; i++) {
-        positions.push(start + i);
-        if (path[start + i] === requested[i]) casing += 2;
-      }
-    } else {
-      let start = 0;
-      for (let i = 0; i < text.length; i++) {
-        const found = value.indexOf(text[i], start);
-        if (found < 0) return;
-        positions.push(found);
-        if (path[found] === requested[i]) casing += 2;
-        start = found + 1;
-      }
-    }
-  }
-  const sorted = [...new Set(positions)].sort((a, b) => a - b);
-  return {
-    path,
-    positions: sorted,
-    score: sorted.reduce(
-      (score, position, index) =>
-        score +
-        (index && position === sorted[index - 1] + 1 ? 8 : 0) +
-        (position > path.lastIndexOf('/') ? 4 : 0) +
-        (position === 0 ||
-        /[/_. -]/.test(path[position - 1]) ||
-        (/[a-z]/.test(path[position - 1]) && /[A-Z]/.test(path[position]))
-          ? 6
-          : 0),
-      casing - path.length,
-    ),
-  };
-}
 
 /** Concrete volatile adapter for demos/tests. It makes no filesystem or durability claim. */
 export function fauxWorkspace(seeds: Seed[]) {
@@ -250,7 +209,7 @@ export function fauxWorkspace(seeds: Seed[]) {
         if (paths.length > 20000) fail('Ignore paths exceed their limit.');
         for (const item of paths) {
           pathCheck(item);
-          if (item.split('/').slice(0, -1).join('/') !== path)
+          if (getParentPath(item) !== path)
             fail('Ignore paths must be immediate directory children.');
         }
         return {
@@ -390,7 +349,7 @@ export function fauxWorkspace(seeds: Seed[]) {
               .filter((path) => eligible(path) && !history.includes(path))
               .map((path) => match(path, query))
               .filter((row): row is LookupMatch => !!row)
-              .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
+              .sort(compareMatches)
           : [];
         return {
           matches: matches.slice(0, Math.max(1, Math.min(limit, 100))),
@@ -497,7 +456,7 @@ export function fauxWorkspace(seeds: Seed[]) {
           if (folder && !map.get(folder)?.directory)
             fail('Batch destination must be an existing folder.');
           const names = operation.sources.map((source) =>
-            source.target.path.split('/').at(-1)!.normalize('NFC').toLowerCase(),
+            getPathName(source.target.path).normalize('NFC').toLowerCase(),
           );
           if (new Set(names).size !== names.length)
             fail('Selection has colliding destination names.');
@@ -513,7 +472,7 @@ export function fauxWorkspace(seeds: Seed[]) {
         }
         const destinationOf = (source: string) =>
           batch
-            ? [operation.destination, source.split('/').at(-1)].filter(Boolean).join('/')
+            ? joinPath(operation.destination ?? '', getPathName(source))
             : operation.destination;
         const replace = (destination: string, source?: string) => {
           const collision = [...map.keys()].find(
@@ -526,7 +485,7 @@ export function fauxWorkspace(seeds: Seed[]) {
             fail('Destination exists. Explicit replacement consent required.', 'Conflict');
           if (collision)
             for (const path of map.keys()) if (isPathAtOrInside(path, collision)) map.delete(path);
-          const parent = destination.split('/').slice(0, -1).join('/');
+          const parent = getParentPath(destination);
           if (parent && !map.get(parent)?.directory)
             fail('Destination parent unavailable.', 'Unavailable');
         };

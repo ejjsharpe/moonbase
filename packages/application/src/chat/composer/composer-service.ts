@@ -6,14 +6,18 @@ import {
   FiberSet,
   Layer,
   Option,
-  Queue,
   Ref,
   type Scope,
   Stream,
   SubscriptionRef,
 } from 'effect';
-import type { ChatMention, ChatModelPreference } from '@moonbase/contracts/chat';
-import type { ChatController } from '../controller.ts';
+import type {
+  ChatCreationSettings,
+  ChatMention,
+  ChatModelPreference,
+  ChatTarget,
+} from '@moonbase/contracts/chat';
+import type { ChatState } from '../chat-state.ts';
 import { rebaseMentions } from './mention-text.ts';
 import { chatWorktreeBranch } from './worktree-branch.ts';
 import {
@@ -31,10 +35,15 @@ import {
 } from './composer.ts';
 
 /** What the composer uses of its chat. */
-export type ComposerChat = Pick<
-  ChatController,
-  'getSnapshot' | 'subscribe' | 'setDraft' | 'send' | 'closeView' | 'select'
->;
+export type ComposerChat = {
+  readonly state: Effect.Effect<ChatState>;
+  /** Signals each change to the chat's state. */
+  readonly changes: Stream.Stream<void>;
+  readonly setDraft: (value: string, mentions?: readonly ChatMention[]) => Effect.Effect<void>;
+  readonly send: (settings?: ChatCreationSettings) => Effect.Effect<void>;
+  readonly closeView: Effect.Effect<void>;
+  readonly select: (target: ChatTarget) => Effect.Effect<void>;
+};
 /** Makes a linked worktree of `root` on `branch` under `requestId`, succeeding with its root. */
 export type CreateWorktree = (
   root: string,
@@ -43,7 +52,7 @@ export type CreateWorktree = (
 ) => Effect.Effect<string, unknown>;
 
 /**
- * One chat's composer, beside its controller: what each place chose for the new chat, the folder
+ * One chat's composer, beside its services: what each place chose for the new chat, the folder
  * each new-chat mention was picked in, a worktree being made, and the one message it shows.
  */
 export type ChatComposer = {
@@ -104,8 +113,12 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
     const unknownRequest = yield* Ref.make<WorktreeRequest | undefined>(undefined);
     /** Worktrees a place made, kept as its folder until a chat is created in one. */
     const made = yield* Ref.make<Readonly<Record<string, MadeWorktree>>>({});
-    const selected = yield* Ref.make(chat.getSnapshot().selected?.conversationId ?? null);
+    const selected = yield* Ref.make((yield* chat.state).selected?.conversationId ?? null);
     const creations = yield* FiberSet.make<void, never>();
+    /** Sends the composer started: each runs as the chat's action, which shows its outcome. */
+    const sending = yield* FiberSet.make<void, never>();
+    const startSend = (settings?: ChatCreationSettings) =>
+      FiberSet.run(sending, chat.send(settings)).pipe(Effect.asVoid);
     const update = (f: (s: ChatComposerSnapshot) => ChatComposerSnapshot) =>
       SubscriptionRef.update(state, f);
 
@@ -126,8 +139,7 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
           : s,
       );
     const noteMentions = (paths: readonly string[], folder: string) =>
-      Effect.suspend(() => {
-        const current = chat.getSnapshot();
+      Effect.flatMap(chat.state, (current) => {
         if (current.selected || !folder) return Effect.void;
         const mentioned = new Set(current.mentions.map((mention) => mention.path));
         return update((s) => {
@@ -139,7 +151,7 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
 
     const checkMentions = (folder: string) =>
       Effect.gen(function* () {
-        const current = chat.getSnapshot();
+        const current = yield* chat.state;
         if (current.selected) return null;
         const { folders } = yield* SubscriptionRef.get(state);
         const unknown = current.mentions.filter((m) => !Object.hasOwn(folders, m.path)).length;
@@ -148,8 +160,8 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
           dropped = 0;
         if (current.mentions.some((mention) => folderOf(mention.path) !== folder)) {
           const rebased = rebaseMentions(current.draft, current.mentions, folderOf, folder);
-          chat.setDraft(rebased.text, rebased.mentions);
-          if (chat.getSnapshot().draft !== rebased.text)
+          yield* chat.setDraft(rebased.text, rebased.mentions);
+          if ((yield* chat.state).draft !== rebased.text)
             return "The draft's mentions couldn't be made relative to its folder, so it wasn't sent.";
           mentions = rebased.mentions;
           dropped = rebased.dropped;
@@ -196,7 +208,7 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
             ]),
           ),
         }));
-        if (chat.getSnapshot().selected)
+        if ((yield* chat.state).selected)
           return yield* report({
             chat: '',
             text: `The worktree is ready at ${root}. Send from a new chat there to start it.`,
@@ -206,7 +218,7 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
         if (problem) return yield* report({ chat: '', text: problem });
         // Sent before the worktree stops being made, so a view shown again sees the send under
         // way rather than an idle draft.
-        void chat.send({ cwd: root, ...settings });
+        yield* startSend({ cwd: root, ...settings });
       });
 
     /**
@@ -226,7 +238,7 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
         );
         if (!reserved) return;
         const cwd = readChoices(yield* SubscriptionRef.get(state), place).cwd;
-        const branch = chatWorktreeBranch(chat.getSnapshot().draft);
+        const branch = chatWorktreeBranch((yield* chat.state).draft);
         const request = yield* Ref.modify(unknownRequest, (unknown) => {
           const next =
             unknown && unknown.key === place.key && unknown.cwd === cwd && unknown.branch === branch
@@ -246,7 +258,7 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
 
     /** Follows the chat: what a sent draft or another chat leaves behind goes. */
     const observe = Effect.gen(function* () {
-      const current = chat.getSnapshot();
+      const current = yield* chat.state;
       const now = current.selected?.conversationId ?? null;
       const leftNewChat = (yield* Ref.getAndSet(selected, now)) === null && now !== null;
       // The folders cover only what the new chat draft mentions, so a sent or emptied one has none.
@@ -275,14 +287,8 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
           yield* choose(worktree.place, { cwd: worktree.from, newWorktree: false });
       }
     });
-    yield* Stream.callback<void>(
-      (queue) =>
-        Effect.acquireRelease(
-          Effect.sync(() => chat.subscribe(() => Queue.offerUnsafe(queue, undefined))),
-          (unsubscribe) => Effect.sync(unsubscribe),
-        ),
-      { bufferSize: 1, strategy: 'sliding' },
-    ).pipe(
+    yield* chat.changes.pipe(
+      Stream.buffer({ capacity: 1, strategy: 'sliding' }),
       Stream.runForEach(() => observe),
       Effect.forkScoped,
     );
@@ -296,7 +302,7 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
       checkMentions,
       mention: (place, files) =>
         Effect.gen(function* () {
-          const current = chat.getSnapshot();
+          const current = yield* chat.state;
           const snapshot = yield* SubscriptionRef.get(state);
           const folder = findChatFolder(current, readChoices(snapshot, place).cwd);
           const plan = planFileMentions(
@@ -307,8 +313,8 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
             snapshot.creatingWorktree,
           );
           if (plan.draft) {
-            chat.setDraft(plan.draft.text, plan.draft.mentions);
-            if (!current.selected && chat.getSnapshot().draft === plan.draft.text)
+            yield* chat.setDraft(plan.draft.text, plan.draft.mentions);
+            if (!current.selected && (yield* chat.state).draft === plan.draft.text)
               yield* noteMentions(plan.draft.added, plan.folder!);
           }
           const where = current.selected?.conversationId ?? '';
@@ -318,14 +324,11 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
         }),
       send: (place, { selection, createWorktree }) =>
         Effect.gen(function* () {
-          const current = chat.getSnapshot();
+          const current = yield* chat.state;
           yield* dismiss({ chat: current.selected?.conversationId ?? '', place: place.key });
           // Enter sends even while Send is disabled; one worktree per first message.
           if ((yield* SubscriptionRef.get(state)).creatingWorktree) return;
-          if (current.selected) {
-            void chat.send();
-            return;
-          }
+          if (current.selected) return yield* startSend();
           const { cwd, newWorktree } = readChoices(yield* SubscriptionRef.get(state), place);
           // Without a folder, a new local chat runs in one the host makes for it.
           const settings = selection ? { ...(cwd ? { cwd } : {}), ...selection } : undefined;
@@ -334,18 +337,18 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
           if (problem) return yield* report({ chat: '', place: place.key, text: problem });
           if (createWorktree && newWorktree && selection)
             return yield* sendInWorktree(place, createWorktree, selection);
-          void chat.send(settings);
+          yield* startSend(settings);
         }),
       startNewChat: (text, mentions, folder) =>
         Effect.gen(function* () {
-          const target = chat.getSnapshot().selected;
+          const target = (yield* chat.state).selected;
           if (!target) {
-            chat.setDraft(text, mentions);
+            yield* chat.setDraft(text, mentions);
             return true;
           }
-          chat.setDraft('');
-          const closing = chat.closeView();
-          const current = chat.getSnapshot();
+          yield* chat.setDraft('');
+          yield* chat.closeView;
+          const current = yield* chat.state;
           // The new chat's folders cover only what its draft mentions now, not a sent draft's.
           if (!current.selected)
             yield* update((s) => ({
@@ -353,24 +356,23 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
               folders: keepMentionedFolders(s.folders, current.mentions),
             }));
           // A view that couldn't close keeps its draft without the command.
-          if (current.selected) chat.setDraft(text, mentions);
+          if (current.selected) yield* chat.setDraft(text, mentions);
           else if (text) {
             const { folders } = yield* SubscriptionRef.get(state);
             const joined = joinNewChatDraft(current, folders, text, mentions, folder);
             if ('problem' in joined) {
-              void chat.select(target);
-              chat.setDraft(text, mentions);
+              yield* FiberSet.run(sending, chat.select(target));
+              yield* chat.setDraft(text, mentions);
               yield* report({ chat: target.conversationId, draft: text, text: joined.problem });
               return false;
             }
-            chat.setDraft(joined.text, joined.mentions);
-            if (chat.getSnapshot().draft === joined.text && folder)
+            yield* chat.setDraft(joined.text, joined.mentions);
+            if ((yield* chat.state).draft === joined.text && folder)
               yield* noteMentions(
                 mentions.map((mention) => mention.path),
                 folder,
               );
           }
-          yield* Effect.promise(() => closing);
           return true;
         }),
     } satisfies ChatComposer;

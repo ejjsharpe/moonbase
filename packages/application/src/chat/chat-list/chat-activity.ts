@@ -1,5 +1,5 @@
 import type { ChatSnapshot, ChatSummary } from '@moonbase/contracts/chat';
-import type { Pending } from './saved.ts';
+import type { Pending } from '../drafts/drafts.ts';
 
 /**
  * Why a chat sits in its group: what it last did, that it waits on an unconfirmed Send, that it is

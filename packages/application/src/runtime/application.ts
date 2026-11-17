@@ -1,7 +1,7 @@
 import * as Schema from 'effect/Schema';
 import type { Effect } from 'effect';
 import { ApplicationError, ApplicationErrorCodeSchema } from '@moonbase/contracts/errors';
-import type { ChatDependencies } from '../chat/index.ts';
+import type { ChatDependencies } from '../chat/chat-ports.ts';
 
 /** A chat host the user can switch to, acquired when it is opened. */
 export type NamedChatTarget = {

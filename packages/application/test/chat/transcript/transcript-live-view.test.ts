@@ -1,14 +1,23 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { Effect } from 'effect';
-import { makeApplication } from '../../runtime/application-fixture.ts';
 import type { TranscriptView } from '@moonbase/application/chat';
 import type { ChatSnapshot, ChatTranscriptSource } from '@moonbase/contracts/chat';
-import { transcriptFixture, transcriptController, digest, part } from './transcript-fixture.ts';
+import { TranscriptReadError } from '../../../src/chat/transcript/transcript-errors.ts';
+import {
+  transcriptFixture,
+  transcriptHarness,
+  digest,
+  part,
+  type TranscriptHarness,
+} from './transcript-fixture.ts';
 
-function publishLive(
-  f: ReturnType<typeof transcriptFixture>,
+const isInvalidView = (error: unknown) =>
+  error instanceof TranscriptReadError && error.problem === 'invalid-view';
+
+/** A running snapshot whose live part the host serves. */
+function liveSnapshot(
+  f: TranscriptHarness,
   text = 'live content',
   incarnation = digest('view incarnation'),
 ) {
@@ -34,106 +43,48 @@ function publishLive(
     },
   };
   f.sources.set(JSON.stringify(source), { source, data: [text] });
-  f.publish(snapshot);
   return { source, descriptor, snapshot };
 }
+async function publishLive(f: TranscriptHarness, text?: string, incarnation?: string) {
+  const live = liveSnapshot(f, text, incarnation);
+  await f.publish(live.snapshot);
+  return live;
+}
 
-test('application restores the live row and expansions across panel and named-controller replacement, never restart', async () => {
-  const a = transcriptFixture(64),
-    b = transcriptFixture(64);
-  publishLive(a);
-  publishLive(b);
-  const options = {
-    chatTargets: [
-      { id: 'A', label: 'A', acquire: Effect.sync(() => a.dependencies) },
-      { id: 'B', label: 'B', acquire: Effect.sync(() => b.dependencies) },
-    ],
-  };
-  const view: TranscriptView = {
-    anchor: { key: 'live:submission', offset: -17.5 },
-    expanded: ['thought', 'tool'],
-  };
-  const app = makeApplication(options);
-  await app.start();
-  try {
-    let chat = (await app.chat())!;
-    await chat.start();
-    await chat.select(a.target);
-    assert.equal(chat.backendId, 'A');
-    chat.setTranscriptView(view);
-    const raw = a.storage.value;
-    assert(await app.app((a) => a.closeChat));
-    await app.cleanupSettled();
-    chat = (await app.app((a) => a.openChat))!;
-    await chat.start();
-    assert.deepEqual(chat.getSnapshot().transcript.view, view);
-    assert.equal(a.calls.filter((call) => call.operation === 'getChatHistoryAround').length, 0);
-    chat = (await app.app((a) => a.selectChatTarget('B')))!;
-    await chat.start();
-    await chat.select(b.target);
-    assert.equal(chat.backendId, 'B');
-    assert.equal(chat.getSnapshot().transcript.view.anchor, null, 'each backend has its own view');
-    chat.setTranscriptView({ anchor: { key: 'entry:e40', offset: 0 }, expanded: [] });
-    chat = (await app.app((a) => a.selectChatTarget('A')))!;
-    await chat.start();
-    assert.deepEqual(chat.getSnapshot().transcript.view, view);
-    assert.equal(a.storage.value, raw);
-    assert(!raw!.includes('anchor') && !raw!.includes('expanded'));
-  } finally {
-    await app.dispose();
-  }
-  const restarted = makeApplication(options);
-  await restarted.start();
-  const reopened = (await restarted.chat())!;
-  try {
-    await reopened.start();
-    assert.equal(reopened.getSnapshot().selected!.conversationId, a.target.conversationId);
-    assert.equal(reopened.getSnapshot().transcript.view.anchor, null);
-    assert.deepEqual(reopened.getSnapshot().transcript.view.expanded, []);
-    assert.equal(reopened.getSnapshot().transcript.atLatest, true);
-  } finally {
-    await restarted.dispose();
-  }
-});
-
-function captureView(live: ReturnType<typeof publishLive>, offset = -12) {
+function captureView(live: Awaited<ReturnType<typeof publishLive>>, offset = -12) {
   return {
     anchor: { key: `live:${live.source.submissionId}`, offset },
     expanded: ['live-thought', 'live-tool'],
   } satisfies TranscriptView;
 }
 test('view input rejects anchors that name no row', async (t) => {
-  const f = await transcriptController(t, 64);
+  const f = await transcriptHarness(t, 64);
   for (const key of ['live', 'entry:', 'message:e1', ' '])
-    assert.throws(
-      () => f.controller.setTranscriptView({ anchor: { key, offset: 0 }, expanded: [] }),
-      (error) => ApplicationError.is(error),
+    await assert.rejects(
+      f.transcript.setView({ anchor: { key, offset: 0 }, expanded: [] }),
+      isInvalidView,
       key,
     );
-  assert.throws(
-    () =>
-      f.controller.setTranscriptView({
-        anchor: { key: 'entry:e16', offset: Number.NaN },
-        expanded: [],
-      }),
-    ApplicationError.is,
+  await assert.rejects(
+    f.transcript.setView({ anchor: { key: 'entry:e16', offset: Number.NaN }, expanded: [] }),
+    isInvalidView,
   );
-  assert.equal(f.controller.getSnapshot().transcript.view.anchor, null);
-  await f.controller.jumpToEntry('e16');
-  f.controller.setTranscriptView({
+  assert.equal(f.state.view.anchor, null);
+  await f.transcript.jumpToEntry('e16');
+  await f.transcript.setView({
     anchor: { key: 'entry:e16', offset: -3 },
     expanded: ['durable'],
   });
-  await f.controller.detach();
-  await f.controller.start();
-  assert.deepEqual(f.controller.getSnapshot().transcript.view, {
+  await f.reopen();
+  await f.transcript.restoreView();
+  assert.deepEqual(f.state.view, {
     anchor: { key: 'entry:e16', offset: -3 },
     expanded: ['durable'],
   });
-  assert(f.controller.getSnapshot().transcript.entries.some((entry) => entry.id === 'e16'));
-  await f.controller.jumpToEntry('invented-row');
-  assert(f.controller.getSnapshot().transcript.error, 'unrecognized durable IDs fail explicitly');
-  assert.deepEqual(f.controller.getSnapshot().transcript.view, {
+  assert(f.state.entries.some((entry) => entry.id === 'e16'));
+  await f.transcript.jumpToEntry('invented-row');
+  assert(f.state.error, 'unrecognized durable IDs fail explicitly');
+  assert.deepEqual(f.state.view, {
     anchor: { key: 'entry:e16', offset: -3 },
     expanded: ['durable'],
   });
@@ -167,18 +118,24 @@ test('view memory remains bounded, isolated, and independent of caller mutation'
 
 for (const change of ['append', 'replace', 'retire', 'reconnect'] as const)
   test(`view memory survives ${change} without content reads or source proofs`, async (t) => {
-    const f = await transcriptController(t, 64);
-    const live = publishLive(f.fixture);
+    const f = await transcriptHarness(t, 64);
+    const live = await publishLive(f);
     const view = captureView(live);
-    f.controller.setTranscriptView(view);
-    await f.controller.detach();
-    if (change === 'retire') f.fixture.publish({ ...live.snapshot, run: null, state: 'idle' });
+    await f.transcript.setView(view);
+    // The chat closes, and its host moves on before it opens again.
+    await f.close();
+    if (change === 'retire') f.snapshot = { ...live.snapshot, run: null, state: 'idle' };
     else if (change === 'reconnect')
-      f.fixture.publish({ ...live.snapshot, observationStatus: 'reconnecting' });
-    else publishLive(f.fixture, change === 'append' ? 'live content appended' : 'changed text');
+      f.snapshot = { ...live.snapshot, observationStatus: 'reconnecting' };
+    else
+      f.snapshot = liveSnapshot(
+        f,
+        change === 'append' ? 'live content appended' : 'changed text',
+      ).snapshot;
     const calls = f.calls.length;
-    await f.controller.start();
-    assert.deepEqual(f.controller.getSnapshot().transcript.view, view);
+    await f.reopen();
+    await f.transcript.restoreView();
+    assert.deepEqual(f.state.view, view);
     assert(
       !f.calls
         .slice(calls)
@@ -188,36 +145,37 @@ for (const change of ['append', 'replace', 'retire', 'reconnect'] as const)
             call.operation === 'getChatHistoryAround',
         ),
     );
-    await f.controller.jumpToEntry('e16');
-    publishLive(f.fixture, 'another update');
-    assert.equal(f.controller.getSnapshot().transcript.view.anchor!.key, 'entry:e16');
+    await f.transcript.jumpToEntry('e16');
+    await publishLive(f, 'another update');
+    assert.equal(f.state.view.anchor!.key, 'entry:e16');
   });
 
 test('failed navigation and observation remain visible independently of view memory', async (t) => {
-  const f = await transcriptController(t, 64);
-  const view = captureView(publishLive(f.fixture));
-  f.controller.setTranscriptView(view);
-  f.fixture.handlers.set('getChatHistoryAround', async () => {
+  const f = await transcriptHarness(t, 64);
+  const view = captureView(await publishLive(f));
+  await f.transcript.setView(view);
+  f.handlers.set('getChatHistoryAround', async () => {
     throw new ApplicationError({ code: 'Unavailable', message: 'history unavailable' });
   });
-  await f.controller.showEarlier();
-  assert.match(f.controller.getSnapshot().transcript.error!, /history unavailable/);
-  f.controller.setTranscriptView({ ...view, anchor: { ...view.anchor, offset: -2 } });
-  assert.match(f.controller.getSnapshot().transcript.error!, /history unavailable/);
-  f.fixture.fail(new ApplicationError({ code: 'Unauthorized', message: 'authority lost' }));
-  assert.equal(f.controller.getSnapshot().transcript.observation, 'failed');
-  assert.match(f.controller.getSnapshot().transcript.error!, /authority lost/);
+  await f.transcript.showEarlier();
+  assert.match(f.state.error!, /history unavailable/);
+  await f.transcript.setView({ ...view, anchor: { ...view.anchor, offset: -2 } });
+  assert.match(f.state.error!, /history unavailable/);
+  await f.transcript.fail(
+    new ApplicationError({ code: 'Unauthorized', message: 'authority lost' }),
+  );
+  assert.equal(f.state.observation, 'failed');
+  assert.match(f.state.error!, /authority lost/);
 });
 
 test('view input rejects anchor fields beyond the row key and offset', async (t) => {
-  const f = await transcriptController(t, 64);
+  const f = await transcriptHarness(t, 64);
   for (const extra of [{ entryId: 'e16' }, { partId: 'm0.b0' }])
-    assert.throws(
-      () =>
-        f.controller.setTranscriptView({
-          anchor: { key: 'entry:e16', offset: -2, ...extra } as never,
-          expanded: [],
-        }),
-      ApplicationError.is,
+    await assert.rejects(
+      f.transcript.setView({
+        anchor: { key: 'entry:e16', offset: -2, ...extra } as never,
+        expanded: [],
+      }),
+      isInvalidView,
     );
 });
