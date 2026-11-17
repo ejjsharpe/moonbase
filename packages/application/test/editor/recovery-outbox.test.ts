@@ -418,3 +418,35 @@ for (const kind of ['close', 'quit', 'reload'] as const)
       await f.dispose();
     }
   });
+
+test("a lost Discard reply behind another buffer's held draft still reopens the reloaded tab", async () => {
+  const f = await fixture();
+  const hold = f.hold('saveFile');
+  try {
+    await f.editor.open(other, { intent: 'keep' });
+    f.editor.edit(target, 'dirty');
+    await f.editor.flush();
+    // b.ts saves, so its newer draft waits first in the queue until the Save settles.
+    f.editor.edit(other, 'saving');
+    const saving = f.editor.save(other);
+    await hold.entered;
+    f.editor.edit(other, 'typed during the Save');
+    // Reload's Discard commits but its reply is lost; the store then shows it committed.
+    f.memory.failNext('closeTab', 'Reply lost', true, 'Uncertain');
+    f.memory.externalWrite(target, 'reloaded');
+    assert.equal(await f.editor.reload(target), true);
+    hold.release();
+    await saving;
+    await f.editor.flush();
+    assert.equal(f.editor.buffer(target)?.text, 'reloaded');
+    const stored = await f.stored();
+    assert.deepEqual(stored.tabs(checkout.checkoutId).sort(), ['a.ts', 'b.ts']);
+    assert.deepEqual(
+      stored.drafts.map((draft) => [draft.target.path, draft.text]),
+      [['b.ts', 'typed during the Save']],
+    );
+  } finally {
+    hold.release();
+    await f.dispose();
+  }
+});

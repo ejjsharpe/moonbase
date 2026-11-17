@@ -208,7 +208,9 @@ export class RecoveryOutbox extends Context.Service<RecoveryOutbox, RecoveryOutb
             if (edit.kind === 'closeTab') {
               // A close is part of the action that made it (a Close, a Discard, a Reload) and is
               // never sent again behind the editor's back: the tab edits queued after it go too.
-              const next = (yield* get).queue[0];
+              // The edit that followed the close for its buffer: another buffer's held draft may be
+              // first in the queue, since the close can be taken from behind it.
+              const next = (yield* get).queue.find((queued) => isStructural(queued, edit.bufferId));
               const reopen =
                 next?.kind === 'openTab' && next.bufferId === edit.bufferId ? next : undefined;
               yield* queue((q) => q.filter((queued) => !isStructural(queued, edit.bufferId)));
