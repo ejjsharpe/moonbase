@@ -199,7 +199,28 @@ async function close(f: Fixture) {
   await f.close();
 }
 
-test('dirty editor/live chat, two drafts, no-resend reconnect, view close and client Quit stay independent', async () => {
+/** Sends in a new remote chat; its tool is held, so the chat stays live. */
+async function sendLive(p: Page, f: Fixture, title: string) {
+  await create(p, title);
+  await p.getByLabel('Message', { exact: true }).fill('one deliberately admitted message');
+  await p.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect.poll(async () => (await f.stats()).tools).toBe(1);
+}
+/** Sends in a new remote chat whose Send reply is lost; returns the Send it keeps to settle. */
+async function sendLost(p: Page, f: Fixture, title: string) {
+  await f.loseNextSend();
+  await sendLive(p, f, title);
+  await expect
+    .poll(async () =>
+      (await saved(p)).pending.some((v: { operation: string }) => v.operation === 'sendChat'),
+    )
+    .toBe(true);
+  return (await saved(p)).pending.find((v: { operation: string }) => v.operation === 'sendChat');
+}
+const sends = async (f: Fixture, command: string) =>
+  (await f.stats()).commands.filter((v) => v === command).length;
+
+test('a dirty editor and two chat drafts stay independent of a live chat through Reload, which resends nothing', async () => {
   const f = await fixture(true);
   let current: ElectronApplication | undefined;
   try {
@@ -212,19 +233,7 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     expect(await readFile(f.log, 'utf8').catch(() => null)).toBeNull();
     await local(p, app, f);
     await connect(p);
-    await create(p, 'First remote chat');
-    await f.loseNextSend();
-    await p.getByLabel('Message', { exact: true }).fill('one deliberately admitted message');
-    await p.getByRole('button', { name: 'Send message', exact: true }).click();
-    await expect.poll(async () => (await f.stats()).tools).toBe(1);
-    await expect
-      .poll(async () =>
-        (await saved(p)).pending.some((v: { operation: string }) => v.operation === 'sendChat'),
-      )
-      .toBe(true);
-    const original = (await saved(p)).pending.find(
-      (v: { operation: string }) => v.operation === 'sendChat',
-    );
+    await sendLost(p, f, 'First remote chat');
     await p.getByLabel('Message', { exact: true }).fill('first independent newer draft');
     await tab(p, 'Agents').focus();
     await p.keyboard.press('ArrowDown');
@@ -298,11 +307,28 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     await expect(p.getByLabel('Message', { exact: true })).toHaveValue(
       'first independent newer draft',
     );
-    expect((await f.stats()).commands.filter((v) => v === 'sendChat')).toHaveLength(1);
+    await p.getByRole('button', { name: 'Second remote chat', exact: false }).click();
+    await expect(p.getByLabel('Message', { exact: true })).toHaveValue('second independent draft');
+    expect(await sends(f, 'sendChat')).toBe(1);
+    expect(errors).toEqual([]);
+  } finally {
+    if (current) await stop(current, true);
+    await close(f);
+  }
+});
+
+test('a reconnect settles a Send whose reply was lost without resending it', async () => {
+  const f = await fixture(true);
+  let current: ElectronApplication | undefined;
+  try {
+    const { app, page: p, errors } = await launch(f);
+    current = app;
+    await connect(p);
+    const original = await sendLost(p, f, 'First remote chat');
     await disconnectChat(p);
     await p.getByRole('button', { name: 'Connect', exact: true }).click();
     await expect(p.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
-    expect((await f.stats()).commands.filter((v) => v === 'sendChat')).toHaveLength(1);
+    expect(await sends(f, 'sendChat')).toBe(1);
     await expect
       .poll(
         async () =>
@@ -313,25 +339,55 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     expect((await f.stats()).mutations.find((v) => v.operation === 'sendChat')!.input).toEqual(
       original.input,
     );
+    expect(errors).toEqual([]);
+  } finally {
+    if (current) await stop(current, true);
+    await close(f);
+  }
+});
+
+test('closing the chat view or a saved editor tab leaves a live chat running', async () => {
+  const f = await fixture(true);
+  let current: ElectronApplication | undefined;
+  try {
+    await setup(f);
+    const { app, page: p, errors } = await launch(f);
+    current = app;
+    await local(p, app, f);
+    await connect(p);
+    await sendLive(p, f, 'First remote chat');
+    await expect(p.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
     await p.getByRole('button', { name: 'Close view', exact: true }).click();
-    expect((await f.stats()).commands.filter((v) => v === 'stopChat')).toHaveLength(0);
+    expect(await sends(f, 'stopChat')).toBe(0);
     await p.getByRole('button', { name: 'First remote chat', exact: false }).click();
     await projectTab(p).click();
     await expect(editor(p)).toBeFocused();
     await p.getByRole('button', { name: 'Close a.ts', exact: true }).click();
     await p.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
     await saveFile(p);
-    await expect
-      .poll(() => readFile(join(f.cwd, 'a.ts'), 'utf8'))
-      .toBe('local dirty draft + live tool editing');
+    await expect.poll(() => readFile(join(f.cwd, 'a.ts'), 'utf8')).toBe('local dirty draft');
     // The bytes land before the Save settles, and Close refuses while it is in flight.
     await expectSaveEnabled(p, true);
     await p.getByRole('button', { name: 'Close a.ts', exact: true }).click();
     await expect(editor(p)).toHaveCount(0);
-    expect((await f.stats()).commands.filter((v) => v === 'stopChat')).toHaveLength(0);
-    await tab(p, 'Agents').click();
-    await p.getByRole('button', { name: 'Second remote chat', exact: false }).click();
-    await expect(p.getByLabel('Message', { exact: true })).toHaveValue('second independent draft');
+    expect(await sends(f, 'stopChat')).toBe(0);
+    expect(errors).toEqual([]);
+  } finally {
+    if (current) await stop(current, true);
+    await close(f);
+  }
+});
+
+test('closing the window keeps chat drafts, and Quit keeps them and the live chat without stopping it', async () => {
+  const f = await fixture(true);
+  let current: ElectronApplication | undefined;
+  try {
+    const { app, page: p, errors } = await launch(f);
+    current = app;
+    await connect(p);
+    await sendLive(p, f, 'First remote chat');
+    await p.getByLabel('Message', { exact: true }).fill('first independent newer draft');
+    await create(p, 'Second remote chat');
     await p.getByLabel('Message', { exact: true }).fill('latest second draft for restart');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
     expect(
@@ -343,14 +399,14 @@ test('dirty editor/live chat, two drafts, no-resend reconnect, view close and cl
     );
     await stop(app);
     current = undefined;
-    expect((await f.stats()).commands.filter((v) => v === 'stopChat')).toHaveLength(0); // Quit didn't Stop/shut down the host.
+    expect(await sends(f, 'stopChat')).toBe(0); // Quit didn't Stop/shut down the host.
     const second = await launch(f);
     current = second.app;
     await connect(second.page);
     await expect(second.page.getByLabel('Message', { exact: true })).toHaveValue(
       'latest second draft for restart',
     );
-    expect((await f.stats()).commands.filter((v) => v === 'sendChat')).toHaveLength(1);
+    expect(await sends(f, 'sendChat')).toBe(1);
     await second.page.getByRole('button', { name: 'First remote chat', exact: false }).click();
     await expect(second.page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
     await expect(second.page.getByLabel('Message', { exact: true })).toHaveValue(
