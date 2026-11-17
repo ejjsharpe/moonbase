@@ -1,6 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChatState } from '@moonbase/application/chat';
+import { useCallback, useEffect, useId, useMemo } from 'react';
+import { Effect } from 'effect';
+import * as Atom from 'effect/reactivity/Atom';
+import * as AsyncResult from 'effect/reactivity/AsyncResult';
+import { useAtomValue } from '@effect/atom-react';
+import {
+  nativeActionsAtoms,
+  type ChatState,
+  type NativeActionKind,
+  type TranscriptNotice,
+} from '@moonbase/application/chat';
 import type { TranscriptCopy, TranscriptImage } from '../../../ipc/chat-rpcs.ts';
+import type { DesktopRunner } from '../../shell/desktop-application.ts';
 
 /** What a transcript asks of main for one chat target: Copy, opening a link, an image's URL. */
 export type TranscriptNative = {
@@ -9,92 +19,47 @@ export type TranscriptNative = {
   imageUrl(input: TranscriptImage, signal?: AbortSignal): Promise<string>;
 };
 
-export type NativeActionKind = 'copy' | 'open';
-/** `success` clears itself; `error` stays until replaced. Neither ever reports another's outcome. */
-export type TranscriptNotice = { tone: 'progress' | 'success' | 'error'; text: string };
 /** Stable for the transcript's lifetime, so rows can memoize on them. */
 export type TranscriptActions = {
   run(action: (signal: AbortSignal) => Promise<void>, kind: NativeActionKind): void;
   openLink(url: string): void;
 };
 
-const actionLabels = {
-  copy: { pending: 'Copying complete source…', done: 'Copied.' },
-  open: { pending: 'Opening link…', done: 'Opened in your browser.' },
-} satisfies Record<NativeActionKind, { pending: string; done: string }>;
-/** Native actions running at once; more are refused rather than queued. */
-const maxNativeActions = 2;
-/** A success notice clears after this; failures stay until replaced. */
-const successNoticeMs = 4000;
+const noNotice = Atom.make<TranscriptNotice | null>(null);
 
-/** Runs native Copy/Open with one visible notice, cancelling held actions when the view goes offline. */
+/**
+ * The transcript's native Copy/Open, run by the application's native actions (at most two at once,
+ * one notice), which this view owns while mounted and cancels when it goes offline.
+ */
 export function useTranscriptActions(
   native: TranscriptNative | undefined,
   { ready, transcript: { observation } }: Pick<ChatState, 'ready' | 'transcript'>,
+  runner: DesktopRunner,
 ) {
-  const [notice, setNotice] = useState<TranscriptNotice | null>(null);
-  const jobs = useRef(new Set<AbortController>());
+  const result = useAtomValue(nativeActionsAtoms.actions(useId()));
+  const owned = AsyncResult.isSuccess(result) ? result.value : null;
+  const notice = useAtomValue(owned ? nativeActionsAtoms.notice(owned) : noNotice);
   useEffect(() => {
-    const running = jobs.current;
-    return () => {
-      for (const job of running) job.abort();
-    };
-  }, []);
-  useEffect(() => {
-    if (
-      (observation === 'inactive' || !ready) &&
-      [...jobs.current].some((job) => !job.signal.aborted)
-    ) {
-      for (const job of jobs.current) job.abort();
-      setNotice({
-        tone: 'error',
-        text: 'Native action cancelled because this view is offline. Reconnect and try again.',
-      });
-    }
-  }, [observation, ready]);
-  useEffect(() => {
-    if (notice?.tone !== 'success') return;
-    const timer = setTimeout(
-      () => setNotice((current) => (current === notice ? null : current)),
-      successNoticeMs,
-    );
-    return () => clearTimeout(timer);
-  }, [notice]);
+    if (owned && (observation === 'inactive' || !ready)) runner.runSync(owned.cancel);
+  }, [owned, observation, ready, runner]);
   const run = useCallback(
     (action: (signal: AbortSignal) => Promise<void>, kind: NativeActionKind) => {
-      if (jobs.current.size >= maxNativeActions) {
-        setNotice({
-          tone: 'error',
-          text: 'Two native actions are still running. Wait for them to finish.',
-        });
-        return;
-      }
-      const job = new AbortController();
-      jobs.current.add(job);
-      setNotice({ tone: 'progress', text: actionLabels[kind].pending });
-      void action(job.signal)
-        .then(
-          () => {
-            if (!job.signal.aborted) setNotice({ tone: 'success', text: actionLabels[kind].done });
-          },
-          (error) => {
-            if (!job.signal.aborted)
-              setNotice({
-                tone: 'error',
-                text: error instanceof Error ? error.message : 'The action failed. Try again.',
-              });
-          },
-        )
-        .finally(() => jobs.current.delete(job));
+      if (owned)
+        runner.runSync(
+          owned.run(Effect.tryPromise({ try: action, catch: (error) => error }), kind),
+        );
     },
-    [],
+    [owned, runner],
   );
   const openLink = useCallback(
     (url: string) => {
       if (native) run((signal) => native.openLink(url, signal), 'open');
-      else setNotice({ tone: 'error', text: 'Native link opening is unavailable in this view.' });
+      else if (owned)
+        runner.runSync(
+          owned.show({ tone: 'error', text: 'Native link opening is unavailable in this view.' }),
+        );
     },
-    [native, run],
+    [native, run, owned, runner],
   );
   const actions = useMemo<TranscriptActions>(() => ({ run, openLink }), [run, openLink]);
   return { notice, actions };

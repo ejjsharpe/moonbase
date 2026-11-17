@@ -658,6 +658,7 @@ export function ChatView({
           controller={controller}
           state={state}
           native={transcriptNative}
+          runner={runner}
         />
       )}
       <div {...stylex.props(styles.composeArea, !state.selected && styles.starter)}>

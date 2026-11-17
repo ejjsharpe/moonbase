@@ -58,3 +58,6 @@ export {
   type MentionQuery,
 } from './composer/mention-text.ts';
 export { chatWorktreeBranch } from './composer/worktree-branch.ts';
+export { makeNativeActions, type NativeActions } from './native-actions/native-actions-runner.ts';
+export { nativeActionsAtoms } from './native-actions/native-actions-atoms.ts';
+export type { NativeActionKind, TranscriptNotice } from './native-actions/native-actions.ts';
