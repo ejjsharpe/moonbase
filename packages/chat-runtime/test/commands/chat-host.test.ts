@@ -8,8 +8,7 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { ChatService } from '@moonbase/contracts/services';
 import { NodeSqliteDatabase } from '@earendil-works/chord/sqlite/node';
-import { LocalPiRuntimeLive } from '../../src/index.ts';
-import { session, fixture } from '../runtime-fixture.ts';
+import { session, fixture, localPiRuntime } from '../runtime-fixture.ts';
 
 test('real SQLite full failure is visible and old committed chats survive reopen', async (t) => {
   const original = NodeSqliteDatabase.prototype.transaction;
@@ -51,7 +50,7 @@ test('store authority rejects actor/host retargeting without executing work', as
   await f.dispose();
   for (const change of [{ actorId: 'other' }, { host: { ...session.host, storeId: 'other' } }]) {
     const runtime = ManagedRuntime.make(
-      LocalPiRuntimeLive({
+      localPiRuntime({
         ...session,
         databasePath: f.config.databasePath,
         models: f.config.models,
@@ -87,7 +86,7 @@ test('escaped identity components open and reopen without an extra serialized id
     model = { provider: faux.provider.id, modelId: faux.getModel().id },
     config = { ...session, databasePath: join(directory, 'chat.sqlite'), models };
   assert(Buffer.byteLength(JSON.stringify({ ...session, cwd, model })) > 8192);
-  let runtime = ManagedRuntime.make(LocalPiRuntimeLive(config));
+  let runtime = ManagedRuntime.make(localPiRuntime(config));
   t.after(async () => {
     try {
       await runtime.dispose();
@@ -103,7 +102,7 @@ test('escaped identity components open and reopen without an extra serialized id
     settings: { cwd, model },
   });
   await runtime.dispose();
-  runtime = ManagedRuntime.make(LocalPiRuntimeLive(config));
+  runtime = ManagedRuntime.make(localPiRuntime(config));
   assert.deepEqual(
     await makeChatClient(runtime).command('getChatHost', { host: session.host }),
     host,

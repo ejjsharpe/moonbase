@@ -12,7 +12,8 @@ import {
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
-import { LocalPiRuntimeLive, LocalPiControl } from '../src/index.ts';
+import { LocalPiControl } from '../src/index.ts';
+import { localPiRuntime } from './runtime-fixture.ts';
 
 const session = { host: { hostId: 'local-test', storeId: 'local-store' }, actorId: 'local-owner' };
 async function until<A>(read: () => Promise<A>, ready: (value: A) => boolean) {
@@ -43,7 +44,7 @@ test('local conversations retain distinct folders/models, coding tools, immutabl
       faux.models.map((model) => ({ ...model, thinkingLevelMap: { xhigh: 'xhigh' } })),
   });
   const config = { ...session, databasePath: join(root, 'local.sqlite'), models };
-  let runtime = ManagedRuntime.make(LocalPiRuntimeLive(config));
+  let runtime = ManagedRuntime.make(localPiRuntime(config));
   t.after(async () => {
     await runtime.dispose();
     await rm(root, { recursive: true, force: true });
@@ -114,7 +115,7 @@ test('local conversations retain distinct folders/models, coding tools, immutabl
     assert.equal(await readFile(join(inputs[i].settings.cwd, 'result.txt'), 'utf8'), 'folder-' + i);
   }
   await runtime.dispose();
-  runtime = ManagedRuntime.make(LocalPiRuntimeLive(config));
+  runtime = ManagedRuntime.make(localPiRuntime(config));
   client = makeChatClient(runtime);
   assert.deepEqual(await client.command('createChat', inputs[0]), chats[0]);
   assert.equal(
@@ -147,10 +148,10 @@ test('local conversations retain distinct folders/models, coding tools, immutabl
     { code: 'Incompatible' },
   );
   const control = await runtime.runPromise(LocalPiControl);
-  control.setAdmissionsOpen(false);
+  await runtime.runPromise(control.setAdmissionsOpen(false));
   await assert.rejects(client.command('createChat', inputs[0]), { code: 'Unavailable' });
   assert.equal(await runtime.runPromise(control.hasActiveWork()), false);
-  control.setAdmissionsOpen(true);
+  await runtime.runPromise(control.setAdmissionsOpen(true));
   assert.deepEqual(await client.command('createChat', inputs[0]), chats[0]);
   await rm(first, { recursive: true });
   assert.match(
@@ -177,7 +178,7 @@ test('a local chat without a project runs in a new, empty folder of its own', as
       if (refuse) throw new Error('refused');
     },
   };
-  let runtime = ManagedRuntime.make(LocalPiRuntimeLive(config));
+  let runtime = ManagedRuntime.make(localPiRuntime(config));
   t.after(async () => {
     await runtime.dispose();
     await rm(root, { recursive: true, force: true });
@@ -188,7 +189,7 @@ test('a local chat without a project runs in a new, empty folder of its own', as
   // A host with nowhere to make chat folders still requires one.
   await assert.rejects(client.command('createChat', input('nowhere')), { code: 'InvalidInput' });
   await runtime.dispose();
-  runtime = ManagedRuntime.make(LocalPiRuntimeLive({ ...config, chatFolders }));
+  runtime = ManagedRuntime.make(localPiRuntime({ ...config, chatFolders }));
   client = makeChatClient(runtime);
   refuse = true;
   await assert.rejects(client.command('createChat', input('refused')));
@@ -230,7 +231,7 @@ test('a local chat without a project runs in a new, empty folder of its own', as
   );
   assert.equal(await readFile(join(folders[0]!, 'notes.txt'), 'utf8'), 'own folder');
   await runtime.dispose();
-  runtime = ManagedRuntime.make(LocalPiRuntimeLive({ ...config, chatFolders }));
+  runtime = ManagedRuntime.make(localPiRuntime({ ...config, chatFolders }));
   client = makeChatClient(runtime);
   const listed = (await client.command('listChats', { session })).conversations;
   assert.deepEqual(
@@ -276,7 +277,7 @@ test('a chat without a project is refused while its folders would sit inside a G
     faux = fauxProvider({ models: [{ id: 'model' }] });
   models.setProvider(faux.provider);
   const runtime = ManagedRuntime.make(
-    LocalPiRuntimeLive({
+    localPiRuntime({
       ...session,
       databasePath: join(root, 'local.sqlite'),
       models,
@@ -314,7 +315,7 @@ test('Quit control sees hidden work and gates unfinished local mutations without
     fauxAssistantMessage('This local generation stays active long enough to inspect all work.'),
   ]);
   const runtime = ManagedRuntime.make(
-    LocalPiRuntimeLive({ ...session, models, databasePath: join(directory, 'chat.sqlite') }),
+    localPiRuntime({ ...session, models, databasePath: join(directory, 'chat.sqlite') }),
   );
   t.after(async () => {
     await runtime.dispose();
@@ -332,9 +333,9 @@ test('Quit control sees hidden work and gates unfinished local mutations without
     },
   });
   await client.command('sendChat', { target: conversation.target, requestId: 'send', text: 'Run' });
-  control.setAdmissionsOpen(false);
+  await runtime.runPromise(control.setAdmissionsOpen(false));
   assert.equal(await runtime.runPromise(control.hasActiveWork()), true);
-  control.setAdmissionsOpen(true);
+  await runtime.runPromise(control.setAdmissionsOpen(true));
   const snapshot = await client.command('getChat', { target: conversation.target });
   assert.equal(snapshot.state, 'running');
   assert.equal(Effect.isEffect(control.hasActiveWork()), true);
@@ -346,7 +347,7 @@ test('Quit still sees a root-owned Create admission after its caller cancels the
     faux = fauxProvider();
   models.setProvider(faux.provider);
   const runtime = ManagedRuntime.make(
-    LocalPiRuntimeLive({ ...session, models, databasePath: join(directory, 'chat.sqlite') }),
+    localPiRuntime({ ...session, models, databasePath: join(directory, 'chat.sqlite') }),
   );
   const released = Promise.withResolvers<void>(),
     started = Promise.withResolvers<void>();
@@ -393,7 +394,7 @@ test('Quit still sees a root-owned Create admission after its caller cancels the
   await started.promise;
   abort.abort();
   await assert.rejects(create, { code: 'Cancelled' });
-  control.setAdmissionsOpen(false);
+  await runtime.runPromise(control.setAdmissionsOpen(false));
   assert.equal(await runtime.runPromise(control.hasActiveWork()), true);
   released.resolve();
   await until(
@@ -419,7 +420,7 @@ test('Quit counts Send metadata validation as unfinished root-owned admission', 
     async (...args: Parameters<typeof open>) => (harness = await open(...args)),
   );
   const runtime = ManagedRuntime.make(
-    LocalPiRuntimeLive({ ...session, models, databasePath: join(directory, 'chat.sqlite') }),
+    localPiRuntime({ ...session, models, databasePath: join(directory, 'chat.sqlite') }),
   );
   const client = makeChatClient(runtime),
     control = await runtime.runPromise(LocalPiControl);
@@ -462,7 +463,7 @@ test('Quit counts Send metadata validation as unfinished root-owned admission', 
     text: 'Question',
   });
   await started.promise;
-  control.setAdmissionsOpen(false);
+  await runtime.runPromise(control.setAdmissionsOpen(false));
   assert.equal(await runtime.runPromise(control.hasActiveWork()), true);
   released.resolve();
   assert.equal((await send).admission, 'admitted');

@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { ManagedRuntime, Layer } from 'effect';
 import { makeChatClient, makeProviderSetupClient } from '@moonbase/application/runtime/clients';
+import * as NodeServices from '@effect/platform-node/NodeServices';
 import { LocalPiRuntimeLive } from './src/index.ts';
 import { createLocalModels } from './src/local-models.ts';
 import { ProviderSetupLive } from './src/providers.ts';
@@ -33,7 +34,7 @@ async function main() {
   models.setProvider(subscription);
   const session = {host:{hostId:'claude-code',storeId:'claude-code-store'},actorId:'owner'};
   const runtime = ManagedRuntime.make(Layer.merge(
-    LocalPiRuntimeLive({...session,models,databasePath:join(directory,'chat.sqlite')}),
+    LocalPiRuntimeLive({...session,models,databasePath:join(directory,'chat.sqlite')}).pipe(Layer.provide(NodeServices.layer)),
     ProviderSetupLive({models,openUrl:async()=>{},deviceId:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',getCheckProblem:(id,signal)=>id===subscription.id?subscription.getCheckProblem(signal):undefined}),
   ));
   try {

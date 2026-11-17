@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import { Harness } from '@earendil-works/pi-durable';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
-import { ManagedRuntime } from 'effect';
+import { Layer, ManagedRuntime } from 'effect';
+import * as NodeServices from '@effect/platform-node/NodeServices';
 import { createMoonbaseApplication } from '@moonbase/application';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
@@ -55,7 +56,7 @@ for (const mode of ['local', 'remote'] as const)
             ...session,
             databasePath: join(directory, 'chat.sqlite'),
             models,
-          }),
+          }).pipe(Layer.provide(NodeServices.layer)),
         );
     const root = remote?.root(),
       chat = root?.chat ?? makeChatClient(local!);

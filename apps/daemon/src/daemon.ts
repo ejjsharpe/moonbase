@@ -231,7 +231,7 @@ const serveDaemon = (options: DaemonOptions, directory: string, log: DaemonLog) 
       ),
     );
     // Stopping refuses new work at once; the server, workspace and runtime then close in order.
-    stop.onRequest(() => control.setAdmissionsOpen(false));
+    stop.onRequest(() => runtime.runSync(control.setAdmissionsOpen(false)));
 
     let closingWorkspace: Promise<void> | undefined;
     /** Closes the workspace once: cancels its helper process groups and waits for them. */

@@ -17,12 +17,11 @@ import { Harness, createRegistry, defineExtension, defineTool } from '@earendil-
 import { Type } from 'typebox';
 import { NodeSqliteDatabase } from '@earendil-works/chord/sqlite/node';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import { LocalPiRuntimeLive } from '../src/index.ts';
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { Effect, Layer } from 'effect';
 import { runApplicationEffect } from '@moonbase/application/runtime/effect-client';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
-import { session, delay, until, fixture } from './runtime-fixture.ts';
+import { session, delay, until, fixture, localPiRuntime } from './runtime-fixture.ts';
 
 test('busy reservation stays visible; view unsubscribe and caller cancellation never Stop admitted work', async (t) => {
   const f = await fixture(t),
@@ -816,7 +815,7 @@ test('partial acquisition attempts each transferred resource release once and pr
       root,
       Effect.scoped(
         Layer.build(
-          LocalPiRuntimeLive({ ...session, databasePath: join(directory, 'chat.sqlite'), models }),
+          localPiRuntime({ ...session, databasePath: join(directory, 'chat.sqlite'), models }),
         ),
       ).pipe(Effect.mapError(toChatApplicationError)),
     ),

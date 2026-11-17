@@ -9,7 +9,8 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, open, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ManagedRuntime } from 'effect';
+import { Layer, ManagedRuntime } from 'effect';
+import * as NodeServices from '@effect/platform-node/NodeServices';
 import { createModels } from '@earendil-works/pi-ai/models';
 import {
   fauxAssistantMessage,
@@ -56,7 +57,9 @@ const models = createModels(),
   faux = fauxProvider({ models: [{ id: 'mock-model', reasoning: true }], tokensPerSecond: 4000 });
 models.setProvider(faux.provider);
 const runtime = ManagedRuntime.make(
-  LocalPiRuntimeLive({ ...session, databasePath: join(directory, 'chat.sqlite'), models }),
+  LocalPiRuntimeLive({ ...session, databasePath: join(directory, 'chat.sqlite'), models }).pipe(
+    Layer.provide(NodeServices.layer),
+  ),
 );
 const client = makeChatClient(runtime);
 

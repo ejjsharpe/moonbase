@@ -4,6 +4,7 @@ import { mkdtemp, realpath, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Layer, ManagedRuntime } from 'effect';
+import * as NodeServices from '@effect/platform-node/NodeServices';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
@@ -49,7 +50,9 @@ test('desktop recovers an exact committed Create before renewed folder approval,
       if (!approved) throw new FolderRefusedError({ refusal: 'not-approved' });
     },
   };
-  let runtime = ManagedRuntime.make(Layer.orDie(LocalPiRuntimeLive(config)));
+  let runtime = ManagedRuntime.make(
+    Layer.orDie(LocalPiRuntimeLive(config).pipe(Layer.provide(NodeServices.layer))),
+  );
   await makeChatClient(runtime).command('getChatHost', { host: context.host });
   let ipc = await overIpc(runtime as never, context);
   t.after(async () => {
@@ -69,7 +72,9 @@ test('desktop recovers an exact committed Create before renewed folder approval,
   await runtime.dispose();
   await rm(cwd, { recursive: true });
   approved = false;
-  runtime = ManagedRuntime.make(Layer.orDie(LocalPiRuntimeLive(config)));
+  runtime = ManagedRuntime.make(
+    Layer.orDie(LocalPiRuntimeLive(config).pipe(Layer.provide(NodeServices.layer))),
+  );
   await makeChatClient(runtime).command('getChatHost', { host: context.host });
   ipc = await overIpc(runtime as never, context);
   assert.deepEqual(await ipc.target('local').chat.command('createChat', input), committed);

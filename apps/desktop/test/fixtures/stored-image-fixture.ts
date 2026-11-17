@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { ManagedRuntime } from 'effect';
+import { Layer, ManagedRuntime } from 'effect';
+import * as NodeServices from '@effect/platform-node/NodeServices';
 import { createModels } from '@earendil-works/pi-ai/models';
 import {
   fauxProvider,
@@ -67,7 +68,7 @@ export function createImageRuntime(config: ChatSession & { databasePath: string 
       databasePath: config.databasePath,
       models,
       registry,
-    }),
+    }).pipe(Layer.provide(NodeServices.layer)),
   );
   return { runtime, model, client: makeChatClient(runtime) };
 }

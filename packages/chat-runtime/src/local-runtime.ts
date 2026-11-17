@@ -1,6 +1,7 @@
 import { createRegistry } from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { Context, Effect, Layer, Stream } from 'effect';
+import type { ChildProcessSpawner } from 'effect/process';
 import type { ChatError } from '@moonbase/contracts/chat-errors';
 import { ChatService, type ChatServiceShape } from '@moonbase/contracts/services';
 import { markFolderAsProject, settleChat } from './commands/chat-metadata.ts';
@@ -16,7 +17,6 @@ import {
   readSnapshot,
 } from './commands/chat-reads.ts';
 import { createChat } from './commands/create-chat.ts';
-import { safeError } from './commands/safe-error.ts';
 import { getSend, sendChat } from './commands/send-chat.ts';
 import { stopChat } from './commands/stop-chat.ts';
 import { watchChat } from './commands/watch-chat.ts';
@@ -46,16 +46,16 @@ function makeChatService(host: Host): ChatServiceShape {
     findChatFiles: (d) => host.run('findChatFiles', d, (input) => findFiles(host, input)),
     watch: ({ target }) => watchChat(host, target),
     watchChatList: ({ session }) =>
-      Stream.unwrap(
-        Effect.map(Effect.try({ try: () => host.session(session), catch: safeError }), () =>
-          watchChatListState(host, session),
-        ),
-      ),
+      Stream.unwrap(Effect.as(host.checkSession(session), watchChatListState(host, session))),
   };
 }
+/**
+ * The chat runtime on one Pi store. It needs a `ChildProcessSpawner` for the file search's checks;
+ * the process root provides the platform's.
+ */
 export const LocalPiRuntimeLive = (
   config: LocalPiRuntimeConfiguration,
-): Layer.Layer<ChatService | LocalPiControl, ChatError> =>
+): Layer.Layer<ChatService | LocalPiControl, ChatError, ChildProcessSpawner.ChildProcessSpawner> =>
   Layer.effectContext(
     Effect.gen(function* () {
       const registry = config.registry ?? createRegistry();
@@ -66,16 +66,9 @@ export const LocalPiRuntimeLive = (
       const host = yield* openHost({ ...config, registry });
       return Context.make(ChatService, makeChatService(host)).pipe(
         Context.add(LocalPiControl, {
-          setAdmissionsOpen: (open) => {
-            host.admissionsOpen = open;
-          },
-          hasActiveWork: () =>
-            Effect.tryPromise({ try: () => host.hasActiveWork(), catch: safeError }),
-          markFolderAsProject: (target) =>
-            Effect.tryPromise({
-              try: () => markFolderAsProject(host, target),
-              catch: (error) => safeError(error, true),
-            }),
+          setAdmissionsOpen: (open) => host.setAdmissionsOpen(open),
+          hasActiveWork: () => host.hasActiveWork(),
+          markFolderAsProject: (target) => markFolderAsProject(host, target),
         }),
       );
     }),

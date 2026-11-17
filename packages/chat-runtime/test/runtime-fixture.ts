@@ -1,14 +1,18 @@
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Cause, Effect, Exit, ManagedRuntime } from 'effect';
+import { Cause, Effect, Exit, Layer, ManagedRuntime } from 'effect';
+import * as NodeServices from '@effect/platform-node/NodeServices';
 import { isChatError } from '@moonbase/contracts/chat-errors';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { makeChatClient } from '@moonbase/application/runtime/clients';
 import { type Registry } from '@earendil-works/pi-durable';
-import { LocalPiRuntimeLive } from '../src/index.ts';
+import { LocalPiRuntimeLive, type LocalPiRuntimeConfiguration } from '../src/index.ts';
 
+/** The runtime with the platform services a process root would give it. */
+export const localPiRuntime = (config: LocalPiRuntimeConfiguration) =>
+  LocalPiRuntimeLive(config).pipe(Layer.provide(NodeServices.layer));
 export const session = {
   host: { hostId: 'test-host', storeId: 'test-store' },
   actorId: 'personal',
@@ -51,7 +55,7 @@ export async function fixture(
   };
   // Each chat's own folder and model, as a client's first Send names them.
   const settings = { cwd: directory, model: config.model };
-  const layer = LocalPiRuntimeLive({
+  const layer = localPiRuntime({
     ...session,
     databasePath: config.databasePath,
     models,
