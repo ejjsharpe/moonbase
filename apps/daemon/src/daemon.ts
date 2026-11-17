@@ -1,5 +1,7 @@
 import { join } from 'node:path';
-import { Cause, Deferred, Effect, Exit, Layer, ManagedRuntime } from 'effect';
+import { Cause, Deferred, Effect, Exit, Layer, ManagedRuntime, type FileSystem } from 'effect';
+import type { ChildProcessSpawner } from 'effect/process';
+import * as NodeServices from '@effect/platform-node/NodeServices';
 import type { MutableModels } from '@earendil-works/pi-ai/models';
 import {
   LocalHostLive,
@@ -8,10 +10,11 @@ import {
   type LocalPiRuntimeConfiguration,
 } from '@moonbase/chat-runtime';
 import {
-  createCredentialStore,
-  createKeyEncryption,
+  makeCredentialStore,
+  makeKeyEncryption,
   type CredentialKeySource,
 } from '@moonbase/chat-runtime/credentials';
+import type { CredentialKeyError } from '@moonbase/contracts/provider-errors';
 import { WorkspaceFolders, WorkspaceHostLive, type ChatFolders } from '@moonbase/workspace';
 import { WorkspaceHostService, type WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import type { DaemonSettings } from './daemon-settings.ts';
@@ -58,8 +61,12 @@ import {
 
 /** What an entry point adds to a daemon in either mode. */
 export type DaemonProviders = {
-  /** The key that encrypts the daemon's provider credentials. */
-  keySource: CredentialKeySource;
+  /** Makes the source of the key that encrypts the daemon's provider credentials. */
+  keySource: Effect.Effect<
+    CredentialKeySource,
+    CredentialKeyError,
+    FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
+  >;
   /** Adds providers to the local catalog; returns the Claude Code subscription if it added one. */
   installProviders?(models: MutableModels): ClaudeCodeSubscription | undefined;
   /** Replaces the runtime's coding tools; test entries install controlled ones. */
@@ -181,9 +188,9 @@ const serveDaemon = (options: DaemonOptions, directory: string, log: DaemonLog) 
     // Swapped for the open workspace while it is open, so chats never ask a closed one.
     let workspace: Workspace = noWorkspace;
     const providers = options.providers(settings, session);
+    const keySource = yield* providers.keySource.pipe(Effect.provide(NodeServices.layer));
     // A key file is checked before serving; the Keychain is read at the first sign-in.
-    if (settings.credentialKey?.source === 'file')
-      yield* attempt(() => checkKeyFile(providers.keySource));
+    if (settings.credentialKey?.source === 'file') yield* checkKeyFile(keySource);
     // A host's roots are checked once, so a root replaced later approves nothing.
     const approvedFolders =
       settings.mode === 'host'
@@ -206,7 +213,7 @@ const serveDaemon = (options: DaemonOptions, directory: string, log: DaemonLog) 
     const runtime = yield* Effect.acquireRelease(
       Effect.sync(() =>
         ManagedRuntime.make(
-          composeRuntime(directory, providers, folders, session, databasePath, ripgrep),
+          composeRuntime(directory, providers, keySource, folders, session, databasePath, ripgrep),
         ),
       ),
       (runtime) => attempt(() => runtime.dispose()).pipe(Effect.orDie),
@@ -422,9 +429,7 @@ function countUse(idle: IdleMonitor) {
  * Refuses an unsafe key file, or one that holds no key, before the daemon serves. Loading creates
  * nothing; a missing key file is created at the first sign-in. Its errors name no path or contents.
  */
-async function checkKeyFile(keySource: CredentialKeySource) {
-  await keySource.load();
-}
+const checkKeyFile = (keySource: CredentialKeySource) => Effect.asVoid(keySource.load);
 
 /**
  * Composes the runtime both modes serve: local-mode chats with their own folders and models,
@@ -434,49 +439,58 @@ async function checkKeyFile(keySource: CredentialKeySource) {
 function composeRuntime(
   directory: string,
   providers: DaemonProviders,
+  keySource: CredentialKeySource,
   folders: FolderApprovals,
   session: ChatSession,
   databasePath: string,
   ripgrep: { ripgrepExecutable?: string },
 ) {
-  const credentials = createCredentialStore(
-    join(directory, 'credentials'),
-    createKeyEncryption(providers.keySource),
-  );
-  const models = createLocalModels(credentials);
-  const claudeCode = providers.installProviders?.(models);
-  const chatFolders = join(directory, 'chats');
-  // A folder chats may use, still the same directory, may be searched and chatted in.
-  const requireApprovedFolder = async (path: string, use: FolderRefusedError['use']) => {
-    if (await folders.has(path)) return;
-    throw new FolderRefusedError(
-      folders.refusal === 'outside-roots'
-        ? { refusal: 'outside-roots' }
-        : { refusal: 'not-approved', use },
-    );
-  };
-  const runtime = LocalPiRuntimeLive({
-    ...session,
-    databasePath,
-    chatFolders,
-    models,
-    ...(providers.registry ? { registry: providers.registry } : {}),
-    approveCreation: async (creation: ChatCreationSettings) => {
-      if (creation.cwd === undefined) return;
-      await requireApprovedFolder(creation.cwd, 'chat');
-      await folders.touch(creation.cwd);
-    },
-    approveFolder: (cwd: string) => requireApprovedFolder(cwd, 'search'),
-    ...ripgrep,
-  });
-  return Layer.mergeAll(
-    LocalHostLive({ host: session.host, folders, chatFolders }).pipe(Layer.provideMerge(runtime)),
-    // The daemon never opens a browser: without `openUrl`, clients read sign-in links to open.
-    ProviderSetupLive({
-      models,
-      deviceId: session.host.hostId,
-      getCheckProblem: (id, signal) =>
-        claudeCode && id === claudeCode.id ? claudeCode.getCheckProblem(signal) : undefined,
+  return Layer.unwrap(
+    Effect.gen(function* () {
+      // Pi's credential store serves in the composed runtime's scope, which closes after the
+      // layers built over it.
+      const credentials = yield* makeCredentialStore(
+        join(directory, 'credentials'),
+        yield* makeKeyEncryption(keySource),
+      );
+      const models = createLocalModels(credentials);
+      const claudeCode = providers.installProviders?.(models);
+      const chatFolders = join(directory, 'chats');
+      // A folder chats may use, still the same directory, may be searched and chatted in.
+      const requireApprovedFolder = async (path: string, use: FolderRefusedError['use']) => {
+        if (await folders.has(path)) return;
+        throw new FolderRefusedError(
+          folders.refusal === 'outside-roots'
+            ? { refusal: 'outside-roots' }
+            : { refusal: 'not-approved', use },
+        );
+      };
+      const runtime = LocalPiRuntimeLive({
+        ...session,
+        databasePath,
+        chatFolders,
+        models,
+        ...(providers.registry ? { registry: providers.registry } : {}),
+        approveCreation: async (creation: ChatCreationSettings) => {
+          if (creation.cwd === undefined) return;
+          await requireApprovedFolder(creation.cwd, 'chat');
+          await folders.touch(creation.cwd);
+        },
+        approveFolder: (cwd: string) => requireApprovedFolder(cwd, 'search'),
+        ...ripgrep,
+      });
+      return Layer.mergeAll(
+        LocalHostLive({ host: session.host, folders, chatFolders }).pipe(
+          Layer.provideMerge(runtime),
+        ),
+        // The daemon never opens a browser: without `openUrl`, clients read sign-in links to open.
+        ProviderSetupLive({
+          models,
+          deviceId: session.host.hostId,
+          getCheckProblem: (id, signal) =>
+            claudeCode && id === claudeCode.id ? claudeCode.getCheckProblem(signal) : undefined,
+        }),
+      );
     }),
-  );
+  ).pipe(Layer.provide(NodeServices.layer));
 }

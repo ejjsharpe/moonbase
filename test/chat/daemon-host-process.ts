@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import type { MutableModels } from '@earendil-works/pi-ai/models';
 import type { ChatServiceShape } from '@moonbase/contracts/services';
 import type { LocalPiRuntimeConfiguration } from '@moonbase/chat-runtime';
-import { createKeyFileSource } from '@moonbase/chat-runtime/credentials';
+import { makeKeyFileSource } from '@moonbase/chat-runtime/credentials';
 import { runDaemon } from '../../apps/daemon/src/daemon.ts';
 import { readDirectoryArgument } from '../../apps/daemon/src/data-directory.ts';
 import { hostControl } from './host-control.ts';
@@ -38,7 +38,7 @@ try {
     ready: (line) => process.send?.({ event: 'ready', port: JSON.parse(line).port }),
     closeClaudeCode: async () => {},
     providers: (settings) => ({
-      keySource: createKeyFileSource(
+      keySource: makeKeyFileSource(
         settings.credentialKey?.source === 'file' ? settings.credentialKey.path : '',
       ),
       installProviders: (models) => {

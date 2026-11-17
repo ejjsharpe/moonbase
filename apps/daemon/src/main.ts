@@ -1,4 +1,4 @@
-import { createKeyFileSource, createKeychainKeySource } from '@moonbase/chat-runtime/credentials';
+import { makeKeyFileSource, makeKeychainKeySource } from '@moonbase/chat-runtime/credentials';
 import {
   closeClaudeCodeProcesses,
   createClaudeCodeSubscription,
@@ -33,8 +33,8 @@ async function main() {
       // A host always names a key file: without a GUI session the login keychain is locked.
       keySource:
         settings.credentialKey?.source === 'file'
-          ? createKeyFileSource(settings.credentialKey.path)
-          : createKeychainKeySource({ storeId: session.host.storeId }),
+          ? makeKeyFileSource(settings.credentialKey.path)
+          : makeKeychainKeySource({ storeId: session.host.storeId }),
       installProviders: (models) => {
         const claudeCode = createClaudeCodeSubscription();
         models.setProvider(claudeCode);

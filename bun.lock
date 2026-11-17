@@ -45,6 +45,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@earendil-works/pi-ai": "1.4.0",
+        "@effect/platform-node": "4.1.0",
         "@moonbase/application": "workspace:*",
         "@moonbase/chat-runtime": "workspace:*",
         "@moonbase/contracts": "workspace:*",
@@ -84,6 +85,7 @@
       },
       "devDependencies": {
         "@earendil-works/pi-ai": "1.4.0",
+        "@effect/platform-node": "4.1.0",
         "@moonbase/effect": "workspace:*",
         "@types/mdast": "4.0.4",
         "electron": "45.1.0",
@@ -115,6 +117,7 @@
         "lru-cache": "11.5.3",
       },
       "devDependencies": {
+        "@effect/platform-node": "4.1.0",
         "@moonbase/application": "workspace:*",
         "typebox": "1.3.27",
       },
@@ -142,6 +145,7 @@
         "@earendil-works/chord": "1.4.0",
         "@earendil-works/pi-ai": "1.4.0",
         "@earendil-works/pi-durable": "1.4.0",
+        "@effect/platform-node": "4.1.0",
         "@moonbase/application": "workspace:*",
         "@moonbase/chat-runtime": "workspace:*",
         "typebox": "1.3.27",
@@ -203,6 +207,9 @@
     },
     "test/chat": {
       "name": "@moonbase/chat-integration",
+      "devDependencies": {
+        "@effect/platform-node": "4.1.0",
+      },
     },
     "test/editor-workspace": {
       "name": "@moonbase/editor-integration",
