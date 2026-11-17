@@ -5,7 +5,7 @@ import type {
   ProviderSetupService,
   WorkspaceHostServiceShape,
 } from '@moonbase/contracts/services';
-import { createHostHealthReply } from './health.ts';
+import { createHostHealthReply } from '../health.ts';
 import { HostVerificationError } from '@moonbase/contracts/connection-errors';
 import { HostKeyExposedError, HostUnavailableError } from '@moonbase/contracts/host-errors';
 import {
@@ -28,7 +28,7 @@ import { UnauthorizedError } from '@moonbase/contracts/errors';
 import { serveBun, type BunServer, type BunWebSocket } from './bun-server.ts';
 import { serveRpc, serveWorkspaceRpc } from './rpc-server.ts';
 import type { RpcConnections, RpcSocketData } from './rpc-connections.ts';
-import { createUpgradeNonces, isUpgradeProof, readUpgradeProtocols } from './upgrade-proof.ts';
+import { createUpgradeNonces, isUpgradeProof, readUpgradeProtocols } from '../upgrade-proof.ts';
 
 export type ChatServerConfiguration = { host: ChatHostTarget; token: string; port: number };
 /** What a daemon serves: chat, and in either mode its folder, control and provider services. */

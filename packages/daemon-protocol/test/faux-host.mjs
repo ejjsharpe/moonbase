@@ -12,7 +12,7 @@ import { Type } from 'typebox';
 import { chatHostCapabilities } from '@moonbase/contracts/host';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
-import { serveChat } from '../src/server.ts';
+import { serveChat } from '../src/server/server.ts';
 const config = JSON.parse(await readFile(process.argv[2], 'utf8'));
 const models = createModels(),
   faux = fauxProvider({
