@@ -5,7 +5,8 @@ import type {
   WorkspaceOperation,
 } from '@moonbase/contracts/workspace';
 import { EditorError } from '../editor-errors.ts';
-import { moveRecoveryReferences, sameCheckout } from '../recovery/recovery-references.ts';
+import { sameCheckout } from '../keys.ts';
+import { movePathsInRecovery } from '../views/views.ts';
 import { EditorViews } from '../views/views-service.ts';
 import { forgetTrashed, isCheckoutListed, moveClosed } from '../views/views.ts';
 import {
@@ -109,7 +110,7 @@ export class EditorOperations extends Context.Service<EditorOperations, EditorOp
                 )
                   continue;
                 if (result.kind === 'move' && item.destination) {
-                  moveRecoveryReferences(
+                  movePathsInRecovery(
                     draft.recovery,
                     result.checkout,
                     item.source,

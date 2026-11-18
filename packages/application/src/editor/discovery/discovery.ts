@@ -6,7 +6,7 @@ import type {
   FileView,
   GitStatus,
 } from '@moonbase/contracts/workspace';
-import { checkoutKey } from '../recovery/recovery-references.ts';
+import { checkoutKey } from '../keys.ts';
 
 /** How the last activation of a file's comparison went, so a failed one isn't repeated. */
 export type ComparisonAttempt = { mode: FileView; failedWorkingVersion?: string };

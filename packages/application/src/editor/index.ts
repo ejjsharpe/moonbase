@@ -10,7 +10,7 @@ export {
 } from './editor-errors.ts';
 export { describeEditorFailure, isCancelled } from './alerts/alerts.ts';
 export { readOwn } from './record.ts';
-export { checkoutKey, fileKey, sameCheckout } from './recovery/recovery-references.ts';
+export { checkoutKey, fileKey, sameCheckout } from './keys.ts';
 export type { CheckoutView, EditorRecovery, EditorTab } from './recovery/recovery-layout.ts';
 
 export { EditorSession, type SessionState } from './session/session-service.ts';

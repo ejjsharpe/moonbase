@@ -21,7 +21,7 @@ import { EditorDiscovery } from '../discovery/discovery-service.ts';
 import { listingKey } from '../discovery/discovery.ts';
 import { RecoveryOutbox } from '../recovery/recovery-outbox-service.ts';
 import { RecoverySync } from '../recovery/recovery-sync-service.ts';
-import { checkoutKey, fileKey } from '../recovery/recovery-references.ts';
+import { checkoutKey, fileKey } from '../keys.ts';
 import { EditorTabs } from '../tabs/tabs-service.ts';
 import { clampSidebarWidth, listLevels, type RevealOptions } from './tree.ts';
 

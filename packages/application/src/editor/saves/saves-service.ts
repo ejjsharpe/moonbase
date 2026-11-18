@@ -12,7 +12,7 @@ import { EditorDiscovery } from '../discovery/discovery-service.ts';
 import { EditorOperations } from '../operations/operations-service.ts';
 import { RecoveryOutbox } from '../recovery/recovery-outbox-service.ts';
 import { RecoverySync } from '../recovery/recovery-sync-service.ts';
-import { fileKey } from '../recovery/recovery-references.ts';
+import { fileKey } from '../keys.ts';
 import { EditorTabs } from '../tabs/tabs-service.ts';
 import { conflictComparison } from '../tabs/tabs.ts';
 import { EditorMutations } from '../mutation/mutation-service.ts';

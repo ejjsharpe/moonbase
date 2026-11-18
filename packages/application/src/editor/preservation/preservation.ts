@@ -1,7 +1,7 @@
 import type { FileTarget } from '@moonbase/contracts/workspace';
 import type { BuffersState, EditorBuffer } from '../buffers/buffers.ts';
 import { isSaving } from '../buffers/buffers.ts';
-import { fileKey } from '../recovery/recovery-references.ts';
+import { fileKey } from '../keys.ts';
 import { isOutboxIdle, type OutboxState } from '../recovery/recovery-outbox.ts';
 import { areOperationsSettled, type OperationsState } from '../operations/operations.ts';
 import type { SessionState } from '../session/session-service.ts';

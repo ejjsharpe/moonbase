@@ -16,7 +16,7 @@ import { EditorOperations } from '../operations/operations-service.ts';
 import { RecoveryOutbox } from '../recovery/recovery-outbox-service.ts';
 import { RecoverySync } from '../recovery/recovery-sync-service.ts';
 import { emptyCheckoutView } from '../recovery/recovery-layout.ts';
-import { fileKey, sameCheckout } from '../recovery/recovery-references.ts';
+import { fileKey, sameCheckout } from '../keys.ts';
 import { EditorTabs } from '../tabs/tabs-service.ts';
 import { EditorTree } from '../tree/tree-service.ts';
 import { isInitialized } from './checkouts.ts';

@@ -12,7 +12,8 @@ import { EditorDiscovery } from '../discovery/discovery-service.ts';
 import { EditorOperations } from '../operations/operations-service.ts';
 import { RecoveryOutbox } from '../recovery/recovery-outbox-service.ts';
 import { RecoverySync } from '../recovery/recovery-sync-service.ts';
-import { closeRecoveryReferences, fileKey } from '../recovery/recovery-references.ts';
+import { fileKey } from '../keys.ts';
+import { closeFilesInRecovery } from '../views/views.ts';
 import { EditorTabs } from '../tabs/tabs-service.ts';
 import { EditorTree } from '../tree/tree-service.ts';
 import { EditorSaves } from '../saves/saves-service.ts';
@@ -119,7 +120,7 @@ export class EditorPreservation extends Context.Service<
           }
           yield* recovery.send;
           const closed = yield* views.modify(({ recovery }) =>
-            closeRecoveryReferences(recovery, targets, kind, checkout, true),
+            closeFilesInRecovery(recovery, targets, kind, checkout, true),
           );
           if (kind === 'quit')
             yield* buffers.modify((d) => {

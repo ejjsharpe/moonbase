@@ -19,7 +19,7 @@ import { EditorDiscovery } from '../discovery/discovery-service.ts';
 import { EditorOperations } from '../operations/operations-service.ts';
 import { matchesOperation } from '../operations/operations.ts';
 import { RecoverySync } from '../recovery/recovery-sync-service.ts';
-import { sameCheckout } from '../recovery/recovery-references.ts';
+import { sameCheckout } from '../keys.ts';
 import { EditorTree } from '../tree/tree-service.ts';
 import {
   admitsMutation,

@@ -13,7 +13,8 @@ import { EditorOperations } from '../operations/operations-service.ts';
 import { operationKey } from '../operations/operations.ts';
 import { RecoveryOutbox, type OutboxSender } from './recovery-outbox-service.ts';
 import { toRecoveryLayout } from './recovery-layout.ts';
-import { closeRecoveryReferences, sameCheckout } from './recovery-references.ts';
+import { sameCheckout } from '../keys.ts';
+import { closeFilesInRecovery } from '../views/views.ts';
 
 export type RecoverySyncShape = {
   /**
@@ -216,7 +217,7 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
             yield* outbox.openTab(tab.id, tab.target);
           } else {
             yield* views.modify(({ recovery }) =>
-              closeRecoveryReferences(recovery, [tab.target], 'files'),
+              closeFilesInRecovery(recovery, [tab.target], 'files'),
             );
             yield* buffers.forget([key]);
           }

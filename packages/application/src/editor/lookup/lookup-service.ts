@@ -5,7 +5,7 @@ import { describeEditorFailure } from '../alerts/alerts.ts';
 import { EditorSession } from '../session/session-service.ts';
 import { EditorViews } from '../views/views-service.ts';
 import { EditorDiscovery } from '../discovery/discovery-service.ts';
-import { checkoutKey, sameCheckout } from '../recovery/recovery-references.ts';
+import { checkoutKey, sameCheckout } from '../keys.ts';
 import { makeEditorQuery } from '../editor-query.ts';
 import { emptyLookup, lookupCheckouts, rankLookup, type LookupSnapshot } from './lookup.ts';
 

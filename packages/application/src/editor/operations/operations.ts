@@ -4,7 +4,7 @@ import type {
   OperationResult,
   WorkspaceOperation,
 } from '@moonbase/contracts/workspace';
-import { sameCheckout } from '../recovery/recovery-references.ts';
+import { sameCheckout } from '../keys.ts';
 import { listOperationDestinations } from '../mutation/mutation.ts';
 
 /** A file operation the editor dispatched or was told of, until it is acknowledged. */

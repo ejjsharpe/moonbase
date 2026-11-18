@@ -21,7 +21,7 @@ import { EditorBuffers } from '../buffers/buffers-service.ts';
 import { isClean, isDirty, newBuffer } from '../buffers/buffers.ts';
 import { EditorDiscovery } from '../discovery/discovery-service.ts';
 import { RecoveryOutbox } from '../recovery/recovery-outbox-service.ts';
-import { fileKey } from '../recovery/recovery-references.ts';
+import { fileKey } from '../keys.ts';
 import { conflictComparison, placeOpenedFile, type OpenOptions } from './tabs.ts';
 
 export type { OpenOptions };

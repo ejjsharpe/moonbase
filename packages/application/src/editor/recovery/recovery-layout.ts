@@ -12,7 +12,7 @@ import type {
   FileView,
 } from '@moonbase/contracts/workspace';
 import { readOwn, writeOwn } from '../record.ts';
-import { fileKey } from './recovery-references.ts';
+import { fileKey } from '../keys.ts';
 
 // The recovery store names an open file by its buffer (epic #273 D3); the editor shows its tabs
 // by path. These translate between the two: the store's layout read as the editor shows it, and
