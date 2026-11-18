@@ -17,8 +17,9 @@ Data may be lost between versions while Moonbase is prerelease: a change can sta
 ## Files and folders
 
 - One concept per file, named for what it holds. A file whose summary needs "and" is two files. Source files stay under about 600 lines: a guideline review applies, not a lint rule. Don't grow a file past it; put a new concept in its own file.
-- Start flat. When a few files belong to one thing and are used together, group them in a folder named for it (`renderer/chat/transcript/`, `workbench/src/files-tree/`). Code shared by several features sits in kind folders at the root (`renderer/components/`, `renderer/hooks/`); code one feature uses lives in that feature. Don't add generic folders like `utils/` or `logic/`.
-- Code that runs in different processes gets a folder per process: desktop `main/`, `preload/` and `renderer/`, with the IPC contract they share in `ipc/`; workspace `host/` and `client/`, with what they share at `src/`.
+- File names are kebab-case. Repeat the concept where a bare name would be ambiguous (`editor-session.ts`), and hyphenate role suffixes (`-service`, `-atoms`, `-fixture`) rather than dotting them; only StyleX's `.stylex.ts` is dotted. `main.ts`/`main.tsx` is only a process entry point.
+- Start flat. When a few files belong to one thing and are used together, group them in a folder named for it (`renderer/chat/transcript/`, `workbench/src/files-tree/`). Code shared by several features sits in kind folders at the root (`renderer/components/`, `renderer/hooks/`); code one feature uses lives in that feature. Don't add generic folders like `utils/` or `logic/`. `packages/contracts/src` stays flat, since its concepts import each other.
+- Code that runs in different processes gets a folder per process: desktop `main/`, `preload/` and `renderer/`, with the IPC contract they share in `ipc/`; workspace `host/` and `client/`, and daemon-protocol `server/` and `client/`, with what each side shares at `src/`.
 - Client state in `packages/application` is one folder per concept, with `x.ts`, `x-service.ts` and `x-atoms.ts` for its three layers (see its README).
 - Tests sit in each module's `test/`, mirroring `src/` where it has folders. Playwright specs go in `test/e2e/`; desktop's harnesses and faux processes in `test/fixtures/`. Suites that run a real daemon go in the root `test/` folder.
 - Tests that need macOS (the native helper, FSEvents, the Keychain, a daemon serving files) go in the module's `test/macos/`, keeping the name of the file they test; CI runs the rest on Linux. Such a package carries the `macos-tests` Nx tag and `test:linux` and `test:macos` scripts (`packages/workspace` runs wholly on macOS: tag and `test:macos` only). Don't skip on `process.platform`; move the test to `test/macos/`.
@@ -26,7 +27,7 @@ Data may be lost between versions while Moonbase is prerelease: a change can sta
 
 ## Effect
 
-Write code as if Moonbase had been Effect-native from the start (epic #273, D14 and D15). Code that predates this is being moved; don't copy its patterns.
+Write code as if Moonbase had been Effect-native from the start (epic #273, D14 and D15).
 
 - A module is a `Context.Service` with a `Layer`, and its methods return Effects. Resources are `Effect.acquireRelease` in a `Scope`, not closed flags, AbortController sets or collected-failure arrays.
 - Each process runs one runtime at its root. Library code never calls `Effect.runPromise`, `runFork` or `runSync`.
