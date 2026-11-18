@@ -38,7 +38,7 @@ export class EditorLoader extends Context.Service<EditorLoader, EditorLoaderShap
       const tabs = yield* EditorTabs;
       const tree = yield* EditorTree;
       const { clientId } = session;
-      // Built last, this closes first: nothing is accepted, reported or sent once it starts.
+      // Built last, this closes first: nothing is admitted, reported or sent once it starts.
       yield* Effect.addFinalizer(() => Effect.andThen(session.close, outbox.clear));
       const closing = Effect.map(session.get, (s) => s.closing);
 
@@ -92,7 +92,7 @@ export class EditorLoader extends Context.Service<EditorLoader, EditorLoaderShap
       });
       const load = yield* Effect.cached(session.run(loadOnce));
       return {
-        load: Effect.andThen(session.assertAccepting, load),
+        load: Effect.andThen(session.admit, load),
       } satisfies EditorLoaderShape;
     }),
   );

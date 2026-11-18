@@ -111,7 +111,7 @@ const requestProblems = {
   'already-git': 'This project is already a Git repository.',
   'save-pending': 'A save awaits recovery. Resolve it before initializing Git.',
   'operation-pending':
-    'A file operation awaits recovery or inspection. Resolve it before initializing Git.',
+    'A file operation awaits recovery publication or inspection. Resolve it before initializing Git.',
   'branch-name': 'Invalid branch name.',
   'chat-branch-name': 'Choose a simple branch name for the worktree.',
   'watch-limit': 'Watch subscription limit reached.',
@@ -251,9 +251,9 @@ export class WorkspaceUnsupportedError extends Schema.TaggedError<WorkspaceUnsup
 }
 
 const storeFailures = {
-  'invalid-data': 'Invalid workspace saved data. Original data retained; writes blocked.',
-  write: 'Workspace journal write failed; retain drafts and retry. ',
-  reservation: 'Workspace request reservation failed; no mutation started. ',
+  'invalid-data': 'Invalid workspace saved data. Original data retained; publication blocked.',
+  publication: 'Workspace journal publication failed; retain drafts and retry. ',
+  reservation: 'Workspace request reservation failed; no mutation admitted. ',
   failed: 'Application effect failed',
 } as const;
 /** The store could not be read or written. A failed write names the safe text of what failed. */
@@ -275,7 +275,7 @@ const unresolved = {
   'operation-unacknowledgeable':
     'Uncertain operation evidence cannot be acknowledged away. Inspect the affected paths.',
   'awaits-recovery':
-    'An operation awaits recovery or inspection. Query its status; do not repeat the mutation.',
+    'An operation awaits recovery publication or inspection. Query its status; do not repeat the mutation.',
 } as const;
 /** An earlier save or operation has no known outcome: its caller asks for it, never repeats it. */
 export class UnresolvedWorkError extends Schema.TaggedError<UnresolvedWorkError>()(

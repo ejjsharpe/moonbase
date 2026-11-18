@@ -1,7 +1,7 @@
 import type { FileTarget } from '@moonbase/contracts/workspace';
 import type { BuffersState, EditorBuffer } from '../buffers/buffers.ts';
 import { isSaving } from '../buffers/buffers.ts';
-import { fileKey } from '../keys.ts';
+import { fileKey } from '../recovery/recovery-references.ts';
 import { isOutboxIdle, type OutboxState } from '../recovery/recovery-outbox.ts';
 import { areOperationsSettled, type OperationsState } from '../operations/operations.ts';
 import type { SessionState } from '../session/session-service.ts';
@@ -25,7 +25,7 @@ export const isRecoveryReady = (
   session.ready &&
   !session.loading &&
   !session.closing &&
-  !session.holdingUnsaved &&
+  !session.preserving &&
   !session.initializing &&
   isOutboxIdle(outbox) &&
   ![...buffers.buffers.values()].some(isSaving) &&

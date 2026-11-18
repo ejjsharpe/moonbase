@@ -40,7 +40,7 @@ export const saveFile = (input: HostInput<'saveFile'>) =>
     );
     const directory = yield* checkouts.directory(input.target.checkout),
       disk = yield* Effect.interruptible(directory.read(input.target.path));
-    // A save cancelled before it is reserved never runs.
+    // A save cancelled before it is admitted never runs.
     yield* cancellationPoint;
     if (disk.version !== input.expectedVersion) {
       const result = { kind: 'conflict', disk } as const;
@@ -72,12 +72,12 @@ export const saveFile = (input: HostInput<'saveFile'>) =>
       try {
         journal.settleSave(id, record);
       } catch (error) {
-        journal.keepUnpersistedSave(id, record);
+        journal.retainSave(id, record);
         if (result.kind === 'saved')
           return {
             ...result,
             persistencePending: true,
-            message: 'Saved to disk; recording it in the journal failed: ' + errorText(error),
+            message: 'Saved to disk; durable request publication failed: ' + errorText(error),
           };
       }
       return result;
@@ -85,7 +85,7 @@ export const saveFile = (input: HostInput<'saveFile'>) =>
       // The disk may have changed: the request stays journalled, for its status to settle.
       Effect.catchCause((cause) => {
         record.message = errorText(Cause.squash(cause));
-        journal.keepUnpersistedSave(id, record);
+        journal.retainSave(id, record);
         return Effect.fail(new UncertainError({ operation: 'Save', target: input.target }));
       }),
       Effect.ensuring(Effect.sync(() => journal.finishSave(id))),

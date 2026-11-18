@@ -85,8 +85,8 @@ test('dirty Copy carries a separate destination draft; Trash retains dirty sourc
   }
 });
 
-test('closed checkout metadata receives operation results without discovery or reopening', async () => {
-  const f = await fixture('closed-results', false);
+test('closed checkout metadata receives operation facts without discovery or reopening', async () => {
+  const f = await fixture('closed-facts', false);
   try {
     await f.editor.open(target('a.ts'), { view: 'staged' });
     await f.editor.openCheckout(second.root);
@@ -107,7 +107,7 @@ test('closed checkout metadata receives operation results without discovery or r
     await f.editor.dispose();
     const observed: string[] = [];
     const restored = await acquireEditor(f.runtime, {
-      clientId: 'closed-results',
+      clientId: 'closed-facts',
       client: {
         ...f.client,
         watch(input, receive, error) {

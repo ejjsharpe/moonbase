@@ -68,7 +68,7 @@ test('origin acknowledgement cannot hide a move from another observer; the obser
     const baseline = observer.buffer(target('a.ts'))!.disk;
     const sources = await f.editor.inspect(checkout, ['a.ts']);
     await f.editor.mutate({
-      id: 'shared-result',
+      id: 'shared-fact',
       checkout,
       sources,
       kind: 'move',
@@ -80,7 +80,7 @@ test('origin acknowledgement cannot hide a move from another observer; the obser
     );
     const evidence = await f.client.command('loadRecovery', { clientId: 'observer' });
     assert.equal(evidence.operations[0].clientId, 'origin');
-    assert.equal(evidence.operations[0].id, 'shared-result');
+    assert.equal(evidence.operations[0].id, 'shared-fact');
     observer.edit(target('a.ts'), 'newer live observer text');
     await observer.reconcileRecovery();
     assert.equal(observer.buffer(target('a.ts')), undefined);

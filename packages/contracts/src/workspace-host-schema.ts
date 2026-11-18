@@ -53,7 +53,7 @@ export const HostOperationResultSchema = struct({
 });
 /**
  * What the journal knows of a save: `saved` names the version of the request's text,
- * `not-started` means the host never received the request and `uncertain` means it did but disk
+ * `not-started` means the host never admitted the request and `uncertain` means it did but disk
  * evidence cannot say what happened.
  */
 export const SaveStatusSchema = Schema.Union([

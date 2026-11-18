@@ -4,7 +4,7 @@ import { EditorAlerts } from '../alerts/alerts-service.ts';
 import { EditorDiscovery } from '../discovery/discovery-service.ts';
 import { RecoveryOutbox } from '../recovery/recovery-outbox-service.ts';
 import { emptyCheckoutView, type EditorTab } from '../recovery/recovery-layout.ts';
-import { fileKey, sameCheckout } from '../keys.ts';
+import { fileKey, sameCheckout } from '../recovery/recovery-references.ts';
 import { EditorViews } from '../views/views-service.ts';
 import {
   draftBuffers,

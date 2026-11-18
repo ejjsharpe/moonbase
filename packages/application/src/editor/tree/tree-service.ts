@@ -20,7 +20,7 @@ import { EditorDiscovery } from '../discovery/discovery-service.ts';
 import { listingKey } from '../discovery/discovery.ts';
 import { RecoveryOutbox } from '../recovery/recovery-outbox-service.ts';
 import { RecoverySync } from '../recovery/recovery-sync-service.ts';
-import { checkoutKey, fileKey } from '../keys.ts';
+import { checkoutKey, fileKey } from '../recovery/recovery-references.ts';
 import { EditorTabs } from '../tabs/tabs-service.ts';
 import { clampSidebarWidth, listLevels, type RevealOptions } from './tree.ts';
 
@@ -29,7 +29,7 @@ export type EditorTreeShape = {
     checkout: CheckoutTarget,
     patch: Partial<CheckoutTree>,
   ) => Effect.Effect<void, EditorFailure>;
-  /** `tree` for an action already running. */
+  /** `tree` for an action already admitted. */
   readonly updateTree: (
     checkout: CheckoutTarget,
     patch: Partial<CheckoutTree>,
@@ -83,8 +83,8 @@ export class EditorTree extends Context.Service<EditorTree, EditorTreeShape>()(
       const tabs = yield* EditorTabs;
       const reveals = yield* FiberMap.make<string, boolean, EditorFailure>();
       const background = yield* FiberSet.make();
-      const runAction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        session.run(Effect.andThen(session.assertAccepting, effect));
+      const admitted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        session.run(Effect.andThen(session.admit, effect));
       const isOpen = (checkout: CheckoutTarget) =>
         Effect.map(views.get, ({ recovery }) =>
           recovery.openCheckoutIds.includes(checkout.checkoutId),
@@ -122,18 +122,18 @@ export class EditorTree extends Context.Service<EditorTree, EditorTreeShape>()(
                 !mode ||
                 mode === 'file' ||
                 mode === 'conflict' ||
-                (yield* session.get).holdingUnsaved
+                (yield* session.get).preserving
               )
                 return;
               const target = { checkout, path: selected.active },
                 key = fileKey(target);
               const stillShown = Effect.map(
                 Effect.all([session.get, views.get]),
-                ([{ closing, holdingUnsaved }, { recovery }]) => {
+                ([{ closing, preserving }, { recovery }]) => {
                   const view = recovery.views.get(checkout.checkoutId);
                   return (
                     !closing &&
-                    !holdingUnsaved &&
+                    !preserving &&
                     recovery.openCheckoutIds.includes(checkout.checkoutId) &&
                     view?.active === target.path &&
                     view.fileViews.get(target.path) === mode
@@ -201,7 +201,7 @@ export class EditorTree extends Context.Service<EditorTree, EditorTreeShape>()(
         });
 
       const reveal: EditorTreeShape['reveal'] = (target, options = {}) =>
-        runAction(
+        admitted(
           Effect.gen(function* () {
             yield* views.view(target.checkout);
             if (!isRelativePath(target.path))
@@ -282,12 +282,12 @@ export class EditorTree extends Context.Service<EditorTree, EditorTreeShape>()(
         );
 
       return {
-        tree: (checkout, patch) => runAction(updateTree(checkout, patch)),
+        tree: (checkout, patch) => admitted(updateTree(checkout, patch)),
         updateTree,
         resizeSidebar: (width) =>
           Effect.gen(function* () {
-            const { acceptingActions, closing } = yield* session.get;
-            if (!acceptingActions || closing) return;
+            const { admissionsOpen, closing } = yield* session.get;
+            if (!admissionsOpen || closing) return;
             yield* views.modify(({ recovery }) => {
               recovery.sidebarWidth = clampSidebarWidth(width);
             });
@@ -295,18 +295,18 @@ export class EditorTree extends Context.Service<EditorTree, EditorTreeShape>()(
           }),
         setFollowActiveFile: (follow) =>
           Effect.gen(function* () {
-            const { acceptingActions, closing } = yield* session.get;
-            if (!acceptingActions || closing) return;
+            const { admissionsOpen, closing } = yield* session.get;
+            if (!admissionsOpen || closing) return;
             yield* views.modify(({ recovery }) => {
               recovery.followActiveFile = follow;
             });
             yield* outbox.changed;
           }),
-        list: (checkout, path = '') => runAction(discovery.list(checkout, path)),
+        list: (checkout, path = '') => admitted(discovery.list(checkout, path)),
         reveal,
         endReveal: (checkout) => FiberMap.remove(reveals, checkoutKey(checkout)),
         refresh: (checkout) =>
-          runAction(Effect.andThen(rewatchLost(checkout), refreshCheckout(checkout))),
+          admitted(Effect.andThen(rewatchLost(checkout), refreshCheckout(checkout))),
         refreshCheckout,
         observe,
         rewatchLost,

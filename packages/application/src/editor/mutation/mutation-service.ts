@@ -19,10 +19,10 @@ import { EditorDiscovery } from '../discovery/discovery-service.ts';
 import { EditorOperations } from '../operations/operations-service.ts';
 import { matchesOperation } from '../operations/operations.ts';
 import { RecoverySync } from '../recovery/recovery-sync-service.ts';
-import { sameCheckout } from '../keys.ts';
+import { sameCheckout } from '../recovery/recovery-references.ts';
 import { EditorTree } from '../tree/tree-service.ts';
 import {
-  allowsMutation,
+  admitsMutation,
   findCollisions,
   getMutationDestinations,
   listOperationDestinations,
@@ -38,8 +38,8 @@ export type OperationInput = Omit<WorkspaceOperation, 'clientId' | 'id'> & { id?
 
 export type EditorMutationsShape = {
   readonly state: SubscriptionRef.SubscriptionRef<MutationState>;
-  /** The mutation gate: whether `mutate` would run `action` now. */
-  readonly allows: (action: MutationAction) => Effect.Effect<boolean>;
+  /** The mutation gate: whether `mutate` would admit `action` now. */
+  readonly admits: (action: MutationAction) => Effect.Effect<boolean>;
   /**
    * Applies a file operation, one at a time: finds what it would replace, asks through
    * `replacePrompt` before replacing anything, then dispatches it. It never fails: a refusal or
@@ -53,8 +53,8 @@ export type EditorMutationsShape = {
   readonly answer: (promptId: string, replace: boolean) => Effect.Effect<void>;
   /**
    * Dispatches an operation as given. `saving` is a Save of a buffer whose file isn't on disk,
-   * which creates it with the buffer's text; it may run inside a Close's prompt, and so
-   * while the editor accepts no new actions.
+   * which creates it with the buffer's text; it may run inside a Close's preservation, and so
+   * while admissions are closed.
    */
   readonly dispatch: (
     input: OperationInput,
@@ -95,8 +95,8 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
         replacePrompt: null,
       });
       let answer: Deferred.Deferred<boolean> | undefined;
-      const runAction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        session.run(Effect.andThen(session.assertAccepting, effect));
+      const admitted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        session.run(Effect.andThen(session.admit, effect));
       const fail = (reason: EditorError['reason']) => Effect.fail(new EditorError({ reason }));
       const refreshIfOpen = (checkout: CheckoutTarget) =>
         Effect.flatMap(views.get, ({ recovery }) =>
@@ -119,7 +119,7 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
           yield* views.view(input.checkout);
           const modes = yield* session.get;
           if (modes.initializing === input.checkout.checkoutId) return yield* fail('initializing');
-          if (modes.holdingUnsaved && !saving) return yield* fail('holding-unsaved');
+          if (modes.preserving && !saving) return yield* fail('preserving');
           const operation: WorkspaceOperation = {
             ...structuredClone(input),
             clientId,
@@ -215,11 +215,11 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
           return result;
         });
 
-      const allows = (action: MutationAction) =>
+      const admits = (action: MutationAction) =>
         Effect.map(
           Effect.all([session.get, views.get, SubscriptionRef.get(state)]),
           ([modes, { recovery }, { mutating }]) =>
-            allowsMutation({ ...modes, prompting: false, mutating, recovery }, action),
+            admitsMutation({ ...modes, prompting: false, mutating, recovery }, action),
         );
 
       /** Publishes the replace prompt and waits for `answer`. */
@@ -329,14 +329,14 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
 
       return {
         state,
-        allows,
+        admits,
         mutate: (action, options) =>
           Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {
               const [modes, { recovery }] = yield* Effect.all([session.get, views.get]);
               // Checking the gate and taking it are one step, so two mutations can't both start.
               const reserved = yield* SubscriptionRef.modify(state, (s) =>
-                allowsMutation(
+                admitsMutation(
                   { ...modes, prompting: false, mutating: s.mutating, recovery },
                   action,
                 )
@@ -364,10 +364,10 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
             yield* Deferred.succeed(answer, replace === true);
           }),
         dispatch: (input, saving) =>
-          saving ? session.run(dispatch(input, saving)) : runAction(dispatch(input)),
-        resolve: (id, operationClientId) => runAction(resolve(id, operationClientId)),
-        inspect: (checkout, paths) => runAction(inspect(checkout, paths)),
-        reconcile: runAction(Effect.andThen(session.assertReady, recovery.reconcile())),
+          saving ? session.run(dispatch(input, saving)) : admitted(dispatch(input)),
+        resolve: (id, operationClientId) => admitted(resolve(id, operationClientId)),
+        inspect: (checkout, paths) => admitted(inspect(checkout, paths)),
+        reconcile: admitted(Effect.andThen(session.assertReady, recovery.reconcile())),
       } satisfies EditorMutationsShape;
     }),
   );

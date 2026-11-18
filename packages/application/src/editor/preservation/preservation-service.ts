@@ -11,8 +11,7 @@ import { EditorDiscovery } from '../discovery/discovery-service.ts';
 import { EditorOperations } from '../operations/operations-service.ts';
 import { RecoveryOutbox } from '../recovery/recovery-outbox-service.ts';
 import { RecoverySync } from '../recovery/recovery-sync-service.ts';
-import { fileKey } from '../keys.ts';
-import { closeFilesInRecovery } from '../views/views.ts';
+import { closeRecoveryReferences, fileKey } from '../recovery/recovery-references.ts';
 import { EditorTabs } from '../tabs/tabs-service.ts';
 import { EditorTree } from '../tree/tree-service.ts';
 import { EditorSaves } from '../saves/saves-service.ts';
@@ -22,11 +21,11 @@ import {
   isRecoveryReady,
   type CloseChoice,
   type ClosePrompt,
-} from './unsaved-changes.ts';
+} from './preservation.ts';
 
 type CloseKind = 'files' | 'checkout' | 'quit';
 
-export type UnsavedChangesGuardShape = {
+export type EditorPreservationShape = {
   readonly closePrompt: SubscriptionRef.SubscriptionRef<ClosePrompt | null>;
   /**
    * Closes files: asks Save, Discard or Cancel for each with unsaved changes, then closes them.
@@ -36,7 +35,7 @@ export type UnsavedChangesGuardShape = {
   readonly closeCheckout: (checkout: CheckoutTarget) => Effect.Effect<boolean, EditorFailure>;
   /** Asks about every buffer with unsaved changes, as Quit does; its tabs stay. */
   readonly prepareQuit: Effect.Effect<boolean, EditorFailure>;
-  /** Confirms recovery is complete once composition has stopped new actions. */
+  /** Confirms recovery is complete once composition has fenced admissions. */
   readonly finishQuitPreparation: Effect.Effect<boolean>;
   readonly answerClose: (promptId: string, choice: CloseChoice) => Effect.Effect<void>;
   /** Opens the files of the checkout's last close again. */
@@ -46,12 +45,12 @@ export type UnsavedChangesGuardShape = {
 };
 
 /** Closing files, checkouts and the editor without losing unsaved work, and reopening them. */
-export class UnsavedChangesGuard extends Context.Service<
-  UnsavedChangesGuard,
-  UnsavedChangesGuardShape
->()('moonbase/editor/UnsavedChangesGuard') {
+export class EditorPreservation extends Context.Service<
+  EditorPreservation,
+  EditorPreservationShape
+>()('moonbase/editor/EditorPreservation') {
   static readonly layer = Layer.effect(
-    UnsavedChangesGuard,
+    EditorPreservation,
     Effect.gen(function* () {
       const session = yield* EditorSession;
       const alerts = yield* EditorAlerts;
@@ -66,8 +65,8 @@ export class UnsavedChangesGuard extends Context.Service<
       const saves = yield* EditorSaves;
       const closePrompt = yield* SubscriptionRef.make<ClosePrompt | null>(null);
       let answer: Deferred.Deferred<CloseChoice> | undefined;
-      const runAction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        session.run(Effect.andThen(session.assertAccepting, effect));
+      const admitted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        session.run(Effect.andThen(session.admit, effect));
       const closing = Effect.map(session.get, (s) => s.closing);
       const recoveryReady = Effect.map(
         Effect.all([session.get, outbox.get, buffers.get, operations.get]),
@@ -119,7 +118,7 @@ export class UnsavedChangesGuard extends Context.Service<
           }
           yield* recovery.send;
           const closed = yield* views.modify(({ recovery }) =>
-            closeFilesInRecovery(recovery, targets, kind, checkout, true),
+            closeRecoveryReferences(recovery, targets, kind, checkout, true),
           );
           if (kind === 'quit')
             yield* buffers.modify((d) => {
@@ -142,7 +141,7 @@ export class UnsavedChangesGuard extends Context.Service<
           return closed;
         });
 
-      const closeAsking = (targets: FileTarget[], kind: CloseKind, checkout?: CheckoutTarget) =>
+      const preserve = (targets: FileTarget[], kind: CloseKind, checkout?: CheckoutTarget) =>
         Effect.gen(function* () {
           yield* session.assertReady;
           const modes = yield* session.get;
@@ -150,7 +149,7 @@ export class UnsavedChangesGuard extends Context.Service<
             yield* alerts.report(new EditorError({ reason: 'initializing-close' }));
             return false;
           }
-          if (modes.holdingUnsaved || [...(yield* buffers.get).buffers.values()].some(isSaving))
+          if (modes.preserving || [...(yield* buffers.get).buffers.values()].some(isSaving))
             return false;
           const captured = captureTargets(targets);
           for (const target of captured)
@@ -158,7 +157,7 @@ export class UnsavedChangesGuard extends Context.Service<
               yield* alerts.report(new EditorError({ reason: 'close-uncertain' }));
               return false;
             }
-          return yield* tabs.whileHoldingUnsaved(
+          return yield* tabs.whilePreserving(
             Effect.gen(function* () {
               const discarded = new Set<string>();
               for (const target of captured) {
@@ -186,21 +185,21 @@ export class UnsavedChangesGuard extends Context.Service<
 
       return {
         closePrompt,
-        close: (targets) => runAction(closeAsking(targets, 'files')),
+        close: (targets) => admitted(preserve(targets, 'files')),
         closeCheckout: (checkout) =>
-          runAction(
+          admitted(
             Effect.gen(function* () {
               const selected = yield* views.view(checkout);
-              return yield* closeAsking(
+              return yield* preserve(
                 selected.openFiles.map((path) => ({ checkout, path })),
                 'checkout',
                 checkout,
               );
             }),
           ),
-        prepareQuit: runAction(
+        prepareQuit: admitted(
           Effect.flatMap(buffers.get, (held) =>
-            closeAsking(
+            preserve(
               [...held.buffers.values()].map((buffer) => buffer.target),
               'quit',
             ),
@@ -210,11 +209,11 @@ export class UnsavedChangesGuard extends Context.Service<
           Effect.gen(function* () {
             const modes = yield* session.get;
             if (
-              modes.acceptingActions ||
+              modes.admissionsOpen ||
               !modes.ready ||
               modes.loading ||
               modes.closing ||
-              modes.holdingUnsaved ||
+              modes.preserving ||
               modes.initializing ||
               [...(yield* buffers.get).buffers.values()].some(
                 (buffer) => isDirty(buffer) || isSaving(buffer),
@@ -234,16 +233,16 @@ export class UnsavedChangesGuard extends Context.Service<
         ),
         answerClose: (promptId, choice) =>
           Effect.gen(function* () {
-            if (!(yield* session.get).acceptingActions) return;
+            if (!(yield* session.get).admissionsOpen) return;
             const shown = yield* SubscriptionRef.get(closePrompt);
             if (!answer || shown?.id !== promptId || !isCloseChoice(choice)) return;
             yield* Deferred.succeed(answer, choice);
           }),
         reopen: (checkout) =>
-          runAction(
+          admitted(
             Effect.gen(function* () {
               yield* views.view(checkout);
-              if ((yield* session.get).holdingUnsaved) return false;
+              if ((yield* session.get).preserving) return false;
               const found = findClosedAction((yield* views.get).closed, checkout);
               if (!found) return false;
               const { action, index } = found;
@@ -277,7 +276,7 @@ export class UnsavedChangesGuard extends Context.Service<
             }),
           ),
         recoveryReady,
-      } satisfies UnsavedChangesGuardShape;
+      } satisfies EditorPreservationShape;
     }),
   );
 }

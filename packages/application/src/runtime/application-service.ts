@@ -1,5 +1,5 @@
 import { Context, Deferred, Effect, Exit, Layer, Option, Ref, SubscriptionRef } from 'effect';
-import { UnsavedChangesGuard } from '../editor/unsaved-changes/unsaved-changes-service.ts';
+import { EditorPreservation } from '../editor/preservation/preservation-service.ts';
 import { EditorSession } from '../editor/session/session-service.ts';
 import { EditorLoader } from '../editor/editor-loader.ts';
 import type { EditorFailure } from '../editor/editor-errors.ts';
@@ -34,11 +34,11 @@ export type MoonbaseApplicationShape = {
   readonly canUnload: Effect.Effect<boolean>;
   /**
    * Prepares Quit: keeps the chat's drafts, asks about each editor buffer with unsaved changes and
-   * stops new actions once all is kept. Succeeds false, accepting actions again, on a veto.
+   * fences every admission once all is kept. Succeeds false, restoring admissions, on a veto.
    * A call while one runs joins it.
    */
   readonly prepareQuit: Effect.Effect<boolean>;
-  /** Releases the chat and stops the editor's new actions, as the document goes; the editor closes after. */
+  /** Releases the chat and fences the editor, as the document goes; the editor closes after. */
   readonly release: Effect.Effect<void, ApplicationLifecycleError>;
   readonly reportCleanup: (error: unknown) => Effect.Effect<void>;
   /** Opens the chat while the application is live. */
@@ -87,24 +87,23 @@ export class MoonbaseApplication extends Context.Service<
         const chat = yield* ChatHost;
         const navigation = yield* PlaceNavigation;
         const session = yield* Effect.serviceOption(EditorSession);
-        const unsavedChanges = yield* Effect.serviceOption(UnsavedChangesGuard);
+        const preservation = yield* Effect.serviceOption(EditorPreservation);
         const loader = yield* Effect.serviceOption(EditorLoader);
         const phase = yield* SubscriptionRef.make<ApplicationPhase>('live');
         const quit = yield* Ref.make<QuitState>({ consented: false, checkingUnload: false });
         const getPhase = SubscriptionRef.get(phase);
-        const recoveryReady = Option.match(unsavedChanges, {
+        const recoveryReady = Option.match(preservation, {
           onNone: () => Effect.succeed(true),
           onSome: (editor) => editor.recoveryReady,
         });
-        const setEditorAccepting = (open: boolean) =>
+        const fenceEditor = (open: boolean) =>
           Option.isSome(session)
-            ? session.value.update((s) => (s.closing ? s : { ...s, acceptingActions: open }))
+            ? session.value.update((s) => (s.closing ? s : { ...s, admissionsOpen: open }))
             : Effect.void;
-        const setAccepting = (open: boolean) =>
-          Effect.andThen(setEditorAccepting(open), chat.setAccepting(open));
+        const fence = (open: boolean) => Effect.andThen(fenceEditor(open), chat.fence(open));
         const restore = Effect.gen(function* () {
           if ((yield* getPhase) !== 'preparing') return;
-          yield* setAccepting(true);
+          yield* fence(true);
           yield* SubscriptionRef.set(phase, 'live');
         });
         const vetoed = Effect.as(restore, false);
@@ -117,19 +116,19 @@ export class MoonbaseApplication extends Context.Service<
         const prepare = Effect.gen(function* () {
           yield* chat.settle;
           if ((yield* getPhase) !== 'preparing') return false;
-          yield* chat.setAccepting(false);
+          yield* chat.fence(false);
           const preserved = yield* chat.preserve;
-          if ((yield* getPhase) === 'preparing') yield* chat.setAccepting(true);
+          if ((yield* getPhase) === 'preparing') yield* chat.fence(true);
           const { status } = yield* SubscriptionRef.get(chat.state);
           if (status === 'initialization-failed' || !preserved) return yield* vetoed;
-          if (Option.isSome(unsavedChanges)) {
-            if ((yield* getPhase) !== 'preparing' || !(yield* unsavedChanges.value.prepareQuit))
+          if (Option.isSome(preservation)) {
+            if ((yield* getPhase) !== 'preparing' || !(yield* preservation.value.prepareQuit))
               return yield* vetoed;
-            yield* setEditorAccepting(false);
-            if (!(yield* unsavedChanges.value.finishQuitPreparation)) return yield* vetoed;
+            yield* fenceEditor(false);
+            if (!(yield* preservation.value.finishQuitPreparation)) return yield* vetoed;
           }
           if ((yield* getPhase) !== 'preparing') return false;
-          yield* setAccepting(false);
+          yield* fence(false);
           if (!(yield* chat.preserve) || !(yield* recoveryReady)) return yield* vetoed;
           if ((yield* getPhase) !== 'preparing') return false;
           yield* Ref.update(quit, (q) => ({ ...q, consented: true }));
@@ -171,10 +170,10 @@ export class MoonbaseApplication extends Context.Service<
             )
               return false;
             yield* Ref.update(quit, (q) => ({ ...q, checkingUnload: true }));
-            yield* setAccepting(false);
+            yield* fence(false);
             const kept =
               (yield* chat.preserve) && (yield* getPhase) === 'live' && (yield* recoveryReady);
-            if ((yield* getPhase) === 'live') yield* setAccepting(true);
+            if ((yield* getPhase) === 'live') yield* fence(true);
             yield* Ref.update(quit, (q) => ({ ...q, checkingUnload: false }));
             return kept;
           }),
@@ -201,7 +200,7 @@ export class MoonbaseApplication extends Context.Service<
           }),
           release: Effect.gen(function* () {
             yield* SubscriptionRef.set(phase, 'disposing');
-            yield* setAccepting(false);
+            yield* fence(false);
             const released = yield* Effect.exit(chat.release);
             yield* SubscriptionRef.set(phase, Exit.isSuccess(released) ? 'disposed' : 'failed');
             return yield* released;

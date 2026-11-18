@@ -5,7 +5,7 @@ import { describeEditorFailure } from '../alerts/alerts.ts';
 import { EditorSession } from '../session/session-service.ts';
 import { EditorViews } from '../views/views-service.ts';
 import { EditorDiscovery } from '../discovery/discovery-service.ts';
-import { checkoutKey, sameCheckout } from '../keys.ts';
+import { checkoutKey, sameCheckout } from '../recovery/recovery-references.ts';
 import { makeEditorQuery } from '../editor-query.ts';
 import { emptyLookup, lookupCheckouts, rankLookup, type LookupSnapshot } from './lookup.ts';
 
@@ -35,7 +35,7 @@ export class EditorLookup extends Context.Service<EditorLookup, EditorLookupShap
       const session = yield* EditorSession;
       const views = yield* EditorViews;
       const discovery = yield* EditorDiscovery;
-      const accepting = Effect.map(session.get, (s) => s.acceptingActions && !s.closing);
+      const admits = Effect.map(session.get, (s) => s.admissionsOpen && !s.closing);
       return {
         make: Effect.gen(function* () {
           const runner = yield* makeEditorQuery(emptyLookup);
@@ -60,7 +60,7 @@ export class EditorLookup extends Context.Service<EditorLookup, EditorLookupShap
             state: runner.state,
             query: (query, checkouts) =>
               Effect.gen(function* () {
-                if (!(yield* accepting)) return;
+                if (!(yield* admits)) return;
                 const key = JSON.stringify([query, checkouts.map(checkoutKey)]);
                 // Earlier rows stay until the new ones arrive, so the list doesn't flicker while
                 // typing. A refresh keeps its message too: the rows already answer the same query.
@@ -99,9 +99,13 @@ export class EditorLookup extends Context.Service<EditorLookup, EditorLookupShap
                 );
               }),
             open: (open) =>
-              Effect.flatMap(accepting, (ok) => (ok ? runner.open(open) : Effect.succeed(false))),
+              Effect.flatMap(admits, (admitted) =>
+                admitted ? runner.open(open) : Effect.succeed(false),
+              ),
             message: (message) =>
-              Effect.flatMap(accepting, (ok) => (ok ? runner.update({ message }) : Effect.void)),
+              Effect.flatMap(admits, (admitted) =>
+                admitted ? runner.update({ message }) : Effect.void,
+              ),
           } satisfies Lookup;
         }),
       } satisfies EditorLookupShape;

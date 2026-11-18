@@ -20,7 +20,7 @@ import { quote, fixture, isError, seed, waitFor } from './recovery-fixture.ts';
 import { captureNative, releaseNative } from './workspace-fixture.ts';
 
 // The check is the same for every kind; each alias folds to the same destination differently.
-test('batch move rejects duplicate replacement destinations before it starts', async () => {
+test('batch move rejects duplicate replacement destinations before admission', async () => {
   const f = fixture(),
     trash = join(f.base, 'trash');
   const helper = f.wrapper(`if [ "$1" = trash ]; then /usr/bin/touch ${quote(trash)}; exit 1; fi`),

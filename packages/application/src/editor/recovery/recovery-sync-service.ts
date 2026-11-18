@@ -13,13 +13,12 @@ import { EditorOperations } from '../operations/operations-service.ts';
 import { operationKey } from '../operations/operations.ts';
 import { RecoveryOutbox, type OutboxSender } from './recovery-outbox-service.ts';
 import { toRecoveryLayout } from './recovery-layout.ts';
-import { sameCheckout } from '../keys.ts';
-import { closeFilesInRecovery } from '../views/views.ts';
+import { closeRecoveryReferences, sameCheckout } from './recovery-references.ts';
 
 export type RecoverySyncShape = {
   /**
    * Sends the recovery edits made so far; succeeds once each has committed. Fails while a close
-   * or reload is holdingUnsaved, and waits for a running `initializeRepository`.
+   * or reload is preserving, and waits for a running `initializeRepository`.
    */
   readonly flush: Effect.Effect<void, EditorFailure>;
   /** Sends the edits made so far, for an action already holding the editor (a close's own). */
@@ -55,7 +54,7 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
       const operations = yield* EditorOperations;
       const outbox = yield* RecoveryOutbox;
       const { clientId } = session;
-      const reconcileLock = yield* Semaphore.make(1);
+      const factsLock = yield* Semaphore.make(1);
       const sends = yield* FiberSet.make();
       const recoveryWatch = yield* FiberHandle.make();
       const closing = Effect.map(session.get, (s) => s.closing);
@@ -167,7 +166,7 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
 
       const reconcile: RecoverySyncShape['reconcile'] = (result, initial) =>
         session.run(
-          reconcileLock.withPermits(1)(
+          factsLock.withPermits(1)(
             Effect.gen(function* () {
               if (yield* closing) return;
               yield* session.awaitInitialization;
@@ -177,26 +176,22 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
               if (loaded.state.clientId !== clientId)
                 return yield* new EditorError({ reason: 'foreign-recovery' });
               yield* follow(loaded.state, true);
-              const results = [
+              const facts = [
                 ...new Map(
-                  [...loaded.operations, ...(result ? [result] : [])].map((operation) => [
-                    operationKey(operation.clientId, operation.id),
-                    operation,
+                  [...loaded.operations, ...(result ? [result] : [])].map((fact) => [
+                    operationKey(fact.clientId, fact.id),
+                    fact,
                   ]),
                 ).values(),
               ];
-              for (const operation of results) yield* operations.applyResult(operation);
-              if (results.length) yield* outbox.changed;
-              for (const operation of results) {
-                if (operation.outcome === 'uncertain' || (yield* closing)) continue;
+              for (const fact of facts) yield* operations.applyFacts(fact);
+              if (facts.length) yield* outbox.changed;
+              for (const fact of facts) {
+                if (fact.outcome === 'uncertain' || (yield* closing)) continue;
                 yield* workspace
-                  .acknowledgeOperation({
-                    clientId,
-                    operationClientId: operation.clientId,
-                    id: operation.id,
-                  })
+                  .acknowledgeOperation({ clientId, operationClientId: fact.clientId, id: fact.id })
                   .pipe(Effect.tapError(alerts.report));
-                yield* operations.acknowledge(operation.clientId, operation.id);
+                yield* operations.acknowledge(fact.clientId, fact.id);
               }
             }),
           ),
@@ -221,7 +216,7 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
             yield* outbox.openTab(tab.id, tab.target);
           } else {
             yield* views.modify(({ recovery }) =>
-              closeFilesInRecovery(recovery, [tab.target], 'files'),
+              closeRecoveryReferences(recovery, [tab.target], 'files'),
             );
             yield* buffers.forget([key]);
           }
@@ -281,8 +276,8 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
           // An edit now would name the folder target that `git init` retires.
           yield* session.awaitInitialization;
           yield* session.assertReady;
-          if ((yield* session.get).holdingUnsaved)
-            return yield* new EditorError({ reason: 'holding-unsaved-flush' });
+          if ((yield* session.get).preserving)
+            return yield* new EditorError({ reason: 'preserving-flush' });
           yield* send;
         }),
         send,

@@ -79,7 +79,7 @@ export function Rail({
   chatVisible,
   chatOpen,
   disabled,
-  holdingUnsaved,
+  preserving,
   closeCheckout,
   closeChat,
   openCheckout,
@@ -100,7 +100,7 @@ export function Rail({
   chatVisible: boolean;
   chatOpen: boolean;
   disabled: boolean;
-  holdingUnsaved: boolean;
+  preserving: boolean;
   closeCheckout(checkout: CheckoutTarget): void;
   closeChat(): void;
   openCheckout?: () => void;
@@ -297,7 +297,7 @@ export function Rail({
                           <Button
                             {...stylex.props(controls.button, styles.railClose)}
                             aria-label={`Close checkout ${checkout.root}`}
-                            disabled={disabled || holdingUnsaved || !present}
+                            disabled={disabled || preserving || !present}
                             onClick={() => closeCheckout(checkout)}>
                             <Icon name="close" />
                           </Button>
@@ -317,7 +317,7 @@ export function Rail({
                       recent={recentCheckouts}
                       reopen={reopenCheckout}
                       browse={openCheckout}
-                      disabled={disabled || holdingUnsaved}
+                      disabled={disabled || preserving}
                       trigger={stylex.props(controls.button, styles.railTab)}>
                       <span aria-hidden="true" {...stylex.props(styles.tile, styles.openTile)}>
                         <Icon name="plus" />
@@ -329,7 +329,7 @@ export function Rail({
                         <Button
                           aria-label="Open checkout"
                           {...stylex.props(controls.button, styles.railTab)}
-                          disabled={disabled || holdingUnsaved}
+                          disabled={disabled || preserving}
                           onClick={openCheckout}>
                           <span aria-hidden="true" {...stylex.props(styles.tile, styles.openTile)}>
                             <Icon name="plus" />

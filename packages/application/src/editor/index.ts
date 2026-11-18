@@ -9,7 +9,7 @@ export {
   type EditorFailure,
 } from './editor-errors.ts';
 export { describeEditorFailure, isCancelled } from './alerts/alerts.ts';
-export { checkoutKey, fileKey, sameCheckout } from './keys.ts';
+export { checkoutKey, fileKey, sameCheckout } from './recovery/recovery-references.ts';
 export type { CheckoutView, EditorRecovery, EditorTab } from './recovery/recovery-layout.ts';
 
 export { EditorSession, type SessionState } from './session/session-service.ts';
@@ -27,7 +27,7 @@ export { EditorTree } from './tree/tree-service.ts';
 export type { RevealOptions } from './tree/tree.ts';
 export { EditorMutations, type OperationInput } from './mutation/mutation-service.ts';
 export {
-  allowsMutation,
+  admitsMutation,
   maxMutationEntries,
   mutationUnavailable,
   getMutationDestinations,
@@ -38,8 +38,8 @@ export {
   type ReplacePrompt,
 } from './mutation/mutation.ts';
 export { EditorSaves } from './saves/saves-service.ts';
-export { UnsavedChangesGuard } from './unsaved-changes/unsaved-changes-service.ts';
-export type { CloseChoice, ClosePrompt } from './unsaved-changes/unsaved-changes.ts';
+export { EditorPreservation } from './preservation/preservation-service.ts';
+export type { CloseChoice, ClosePrompt } from './preservation/preservation.ts';
 export { EditorCheckouts } from './checkouts/checkouts-service.ts';
 export { EditorLookup, type Lookup } from './lookup/lookup-service.ts';
 export type { LookupRow, LookupSnapshot } from './lookup/lookup.ts';

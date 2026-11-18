@@ -11,7 +11,7 @@ import {
   editorLayer,
   EditorBuffers,
   EditorCheckouts,
-  UnsavedChangesGuard,
+  EditorPreservation,
   EditorSession,
   EditorTabs,
   RecoverySync,
@@ -100,11 +100,11 @@ export function makeApplication(options: Options) {
       flush: () => through(RecoverySync, (r) => r.flush),
       text: (file: FileTarget = target) =>
         through(EditorBuffers, (b) => Effect.map(b.find(file), (buffer) => buffer?.text)),
-      acceptingActions: () =>
-        through(EditorSession, (s) => Effect.map(s.get, (state) => state.acceptingActions)),
+      admissionsOpen: () =>
+        through(EditorSession, (s) => Effect.map(s.get, (state) => state.admissionsOpen)),
       /** The next close prompt, waiting for one if none is shown. */
       closePrompt: () =>
-        through(UnsavedChangesGuard, (p) =>
+        through(EditorPreservation, (p) =>
           SubscriptionRef.changes(p.closePrompt).pipe(
             Stream.filter((prompt): prompt is ClosePrompt => prompt !== null),
             Stream.runHead,
@@ -112,7 +112,7 @@ export function makeApplication(options: Options) {
           ),
         ),
       answer: (id: string, choice: 'save' | 'discard' | 'cancel') =>
-        through(UnsavedChangesGuard, (p) => p.answerClose(id, choice)),
+        through(EditorPreservation, (p) => p.answerClose(id, choice)),
       drafts: () =>
         through(WorkspaceService, (w) =>
           Effect.map(w.loadRecovery({ clientId: 'one' }), ({ state }) =>

@@ -11,7 +11,7 @@ import { EditorTabs } from './tabs/tabs-service.ts';
 import { EditorTree } from './tree/tree-service.ts';
 import { EditorMutations } from './mutation/mutation-service.ts';
 import { EditorSaves } from './saves/saves-service.ts';
-import { UnsavedChangesGuard } from './unsaved-changes/unsaved-changes-service.ts';
+import { EditorPreservation } from './preservation/preservation-service.ts';
 import { EditorCheckouts } from './checkouts/checkouts-service.ts';
 import { EditorLookup } from './lookup/lookup-service.ts';
 import { EditorTextSearch } from './text-search/text-search-service.ts';
@@ -39,7 +39,7 @@ export type EditorServices =
   | EditorTree
   | EditorMutations
   | EditorSaves
-  | UnsavedChangesGuard
+  | EditorPreservation
   | EditorCheckouts
   | EditorLookup
   | EditorTextSearch
@@ -48,7 +48,7 @@ export type EditorServices =
 
 /**
  * One editor over the `WorkspaceService` its root supplies. Closing the layer's scope stops it
- * first (nothing is accepted, reported or sent), then releases each service in reverse.
+ * first (nothing is admitted, reported or sent), then releases each service in reverse.
  */
 export const editorLayer = (options: EditorOptions = {}) => {
   const base = Layer.provideMerge(EditorAlerts.layer, EditorSession.layer(options));
@@ -66,7 +66,7 @@ export const editorLayer = (options: EditorOptions = {}) => {
   );
   const actions = Layer.provideMerge(
     Layer.mergeAll(
-      UnsavedChangesGuard.layer,
+      EditorPreservation.layer,
       EditorCheckouts.layer,
       EditorLookup.layer,
       EditorTextSearch.layer,

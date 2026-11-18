@@ -11,7 +11,7 @@ import type { EditorActions } from '../editor-actions.ts';
 export type ExplorerActionContext = {
   actions: EditorActions;
   checkout: CheckoutTarget;
-  holdingUnsaved: boolean;
+  preserving: boolean;
   /** Whether a file is active, to reveal. */
   hasActiveFile: boolean;
   hideIgnoredFiles: boolean;
@@ -39,7 +39,7 @@ export type ExplorerActionContext = {
 export function listExplorerActions({
   actions,
   checkout,
-  holdingUnsaved,
+  preserving,
   hasActiveFile,
   hideIgnoredFiles,
   following,
@@ -75,7 +75,7 @@ export function listExplorerActions({
           {
             label: 'Import Files…',
             icon: 'import',
-            disabled: holdingUnsaved,
+            disabled: preserving,
             run: () =>
               run(
                 (async () => {

@@ -14,13 +14,13 @@ import {
   EditorAlerts,
   EditorCheckouts,
   EditorMutations,
-  UnsavedChangesGuard,
+  EditorPreservation,
   EditorSaves,
   EditorTabs,
   EditorTree,
   RecoverySync,
   EditorSession,
-  allowsMutation,
+  admitsMutation,
   fileKey,
   type CloseChoice,
   type EditorSnapshot,
@@ -44,7 +44,7 @@ export function makeEditorActions(editor: WorkbenchEditor, registry: AtomRegistr
   const tabs = Context.get(context, EditorTabs),
     tree = Context.get(context, EditorTree),
     saves = Context.get(context, EditorSaves),
-    unsavedChanges = Context.get(context, UnsavedChangesGuard),
+    preservation = Context.get(context, EditorPreservation),
     checkouts = Context.get(context, EditorCheckouts),
     mutations = Context.get(context, EditorMutations),
     recovery = Context.get(context, RecoverySync),
@@ -108,11 +108,11 @@ export function makeEditorActions(editor: WorkbenchEditor, registry: AtomRegistr
     save: (target: FileTarget, overwrite?: boolean) => call(saves.save(target, overwrite)),
     reload: (target: FileTarget) => call(saves.reload(target)),
     cancelConflict: (target: FileTarget) => fire(saves.cancelConflict(target)),
-    close: (targets: FileTarget[]) => call(unsavedChanges.close(targets)),
-    closeCheckout: (checkout: CheckoutTarget) => call(unsavedChanges.closeCheckout(checkout)),
+    close: (targets: FileTarget[]) => call(preservation.close(targets)),
+    closeCheckout: (checkout: CheckoutTarget) => call(preservation.closeCheckout(checkout)),
     answerClose: (promptId: string, choice: CloseChoice) =>
-      fire(unsavedChanges.answerClose(promptId, choice)),
-    reopen: (checkout: CheckoutTarget) => call(unsavedChanges.reopen(checkout)),
+      fire(preservation.answerClose(promptId, choice)),
+    reopen: (checkout: CheckoutTarget) => call(preservation.reopen(checkout)),
     openCheckout: (root: string) => call(checkouts.openCheckout(root)),
     selectCheckout: (target: CheckoutTarget) => call(checkouts.selectCheckout(target)),
     listWorktrees: (checkout: CheckoutTarget) => call(checkouts.listWorktrees(checkout)),
@@ -123,9 +123,9 @@ export function makeEditorActions(editor: WorkbenchEditor, registry: AtomRegistr
     flush: () => call(recovery.flush),
     resolveOperation: (id: string, operationClientId?: string) =>
       call(mutations.resolve(id, operationClientId)),
-    /** The mutation gate, read now: whether `mutate` would run `action`. */
-    allowsMutation: (action: MutationAction) =>
-      allowsMutation(
+    /** The mutation gate, read now: whether `mutate` would admit `action`. */
+    admitsMutation: (action: MutationAction) =>
+      admitsMutation(
         {
           ...registry.get(atoms.session),
           prompting: false,

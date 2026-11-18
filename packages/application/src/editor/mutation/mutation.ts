@@ -57,14 +57,14 @@ export type MutationState = {
 export const maxMutationEntries = 128;
 /** Why the mutation gate refused an action. */
 export const mutationUnavailable =
-  'File action unavailable. Check the selection and finish the current editor dialog or Close prompt.';
+  'File action unavailable. Check the selection and finish the current editor dialog or preservation.';
 
 /** The mutation gate: the editor is ready and idle, the checkout is open and the action fits. */
-export function allowsMutation(
+export function admitsMutation(
   editor: {
     ready: boolean;
     closing: boolean;
-    holdingUnsaved: boolean;
+    preserving: boolean;
     prompting: boolean;
     mutating: boolean;
     recovery: EditorRecovery;
@@ -74,7 +74,7 @@ export function allowsMutation(
   return (
     editor.ready &&
     !editor.closing &&
-    !editor.holdingUnsaved &&
+    !editor.preserving &&
     !editor.prompting &&
     !editor.mutating &&
     isCheckoutOpen(editor.recovery, action.checkout) &&

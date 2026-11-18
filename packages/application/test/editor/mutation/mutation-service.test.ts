@@ -73,7 +73,7 @@ const declined = { completed: false, error: '', items: [] };
 const unavailable = {
   completed: false,
   error:
-    'File action unavailable. Check the selection and finish the current editor dialog or Close prompt.',
+    'File action unavailable. Check the selection and finish the current editor dialog or preservation.',
   items: [],
 };
 
@@ -161,13 +161,13 @@ test('one direct mutation runs at a time; another is refused until it ends', asy
     const copy = { checkout, kind: 'copy' as const, paths: ['a.ts'] };
     const running = f.editor.mutations.run(copy, 'b.ts');
     assert.equal(f.editor.getSnapshot().mutating, true);
-    assert.equal(f.editor.mutations.allows(copy), false);
+    assert.equal(f.editor.mutations.admits(copy), false);
     const prompt = await nextPrompt(f.editor);
     assert.deepEqual(prompt.paths, ['b.ts']);
     assert.deepEqual(await f.editor.mutations.run(copy, 'other.ts'), unavailable);
     f.editor.mutations.answer(prompt.id, false);
     assert.deepEqual(await running, declined);
-    assert.equal(f.editor.mutations.allows(copy), true);
+    assert.equal(f.editor.mutations.admits(copy), true);
   } finally {
     await f.dispose();
   }
@@ -436,7 +436,7 @@ for (const kind of ['move', 'copy'] as const)
     const f = await fixture('unused', false);
     await f.editor.dispose();
     let ready!: () => void, release!: () => void;
-    const reached = new Promise<void>((resolve) => {
+    const admitted = new Promise<void>((resolve) => {
         ready = resolve;
       }),
       wait = new Promise<void>((resolve) => {
@@ -463,7 +463,7 @@ for (const kind of ['move', 'copy'] as const)
       const sources = await editor.inspect(checkout, ['a.ts']),
         baseline = editor.buffer(target('a.ts'))!.disk;
       const operation = editor.mutate({ checkout, sources, kind, destination: 'destination.ts' });
-      await reached;
+      await admitted;
       editor.edit(target('a.ts'), 'newer live text');
       release();
       await operation;

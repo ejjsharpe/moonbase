@@ -15,7 +15,7 @@ import { EditorOperations } from '../operations/operations-service.ts';
 import { RecoveryOutbox } from '../recovery/recovery-outbox-service.ts';
 import { RecoverySync } from '../recovery/recovery-sync-service.ts';
 import { emptyCheckoutView } from '../recovery/recovery-layout.ts';
-import { fileKey, sameCheckout } from '../keys.ts';
+import { fileKey, sameCheckout } from '../recovery/recovery-references.ts';
 import { EditorTabs } from '../tabs/tabs-service.ts';
 import { EditorTree } from '../tree/tree-service.ts';
 import { isInitialized } from './checkouts.ts';
@@ -59,8 +59,8 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
       const recovery = yield* RecoverySync;
       const tabs = yield* EditorTabs;
       const tree = yield* EditorTree;
-      const runAction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        session.run(Effect.andThen(session.assertAccepting, effect));
+      const admitted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        session.run(Effect.andThen(session.admit, effect));
       const closing = Effect.map(session.get, (s) => s.closing);
       const isOpen = (checkout: CheckoutTarget) =>
         Effect.map(views.get, ({ recovery }) =>
@@ -83,7 +83,7 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
       const assertRebindable = (checkout: CheckoutTarget) =>
         Effect.gen(function* () {
           const busy =
-            (yield* session.get).holdingUnsaved ||
+            (yield* session.get).preserving ||
             [...(yield* buffers.get).buffers.values()].some(
               (buffer) => sameCheckout(buffer.target.checkout, checkout) && isSaving(buffer),
             ) ||
@@ -232,7 +232,7 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
           }).pipe(Effect.ensuring(session.endInitialization));
           // Edits made meanwhile are sent now, under the Git target.
           const modes = yield* session.get;
-          if (!modes.closing && !modes.holdingUnsaved) {
+          if (!modes.closing && !modes.preserving) {
             if (outcome.failure) yield* Effect.catch(recovery.flush, alerts.report);
             else yield* recovery.flush;
           }
@@ -243,7 +243,7 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
 
       return {
         openCheckout: (root) =>
-          runAction(
+          admitted(
             Effect.gen(function* () {
               yield* session.assertReady;
               const target = yield* reported(workspace.openCheckout({ root }));
@@ -252,20 +252,20 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
               return yield* addCheckout(target);
             }),
           ),
-        selectCheckout: (target) => runAction(selectOpenCheckout(target)),
+        selectCheckout: (target) => admitted(selectOpenCheckout(target)),
         listWorktrees: (checkout) =>
-          runAction(
+          admitted(
             Effect.andThen(views.view(checkout), reported(workspace.listWorktrees({ checkout }))),
           ),
         createWorktree: (input) =>
-          runAction(
+          admitted(
             Effect.gen(function* () {
               yield* session.assertReady;
               yield* views.view(input.checkout);
               return yield* addCheckout(yield* reported(workspace.createWorktree(input)));
             }),
           ),
-        initializeRepository: (checkout) => runAction(initializeRepository(checkout)),
+        initializeRepository: (checkout) => admitted(initializeRepository(checkout)),
       } satisfies EditorCheckoutsShape;
     }),
   );

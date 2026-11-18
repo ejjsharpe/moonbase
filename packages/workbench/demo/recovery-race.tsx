@@ -93,10 +93,10 @@ const racing: DemoClient = {
   async command(name, input, options) {
     if (edits.has(name) && holdCopyPreflight) {
       holdCopyPreflight = false;
-      const reply = await client.command(name, input, options);
+      const receipt = await client.command(name, input, options);
       copyPhase = 'preflight';
       await copyPreflight;
-      return reply;
+      return receipt;
     }
     if (hold && edits.has(name)) {
       waiting = true;

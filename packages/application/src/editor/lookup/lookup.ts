@@ -1,5 +1,5 @@
 import type { CheckoutTarget, CommandOutput, LookupMatch } from '@moonbase/contracts/workspace';
-import { fileKey } from '../keys.ts';
+import { fileKey } from '../recovery/recovery-references.ts';
 
 export type LookupRow = LookupMatch & { checkout: CheckoutTarget; recent: boolean };
 export type LookupSnapshot = { rows: LookupRow[]; message: string; busy: boolean };

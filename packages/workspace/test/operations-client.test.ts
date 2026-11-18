@@ -20,7 +20,7 @@ import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { captureNative, fixture, rejects } from './workspace-fixture.ts';
 import { bufferIdOf, draftsOf, seed } from './recovery-fixture.ts';
 import { initRepository } from './repository-fixture.ts';
-test('known move preserves drafts and exact target, acknowledgement needs only its recorded outcome; replay does not move twice', async () => {
+test('known move preserves drafts and exact target, acknowledgement needs only its publication; replay does not move twice', async () => {
   const f = fixture();
   try {
     writeFileSync(join(f.root, 'file.txt'), 'disk');
@@ -81,7 +81,7 @@ test('create/copy and scoped native import use actual files; single-use referenc
   const f = fixture();
   try {
     const checkout = await f.client.command('openCheckout', { root: f.root });
-    const acknowledge = async (id: string) => {
+    const publish = async (id: string) => {
       await f.client.command('loadRecovery', { clientId: 'alice' });
       await f.client.command('acknowledgeOperation', {
         clientId: 'alice',
@@ -103,7 +103,7 @@ test('create/copy and scoped native import use actual files; single-use referenc
       ).outcome,
       'completed',
     );
-    await acknowledge('create');
+    await publish('create');
     const sources = await f.client.command('inspectEntries', { checkout, paths: ['created.txt'] });
     assert.equal(
       (
@@ -118,7 +118,7 @@ test('create/copy and scoped native import use actual files; single-use referenc
       ).outcome,
       'completed',
     );
-    await acknowledge('copy');
+    await publish('copy');
     assert.equal(readFileSync(join(f.root, 'copy.txt'), 'utf8'), 'created');
     writeFileSync(join(f.base, 'external.txt'), 'native bytes');
     const references = await f.runtime.runPromise(
@@ -138,7 +138,7 @@ test('create/copy and scoped native import use actual files; single-use referenc
       ).outcome,
       'completed',
     );
-    await acknowledge('import');
+    await publish('import');
     assert.equal(readFileSync(join(f.root, 'imported.txt'), 'utf8'), 'native bytes');
     await assert.rejects(
       f.client.command('mutate', {
@@ -253,12 +253,12 @@ for (const kind of ['move', 'trash'] as const)
     const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
     const helper = join(f.base, 'lose-response'),
       countFile = join(f.base, 'count'),
-      trashLog = join(f.base, 'trash-log');
+      receipt = join(f.base, 'trash-receipt');
     // Only this controlled helper drops a response after calling the actual production native binary.
     const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
     writeFileSync(
       helper,
-      `#!/bin/sh\nif [ "$1" = ${quote(kind)} ]; then\n  printf 'called\\n' >> ${quote(countFile)}\n  ${quote(binary)} "$@" > ${quote(trashLog)}\n  status=$?\n  if [ "$status" -ne 0 ]; then exit "$status"; fi\n  kill -KILL $$\nfi\nexec ${quote(binary)} "$@"\n`,
+      `#!/bin/sh\nif [ "$1" = ${quote(kind)} ]; then\n  printf 'called\\n' >> ${quote(countFile)}\n  ${quote(binary)} "$@" > ${quote(receipt)}\n  status=$?\n  if [ "$status" -ne 0 ]; then exit "$status"; fi\n  kill -KILL $$\nfi\nexec ${quote(binary)} "$@"\n`,
     );
     chmodSync(helper, 0o700);
     const runtime = ManagedRuntime.make(
@@ -307,8 +307,8 @@ for (const kind of ['move', 'trash'] as const)
       }
     } finally {
       await runtime.dispose();
-      if (kind === 'trash' && existsSync(trashLog)) {
-        const trashed = readFileSync(trashLog, 'utf8');
+      if (kind === 'trash' && existsSync(receipt)) {
+        const trashed = readFileSync(receipt, 'utf8');
         if (trashed.includes('/.Trash/') && existsSync(trashed)) {
           assert.equal(readFileSync(trashed, 'utf8'), 'disk bytes');
           rmSync(trashed);
@@ -349,7 +349,7 @@ test('known native Trash keeps another client draft and deliberate replacement u
   }
 });
 
-test('filesystem success followed by a real SQLite write failure stays observable and a retry records it without repeating the mutation', async () => {
+test('filesystem success followed by real SQLite publication failure stays observable and retry publishes without repeating mutation', async () => {
   const { DatabaseSync } = await import('node:sqlite'),
     { fileURLToPath } = await import('node:url');
   const f = fixture(),
@@ -381,7 +381,7 @@ test('filesystem success followed by a real SQLite write failure stays observabl
     ]);
     const sources = await client.command('inspectEntries', { checkout, paths: ['file.txt'] });
     const operation = {
-      id: 'unrecorded',
+      id: 'publication',
       clientId: 'alice',
       checkout,
       kind: 'move' as const,
@@ -540,7 +540,7 @@ test('batch move reports partial success and explicit replacement revalidates th
   }
 });
 
-test('cancelling a received native copy is typed, preserves source and leaves unrelated file queries usable', async () => {
+test('cancelling admitted native copy is typed, preserves source and leaves unrelated file queries usable', async () => {
   const { fileURLToPath } = await import('node:url');
   const f = fixture(),
     helper = join(f.base, 'slow-copy'),
@@ -706,7 +706,7 @@ test('restart counts transfer and Trash results by structure regardless of displ
           JSON.stringify({
             open: true,
             input,
-            clientRevisions: {},
+            publicationRevisions: {},
             acknowledgedBy: [],
             result: { ...result, items: [] },
           }),

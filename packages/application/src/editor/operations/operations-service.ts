@@ -5,8 +5,7 @@ import type {
   WorkspaceOperation,
 } from '@moonbase/contracts/workspace';
 import { EditorError } from '../editor-errors.ts';
-import { sameCheckout } from '../keys.ts';
-import { movePathsInRecovery } from '../views/views.ts';
+import { moveRecoveryReferences, sameCheckout } from '../recovery/recovery-references.ts';
 import { EditorViews } from '../views/views-service.ts';
 import { forgetTrashed, isCheckoutListed, moveClosed } from '../views/views.ts';
 import {
@@ -31,7 +30,7 @@ export type EditorOperationsShape = {
   /** Whether an operation whose outcome is uncertain may touch `target`. */
   readonly isUncertainFor: (target: FileTarget) => Effect.Effect<boolean>;
   /** Takes an operation's completed items into what the editor remembers by path. */
-  readonly applyResult: (result: OperationResult) => Effect.Effect<void, EditorError>;
+  readonly applyFacts: (result: OperationResult) => Effect.Effect<void, EditorError>;
 };
 
 /** The file operations the editor has sent or been told of, until each is acknowledged. */
@@ -84,7 +83,7 @@ export class EditorOperations extends Context.Service<EditorOperations, EditorOp
           }),
         isUncertainFor: (target) =>
           Effect.map(SubscriptionRef.get(state), (ops) => isUncertainFor(ops, target)),
-        applyResult: (result) =>
+        applyFacts: (result) =>
           Effect.gen(function* () {
             const key = operationKey(result.clientId, result.id);
             const ops = yield* SubscriptionRef.get(state);
@@ -110,7 +109,7 @@ export class EditorOperations extends Context.Service<EditorOperations, EditorOp
                 )
                   continue;
                 if (result.kind === 'move' && item.destination) {
-                  movePathsInRecovery(
+                  moveRecoveryReferences(
                     draft.recovery,
                     result.checkout,
                     item.source,

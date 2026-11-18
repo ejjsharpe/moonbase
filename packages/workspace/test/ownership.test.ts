@@ -11,7 +11,7 @@ import { ApplicationError } from '@moonbase/contracts/workspace';
 import type { RecoveryState } from '@moonbase/contracts/recovery';
 import { makeWorkspaceClient } from './workspace-client-fixture.ts';
 import { runApplicationEffect } from '@moonbase/application/chat/promises';
-import { applyOperationEffects } from '../src/client/operation-effects.ts';
+import { reconcile } from '../src/client/reconcile.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { recordWatchDeliveries, startOnTestClock } from './watch-fixture.ts';
 import { fixture, isError, quote, seed, waitFor } from './recovery-fixture.ts';
@@ -165,7 +165,7 @@ test('failed durable import reservation leaves native references unclaimed for t
   }
 });
 
-test('cancelled queued Save releases its lease without starting and successors stay ordered', async () => {
+test('cancelled queued Save releases its lease without admission and successors stay ordered', async () => {
   const f = fixture(),
     ready = join(f.base, 'ready'),
     resume = join(f.base, 'resume'),
@@ -431,9 +431,9 @@ test('private configuration rejects unsafe shapes before creating a state direct
   }
 });
 
-test('cancelling a running copy retains its overlap lease and root resources until the helper actually exits', async () => {
+test('admitted cancellation retains its overlap lease and root resources until the helper actually exits', async () => {
   const f = fixture(),
-    ready = join(f.base, 'started'),
+    ready = join(f.base, 'admitted'),
     release = join(f.base, 'release-descendant');
   // The helper ignores the stop request, so it keeps running until released.
   const helper = f.wrapper(
@@ -487,7 +487,7 @@ test('cancelling a running copy retains its overlap lease and root resources unt
     assert.equal(
       successorSettled,
       false,
-      'the interrupted waiter must not release its running overlap lease',
+      'the interrupted waiter must not release its admitted overlap lease',
     );
     let disposed = false;
     closing = runtime.dispose().then(() => {
@@ -525,7 +525,7 @@ test('cancelling a running copy retains its overlap lease and root resources unt
 
 test('root disposal retains claimed native descriptors and journal ownership until actual helper exit', async () => {
   const f = fixture(),
-    ready = join(f.base, 'import-started'),
+    ready = join(f.base, 'import-admitted'),
     release = join(f.base, 'release-import');
   // The helper ignores the stop request, as above.
   const helper = f.wrapper(
@@ -719,7 +719,7 @@ test('saved recovery naming a foreign checkout, an escaping path or a wrong base
       // A host's move to a path outside the checkout moves nothing in the recovery.
       const moved = structuredClone(state);
       moved.views[checkout.checkoutId]!.positions = { [bufferId]: {} };
-      applyOperationEffects(moved, [
+      reconcile(moved, [
         {
           input: { kind: 'move', checkout },
           result: {
@@ -844,7 +844,7 @@ test('mutation cancellation during preflight reserves no ID and consumes no nati
       queueMicrotask(() => abort.abort());
       await rejected;
       await client.command('readFile', { checkout, path: 'file.txt' });
-      // The host reserved nothing, but a status query leaves a tombstone for the ID, so the selection runs again
+      // The host reserved nothing, but a status query fences the ID, so the selection runs again
       // under a new one.
       assert.equal(
         (await client.command('mutate', { ...input, id: input.id + '-again' })).outcome,

@@ -11,7 +11,7 @@ import type { SaveStatus } from '@moonbase/contracts/workspace-host';
 import {
   InvalidRecoveryRequestError,
   RecoveryConflictError,
-  RecoveryUpdatePendingError,
+  RecoveryPublicationError,
   SaveNotSentError,
 } from '@moonbase/contracts/workspace-errors';
 import { WorkspaceConflictError } from '@moonbase/contracts/workspace-host-errors';
@@ -24,7 +24,7 @@ import { saveKey, unresolvedSaves, type RecoveryContext } from './recovery-conte
 
 /**
  * The text a save began from: kept with the save when it was read from the host, else a draft's
- * baseline in the recovery, which holds it while no edit of the client's came after the save began (only
+ * baseline in the recovery, which holds it while no publication came after the save began (only
  * then is a save restored). Internal writes move and copy drafts but keep their baseline, and
  * versions are content hashes, so any draft's baseline with that version is the same text.
  */
@@ -97,18 +97,16 @@ export const replaySave = (
         // A save whose text did not reach the disk has its text restored with its whole group.
         const restore = record.result?.kind !== 'saved';
         if (restore) yield* followRestoredCheckouts(context, [record]);
-        const recorded = yield* Effect.exit(
-          recordSaveOutcomes(context, [record], restore, notStarted),
-        );
-        if (recorded._tag === 'Failure') {
-          const failure = errorText(Cause.squash(recorded.cause));
+        const published = yield* Effect.exit(publishSaves(context, [record], restore, notStarted));
+        if (published._tag === 'Failure') {
+          const failure = errorText(Cause.squash(published.cause));
           if (record.result?.kind !== 'saved')
-            return yield* new RecoveryUpdatePendingError({ pending: 'save', detail: failure });
+            return yield* new RecoveryPublicationError({ pending: 'save', detail: failure });
           yield* acknowledgeSaves(context, []);
           return {
             ...record.result,
             persistencePending: true,
-            message: 'Saved to disk; recording it in recovery is pending. ' + failure,
+            message: 'Saved to disk; recovery publication pending. ' + failure,
           };
         }
         yield* acknowledgeSaves(context, [record]);
@@ -143,11 +141,11 @@ export const acknowledgeSaves = (
 /**
  * Applies saves' outcomes to the client's recovery in one transaction. When restoring, the text
  * of every save whose text did not reach the disk is put back as a draft over its baseline, for
- * the client's whole group of unresolved saves at once, but only while no edit of the client's
+ * the client's whole group of unresolved saves at once, but only while no client publication
  * came after the save began (a later one is the client's own newer word). `notStarted` names
- * saves the host never received.
+ * saves the host never admitted.
  */
-export const recordSaveOutcomes = (
+export const publishSaves = (
   context: RecoveryContext,
   records: SaveRecord[],
   restore = false,
@@ -170,15 +168,15 @@ export const recordSaveOutcomes = (
         );
         for (const record of records) group.set(saveKey(record.input), record);
         if ([...group.keys()].some((id) => context.activeSaves.has(id)))
-          throw new RecoveryUpdatePendingError({ pending: 'save-running' });
+          throw new RecoveryPublicationError({ pending: 'save-running' });
         records = [...group.values()];
       }
       const stored = store.readRecovery(clientId),
         revision = stored?.revision ?? 0,
-        editRevision = store.editRevision(clientId),
+        publication = store.publication(clientId),
         state = stored?.state ?? emptyRecoveryState(clientId);
       let changed = false;
-      // Baselines these outcomes replace in drafts, which a save may still have begun from.
+      // Baselines this publication replaces in drafts, which a save may still have begun from.
       const replaced: FileDocument[] = [];
       const updates = records.map((record) => {
         const id = saveKey(record.input),
@@ -197,11 +195,11 @@ export const recordSaveOutcomes = (
           restore &&
           base.state === 'sent' &&
           result?.kind !== 'saved' &&
-          base.editRevision === editRevision;
+          base.recoveryPublication === publication;
         let drafted = false;
         if (restores) {
           const disk = findBaseline(state, record.input.target, base.baseline);
-          if (!disk) throw new RecoveryUpdatePendingError({ pending: 'baseline-missing' });
+          if (!disk) throw new RecoveryPublicationError({ pending: 'baseline-missing' });
           if (!state.checkouts.some((c) => same(c, record.input.target.checkout))) {
             state.checkouts.push(record.input.target.checkout);
             drafted = true;
@@ -257,7 +255,7 @@ export const recordSaveOutcomes = (
       return updates;
     })
     .pipe(
-      // Only a committed transaction changes the records the caller holds.
+      // Only a committed publication changes the records the caller holds.
       Effect.map((updates) => {
         for (const { record, updated } of updates) Object.assign(record, updated);
       }),

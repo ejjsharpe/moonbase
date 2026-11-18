@@ -12,8 +12,8 @@ import {
 // the `ApplicationError` code and text clients have always read.
 
 const recoveryConflicts = {
-  'operation-identity': 'Operation identity changed before its outcome reached the recovery.',
-  'save-identity': 'Save identity changed before its outcome reached the recovery.',
+  'operation-identity': 'Operation identity changed before recovery publication.',
+  'save-identity': 'Save identity changed before recovery publication.',
   'operation-not-sent':
     'The operation never reached the host and did not run. Repeat it as a new operation.',
 } as const;
@@ -29,10 +29,10 @@ export class RecoveryConflictError extends Schema.TaggedError<RecoveryConflictEr
   }
 }
 
-const pendingUpdates = {
-  save: 'The Save outcome is not in the recovery yet; the previous recovery is kept. ',
+const pendingPublications = {
+  save: 'Admitted Save recovery publication pending; previous valid snapshot retained. ',
   'operation-acknowledgement':
-    'The operation outcome is not in the recovery yet. Keep the previous recovery until it is, then acknowledge.',
+    'Known operation recovery publication is pending. Preserve the prior valid snapshot before acknowledgement.',
   'uncertain-draft':
     'An uncertain operation still owns this recovery draft. Inspect/reconcile the original paths before discarding it.',
   'save-running':
@@ -44,20 +44,22 @@ const pendingUpdates = {
  * The recovery could not take an outcome in yet; the earlier recovery is kept. `detail` is the
  * safe text of what failed, when there is one.
  */
-export class RecoveryUpdatePendingError extends Schema.TaggedError<RecoveryUpdatePendingError>()(
-  'RecoveryUpdatePendingError',
+export class RecoveryPublicationError extends Schema.TaggedError<RecoveryPublicationError>()(
+  'RecoveryPublicationError',
   {
-    pending: Schema.Literals(Object.keys(pendingUpdates) as (keyof typeof pendingUpdates)[]),
+    pending: Schema.Literals(
+      Object.keys(pendingPublications) as (keyof typeof pendingPublications)[],
+    ),
     detail: Schema.optional(Schema.String),
   },
 ) {
   override get message() {
-    return pendingUpdates[this.pending] + (this.detail ?? '');
+    return pendingPublications[this.pending] + (this.detail ?? '');
   }
 }
 
 const recoveryProblems = {
-  'save-group': 'Saves recorded together belong to one client.',
+  'save-group': 'A Save publication group belongs to one client.',
   'destination-drafts': 'Destination has recovery drafts. Preserve them before replacement.',
   'invalid-state': 'Invalid recovery state.',
   'unknown-buffer': 'No such buffer is open in this recovery.',
@@ -117,7 +119,7 @@ export class UnexpectedHostReplyError extends Schema.TaggedError<UnexpectedHostR
 /** The recovery store's own errors. */
 export type RecoveryError =
   | RecoveryConflictError
-  | RecoveryUpdatePendingError
+  | RecoveryPublicationError
   | InvalidRecoveryRequestError
   | UnreadableRecoveryError
   | ObserverAccessError
@@ -128,7 +130,7 @@ export type WorkspaceError = WorkspaceHostError | RecoveryError;
 
 const codes: Record<RecoveryError['_tag'], ApplicationErrorCode> = {
   RecoveryConflictError: 'Conflict',
-  RecoveryUpdatePendingError: 'Persistence',
+  RecoveryPublicationError: 'Persistence',
   InvalidRecoveryRequestError: 'InvalidInput',
   UnreadableRecoveryError: 'InvalidInput',
   ObserverAccessError: 'Unauthorized',

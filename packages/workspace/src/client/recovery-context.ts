@@ -53,16 +53,16 @@ export const unresolvedSaves = pendingSaves + " AND json_extract(body, '$.state'
 
 /** Whether anything is left to do for an operation record (see `OperationRecord.open`). */
 function isOpen(record: OperationRecord) {
-  const applied = record.appliedItems ?? [];
+  const published = record.publishedItems ?? [];
   const owners = [
     ...(record.remote ? [] : [record.input.clientId]),
-    ...Object.keys(record.clientRevisions),
+    ...Object.keys(record.publicationRevisions),
   ];
   return (
     record.result.outcome === 'uncertain' ||
-    record.applyError !== undefined ||
+    record.publicationError !== undefined ||
     record.result.items.some(
-      (item) => item.outcome === 'completed' && !applied.includes(canonical(item)),
+      (item) => item.outcome === 'completed' && !published.includes(canonical(item)),
     ) ||
     owners.some((client) => !record.acknowledgedBy.includes(client)) ||
     (!record.remote && !record.hostAcknowledged)
@@ -144,7 +144,7 @@ export class RecoveryContext {
   }
   /**
    * A checkout's operation records that are not settled for every purpose: uncertain, with a
-   * an outcome still not recorded, or not yet acknowledged by the client that made them.
+   * recovery publication still failing, or not yet acknowledged by the client that made them.
    */
   getUnsettledCheckoutOperations(target: CheckoutTarget) {
     return this.getOpenOperations(target).filter(
@@ -152,7 +152,7 @@ export class RecoveryContext {
         !this.activeOperations.has(operationKey(r)) &&
         !r.remote &&
         (r.result.outcome === 'uncertain' ||
-          r.applyError !== undefined ||
+          r.publicationError !== undefined ||
           !r.acknowledgedBy.includes(r.input.clientId)),
     );
   }

@@ -37,9 +37,9 @@ for (const origin of ['own', 'foreign'] as const)
   test(`a draft opened at a move's destination is kept beside the arriving draft (${origin} move)`, async () => {
     const f = await fixture('collision', false);
     await f.editor.dispose();
-    let reach!: () => void, release!: () => void;
-    const reached = new Promise<void>((resolve) => {
-        reach = resolve;
+    let admit!: () => void, release!: () => void;
+    const admitted = new Promise<void>((resolve) => {
+        admit = resolve;
       }),
       wait = new Promise<void>((resolve) => {
         release = resolve;
@@ -50,7 +50,7 @@ for (const origin of ['own', 'foreign'] as const)
       async command(name, input, options) {
         const result = await f.client.command(name, input, options);
         if (origin === 'own' && name === 'mutate') {
-          reach();
+          admit();
           await wait;
         }
         return result;
@@ -73,7 +73,7 @@ for (const origin of ['own', 'foreign'] as const)
           kind: 'move',
           destination: 'destination.ts',
         });
-        await reached;
+        await admitted;
       } else {
         await f.client.command('mutate', {
           id: 'collision',

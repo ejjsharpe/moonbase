@@ -57,7 +57,7 @@ const pathCheck = (path: string, directory = false) => {
     fail('Invalid relative path.');
 };
 
-/** An in-memory workspace for demos and tests. It makes no filesystem or durability claim. */
+/** Concrete volatile adapter for demos/tests. It makes no filesystem or durability claim. */
 export function fauxWorkspace(given: Seed[]) {
   let version = 0;
   const files = new Map<string, Map<string, Entry>>();

@@ -20,7 +20,7 @@ const closeLabels = ['Close', 'Close Others', 'Close to the Right', 'Close All']
  */
 export function EditorTabMenu({
   actions,
-  holdingUnsaved,
+  preserving,
   file,
   buffer: current,
   openFiles,
@@ -33,7 +33,7 @@ export function EditorTabMenu({
   withFocus,
 }: {
   actions: EditorActions;
-  holdingUnsaved: boolean;
+  preserving: boolean;
   file: FileTarget;
   buffer: Buffer | undefined;
   /** The checkout's open tabs, in order. */
@@ -88,7 +88,7 @@ export function EditorTabMenu({
           </Menu.Item>
           <Menu.Item
             {...stylex.props(overlays.option)}
-            disabled={!current || current.saving || holdingUnsaved}
+            disabled={!current || current.saving || preserving}
             onClick={() => run(actions.save(file))}>
             {current?.pendingSave ? 'Retry Save' : 'Save'}
           </Menu.Item>

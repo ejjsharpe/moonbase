@@ -38,10 +38,10 @@ describe('checkout discovery and activation', () => {
   test('selecting a background-closed checkout loads its absent survivor in its remembered view', async () => {
     const f = await fixture('r4-background', false);
     let hold = false,
-      reach!: () => void,
+      admit!: () => void,
       release!: () => void;
-    const reached = new Promise<void>((resolve) => {
-        reach = resolve;
+    const admitted = new Promise<void>((resolve) => {
+        admit = resolve;
       }),
       wait = new Promise<void>((resolve) => {
         release = resolve;
@@ -62,7 +62,7 @@ describe('checkout discovery and activation', () => {
         watch: () => async () => {},
         async command(name, input, options) {
           if (hold && isRecoveryEdit(name)) {
-            reach();
+            admit();
             await wait;
           }
           return f.client.command(name, input, options);
@@ -86,7 +86,7 @@ describe('checkout discovery and activation', () => {
           watch: () => async () => {},
           async command(name, input, options) {
             if (hold && isRecoveryEdit(name)) {
-              reach();
+              admit();
               await wait;
             }
             if (delayRead && name === 'readComparison') {
@@ -105,7 +105,7 @@ describe('checkout discovery and activation', () => {
         () => editor.close([target('b.ts')]),
         async () => 'discard',
       );
-      await reached;
+      await admitted;
       editor.selectCheckout(second);
       release();
       assert.equal(await closing, true);
@@ -138,7 +138,7 @@ describe('checkout discovery and activation', () => {
   });
 
   for (const outcome of ['success', 'cancel', 'failure'] as const)
-    test(`a selected absent survivor activates after another Close releases (${outcome})`, async () => {
+    test(`a selected absent survivor activates after another preservation releases (${outcome})`, async () => {
       const f = await observedFixture('r5-selected-' + outcome);
       let entered = held(),
         release = held(),
@@ -611,9 +611,9 @@ test('missing retained dirty tab stays accessible after Trash and new missing op
 test('a newer explicit checkout selection defeats a delayed file activation in another checkout', async () => {
   const f = await fixture('unused', false);
   await f.editor.dispose();
-  let reach!: () => void, release!: () => void;
-  const reached = new Promise<void>((resolve) => {
-      reach = resolve;
+  let admit!: () => void, release!: () => void;
+  const admitted = new Promise<void>((resolve) => {
+      admit = resolve;
     }),
     wait = new Promise<void>((resolve) => {
       release = resolve;
@@ -625,7 +625,7 @@ test('a newer explicit checkout selection defeats a delayed file activation in a
       watch: () => async () => {},
       async command(name, input, options) {
         if (name === 'readFile') {
-          reach();
+          admit();
           await wait;
         }
         return f.client.command(name, input, options);
@@ -638,7 +638,7 @@ test('a newer explicit checkout selection defeats a delayed file activation in a
     await editor.openCheckout(second.root);
     editor.selectCheckout(checkout);
     const opening = editor.open(target('a.ts'));
-    await reached;
+    await admitted;
     editor.selectCheckout(second);
     release();
     assert.equal(await opening, false);

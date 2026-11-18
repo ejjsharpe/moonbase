@@ -20,7 +20,7 @@ import { EditorBuffers } from '../buffers/buffers-service.ts';
 import { isClean, isDirty, newBuffer } from '../buffers/buffers.ts';
 import { EditorDiscovery } from '../discovery/discovery-service.ts';
 import { RecoveryOutbox } from '../recovery/recovery-outbox-service.ts';
-import { fileKey } from '../keys.ts';
+import { fileKey } from '../recovery/recovery-references.ts';
 import { conflictComparison, placeOpenedFile, type OpenOptions } from './tabs.ts';
 
 export type { OpenOptions };
@@ -35,14 +35,14 @@ export type EditorTabsShape = {
     target: FileTarget,
     options?: OpenOptions,
   ) => Effect.Effect<boolean, EditorFailure>;
-  /** `open` for an action already running. */
+  /** `open` for an action already admitted. */
   readonly openFile: (
     target: FileTarget,
     options?: OpenOptions,
   ) => Effect.Effect<boolean, EditorFailure>;
   /** Opens the selected checkout's active file if it isn't shown as its view asks. */
   readonly activateSelected: Effect.Effect<boolean, EditorFailure>;
-  /** Cancels any running open, as a newer selection or a Close prompt does. */
+  /** Cancels any running open, as a newer selection or a preservation does. */
   readonly cancelActivation: Effect.Effect<void>;
   /** Runs `read` as the activation unless an open runs; succeeds whether it ran to completion. */
   readonly whileIdle: (read: Effect.Effect<void>) => Effect.Effect<void>;
@@ -67,7 +67,7 @@ export type EditorTabsShape = {
    * Holds the editor for a close or reload: no open runs and edits are refused until `work`
    * ends; then the selected file is shown again and the edits made meanwhile are sent.
    */
-  readonly whileHoldingUnsaved: <A, E, R>(work: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  readonly whilePreserving: <A, E, R>(work: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 };
 
 /** Opening, arranging and editing the tabs of the editor's checkouts. */
@@ -85,8 +85,8 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
       const discovery = yield* EditorDiscovery;
       const outbox = yield* RecoveryOutbox;
       const activation = yield* FiberHandle.make<boolean, never>();
-      const runAction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        session.run(Effect.andThen(session.assertAccepting, effect));
+      const admitted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        session.run(Effect.andThen(session.admit, effect));
 
       /** Whether the file's folder lists in full without it: a failed read found nothing there. */
       const isMissing = (target: FileTarget) =>
@@ -219,14 +219,14 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
           const selected = yield* views.view(target.checkout);
           if (!isRelativePath(target.path))
             return yield* new EditorError({ reason: 'invalid-path' });
-          if ((yield* session.get).holdingUnsaved) return false;
+          if ((yield* session.get).preserving) return false;
           const key = fileKey(target),
             mode = options.view ?? selected.fileViews.get(target.path) ?? 'file';
           const isCurrent = Effect.map(
             Effect.all([session.get, views.get]),
-            ([{ closing, holdingUnsaved }, { recovery }]) =>
+            ([{ closing, preserving }, { recovery }]) =>
               !closing &&
-              !holdingUnsaved &&
+              !preserving &&
               (options.current?.() ?? true) &&
               isCheckoutOpen(recovery, target.checkout),
           );
@@ -255,8 +255,8 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
         });
 
       const activateSelected: Effect.Effect<boolean, EditorFailure> = Effect.gen(function* () {
-        const { closing, holdingUnsaved } = yield* session.get;
-        if (closing || holdingUnsaved) return false;
+        const { closing, preserving } = yield* session.get;
+        if (closing || preserving) return false;
         const { recovery } = yield* views.get;
         const checkout = recovery.checkouts.find(
           (target) => target.checkoutId === recovery.selectedCheckoutId,
@@ -301,7 +301,7 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
 
       return {
         open: (target, options = {}) =>
-          runAction(
+          admitted(
             Effect.gen(function* () {
               // The folder's reads end during `git init`: open the file once it is the repository.
               if ((yield* session.get).initializing === target.checkout.checkoutId) {
@@ -326,7 +326,7 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
             yield* Fiber.await(fiber);
           }),
         navigate: (checkout, direction) =>
-          runAction(
+          admitted(
             Effect.gen(function* () {
               const selected = yield* views.view(checkout),
                 paths = selected.openFiles;
@@ -337,13 +337,13 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
             }),
           ),
         edit: (target, text) =>
-          runAction(
+          admitted(
             Effect.gen(function* () {
               yield* views.view(target.checkout);
               if (!isRelativePath(target.path))
                 return yield* new EditorError({ reason: 'invalid-path' });
-              if ((yield* session.get).holdingUnsaved)
-                return yield* new EditorError({ reason: 'holding-unsaved' });
+              if ((yield* session.get).preserving)
+                return yield* new EditorError({ reason: 'preserving' });
               if (new TextEncoder().encode(text).length > maximumFileBytes)
                 return yield* new EditorError({ reason: 'text-too-large' });
               const buffer = yield* buffers.find(target);
@@ -356,12 +356,12 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
               yield* outbox.changed;
             }),
           ),
-        keepOpen: (target) => runAction(keepOpen(target)),
+        keepOpen: (target) => admitted(keepOpen(target)),
         reorder: (checkout, from, to) =>
-          runAction(
+          admitted(
             Effect.gen(function* () {
               const selected = yield* views.view(checkout);
-              if ((yield* session.get).holdingUnsaved || !selected.openFiles.includes(from)) return;
+              if ((yield* session.get).preserving || !selected.openFiles.includes(from)) return;
               yield* views.modify(({ recovery }) => {
                 const view = recovery.views.get(checkout.checkoutId)!;
                 view.openFiles.splice(view.openFiles.indexOf(from), 1);
@@ -373,8 +373,8 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
           ),
         position: (target, mode, position) =>
           Effect.gen(function* () {
-            const { acceptingActions, closing, holdingUnsaved } = yield* session.get;
-            if (!acceptingActions || closing || holdingUnsaved) return;
+            const { admissionsOpen, closing, preserving } = yield* session.get;
+            if (!admissionsOpen || closing || preserving) return;
             const changed = yield* views.modify(({ recovery }) => {
               if (!isCheckoutOpen(recovery, target.checkout)) return false;
               const selected = recovery.views.get(target.checkout.checkoutId);
@@ -386,16 +386,16 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
             });
             if (changed) yield* outbox.changed;
           }),
-        whileHoldingUnsaved: (work) =>
+        whilePreserving: (work) =>
           Effect.gen(function* () {
-            yield* session.update((s) => ({ ...s, holdingUnsaved: true }));
+            yield* session.update((s) => ({ ...s, preserving: true }));
             yield* FiberHandle.clear(activation);
             return yield* work;
           }).pipe(
             Effect.ensuring(
               Effect.gen(function* () {
                 if ((yield* session.get).closing) return;
-                yield* session.update((s) => ({ ...s, holdingUnsaved: false }));
+                yield* session.update((s) => ({ ...s, preserving: false }));
                 yield* Effect.catch(activateSelected, alerts.report);
                 yield* outbox.schedule;
               }),

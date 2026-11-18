@@ -48,7 +48,7 @@ for (const [name, entry] of Object.entries(entries))
     if (entry === '' || entry === '/editor')
       for (const owner of [
         'recovery/recovery-outbox-service',
-        'unsaved-changes/unsaved-changes-service',
+        'preservation/preservation-service',
         'discovery/discovery-service',
       ])
         assert(

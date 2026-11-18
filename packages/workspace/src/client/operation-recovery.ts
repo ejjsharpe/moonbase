@@ -8,7 +8,7 @@ import type { HostOperationResult } from '@moonbase/contracts/workspace-host';
 import {
   ObserverAccessError,
   RecoveryConflictError,
-  RecoveryUpdatePendingError,
+  RecoveryPublicationError,
 } from '@moonbase/contracts/workspace-errors';
 import {
   UnresolvedWorkError,
@@ -17,7 +17,7 @@ import {
 import { attempt, type WorkspaceFailure } from '../attempt.ts';
 import { canonical, errorText, isOriginalResult, key, same } from '../validation.ts';
 import type { OperationRecord } from './client-schema.ts';
-import { applyOperationEffects } from './operation-effects.ts';
+import { reconcile } from './reconcile.ts';
 import type { RecoveryContext } from './recovery-context.ts';
 
 type MergedOperation = {
@@ -28,7 +28,7 @@ type MergedOperation = {
   changed: boolean;
 };
 
-/** Takes the host's items and outcome into the client's record, ahead of recording it. */
+/** Takes the host's items and outcome into the client's record, ahead of publishing it. */
 export function adoptHostResult(record: OperationRecord, host: HostOperationResult) {
   record.result = { ...record.result, items: host.items, outcome: host.outcome };
   if (host.message === undefined) delete record.result.message;
@@ -49,7 +49,7 @@ export const replayOperation = (
     if (!same(record.input, input))
       return yield* new WorkspaceConflictError({ conflict: 'operation-payload' });
     if (context.activeOperations.has(id)) return { result: record.result, missing: false };
-    if (record.applyError) yield* recordOperationOutcome(context, id, record);
+    if (record.publicationError) yield* publishOperation(context, id, record);
     const missing =
       !record.remote &&
       record.result.outcome === 'uncertain' &&
@@ -74,7 +74,7 @@ export const resolveOperation = (
     }
     if (!asked.value) return 'missing';
     adoptHostResult(record, asked.value);
-    yield* recordOperationOutcome(context, id, record);
+    yield* publishOperation(context, id, record);
     return 'found';
   });
 
@@ -93,15 +93,15 @@ export const getOperationStatus = (
     ) {
       if (!record.remote && record.result.outcome === 'uncertain')
         yield* resolveOperation(context, id, record);
-      else if (record.applyError) yield* recordOperationOutcome(context, id, record);
+      else if (record.publicationError) yield* publishOperation(context, id, record);
     }
     return record.result;
   });
 
 /**
  * Records that a client has taken in an operation's effect on its recovery. The store applied
- * that effect itself when it recorded the operation's outcome, and edits name buffers, so a
- * client's later edits cannot undo it: only that has to have happened. Returns whether the
+ * that effect itself when it published the operation, and edits name buffers, so a client's
+ * later edits cannot undo it: only the publication has to have happened. Returns whether the
  * host should now be told this client's own operation is settled.
  */
 export const acknowledgeOperation = (
@@ -120,13 +120,13 @@ export const acknowledgeOperation = (
     )
       return yield* new ObserverAccessError();
     if (
-      record.applyError ||
+      record.publicationError ||
       record.result.items.some(
         (item) =>
-          item.outcome === 'completed' && !(record.appliedItems ?? []).includes(canonical(item)),
+          item.outcome === 'completed' && !(record.publishedItems ?? []).includes(canonical(item)),
       )
     )
-      return yield* new RecoveryUpdatePendingError({ pending: 'operation-acknowledgement' });
+      return yield* new RecoveryPublicationError({ pending: 'operation-acknowledgement' });
     if (record.result.outcome === 'uncertain')
       return yield* new UnresolvedWorkError({ state: 'operation-unacknowledgeable' });
     yield* attempt(() =>
@@ -150,37 +150,32 @@ export const markOperationAcknowledged = (context: RecoveryContext, id: string) 
  * be written) and retried at the next load or repeat; the host also keeps the outcome until it
  * is acknowledged.
  */
-export const recordOperationOutcome = (
-  context: RecoveryContext,
-  id: string,
-  record: OperationRecord,
-) =>
+export const publishOperation = (context: RecoveryContext, id: string, record: OperationRecord) =>
   context.store
     .transaction(() => applyOperations(context, [{ id, record }]))
     .pipe(
       Effect.map(([merged]) => {
-        delete record.applyError;
+        delete record.publicationError;
         Object.assign(record, merged.updated);
       }),
-      Effect.catch((error) => attempt(() => keepFailedOutcome(context, id, record, error))),
+      Effect.catch((error) => attempt(() => recordPublicationFailure(context, id, record, error))),
       Effect.ignore,
     );
 
-/** Keeps an outcome that could not be recorded, to be retried at the next load or repeat. */
-export function keepFailedOutcome(
+/** Keeps a record's failed publication, to be retried at the next load or repeat. */
+export function recordPublicationFailure(
   context: RecoveryContext,
   id: string,
   record: OperationRecord,
   error: unknown,
 ) {
-  record.applyError =
-    'Recording the outcome in recovery is pending; the previous recovery is kept. ' +
-    errorText(error);
-  record.result.message = record.applyError;
+  record.publicationError =
+    'Recovery publication pending; previous valid snapshot retained. ' + errorText(error);
+  record.result.message = record.publicationError;
   try {
     const committed = context.store.get<OperationRecord>('operations', id);
-    record.appliedItems = [
-      ...new Set([...(committed?.appliedItems ?? []), ...(record.appliedItems ?? [])]),
+    record.publishedItems = [
+      ...new Set([...(committed?.publishedItems ?? []), ...(record.publishedItems ?? [])]),
     ];
     context.putOperation(id, record);
   } catch {
@@ -215,7 +210,7 @@ export function applyOperations(
     let revision = current;
     const fresh = relevant.filter((m) => m.fresh.length);
     if (fresh.length) {
-      const { collisions, replaced } = applyOperationEffects(
+      const { collisions, replaced } = reconcile(
         state,
         fresh.map((m) => ({ ...m.updated, result: { ...m.updated.result, items: m.fresh } })),
       );
@@ -229,7 +224,7 @@ export function applyOperations(
         revision++;
       }
     }
-    for (const m of relevant) m.updated.clientRevisions[client] = revision;
+    for (const m of relevant) m.updated.publicationRevisions[client] = revision;
   }
   for (const m of changed) context.putOperation(m.id, m.updated);
   return merged;
@@ -277,11 +272,14 @@ function mergeOperation(
     outcome = 'uncertain';
   else if (originals.every((item) => item.outcome === 'completed')) outcome = 'completed';
   else outcome = 'failed';
-  const applied = new Set([...(committed?.appliedItems ?? []), ...(record.appliedItems ?? [])]);
+  const published = new Set([
+    ...(committed?.publishedItems ?? []),
+    ...(record.publishedItems ?? []),
+  ]);
   const fresh = mergedItems.filter(
-    (item) => item.outcome === 'completed' && !applied.has(canonical(item)),
+    (item) => item.outcome === 'completed' && !published.has(canonical(item)),
   );
-  const failed = record.applyError ?? committed?.applyError;
+  const failed = record.publicationError ?? committed?.publicationError;
   if (
     committed &&
     same(committed.result.items, mergedItems) &&
@@ -292,12 +290,12 @@ function mergeOperation(
     return { id, record, updated: committed, fresh, changed: false };
   const updated: OperationRecord = {
     ...record,
-    clientRevisions: { ...record.clientRevisions, ...committed?.clientRevisions },
+    publicationRevisions: { ...record.publicationRevisions, ...committed?.publicationRevisions },
     acknowledgedBy: [...new Set([...(committed?.acknowledgedBy ?? []), ...record.acknowledgedBy])],
-    appliedItems: [...applied, ...fresh.map(canonical)],
+    publishedItems: [...published, ...fresh.map(canonical)],
     result: { ...record.result, items: mergedItems, outcome },
   };
-  delete updated.applyError;
+  delete updated.publicationError;
   if (
     updated.result.outcome !== 'uncertain' &&
     (failed !== undefined || committed?.result.outcome === 'uncertain')

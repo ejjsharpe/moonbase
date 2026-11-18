@@ -173,7 +173,7 @@ test('a save whose baseline another save of the file replaced in the recovery st
   }
 });
 
-test('a move whose reply is lost before its outcome is recorded resolves through operationStatus after a restart', async () => {
+test('a move whose reply is lost before publication resolves through operationStatus after a restart', async () => {
   const h = harness();
   try {
     writeFileSync(join(h.root, 'file.txt'), 'disk');
@@ -684,7 +684,7 @@ test('loading recovery stops waiting on a host that does not answer and still re
     assert.equal(draftsOf(load.state)[0]?.text, 'unsettled text');
     assert(load.errors.some((error) => error.includes('broken')));
     assert(load.errors.length > 1);
-    // The unreadable row neither stalls a Trash (its feed entry skips it) nor lets a move
+    // The unreadable row neither stalls a Trash (its feed publication skips it) nor lets a move
     // onto a path that might hold its draft proceed.
     await alice.runtime.dispose();
     const next = h.startClient('alice', host);

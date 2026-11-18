@@ -150,7 +150,7 @@ describe('Save races', () => {
   });
 
   test('Save replies arriving in reverse order keep every newer draft without repeating writes', async () => {
-    const reached = [held(), held()],
+    const admitted = [held(), held()],
       reply = [held(), held()];
     const f = await fixture((raw) => ({
       ...raw,
@@ -159,7 +159,7 @@ describe('Save races', () => {
         if (name === 'saveFile') {
           const index = ['a.ts', 'b.ts'].indexOf((input as CommandInput<'saveFile'>).target.path);
           if (index >= 0) {
-            reached[index].release();
+            admitted[index].release();
             await reply[index].promise;
           }
         }
@@ -168,9 +168,9 @@ describe('Save races', () => {
     }));
     try {
       const a = f.editor.save(target('a.ts'));
-      await reached[0].promise;
+      await admitted[0].promise;
       const b = f.editor.save(target('b.ts'));
-      await reached[1].promise;
+      await admitted[1].promise;
       assert.equal(await f.editor.save(target('c.ts')), true);
       for (const path of ['a.ts', 'b.ts', 'c.ts']) f.editor.edit(target(path), 'newer ' + path);
       reply[1].release();
@@ -249,7 +249,7 @@ describe('Save races', () => {
             false,
           );
         else await assert.rejects(f.editor.reload(target('a.ts')), /Discard not delivered/);
-        assert.equal(f.editor.getSnapshot().holdingUnsaved, false);
+        assert.equal(f.editor.getSnapshot().preserving, false);
         assert.equal(f.editor.buffer(target('a.ts'))!.text, 'captured a.ts');
         assert.equal(f.editor.buffer(target('a.ts'))!.disk.text, 'A');
         assert(
@@ -334,14 +334,14 @@ describe('Save races', () => {
   });
 
   test('disposal during a held Save cancels it, releases observations and sends no edits', async () => {
-    const reached = held(),
+    const admitted = held(),
       reply = held();
     const f = await fixture((raw) => ({
       ...raw,
       async command(name, input, options) {
         const result = await raw.command(name, input, options);
         if (name === 'saveFile' && (input as CommandInput<'saveFile'>).target.path === 'a.ts') {
-          reached.release();
+          admitted.release();
           await reply.promise;
         }
         return result;
@@ -349,7 +349,7 @@ describe('Save races', () => {
     }));
     try {
       const cancelled = assert.rejects(f.editor.save(target('a.ts')), /Editor disposed/);
-      await reached.promise;
+      await admitted.promise;
       const edits = f.memory.stats.edits;
       await f.editor.dispose();
       reply.release();
@@ -380,7 +380,7 @@ describe('Save races', () => {
       await assert.rejects(f.editor.save(target('a.ts')));
       assert.equal(f.editor.buffer(target('a.ts'))!.pendingSave, undefined);
       assert.equal(await quit(f.editor, 'discard'), false, 'recovery cannot keep the invalid text');
-      f.editor.edit(target('a.ts'), 'corrected before closing');
+      f.editor.edit(target('a.ts'), 'corrected before preservation');
       assert.equal(await quit(f.editor, 'discard'), true);
     } finally {
       await f.dispose();
@@ -389,8 +389,6 @@ describe('Save races', () => {
 });
 
 describe('saves and reloads', () => {
-  /** A client's recovery as the store holds it. */
-  /** The drafts a recovery holds, as the file each is for, its text and its baseline. */
   test('external-change conflict retains dirty text and baseline; Overwrite checks the observed version again', async () => {
     const f = await fixture();
     try {
@@ -443,7 +441,7 @@ describe('saves and reloads', () => {
     }
   });
 
-  test('lost Save response retries its immutable payload once, keeping newer edits', async () => {
+  test('lost Save response retries its immutable payload once, preserving newer edits', async () => {
     const f = await fixture();
     try {
       await f.editor.open(target('a.ts'));

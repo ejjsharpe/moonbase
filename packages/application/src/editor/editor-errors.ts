@@ -27,8 +27,8 @@ const reasons = {
   'initializing-close': 'Git is initializing. Close again when it finishes.',
   'rebind-busy': 'Wait for saves and file operations in this project to finish.',
   'checkout-identity': 'Checkout identity changed; retained work has not been rebound.',
-  'holding-unsaved': 'Finish the open Close or Reload first.',
-  'holding-unsaved-flush': 'Finish the open Close or Reload before flushing.',
+  preserving: 'Finish the captured preservation action first.',
+  'preserving-flush': 'Finish the captured preservation action before flushing.',
   'text-too-large': 'Editable text exceeds 2 MiB.',
   'not-open': 'Open this file before editing it.',
   'file-unavailable': 'File unavailable on disk. Retained buffer and edits remain accessible.',
@@ -97,7 +97,7 @@ export function getFailureCode(error: unknown): ApplicationErrorCode | undefined
   return undefined;
 }
 
-/** The store or host refused the request as given: it never ran. */
+/** The store or host refused the request as given: it was never admitted. */
 export const isRefusal = (error: unknown) => getFailureCode(error) === 'InvalidInput';
 /** The host could not be reached (a restarted daemon, say): watching again may succeed. */
 export const isUnavailable = (error: unknown) => getFailureCode(error) === 'Unavailable';

@@ -46,7 +46,7 @@ import {
   EditorLookup,
   EditorMutations,
   EditorOperations,
-  UnsavedChangesGuard,
+  EditorPreservation,
   EditorSaves,
   EditorSession,
   EditorTabs,
@@ -251,7 +251,7 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
     tabs = get(EditorTabs),
     tree = get(EditorTree),
     saves = get(EditorSaves),
-    unsavedChanges = get(UnsavedChangesGuard),
+    preservation = get(EditorPreservation),
     checkouts = get(EditorCheckouts),
     mutations = get(EditorMutations),
     recovery = get(RecoverySync),
@@ -266,7 +266,7 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
     get(EditorOperations).state,
     get(RecoveryOutbox).state,
     mutations.state,
-    unsavedChanges.closePrompt,
+    preservation.closePrompt,
   ] as const;
   let parts: unknown[] | undefined, snapshot: EditorSnapshot | undefined;
   const getSnapshot = (): EditorSnapshot => {
@@ -384,9 +384,9 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
       watchRefs(refs as unknown as SubscriptionRef.SubscriptionRef<unknown>[], listener),
     report: (error: unknown) => now(alerts.report(error)),
     clearErrors: () => now(alerts.clear),
-    /** Composition stops new actions while it prepares Quit. */
-    setAcceptingActions: (open: boolean) =>
-      now(session.update((s) => (s.closing ? s : { ...s, acceptingActions: open }))),
+    /** Composition fences admissions while it prepares Quit. */
+    setAdmissionsOpen: (open: boolean) =>
+      now(session.update((s) => (s.closing ? s : { ...s, admissionsOpen: open }))),
     load: () => run(get(EditorLoader).load),
     openCheckout: (root: string) => run(checkouts.openCheckout(root)),
     listWorktrees: (checkout: CheckoutTarget) => run(checkouts.listWorktrees(checkout)),
@@ -394,7 +394,7 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
     initializeRepository: (checkout: CheckoutTarget) =>
       run(checkouts.initializeRepository(checkout)),
     selectCheckout: (target: CheckoutTarget) => run(checkouts.selectCheckout(target)),
-    flush: () => run(Effect.andThen(session.assertAccepting, recovery.flush)),
+    flush: () => run(Effect.andThen(session.admit, recovery.flush)),
     buffer: (target: FileTarget): Readonly<EditorBuffer> | undefined =>
       getSnapshot().buffers.find((buffer) => fileKey(buffer.target) === fileKey(target)),
     edit: (target: FileTarget, text: string) => now(tabs.edit(target, text)),
@@ -413,12 +413,12 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
     reload: (target: FileTarget) => run(saves.reload(target)),
     cancelConflict: (target: FileTarget) => now(saves.cancelConflict(target)),
     answerClose: (promptId: string, choice: CloseChoice) =>
-      now(unsavedChanges.answerClose(promptId, choice)),
-    close: (targets: FileTarget[]) => run(unsavedChanges.close(targets)),
-    closeCheckout: (checkout: CheckoutTarget) => run(unsavedChanges.closeCheckout(checkout)),
-    prepareQuit: () => run(unsavedChanges.prepareQuit),
-    finishQuitPreparation: () => run(unsavedChanges.finishQuitPreparation),
-    reopen: (checkout: CheckoutTarget) => run(unsavedChanges.reopen(checkout)),
+      now(preservation.answerClose(promptId, choice)),
+    close: (targets: FileTarget[]) => run(preservation.close(targets)),
+    closeCheckout: (checkout: CheckoutTarget) => run(preservation.closeCheckout(checkout)),
+    prepareQuit: () => run(preservation.prepareQuit),
+    finishQuitPreparation: () => run(preservation.finishQuitPreparation),
+    reopen: (checkout: CheckoutTarget) => run(preservation.reopen(checkout)),
     tree: (checkout: CheckoutTarget, patch: Partial<CheckoutTree>) =>
       now(tree.tree(checkout, patch)),
     resizeSidebar: (width: number) => now(tree.resizeSidebar(width)),
@@ -430,7 +430,7 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
     lookup: (checkout: CheckoutTarget, query: string) =>
       run(
         Effect.gen(function* () {
-          yield* session.assertAccepting;
+          yield* session.admit;
           yield* views.view(checkout);
           const { recovery: shown } = yield* views.get;
           return yield* Context.get(
@@ -463,7 +463,7 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
       });
     },
     mutations: {
-      allows: (action: MutationAction) => now(mutations.allows(action)),
+      admits: (action: MutationAction) => now(mutations.admits(action)),
       /** Runs a file operation as the tree does, asking before it replaces anything. */
       run: (action: MutationAction, destination: string | MutationOptions) =>
         run(

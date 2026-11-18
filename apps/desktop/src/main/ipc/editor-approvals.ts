@@ -95,8 +95,7 @@ export class EditorApprovals {
     },
     loadRecovery: ({ state, operations }) => {
       for (const target of state.checkouts) this.known.set(target.checkoutId, target);
-      for (const operation of operations)
-        this.operations.add(JSON.stringify([operation.clientId, operation.id]));
+      for (const fact of operations) this.operations.add(JSON.stringify([fact.clientId, fact.id]));
     },
   };
 }

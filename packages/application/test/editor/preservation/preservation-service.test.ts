@@ -22,7 +22,7 @@ import {
   type CloseChoice,
   EditorCheckouts,
   EditorLoader,
-  UnsavedChangesGuard,
+  EditorPreservation,
   EditorSession,
   EditorTabs,
   RecoveryOutbox,
@@ -62,7 +62,7 @@ test('exact close prompts ignore stale answers and disposal cancels an outstandi
   }
 });
 
-describe('Close and Quit races', () => {
+describe('captured preservation races', () => {
   const { checkout, second, target, fixture, held, holding, observedFixture, storedRecovery } =
     controllerFixture;
   const closeAs = (editor: EditorDriver, kind: 'files' | 'checkout' | 'quit', path: string) =>
@@ -77,7 +77,7 @@ describe('Close and Quit races', () => {
     );
 
   for (const kind of ['files', 'checkout', 'quit'] as const)
-    test(`${kind} with unsaved changes keeps the selection and layout changed while its edit is held`, async () => {
+    test(`${kind} preservation keeps the selection and layout changed while its edit is held`, async () => {
       const f = await fixture('selection-' + kind, false);
       const h = holding({ ...f.client, watch: () => async () => {} });
       await f.editor.dispose();
@@ -128,7 +128,7 @@ describe('Close and Quit races', () => {
     });
 
   for (const kind of ['files', 'checkout', 'quit'] as const)
-    test(`${kind} with unsaved changes whose discard reply is lost shows on restart what the editor shows`, async () => {
+    test(`${kind} preservation whose discard reply is lost shows on restart what the editor shows`, async () => {
       const f = await fixture('lost-discard-' + kind, false);
       try {
         await f.editor.open(target('b.ts'));
@@ -370,7 +370,7 @@ describe('Close and Quit races', () => {
     }
   });
 
-  test('a received observer acknowledgement stays completed when its response crosses a Reload lock', async () => {
+  test('an admitted observer acknowledgement stays completed when its response crosses a Reload lock', async () => {
     const f = await observedFixture('ack-boundary'),
       acked = held(),
       releaseAck = held(),
@@ -429,7 +429,7 @@ describe('Close and Quit races', () => {
 
   test('a copied draft discarded before the copy replies stays discarded, and newer edits there are kept', async () => {
     const f = await observedFixture('copy-close'),
-      reached = held(),
+      admitted = held(),
       reply = held();
     try {
       await f.editor.open(target('a.ts'), { view: 'file' });
@@ -439,13 +439,13 @@ describe('Close and Quit races', () => {
       f.transport.command = async (name, input, options) => {
         const result = await f.clientCommand(name, input, options);
         if (name === 'mutate') {
-          reached.release();
+          admitted.release();
           await reply.promise;
         }
         return result;
       };
       const copying = f.editor.mutate({ checkout, kind: 'copy', sources, destination: 'copy.ts' });
-      await reached.promise;
+      await admitted.promise;
       await f.editor.reconcileRecovery();
       assert.equal(f.editor.buffer(target('copy.ts'))?.text, 'source draft');
       assert.equal(
@@ -498,7 +498,7 @@ describe('Close and Quit races', () => {
   });
 });
 
-test('captured close defers Discards; earlier Save stays saved after a later Cancel', async () => {
+test('captured close defers Discards; earlier Save remains a fact after later Cancel', async () => {
   const f = await fixture();
   try {
     for (const path of ['a.ts', 'b.ts', 'c.ts']) {
@@ -581,7 +581,7 @@ test('reopen restores batch order/view/position and reads current source rather 
 test('pending commands retain newer live text and close cannot cross an unresolved Save', async () => {
   const f = await fixture();
   let received!: () => void, release!: () => void;
-  const reached = new Promise<void>((resolve) => {
+  const admitted = new Promise<void>((resolve) => {
       received = resolve;
     }),
     delayed = new Promise<void>((resolve) => {
@@ -606,7 +606,7 @@ test('pending commands retain newer live text and close cannot cross an unresolv
     editor.edit(target('a.ts'), 'captured save');
     await editor.flush();
     const save = editor.save(target('a.ts'));
-    await reached;
+    await admitted;
     editor.edit(target('a.ts'), 'newer live edit');
     assert.equal(
       await answering(
@@ -632,7 +632,7 @@ test('pending commands retain newer live text and close cannot cross an unresolv
   }
 });
 
-test('Quit uses the same deferred unsaved-changes gate and a failed discard keeps all edits', async () => {
+test('Quit uses the same deferred preservation gate and a failed discard keeps all edits', async () => {
   const f = await fixture();
   try {
     await f.editor.open(target('a.ts'));
@@ -740,25 +740,24 @@ describe('Quit preparation on its own', () => {
           yield* tabs.open(file);
           yield* (yield* RecoverySync).flush;
           const session = yield* EditorSession;
-          const guard = yield* UnsavedChangesGuard;
-          const setAccepting = (open: boolean) =>
-            session.update((s) => ({ ...s, acceptingActions: open }));
+          const preservation = yield* EditorPreservation;
+          const fence = (open: boolean) => session.update((s) => ({ ...s, admissionsOpen: open }));
           // The last change before Quit is a layout edit the store loses.
           loseLayout = true;
           yield* tabs.position(file, 'file', { line: 1, column: 7, top: 20, left: 0 });
-          yield* setAccepting(false);
-          assert.equal(yield* guard.finishQuitPreparation, false);
+          yield* fence(false);
+          assert.equal(yield* preservation.finishQuitPreparation, false);
           assert.notEqual(
             (yield* SubscriptionRef.get((yield* RecoveryOutbox).state)).failure,
             undefined,
           );
-          assert.equal(yield* guard.recoveryReady, false);
+          assert.equal(yield* preservation.recoveryReady, false);
           // Quit may go once a later flush keeps it.
-          yield* setAccepting(true);
+          yield* fence(true);
           loseLayout = false;
           yield* (yield* RecoverySync).flush;
-          yield* setAccepting(false);
-          assert.equal(yield* guard.finishQuitPreparation, true);
+          yield* fence(false);
+          assert.equal(yield* preservation.finishQuitPreparation, true);
           const { state } = yield* store.loadRecovery({ clientId: 'quit' });
           const id = state.buffers.find((buffer) => buffer.target.path === 'a.ts')!.id;
           assert.deepEqual(state.views[opened.checkoutId].positions[id].file, {

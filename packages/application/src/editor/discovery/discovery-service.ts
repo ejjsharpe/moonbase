@@ -20,7 +20,7 @@ import type {
 import { retryWatch, watchRetry } from '../../watch-retry.ts';
 import { EditorError, isUnavailable, type EditorFailure } from '../editor-errors.ts';
 import { isRelativePath } from '../relative-path.ts';
-import { checkoutKey, sameCheckout } from '../keys.ts';
+import { checkoutKey, sameCheckout } from '../recovery/recovery-references.ts';
 import { EditorSession } from '../session/session-service.ts';
 import { EditorAlerts } from '../alerts/alerts-service.ts';
 import { EditorViews } from '../views/views-service.ts';

@@ -49,7 +49,7 @@ export function useWorkbenchKeys({
         !element.closest('.monaco-editor'))
     )
       return;
-    if (!checkout || !view || state.holdingUnsaved) return;
+    if (!checkout || !view || state.preserving) return;
     const key = event.key.toLowerCase(),
       command = event.metaKey || event.ctrlKey,
       picking = pickerMode(event, pickerCommand(event));

@@ -30,7 +30,7 @@ const retype = async (client: Client, drafts: SeedDraft[], text: (draft: SeedDra
       disk: draft.disk,
     });
 };
-/** Alice's stored recovery revision under `base`: each write of her recovery adds one. */
+/** Alice's stored recovery revision under `base`: each publication of her recovery adds one. */
 const revisionOf = (base: string) => {
   const db = new DatabaseSync(join(base, 'state/moonbase-workspace-v1.sqlite'));
   try {
@@ -40,17 +40,17 @@ const revisionOf = (base: string) => {
     db.close();
   }
 };
-/** Asserts that `change` writes alice's recovery exactly once. */
-const assertOneRecoveryWrite = async <T>(base: string, change: () => Promise<T>) => {
+/** Asserts that `change` publishes alice's recovery exactly once. */
+const assertOnePublication = async <T>(base: string, change: () => Promise<T>) => {
   const before = revisionOf(base);
   const value = await change();
-  assert.equal(revisionOf(base), before + 1, 'expected one recovery write');
+  assert.equal(revisionOf(base), before + 1, 'expected one recovery publication');
   return value;
 };
 /** The layout part of a recovery, for an `updateLayout`. */
 const layoutOf = ({ version: _v, clientId: _c, buffers: _b, ...layout }: RecoveryState) => layout;
 
-test('concurrent lost-move reconciliation writes the recovery once and acknowledgement keeps its result', async () => {
+test('concurrent lost-move reconciliation publishes once and acknowledgement keeps its result', async () => {
   const f = fixture(),
     count = join(f.base, 'effects');
   const helper = f.wrapper(
@@ -82,17 +82,17 @@ test('concurrent lost-move reconciliation writes the recovery once and acknowled
     );
     await current.runtime.dispose();
     current = f.start();
-    await assertOneRecoveryWrite(f.base, () =>
+    await assertOnePublication(f.base, () =>
       Promise.all([
         current.client.command('operationStatus', { clientId: 'alice', id: 'lost' }),
         current.client.command('loadRecovery', { clientId: 'alice' }),
       ]),
     );
-    const status = await current.client.command('operationStatus', {
+    const receipt = await current.client.command('operationStatus', {
       clientId: 'alice',
       id: 'lost',
     });
-    assert.equal(status?.outcome, 'completed');
+    assert.equal(receipt?.outcome, 'completed');
     await current.client.command('acknowledgeOperation', {
       clientId: 'alice',
       operationClientId: 'alice',
@@ -100,7 +100,7 @@ test('concurrent lost-move reconciliation writes the recovery once and acknowled
     });
     assert.deepEqual(
       await current.client.command('operationStatus', { clientId: 'alice', id: 'lost' }),
-      status,
+      receipt,
     );
     assert.equal(readFileSync(count, 'utf8'), 'effect\n');
   } finally {
@@ -141,7 +141,7 @@ test('copy recovery overflow retains a valid snapshot and pending evidence acros
     assert.equal(result.items[0].outcome, 'completed');
     const retained = await load(current.client);
     assert.deepEqual(retained.state, snapshot);
-    assert(retained.errors.some((e) => /recovery/i.test(e)));
+    assert(retained.errors.some((e) => /recovery|publication/i.test(e)));
     assert.equal(retained.operations.length, 1);
     await assert.rejects(
       current.client.command('acknowledgeOperation', {
@@ -165,7 +165,7 @@ test('copy recovery overflow retains a valid snapshot and pending evidence acros
 });
 
 for (const competing of [false, true])
-  test(`interrupted newer Save plus external change ${competing ? 'keeps a later competing edit' : 'restores the sent text over the older draft'}`, async () => {
+  test(`interrupted newer Save plus external change ${competing ? 'preserves later competing publication' : 'restores admitted text over the older draft'}`, async () => {
     const f = fixture(),
       helper = f.wrapper('if [ "$1" = stage ]; then kill -KILL $$; fi');
     let current = f.start(helper);
@@ -175,15 +175,15 @@ for (const competing of [false, true])
         disk = await current.client.command('readFile', target);
       const seeded = [{ target, text: 'older draft', disk }];
       await seed(current.client, 'alice', seeded);
-      writeFileSync(join(f.root, 'file.txt'), 'captured sent bytes');
-      const sentBaseline = await current.client.command('readFile', target);
+      writeFileSync(join(f.root, 'file.txt'), 'captured admission bytes');
+      const admittedBaseline = await current.client.command('readFile', target);
       await assert.rejects(
         current.client.command('saveFile', {
           clientId: 'alice',
           requestId: 'save',
           target,
-          expectedVersion: sentBaseline.version,
-          text: 'newest sent text',
+          expectedVersion: admittedBaseline.version,
+          text: 'newest admitted text',
         }),
         isError('Uncertain'),
       );
@@ -192,8 +192,8 @@ for (const competing of [false, true])
       await current.runtime.dispose();
       current = f.start();
       const [restored] = draftsOf((await load(current.client)).state);
-      assert.equal(restored?.text, competing ? 'later competing text' : 'newest sent text');
-      assert.deepEqual(restored?.disk, competing ? disk : sentBaseline);
+      assert.equal(restored?.text, competing ? 'later competing text' : 'newest admitted text');
+      assert.deepEqual(restored?.disk, competing ? disk : admittedBaseline);
       assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'external bytes');
     } finally {
       await current.runtime.dispose();
@@ -293,7 +293,7 @@ for (const kind of ['move', 'copy'] as const)
   });
 
 for (const competing of [false, true])
-  test(`interrupted Save group ${competing ? 'keeps a genuinely later client edit' : 'restores both sent drafts in one revision across repeated restarts'}`, async () => {
+  test(`interrupted Save group ${competing ? 'preserves a genuinely later client publication' : 'restores both admitted drafts in one revision across repeated restarts'}`, async () => {
     const f = fixture(),
       count = join(f.base, 'stage-count');
     const helper = f.wrapper(
@@ -321,7 +321,7 @@ for (const competing of [false, true])
             requestId: target.path,
             target,
             expectedVersion: disk.version,
-            text: 'sent ' + target.path,
+            text: 'admitted ' + target.path,
           }),
           isError('Uncertain'),
         );
@@ -337,7 +337,7 @@ for (const competing of [false, true])
         assert.deepEqual(loads[0].state, loads[1].state);
         assert.deepEqual(
           draftsOf(loads[0].state),
-          drafts.map((d) => ({ ...d, text: (competing ? 'later ' : 'sent ') + d.target.path })),
+          drafts.map((d) => ({ ...d, text: (competing ? 'later ' : 'admitted ') + d.target.path })),
         );
       }
       assert.equal(readFileSync(count, 'utf8'), 'stage\nstage\n');
@@ -380,7 +380,7 @@ test('interrupted Save group capacity overflow retains the entire prior valid sn
           requestId: path,
           target: { checkout, path },
           expectedVersion: disk.version,
-          text: 'sent ' + path,
+          text: 'admitted ' + path,
         }),
         isError('Uncertain'),
       );
@@ -399,7 +399,7 @@ test('interrupted Save group capacity overflow retains the entire prior valid sn
   }
 });
 
-test('a client edit during grouped disk inspection stays authoritative', async () => {
+test('a client publication during grouped disk inspection stays authoritative', async () => {
   const f = fixture(),
     ready = join(f.base, 'read-ready'),
     release = join(f.base, 'read-release');
@@ -424,7 +424,7 @@ test('a client edit during grouped disk inspection stays authoritative', async (
           clientId: 'alice',
           requestId: path,
           target: { checkout, path },
-          text: 'sent ' + path,
+          text: 'admitted ' + path,
           expectedVersion: disk.version,
         }),
         isError('Uncertain'),
@@ -449,7 +449,7 @@ test('a client edit during grouped disk inspection stays authoritative', async (
   }
 });
 
-test('grouped Save recording keeps a visible persistence failure and clears pending on a non-replaying retry', async () => {
+test('grouped Save publisher preserves visible persistence failure and clears pending on a non-replaying retry', async () => {
   const f = fixture(),
     ready = join(f.base, 'saved'),
     release = join(f.base, 'release'),
@@ -465,7 +465,7 @@ test('grouped Save recording keeps a visible persistence failure and clears pend
     await seed(client, 'alice', [{ target, text: 'saved text', disk }]);
     const input = {
       clientId: 'alice',
-      requestId: 'unrecorded',
+      requestId: 'publication',
       target,
       expectedVersion: disk.version,
       text: 'saved text',
@@ -484,7 +484,7 @@ test('grouped Save recording keeps a visible persistence failure and clears pend
       lock.exec('ROLLBACK');
       lock.close();
     }
-    const result = await assertOneRecoveryWrite(f.base, () => client.command('saveFile', input));
+    const result = await assertOnePublication(f.base, () => client.command('saveFile', input));
     assert.equal(result.kind, 'saved');
     assert(result.kind === 'saved' && !result.persistencePending);
     assert.deepEqual(await client.command('saveFile', input), result);
@@ -522,7 +522,7 @@ test('retries cannot split an overflowing interrupted Save restoration group', a
       requestId: path,
       target: { checkout, path },
       expectedVersion: disk.version,
-      text: 'sent ' + path,
+      text: 'admitted ' + path,
     }));
     for (const input of inputs)
       await assert.rejects(current.client.command('saveFile', input), isError('Uncertain'));
@@ -578,13 +578,13 @@ for (const sibling of ['save', 'move'] as const)
             requestId: 'a',
             target: drafts[0].target,
             expectedVersion: drafts[0].disk.version,
-            text: 'sent a',
+            text: 'admitted a',
           }),
           isError('Uncertain'),
         );
         writeFileSync(join(f.root, 'a.txt'), 'external');
         if (sibling === 'save') {
-          const result = await assertOneRecoveryWrite(f.base, () =>
+          const result = await assertOnePublication(f.base, () =>
             current.client.command('saveFile', {
               clientId: 'alice',
               requestId: 'b',
@@ -599,7 +599,7 @@ for (const sibling of ['save', 'move'] as const)
             checkout,
             paths: ['b.txt'],
           });
-          const result = await assertOneRecoveryWrite(f.base, () =>
+          const result = await assertOnePublication(f.base, () =>
             current.client.command('mutate', {
               clientId: 'alice',
               id: 'b',
@@ -618,7 +618,7 @@ for (const sibling of ['save', 'move'] as const)
           const loaded = draftsOf((await load(current.client)).state);
           assert.equal(
             loaded.find((d) => d.target.path === 'a.txt')?.text,
-            competing ? 'later a.txt' : 'sent a',
+            competing ? 'later a.txt' : 'admitted a',
           );
           assert.deepEqual(loaded.find((d) => d.target.path === 'a.txt')?.disk, drafts[0].disk);
           if (!competing) {
@@ -662,7 +662,7 @@ test('an edit during Save preflight wins over the interrupted save it began befo
       requestId: 'preflight',
       target,
       expectedVersion: disk.version,
-      text: 'sent before recording',
+      text: 'admitted before publication',
     });
     await waitFor(ready);
     await retype(current.client, seeded, () => 'newer client edit');
@@ -757,7 +757,7 @@ test('an interrupted save the disk no longer shows settles as a conflict and blo
           expectedVersion,
         }),
       );
-    await assert.rejects(save('alice', 'sent', disk.version), isError('Uncertain'));
+    await assert.rejects(save('alice', 'admitted', disk.version), isError('Uncertain'));
     writeFileSync(join(f.root, 'file.txt'), 'external');
     const external = await Effect.runPromise(host.readFile(target));
     // Another client may still save there: the host settles the first save from the disk.
@@ -777,7 +777,7 @@ test('an interrupted save the disk no longer shows settles as a conflict and blo
 });
 
 for (const sibling of ['save', 'move'] as const)
-  test(`pending text survives a failed ${sibling} outcome record and its non-replaying retry`, async () => {
+  test(`pending text survives a failed ${sibling} fact publication and its non-replaying retry`, async () => {
     const f = fixture(),
       ready = join(f.base, 'ready'),
       release = join(f.base, 'release'),
@@ -834,13 +834,13 @@ for (const sibling of ['save', 'move'] as const)
         const result = await pending;
         if ('outcome' in result) {
           assert.equal(result.items[0].outcome, 'completed');
-          assert.match(result.message!, /recording .*(?:failed|pending)/i);
+          assert.match(result.message!, /publication (?:failed|pending)/i);
         } else assert(result.kind === 'saved' && result.persistencePending);
       } finally {
         lock.exec('ROLLBACK');
         lock.close();
       }
-      const retried = await assertOneRecoveryWrite(f.base, async () =>
+      const retried = await assertOnePublication(f.base, async () =>
         sibling === 'save'
           ? await current.client.command('saveFile', saveInput)
           : await current.client.command('mutate', moveInput),
@@ -864,7 +864,7 @@ for (const sibling of ['save', 'move'] as const)
     }
   });
 
-test('complete restoration retries wait for an active sibling Save without recording part of its group', async () => {
+test('complete restoration retries wait for an active sibling admission without publishing part of its group', async () => {
   const f = fixture(),
     ready = join(f.base, 'ready'),
     release = join(f.base, 'release'),
@@ -964,7 +964,7 @@ if [ "$1" = replace ]; then printf 'replace\\n' >> ${quote(count)}; if [ "$2" = 
       await assert.rejects(saving, isError('Uncertain'));
       if (lost === 'stage') writeFileSync(join(f.root, 'file.txt'), 'external');
       const actual = await current.client.command('readFile', target);
-      const saved = await assertOneRecoveryWrite(f.base, () =>
+      const saved = await assertOnePublication(f.base, () =>
         current.client.command('saveFile', {
           clientId: 'alice',
           requestId: 'b',

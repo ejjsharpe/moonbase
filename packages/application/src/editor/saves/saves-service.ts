@@ -11,7 +11,7 @@ import { EditorDiscovery } from '../discovery/discovery-service.ts';
 import { EditorOperations } from '../operations/operations-service.ts';
 import { RecoveryOutbox } from '../recovery/recovery-outbox-service.ts';
 import { RecoverySync } from '../recovery/recovery-sync-service.ts';
-import { fileKey } from '../keys.ts';
+import { fileKey } from '../recovery/recovery-references.ts';
 import { EditorTabs } from '../tabs/tabs-service.ts';
 import { conflictComparison } from '../tabs/tabs.ts';
 import { EditorMutations } from '../mutation/mutation-service.ts';
@@ -24,7 +24,7 @@ export type EditorSavesShape = {
    * reported; edits are kept either way.
    */
   readonly save: (target: FileTarget, overwrite?: boolean) => Effect.Effect<boolean, EditorFailure>;
-  /** `save` for an action already running, such as a Close's own Save. */
+  /** `save` for an action already admitted, such as a Close's own Save. */
   readonly saveFile: (target: FileTarget) => Effect.Effect<boolean, EditorFailure>;
   /** Discards a buffer's edits and shows the file as it is on disk. */
   readonly reload: (target: FileTarget) => Effect.Effect<boolean, EditorFailure>;
@@ -50,8 +50,8 @@ export class EditorSaves extends Context.Service<EditorSaves, EditorSavesShape>(
       const recovery = yield* RecoverySync;
       const tabs = yield* EditorTabs;
       const mutations = yield* EditorMutations;
-      const runAction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        session.run(Effect.andThen(session.assertAccepting, effect));
+      const admitted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        session.run(Effect.andThen(session.admit, effect));
       const closing = Effect.map(session.get, (s) => s.closing);
       /** Clears `saving` once the save ends, unless the editor closed meanwhile. */
       const settle = (buffer: EditorBuffer) =>
@@ -179,23 +179,23 @@ export class EditorSaves extends Context.Service<EditorSaves, EditorSavesShape>(
         });
 
       return {
-        save: (target, overwrite = false) => runAction(saveFile(target, overwrite)),
+        save: (target, overwrite = false) => admitted(saveFile(target, overwrite)),
         saveFile: (target) => session.run(saveFile(target)),
         reload: (target) =>
-          runAction(
+          admitted(
             Effect.gen(function* () {
               const captured = structuredClone(target),
                 key = fileKey(captured);
               yield* views.view(captured.checkout);
               const buffer = yield* buffers.find(captured);
               const modes = yield* session.get;
-              if (!buffer || buffer.pendingSave || modes.holdingUnsaved || modes.initializing)
+              if (!buffer || buffer.pendingSave || modes.preserving || modes.initializing)
                 return false;
               const sameBuffer = Effect.map(
                 buffers.get,
                 (s) => s.buffers.get(key)?.id === buffer.id,
               );
-              return yield* tabs.whileHoldingUnsaved(
+              return yield* tabs.whilePreserving(
                 Effect.gen(function* () {
                   const disk = yield* workspace
                     .readFile(captured)
@@ -234,7 +234,7 @@ export class EditorSaves extends Context.Service<EditorSaves, EditorSavesShape>(
           ),
         cancelConflict: (target) =>
           Effect.gen(function* () {
-            if (!(yield* session.get).acceptingActions) return;
+            if (!(yield* session.get).admissionsOpen) return;
             const buffer = yield* buffers.find(target);
             if (buffer)
               yield* buffers.updateBuffer(buffer.id, (b) => {
