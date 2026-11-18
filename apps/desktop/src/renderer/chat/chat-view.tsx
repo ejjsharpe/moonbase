@@ -1,17 +1,26 @@
 import {
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
   type KeyboardEvent,
 } from 'react';
+import { Context } from 'effect';
+import { useAtomValue } from '@effect/atom-react';
 import * as stylex from '@stylexjs/stylex';
 import { workbench } from '@moonbase/ui/workbench';
 import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
-import type { ChatComposer } from '@moonbase/application/chat';
+import {
+  ChatDrafts,
+  ChatList as ChatListService,
+  ChatSelection,
+  type ChatComposer,
+  type ChatServices,
+} from '@moonbase/application/chat';
 import type { DesktopRunner } from '../shell/desktop-application.ts';
-import { FindBar, handleChatFindKeyDown } from './find.tsx';
+import { FindBar, handleChatFindKeyDown, type ChatFindOwner } from './find.tsx';
 import { Transcript } from './transcript/transcript.tsx';
 import type { TranscriptNative } from './transcript/transcript-actions.ts';
 import type { ChatFolderProject } from './folder-picker.tsx';
@@ -21,7 +30,7 @@ import { ChatHeader, DockChatHeader } from './chat-header.tsx';
 import { PendingCommands } from './pending-commands.tsx';
 import { Composer } from './composer/composer.tsx';
 import { focusMessage } from './open-chat.ts';
-import type { DesktopChat } from './desktop-chat.ts';
+import { ChatContext, useChatShared, type ChatShared } from './chat-context.ts';
 
 const compactLayout = window.matchMedia('(max-width: 640px)');
 const subscribeLayout = (listener: () => void) => {
@@ -48,16 +57,42 @@ export type ChatHosts = {
   disabled?: boolean;
 };
 
-/** Notices about the chat as a whole: the controller's status, storage and errors. */
+/** Notices about the chat as a whole: the chat's status, storage and errors. */
 const hiddenNotices = ['Disconnected.', 'Verified host.', 'Local chat.', 'Local tools use'];
+
+function ChatNotices({ chat }: { chat: ChatShared }) {
+  const notice = useAtomValue(chat.atoms.notice);
+  const storageError = useAtomValue(chat.atoms.storageError);
+  const error = useAtomValue(chat.atoms.error);
+  return (
+    <div {...stylex.props(styles.notices)}>
+      {notice && !hiddenNotices.some((prefix) => notice.startsWith(prefix)) && (
+        <p role="status" {...stylex.props(styles.small)}>
+          {notice}
+        </p>
+      )}
+      {storageError && (
+        <p role="alert" {...stylex.props(styles.warning)}>
+          {storageError} Preserve this window and data. Sending and Quit are blocked.
+        </p>
+      )}
+      {error && (
+        <p role="alert" {...stylex.props(styles.warning)}>
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
 
 /**
  * A chat target's chats: in Agents, the chat list beside the open chat; in a project's dock, that
- * project's chats or one of them. The consumer owns the controller, its composer and the runtime;
- * this view installs no capabilities.
+ * project's chats or one of them. The consumer owns the chat, its composer and the runtime; this
+ * view installs no capabilities. Each part reads its own atoms, so typing re-renders the composer
+ * alone.
  */
 export function ChatView({
-  controller,
+  services,
   composer,
   runner,
   chooseFolder,
@@ -73,8 +108,9 @@ export function ChatView({
   sidebarHidden = false,
   titleBar,
 }: {
-  controller: DesktopChat;
-  /** The chat's composer, made beside its controller: it outlives this view. */
+  /** The open chat's services. */
+  services: Context.Context<ChatServices>;
+  /** The chat's composer, made beside its services: it outlives this view. */
   composer: ChatComposer;
   /** The renderer root's runners, which the composer's and transcript's actions run on. */
   runner: DesktopRunner;
@@ -109,72 +145,62 @@ export function ChatView({
     [dockList, setDockList] = useState(false);
   const titleId = useId();
   const findInput = useRef<HTMLInputElement>(null);
-  const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
-  const connected = state.ready;
+  const shared = useChatShared(services, runner);
+  const { atoms, backendId, act } = shared;
+  const connected = useAtomValue(atoms.ready);
+  // A remote host's own folders never open here as a project, nor in this Mac's folder picker.
+  const { remote } = useAtomValue(atoms.link);
+  const selected = useAtomValue(atoms.selected);
+  const { chats } = useAtomValue(atoms.list);
+  const findOpen = useAtomValue(atoms.findOpen);
+  const openCwd = useAtomValue(atoms.snapshotFolder);
   // The open chat counts as looked at while it is on screen, up to its latest listed activity.
-  const openListing = state.chats.find(
-    (c) => c.target.conversationId === state.selected?.conversationId,
-  );
+  const openListing = chats.find((c) => c.target.conversationId === selected?.conversationId);
   const openSeenAt = openListing && (openListing.activity?.at ?? openListing.createdAt);
   useEffect(() => {
     if (!visible || !openListing || !openSeenAt || document.visibilityState !== 'visible') return;
-    controller.markSeen(openListing.target.conversationId, openSeenAt);
-  }, [controller, visible, openListing, openSeenAt]);
+    void act(
+      Context.get(services, ChatDrafts).markSeen(openListing.target.conversationId, openSeenAt),
+    );
+  }, [services, act, visible, openListing, openSeenAt]);
   // The list follows the host's chat list watch. Becoming visible watches it again if that watch
   // stopped, and lists again once it delivers.
   useEffect(() => {
     if (!connected) return;
     const resume = () => {
-      if (document.visibilityState === 'visible') void controller.watchChats();
+      if (document.visibilityState === 'visible')
+        void act(Context.get(services, ChatListService).watch);
     };
     document.addEventListener('visibilitychange', resume);
     return () => document.removeEventListener('visibilitychange', resume);
-  }, [controller, connected]);
-  const startNewChat = () => void controller.closeView().then(focusMessage);
-  // A remote host's own folders never open here as a project, nor in this Mac's folder picker.
-  const remote = state.remote;
-  const findOwner = JSON.stringify([controller.backendId, state.selected]);
+  }, [services, act, connected]);
+  const startNewChat = () =>
+    void act(Context.get(services, ChatSelection).closeView).then(focusMessage);
+  const findOwner = JSON.stringify([backendId, selected]);
+  const find = useMemo<ChatFindOwner>(
+    () => ({ owner: findOwner, selected: !!selected, open: findOpen }),
+    [findOwner, selected, findOpen],
+  );
   const onFindKeyDown = (event: KeyboardEvent<HTMLElement>) =>
-    handleChatFindKeyDown(event, controller, findInput);
+    handleChatFindKeyDown(event, shared, find, findInput);
   const chat = (
     <div {...stylex.props(workbench.pane, workbench.canvasPane)}>
-      {state.transcript.find.open && (
-        <FindBar controller={controller} state={state.transcript.find} input={findInput} />
-      )}
-      <div {...stylex.props(styles.notices)}>
-        {state.notice && !hiddenNotices.some((prefix) => state.notice.startsWith(prefix)) && (
-          <p role="status" {...stylex.props(styles.small)}>
-            {state.notice}
-          </p>
-        )}
-        {state.storageError && (
-          <p role="alert" {...stylex.props(styles.warning)}>
-            {state.storageError} Preserve this window and data. Sending and Quit are blocked.
-          </p>
-        )}
-        {state.error && (
-          <p role="alert" {...stylex.props(styles.warning)}>
-            {state.error}
-          </p>
-        )}
-      </div>
-      <PendingCommands controller={controller} state={state} />
-      {state.selected && (
+      {findOpen && <FindBar chat={shared} input={findInput} />}
+      <ChatNotices chat={shared} />
+      <PendingCommands />
+      {selected && (
         <Transcript
-          key={controller.backendId + JSON.stringify(state.selected)}
-          services={controller.context}
-          atoms={controller.atoms}
-          backendId={controller.backendId}
-          target={state.selected}
+          key={backendId + JSON.stringify(selected)}
+          services={services}
+          atoms={atoms}
+          backendId={backendId}
+          target={selected}
           native={transcriptNative}
           runner={runner}
         />
       )}
       <Composer
-        controller={controller}
         composer={composer}
-        runner={runner}
-        state={state}
         dockProject={dock?.project}
         dockCwd={dock?.cwd}
         hosts={hosts}
@@ -191,46 +217,45 @@ export function ChatView({
       dock.roots.some(
         (root) => folder === root || folder.startsWith(root.replace(/\/$/, '') + '/'),
       );
-    const selectedCwd = state.snapshot?.conversation.cwd ?? openListing?.cwd;
+    const selectedCwd = openCwd ?? openListing?.cwd;
     // A chat from another project is never shown here; the dock opens on this project's list.
-    const listing = dockList || (!!state.selected && !!selectedCwd && !inProject(selectedCwd));
+    const listing = dockList || (!!selected && !!selectedCwd && !inProject(selectedCwd));
     return (
-      <div
-        data-chat-find-owner={findOwner}
-        onKeyDown={onFindKeyDown}
-        {...stylex.props(workbench.page, styles.page, styles.dockPage)}>
-        {listing ? (
-          <ProjectChatList
-            controller={controller}
-            state={state}
-            dock={dock}
-            chats={state.chats.filter((c) => inProject(c.cwd))}
-            onChoose={() => setDockList(false)}
-            onNewChat={() => {
-              setDockList(false);
-              startNewChat();
-            }}
-          />
-        ) : (
-          <main aria-label="Agent workspace" {...stylex.props(styles.content, styles.dockContent)}>
-            <DockChatHeader
-              controller={controller}
-              state={state}
+      <ChatContext value={shared}>
+        <div
+          data-chat-find-owner={findOwner}
+          onKeyDown={onFindKeyDown}
+          {...stylex.props(workbench.page, styles.page, styles.dockPage)}>
+          {listing ? (
+            <ProjectChatList
               dock={dock}
-              findInput={findInput}
-              onShowList={() => setDockList(true)}
+              chats={chats.filter((c) => inProject(c.cwd))}
+              onChoose={() => setDockList(false)}
+              onNewChat={() => {
+                setDockList(false);
+                startNewChat();
+              }}
             />
-            {chat}
-          </main>
-        )}
-      </div>
+          ) : (
+            <main
+              aria-label="Agent workspace"
+              {...stylex.props(styles.content, styles.dockContent)}>
+              <DockChatHeader
+                find={find}
+                dock={dock}
+                findInput={findInput}
+                onShowList={() => setDockList(true)}
+              />
+              {chat}
+            </main>
+          )}
+        </div>
+      </ChatContext>
     );
   }
   const inBar = titleBar !== undefined;
   const list = (
     <ChatList
-      controller={controller}
-      state={state}
       compact={compact}
       hidden={sidebarHidden}
       onChosen={() => setListOpen(false)}
@@ -238,43 +263,42 @@ export function ChatView({
     />
   );
   return (
-    <div
-      data-chat-find-owner={findOwner}
-      onKeyDown={onFindKeyDown}
-      {...stylex.props(workbench.page, styles.page)}>
+    <ChatContext value={shared}>
       <div
-        {...stylex.props(
-          styles.workspace,
-          !compact && styles.expandedWorkspace,
-          !compact && sidebarHidden && styles.closedWorkspace,
-        )}>
-        {!compact && list}
-        <main
-          aria-label="Agent workspace"
-          // The title is in the window's title bar, outside this landmark, so it names the chat here.
-          aria-describedby={inBar && titleBar ? titleId : undefined}
-          data-title-anchor=""
-          {...stylex.props(styles.content)}>
-          <ChatHeader
-            controller={controller}
-            state={state}
-            composer={composer}
-            runner={runner}
-            turnIntoProject={remote ? undefined : turnIntoProject}
-            findInput={findInput}
-            titleId={titleId}
-            titleBar={titleBar}
-            compact={compact}
-            list={list}
-            listOpen={listOpen}
-            onListOpenChange={setListOpen}
-            findOwner={findOwner}
-            onFindKeyDown={onFindKeyDown}
-          />
-          {chat}
-        </main>
+        data-chat-find-owner={findOwner}
+        onKeyDown={onFindKeyDown}
+        {...stylex.props(workbench.page, styles.page)}>
+        <div
+          {...stylex.props(
+            styles.workspace,
+            !compact && styles.expandedWorkspace,
+            !compact && sidebarHidden && styles.closedWorkspace,
+          )}>
+          {!compact && list}
+          <main
+            aria-label="Agent workspace"
+            // The title is in the window's title bar, outside this landmark, so it names the chat here.
+            aria-describedby={inBar && titleBar ? titleId : undefined}
+            data-title-anchor=""
+            {...stylex.props(styles.content)}>
+            <ChatHeader
+              find={find}
+              composer={composer}
+              turnIntoProject={remote ? undefined : turnIntoProject}
+              findInput={findInput}
+              titleId={titleId}
+              titleBar={titleBar}
+              compact={compact}
+              list={list}
+              listOpen={listOpen}
+              onListOpenChange={setListOpen}
+              onFindKeyDown={onFindKeyDown}
+            />
+            {chat}
+          </main>
+        </div>
       </div>
-    </div>
+    </ChatContext>
   );
 }
 

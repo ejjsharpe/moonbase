@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useState } from 'react';
 import * as stylex from '@stylexjs/stylex';
-import { Effect, SubscriptionRef } from 'effect';
+import { Effect } from 'effect';
 import { useAtomValue } from '@effect/atom-react';
 import { colors, space, type } from '@moonbase/ui/tokens.stylex';
 import {
@@ -79,11 +79,13 @@ export const Entry = memo(function Entry({
       return;
     const restart = manifest?.status === 'complete' && manifest.omittedParts > 0 && !replay.done;
     if (manifest && !manifest.nextCursor && !restart) return;
+    if (!restart) {
+      void act(selection.loadTranscriptManifest(source));
+      return;
+    }
     void act(
-      Effect.gen(function* () {
-        yield* selection.loadTranscriptManifest(source, restart);
-        const { find } = (yield* SubscriptionRef.get(selection.state)).transcript;
-        if (restart && find.active === findMatch)
+      Effect.map(selection.replayTranscriptManifest(source, findMatch), (still) => {
+        if (still)
           setReplay((current) => (current === replay ? { ...current, done: true } : current));
       }),
     );

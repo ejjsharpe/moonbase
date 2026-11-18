@@ -42,6 +42,8 @@ export function driveChat(
     closeView: () => run(selection.closeView),
     select: (target: Parameters<typeof selection.select>[0]) => run(selection.select(target)),
     setDraft: (...args: Parameters<typeof drafts.setDraft>) => run(drafts.setDraft(...args)),
+    setModelPreference: (...args: Parameters<typeof drafts.setModelPreference>) =>
+      run(drafts.setModelPreference(...args)),
     preserve: () => run(drafts.preserve),
     send: () => run(sends.send()),
     create: (...args: Parameters<typeof sends.create>) => run(sends.create(...args)),
@@ -56,6 +58,8 @@ export function driveChat(
     jumpToLatest: () => run(selection.jumpToLatest),
     setTranscriptView: (...args: Parameters<typeof selection.setTranscriptView>) =>
       run(selection.setTranscriptView(...args)),
+    openFind: () => run(selection.openFind),
+    cancelFindReveal: () => run(selection.cancelFindReveal),
     findTranscript: (query: string) => run(selection.findTranscript(query)),
     closeFind: () => run(selection.closeFind),
     nextFindMatch: () => run(selection.nextFindMatch),

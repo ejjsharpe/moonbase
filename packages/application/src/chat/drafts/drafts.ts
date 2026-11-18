@@ -176,26 +176,27 @@ export function keepMentions(
   return kept;
 }
 
-/** `saved` with the selected chat's draft (or the new chat's) replaced. */
+/**
+ * `saved` with the selected chat's draft (or the new chat's) replaced. The rest keeps its identity,
+ * so what reads the selection, pending commands or seen activity is not told of each keystroke.
+ */
 export function writeDraft(saved: Saved, text: string, mentions: ChatMention[]): Saved {
-  const next = structuredClone(saved);
   const target = saved.selected;
   if (!target) {
-    if (text) next.newDraft = text;
-    else delete next.newDraft;
-    if (mentions.length) next.newDraftMentions = mentions;
-    else delete next.newDraftMentions;
-    return next;
+    const { newDraft: _text, newDraftMentions: _mentions, ...rest } = saved;
+    return {
+      ...rest,
+      ...(text ? { newDraft: text } : {}),
+      ...(mentions.length ? { newDraftMentions: [...mentions] } : {}),
+    };
   }
-  if (!text) {
-    next.drafts = next.drafts.filter((draft) => !isSameTarget(draft.target, target));
-    return next;
-  }
-  const index = next.drafts.findIndex((draft) => isSameTarget(draft.target, target));
-  const draft = { target, text, ...(mentions.length ? { mentions } : {}) };
-  if (index >= 0) next.drafts[index] = draft;
-  else next.drafts.push(draft);
-  return next;
+  const others = saved.drafts.filter((draft) => !isSameTarget(draft.target, target));
+  if (!text) return { ...saved, drafts: others };
+  const index = saved.drafts.findIndex((draft) => isSameTarget(draft.target, target));
+  const draft = { target, text, ...(mentions.length ? { mentions: [...mentions] } : {}) };
+  const drafts =
+    index >= 0 ? saved.drafts.map((item, at) => (at === index ? draft : item)) : [...others, draft];
+  return { ...saved, drafts };
 }
 
 /** `seen` with a look at `conversationId` as of `at`; undefined if a newer look is recorded. */

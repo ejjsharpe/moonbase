@@ -1,5 +1,5 @@
 export { chatLayer, type ChatServices } from './chat-layer.ts';
-export { makeChatAtoms, type ChatAtoms } from './chat-atoms.ts';
+export { getChatAtoms, type ChatAtoms } from './chat-atoms.ts';
 export { readChatState, watchChatState, toChatState, type ChatState } from './chat-state.ts';
 export type {
   ChatDependencies,

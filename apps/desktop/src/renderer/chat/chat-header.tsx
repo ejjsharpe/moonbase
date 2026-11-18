@@ -8,25 +8,29 @@ import { workbench } from '@moonbase/ui/workbench';
 import { Icon } from '@moonbase/ui/icons';
 import { projectInitials, projectTiles } from '@moonbase/ui/projects';
 import { colors, space, type } from '@moonbase/ui/tokens.stylex';
-import { findSelectedChat, type ChatComposer, type ChatState } from '@moonbase/application/chat';
+import { Context } from 'effect';
+import { ChatList, ChatSelection, type ChatComposer } from '@moonbase/application/chat';
 import { folderName } from '../components/folder-menu.tsx';
-import type { DesktopRunner } from '../shell/desktop-application.ts';
-import { activateChatFind } from './find.tsx';
-import { describeOpenChat, readOpenSettled, settleOpenChat } from './open-chat.ts';
+import { activateChatFind, type ChatFindOwner } from './find.tsx';
+import { describeOpenChat } from './open-chat.ts';
+import { useOpenChat } from './use-open-chat.ts';
+import { useChat } from './chat-context.ts';
 import type { ChatDock } from './chat-view.tsx';
-import type { DesktopChat } from './desktop-chat.ts';
+
+type OpenChat = ReturnType<typeof useOpenChat>;
 
 /** Settles or unsettles the open chat. */
-function SettleButton({ controller, state }: { controller: DesktopChat; state: ChatState }) {
-  const chat = findSelectedChat(state);
-  if (!state.selected || !chat) return null;
+function SettleButton({ open }: { open: OpenChat }) {
+  const { services, act } = useChat();
+  const { selected, chat } = open;
+  if (!selected || !chat) return null;
   return (
     <Button
       aria-label={chat.settledAt ? 'Unsettle chat' : 'Settle chat'}
       title={chat.settledAt ? 'Unsettle chat' : 'Settle chat'}
       {...stylex.props(controls.button, controls.iconButton)}
-      disabled={readOpenSettled(state) === null}
-      onClick={() => settleOpenChat(controller, state, !chat.settledAt)}>
+      disabled={open.settled === null}
+      onClick={() => void act(Context.get(services, ChatList).settle(selected, !chat.settledAt))}>
       <Icon name={chat.settledAt ? 'unsettle' : 'settle'} />
     </Button>
   );
@@ -34,21 +38,20 @@ function SettleButton({ controller, state }: { controller: DesktopChat; state: C
 
 /** Opens Find in the open chat's transcript. */
 function FindButton({
-  controller,
-  state,
+  find,
   findInput,
 }: {
-  controller: DesktopChat;
-  state: ChatState;
+  find: ChatFindOwner;
   findInput: RefObject<HTMLInputElement | null>;
 }) {
-  if (!state.selected) return null;
+  const chat = useChat();
+  if (!find.selected) return null;
   return (
     <Button
       aria-label="Find"
       title="Find · ⌘F"
       {...stylex.props(controls.button, controls.iconButton)}
-      onClick={(event) => activateChatFind(controller, event.currentTarget, findInput)}>
+      onClick={(event) => activateChatFind(chat, find, event.currentTarget, findInput)}>
       <Icon name="search" />
     </Button>
   );
@@ -59,33 +62,30 @@ function FindButton({
  * couldn't is the composer's message, in that chat.
  */
 function TurnButton({
-  controller,
-  state,
+  open,
   composer,
-  runner,
   turnIntoProject,
 }: {
-  controller: DesktopChat;
-  state: ChatState;
+  open: OpenChat;
   composer: ChatComposer;
-  runner: DesktopRunner;
   turnIntoProject: (conversationId: string) => Promise<void>;
 }) {
+  const { services, runner, act } = useChat();
   const [turning, setTurning] = useState(false);
-  if (!state.selected || !findSelectedChat(state)?.ownFolder) return null;
-  const id = state.selected.conversationId;
+  if (!open.selected || !open.chat?.ownFolder) return null;
+  const id = open.selected.conversationId;
   return (
     <Button
       aria-label="Turn into project"
       title="Turn into project · opens this chat’s folder as a project"
       {...stylex.props(controls.button, controls.iconButton)}
-      disabled={turning || !state.ready}
+      disabled={turning || !open.ready}
       onClick={() => {
         setTurning(true);
         runner.runSync(composer.dismiss({ chat: id }));
         void turnIntoProject(id)
           .then(
-            () => controller.reloadChats(),
+            () => act(Context.get(services, ChatList).reload()),
             (error: unknown) =>
               runner.runSync(
                 composer.report({
@@ -125,19 +125,18 @@ export function DockButtons({ dock }: { dock: ChatDock }) {
 
 /** The open chat's header in a project's dock: back to the project's chats, then its actions. */
 export function DockChatHeader({
-  controller,
-  state,
+  find,
   dock,
   findInput,
   onShowList,
 }: {
-  controller: DesktopChat;
-  state: ChatState;
+  find: ChatFindOwner;
   dock: ChatDock;
   findInput: RefObject<HTMLInputElement | null>;
   onShowList(): void;
 }) {
-  const { title, context } = describeOpenChat(state);
+  const open = useOpenChat();
+  const { title, context } = describeOpenChat(open);
   return (
     <header {...stylex.props(workbench.paneHeader, dockHeaderStyles.header)}>
       <Button
@@ -148,12 +147,12 @@ export function DockChatHeader({
         <Icon name="back" />
       </Button>
       <div
-        title={state.selected ? context : `In ${dock.project}`}
+        title={open.selected ? context : `In ${dock.project}`}
         {...stylex.props(dockHeaderStyles.heading)}>
         <h1 {...stylex.props(dockHeaderStyles.title, controls.truncate)}>{title}</h1>
       </div>
-      <SettleButton controller={controller} state={state} />
-      <FindButton controller={controller} state={state} findInput={findInput} />
+      <SettleButton open={open} />
+      <FindButton find={find} findInput={findInput} />
       <DockButtons dock={dock} />
     </header>
   );
@@ -165,10 +164,8 @@ export function DockChatHeader({
  * layout it opens the chat list as a drawer.
  */
 export function ChatHeader({
-  controller,
-  state,
+  find,
   composer,
-  runner,
   turnIntoProject,
   findInput,
   titleId,
@@ -177,13 +174,9 @@ export function ChatHeader({
   list,
   listOpen,
   onListOpenChange,
-  findOwner,
   onFindKeyDown,
 }: {
-  controller: DesktopChat;
-  state: ChatState;
   composer: ChatComposer;
-  runner: DesktopRunner;
   turnIntoProject?: (conversationId: string) => Promise<void>;
   findInput: RefObject<HTMLInputElement | null>;
   titleId: string;
@@ -195,12 +188,14 @@ export function ChatHeader({
   listOpen: boolean;
   onListOpenChange(open: boolean): void;
   /** The chat Find belongs to, and its keys, which the title bar's copy needs too. */
-  findOwner: string;
+  find: ChatFindOwner;
   onFindKeyDown(event: KeyboardEvent<HTMLElement>): void;
 }) {
+  const { services, act } = useChat();
+  const open = useOpenChat();
   const inBar = titleBar !== undefined;
-  const { title, context } = describeOpenChat(state);
-  const chat = findSelectedChat(state);
+  const { title, context } = describeOpenChat(open);
+  const { chat } = open;
   // A chat without a project has no project crumb.
   const folder = chat && !chat.ownFolder ? folderName(chat.cwd) : undefined;
   const content = (
@@ -228,9 +223,9 @@ export function ChatHeader({
       )}
       {/* Breadcrumb: the chat's project, then the chat. Folder and model are in its title. */}
       <div
-        title={state.selected ? context : undefined}
+        title={open.selected ? context : undefined}
         {...stylex.props(styles.crumbs, inBar && styles.barCrumbs)}>
-        {state.selected && folder && (
+        {open.selected && folder && (
           <>
             <span
               aria-hidden="true"
@@ -243,7 +238,7 @@ export function ChatHeader({
             </span>
           </>
         )}
-        {inBar && !compact && !(state.selected && folder) && (
+        {inBar && !compact && !(open.selected && folder) && (
           <span aria-hidden="true" {...stylex.props(styles.barIcon)}>
             <Icon name="agents" />
           </span>
@@ -256,22 +251,16 @@ export function ChatHeader({
       </div>
       <div {...stylex.props(controls.row, inBar && styles.barButtons)}>
         {turnIntoProject && (
-          <TurnButton
-            controller={controller}
-            state={state}
-            composer={composer}
-            runner={runner}
-            turnIntoProject={turnIntoProject}
-          />
+          <TurnButton open={open} composer={composer} turnIntoProject={turnIntoProject} />
         )}
-        <SettleButton controller={controller} state={state} />
-        <FindButton controller={controller} state={state} findInput={findInput} />
-        {state.selected && (
+        <SettleButton open={open} />
+        <FindButton find={find} findInput={findInput} />
+        {open.selected && (
           <Button
             aria-label="Close view"
             title="Back to new chat"
             {...stylex.props(controls.button, controls.iconButton)}
-            onClick={() => void controller.closeView()}>
+            onClick={() => void act(Context.get(services, ChatSelection).closeView)}>
             <Icon name="close" />
           </Button>
         )}
@@ -285,7 +274,7 @@ export function ChatHeader({
     createPortal(
       // The bar belongs to this chat for Find, as its header did.
       <div
-        data-chat-find-owner={findOwner}
+        data-chat-find-owner={find.owner}
         onKeyDown={onFindKeyDown}
         {...stylex.props(styles.barContext)}>
         {content}

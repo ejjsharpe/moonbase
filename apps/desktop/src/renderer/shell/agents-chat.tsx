@@ -1,4 +1,6 @@
 import type { ComponentProps } from 'react';
+import { Context } from 'effect';
+import { ChatProviderSetup } from '@moonbase/application/chat';
 import type { MoonbaseApplicationSnapshot } from '@moonbase/application';
 import { ChatView } from '../chat/chat-view.tsx';
 import type { SettingsSection } from './settings.tsx';
@@ -39,7 +41,11 @@ export function AgentsChat({
             }
           : undefined
       }
-      setUpProviders={chat.controller.providers ? () => openSettings('providers') : undefined}
+      setUpProviders={
+        Context.get(chat.services, ChatProviderSetup).available
+          ? () => openSettings('providers')
+          : undefined
+      }
     />
   );
 }

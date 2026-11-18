@@ -1,16 +1,16 @@
 import * as stylex from '@stylexjs/stylex';
 import { colors, space, syntax, type } from '@moonbase/ui/tokens.stylex';
-import type { ChatState } from '@moonbase/application/chat';
+import { useAtomValue } from '@effect/atom-react';
 import { Choice } from '../choice.tsx';
 import { FolderPicker, type ChatFolderProject } from '../folder-picker.tsx';
 import type { ChatHosts } from '../chat-view.tsx';
+import { useChat } from '../chat-context.ts';
 
 /**
  * Where a new chat runs: its working folder (or none, in a project's dock always the project's),
  * whether its first message makes a worktree there, and the host.
  */
 export function NewChatPlace({
-  state,
   cwd,
   newWorktree,
   worktreeChoice,
@@ -24,7 +24,6 @@ export function NewChatPlace({
   chooseWorktree,
   browse,
 }: {
-  state: ChatState;
   cwd: string;
   newWorktree: boolean;
   /** Whether the folder can have a new worktree made for the chat. */
@@ -40,15 +39,14 @@ export function NewChatPlace({
   /** Picks a folder in the native picker; absent where it can't (a remote host's chats). */
   browse?: () => void;
 }) {
-  const remote = state.remote,
-    connected = state.ready;
+  const { remote, ready: connected, connection } = useAtomValue(useChat().atoms.link);
   const hostDot = (
     <span
       aria-hidden="true"
       {...stylex.props(
         styles.localDot,
         remote && !connected && styles.offlineDot,
-        remote && state.connection?.state === 'connecting' && styles.pendingDot,
+        remote && connection?.state === 'connecting' && styles.pendingDot,
       )}
     />
   );
