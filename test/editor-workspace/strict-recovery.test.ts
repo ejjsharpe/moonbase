@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { WorkspaceClient as EditorClient } from '@moonbase/application/testing/editor-fixture';
-import { code, fixture, listDrafts } from './editor-workspace-fixture.ts';
+import { inGroup, fixture, listDrafts } from './editor-workspace-fixture.ts';
 
 test('a stored recovery of an unknown format fails to load, the editor refuses to load, and the row stays untouched', async () => {
   const f = fixture();
@@ -41,7 +41,7 @@ test('a stored recovery of an unknown format fails to load, the editor refuses t
 
       await assert.rejects(
         restarted.client.command('loadRecovery', { clientId: 'strict-editor' }),
-        code('Persistence'),
+        inGroup('storage'),
       );
       let writes = 0;
       const observed: EditorClient = {
@@ -56,7 +56,7 @@ test('a stored recovery of an unknown format fails to load, the editor refuses t
           return restarted.client.command(name, input, options);
         },
       };
-      await assert.rejects(f.editor('strict-editor', observed), code('Persistence'));
+      await assert.rejects(f.editor('strict-editor', observed), inGroup('storage'));
       // An edit sent anyway is refused, not written over the row.
       await assert.rejects(
         restarted.client.command('updateDraft', {
@@ -65,14 +65,14 @@ test('a stored recovery of an unknown format fails to load, the editor refuses t
           text: 'overwrite',
           disk: listDrafts(stored)['b.ts']!.disk,
         }),
-        code('Persistence'),
+        inGroup('storage'),
       );
       assert.equal(writes, 0);
       assert.deepEqual(rows(), before);
       assert.equal(readFileSync(join(f.roots[0], 'b.ts'), 'utf8'), 'B\n');
 
       await f.restart();
-      await assert.rejects(f.loadRecovery('strict-editor'), code('Persistence'));
+      await assert.rejects(f.loadRecovery('strict-editor'), inGroup('storage'));
       assert.deepEqual(rows(), before);
     } finally {
       database.close();

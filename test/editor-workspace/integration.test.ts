@@ -12,7 +12,7 @@ import {
 } from '@moonbase/application/testing/editor-fixture';
 import { checkoutKey, fileKey } from '@moonbase/application/editor';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
-import { answering, code, fixture, listDrafts, listTabs } from './editor-workspace-fixture.ts';
+import { answering, inGroup, fixture, listDrafts, listTabs } from './editor-workspace-fixture.ts';
 
 for (const [kind, source, collision] of [
   ['copy', 'b.ts', null],
@@ -121,7 +121,7 @@ test('create and native import consumer payloads need no empty inspection and re
         destination: '',
         nativeReferences: references,
       }),
-      code('InvalidInput'),
+      inGroup('refusal'),
     );
     const replacements = await editor.inspect(checkout, ['b.ts']);
     const single = await editor.mutate({
@@ -143,7 +143,7 @@ test('create and native import consumer payloads need no empty inspection and re
         destination: 'replayed.txt',
         nativeReferences: references,
       }),
-      code('Unauthorized'),
+      inGroup('access'),
     );
     const second = join(f.base, 'second.txt');
     writeFileSync(second, 'SECOND SOURCE\n');

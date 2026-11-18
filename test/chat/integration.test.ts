@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
+import { type ErrorGroup, getErrorGroup } from '@moonbase/contracts/error-groups';
 import { execFileSync } from 'node:child_process';
 import { test } from 'node:test';
 import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { ApplicationError } from '@moonbase/contracts/errors';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
 import { controlledHostFixture, until } from './controlled-host-fixture.ts';
 import { keyedModel } from './faux-model.ts';
+/** Whether a failure means `group` for its request. */
+const inGroup = (group: ErrorGroup) => (error: unknown) => getErrorGroup(error) === group;
 
 async function fixture(t: { after(fn: () => Promise<void>): void }, hold = false) {
   const f = await controlledHostFixture(new URL('./faux-reply.mjs', import.meta.url), hold);
@@ -20,9 +22,10 @@ test('combined public root requires explicit verified Connect, then saves/lists/
   const f = await fixture(t),
     client = f.root();
   assert.equal((await client.connection.command('getConnection', {})).state, 'disconnected');
-  await assert.rejects(client.chat.command('getChatHost', { host: f.session.host }), {
-    code: 'Unavailable',
-  });
+  await assert.rejects(
+    client.chat.command('getChatHost', { host: f.session.host }),
+    inGroup('unavailable'),
+  );
   const connected = await client.connection.command('connect', { profileId: client.profile.id });
   assert.equal(connected.state, 'connected');
   assert(!JSON.stringify(connected).includes(f.token));
@@ -44,7 +47,7 @@ test('combined public root requires explicit verified Connect, then saves/lists/
   );
   const target = created.conversation.target,
     snapshots: ChatSnapshot[] = [],
-    errors: ApplicationError[] = [];
+    errors: unknown[] = [];
   const unsubscribe = client.chat.watch(
     { target },
     (value) => snapshots.push(value),
@@ -159,7 +162,7 @@ test('through the forward, a remote client chooses host folders from approved ro
         title: 'Refused',
         settings: { cwd, model: f.model },
       }),
-      (error: { code: string }) => ['Unauthorized', 'InvalidInput'].includes(error.code),
+      (error: unknown) => ['access', 'refusal'].includes(getErrorGroup(error)!),
     );
   await assert.rejects(
     client.chat.command('findChatFiles', {
@@ -167,7 +170,7 @@ test('through the forward, a remote client chooses host folders from approved ro
       cwd: outside,
       query: 'x',
     }),
-    { code: 'Unauthorized' },
+    inGroup('access'),
   );
   assert.equal((await f.stats()).calls, 1);
 });
@@ -185,7 +188,7 @@ test('a lost Send response and client closure retain original receipt; reconnect
     target = created.conversation.target;
   const input = { target, requestId: 'immutable-send', text: 'Only one admitted input' };
   await f.loseNextSend();
-  await assert.rejects(first.chat.command('sendChat', input), { code: 'Uncertain' });
+  await assert.rejects(first.chat.command('sendChat', input), inGroup('uncertain'));
   await until(f.stats, (value) => value.calls === 1);
   await first.runtime.dispose();
   f.release();
@@ -240,13 +243,13 @@ test('disconnect denies commands without implicit reconnect; stale Disconnect an
     ),
     stop = run.run!.stop;
   await first.connection.command('disconnect', { connectionId: old.connectionId! });
-  await assert.rejects(first.chat.command('getChat', { target }), { code: 'Unavailable' });
+  await assert.rejects(first.chat.command('getChat', { target }), inGroup('unavailable'));
   assert.equal((await first.connection.command('getConnection', {})).state, 'disconnected');
   const current = await first.connection.command('connect', { profileId: first.profile.id });
   assert.notEqual(current.connectionId, old.connectionId);
   await assert.rejects(
     first.connection.command('disconnect', { connectionId: old.connectionId! }),
-    { code: 'Conflict' },
+    inGroup('conflict'),
   );
   assert.equal((await first.connection.command('getConnection', {})).state, 'connected');
   const result = await first.chat.command('stopChat', { stop, requestId: 'stop-exact' });
@@ -263,9 +266,10 @@ test('disconnect denies commands without implicit reconnect; stale Disconnect an
 test('a signed health reply for another exact host cannot connect or expose a chat endpoint', async (t) => {
   const f = await fixture(t),
     wrong = f.root({ ...f.session.host, hostId: 'other-host' });
-  await assert.rejects(wrong.connection.command('connect', { profileId: wrong.profile.id }), {
-    code: 'Incompatible',
-  });
+  await assert.rejects(
+    wrong.connection.command('connect', { profileId: wrong.profile.id }),
+    inGroup('incompatible'),
+  );
   assert.equal((await wrong.connection.command('getConnection', {})).state, 'failed');
   await assert.rejects(wrong.chat.command('getChatHost', { host: wrong.profile.expected }));
   assert.equal((await f.stats()).calls, 0);
@@ -301,8 +305,8 @@ test('Disconnect after a committed Send preserves uncertainty and original ident
   assert.equal((await client.connection.command('getConnection', {})).state, 'disconnected');
   const result = await outcome;
   assert.equal(
-    (result.error as ApplicationError)?.code,
-    'Uncertain',
+    getErrorGroup(result.error),
+    'uncertain',
     'dispatch may have committed; retain the original identity',
   );
   assert.equal((await f.stats()).commands.filter((name) => name === 'sendChat').length, 1);
@@ -364,9 +368,10 @@ test('transcript reads cross the real child/forwarding boundary with identity, l
     };
   const request = { source, selection };
   await f.loseNextReply('getChatTranscriptContent');
-  await assert.rejects(client.chat.command('getChatTranscriptContent', request), {
-    code: 'Unavailable',
-  });
+  await assert.rejects(
+    client.chat.command('getChatTranscriptContent', request),
+    inGroup('unavailable'),
+  );
   const content = await client.chat.command('getChatTranscriptContent', request);
   assert(content.kind === 'content');
   assert.equal(content.data, 'Retained user content 😀');
@@ -404,7 +409,7 @@ test('transcript reads cross the real child/forwarding boundary with identity, l
   const pending = client.chat.command('getChatTranscriptContent', request, {
     signal: abort.signal,
   });
-  const cancelled = assert.rejects(pending, { code: 'Cancelled' });
+  const cancelled = assert.rejects(pending, inGroup('cancelled'));
   await until(f.stats, (stats) => stats.heldReplies.includes('getChatTranscriptContent'));
   assert.equal((await client.chat.command('getChat', { target: other })).state, 'idle');
   const stop = await client.chat.command('stopChat', { stop: live.run!.stop, requestId: 'stop' });
@@ -414,7 +419,7 @@ test('transcript reads cross the real child/forwarding boundary with identity, l
   await f.releaseReply();
   await f.holdReply('getChatHistoryAround');
   const stale = client.chat.command('getChatHistoryAround', { target, entryId: source.entryId });
-  const disconnected = assert.rejects(stale, { code: 'Unavailable' });
+  const disconnected = assert.rejects(stale, inGroup('unavailable'));
   await until(f.stats, (stats) => stats.heldReplies.includes('getChatHistoryAround'));
   await client.connection.command('disconnect', { connectionId: connected.connectionId! });
   await disconnected;
@@ -450,7 +455,7 @@ test('cross-process capable observation streams thinking/text before completion,
     })
   ).conversation.target;
   const views: ChatSnapshot[] = [],
-    errors: ApplicationError[] = [];
+    errors: unknown[] = [];
   const close = root.chat.watch(
     { target },
     (value) => views.push(value),
@@ -520,7 +525,7 @@ test('cross-process tool progress arrives while execution is held and independen
     })
   ).conversation.target;
   const views: ChatSnapshot[] = [],
-    errors: ApplicationError[] = [];
+    errors: unknown[] = [];
   const close = root.chat.watch(
     { target },
     (v) => views.push(v),
