@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { acquireEditor, answering } from './editor-model-fixture.ts';
-import { checkout, second, target, fixture, storedRecovery } from './editor-fixture.ts';
+import {
+  acquireEditor,
+  answering,
+  checkout,
+  second,
+  target,
+  fixture,
+  storedRecovery,
+} from './editor-fixture.ts';
 
 test('retained snapshots stay stable across edits, positions, disk/conflict updates and close prompts', async () => {
   const f = await fixture('snapshot-updates', false);
@@ -122,19 +129,6 @@ test('restored drafts and uncertain Save and move results keep their exact ident
     assert.equal(drafts.find((draft) => draft.target.path === 'moved.ts')!.text, 'newer live a');
   } finally {
     await editor.dispose();
-    await f.dispose();
-  }
-});
-
-test('a reported string shows as written, and an unknown error only as a generic failure', async () => {
-  const f = await fixture('reported-errors', false);
-  try {
-    f.editor.report('Can’t move a folder into itself.');
-    f.editor.report(new Error('/private/path'));
-    const [own, unknown] = f.editor.getSnapshot().errors;
-    assert.equal(own, 'Can’t move a folder into itself.');
-    assert.doesNotMatch(unknown, /private/);
-  } finally {
     await f.dispose();
   }
 });

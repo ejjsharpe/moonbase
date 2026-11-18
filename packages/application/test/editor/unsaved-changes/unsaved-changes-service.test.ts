@@ -1,8 +1,66 @@
-import { acquireEditor, answering } from './editor-model-fixture.ts';
-import * as controllerFixture from './editor-fixture.ts';
 import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
-import type { EditorDriver } from './editor-model-fixture.ts';
+import { Effect, ManagedRuntime, Layer, SubscriptionRef } from 'effect';
+import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
+import {
+  toWorkspaceClient as makeEditorClient,
+  type WorkspaceClient,
+} from '@moonbase/application/testing/editor-fixture';
+import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
+import * as controllerFixture from '../editor-fixture.ts';
+import {
+  acquireEditor,
+  checkout,
+  target,
+  answering,
+  type EditorDriver,
+  fixture,
+  loadStoredState,
+  draftsOf,
+} from '../editor-fixture.ts';
+import {
+  type CloseChoice,
+  EditorCheckouts,
+  EditorLoader,
+  UnsavedChangesGuard,
+  EditorSession,
+  EditorTabs,
+  RecoveryOutbox,
+  RecoverySync,
+  editorLayer,
+} from '@moonbase/application/editor';
+import { WorkspaceService } from '@moonbase/contracts/workspace-service';
+
+test('exact close prompts ignore stale answers and disposal cancels an outstanding prompt', async () => {
+  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
+  const runtime = ManagedRuntime.make(memory.layer);
+  const editor = await acquireEditor(runtime, {
+    client: makeEditorClient(runtime),
+    clientId: 'prompts',
+  });
+  try {
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    await editor.open(target('a.ts'));
+    editor.edit(target('a.ts'), 'dirty');
+    const closing = editor.close([target('a.ts')]);
+    const prompt = editor.getSnapshot().closePrompt!;
+    assert(prompt);
+    editor.answerClose('stale-prompt', 'discard');
+    assert.equal(editor.getSnapshot().closePrompt?.id, prompt.id);
+    editor.answerClose(prompt.id, 'cancel');
+    assert.equal(await closing, false);
+    const next = editor.close([target('a.ts')]);
+    // Disposal answers the outstanding prompt Cancel, or ends the close with the editor.
+    const result = next.catch(() => false);
+    await editor.dispose();
+    assert.equal(await result, false);
+    assert.equal(editor.getSnapshot().closePrompt, null);
+  } finally {
+    await editor.dispose();
+    await runtime.dispose();
+  }
+});
 
 describe('Close and Quit races', () => {
   const { checkout, second, target, fixture, held, holding, observedFixture, storedRecovery } =
@@ -312,7 +370,7 @@ describe('Close and Quit races', () => {
     }
   });
 
-  test('an reached observer acknowledgement stays completed when its response crosses a Reload lock', async () => {
+  test('a received observer acknowledgement stays completed when its response crosses a Reload lock', async () => {
     const f = await observedFixture('ack-boundary'),
       acked = held(),
       releaseAck = held(),
@@ -436,6 +494,284 @@ describe('Close and Quit races', () => {
     } finally {
       reply.release();
       await f.dispose();
+    }
+  });
+});
+
+test('captured close defers Discards; earlier Save stays saved after a later Cancel', async () => {
+  const f = await fixture();
+  try {
+    for (const path of ['a.ts', 'b.ts', 'c.ts']) {
+      await f.editor.open(target(path));
+      f.editor.edit(target(path), 'edit ' + path);
+    }
+    const choices: CloseChoice[] = ['save', 'discard', 'cancel'];
+    assert.equal(
+      await answering(
+        f.editor,
+        () => f.editor.close([target('a.ts'), target('b.ts'), target('c.ts')]),
+        async () => choices.shift()!,
+      ),
+      false,
+    );
+    assert.equal(
+      f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.openFiles.length,
+      3,
+    );
+    assert.equal(f.editor.buffer(target('a.ts'))!.disk.text, 'edit a.ts');
+    assert.equal(f.editor.buffer(target('b.ts'))!.text, 'edit b.ts');
+    assert.equal(f.editor.buffer(target('c.ts'))!.text, 'edit c.ts');
+    f.memory.failNext('closeTab');
+    assert.equal(
+      await answering(
+        f.editor,
+        () => f.editor.close([target('b.ts')]),
+        async () => 'discard',
+      ),
+      false,
+    );
+    assert.equal(f.editor.buffer(target('b.ts'))!.text, 'edit b.ts');
+    await f.editor.flush();
+    assert(
+      draftsOf(await loadStoredState(f.client, f.editor.clientId)).some(
+        (d) => d.target.path === 'b.ts' && d.text === 'edit b.ts',
+      ),
+    );
+    assert.equal(
+      await answering(
+        f.editor,
+        () => f.editor.close([target('b.ts')]),
+        async () => 'discard',
+      ),
+      true,
+    );
+    assert.equal(f.editor.buffer(target('b.ts')), undefined);
+    await f.editor.reopen(checkout);
+    assert.equal(f.editor.buffer(target('b.ts'))!.text, 'second');
+  } finally {
+    await f.dispose();
+  }
+});
+
+test('reopen restores batch order/view/position and reads current source rather than discarded text', async () => {
+  const f = await fixture();
+  try {
+    await f.editor.open(target('a.ts'), { view: 'staged' });
+    await f.editor.open(target('b.ts'));
+    f.editor.position(target('a.ts'), 'staged', { line: 1, column: 4, top: 18, left: 2 });
+    await answering(
+      f.editor,
+      () => f.editor.close([target('a.ts'), target('b.ts')]),
+      async () => 'discard',
+    );
+    f.memory.externalWrite(target('b.ts'), 'latest source');
+    await f.editor.reopen(checkout);
+    const selected = f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!;
+    assert.deepEqual(selected.openFiles, ['a.ts', 'b.ts']);
+    assert.equal(selected.fileViews.get('a.ts'), 'staged');
+    assert.equal(selected.positions.get('a.ts')!.staged?.column, 4);
+    assert.equal(f.editor.buffer(target('b.ts'))!.text, 'latest source');
+    await f.editor.navigate(checkout, -1);
+    assert.equal(f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.active, 'a.ts');
+  } finally {
+    await f.dispose();
+  }
+});
+
+test('pending commands retain newer live text and close cannot cross an unresolved Save', async () => {
+  const f = await fixture();
+  let received!: () => void, release!: () => void;
+  const reached = new Promise<void>((resolve) => {
+      received = resolve;
+    }),
+    delayed = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+  const client: WorkspaceClient = {
+    ...f.client,
+    async command(name, input, options) {
+      const result = await f.client.command(name, input, options);
+      if (name === 'saveFile') {
+        received();
+        await delayed;
+      }
+      return result;
+    },
+  };
+  const editor = await acquireEditor(f.runtime, { client, clientId: 'pending-save' });
+  try {
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    await editor.open(target('a.ts'));
+    editor.edit(target('a.ts'), 'captured save');
+    await editor.flush();
+    const save = editor.save(target('a.ts'));
+    await reached;
+    editor.edit(target('a.ts'), 'newer live edit');
+    assert.equal(
+      await answering(
+        editor,
+        () => editor.prepareQuit(),
+        async () => 'discard',
+      ),
+      false,
+    );
+    release();
+    assert.equal(await save, false);
+    assert.equal(editor.buffer(target('a.ts'))!.disk.text, 'captured save');
+    assert.equal(editor.buffer(target('a.ts'))!.text, 'newer live edit');
+    await editor.flush();
+    assert.deepEqual(
+      draftsOf(await loadStoredState(f.client, editor.clientId)).map((d) => d.text),
+      ['newer live edit'],
+    );
+  } finally {
+    release();
+    await editor.dispose();
+    await f.dispose();
+  }
+});
+
+test('Quit uses the same deferred unsaved-changes gate and a failed discard keeps all edits', async () => {
+  const f = await fixture();
+  try {
+    await f.editor.open(target('a.ts'));
+    f.editor.edit(target('a.ts'), 'dirty');
+    assert.equal(
+      await answering(
+        f.editor,
+        () => f.editor.prepareQuit(),
+        async () => 'cancel',
+      ),
+      false,
+    );
+    f.memory.failNext('closeTab');
+    assert.equal(
+      await answering(
+        f.editor,
+        () => f.editor.prepareQuit(),
+        async () => 'discard',
+      ),
+      false,
+    );
+    assert.equal(f.editor.buffer(target('a.ts'))!.text, 'dirty');
+    await f.editor.flush();
+    assert.deepEqual(
+      draftsOf(await loadStoredState(f.client, f.editor.clientId)).map((d) => d.text),
+      ['dirty'],
+    );
+    assert.equal(
+      await answering(
+        f.editor,
+        () => f.editor.prepareQuit(),
+        async () => 'save',
+      ),
+      true,
+    );
+    assert.equal(f.editor.buffer(target('a.ts'))!.text, 'dirty');
+  } finally {
+    await f.dispose();
+  }
+});
+
+test('checkout close retains exact metadata and reopens its order, comparison, positions and active file', async () => {
+  const f = await fixture('checkout-memory', false);
+  try {
+    await f.editor.open(target('a.ts'), { view: 'staged' });
+    await f.editor.open(target('b.ts'));
+    f.editor.position(target('a.ts'), 'staged', { line: 1, column: 5, top: 12, left: 2 });
+    f.editor.reorder(checkout, 'b.ts', 0);
+    const before = f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!;
+    assert(before);
+    assert.deepEqual(f.editor.getSnapshot().recovery.openCheckoutIds, [checkout.checkoutId]);
+    await answering(
+      f.editor,
+      () => f.editor.closeCheckout(checkout),
+      async () => 'discard',
+    );
+    const closed = f.editor.getSnapshot().recovery;
+    assert.deepEqual(closed.checkouts, [checkout]);
+    assert.deepEqual(closed.openCheckoutIds, []);
+    assert.deepEqual(closed.views.get(checkout.checkoutId), before);
+    assert(closed.recentFiles.length);
+    await f.editor.openCheckout(checkout.root);
+    assert.deepEqual(f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!, before);
+    assert.equal(f.editor.buffer(target('b.ts'))!.text, 'second');
+    assert.equal(await f.editor.reopen(checkout), false);
+  } finally {
+    await f.dispose();
+  }
+});
+
+describe('Quit preparation on its own', () => {
+  const checkout: CheckoutTarget = {
+    hostId: 'local',
+    checkoutId: 'quit',
+    projectId: 'project',
+    root: '/memory/quit',
+    vcs: 'git',
+    branch: 'main',
+    worktree: 'main',
+  };
+
+  test('a failed final layout edit vetoes Quit until a later flush keeps it', async () => {
+    const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'original' } }]);
+    const base = ManagedRuntime.make(memory.layer);
+    const store = await base.runPromise(Effect.service(WorkspaceService));
+    let loseLayout = false;
+    const workspace = Layer.succeed(WorkspaceService, {
+      ...store,
+      updateLayout: (input) =>
+        loseLayout
+          ? Effect.fail(new ApplicationError({ code: 'Persistence', message: 'Layout lost' }))
+          : store.updateLayout(input),
+    });
+    const runtime = ManagedRuntime.make(
+      Layer.provideMerge(editorLayer({ clientId: 'quit' }), workspace),
+    );
+    const target = { checkout, path: 'a.ts' };
+    try {
+      await runtime.runPromise(
+        Effect.gen(function* () {
+          yield* (yield* EditorLoader).load;
+          const opened = yield* (yield* EditorCheckouts).openCheckout(checkout.root);
+          const file = { ...target, checkout: opened };
+          const tabs = yield* EditorTabs;
+          yield* tabs.open(file);
+          yield* (yield* RecoverySync).flush;
+          const session = yield* EditorSession;
+          const guard = yield* UnsavedChangesGuard;
+          const setAccepting = (open: boolean) =>
+            session.update((s) => ({ ...s, acceptingActions: open }));
+          // The last change before Quit is a layout edit the store loses.
+          loseLayout = true;
+          yield* tabs.position(file, 'file', { line: 1, column: 7, top: 20, left: 0 });
+          yield* setAccepting(false);
+          assert.equal(yield* guard.finishQuitPreparation, false);
+          assert.notEqual(
+            (yield* SubscriptionRef.get((yield* RecoveryOutbox).state)).failure,
+            undefined,
+          );
+          assert.equal(yield* guard.recoveryReady, false);
+          // Quit may go once a later flush keeps it.
+          yield* setAccepting(true);
+          loseLayout = false;
+          yield* (yield* RecoverySync).flush;
+          yield* setAccepting(false);
+          assert.equal(yield* guard.finishQuitPreparation, true);
+          const { state } = yield* store.loadRecovery({ clientId: 'quit' });
+          const id = state.buffers.find((buffer) => buffer.target.path === 'a.ts')!.id;
+          assert.deepEqual(state.views[opened.checkoutId].positions[id].file, {
+            line: 1,
+            column: 7,
+            top: 20,
+            left: 0,
+          });
+        }),
+      );
+    } finally {
+      await runtime.dispose();
+      await base.dispose();
     }
   });
 });

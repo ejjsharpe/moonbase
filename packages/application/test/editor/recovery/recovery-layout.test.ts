@@ -1,4 +1,4 @@
-import { acquireEditor, answering } from './editor-model-fixture.ts';
+import { acquireEditor, answering } from '../editor-fixture.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ManagedRuntime } from 'effect';
@@ -14,9 +14,13 @@ const checkout = {
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };
+
 const names = ['__proto__', 'constructor', 'toString', 'hasOwnProperty'];
+
 const target = (path: string) => ({ checkout, path });
+
 const cursor = { line: 1, column: 3, top: 0, left: 0 };
+
 function protectPrototypes() {
   const objects = [
     Object.prototype,
@@ -172,42 +176,6 @@ test('prototype-shaped filenames keep own JSON view keys through Save, reopen, r
   } finally {
     prototypes.restore();
     await editor.dispose();
-    await runtime.dispose();
-  }
-});
-
-test('untracked prototype-shaped filenames never inherit a demo Git baseline', async () => {
-  const memory = fauxWorkspace([
-    {
-      checkout,
-      files: Object.fromEntries(names.map((path) => [path, 'working'])),
-      head: {},
-      index: {},
-    },
-  ]);
-  const runtime = ManagedRuntime.make(memory.layer),
-    client = makeEditorClient(runtime);
-  try {
-    assert.deepEqual(
-      (await client.command('gitStatus', { checkout })).changes.map((change) => [
-        change.path,
-        change.area,
-      ]),
-      names.map((path) => [path, 'untracked']),
-    );
-    for (const path of names) {
-      for (const area of ['staged', 'unstaged'] as const)
-        await assert.rejects(
-          client.command('readComparison', { target: target(path), area }),
-          /Git baseline unavailable/,
-        );
-      assert.equal(
-        (await client.command('readComparison', { target: target(path), area: 'untracked' }))
-          .original,
-        '',
-      );
-    }
-  } finally {
     await runtime.dispose();
   }
 });

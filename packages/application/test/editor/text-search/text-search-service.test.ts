@@ -20,6 +20,7 @@ const checkout: CheckoutTarget = {
   branch: 'main',
   worktree: 'main',
 };
+
 /** Waits until the search shows `message`. */
 const settled = (search: TextSearch, message: string) =>
   SubscriptionRef.changes(search.state).pipe(

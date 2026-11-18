@@ -1,5 +1,4 @@
-import { acquireEditor, answering } from './editor-model-fixture.ts';
-import { holding, storedRecovery } from './editor-fixture.ts';
+import { acquireEditor, answering, holding, storedRecovery } from '../editor-fixture.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Effect, ManagedRuntime } from 'effect';
@@ -16,8 +15,11 @@ const checkout: CheckoutTarget = {
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };
+
 const target = { checkout, path: 'a.ts' };
+
 const other = { checkout, path: 'b.ts' };
+
 const third = { checkout, path: 'c.ts' };
 
 /** An editor whose commands the test can hold, with a.ts open; `testClock` runs its debounce. */
@@ -53,6 +55,7 @@ async function fixture(testClock = false) {
     },
   };
 }
+
 const settled = (promise: Promise<unknown>) => {
   const state = { done: false };
   void promise.then(
@@ -61,6 +64,7 @@ const settled = (promise: Promise<unknown>) => {
   );
   return state;
 };
+
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 test('a change makes recovery unready at once until its edit commits, and survives a restart', async () => {

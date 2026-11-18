@@ -1,15 +1,105 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
-import { acquireEditor } from './editor-model-fixture.ts';
-import { checkout, second, fixture, held, target } from './editor-fixture.ts';
-import { fileKey, type EditorSnapshot } from '@moonbase/application/editor';
-import { Effect } from 'effect';
-import { ApplicationError, type WorkspaceEvent } from '@moonbase/contracts/workspace';
+import { test, describe } from 'node:test';
+import { Deferred, Effect, Exit, Fiber, Layer, ManagedRuntime, Option } from 'effect';
+import { WorkspaceService } from '@moonbase/contracts/workspace-service';
+import {
+  type CheckoutTarget,
+  ApplicationError,
+  type WorkspaceEvent,
+} from '@moonbase/contracts/workspace';
+import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
+import {
+  EditorCheckouts,
+  EditorDiscovery,
+  EditorLoader,
+  editorLayer,
+  fileKey,
+  type EditorSnapshot,
+} from '@moonbase/application/editor';
+import {
+  acquireEditor,
+  checkout,
+  second,
+  fixture,
+  held,
+  target,
+  held as gate,
+} from '../editor-fixture.ts';
+import {
+  toWorkspaceClient as makeEditorClient,
+  type WorkspaceClient,
+} from '@moonbase/application/testing/editor-fixture';
+
+describe('the discovery service on its own', () => {
+  const checkout: CheckoutTarget = {
+    hostId: 'local',
+    checkoutId: 'listing',
+    projectId: 'project',
+    root: '/memory/listing',
+    vcs: 'git',
+    branch: 'main',
+    worktree: 'main',
+  };
+
+  test('a listing whose checkout closes while it replaces a classification still settles', async () => {
+    const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'one', 'b.ts': 'two' } }]);
+    const runtime = ManagedRuntime.make(memory.layer);
+    const base = await runtime.runPromise(Effect.service(WorkspaceService));
+    // Git never answers, and takes a moment to stop: the window where the checkout closes.
+    const cancelling = await runtime.runPromise(Deferred.make<void>());
+    const workspace = Layer.succeed(WorkspaceService, {
+      ...base,
+      getIgnoredPaths: () =>
+        Effect.never.pipe(
+          Effect.onInterrupt(() =>
+            Effect.andThen(Deferred.succeed(cancelling, undefined), Effect.sleep('30 millis')),
+          ),
+        ),
+    });
+    const editor = ManagedRuntime.make(
+      Layer.provideMerge(editorLayer({ clientId: 'c' }), workspace),
+    );
+    try {
+      await editor.runPromise(
+        Effect.gen(function* () {
+          yield* (yield* EditorLoader).load;
+          const opened = yield* (yield* EditorCheckouts).openCheckout(checkout.root);
+          const discovery = yield* EditorDiscovery;
+          // Opening listed the root once. The second read keeps that one's classification running;
+          // the third cancels the second's, which takes a moment: the checkout closes meanwhile.
+          yield* discovery.list(opened, '');
+          const third = yield* Effect.forkChild(discovery.list(opened, ''));
+          yield* Deferred.await(cancelling);
+          yield* discovery.release(opened);
+          const settled = yield* Effect.timeoutOption(Fiber.await(third), '5 seconds');
+          assert(Option.isSome(settled), 'the listing settled');
+          assert(Exit.isExit(settled.value));
+        }),
+      );
+    } finally {
+      await editor.dispose();
+      await runtime.dispose();
+    }
+  });
+});
 
 async function until(check: () => unknown) {
   const deadline = Date.now() + 10_000;
   while (!check() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
   assert(check());
+}
+
+type Snapshots = { getSnapshot(): EditorSnapshot };
+
+/** c.ts's Git classification in the root listing. */
+const readIgnored = (editor: Snapshots) =>
+  editor.getSnapshot().listings[fileKey(target(''))]?.entries.find((entry) => entry.path === 'c.ts')
+    ?.ignored;
+
+async function expectClassification(editor: Snapshots, expected: boolean | undefined) {
+  for (let i = 0; i < 200 && readIgnored(editor) !== expected; i++)
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(readIgnored(editor), expected);
 }
 
 test('overlapping folder reads share one request and later navigation reads fresh entries', async () => {
@@ -373,17 +463,6 @@ test('a refreshed listing keeps its ignored classification until Git classifies 
   }
 });
 
-type Snapshots = { getSnapshot(): EditorSnapshot };
-/** c.ts's Git classification in the root listing. */
-const readIgnored = (editor: Snapshots) =>
-  editor.getSnapshot().listings[fileKey(target(''))]?.entries.find((entry) => entry.path === 'c.ts')
-    ?.ignored;
-async function expectClassification(editor: Snapshots, expected: boolean | undefined) {
-  for (let i = 0; i < 200 && readIgnored(editor) !== expected; i++)
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  assert.equal(readIgnored(editor), expected);
-}
-
 test('refreshes faster than Git cannot keep a file dimmed after a .gitignore edit', async () => {
   const f = await fixture('listing-ignored-starved-source', false);
   // What Git answers, and the held answers in the order they were asked.
@@ -517,5 +596,167 @@ test('a kept classification that reports an error does not stand in for a failed
     for (const call of asked) call.answer({ paths: [] });
     await editor.dispose();
     await f.dispose();
+  }
+});
+
+test('checkout close cancels its in-flight observer refresh without reporting obsolete read cancellation', async () => {
+  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
+  const runtime = ManagedRuntime.make(memory.layer),
+    raw = makeEditorClient(runtime),
+    entered = gate(),
+    release = gate();
+  let held = false,
+    signal: AbortSignal | undefined;
+  const client: WorkspaceClient = {
+    ...raw,
+    async command(name, input, options) {
+      if (held && name === 'listDirectory') {
+        signal = options?.signal;
+        entered.release();
+        await release.promise;
+      }
+      return raw.command(name, input, options);
+    },
+  };
+  const editor = await acquireEditor(runtime, { client, clientId: 'closing-refresh' });
+  try {
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    await editor.open(target('a.ts'));
+    await editor.flush();
+    held = true;
+    memory.externalWrite(target('a.ts'), 'B');
+    await entered.promise;
+    assert.equal(await editor.closeCheckout(checkout), true);
+    assert.equal(signal?.aborted, true);
+    assert.deepEqual(editor.getSnapshot().errors, []);
+    const snapshot = editor.getSnapshot();
+    release.release();
+    await runtime.runPromise(Effect.yieldNow);
+    assert.strictEqual(editor.getSnapshot(), snapshot);
+  } finally {
+    release.release();
+    await editor.dispose();
+    await runtime.dispose();
+  }
+});
+
+test('selected file replacement cancels held comparison refresh and checkout close cancels held reveal reads', async () => {
+  const memory = fauxWorkspace([
+    {
+      checkout,
+      files: { 'a.ts': 'A', 'b.ts': 'B', 'folder/c.ts': 'C' },
+      head: { 'a.ts': 'HEAD A' },
+      index: { 'a.ts': 'INDEX A' },
+    },
+  ]);
+  const runtime = ManagedRuntime.make(memory.layer),
+    raw = makeEditorClient(runtime);
+  let heldName = '',
+    entered = held(),
+    release = held(),
+    signal: AbortSignal | undefined;
+  const wasAborted = () => signal?.aborted;
+  const client: WorkspaceClient = {
+    ...raw,
+    async command(name, input, options) {
+      if (name === heldName) {
+        signal = options?.signal;
+        entered.release();
+        await release.promise;
+      }
+      return raw.command(name, input, options);
+    },
+  };
+  const editor = await acquireEditor(runtime, { client, clientId: 'owned-read-scopes' });
+  try {
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    await editor.open(target('a.ts'), { view: 'staged' });
+    heldName = 'readComparison';
+    const refresh = editor.refresh(checkout);
+    await entered.promise;
+    await editor.open(target('b.ts'));
+    assert.equal(wasAborted(), true);
+    release.release();
+    await refresh;
+    entered = held();
+    release = held();
+    heldName = 'listDirectory';
+    signal = undefined;
+    // Closing the checkout aborts the held read and abandons the reveal, which resolves false.
+    const reveal = editor.reveal(target('folder/c.ts'));
+    await entered.promise;
+    assert.equal(await editor.closeCheckout(checkout), true);
+    assert.equal(wasAborted(), true);
+    release.release();
+    assert.equal(await reveal, false);
+  } finally {
+    release.release();
+    await editor.dispose();
+    await runtime.dispose();
+  }
+});
+
+test('cached and implicit checkout selection retain an exact owner for comparison refresh cancellation', async () => {
+  const other = { ...checkout, checkoutId: 'other', root: '/memory/other' };
+  const memory = fauxWorkspace(
+    [checkout, other].map((checkout) => ({
+      checkout,
+      files: { 'a.ts': 'A', 'b.ts': 'B' },
+      head: { 'a.ts': 'HEAD A' },
+      index: { 'a.ts': 'INDEX A' },
+    })),
+  );
+  const runtime = ManagedRuntime.make(memory.layer),
+    raw = makeEditorClient(runtime);
+  let held = false,
+    entered = gate(),
+    release = gate(),
+    observed: AbortSignal | undefined;
+  const aborted = () => observed?.aborted;
+  const client: WorkspaceClient = {
+    ...raw,
+    async command(name, input, options) {
+      if (held && name === 'readComparison') {
+        observed = options?.signal;
+        entered.release();
+        await release.promise;
+      }
+      return raw.command(name, input, options);
+    },
+  };
+  const editor = await acquireEditor(runtime, { client, clientId: 'cached-selection' });
+  try {
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    await editor.open(target('a.ts'), { view: 'staged' });
+    await editor.openCheckout(other.root);
+    await editor.open({ checkout: other, path: 'a.ts' }, { view: 'staged' });
+    await editor.selectCheckout(checkout);
+    held = true;
+    const refresh = editor.refresh(checkout);
+    await entered.promise;
+    await editor.selectCheckout(other);
+    assert.equal(aborted(), true);
+    release.release();
+    await refresh;
+    held = false;
+    await editor.closeCheckout(other); // Implicitly selects cached checkout A.
+    entered = gate();
+    release = gate();
+    observed = undefined;
+    held = true;
+    const implicit = editor.refresh(checkout);
+    await entered.promise;
+    await editor.open(target('b.ts'));
+    assert.equal(aborted(), true);
+    release.release();
+    await implicit;
+    assert.deepEqual(editor.getSnapshot().errors, []);
+  } finally {
+    release.release();
+    await editor.dispose();
+    await runtime.dispose();
   }
 });
