@@ -6,7 +6,7 @@ import type {
   ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
-import { makeTranscriptFailure } from './transcript-read.ts';
+import { TranscriptReadError } from './transcript-errors.ts';
 import type { TranscriptManifestState } from './transcript-state.ts';
 import { reuseParts } from './transcript-history.ts';
 
@@ -28,7 +28,7 @@ export function appendManifestPage(
   known: ChatTranscriptPart[],
 ): TranscriptManifestState {
   if (reply.parts.some((part) => manifest.parts.some((old) => old.partId === part.partId)))
-    throw makeTranscriptFailure('Manifest continuation repeats a part.');
+    throw new TranscriptReadError({ problem: 'manifest-continuation-repeats' });
   return {
     ...manifest,
     parts: [...manifest.parts, ...reuseParts(known, reply.parts)],

@@ -11,8 +11,9 @@ export function makeApplicationAtoms(application: MoonbaseApplicationShape) {
     snapshot: Atom.readable((get) =>
       toApplicationSnapshot(get(phase), get(chat), application.chat.targets),
     ),
-    chat: Atom.readable((get) => get(chat).controller),
-    /** The open chat's composer, made beside its controller. */
+    /** The open chat's services. */
+    chat: Atom.readable((get) => get(chat).chat),
+    /** The open chat's composer, made beside its services. */
     composer: Atom.readable((get) => get(chat).composer),
     ...makePlaceHistoryAtoms(application.navigation),
   };

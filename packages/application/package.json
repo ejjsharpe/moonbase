@@ -9,6 +9,7 @@
     "./editor": "./src/editor/index.ts",
     "./testing/faux-workspace": "./src/testing/faux-workspace.ts",
     "./testing/faux-chat": "./src/testing/faux-chat.ts",
+    "./testing/chat-fixture": "./src/testing/chat-fixture.ts",
     ".": "./src/index.ts",
     "./testing/editor-fixture": "./src/testing/editor-fixture.ts"
   },

@@ -1,8 +1,9 @@
 import type { ChatOutput, ChatTarget, ChatTranscriptMatch } from '@moonbase/contracts/chat';
 import { getChatFindExpression } from '@moonbase/contracts/chat';
 import { areJsonValuesEqual, getJsonKey } from '@moonbase/contracts/common';
-import { sameTarget } from '../saved.ts';
-import { makeTranscriptFailure, trackTranscriptCursor } from './transcript-read.ts';
+import { isSameTarget } from '../drafts/drafts.ts';
+import { trackTranscriptCursor } from './transcript-read.ts';
+import { TranscriptReadError } from './transcript-errors.ts';
 import type { TranscriptFindState } from './transcript-state.ts';
 
 export type FindPage = ChatOutput<'findChatTranscript'>;
@@ -28,7 +29,7 @@ export class TranscriptFindPass {
   checkPage(page: FindPage, cursor: string | null, boundary: FindBoundary) {
     const { progress, query } = this;
     if (
-      !sameTarget(page.target, this.target) ||
+      !isSameTarget(page.target, this.target) ||
       page.query !== query ||
       page.cursor !== cursor ||
       (boundary.start !== null && page.startCursor !== boundary.start) ||
@@ -39,9 +40,7 @@ export class TranscriptFindPass {
         page.progress.entries === progress.entries &&
         page.progress.bytes === progress.bytes)
     )
-      throw makeTranscriptFailure(
-        'Find reply does not match the query or advance its fixed boundary.',
-      );
+      throw new TranscriptReadError({ problem: 'find-reply-mismatch' });
     const expression = getChatFindExpression(query);
     let last = this.last;
     const seen = new Set<string>();
@@ -58,7 +57,7 @@ export class TranscriptFindPass {
           isNumeric(match.source.entryId) &&
           Number(match.source.entryId) < Number(last.source.entryId))
       )
-        throw makeTranscriptFailure('Find repeats or reverses an original-text match.');
+        throw new TranscriptReadError({ problem: 'find-match-order' });
       seen.add(key);
       last = match;
       const start = match.start - match.snippet.start,
@@ -66,7 +65,7 @@ export class TranscriptFindPass {
       expression.lastIndex = 0;
       const hit = expression.exec(match.snippet.text.slice(start, end));
       if (
-        !sameTarget(match.source.target, this.target) ||
+        !isSameTarget(match.source.target, this.target) ||
         page.upperEntryId === null ||
         (isNumeric(match.source.entryId) &&
           isNumeric(page.upperEntryId) &&
@@ -74,7 +73,7 @@ export class TranscriptFindPass {
         hit?.index !== 0 ||
         hit[0].length !== end - start
       )
-        throw makeTranscriptFailure('Find returned an invalid original-text match.');
+        throw new TranscriptReadError({ problem: 'find-match-invalid' });
     }
     this.advance(cursor, page.nextCursor);
     this.progress = page.progress;

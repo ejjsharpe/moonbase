@@ -6,9 +6,9 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import type { ChatController } from '@moonbase/application/chat';
 import type { ChatTranscriptMatch } from '@moonbase/contracts/chat';
 import { getTranscriptDisclosureId } from '../../../ipc/transcript-markdown.ts';
+import type { DesktopChat } from '../desktop-chat.ts';
 
 /**
  * The view-memory expansion ID of disclosure `id` in a row: null while it is being computed, and
@@ -46,7 +46,7 @@ const isRemembered = (expansion: string | null, failed: boolean, expandedIds: re
   failed || (expansion !== null && expandedIds.includes(expansion));
 
 /** Writes one expansion into view memory. */
-function setExpansion(controller: ChatController, expansion: string, open: boolean) {
+function setExpansion(controller: DesktopChat, expansion: string, open: boolean) {
   const { view } = controller.getSnapshot().transcript;
   if (view.expanded.includes(expansion) === open) return;
   controller.setTranscriptView({
@@ -63,7 +63,7 @@ export function useRememberedFold(
   entryId: string,
   id: string,
   expandedIds: readonly string[],
-  controller: ChatController,
+  controller: DesktopChat,
 ) {
   const { expansion, failed } = useExpansionId(entryId, id);
   return {
@@ -79,7 +79,7 @@ export type RowExpansions = {
   entryId: string;
   partId: string;
   expandedIds: readonly string[];
-  controller: ChatController;
+  controller: DesktopChat;
 };
 export const RowExpansionContext = createContext<RowExpansions | null>(null);
 /**
@@ -109,7 +109,7 @@ export function useRememberedExpansion(id: string | null) {
 export function useFoldedFindMatch(
   match: ChatTranscriptMatch | null,
   revealing: boolean,
-  controller: ChatController,
+  controller: DesktopChat,
 ) {
   const key = match ? JSON.stringify(match) : null;
   const [folded, setFolded] = useState<string | null>(null);
@@ -154,7 +154,7 @@ export function useDisclosure({
   match: ChatTranscriptMatch | null;
   /** Find is revealing the active match: it was just moved to, and no reader input ended that. */
   revealing: boolean;
-  controller: ChatController;
+  controller: DesktopChat;
 }) {
   const { expansion, failed: disclosureError } = useExpansionId(entryId, id);
   const found = useFoldedFindMatch(match, revealing, controller);

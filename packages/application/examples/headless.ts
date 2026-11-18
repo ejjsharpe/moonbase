@@ -8,6 +8,14 @@ import {
   EditorTabs,
   RecoverySync,
 } from '@moonbase/application/editor';
+import {
+  ChatConnection,
+  ChatDrafts,
+  ChatSelection,
+  ChatSends,
+  readChatState,
+  type ChatServices,
+} from '@moonbase/application/chat';
 import { fauxChat } from '@moonbase/application/testing/faux-chat';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 
@@ -37,7 +45,6 @@ export async function checkHeadlessApplication() {
     const workspace = fauxWorkspace([{ checkout, files: { 'example.txt': 'original' } }]).layer;
     const application = MoonbaseApplication.layer({
       chat: mode === 'editor' ? undefined : Effect.succeed(chat.dependencies),
-      runner: { runPromiseExit: (effect, options) => runtime.runPromiseExit(effect, options) },
     });
     const layer =
       mode === 'chat'
@@ -69,24 +76,32 @@ export async function checkHeadlessApplication() {
             yield* (yield* RecoverySync).flush;
           }) as Effect.Effect<void, unknown>,
         );
-      const conversation = (await runtime.runPromise(SubscriptionRef.get(app.chat.state)))
-        .controller;
+      const conversation = (await runtime.runPromise(SubscriptionRef.get(app.chat.state))).chat;
+      // The chat's services alone: no atom, controller or view.
+      const inChat = <A>(effect: Effect.Effect<A, never, ChatServices>) =>
+        runtime.runPromise(Effect.provideContext(effect, conversation!));
       if (mode !== 'editor') {
         invariant(conversation, 'Chat did not open');
-        await conversation.start();
+        await inChat(Effect.flatMap(ChatConnection, (c) => c.start));
         invariant(!chat.calls.includes('connect'), 'Observation connected automatically');
-        await conversation.connect();
-        await conversation.select(chat.target);
-        conversation.setDraft('portable draft');
-        invariant(conversation.preserve(), 'Preservation vetoed');
+        await inChat(Effect.flatMap(ChatConnection, (c) => c.connect));
+        await inChat(Effect.flatMap(ChatSelection, (s) => s.select(chat.target)));
+        await inChat(Effect.flatMap(ChatDrafts, (d) => d.setDraft('portable draft')));
+        invariant(
+          await inChat(Effect.flatMap(ChatDrafts, (d) => d.preserve)),
+          'Preservation vetoed',
+        );
         invariant(chat.storage.value?.includes('portable draft'), 'Draft was not written');
-        await conversation.send();
+        await inChat(Effect.flatMap(ChatSends, (s) => s.send()));
         invariant(chat.calls.includes('sendChat'), 'Explicit Send did not complete');
+        const state = await inChat(readChatState);
+        invariant(state.pending.length === 0 && state.draft === '', 'Send was not resolved');
       }
       invariant(runtime.runSync(app.canUnload), 'Preserved application vetoed unload');
       invariant(await runtime.runPromise(app.prepareQuit), 'Preserved application vetoed Quit');
       const raw = chat.storage.value;
-      conversation?.setDraft('blocked after consent');
+      if (conversation)
+        await inChat(Effect.flatMap(ChatDrafts, (d) => d.setDraft('blocked after consent')));
       invariant(chat.storage.value === raw, 'Prepared application admitted a draft edit');
       const opened = await runtime.runPromiseExit(app.openChat);
       invariant(opened._tag === 'Failure', 'Prepared application opened a chat');

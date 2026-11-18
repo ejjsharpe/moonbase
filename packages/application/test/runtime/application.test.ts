@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Effect } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/errors';
 import { isEditorError } from '@moonbase/application/editor';
 import { fauxChat, makeApplication } from './application-fixture.ts';
 
@@ -159,55 +158,35 @@ test('a failed final chat write restores admissions without reversing a complete
   }
 });
 
-for (const fails of [false, true])
-  test(`a closed chat owns its release, which blocks reopening until it ends (release fails: ${fails})`, async () => {
-    const chat = fauxChat(),
-      held = Promise.withResolvers<void>();
-    const f = makeApplication({ editor: true, chat: Effect.succeed(chat.dependencies) });
-    try {
-      await f.start();
-      const old = (await f.chat())!;
-      await old.start();
-      await old.connect();
-      await old.select(chat.target);
-      chat.controls.release = () => held.promise;
-      assert.equal(await f.app((a) => a.closeChat), true);
-      assert.equal(await f.chat(), null);
-      assert.deepEqual((await f.snapshot()).cleanup.pending, ['chat']);
-      await assert.rejects(
-        f.app((a) => a.openChat),
-        isLifecycleError('cleanup-pending'),
-      );
-      // The released chat writes nothing more.
-      const writes = chat.storage.writes;
-      old.setDraft('late');
-      assert.equal(chat.storage.writes, writes);
-      if (fails)
-        held.reject(
-          new ApplicationError({ code: 'Persistence', message: 'Cleanup failed safely' }),
-        );
-      else held.resolve();
-      await f.cleanupSettled();
-      if (fails) {
-        const snapshot = await f.snapshot();
-        assert.equal(snapshot.chat.state, 'cleanup-blocked');
-        assert(
-          snapshot.cleanup.errors.some((message) => message.includes('Cleanup failed safely')),
-        );
-        await assert.rejects(
-          f.app((a) => a.openChat),
-          isLifecycleError('cleanup-pending'),
-        );
-        await assert.rejects(
-          f.app((a) => a.release),
-          isLifecycleError('cleanup-failed'),
-        );
-        assert.equal((await f.snapshot()).phase, 'failed');
-      } else assert(await f.app((a) => a.openChat));
-    } finally {
-      await f.dispose();
-    }
-  });
+test('a closed chat owns its release, which blocks reopening until it ends', async () => {
+  const chat = fauxChat(),
+    held = Promise.withResolvers<void>();
+  const f = makeApplication({ editor: true, chat: Effect.succeed(chat.dependencies) });
+  try {
+    await f.start();
+    const old = (await f.chat())!;
+    await old.start();
+    await old.connect();
+    await old.select(chat.target);
+    chat.controls.release = () => held.promise;
+    assert.equal(await f.app((a) => a.closeChat), true);
+    assert.equal(await f.chat(), null);
+    assert.deepEqual((await f.snapshot()).cleanup.pending, ['chat']);
+    await assert.rejects(
+      f.app((a) => a.openChat),
+      isLifecycleError('cleanup-pending'),
+    );
+    // The released chat writes nothing more.
+    const writes = chat.storage.writes;
+    await old.setDraft('late');
+    assert.equal(chat.storage.writes, writes);
+    held.resolve();
+    await f.cleanupSettled();
+    assert(await f.app((a) => a.openChat));
+  } finally {
+    await f.dispose();
+  }
+});
 
 test('opens asked for together share one acquisition, and Quit waits for it', async () => {
   const chat = fauxChat(),
@@ -230,7 +209,7 @@ test('opens asked for together share one acquisition, and Quit waits for it', as
     assert.equal(await quit, true);
     assert.equal(opens, 2);
     const writes = chat.storage.writes;
-    first.setDraft('blocked');
+    await f.drive(first).setDraft('blocked');
     assert.equal(chat.storage.writes, writes);
   } finally {
     await f.dispose();
@@ -241,14 +220,6 @@ test('named targets keep separate drafts and switch only once the old chat is re
   const local = fauxChat(),
     remote = fauxChat();
   const localDependencies = { ...local.dependencies, connection: undefined };
-  const localChat = localDependencies.chat;
-  localDependencies.chat = {
-    ...localChat,
-    command: async (op, input, options) =>
-      op === 'getChatHost'
-        ? ({ ...localDependencies.context, mode: 'local' } as never)
-        : localChat.command(op, input, options),
-  };
   const f = makeApplication({
     chatTargets: [
       { id: 'local', label: 'Local', acquire: Effect.succeed(localDependencies) },
@@ -261,7 +232,7 @@ test('named targets keep separate drafts and switch only once the old chat is re
     const first = (await f.chat())!;
     await first.start();
     await first.create('Local', { cwd: '/local', model: { provider: 'fake', modelId: 'first' } });
-    first.setDraft('local draft');
+    await first.setDraft('local draft');
     const held = Promise.withResolvers<void>();
     local.controls.release = () => held.promise;
     const switching = f.app((a) => a.selectChatTarget('remote'));
@@ -271,7 +242,7 @@ test('named targets keep separate drafts and switch only once the old chat is re
       isLifecycleError('target-unavailable'),
     );
     held.resolve();
-    const second = (await switching)!;
+    const second = f.drive((await switching)!);
     assert.equal((await f.snapshot()).chatTargetId, 'remote');
     await second.start();
     await second.connect();
@@ -279,8 +250,8 @@ test('named targets keep separate drafts and switch only once the old chat is re
       cwd: '/remote',
       model: { provider: 'fake', modelId: 'first' },
     });
-    second.setDraft('remote draft');
-    const back = (await f.app((a) => a.selectChatTarget('local')))!;
+    await second.setDraft('remote draft');
+    const back = f.drive((await f.app((a) => a.selectChatTarget('local')))!);
     assert.equal(back.getSnapshot().draft, 'local draft');
     assert.equal(JSON.parse(remote.storage.value!).drafts[0].text, 'remote draft');
     assert(

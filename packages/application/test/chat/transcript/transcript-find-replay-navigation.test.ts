@@ -1,67 +1,44 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { scaledTranscriptLimits, transcriptController, tick } from './transcript-fixture.ts';
-async function until(check: () => boolean) {
-  for (let i = 0; i < 300; i++) {
-    if (check()) return;
-    await tick();
-  }
-  assert(check());
-}
+import { scaledTranscriptLimits, transcriptHarness, until } from './transcript-fixture.ts';
+
 for (const late of ['success', 'error'])
   test(`manual navigation wins an evicted-match replay with late ${late}`, async (t) => {
-    const f = await transcriptController(t, 138, true, {
-      transcriptLimits: scaledTranscriptLimits,
-    });
-    await f.controller.findTranscript('same');
-    await until(() => f.controller.getSnapshot().transcript.view.anchor?.key === 'entry:e0');
-    f.controller.cancelFindReveal();
-    assert.equal(f.controller.getSnapshot().transcript.find.revealing, false);
-    let releaseReplay!: () => void, releaseManual!: () => void;
+    const f = await transcriptHarness(t, 138, { limits: scaledTranscriptLimits });
+    await f.transcript.findTranscript('same');
+    await until(() => f.state.view.anchor?.key === 'entry:e0');
+    await f.transcript.cancelFindReveal();
+    assert.equal(f.state.find.revealing, false);
+    const replayGate = Promise.withResolvers<void>(),
+      manualGate = Promise.withResolvers<void>();
     let replaySignal: AbortSignal | undefined, manualSignal: AbortSignal | undefined;
-    const replayGate = new Promise<void>((r) => (releaseReplay = r));
-    const manualGate = new Promise<void>((r) => (releaseManual = r));
     f.handlers.set('findChatTranscript', async (_input, signal, fallback) => {
       replaySignal = signal;
-      await replayGate;
+      await replayGate.promise;
       if (late === 'error') throw Error('obsolete replay error');
       return fallback();
     });
     f.handlers.set('getChatHistoryAround', async (input, signal, fallback) => {
       if ((input as { entryId: string }).entryId === 'e50') {
         manualSignal = signal;
-        await manualGate;
+        await manualGate.promise;
       }
       return fallback();
     });
-    let next: Promise<void> | undefined, manual: Promise<unknown> | undefined;
     try {
-      next = f.controller.nextFindMatch();
+      const next = f.transcript.moveFind('next');
       await until(() => !!replaySignal);
-      manual = f.controller.jumpToEntry('e50');
+      const manual = f.transcript.jumpToEntry('e50');
       await until(() => !!manualSignal);
-      console.log('replay aborted when manual began:', replaySignal!.aborted);
-      releaseReplay();
+      replayGate.resolve();
       await next;
-      assert.equal(
-        f.controller.getSnapshot().transcript.find.error,
-        null,
-        'cancelled replay must not publish a stale error',
-      );
+      assert.equal(f.state.find.error, null, 'cancelled replay must not publish a stale error');
       assert.equal(manualSignal!.aborted, false, 'older replay must leave manual navigation alive');
-      releaseManual();
+      manualGate.resolve();
       await manual;
-      assert.equal(f.controller.getSnapshot().transcript.view.anchor?.key, 'entry:e50');
+      assert.equal(f.state.view.anchor?.key, 'entry:e50');
     } finally {
-      releaseReplay();
-      releaseManual();
-      await next;
-      await manual;
-      console.log(
-        'final anchor:',
-        f.controller.getSnapshot().transcript.view.anchor?.key,
-        'manual aborted:',
-        manualSignal?.aborted,
-      );
+      replayGate.resolve();
+      manualGate.resolve();
     }
   });

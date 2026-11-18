@@ -2,9 +2,10 @@ import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { colors, space, type } from '@moonbase/ui/tokens.stylex';
-import type { ChatController, ChatState } from '@moonbase/application/chat';
+import type { ChatState } from '@moonbase/application/chat';
 import { effortLabels } from './model-choice.ts';
 import { isBusy } from './open-chat.ts';
+import type { DesktopChat } from './desktop-chat.ts';
 
 /**
  * Commands whose outcome the host never confirmed, kept with their identities: each can be
@@ -14,7 +15,7 @@ export function PendingCommands({
   controller,
   state,
 }: {
-  controller: ChatController;
+  controller: DesktopChat;
   state: ChatState;
 }) {
   if (!state.pending.length) return null;
@@ -65,7 +66,13 @@ export function PendingCommands({
               </Button>
               <Button
                 {...stylex.props(controls.button)}
-                disabled={!connected || isBusy(state, p.input.requestId) || !!state.storageError}
+                // A request still in flight is never sent alongside itself, so Retry waits for it.
+                disabled={
+                  !connected ||
+                  isBusy(state, p.input.requestId) ||
+                  state.dispatching.includes(p.input.requestId) ||
+                  !!state.storageError
+                }
                 onClick={() => void controller.retry(p.input.requestId)}>
                 Retry original{' '}
                 {{ stopChat: 'Stop', sendChat: 'Send', createChat: 'Create' }[p.operation]}

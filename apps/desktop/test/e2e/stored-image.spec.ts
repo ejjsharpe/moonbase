@@ -309,7 +309,7 @@ test('pointer image reading cancels held Find reveal before collapse; only a new
       },
     ]);
     await window.demo.application.chat!.jumpToLatest();
-    const command = window.demo.chat.dependencies.chat.command,
+    const read = window.demo.chat.commands.getChatTranscriptContent,
       gate = Promise.withResolvers<void>();
     let hold = true;
     Object.assign(window, {
@@ -319,11 +319,10 @@ test('pointer image reading cancels held Find reveal before collapse; only a new
         gate.resolve();
       },
     });
-    window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
-      const reply = await command(operation, input, options);
+    window.demo.chat.commands.getChatTranscriptContent = async (input, options) => {
+      const reply = await read(input, options);
       if (
         hold &&
-        operation === 'getChatTranscriptContent' &&
         'selection' in input &&
         input.selection?.partId === 'result' &&
         'cursor' in input &&
@@ -332,7 +331,7 @@ test('pointer image reading cancels held Find reveal before collapse; only a new
         Object.assign(window, { imageFindHeld: true });
         await gate.promise;
       }
-      return reply as never;
+      return reply;
     };
     window.demo.application.chat!.openFind();
   }, checker);

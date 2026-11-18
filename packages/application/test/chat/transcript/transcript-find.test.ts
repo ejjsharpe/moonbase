@@ -2,28 +2,20 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ChatOutput } from '@moonbase/contracts/chat';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { scaledTranscriptLimits, transcriptController, tick } from './transcript-fixture.ts';
-
-async function until(check: () => boolean) {
-  for (let i = 0; i < 200; i++) {
-    if (check()) return;
-    await tick();
-  }
-  assert(check());
-}
+import { scaledTranscriptLimits, tick, transcriptHarness, until } from './transcript-fixture.ts';
 
 test('selected Find scans empty intermediate slices, pins first match, bounds retention and replays the fixed cutoff', async (t) => {
-  const f = await transcriptController(t, 138, true, { transcriptLimits: scaledTranscriptLimits });
-  await f.controller.findTranscript('same');
-  let state = f.controller.getSnapshot().transcript.find;
+  const f = await transcriptHarness(t, 138, { limits: scaledTranscriptLimits });
+  await f.transcript.findTranscript('same');
+  let state = f.state.find;
   assert.equal(state.status, 'complete');
   assert.equal(state.count, 138);
   assert.equal(state.active?.source.entryId, 'e0');
   assert.equal(state.matches.length, f.limits.findMatches);
   assert.equal(state.retainedFrom, 138 - f.limits.findMatches);
   assert.equal(state.upperEntryId, 'e137');
-  await f.controller.nextFindMatch();
-  state = f.controller.getSnapshot().transcript.find;
+  await f.transcript.moveFind('next');
+  state = f.state.find;
   assert.equal(state.active?.source.entryId, 'e1');
   assert.equal(state.activeIndex, 1);
   assert(
@@ -32,17 +24,17 @@ test('selected Find scans empty intermediate slices, pins first match, bounds re
         call.operation === 'findChatTranscript' && (call.input as { cursor?: string }).cursor,
     ),
   );
-  assert(f.controller.getSnapshot().transcript.entries.some((entry) => entry.id === 'e1'));
-  await f.controller.previousFindMatch();
-  assert.equal(f.controller.getSnapshot().transcript.find.active?.source.entryId, 'e0');
-  await f.controller.findTranscript('no match');
-  assert.equal(f.controller.getSnapshot().transcript.find.status, 'complete');
-  assert.equal(f.controller.getSnapshot().transcript.find.count, 0);
+  assert(f.state.entries.some((entry) => entry.id === 'e1'));
+  await f.transcript.moveFind('previous');
+  assert.equal(f.state.find.active?.source.entryId, 'e0');
+  await f.transcript.findTranscript('no match');
+  assert.equal(f.state.find.status, 'complete');
+  assert.equal(f.state.find.count, 0);
 });
 
-test('query replacement, close, Hide and disposal fence late results and errors but retain actual read cleanup', async (t) => {
-  for (const action of ['replace', 'close', 'hide', 'dispose'] as const) {
-    const f = await transcriptController(t, 32);
+test('query replacement, closing Find and closing the transcript fence late results and errors', async (t) => {
+  for (const action of ['replace', 'close', 'scope'] as const) {
+    const f = await transcriptHarness(t, 32);
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
     let entered = false,
@@ -55,28 +47,23 @@ test('query replacement, close, Hide and disposal fence late results and errors 
         throw new ApplicationError({ code: 'Unavailable', message: 'obsolete failure' });
       return fallback();
     });
-    const find = f.controller.findTranscript('same');
+    const find = f.transcript.findTranscript('same');
     await until(() => entered);
-    let disposed = false,
-      disposal: Promise<void> | undefined;
     if (action === 'replace') {
       f.handlers.delete('findChatTranscript');
-      await f.controller.findTranscript('different');
+      await f.transcript.findTranscript('different');
     }
-    if (action === 'close') f.controller.closeFind();
-    if (action === 'hide') void f.controller.detach();
-    if (action === 'dispose')
-      disposal = f.controller.dispose().then(() => {
-        disposed = true;
-      });
-    await tick();
+    if (action === 'close') await f.transcript.closeFind();
+    // Closing the transcript does not wait for the host to answer the cancelled read.
+    if (action === 'scope') await f.close();
     assert(signal?.aborted);
-    assert.equal(disposed, false);
+    const publications = f.publications;
     release();
     await find;
-    await disposal;
-    const state = f.controller.getSnapshot().transcript.find;
-    assert.notEqual(state.query, 'same');
+    await tick();
+    const state = f.state.find;
+    if (action === 'scope') assert.equal(f.publications, publications);
+    else assert.notEqual(state.query, 'same');
     assert.equal(state.error, null);
   }
 });
@@ -112,65 +99,59 @@ test('Find rejects wrong query/authority/cutoff/ranges and host read failures re
       progress: { entries: 0, bytes: 0 },
     }),
   ]) {
-    const f = await transcriptController(t, 32);
+    const f = await transcriptHarness(t, 32);
     f.handlers.set('findChatTranscript', async (_input, _signal, fallback) =>
       change(fallback() as ChatOutput<'findChatTranscript'>),
     );
-    await f.controller.findTranscript('same');
-    assert.equal(f.controller.getSnapshot().transcript.find.status, 'error');
+    await f.transcript.findTranscript('same');
+    assert.equal(f.state.find.status, 'error');
   }
-  const f = await transcriptController(t, 32);
+  const f = await transcriptHarness(t, 32);
   f.handlers.set('findChatTranscript', async () => {
     throw new ApplicationError({ code: 'Unavailable', message: 'host read failed' });
   });
-  await f.controller.findTranscript('same');
-  assert.match(f.controller.getSnapshot().transcript.find.error!, /host read failed/);
+  await f.transcript.findTranscript('same');
+  assert.match(f.state.find.error!, /host read failed/);
 });
 
 test('retained text chunks retain UTF16 bases independently of byte offsets', async (t) => {
-  const f = await transcriptController(t, 1);
+  const f = await transcriptHarness(t, 1);
   const source = f.entries[0].transcript!.source;
   const text = '😀'.repeat(9000);
   f.sources.get(JSON.stringify(source))!.data[0] = text;
-  await f.controller.loadTranscriptManifest(source);
-  const { partId, bytes, revision } = f.controller.getSnapshot().transcript.manifest!.parts[0];
+  await f.transcript.loadManifest(source);
+  const { partId, bytes, revision } = f.state.manifest!.parts[0];
   const selection = { partId, bytes, revision };
-  await f.controller.loadTranscriptPart(source, selection);
-  await f.controller.loadTranscriptPart(source, selection);
-  const content = f.controller.getSnapshot().transcript.content[0];
+  await f.transcript.loadPart(source, selection);
+  await f.transcript.loadPart(source, selection);
+  const content = f.state.content[0];
   assert.equal(content.loadedText, text.length);
   assert.equal(content.chunks[1].textOffset, content.chunks[0].data.length);
 });
 
-test('Find reaches beginning/middle/end on local and remote controllers and surfaces missing targets', async (t) => {
-  for (const local of [true, false]) {
-    const f = await transcriptController(t, 138, local, {
-      transcriptLimits: scaledTranscriptLimits,
-    });
-    for (const index of [0, 69, 137])
-      f.sources.get(JSON.stringify(f.entries[index].transcript!.source))!.data[0] = 'needle';
-    await f.controller.findTranscript('needle');
-    assert.equal(f.controller.getSnapshot().transcript.find.count, 3);
-    for (const index of [69, 137]) {
-      await f.controller.nextFindMatch();
-      assert.equal(f.controller.getSnapshot().transcript.find.active?.source.entryId, `e${index}`);
-      assert(
-        f.controller.getSnapshot().transcript.entries.some((entry) => entry.id === `e${index}`),
-      );
-    }
-    f.publish({ ...f.snapshot, transcriptBoundary: 'new-entry' });
-    assert.equal(f.controller.getSnapshot().transcript.find.refreshAvailable, true);
-    assert.equal(f.controller.getSnapshot().transcript.find.upperEntryId, 'e137');
-    f.handlers.set('getChatHistoryAround', async () => {
-      throw new ApplicationError({ code: 'InvalidInput', message: 'Saved entry is unavailable.' });
-    });
-    await f.controller.previousFindMatch();
-    assert.match(f.controller.getSnapshot().transcript.find.error!, /Saved entry is unavailable/);
+test('Find reaches beginning/middle/end and surfaces missing targets', async (t) => {
+  const f = await transcriptHarness(t, 138, { limits: scaledTranscriptLimits });
+  for (const index of [0, 69, 137])
+    f.sources.get(JSON.stringify(f.entries[index].transcript!.source))!.data[0] = 'needle';
+  await f.transcript.findTranscript('needle');
+  assert.equal(f.state.find.count, 3);
+  for (const index of [69, 137]) {
+    await f.transcript.moveFind('next');
+    assert.equal(f.state.find.active?.source.entryId, `e${index}`);
+    assert(f.state.entries.some((entry) => entry.id === `e${index}`));
   }
+  await f.publish({ ...f.snapshot, transcriptBoundary: 'new-entry' });
+  assert.equal(f.state.find.refreshAvailable, true);
+  assert.equal(f.state.find.upperEntryId, 'e137');
+  f.handlers.set('getChatHistoryAround', async () => {
+    throw new ApplicationError({ code: 'InvalidInput', message: 'Saved entry is unavailable.' });
+  });
+  await f.transcript.moveFind('previous');
+  assert.match(f.state.find.error!, /Saved entry is unavailable/);
 });
 
 test('empty Find slices remain searching until completion', async (t) => {
-  const f = await transcriptController(t, 1100);
+  const f = await transcriptHarness(t, 1100);
   let release!: () => void,
     entered = false;
   const held = new Promise<void>((resolve) => (release = resolve));
@@ -179,20 +160,20 @@ test('empty Find slices remain searching until completion', async (t) => {
     entered = true;
     return fallback();
   });
-  const pending = f.controller.findTranscript('absent');
+  const pending = f.transcript.findTranscript('absent');
   await until(
     () => entered && f.calls.filter((call) => call.operation === 'findChatTranscript').length > 1,
   );
-  assert.equal(f.controller.getSnapshot().transcript.find.status, 'searching');
-  assert.equal(f.controller.getSnapshot().transcript.find.count, 0);
+  assert.equal(f.state.find.status, 'searching');
+  assert.equal(f.state.find.count, 0);
   release();
   await pending;
-  assert.equal(f.controller.getSnapshot().transcript.find.status, 'complete');
+  assert.equal(f.state.find.status, 'complete');
 });
 
-test('replacing Find aborts matched hydration immediately and keeps its real settlement owned', async (t) => {
-  const f = await transcriptController(t, 32);
-  await f.controller.findTranscript('same');
+test('replacing Find aborts matched hydration immediately', async (t) => {
+  const f = await transcriptHarness(t, 32);
+  await f.transcript.findTranscript('same');
   const source = f.entries[0].transcript!.source;
   let release!: () => void, signal: AbortSignal | undefined;
   const held = new Promise<void>((resolve) => (release = resolve));
@@ -201,21 +182,17 @@ test('replacing Find aborts matched hydration immediately and keeps its real set
     await held;
     return fallback();
   });
-  const hydration = f.controller.loadTranscriptManifest(source);
+  const hydration = f.transcript.loadManifest(source);
   await until(() => !!signal);
-  await f.controller.findTranscript('different');
+  await f.transcript.findTranscript('different');
   assert(signal?.aborted);
-  let disposed = false;
-  const dispose = f.controller.dispose().then(() => (disposed = true));
-  await tick();
-  assert.equal(disposed, false);
   release();
   await hydration;
-  await dispose;
+  assert.equal(f.state.manifest?.status, 'partial');
 });
 
 test('deliberate navigation cancels a held Find reveal without dropping query or active result identity', async (t) => {
-  const f = await transcriptController(t, 64);
+  const f = await transcriptHarness(t, 64);
   let release!: () => void, signal: AbortSignal | undefined;
   const held = new Promise<void>((resolve) => (release = resolve));
   f.handlers.set('getChatHistoryAround', async (_input, abort, fallback) => {
@@ -223,15 +200,15 @@ test('deliberate navigation cancels a held Find reveal without dropping query or
     await held;
     return fallback();
   });
-  await f.controller.findTranscript('same');
+  await f.transcript.findTranscript('same');
   await until(() => !!signal);
-  const active = f.controller.getSnapshot().transcript.find.active;
-  f.controller.cancelFindReveal();
+  const active = f.state.find.active;
+  await f.transcript.cancelFindReveal();
   assert(signal?.aborted);
-  const before = f.controller.getSnapshot().transcript.entries;
+  const before = f.state.entries;
   release();
   await tick();
-  const state = f.controller.getSnapshot().transcript;
+  const state = f.state;
   assert.equal(state.find.revealing, false);
   assert.equal(state.find.query, 'same');
   assert.deepEqual(state.find.active, active);
@@ -239,12 +216,12 @@ test('deliberate navigation cancels a held Find reveal without dropping query or
 });
 
 test('paging near a revealed match leaves the reveal', async (t) => {
-  const f = await transcriptController(t, 100);
-  await f.controller.findTranscript('same');
-  await until(() => f.controller.getSnapshot().transcript.view.anchor?.key === 'entry:e0');
+  const f = await transcriptHarness(t, 100);
+  await f.transcript.findTranscript('same');
+  await until(() => f.state.view.anchor?.key === 'entry:e0');
   // The list pages on its own near an edge; only the reader's input ends the reveal.
-  await f.controller.showLater();
-  const state = f.controller.getSnapshot().transcript;
+  await f.transcript.showLater();
+  const state = f.state;
   assert.equal(state.find.revealing, true);
   assert.equal(state.view.anchor?.key, 'entry:e0');
   // The reveal read e0–e16 around its match; the page continued after them.
@@ -253,7 +230,7 @@ test('paging near a revealed match leaves the reveal', async (t) => {
 });
 
 test('cancelled Find reveal cannot cancel or overwrite a newer manual history read', async (t) => {
-  const f = await transcriptController(t, 100);
+  const f = await transcriptHarness(t, 100);
   let releaseOld!: () => void, releaseManual!: () => void;
   const old = new Promise<void>((resolve) => (releaseOld = resolve)),
     manual = new Promise<void>((resolve) => (releaseManual = resolve));
@@ -268,22 +245,22 @@ test('cancelled Find reveal cannot cancel or overwrite a newer manual history re
     await manual;
     return fallback();
   });
-  await f.controller.findTranscript('same');
+  await f.transcript.findTranscript('same');
   await until(() => !!oldSignal);
-  const active = f.controller.getSnapshot().transcript.find.active;
-  const navigation = f.controller.jumpToEntry('e50');
+  const active = f.state.find.active;
+  const navigation = f.transcript.jumpToEntry('e50');
   await until(() => !!manualSignal);
   assert(oldSignal?.aborted);
   assert.equal(manualSignal?.aborted, false);
-  f.controller.cancelFindReveal();
+  await f.transcript.cancelFindReveal();
   releaseOld();
   await tick();
   assert.equal(manualSignal?.aborted, false);
-  assert.equal(f.controller.getSnapshot().transcript.error, null);
-  assert.equal(f.controller.getSnapshot().transcript.find.error, null);
+  assert.equal(f.state.error, null);
+  assert.equal(f.state.find.error, null);
   releaseManual();
   await navigation;
-  const state = f.controller.getSnapshot().transcript;
+  const state = f.state;
   assert(state.entries.some((entry) => entry.id === 'e50'));
   assert.equal(state.view.anchor?.key, 'entry:e50');
   assert.deepEqual(state.find.active, active);
@@ -291,7 +268,7 @@ test('cancelled Find reveal cannot cancel or overwrite a newer manual history re
 });
 
 test('reading before a delayed first result suppresses automatic reveal without cancelling the query', async (t) => {
-  const f = await transcriptController(t, 100);
+  const f = await transcriptHarness(t, 100);
   let release!: () => void,
     entered = false;
   const held = new Promise<void>((resolve) => (release = resolve));
@@ -300,12 +277,12 @@ test('reading before a delayed first result suppresses automatic reveal without 
     await held;
     return fallback();
   });
-  const query = f.controller.findTranscript('same');
+  const query = f.transcript.findTranscript('same');
   await until(() => entered);
-  await f.controller.jumpToEntry('e50');
+  await f.transcript.jumpToEntry('e50');
   release();
   await query;
-  const state = f.controller.getSnapshot().transcript;
+  const state = f.state;
   assert.equal(state.find.status, 'complete');
   assert.equal(state.find.count, 100);
   assert.equal(state.find.active?.source.entryId, 'e0');
@@ -322,7 +299,7 @@ test('reading before a delayed first result suppresses automatic reveal without 
 
 test('reconnecting and failed observations cancel Find and keep a visible retry state without stale publication', async (t) => {
   for (const failure of ['reconnecting', 'failed'] as const) {
-    const f = await transcriptController(t, 64, false, { transcriptLimits: { watchRetryMs: [] } });
+    const f = await transcriptHarness(t, 64, { local: false });
     let release!: () => void, signal: AbortSignal | undefined;
     const held = new Promise<void>((resolve) => (release = resolve));
     f.handlers.set('findChatTranscript', async (_input, abort, fallback) => {
@@ -330,50 +307,54 @@ test('reconnecting and failed observations cancel Find and keep a visible retry 
       await held;
       return fallback();
     });
-    const pending = f.controller.findTranscript('same');
+    const pending = f.transcript.findTranscript('same');
     await until(() => !!signal);
-    if (failure === 'reconnecting') f.publish({ ...f.snapshot, observationStatus: 'reconnecting' });
-    else f.fail(new ApplicationError({ code: 'Unavailable', message: 'Observation stopped' }));
+    if (failure === 'reconnecting')
+      await f.publish({ ...f.snapshot, observationStatus: 'reconnecting' });
+    else
+      await f.transcript.fail(
+        new ApplicationError({ code: 'Unavailable', message: 'Observation stopped' }),
+      );
     assert(signal?.aborted);
-    let state = f.controller.getSnapshot().transcript.find;
+    let state = f.state.find;
     assert.equal(state.status, 'error');
     assert.equal(state.revealing, false);
     const error = state.error;
     release();
     await pending;
     await tick();
-    state = f.controller.getSnapshot().transcript.find;
+    state = f.state.find;
     assert.equal(state.error, error);
     assert.equal(state.count, 0);
     if (failure === 'failed') {
-      await f.controller.findTranscript('new query');
-      assert.match(f.controller.getSnapshot().transcript.find.error!, /Reconnect or reopen/);
+      await f.transcript.findTranscript('new query');
+      assert.match(f.state.find.error!, /Reconnect or reopen/);
     }
   }
 });
 
 test('closing Find forgets its fixed boundary, so later snapshots never offer a refresh', async (t) => {
-  const f = await transcriptController(t, 64);
-  await f.controller.findTranscript('same');
-  assert.equal(f.controller.getSnapshot().transcript.find.upperEntryId, 'e63');
-  f.publish({ ...f.snapshot, transcriptBoundary: 'e10' });
-  assert.equal(f.controller.getSnapshot().transcript.find.refreshAvailable, true);
-  f.controller.closeFind();
-  f.publish({ ...f.snapshot, transcriptBoundary: 'e11' });
-  const find = f.controller.getSnapshot().transcript.find;
+  const f = await transcriptHarness(t, 64);
+  await f.transcript.findTranscript('same');
+  assert.equal(f.state.find.upperEntryId, 'e63');
+  await f.publish({ ...f.snapshot, transcriptBoundary: 'e10' });
+  assert.equal(f.state.find.refreshAvailable, true);
+  await f.transcript.closeFind();
+  await f.publish({ ...f.snapshot, transcriptBoundary: 'e11' });
+  const find = f.state.find;
   assert.equal(find.open, false);
   assert.equal(find.refreshAvailable, false);
 });
 
 test('Find accepts original-text matches under simple Unicode case folding', async (t) => {
-  const f = await transcriptController(t, 1);
+  const f = await transcriptHarness(t, 1);
   const source = f.entries[0].transcript!.source;
-  f.fixture.sources.set(JSON.stringify(source), {
+  f.sources.set(JSON.stringify(source), {
     source,
     data: ['Ein STRAẞE 🌔 und ΣΟΦΟΣ, then straße 🌔 and σοφος'],
   });
-  await f.controller.findTranscript('straße 🌔');
-  let find = f.controller.getSnapshot().transcript.find;
+  await f.transcript.findTranscript('straße 🌔');
+  let find = f.state.find;
   assert.equal(find.error, null);
   assert.deepEqual(
     find.matches.map((match) => [match.start, match.end]),
@@ -382,10 +363,10 @@ test('Find accepts original-text matches under simple Unicode case folding', asy
       [30, 39],
     ],
   );
-  await f.controller.findTranscript('σοφοσ');
-  find = f.controller.getSnapshot().transcript.find;
+  await f.transcript.findTranscript('σοφοσ');
+  find = f.state.find;
   assert.equal(find.error, null);
   assert.equal(find.count, 2);
-  await f.controller.findTranscript('STRASSE');
-  assert.equal(f.controller.getSnapshot().transcript.find.count, 0);
+  await f.transcript.findTranscript('STRASSE');
+  assert.equal(f.state.find.count, 0);
 });

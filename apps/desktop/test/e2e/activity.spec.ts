@@ -54,16 +54,20 @@ test('a failed result keeps its call evidence through a held and failed first ma
       { id: 'result', role: 'tool' as const, parts: result },
     ]);
     const controller = window.demo.application.chat!;
+    // The watch delivers the recorded snapshot on its own fiber.
+    for (let turn = 0; turn < 200; turn++) {
+      if (controller.getSnapshot().snapshot?.entries.some((entry) => entry.id === 'result')) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     await controller.jumpToLatest();
     const resultSource = controller
       .getSnapshot()
       .transcript.entries.find((entry) => entry.id === 'result')!.transcript!.source;
-    const command = window.demo.chat.dependencies.chat.command;
+    const read = window.demo.chat.commands.getChatTranscriptContent;
     const gate = Promise.withResolvers<void>();
     Object.assign(window, { releaseEvidenceManifest: () => gate.resolve() });
-    window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
+    window.demo.chat.commands.getChatTranscriptContent = async (input, options) => {
       if (
-        operation === 'getChatTranscriptContent' &&
         'source' in input &&
         !('selection' in input) &&
         JSON.stringify(input.source) === JSON.stringify(resultSource)
@@ -71,7 +75,7 @@ test('a failed result keeps its call evidence through a held and failed first ma
         await gate.promise;
         throw Error('Controlled first manifest failure');
       }
-      return command(operation, input, options) as never;
+      return read(input, options);
     };
   });
   const origin = page.locator('[data-transcript-entry="origin"]');
@@ -319,16 +323,26 @@ test('same-source thinking/tool appends keep the loaded manifest, focus and sele
         ],
       },
     ]);
-    const command = window.demo.chat.dependencies.chat.command;
+    const { commands } = window.demo.chat;
     Object.assign(window, { progressHistoryReads: 0 });
-    window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
-      if (
-        ['getChat', 'getChatHistory', 'getChatHistoryAround'].includes(operation) ||
-        (operation === 'getChatTranscriptContent' && !('selection' in input))
-      )
-        (window as typeof window & { progressHistoryReads: number }).progressHistoryReads++;
-      return command(operation, input, options) as never;
-    };
+    const count = () =>
+      (window as typeof window & { progressHistoryReads: number }).progressHistoryReads++;
+    const { getChat, getChatHistory, getChatHistoryAround, getChatTranscriptContent } = commands;
+    Object.assign(commands, {
+      getChat: (...args: Parameters<typeof getChat>) => (count(), getChat(...args)),
+      getChatHistory: (...args: Parameters<typeof getChatHistory>) => (
+        count(),
+        getChatHistory(...args)
+      ),
+      getChatHistoryAround: (...args: Parameters<typeof getChatHistoryAround>) => (
+        count(),
+        getChatHistoryAround(...args)
+      ),
+      getChatTranscriptContent: (...args: Parameters<typeof getChatTranscriptContent>) => {
+        if (!('selection' in args[0])) count();
+        return getChatTranscriptContent(...args);
+      },
+    });
   });
   const update = (suffix: string, failed = false) =>
     page.evaluate(
@@ -446,7 +460,7 @@ test('same-source current content and complete Copy survive a late old content r
     )
     .toBe('complete');
   await page.evaluate(() => {
-    const command = window.demo.chat.dependencies.chat.command;
+    const read = window.demo.chat.commands.getChatTranscriptContent;
     const old = window.demo.application.chat!.getSnapshot().snapshot!.run!.transcript!.parts[2]!;
     const gate = Promise.withResolvers<void>();
     let failCurrent = false;
@@ -459,29 +473,23 @@ test('same-source current content and complete Copy survive a late old content r
       },
     });
     let held = false;
-    window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
-      if (
-        failCurrent &&
-        operation === 'getChatTranscriptContent' &&
-        'selection' in input &&
-        input.selection?.partId === old.partId
-      )
+    window.demo.chat.commands.getChatTranscriptContent = async (input, options) => {
+      if (failCurrent && 'selection' in input && input.selection?.partId === old.partId)
         throw Error('Controlled current read failure');
       if (
-        operation === 'getChatTranscriptContent' &&
         'selection' in input &&
         input.selection?.partId === old.partId &&
         input.selection.revision === old.revision &&
         !held
       ) {
         held = true;
-        const reply = await command(operation, input, options);
+        const reply = await read(input, options);
         Object.assign(window, { oldContentHeld: true });
         await gate.promise;
         Object.assign(window, { oldContentSettled: true });
-        return reply as never;
+        return reply;
       }
-      return command(operation, input, options) as never;
+      return read(input, options);
     };
   });
   await openActivity(row);
@@ -618,7 +626,16 @@ test('reading a durable row in the latest window retains current live activity b
     await window.demo.transcript!.record([
       { id: 'recent', parts: [{ kind: 'text', text: 'Recent recorded answer' }] },
     ]);
-    await window.demo.application.chat!.jumpToLatest();
+    const chat = window.demo.application.chat!;
+    // The watch delivers each published snapshot on its own fiber.
+    const landed = async (check: () => boolean) => {
+      for (let turn = 0; turn < 200 && !check(); turn++)
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    };
+    await landed(
+      () => !!chat.getSnapshot().snapshot?.entries.some((entry) => entry.id === 'recent'),
+    );
+    await chat.jumpToLatest();
     await window.demo.transcript!.activity([
       {
         kind: 'result',
@@ -628,6 +645,7 @@ test('reading a durable row in the latest window retains current live activity b
         text: 'Current held output',
       },
     ]);
+    await landed(() => !!chat.getSnapshot().snapshot?.run);
     window.demo.application.chat!.setTranscriptView({
       anchor: { key: 'entry:recent', offset: 0 },
       expanded: [],

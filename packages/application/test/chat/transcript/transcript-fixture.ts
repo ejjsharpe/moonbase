@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { Effect, Exit, Scope } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type {
   ChatClient,
@@ -9,9 +10,13 @@ import type {
   ChatTranscriptPart,
   ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
-import { defaultTranscriptLimits, type ChatDependencies } from '@moonbase/application/chat';
-import { fauxChat } from '@moonbase/application/testing/faux-chat';
-import { modelRoot } from '../chat-model-fixture.ts';
+import {
+  defaultTranscriptLimits,
+  TranscriptViewMemory,
+  type TranscriptLimits,
+  type TranscriptState,
+} from '@moonbase/application/chat';
+import { makeTranscript, type ChatPort, type Transcript } from '@moonbase/application/chat';
 
 export { scaledTranscriptLimits } from './transcript-limits-fixture.ts';
 export const digest = (text: string) => createHash('sha256').update(text).digest('hex');
@@ -26,9 +31,33 @@ export const part = (partId: string, text: string): ChatTranscriptPart => ({
   text: text.slice(0, 64),
   truncated: text.length > 64,
 });
-export function transcriptFixture(count = 640, local = true) {
-  const base = fauxChat();
-  const target = base.target;
+export const selection = (value: ChatTranscriptPart) => ({
+  partId: value.partId,
+  bytes: value.bytes,
+  revision: value.revision,
+});
+/** Yields to timers and I/O once, for polling on state. */
+export const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+/** Polls `check` until it holds. */
+export async function until(check: () => boolean) {
+  for (let i = 0; i < 300 && !check(); i++) await tick();
+  if (!check()) throw Error('The condition never held.');
+}
+export type ContentReply = Extract<ChatOutput<'getChatTranscriptContent'>, { kind: 'content' }>;
+type Handler = (
+  input: never,
+  signal: AbortSignal | undefined,
+  fallback: () => unknown,
+) => Promise<unknown>;
+
+/**
+ * A chat host of `count` entries, each with one text part: its served snapshot holds the newest
+ * 32, and its reads (history, Find, manifests and content) answer from the entries unless a test
+ * sets a handler. It is trusted, like a boundary that already decoded and bounded replies.
+ */
+export function transcriptFixture(count = 640) {
+  const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' };
+  const target = { ...context, conversationId: 'conversation' };
   const sources = new Map<string, { source: ChatTranscriptSource; data: string[] }>();
   const entries: ChatEntry[] = Array.from({ length: count }, (_, index) => {
     const id = `e${index}`,
@@ -44,23 +73,22 @@ export function transcriptFixture(count = 640, local = true) {
     };
   });
   let snapshot: ChatSnapshot = {
-    ...base.snapshot,
+    conversation: {
+      target,
+      title: 'Conversation',
+      cwd: '/remote',
+      model: 'fake',
+      createdAt: '2026-01-01T00:00:00Z',
+    },
+    state: 'idle',
+    run: null,
     entries: entries.slice(-32).reverse(),
     olderCursor: count > 32 ? String(count - 32) : null,
     transcriptBoundary: entries.at(-1)?.id ?? null,
   };
-  let receive = (_value: ChatSnapshot) => {},
-    onError = (_error: ApplicationError) => {};
   const calls: { operation: string; input: unknown; signal?: AbortSignal }[] = [];
-  const handlers = new Map<
-    string,
-    (input: never, signal: AbortSignal | undefined, fallback: () => unknown) => Promise<unknown>
-  >();
-  let watchCloses = 0;
+  const handlers = new Map<string, Handler>();
   function fallback(operation: string, input: unknown): unknown {
-    if (operation === 'getChatHost') return { ...base.dependencies.context, mode: 'local' };
-    if (operation === 'listChats')
-      return { conversations: [snapshot.conversation], nextCursor: null };
     if (operation === 'getChat') return structuredClone(snapshot);
     if (operation === 'findChatTranscript') {
       const request = input as ChatInput<'findChatTranscript'>;
@@ -182,73 +210,144 @@ export function transcriptFixture(count = 640, local = true) {
         nextCursor: end < request.selection.bytes ? String(end) : null,
       };
     }
-    if (operation === 'stopChat') return { ...(input as object), outcome: 'stopped' };
-    if (operation === 'getChatSend') return null;
     throw Error(operation);
   }
-  // Trusted ChatClient: it stands in for a boundary that already decoded and bounded replies.
+  const command = async (operation: string, input: unknown, signal?: AbortSignal) => {
+    calls.push({ operation, input: structuredClone(input), signal });
+    return structuredClone(
+      await (handlers.get(operation)?.(input as never, signal, () => fallback(operation, input)) ??
+        fallback(operation, input)),
+    ) as never;
+  };
+  // The Promise client the desktop's whole-source iteration reads through.
   const chat: ChatClient = {
+    command: (operation, input, options) => command(operation, input, options?.signal),
+    watch: () => async () => {},
     watchChatList: () => async () => {},
-    async command(operation, input, options) {
-      calls.push({ operation, input: structuredClone(input), signal: options?.signal });
-      return structuredClone(
-        await (handlers.get(operation)?.(input as never, options?.signal, () =>
-          fallback(operation, input),
-        ) ?? fallback(operation, input)),
-      ) as never;
-    },
-    watch(_input, callback, error) {
-      receive = callback;
-      onError = error;
-      return async () => {
-        watchCloses++;
-      };
-    },
   };
-  // A local host is on this machine, with no connection to connect.
-  const dependencies = {
-    ...base.dependencies,
-    chat,
-    ...(local ? { connection: undefined } : {}),
-  };
+  // Interrupting a port read aborts its signal without waiting for the handler.
+  const port = new Proxy({} as ChatPort, {
+    get: (_port, operation: string) => (input: unknown) =>
+      Effect.tryPromise({
+        try: (signal) => command(operation, input, signal),
+        catch: (error) => error as ApplicationError,
+      }),
+  });
   return {
-    ...base,
+    target,
     chat,
-    dependencies,
+    port,
     entries,
     calls,
     handlers,
     sources,
+    /** The snapshot `getChat` serves. */
     get snapshot() {
       return snapshot;
     },
-    publish(value: ChatSnapshot) {
+    set snapshot(value: ChatSnapshot) {
       snapshot = structuredClone(value);
-      receive(structuredClone(value));
-    },
-    fail(error: ApplicationError) {
-      onError(error);
-    },
-    get watchCloses() {
-      return watchCloses;
     },
   };
 }
-export async function transcriptController(
+
+type Promised<T> = {
+  [K in keyof T]: T[K] extends Effect.Effect<infer A, infer _E, never>
+    ? () => Promise<A>
+    : T[K] extends (...args: infer P) => Effect.Effect<infer A, infer _E, never>
+      ? (...args: P) => Promise<A>
+      : never;
+};
+
+/**
+ * One open chat's transcript over `transcriptFixture`, as the selection opens it: in its own scope,
+ * given the served snapshot, then restoring the remembered view. `state` is what it last published.
+ */
+export async function transcriptHarness(
   t: { after: (close: () => Promise<void>) => void },
   count = 640,
-  local = true,
-  options: Pick<ChatDependencies, 'transcriptLimits'> = {},
+  options: { local?: boolean; limits?: Partial<TranscriptLimits> } = {},
 ) {
-  const fixture = transcriptFixture(count, local),
-    root = modelRoot();
-  t.after(() => root.close());
-  const controller = await root.make({ ...fixture.dependencies, ...options });
-  await controller.start();
-  if (!local) await controller.connect();
-  await controller.select(fixture.target);
-  const limits = { ...defaultTranscriptLimits, ...options.transcriptLimits };
-  return { ...fixture, fixture, controller, root, limits };
+  const fixture = transcriptFixture(count);
+  const limits = { ...defaultTranscriptLimits, ...options.limits };
+  const memory = new TranscriptViewMemory();
+  let model!: Transcript,
+    scope!: Scope.Closeable,
+    published: TranscriptState | undefined,
+    snapshot: ChatSnapshot | undefined,
+    publications = 0;
+  const harness = {
+    ...fixture,
+    fixture,
+    limits,
+    memory,
+    /** Runs on each publication, in the publishing fiber, after it is recorded. */
+    onPublish: undefined as ((state: TranscriptState) => Effect.Effect<void>) | undefined,
+    /** The snapshot `getChat` serves, and the next opening accepts. */
+    get snapshot() {
+      return fixture.snapshot;
+    },
+    set snapshot(value: ChatSnapshot) {
+      fixture.snapshot = value;
+    },
+    get state() {
+      return published!;
+    },
+    /** The snapshot last published with the state. */
+    get published() {
+      return snapshot;
+    },
+    get publications() {
+      return publications;
+    },
+    transcript: new Proxy({} as Promised<Transcript>, {
+      get: (_transcript, key: keyof Transcript) => {
+        const value = model[key] as unknown;
+        return Effect.isEffect(value)
+          ? () => Effect.runPromise(value as Effect.Effect<unknown, unknown>)
+          : (...args: unknown[]) =>
+              Effect.runPromise((value as (...args: unknown[]) => Effect.Effect<unknown>)(...args));
+      },
+    }),
+    /** Serves `value` and delivers it, as a watch does. */
+    async publish(value: ChatSnapshot) {
+      fixture.snapshot = value;
+      await Effect.runPromise(model.acceptSnapshot(structuredClone(value)));
+    },
+    /** Closes the transcript's scope, as closing the chat does. */
+    close: () => Effect.runPromise(Scope.close(scope, Exit.void)),
+    /** Closes the transcript and opens the chat again, without restoring its view yet. */
+    async reopen() {
+      await harness.close();
+      await open();
+    },
+  };
+  async function open() {
+    scope = Scope.makeUnsafe();
+    model = await Effect.runPromise(
+      Scope.provide(scope)(
+        makeTranscript({
+          chat: fixture.port,
+          target: structuredClone(fixture.target),
+          backend: 'backend',
+          memory,
+          local: options.local ?? true,
+          limits,
+          publish: (state, next) =>
+            Effect.suspend(() => {
+              published = state;
+              if (next) snapshot = next;
+              publications++;
+              return harness.onPublish?.(state) ?? Effect.void;
+            }),
+        }),
+      ),
+    );
+    await Effect.runPromise(model.acceptSnapshot(structuredClone(fixture.snapshot)));
+  }
+  await open();
+  await harness.transcript.restoreView();
+  t.after(() => harness.close());
+  return harness;
 }
-export const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
-export type ContentReply = Extract<ChatOutput<'getChatTranscriptContent'>, { kind: 'content' }>;
+export type TranscriptHarness = Awaited<ReturnType<typeof transcriptHarness>>;

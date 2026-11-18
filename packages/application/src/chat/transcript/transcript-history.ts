@@ -6,8 +6,8 @@ import type {
   ChatTranscriptPart,
 } from '@moonbase/contracts/chat';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
-import { sameTarget } from '../saved.ts';
-import { makeTranscriptFailure } from './transcript-read.ts';
+import { isSameTarget } from '../drafts/drafts.ts';
+import { TranscriptReadError } from './transcript-errors.ts';
 
 export type HistoryDirection = 'earlier' | 'later';
 type AroundPage = ChatOutput<'getChatHistoryAround'>;
@@ -40,7 +40,7 @@ export function reuseEntry(old: ChatEntry | undefined, next: ChatEntry): ChatEnt
 /** Merge the server's ordered subsequences by durable entry ID, never by text/task. */
 function mergeEntries(previous: ChatEntry[], page: ChatEntry[], direction: HistoryDirection) {
   if (new Set(page.map((entry) => entry.id)).size !== page.length)
-    throw makeTranscriptFailure('History repeats an entry.');
+    throw new TranscriptReadError({ problem: 'history-repeats-entry' });
   const result = previous.map((entry) =>
     reuseEntry(entry, page.find((value) => value.id === entry.id) ?? entry),
   );
@@ -57,8 +57,7 @@ function mergeEntries(previous: ChatEntry[], page: ChatEntry[], direction: Histo
   let position = -1;
   for (const entry of page) {
     const next = result.findIndex((value) => value.id === entry.id);
-    if (next <= position)
-      throw makeTranscriptFailure('History order changed within a navigation window.');
+    if (next <= position) throw new TranscriptReadError({ problem: 'history-order-changed' });
     position = next;
   }
   return result;
@@ -69,25 +68,25 @@ export function checkEntrySources(entries: ChatEntry[], target: ChatTarget) {
     if (
       entry.transcript.source.kind !== 'entry' ||
       entry.transcript.source.entryId !== entry.id ||
-      !sameTarget(entry.transcript.source.target, target)
+      !isSameTarget(entry.transcript.source.target, target)
     )
-      throw makeTranscriptFailure('Transcript entry belongs to another source.');
+      throw new TranscriptReadError({ problem: 'entry-source' });
 }
 
 /** Checks a snapshot's authority: its conversation, entry sources and live run source. */
 export function checkSnapshotSources(input: ChatSnapshot, target: ChatTarget) {
-  if (!sameTarget(input.conversation.target, target))
-    throw makeTranscriptFailure('Snapshot belongs to another conversation.');
+  if (!isSameTarget(input.conversation.target, target))
+    throw new TranscriptReadError({ problem: 'snapshot-conversation' });
   checkEntrySources(input.entries, target);
   const live = input.run?.transcript?.source;
   if (
     live &&
     (live.kind !== 'live' ||
-      !sameTarget(live.target, target) ||
+      !isSameTarget(live.target, target) ||
       live.submissionId !== input.run!.stop.submissionId ||
       live.taskId !== input.run!.stop.taskId)
   )
-    throw makeTranscriptFailure('Live transcript does not match its run.');
+    throw new TranscriptReadError({ problem: 'live-run-mismatch' });
 }
 /** Reuses retained values the snapshot repeats, so unchanged rows keep their identity. */
 export function reuseSnapshot(
@@ -213,14 +212,14 @@ export class TranscriptHistory {
   ) {
     const { entryId, cursor, direction } = read;
     if (
-      !sameTarget(page.target, target) ||
+      !isSameTarget(page.target, target) ||
       page.entryId !== entryId ||
       page.cursor !== (cursor ?? null) ||
       (cursor && this.navigation?.upperEntryId !== page.upperEntryId) ||
       (cursor && (direction === 'earlier' ? page.olderCursor : page.newerCursor) === cursor) ||
       (!cursor && !page.entries.some((entry) => entry.id === entryId))
     )
-      throw makeTranscriptFailure('Around-entry reply does not match its navigation boundary.');
+      throw new TranscriptReadError({ problem: 'around-mismatch' });
     checkEntrySources(page.entries, target);
   }
   /** Merges an around-entry page, or replaces the records with it for a jump. */
@@ -254,7 +253,8 @@ export class TranscriptHistory {
    * retained: a snapshot whose live run left no room for entries still has older history.
    */
   applyOlderPage(page: ChatOutput<'getChatHistory'>, cursor: string, target: ChatTarget) {
-    if (page.olderCursor === cursor) throw makeTranscriptFailure('History cursor did not advance.');
+    if (page.olderCursor === cursor)
+      throw new TranscriptReadError({ problem: 'history-cursor-stalled' });
     checkEntrySources(page.entries, target);
     this.records = mergeEntries(this.records, page.entries, 'earlier');
     this.olderEnd = page.olderCursor === null;

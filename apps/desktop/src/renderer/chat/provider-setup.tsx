@@ -4,14 +4,14 @@ import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
 import { colors, radius, space, syntax, type } from '@moonbase/ui/tokens.stylex';
 import { controls } from '@moonbase/ui/controls';
-import type { ProviderSetupController } from '@moonbase/application/chat';
 import { Choice } from './choice.tsx';
 import { Icon } from '@moonbase/ui/icons';
 import { vendorOf, type Provider } from './vendors.ts';
 import { projectTiles } from '@moonbase/ui/projects';
+import type { DesktopProviderSetup } from './desktop-chat.ts';
 
 /** One card per vendor, listing its ways to connect; a running sign-in opens under its way. */
-export function ProviderSetup({ controller }: { controller: ProviderSetupController }) {
+export function ProviderSetup({ controller }: { controller: DesktopProviderSetup }) {
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const flow = state.status?.flow;
   const vendors = new Map<string, Provider[]>();

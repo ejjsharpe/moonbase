@@ -757,16 +757,18 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
       await disconnectChat(page);
       await selectRemoteChat(page);
       await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
-      await expect(page.getByRole('region', { name: 'Retained commands' })).toContainText(
-        'Uncertain',
-      );
-      const afterLoss = await page.evaluate(
-        (op) =>
-          JSON.parse(localStorage.getItem('moonbase.chat.remote.v2')!).pending.find(
-            (p: { operation: string }) => p.operation === op,
-          ),
-        operation,
-      );
+      await expect(page.getByRole('region', { name: 'Retained commands' })).toBeVisible();
+      // The lost reply is recorded on the retained command, which keeps its original identity.
+      const readRetained = () =>
+        page.evaluate(
+          (op) =>
+            JSON.parse(localStorage.getItem('moonbase.chat.remote.v2')!).pending.find(
+              (p: { operation: string }) => p.operation === op,
+            ),
+          operation,
+        );
+      await expect.poll(async () => (await readRetained()).message).not.toBe(retained.message);
+      const afterLoss = await readRetained();
       expect(afterLoss.input).toEqual(retained.input);
       if (operation === 'sendChat')
         await page
@@ -914,7 +916,11 @@ for (const failsWrite of [false, true])
       await page.getByLabel('Message', { exact: true }).fill('Captured second busy intent');
       await page.getByRole('button', { name: 'Send message', exact: true }).click();
       const region = page.getByRole('region', { name: 'Retained commands' });
-      await expect(region).toContainText('Conflict');
+      // The busy host refused it: the Send stays retained, no longer in flight.
+      await region.locator('summary').click();
+      await expect(
+        region.getByRole('button', { name: 'Retry original Send', exact: true }),
+      ).toBeEnabled();
       const pending = await page.evaluate(
         () => JSON.parse(localStorage.getItem('moonbase.chat.remote.v2')!).pending[0],
       );
@@ -939,7 +945,6 @@ for (const failsWrite of [false, true])
           });
       if (failsWrite) await f.holdReply('getChatSend');
       const before = await f.stats();
-      await region.locator('summary').click();
       await region.getByRole('button', { name: 'Retry original Send', exact: true }).click();
       if (failsWrite) {
         await until(f.stats, (s) => s.heldReplies.includes('getChatSend'));

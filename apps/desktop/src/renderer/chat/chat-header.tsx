@@ -8,20 +8,16 @@ import { workbench } from '@moonbase/ui/workbench';
 import { Icon } from '@moonbase/ui/icons';
 import { projectInitials, projectTiles } from '@moonbase/ui/projects';
 import { colors, space, type } from '@moonbase/ui/tokens.stylex';
-import {
-  findSelectedChat,
-  type ChatComposer,
-  type ChatController,
-  type ChatState,
-} from '@moonbase/application/chat';
+import { findSelectedChat, type ChatComposer, type ChatState } from '@moonbase/application/chat';
 import { folderName } from '../components/folder-menu.tsx';
 import type { DesktopRunner } from '../shell/desktop-application.ts';
 import { activateChatFind } from './find.tsx';
 import { describeOpenChat, readOpenSettled, settleOpenChat } from './open-chat.ts';
 import type { ChatDock } from './chat-view.tsx';
+import type { DesktopChat } from './desktop-chat.ts';
 
 /** Settles or unsettles the open chat. */
-function SettleButton({ controller, state }: { controller: ChatController; state: ChatState }) {
+function SettleButton({ controller, state }: { controller: DesktopChat; state: ChatState }) {
   const chat = findSelectedChat(state);
   if (!state.selected || !chat) return null;
   return (
@@ -42,7 +38,7 @@ function FindButton({
   state,
   findInput,
 }: {
-  controller: ChatController;
+  controller: DesktopChat;
   state: ChatState;
   findInput: RefObject<HTMLInputElement | null>;
 }) {
@@ -69,7 +65,7 @@ function TurnButton({
   runner,
   turnIntoProject,
 }: {
-  controller: ChatController;
+  controller: DesktopChat;
   state: ChatState;
   composer: ChatComposer;
   runner: DesktopRunner;
@@ -135,7 +131,7 @@ export function DockChatHeader({
   findInput,
   onShowList,
 }: {
-  controller: ChatController;
+  controller: DesktopChat;
   state: ChatState;
   dock: ChatDock;
   findInput: RefObject<HTMLInputElement | null>;
@@ -184,7 +180,7 @@ export function ChatHeader({
   findOwner,
   onFindKeyDown,
 }: {
-  controller: ChatController;
+  controller: DesktopChat;
   state: ChatState;
   composer: ChatComposer;
   runner: DesktopRunner;

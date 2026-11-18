@@ -222,14 +222,14 @@ test('the chat request size bound admits the largest escaped message', async () 
     },
   });
   try {
-    const chat = f.target('local').chat;
+    const { chat } = await f.ports('local');
     const target = { ...context, conversationId: 'chat' };
     const input = {
       target,
       requestId: 'escaped',
       text: 'x' + '\u0001'.repeat(maximumChatInputBytes - 1),
     };
-    await assert.rejects(chat.command('sendChat', input), { code: 'Uncertain' });
+    await assert.rejects(Effect.runPromise(chat.sendChat(input)), { code: 'Uncertain' });
     assert.deepEqual(sent, [input]);
     assert.equal(sent.length, 1);
   } finally {
