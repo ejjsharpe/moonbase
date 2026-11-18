@@ -4,17 +4,15 @@ import type { LocalDaemon } from './local-daemon.ts';
 
 /**
  * The Restart daemon action: after the user confirms, stops the local daemon with `SIGTERM` (one
- * of an older protocol included) and starts this app's at once with `start`, which also connects
- * to it; its runs resume there. A failure is reported, never thrown.
+ * of an older protocol included) and starts this app's at once, connecting to it; its runs resume
+ * there. A failure is reported, never thrown.
  */
 export const restartDaemon = ({
   daemon,
-  start,
   dialog,
   window,
 }: {
-  daemon: Pick<LocalDaemon, 'stop'>;
-  start: Effect.Effect<unknown, { message: string }>;
+  daemon: Pick<LocalDaemon['Service'], 'restart'>;
   dialog: Pick<Dialog, 'showMessageBox' | 'showErrorBox'>;
   window: BrowserWindow;
 }) =>
@@ -31,13 +29,7 @@ export const restartDaemon = ({
       }),
     );
     if (response !== 1) return;
-    yield* Effect.tryPromise({
-      try: () => daemon.stop(),
-      catch: (error) => ({
-        message: error instanceof Error ? error.message : 'The daemon could not be restarted.',
-      }),
-    }).pipe(
-      Effect.andThen(start),
+    yield* daemon.restart.pipe(
       Effect.catch(({ message }) =>
         Effect.sync(() => dialog.showErrorBox('Moonbase daemon', message)),
       ),

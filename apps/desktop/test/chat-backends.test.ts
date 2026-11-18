@@ -3,14 +3,14 @@ import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
-import { Clock, Deferred, Effect, Exit, Fiber, Scope } from 'effect';
+import { Deferred, Effect, Exit, Fiber, Scope } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { makeChatBackends, type ChatBackendsOptions } from '../src/main/chat/chat-backends.ts';
 import { makeChatDocument } from '../src/main/chat/chat-document.ts';
-import { makeLocalDaemonClient, type DaemonChat } from '../src/main/daemon/local-daemon-client.ts';
+import type { DaemonClients } from '../src/main/daemon/local-daemon.ts';
 import { createFileRequestIds } from '../src/main/request-ids.ts';
 
-type Backend = DaemonChat;
+type Backend = DaemonClients;
 /** A new resolved temporary directory, removed after the test. */
 async function makeDirectory(t: TestContext) {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-chat-backends-')));
@@ -45,68 +45,22 @@ const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
 const fail = <A, E>(effect: Effect.Effect<A, E>) =>
   Effect.runPromise(Effect.flip(effect)) as Promise<E>;
 
-test('local chat shares one attempt to reach the daemon, answers a failed one for a moment, and a cancelled folder choice approves nothing', async (t) => {
+test('a cancelled folder choice approves nothing', async (t) => {
   const session = { host: { hostId: 'local', storeId: 'store' }, actorId: 'owner' };
   const approved: string[] = [];
-  let attempts = 0,
-    now = 0;
   const backend = makeBackend(session, {
     approveFolder: ({ path }: { path: string }) => {
       approved.push(path);
       return { requestId: 'r', path };
     },
   });
-  let acquiring = Effect.runSync(Deferred.make<Backend, ApplicationError>());
-  const scope = Scope.makeUnsafe();
-  t.after(() => run(Scope.close(scope, Exit.void)));
-  // A clock whose time the test moves; it sleeps as the real one does.
-  const clock: Clock.Clock = Object.create(Clock.Clock.defaultValue(), {
-    currentTimeMillisUnsafe: { value: () => now },
-    currentTimeMillis: { value: Effect.sync(() => now) },
-  });
-  const local = await run(
-    Scope.provide(
-      makeLocalDaemonClient(
-        Effect.suspend(() => {
-          attempts++;
-          acquiring = Effect.runSync(Deferred.make<Backend, ApplicationError>());
-          return Deferred.await(acquiring);
-        }),
-      ),
-      scope,
-    ),
-  );
   let picked = Effect.runSync(Deferred.make<string | null>());
   const owner = makeChatBackends({
     installationId: 'installation',
     requestIds: await makeRequestIds(t),
-    local: {
-      get: local.get.pipe(Effect.provideService(Clock.Clock, clock)),
-      peek: local.peek,
-    },
+    local: reached(backend),
     pickFolder: Effect.suspend(() => Deferred.await(picked)),
   });
-  assert.equal(attempts, 0);
-  // A failed attempt is every caller's answer for a moment, then tried anew.
-  const failing = run(Effect.flip(owner.getContext('local')));
-  await new Promise((resolve) => setImmediate(resolve));
-  await run(
-    Deferred.fail(
-      acquiring,
-      new ApplicationError({ code: 'Unavailable', message: 'spawn failed' }),
-    ),
-  );
-  assert.equal((await failing).code, 'Unavailable');
-  assert.equal((await fail(owner.getContext('local'))).code, 'Unavailable');
-  assert.equal(attempts, 1);
-  now += 2000;
-  const first = run(owner.getContext('local')),
-    second = run(owner.getContext('local'));
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(attempts, 2);
-  await run(Deferred.succeed(acquiring, backend));
-  assert.deepEqual(await first, session);
-  assert.deepEqual(await second, session);
   // A choice whose request is cancelled while the picker is open approves nothing.
   const picking = Effect.runFork(owner.chooseFolder);
   await new Promise((resolve) => setImmediate(resolve));
@@ -118,8 +72,6 @@ test('local chat shares one attempt to reach the daemon, answers a failed one fo
   await run(Deferred.succeed(picked, '/current'));
   assert.equal(await current, '/current');
   assert.deepEqual(approved, ['/current']);
-  await run(owner.getContext('local'));
-  assert.equal(attempts, 2);
 });
 
 test('a document releases its provider sign-ins as it goes, on the remote host too, but not on Quit', async () => {

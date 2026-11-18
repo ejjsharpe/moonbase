@@ -3,15 +3,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Effect, Layer, ManagedRuntime } from 'effect';
-import type { ApplicationError } from '@moonbase/contracts/errors';
-import { ConnectionService, WorkspaceHostService } from '@moonbase/contracts/services';
-import { RemoteWorkspaceHostLive } from '@moonbase/daemon-protocol/remote';
-import {
-  createLocalDaemon,
-  findDaemonDirectory,
-  LocalDaemonConnectionLive,
-  readDaemonSession,
-} from '../../src/main/daemon/local-daemon.ts';
+import * as NodeServices from '@effect/platform-node/NodeServices';
+import { findDaemonDirectory } from '../../src/main/daemon/daemon-files.ts';
+import { LocalDaemon, LocalDaemonLive } from '../../src/main/daemon/local-daemon.ts';
 import {
   makeFauxDaemonCommand,
   prepareDaemonData,
@@ -30,38 +24,26 @@ test('a save sent as the daemon is stopped keeps its text, and resolves once the
   const userData = await temporaryProfile(t, stops);
   await prepareDaemonData(userData);
   const directory = findDaemonDirectory(userData);
-  const command = makeFauxDaemonCommand(directory);
-  // Stop the handle's daemon and any replacement it started, while the endpoint file still exists.
+  // Stop the daemon and any replacement it started, while the endpoint file still exists.
   stops.push(() => stopDaemon(directory));
   const project = join(userData, 'project');
   await mkdir(project);
   await writeFile(join(project, 'a.txt'), 'one');
-  const daemon = createLocalDaemon({ directory, command });
-  stops.unshift(() => daemon.stop());
-  await daemon.ensure();
-  const session = await readDaemonSession(directory);
-  // The daemon connection is the one main builds: it starts a stopped daemon on the next request.
-  const connection = ManagedRuntime.make(
-    RemoteWorkspaceHostLive({ host: session.host }).pipe(
-      Layer.provideMerge(LocalDaemonConnectionLive(daemon)),
-    ),
+  // The local daemon main builds: it starts a stopped daemon on the next request.
+  const runtime = ManagedRuntime.make(
+    LocalDaemonLive({
+      directory,
+      command: makeFauxDaemonCommand(directory),
+      openUrl: async () => {},
+    }).pipe(Layer.provide(NodeServices.layer)),
   );
-  stops.unshift(() => connection.dispose());
-  const { client } = await composeWorkspace(t, userData, {
-    connect: Effect.tryPromise({
-      try: () =>
-        connection.runPromise(
-          Effect.gen(function* () {
-            const connections = yield* ConnectionService;
-            return {
-              workspace: yield* WorkspaceHostService,
-              endpoint: yield* connections.endpoint({ host: session.host }),
-            };
-          }),
-        ),
-      catch: (error) => error as ApplicationError,
-    }) as never,
-  });
+  stops.unshift(() => runtime.dispose());
+  const local = await runtime.runPromise(
+    Effect.gen(function* () {
+      return yield* LocalDaemon;
+    }),
+  );
+  const { client } = await composeWorkspace(t, userData, local);
 
   const checkout = await client.command('openCheckout', { root: project });
   const disk = await client.command('readFile', { checkout, path: 'a.txt' });
@@ -75,7 +57,7 @@ test('a save sent as the daemon is stopped keeps its text, and resolves once the
   };
   const before = await readDaemonPid(directory);
   // The daemon is stopped (what Restart daemon does) just as the editor saves.
-  assert.equal(await daemon.stop(), true);
+  await stopDaemon(directory);
   const sent = await client.command('saveFile', save).then(
     (result) => result,
     (error: unknown) => error,
@@ -87,7 +69,7 @@ test('a save sent as the daemon is stopped keeps its text, and resolves once the
   // The next request started a new daemon in a new connection, and files are served again.
   const again = await client.command('readFile', { checkout, path: 'a.txt' });
   assert.equal(again.text, onDisk ? 'edited' : 'one');
-  assert.equal(daemon.isRunning(), true);
+  assert.equal(await Effect.runPromise(local.isRunning), true);
   assert.notEqual(await readDaemonPid(directory), before);
   // The save is settled now: its text is on disk or in the draft, and nothing is left unresolved.
   const settled = await client.command('loadRecovery', { clientId: 'desktop-primary' });

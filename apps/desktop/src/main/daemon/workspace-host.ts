@@ -9,7 +9,8 @@ import {
   hostDeadlinesMs,
   hostInputSchemas,
 } from '@moonbase/contracts/workspace-host-schema';
-import type { LocalDaemonClient } from './local-daemon-client.ts';
+import type { LocalDaemon } from './local-daemon.ts';
+import { toDaemonApplicationError } from './local-daemon-errors.ts';
 
 const unreachable = () =>
   new ApplicationError({
@@ -31,12 +32,13 @@ const withoutFiles = () =>
  * show as unavailable until a retry.
  */
 export function createDaemonWorkspaceHost(
-  local: Pick<LocalDaemonClient, 'connect'>,
+  local: Pick<LocalDaemon['Service'], 'connect'>,
   deadlineMs: (operation: HostCommand | 'watch') => number = (operation) =>
     operation === 'watch' ? hostDeadlinesMs.read : hostDeadlineMs(operation),
 ): WorkspaceHostServiceShape {
   const reach = (operation: HostCommand | 'watch') =>
     local.connect.pipe(
+      Effect.mapError(toDaemonApplicationError),
       Effect.timeoutOrElse({
         duration: deadlineMs(operation),
         orElse: () => Effect.fail(unreachable()),

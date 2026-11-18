@@ -8,13 +8,13 @@ import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { makeWorkspaceClient, type FakeWorkspaceClient } from './workspace-client-fixture.ts';
 import { WorkspaceRecoveryLive } from '@moonbase/workspace';
 import { createDaemonWorkspaceHost } from '../../src/main/daemon/workspace-host.ts';
-import type { LocalDaemonClient } from '../../src/main/daemon/local-daemon-client.ts';
+import type { LocalDaemon } from '../../src/main/daemon/local-daemon.ts';
 
 /** The editor's workspace as main composes it, over `local`; its store is in a temporary profile. */
 export async function composeWorkspace(
   t: TestContext,
   userData: string,
-  local: Pick<LocalDaemonClient, 'connect'>,
+  local: Pick<LocalDaemon['Service'], 'connect'>,
 ) {
   const runtime = ManagedRuntime.make(
     WorkspaceRecoveryLive(

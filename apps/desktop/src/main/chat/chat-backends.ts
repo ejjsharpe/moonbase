@@ -12,7 +12,8 @@ import type {
   ProviderSetupServiceError,
 } from '@moonbase/contracts/services';
 import type { ChatSession } from '@moonbase/contracts/chat';
-import type { DaemonChat, LocalDaemonClient } from '../daemon/local-daemon-client.ts';
+import type { DaemonClients, LocalDaemon } from '../daemon/local-daemon.ts';
+import { toDaemonApplicationError } from '../daemon/local-daemon-errors.ts';
 import type { ChatConfiguration } from './config.ts';
 import type { ChatTargetId, DesktopChatTarget } from '../../ipc/chat-rpcs.ts';
 import type { RequestIds } from '../request-ids.ts';
@@ -22,8 +23,8 @@ export type RemoteChat = {
   configuration: ChatConfiguration;
   chat: ChatServiceShape;
   connection: ConnectionServiceShape;
-  providers: DaemonChat['providers'];
-  folders: DaemonChat['folders'];
+  providers: DaemonClients['providers'];
+  folders: DaemonClients['folders'];
 };
 /** What a chat target's requests reach: its chat, provider setup and, for a remote host, connection. */
 export type ChatTargetClients = {
@@ -39,7 +40,7 @@ const legacy = <A>(effect: Effect.Effect<A, LocalHostServiceError | ProviderSetu
 
 export type ChatBackendsOptions = {
   /** The local daemon, found or started on demand. */
-  local: Pick<LocalDaemonClient, 'get' | 'peek'>;
+  local: Pick<LocalDaemon['Service'], 'get' | 'peek'>;
   remote?: RemoteChat | null;
   readonly pickFolder: Effect.Effect<string | null>;
   /** The identity this profile's workspace store has to the daemon. */
@@ -63,6 +64,8 @@ export function makeChatBackends({
   adoptCheckout = () => {},
   requestIds,
 }: ChatBackendsOptions) {
+  // The local daemon's failures reach the renderer as the legacy error with its code.
+  const reachLocal = Effect.mapError(local.get, toDaemonApplicationError);
   const targets: DesktopChatTarget[] = [
     { id: 'local', label: 'Local', mode: 'local' },
     ...(remote
@@ -129,10 +132,10 @@ export function makeChatBackends({
           ),
     getContext: (backendId: ChatTargetId) =>
       backendId === 'local'
-        ? Effect.map(local.get, (backend) => backend.session)
+        ? Effect.map(reachLocal, (backend) => backend.session)
         : Effect.succeed(remote!.configuration.context),
     chooseFolder: Effect.gen(function* () {
-      const backend = yield* local.get;
+      const backend = yield* reachLocal;
       const selection = yield* pickFolder;
       if (!selection) return null;
       const { path } = yield* legacy(
@@ -171,7 +174,7 @@ export function makeChatBackends({
      */
     createWorktree: (root: string, branch: string, requestId: string) =>
       Effect.gen(function* () {
-        const backend = yield* local.get;
+        const backend = yield* reachLocal;
         yield* legacy(
           backend.folders.checkApprovedFolder({ host: backend.session.host, path: root }),
         );
@@ -188,7 +191,7 @@ export function makeChatBackends({
      */
     turnIntoProject: (conversationId: string) =>
       Effect.gen(function* () {
-        const backend = yield* local.get;
+        const backend = yield* reachLocal;
         const created = yield* withRequestId(
           JSON.stringify(['turnChatIntoProject', conversationId]),
           (requestId) =>

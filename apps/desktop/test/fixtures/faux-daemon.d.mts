@@ -25,3 +25,5 @@ export function stopDaemon(directory: string, pid?: number): Promise<void>;
 export function readFauxCalls(directory: string): Promise<number>;
 export function installFauxDaemon(): void;
 export function stopTestDaemons(folder: string): Promise<number>;
+export function gateDaemonCommand(command: DaemonCommand, gate: string): DaemonCommand;
+export function readGateIds(gate: string, name: 'starts' | 'members'): Promise<number[]>;
