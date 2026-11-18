@@ -250,10 +250,7 @@ test('summary byte and record budgets include hydrated descriptors and envelopes
   const state = f.state;
   assertBounds(state, f.limits);
   assert(state.manifest!.omittedParts > 0);
-  assert.equal(
-    await collect(streamTranscriptSource({ read: f.read, source })),
-    data.join(''),
-  );
+  assert.equal(await collect(streamTranscriptSource({ read: f.read, source })), data.join(''));
 });
 
 test('closing the transcript aborts a held read at once, and its late reply never lands', async (t) => {
@@ -377,10 +374,7 @@ test('trusted port replies and snapshots are not decoded or size-bounded again',
     ...(fallback() as object),
     padding,
   }));
-  assert.equal(
-    await collect(streamTranscriptSource({ read: f.read, source })),
-    'same text',
-  );
+  assert.equal(await collect(streamTranscriptSource({ read: f.read, source })), 'same text');
   await f.transcript.loadManifest(source, true);
   assert.equal(f.state.manifest!.status, 'complete');
   await f.transcript.loadPart(source, chosen, true);
@@ -497,10 +491,7 @@ test('complete iteration rejects a manifest continuation cycle', async (t) => {
       thinking: 'none',
     };
   });
-  await assert.rejects(
-    collect(streamTranscriptSource({ read: f.read, source })),
-    /advance/,
-  );
+  await assert.rejects(collect(streamTranscriptSource({ read: f.read, source })), /advance/);
 });
 
 test('changed entry descriptors invalidate relevant hydration', async (t) => {
@@ -785,8 +776,7 @@ for (const replacement of ['around', 'latest'] as const)
         if ((raw as { entryId: string }).entryId === 'e32') {
           oldEntered.resolve();
           await oldHeld.promise;
-          if (oldOutcome === 'error')
-            throw new HostUnavailableError({ reason: 'failed' });
+          if (oldOutcome === 'error') throw new HostUnavailableError({ reason: 'failed' });
         } else {
           newEntered.resolve();
           await newHeld.promise;
@@ -971,8 +961,7 @@ for (const outcome of ['success', 'error'] as const)
       const reply = fallback();
       entered.resolve();
       await held.promise;
-      if (outcome === 'error')
-        throw new HostUnavailableError({ reason: 'failed' });
+      if (outcome === 'error') throw new HostUnavailableError({ reason: 'failed' });
       return reply;
     });
     try {
