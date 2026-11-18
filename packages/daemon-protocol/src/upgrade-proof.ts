@@ -46,9 +46,10 @@ export const isUpgradeProof = (
 
 /**
  * Nonces signed health issued for RPC upgrades: each usable once, for `rpcLimits.upgradeNonceMs`,
- * with at most `rpcLimits.upgradeNonces` outstanding (a new one evicts the oldest).
+ * with at most `rpcLimits.upgradeNonces` outstanding (a new one evicts the oldest). `now` reads the
+ * server's `Clock`, synchronously, as Bun's request handlers need.
  */
-export function createUpgradeNonces(now: () => number = Date.now) {
+export function createUpgradeNonces(now: () => number) {
   const issued = new Map<string, number>();
   return {
     issue() {

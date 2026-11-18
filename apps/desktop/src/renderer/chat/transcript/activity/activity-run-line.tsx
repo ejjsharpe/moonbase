@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { Icon } from '@moonbase/ui/icons';
@@ -7,6 +6,7 @@ import { summarizeActivityHeadlines, type ActivityHeadline } from './activity.ts
 import { StepLine } from './activity-headline.tsx';
 import { formatMessageTime } from '../message-time.ts';
 import { textStyles } from '../transcript-text.ts';
+import { useNow } from '../../../hooks/use-now.ts';
 
 /**
  * A run of tool rows folded behind one line: "Worked for 1m 29s", a chevron, the clock time at the
@@ -39,8 +39,9 @@ export function RunLine({
   stepsId?: string;
   onToggle: () => void;
 }) {
-  const now = useNow(active && !!startedAt);
-  const until = active ? now : Date.parse(endedAt ?? '');
+  // A running run counts up each second.
+  const now = useNow(active && startedAt ? 1000 : undefined);
+  const until = active ? (now ?? NaN) : Date.parse(endedAt ?? '');
   const elapsed = startedAt ? until - Date.parse(startedAt) : NaN;
   const duration = Number.isFinite(elapsed) && elapsed >= 0 ? formatDuration(elapsed) : null;
   const summary = summarizeActivityHeadlines(headlines);
@@ -85,17 +86,6 @@ export function RunLine({
       )}
     </>
   );
-}
-
-/** The current time, ticking each second while enabled. */
-function useNow(enabled: boolean) {
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    if (!enabled) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [enabled]);
-  return now;
 }
 
 /** "12s", "4m 05s", "1h 02m". */

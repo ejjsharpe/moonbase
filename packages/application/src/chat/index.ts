@@ -55,8 +55,7 @@ export { TranscriptReadError, type TranscriptReadProblem } from './transcript/tr
 export {
   checkTranscriptReply,
   countDecodedTranscriptBytes,
-  iterateTranscriptSource,
-  makeTranscriptReader,
+  streamTranscriptSource,
   trackTranscriptCursor,
 } from './transcript/transcript-read.ts';
 export type { TranscriptRead, TranscriptChunk } from './transcript/transcript-read.ts';

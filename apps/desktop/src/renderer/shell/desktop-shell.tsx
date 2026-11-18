@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  useContext,
   useEffect,
   useImperativeHandle,
   useRef,
@@ -7,7 +8,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import { Context, type Effect } from 'effect';
-import { useAtomValue } from '@effect/atom-react';
+import { RegistryContext, useAtomValue } from '@effect/atom-react';
+import * as AsyncResult from 'effect/reactivity/AsyncResult';
 import { Tabs } from '@base-ui/react/tabs';
 import * as stylex from '@stylexjs/stylex';
 import { titleBar } from './title-bar.stylex.ts';
@@ -26,6 +28,7 @@ import {
   type WorkbenchHandle,
 } from '@moonbase/workbench';
 import { useStoredToggle } from '../hooks/use-stored-toggle.ts';
+import { nowAtom } from '../hooks/use-now.ts';
 import type { TranscriptNative } from '../chat/transcript/transcript-actions.ts';
 import { focusMessage, focusMessageEnd } from '../chat/open-chat.ts';
 import { runChatAction } from '../chat/chat-context.ts';
@@ -103,6 +106,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     { lifecycle, chat, composer } = application,
     state = useAtomValue(editor.atoms.snapshot);
   const worktrees = Context.get(editor.context, EditorWorktrees);
+  const registry = useContext(RegistryContext);
   const [destination, setDestination] = useState<'project' | 'chat'>('chat');
   // Kept here, so the dock comes back at its width after a host switch or chat reopens.
   const [dockWidths, setDockWidths] = useState(defaultDockWidths);
@@ -438,6 +442,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
               pickerEntries={() =>
                 makePickerEntries({
                   chats: application.readChat((atoms) => atoms.list)?.chats ?? [],
+                  now: AsyncResult.getOrThrow(registry.get(nowAtom(60_000))),
                   checkouts: openCheckouts,
                   showChat: chat
                     ? (summary) => {

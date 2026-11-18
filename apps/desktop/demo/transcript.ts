@@ -1,4 +1,5 @@
-import { iterateTranscriptSource } from '@moonbase/application/chat';
+import { Effect, Stream } from 'effect';
+import { streamTranscriptSource, type TranscriptChunk } from '@moonbase/application/chat';
 import type {
   ChatEntry,
   ChatSnapshot,
@@ -231,16 +232,29 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
   };
   const copied: string[] = [],
     links: string[] = [];
+  /** A source's chunks, read as main reads them; the demo has no main process. */
+  const readSource = (
+    input: Pick<Parameters<TranscriptNative['copy']>[0], 'source' | 'selection'>,
+    signal?: AbortSignal,
+  ): Promise<TranscriptChunk[]> =>
+    Effect.runPromise(
+      Stream.runCollect(
+        streamTranscriptSource({
+          ...input,
+          isCurrent: () => true,
+          read: (request) =>
+            Effect.tryPromise({
+              try: (signal) => chat.commands.getChatTranscriptContent(request, { signal }),
+              catch: (error) => error,
+            }),
+        }),
+      ),
+      signal ? { signal } : undefined,
+    );
   const native: TranscriptNative = {
     async copy(input, signal) {
       let text = '';
-      for await (const chunk of iterateTranscriptSource({
-        ...input,
-        signal,
-        isCurrent: () => true,
-        read: (input, options) => chat.commands.getChatTranscriptContent(input, options),
-      }))
-        text += chunk.data;
+      for (const chunk of await readSource(input, signal)) text += chunk.data;
       if (input.code) {
         const block = parseTranscriptMarkdown(text).codeBlocks.find(
           (node) => node.position?.start.offset === input.code!.start,
@@ -258,14 +272,9 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
     },
     // Without Electron main, serve the volatile fixture bytes directly; production uses moonbase:// tokens.
     async imageUrl({ mimeType, ...input }, signal) {
-      const chunks: Uint8Array<ArrayBuffer>[] = [];
-      for await (const chunk of iterateTranscriptSource({
-        ...input,
-        signal,
-        isCurrent: () => true,
-        read: (input, options) => chat.commands.getChatTranscriptContent(input, options),
-      }))
-        chunks.push(Uint8Array.from(atob(chunk.data), (char) => char.charCodeAt(0)));
+      const chunks = (await readSource(input, signal)).map((chunk) =>
+        Uint8Array.from(atob(chunk.data), (char) => char.charCodeAt(0)),
+      );
       return URL.createObjectURL(new Blob(chunks, { type: mimeType }));
     },
   };
