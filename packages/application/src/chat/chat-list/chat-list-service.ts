@@ -173,7 +173,8 @@ export class ChatList extends Context.Service<ChatList, ChatListShape>()('moonba
         // A watch page that landed while this read is newer than the rows it returned.
         const { watched } = yield* Ref.get(listing);
         if (watched && watched !== before) yield* applyWatched(watched);
-      }).pipe(Effect.ignore);
+        // A failed or interrupted listing keeps the last list.
+      }).pipe(Effect.ignoreCause);
 
       const reloadChats = ({ latest = false }: { latest?: boolean } = {}) =>
         Effect.gen(function* () {
@@ -191,7 +192,10 @@ export class ChatList extends Context.Service<ChatList, ChatListShape>()('moonba
                 if (!run) return;
                 yield* reloadOnce;
               }
-            }),
+            }).pipe(
+              // A reload its link's end interrupts leaves the next call free to list.
+              Effect.ensuring(Ref.update(listing, (l) => ({ ...l, reloading: false }))),
+            ),
           );
         });
 
@@ -217,9 +221,11 @@ export class ChatList extends Context.Service<ChatList, ChatListShape>()('moonba
           'chats',
           link.run(
             Effect.gen(function* () {
+              const cursor = (yield* SubscriptionRef.get(state)).nextChats;
+              if (!cursor) return;
+              const page = yield* chat.listChats({ session, cursor });
+              // The list as it is now: changes that landed while the page was read stay.
               const shown = yield* SubscriptionRef.get(state);
-              if (!shown.nextChats) return;
-              const page = yield* chat.listChats({ session, cursor: shown.nextChats });
               const { pages } = yield* Ref.get(listing);
               yield* show(
                 { chats: [...shown.chats, ...page.conversations], nextChats: page.nextCursor },

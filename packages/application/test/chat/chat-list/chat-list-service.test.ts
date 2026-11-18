@@ -5,6 +5,7 @@ import { ApplicationError } from '@moonbase/contracts/errors';
 import { groupChatsByActivity } from '@moonbase/application/chat';
 import {
   chatFixture,
+  connected,
   context,
   openChat,
   settings,
@@ -208,6 +209,26 @@ test('a background reload reads again through the older chats Show older added',
   f.answers.set('createChat', created);
   await f.create('Created', settings);
   assert.deepEqual(await shownIds(f), ['created', ...pageIds(19)]);
+  // A Show older keeps what landed while its page was read.
+  const read = f.answers.get('listChats')!,
+    older = Promise.withResolvers<void>();
+  f.answers.set('listChats', async (input: { cursor?: string }, signal) => {
+    if (input.cursor) await older.promise;
+    return read(input as never, signal);
+  });
+  const showing = f.moreChats();
+  await waitFor(() => f.calls.at(-1)?.operation === 'listChats');
+  f.answers.set('createChat', (input: ChatCommands['createChat']['input']) => ({
+    ...created(input),
+    conversation: {
+      ...created(input).conversation,
+      target: { ...target, conversationId: 'later' },
+    },
+  }));
+  await f.create('Created later', settings);
+  older.resolve();
+  await showing;
+  assert.deepEqual(await shownIds(f), ['later', 'created', ...pageIds(20)]);
 });
 
 test('a background reload reads a bounded depth and keeps the chats past it as listed', async (t) => {
@@ -279,6 +300,18 @@ test('a reload asked for during another joins it, and one asked for the latest l
   assert.equal((await f.state()).chats[0]!.title, 'After the run ended');
   await f.reloadChats();
   assert.equal(count, 4);
+
+  // A reload a new connection generation interrupts leaves the next one free to list.
+  held = Promise.withResolvers<void>();
+  const interrupted = f.reloadChats();
+  await waitFor(() => count === 5);
+  f.answers.delete('listChats');
+  f.publishConnection(connected('next-generation'));
+  await interrupted;
+  await until(f, (s) => s.ready && s.connection?.connectionId === 'next-generation');
+  const before = listings(f);
+  await f.reloadChats();
+  assert.equal(listings(f), before + 1);
 });
 
 test('the chat list follows its watch: changes merge without listing, and a reset or a reconnected watch lists again', async (t) => {
