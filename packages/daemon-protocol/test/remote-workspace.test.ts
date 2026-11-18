@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { getErrorGroup } from '@moonbase/contracts/error-groups';
 import { connect } from 'node:net';
 import { test } from 'node:test';
 import { Effect, Fiber, Layer, ManagedRuntime, Stream } from 'effect';
@@ -20,7 +21,6 @@ import {
   InvalidBaseError,
   InvalidPatternError,
   RecordedRefusalError,
-  toWireError,
   WorkspaceStoreError,
   WorktreeGitError,
 } from '@moonbase/contracts/workspace-host-errors';
@@ -139,10 +139,10 @@ test('a 2 MiB file saves and reads back; a reply past its bound is refused, as U
     reason: 'not-served',
   });
   assert.equal(
-    toWireError(
+    getErrorGroup(
       await failure(plain.run, Stream.runDrain(plain.workspace.watch({ checkout, paths: [''] }))),
-    ).code,
-    'Incompatible',
+    ),
+    'incompatible',
   );
 });
 
@@ -259,7 +259,7 @@ test('a host’s errors reach the client with their codes and the client’s own
     new InvalidBaseError({ base: secret }),
     new GitStatusFormatError({ record: secret }),
     new IncompleteCleanupError({ remains: secret, inspect: secret, failure: secret }),
-    new RecordedRefusalError({ code: 'Conflict', text: secret }),
+    new RecordedRefusalError({ refusal: 'conflict', text: secret }),
     new WorkspaceStoreError({ failure: 'publication', detail: secret }),
     new InterruptedRequestError({ operation: secret }),
     new UncertainError({ operation: secret, target: { ...fileTarget, path: secret } }),
@@ -277,23 +277,22 @@ test('a host’s errors reach the client with their codes and the client’s own
   const codes: string[] = [];
   for (const _ of raised) {
     const error = await failure(run, workspace.readFile(fileTarget));
-    const legacy = toWireError(error);
-    assert(!JSON.stringify(error).includes(secret) && !legacy.message.includes(secret), error._tag);
-    codes.push(legacy.code);
+    assert(!JSON.stringify(error).includes(secret) && !error.message.includes(secret), error._tag);
+    codes.push(getErrorGroup(error)!);
   }
   assert.deepEqual(codes, [
-    'Unavailable',
-    'InvalidInput',
-    'InvalidInput',
-    'Unavailable',
-    'Uncertain',
-    'Conflict',
-    'Persistence',
-    'Uncertain',
-    'Uncertain',
-    'Unauthorized',
-    'Conflict',
-    'Unavailable',
+    'unavailable',
+    'refusal',
+    'refusal',
+    'unavailable',
+    'uncertain',
+    'conflict',
+    'storage',
+    'uncertain',
+    'uncertain',
+    'access',
+    'conflict',
+    'unavailable',
   ]);
   // A branch `createWorktree` found taken is named as the client asked for it.
   files.handlers.createWorktree = async () => {
@@ -556,7 +555,7 @@ test('a watch follows changes, is bounded per connection, ends retryably when th
     client.fork(
       Stream.runForEach(client.workspace.watch({ checkout, paths: ['a'] }), (event) =>
         Effect.sync(() => void (record && events.push(event))),
-      ).pipe(Effect.catch((error) => Effect.sync(() => void ended.push(toWireError(error).code)))),
+      ).pipe(Effect.catch((error) => Effect.sync(() => void ended.push(getErrorGroup(error)!)))),
     );
   follow(true);
   await until(async () => events.length, Boolean);
@@ -575,7 +574,7 @@ test('a watch follows changes, is bounded per connection, ends retryably when th
   );
   follow();
   await until(async () => ended.length, Boolean);
-  assert.deepEqual(ended, ['Unavailable']);
+  assert.deepEqual(ended, ['unavailable']);
   // After the daemon restarts, a watch starts again from a fresh value: an event to read again from.
   await daemon.stop();
   await daemon.start();
@@ -593,7 +592,7 @@ test('a watch follows changes, is bounded per connection, ends retryably when th
     async () => ended.length,
     (count) => count === open,
   );
-  assert(ended.every((code) => code === 'Unavailable'));
+  assert(ended.every((group) => group === 'unavailable'));
 });
 
 /**

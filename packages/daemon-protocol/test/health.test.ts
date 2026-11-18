@@ -5,11 +5,8 @@ import { createServer, type RequestListener } from 'node:http';
 import { test, type TestContext } from 'node:test';
 import { Cause, Effect, Exit, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
-import type { ApplicationErrorCode } from '@moonbase/contracts/errors';
-import {
-  HostVerificationError,
-  toConnectionApplicationError,
-} from '@moonbase/contracts/connection-errors';
+import { getErrorGroup, type ErrorGroup } from '@moonbase/contracts/error-groups';
+import { HostVerificationError } from '@moonbase/contracts/connection-errors';
 import {
   chatHostVersion,
   chatProtocolVersion,
@@ -45,10 +42,10 @@ async function endpoint(t: TestContext, handler: RequestListener): Promise<ChatH
   assert(address && typeof address !== 'string');
   return { origin: `http://127.0.0.1:${address.port}`, token, expected };
 }
-/** A `HostVerificationError` whose legacy code is `code`. */
-const refused = (code: ApplicationErrorCode) => (error: unknown) =>
-  error instanceof HostVerificationError && toConnectionApplicationError(error).code === code;
-async function fails(input: ChatHostEndpoint, code: ApplicationErrorCode) {
+/** A `HostVerificationError` whose reason means `group` for the request. */
+const refused = (group: ErrorGroup) => (error: unknown) =>
+  error instanceof HostVerificationError && getErrorGroup(error) === group;
+async function fails(input: ChatHostEndpoint, code: ErrorGroup) {
   const result = await Effect.runPromiseExit(checkHostHealth(input));
   assert(Exit.isFailure(result), 'health must fail');
   const failures = result.cause.reasons.flatMap((reason) => {
@@ -119,7 +116,7 @@ test('health rejects reflected requests, replayed replies and tampered signed me
   assert.deepEqual(await Effect.runPromise(checkHostHealth(input)), health);
   for (const changed of ['reflection', 'replay', 'tampered']) {
     mode = changed;
-    await fails(input, 'Unauthorized');
+    await fails(input, 'access');
   }
   mode = 'valid';
   const effect = checkHostHealth(input);
@@ -138,7 +135,7 @@ test('the server health helper rejects an unproved client without returning a si
   ]) {
     assert.throws(
       () => createHostHealthReply({ token, health, nonce: 'A'.repeat(43), authorization }),
-      refused('Unauthorized'),
+      refused('access'),
     );
   }
 });
@@ -148,7 +145,7 @@ test('wrong authentication is a typed rejection without including the token in e
     response.writeHead(401);
     response.end('private server detail');
   });
-  await fails(input, 'Unauthorized');
+  await fails(input, 'access');
   const result = await Effect.runPromiseExit(checkHostHealth(input));
   assert(Exit.isFailure(result));
   assert(!String(result.cause).includes(token));
@@ -169,10 +166,10 @@ test('host, store, protocol, version and required capability mismatches fail clo
     { capabilities: [] },
   ]) {
     value = { ...health, ...changed };
-    await fails(input, 'Incompatible');
+    await fails(input, 'incompatible');
   }
   value = { ...health, capabilities: Array(17).fill('chat-v0') };
-  await fails(input, 'Incompatible');
+  await fails(input, 'incompatible');
 });
 
 test('invalid endpoint configuration is rejected before any network request', async (t) => {
@@ -189,10 +186,10 @@ test('invalid endpoint configuration is rejected before any network request', as
     `${input.origin}#fragment`,
     input.origin.replace('//', '//user:pass@'),
   ])
-    await fails({ ...input, origin }, 'InvalidInput');
-  await fails({ ...input, token: '' }, 'InvalidInput');
-  await fails({ ...input, token: token + '\r\n' }, 'InvalidInput');
-  await fails({ ...input, expected: { ...expected, storeId: '' } }, 'InvalidInput');
+    await fails({ ...input, origin }, 'refusal');
+  await fails({ ...input, token: '' }, 'refusal');
+  await fails({ ...input, token: token + '\r\n' }, 'refusal');
+  await fails({ ...input, expected: { ...expected, storeId: '' } }, 'refusal');
   assert.equal(requests, 0);
 });
 
@@ -207,7 +204,7 @@ test('redirects are not followed with the host credential', async (t) => {
       response.end();
     }
   });
-  await fails(input, 'Unavailable');
+  await fails(input, 'unavailable');
   assert.equal(redirectedRequests, 0);
 });
 
@@ -219,14 +216,14 @@ test('health bounds actual response bytes and rejects malformed or non-JSON data
     response.write(typeof body === 'string' ? body.slice(0, 4096) : body.subarray(0, 4096));
     response.end(typeof body === 'string' ? body.slice(4096) : body.subarray(4096));
   });
-  await fails(input, 'Incompatible');
+  await fails(input, 'incompatible');
   type = 'application/json';
   body = '{';
-  await fails(input, 'Incompatible');
+  await fails(input, 'incompatible');
   body = Buffer.from([0xff]);
-  await fails(input, 'Incompatible');
+  await fails(input, 'incompatible');
   body = JSON.stringify({ ...health, padding: 'x'.repeat(9000) });
-  await fails(input, 'Incompatible');
+  await fails(input, 'incompatible');
 });
 
 test(
@@ -280,7 +277,7 @@ test('a stalled health body reaches its deadline and releases the response', asy
   assert(Exit.isFailure(exit), 'health must fail');
   assert(
     exit.cause.reasons.some(
-      (reason) => Cause.isFailReason(reason) && refused('Unavailable')(reason.error),
+      (reason) => Cause.isFailReason(reason) && refused('unavailable')(reason.error),
     ),
   );
   await closed;
@@ -300,7 +297,7 @@ test('health proofs under the protocol 1 domain are refused both ways, and capab
         nonce,
         authorization: `Moonbase-HMAC-SHA256 ${oldProof('request', nonce)}`,
       }),
-    refused('Unauthorized'),
+    refused('access'),
   );
   const daemonHealth = {
     ...health,
@@ -327,7 +324,7 @@ test('health proofs under the protocol 1 domain are refused both ways, and capab
       ),
     );
   });
-  await fails(input, 'Unauthorized');
+  await fails(input, 'access');
   reply = (nonce, authorization) =>
     createHostHealthReply({ token, health: daemonHealth, nonce, authorization });
   assert.deepEqual(await Effect.runPromise(checkHostHealth(input)), daemonHealth);
@@ -336,5 +333,5 @@ test('health proofs under the protocol 1 domain are refused both ways, and capab
     ...createHostHealthReply({ token, health: daemonHealth, nonce, authorization }),
     capabilities: ['chat-v0'],
   });
-  await fails(input, 'Unauthorized');
+  await fails(input, 'access');
 });

@@ -1,11 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { Effect, Fiber, FiberSet, Layer, Ref, Semaphore, Stream, SubscriptionRef } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/errors';
 import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import type { ChatHostHealth } from '@moonbase/contracts/host';
 import { ConnectionService, type ConnectionServiceShape } from '@moonbase/contracts/services';
-import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
+import { ConnectionError, type ConnectionFailure } from '@moonbase/contracts/connection-errors';
 import { isSameChatHost } from '@moonbase/contracts/chat-validation';
 import { checkHostHealth } from '../health.ts';
 import { readDaemonFiles, readDaemonIdentity } from './loopback-files.ts';
@@ -21,8 +20,7 @@ export type LoopbackConnectionConfiguration = {
 export const loopbackProfileId = 'loopback';
 const maximumObservers = 64;
 
-const failure = (code: ApplicationError['code'], message: string) =>
-  new ApplicationError({ code, message });
+const failure = (reason: ConnectionError['reason']) => new ConnectionError({ reason });
 
 /** A verified connection to one daemon process, which its endpoint's `pid` names. */
 type Generation = {
@@ -44,18 +42,16 @@ type Generation = {
  */
 export function LoopbackConnectionLive(
   config: LoopbackConnectionConfiguration,
-): Layer.Layer<ConnectionService, ApplicationError> {
+): Layer.Layer<ConnectionService, ConnectionError> {
   return Layer.effect(
     ConnectionService,
     Effect.gen(function* () {
       if (typeof config.directory !== 'string' || !isAbsolute(config.directory))
-        return yield* Effect.fail(
-          failure('InvalidInput', 'Supply the absolute path of the daemon data directory.'),
-        );
+        return yield* Effect.fail(failure('data-directory'));
       const label = config.label ?? 'This Mac';
       // oxlint-disable-next-line no-control-regex -- Labels reject control characters.
       if (typeof label !== 'string' || !/^[^\x00-\x1f\x7f]{1,128}$/.test(label))
-        return yield* Effect.fail(failure('InvalidInput', 'Choose a short connection label.'));
+        return yield* Effect.fail(failure('label'));
       // The expected identity is the directory's at startup; a different one later is refused.
       const expected = yield* readDaemonIdentity(config.directory);
       const state = yield* SubscriptionRef.make<ConnectionSnapshot>({
@@ -71,18 +67,15 @@ export function LoopbackConnectionLive(
       yield* Effect.addFinalizer(() => lock.withPermits(1)(Ref.set(current, undefined)));
       // Connects run in the layer's scope: closing it interrupts them before the endpoint is
       // forgotten, and one started after it is refused, so the token is never handed out again.
-      const connects = yield* FiberSet.make<ConnectionSnapshot, ApplicationError>();
-      // This connection is still on the legacy error, so a health failure becomes one here.
+      const connects = yield* FiberSet.make<ConnectionSnapshot, ConnectionFailure>();
       const verify = (origin: string, token: string) =>
-        checkHostHealth({ origin, token, expected }).pipe(
-          Effect.mapError(toConnectionApplicationError),
-        );
+        checkHostHealth({ origin, token, expected });
       const connect = Effect.gen(function* () {
         const { profile } = yield* SubscriptionRef.get(state);
         const files = yield* readDaemonFiles(config.directory).pipe(
           Effect.filterOrFail(
             (files) => isSameChatHost(files.expected, expected),
-            () => failure('Incompatible', 'The daemon’s host or store identity changed.'),
+            () => failure('daemon-identity'),
           ),
           Effect.tapError((error) =>
             Effect.andThen(
@@ -151,16 +144,14 @@ export function LoopbackConnectionLive(
             ? Effect.flatMap(FiberSet.run(connects, lock.withPermits(1)(connect)), (fiber) =>
                 Fiber.join(fiber).pipe(Effect.onInterrupt(() => Fiber.interrupt(fiber))),
               )
-            : Effect.fail(failure('InvalidInput', 'Choose the loopback connection profile.')),
+            : Effect.fail(failure('loopback-profile')),
         disconnect: ({ connectionId }) =>
           lock.withPermits(1)(
             Effect.gen(function* () {
               const snapshot = yield* SubscriptionRef.get(state);
               if (snapshot.connectionId === null) return;
               if (snapshot.connectionId !== connectionId)
-                return yield* Effect.fail(
-                  failure('Conflict', 'This disconnect names a stale connection generation.'),
-                );
+                return yield* Effect.fail(failure('stale-generation'));
               yield* Ref.set(current, undefined);
               yield* SubscriptionRef.set(state, {
                 profile: snapshot.profile,
@@ -172,12 +163,7 @@ export function LoopbackConnectionLive(
         endpoint: ({ host }) =>
           Effect.gen(function* () {
             if (!isSameChatHost(host, expected))
-              return yield* Effect.fail(
-                failure(
-                  'Conflict',
-                  'Connection target does not match the daemon’s host and store.',
-                ),
-              );
+              return yield* Effect.fail(failure('daemon-mismatch'));
             const generation = yield* Ref.get(current),
               snapshot = yield* SubscriptionRef.get(state);
             if (
@@ -185,12 +171,7 @@ export function LoopbackConnectionLive(
               snapshot.state !== 'connected' ||
               snapshot.connectionId !== generation.id
             )
-              return yield* Effect.fail(
-                failure(
-                  'Unavailable',
-                  'No verified connection is available for that host and store.',
-                ),
-              );
+              return yield* Effect.fail(failure('not-verified'));
             return structuredClone({
               origin: generation.origin,
               token: generation.token,
@@ -207,15 +188,7 @@ export function LoopbackConnectionLive(
                   Ref.modify(observers, (count) =>
                     count >= maximumObservers ? [false, count] : [true, count + 1],
                   ),
-                  (admitted) =>
-                    admitted
-                      ? Effect.void
-                      : Effect.fail(
-                          failure(
-                            'Unavailable',
-                            'Connection observer limit reached. Close an existing observation before subscribing.',
-                          ),
-                        ),
+                  (admitted) => (admitted ? Effect.void : Effect.fail(failure('observer-limit'))),
                 ),
                 () => Ref.update(observers, (count) => count - 1),
               ),

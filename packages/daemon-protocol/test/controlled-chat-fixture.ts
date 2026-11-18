@@ -2,7 +2,8 @@ import { randomBytes } from 'node:crypto';
 import { Cause, Effect, Queue, Stream } from 'effect';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
 import type { ChatServiceShape } from '@moonbase/contracts/services';
-import { ApplicationError } from '@moonbase/contracts/workspace';
+import { isChatError, type ChatError } from '@moonbase/contracts/chat-errors';
+import { HostUnavailableError } from '@moonbase/contracts/host-errors';
 
 /** 32 random bytes in canonical base64url: a token, nonce or connection ID. */
 export const nonce = () => randomBytes(32).toString('base64url');
@@ -47,7 +48,9 @@ export const snapshotOf = (text: string | null, entries = 0, seed = ''): ChatSna
 
 /** A chat service whose watches and commands the test drives. */
 export function controlledChat() {
-  const watches = new Set<Queue.Queue<ChatSnapshot, ApplicationError | Cause.Done>>(),
+  const watches = new Set<
+      Queue.Queue<ChatSnapshot, ChatError | HostUnavailableError | Cause.Done>
+    >(),
     calls: string[] = [];
   let current = snapshotOf('');
   let closes = 0;
@@ -62,17 +65,17 @@ export function controlledChat() {
         if (handler) return handler(input, signal);
         if (operation === 'getChat') return current;
         if (operation === 'listChats') return { conversations: [], nextCursor: null };
-        throw new ApplicationError({ code: 'Unavailable', message: 'Unexpected command.' });
+        throw new HostUnavailableError({ reason: 'failed' });
       },
       catch: (error) =>
-        ApplicationError.is(error)
+        isChatError(error) || error instanceof HostUnavailableError
           ? error
-          : new ApplicationError({ code: 'Unavailable', message: 'Failed.' }),
+          : new HostUnavailableError({ reason: 'failed' }),
     });
   const client = new Proxy(
     {
       watch: () =>
-        Stream.callback<ChatSnapshot, ApplicationError>((queue) =>
+        Stream.callback<ChatSnapshot, ChatError | HostUnavailableError>((queue) =>
           Effect.acquireRelease(
             Effect.sync(() => {
               watches.add(queue);
@@ -113,7 +116,7 @@ export function controlledChat() {
       for (const queue of watches) Queue.offerUnsafe(queue, snapshot);
     },
     /** Ends every open watch with `error`. */
-    end(error: ApplicationError) {
+    end(error: ChatError | HostUnavailableError) {
       for (const queue of watches) Queue.failCauseUnsafe(queue, Cause.fail(error));
       watches.clear();
     },

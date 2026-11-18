@@ -50,12 +50,12 @@ const remoteErrors = [
     ),
   ),
 ];
-/** The client's own text for a refusal a host recorded, by its code. */
+/** The client's own text for a refusal a host recorded, by its kind. */
 const recordedRefusals = {
-  InvalidInput: 'The host refused this request as invalid.',
-  Unauthorized: 'The host did not authorize this request.',
-  Conflict: 'The host found a conflict with this request.',
-  Incompatible: 'The host’s authority or protocol is incompatible.',
+  invalid: 'The host refused this request as invalid.',
+  unauthorized: 'The host did not authorize this request.',
+  conflict: 'The host found a conflict with this request.',
+  incompatible: 'The host’s authority or protocol is incompatible.',
 } as const;
 
 /**
@@ -102,7 +102,10 @@ export function presentWorkspaceError(
     case 'WorkspaceStoreError':
       return new WorkspaceStoreError({ failure: error.failure });
     case 'RecordedRefusalError':
-      return new RecordedRefusalError({ code: error.code, text: recordedRefusals[error.code] });
+      return new RecordedRefusalError({
+        refusal: error.refusal,
+        text: recordedRefusals[error.refusal],
+      });
     default:
       return error;
   }
@@ -261,7 +264,7 @@ export const RemoteWorkspaceHostLive = (config: {
                             checkout,
                             paths: [''],
                             ...(!readySeen && value.ready ? { ready: true } : {}),
-                            ...(value.error ? { error: 'The workspace watch failed.' } : {}),
+                            ...(value.failed ? { error: 'The workspace watch failed.' } : {}),
                           },
                         ],
                       ] as const;
