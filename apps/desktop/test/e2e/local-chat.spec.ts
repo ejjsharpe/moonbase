@@ -27,6 +27,7 @@ import {
   prepareDaemonData,
   readDaemonPid,
   readFauxCalls,
+  readGateIds,
   stopDaemon,
   writeFauxScript,
 } from '../fixtures/faux-daemon.mjs';
@@ -383,6 +384,40 @@ test('the window opens while the daemon starts; a failed first start leaves file
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     await expect(page.getByText('Started after the retry', { exact: true })).toBeVisible();
     expect(isAlive((await readDaemonPid(profile.daemon))!)).toBe(true);
+  } finally {
+    try {
+      await profile.exit(launched);
+    } finally {
+      await profile.release();
+    }
+  }
+});
+
+test('Quit while a crashed daemon is starting again stops the new one’s whole process group', async () => {
+  test.setTimeout(60_000);
+  const profile = await localProfile('moonbase-local-quit-start-', {});
+  const gate = join(profile.root, 'gate');
+  await mkdir(gate);
+  await writeFile(join(gate, 'start'), '');
+  const launched = await profile.launch({ MOONBASE_TEST_DAEMON_GATE: gate });
+  const { app, page } = launched;
+  try {
+    // The chat list watches the daemon.
+    await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+    await expect(page.getByLabel('Chat configuration')).toHaveCount(0);
+    await expect.poll(() => readDaemonPid(profile.daemon)).toBeDefined();
+    const pid = (await readDaemonPid(profile.daemon))!;
+    // The next start is held, with a member of its process group that would outlive its leader.
+    await rm(join(gate, 'start'));
+    await writeFile(join(gate, 'group'), '');
+    process.kill(pid, 'SIGKILL');
+    // The watch reconnects, which starts a daemon again.
+    await expect.poll(() => readGateIds(gate, 'members')).toHaveLength(1);
+    const leader = (await readGateIds(gate, 'starts')).at(-1)!,
+      [member] = await readGateIds(gate, 'members');
+    await app.evaluate(({ app }) => app.quit());
+    await waitForExit(launched.child);
+    await expect.poll(() => [isAlive(leader), isAlive(member!)]).toEqual([false, false]);
   } finally {
     try {
       await profile.exit(launched);

@@ -131,7 +131,7 @@ for (const entry of [
   'daemon-protocol/src/client/loopback.ts',
   'src/main/daemon/local-daemon.ts',
   'src/main/daemon/daemon-command.ts',
-  'src/main/daemon/local-daemon-client.ts',
+  'src/main/daemon/daemon-process.ts',
 ])
   assert(
     mainInputs.some((path) => path.endsWith(entry)),
