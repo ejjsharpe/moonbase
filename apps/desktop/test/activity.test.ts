@@ -3,12 +3,9 @@ import { test } from 'node:test';
 import type { ChatEntry, ChatTranscript, ChatTranscriptPart } from '@moonbase/contracts/chat';
 import {
   classifyEntry,
-  collectActivityEvidence,
   describeActivityHeadline,
   findAnsweredThoughts,
-  findReadingAnchor,
   getActivityState,
-  getEntryTranscripts,
   getThoughtLine,
   getToolSummary,
   groupActivitySteps,
@@ -17,14 +14,17 @@ import {
   splitCommand,
   summarizeActivityHeadlines,
   type ActivityHeadline,
+} from '../src/renderer/chat/transcript/activity/activity.ts';
+import {
+  findReadingAnchor,
   groupTranscriptRows,
   type TranscriptItem,
-} from '../src/renderer/chat/transcript/activity.ts';
+} from '../src/renderer/chat/transcript/list/list-items.ts';
 import {
   parseRecordedPatch,
   type PatchLine,
-} from '../src/renderer/chat/transcript/recorded-patch-model.ts';
-import { getTranscriptParts } from '../src/renderer/chat/transcript/transcript-parts.ts';
+} from '../src/renderer/chat/transcript/part/recorded-patch-model.ts';
+import { collectResultsByCall } from '@moonbase/application/chat';
 const part = (
   id: string,
   kind: ChatTranscriptPart['kind'],
@@ -55,89 +55,6 @@ const transcript = (entryId: string, parts: ChatTranscriptPart[]): ChatTranscrip
   parts,
   nextCursor: null,
 });
-const liveTranscript = (parts: ChatTranscriptPart[]): ChatTranscript => ({
-  ...transcript('', parts),
-  source: {
-    kind: 'live',
-    target: transcript('', []).source.target,
-    submissionId: 'submission',
-    taskId: 'task',
-    attempt: 0,
-    incarnation: 'a'.repeat(64),
-  },
-});
-test('stale exact live descriptions use current prefix content and selection while retaining recorded paged order', () => {
-  const loaded = liveTranscript([
-    part('z-answer', 'text', { text: 'Before' }),
-    part('q-thought', 'thinking', { text: 'Thought first', bytes: 13 }),
-    part('b-output', 'result', { text: 'Output first', bytes: 12, state: 'running' }),
-    part('y-details', 'details'),
-    part('a-paged-only', 'details', { text: 'Retained fifth part' }),
-  ]);
-  const current = liveTranscript([
-    loaded.parts[0]!,
-    { ...loaded.parts[1]!, text: 'Thought first and next', bytes: 22, revision: 'b'.repeat(64) },
-    {
-      ...loaded.parts[2]!,
-      text: 'Output first and next',
-      bytes: 21,
-      revision: 'c'.repeat(64),
-      state: 'failed',
-    },
-    loaded.parts[3]!,
-  ]);
-  const parts = getTranscriptParts(current, { ...loaded, status: 'source-changed' });
-  assert.deepEqual(
-    parts.map((part) => part.partId),
-    ['z-answer', 'q-thought', 'b-output', 'y-details', 'a-paged-only'],
-  );
-  assert.equal(parts[1]?.text, 'Thought first and next');
-  assert.equal(parts[1]?.bytes, 22);
-  assert.equal(parts[1]?.revision, 'b'.repeat(64));
-  assert.equal(parts[2]?.text, 'Output first and next');
-  assert.equal(parts[2]?.bytes, 21);
-  assert.equal(parts[2]?.revision, 'c'.repeat(64));
-  assert.equal(parts[2]?.state, 'failed');
-  assert.equal(parts[4], loaded.parts[4]);
-});
-test('current loaded pages stay authoritative until stale, and empty pages keep their preview', () => {
-  const current = liveTranscript([part('part', 'thinking', { text: 'Observed' })]);
-  const parts = [part('part', 'thinking', { text: 'Newly read' })];
-  for (const status of ['partial', 'loading', 'complete', 'error'] as const)
-    assert.equal(getTranscriptParts(current, { ...current, parts, status }), parts);
-  assert.equal(
-    getTranscriptParts(current, { ...current, parts: [], status: 'error' }),
-    current.parts,
-  );
-  const durable = transcript('durable', current.parts);
-  assert.equal(getTranscriptParts(durable, { ...durable, parts, status: 'source-changed' }), parts);
-});
-test('foreign targets, entries and live attempts cannot supply loaded descriptions', () => {
-  const current = liveTranscript([part('part', 'thinking', { text: 'Current' })]);
-  const source = current.source;
-  assert.equal(source.kind, 'live');
-  const target = source.target;
-  for (const foreign of [
-    { ...source, target: { ...target, host: { ...target.host, hostId: 'foreign' } } },
-    { ...source, target: { ...target, host: { ...target.host, storeId: 'foreign' } } },
-    { ...source, target: { ...target, actorId: 'foreign' } },
-    { ...source, target: { ...target, conversationId: 'foreign' } },
-    { ...source, submissionId: 'foreign' },
-    { ...source, taskId: 'foreign' },
-    { ...source, attempt: 1 },
-    { ...source, incarnation: 'b'.repeat(64) },
-    transcript('foreign', []).source,
-  ]) {
-    assert.equal(
-      getTranscriptParts(current, {
-        source: foreign,
-        parts: [part('foreign', 'thinking', { text: 'Foreign' })],
-        status: 'source-changed',
-      }),
-      current.parts,
-    );
-  }
-});
 test('consecutive activity leaves every authored answer at its recorded position', () => {
   const parts = [
     part('before', 'text'),
@@ -163,39 +80,6 @@ test('consecutive activity leaves every authored answer at its recorded position
     parts,
   );
 });
-for (const state of ['failed', 'interrupted', 'running'] as const)
-  test(`empty manifest retains preview ${state} evidence for the exact originating call`, () => {
-    const call = part('call', 'arguments', { state: 'requested' });
-    const origin = transcript('origin', [call]);
-    const result = transcript('result', [
-      part('result', 'result', {
-        role: 'tool',
-        state,
-        pairing: 'matched',
-        call: { entryId: 'origin', partId: 'call' },
-      }),
-    ]);
-    const entries: ChatEntry[] = [
-      { id: 'origin', role: 'assistant', text: '', truncated: false, transcript: origin },
-      { id: 'result', role: 'tool', text: '', truncated: false, transcript: result },
-    ];
-    for (const manifest of [null, { source: result.source, parts: [] }]) {
-      const evidence = collectActivityEvidence(getEntryTranscripts(entries, manifest));
-      assert.equal(getActivityState(call, origin, evidence), state);
-    }
-  });
-test('only a nonempty manifest with the exact result source can replace preview evidence', () => {
-  const result = transcript('result', [part('result', 'result', { state: 'failed' })]);
-  const entries: ChatEntry[] = [
-    { id: 'result', role: 'tool', text: '', truncated: false, transcript: result },
-  ];
-  const loaded = { ...result, parts: [part('result', 'result', { state: 'completed' })] };
-  assert.equal(getEntryTranscripts(entries, loaded)[0]?.parts[0]?.state, 'completed');
-  const foreignTarget = structuredClone(loaded);
-  foreignTarget.source.target.host.storeId = 'other';
-  for (const manifest of [transcript('other-entry', loaded.parts), foreignTarget])
-    assert.equal(getEntryTranscripts(entries, manifest)[0]?.parts[0]?.state, 'failed');
-});
 test('reused IDs, names and ambiguous results never provide another originating call state', () => {
   const call = part('call', 'arguments', {
     callId: 'reused',
@@ -212,7 +96,7 @@ test('reused IDs, names and ambiguous results never provide another originating 
     pairing: 'matched',
     call: { entryId: 'first', partId: 'call' },
   });
-  const evidence = collectActivityEvidence([
+  const results = collectResultsByCall([
     first,
     second,
     transcript('result', [result]),
@@ -220,11 +104,11 @@ test('reused IDs, names and ambiguous results never provide another originating 
       { ...result, pairing: 'ambiguous', call: { entryId: 'second', partId: 'call' } },
     ]),
   ]);
-  assert.equal(getActivityState(call, first, evidence), 'failed');
-  assert.equal(getActivityState(call, second, evidence), 'requested');
+  assert.equal(getActivityState(call, first, results), 'failed');
+  assert.equal(getActivityState(call, second, results), 'requested');
   const foreign = transcript('first', [call]);
   foreign.source.target.host.storeId = 'other';
-  assert.equal(getActivityState(call, foreign, evidence), 'requested');
+  assert.equal(getActivityState(call, foreign, results), 'requested');
   assert.equal(getToolSummary({ ...call, text: '{"path":"src/moon.ts"}' }), 'read · src/moon.ts');
   assert.equal(
     getToolSummary({ ...call, toolName: 'bash', text: '{"command":"printf moon\\n"}' }),
@@ -360,9 +244,9 @@ test('a shell line names the program it runs past cd hops, assignments and wrapp
 test('a step headline takes the tense of its state and its output from another row', () => {
   const headline = (parts: ChatTranscriptPart[], answers: ChatTranscript[] = []) => {
     const origin = transcript('origin', parts);
-    const evidence = collectActivityEvidence([origin, ...answers]);
+    const results = collectResultsByCall([origin, ...answers]);
     return groupActivitySteps(origin.parts, 'origin').map((step) =>
-      describeActivityHeadline(step, origin, evidence),
+      describeActivityHeadline(step, origin, results),
     );
   };
   const answer = (state: ChatTranscriptPart['state'], extra: ChatTranscriptPart[] = []) =>

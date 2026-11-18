@@ -2,7 +2,7 @@ import { useCallback, useRef, useState, type KeyboardEvent } from 'react';
 import type { ChatTranscriptPart, ChatTranscriptSource } from '@moonbase/contracts/chat';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import type { TranscriptContentState } from '@moonbase/application/chat';
-import { readingPin, useReadingPin } from './reading-pin.ts';
+import { readingPin, useReadingPin } from '../reading-pin.ts';
 
 type PartBody = {
   source: ChatTranscriptSource;

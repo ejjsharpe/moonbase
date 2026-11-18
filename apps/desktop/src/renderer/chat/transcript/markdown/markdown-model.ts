@@ -1,8 +1,8 @@
 import { LRUCache } from 'lru-cache';
 import type { Root } from 'mdast';
 import { EXIT, visit } from 'unist-util-visit';
-import { parseTranscriptMarkdown } from '../../../ipc/transcript-markdown.ts';
-import { fitsStructuredSource } from './source-limits.ts';
+import { parseTranscriptMarkdown } from '../../../../ipc/transcript-markdown.ts';
+import { fitsStructuredSource } from '../source-limits.ts';
 /** `signature` changes whenever the block's rendering can: its source text or its offset. */
 export type MarkdownBlock = { key: string; tree: Root; signature: string };
 type ParsedMessage = { source: string; blocks: MarkdownBlock[] };
@@ -19,6 +19,14 @@ export class MarkdownCache {
     max: cacheLimits.messages,
     maxSize: cacheLimits.bytes,
     sizeCalculation: ({ source }, key) => retainedBytesPerUnit * (key.length + source.length),
+  });
+  /** Each message's latest blocks, whose unchanged blocks the next revision reuses. */
+  private latest = new LRUCache<string, MarkdownBlock[]>({
+    max: cacheLimits.messages,
+    maxSize: cacheLimits.bytes,
+    sizeCalculation: (blocks, key) =>
+      retainedBytesPerUnit *
+      blocks.reduce((size, block) => size + block.signature.length, key.length),
   });
   private lexed = 0;
   get stats() {
@@ -42,7 +50,7 @@ export class MarkdownCache {
       definitions = true;
       return EXIT;
     });
-    const blocks = (
+    const parsed = (
       definitions ? [tree] : tree.children.map((node): Root => ({ type: 'root', children: [node] }))
     ).map((block, index) => ({
       // A merged document must not reuse a pinned split block's DOM.
@@ -50,6 +58,14 @@ export class MarkdownCache {
       tree: block,
       signature: definitions ? source : getBlockSignature(block, source),
     }));
+    // A block that renders the same keeps its identity, so a growing message re-renders only the
+    // blocks that changed.
+    const previous = this.latest.get(identity) ?? [];
+    const blocks = parsed.map(
+      (block) =>
+        previous.find((old) => old.key === block.key && old.signature === block.signature) ?? block,
+    );
+    this.latest.set(identity, blocks);
     this.messages.set(key, { source, blocks });
     return blocks;
   }
@@ -69,6 +85,7 @@ export class MarkdownCache {
   }
   clear() {
     this.messages.clear();
+    this.latest.clear();
   }
 }
 const textEncoder = new TextEncoder();

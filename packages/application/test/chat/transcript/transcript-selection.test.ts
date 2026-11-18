@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Effect } from 'effect';
-import { ChatSelection } from '@moonbase/application/chat';
+import { ChatSelection, type ChatSelectionShape } from '@moonbase/application/chat';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
 import {
   chatFixture,
@@ -98,4 +98,24 @@ test('refresh reopens a transcript that failed', async (t) => {
   assert.equal(state.snapshot?.conversation.target.conversationId, target.conversationId);
   await turn();
   assert.equal(f.subscriptions, 1, 'the failed watch was released');
+});
+
+test('a view update applies to the open chat’s current view in one step, and to no other chat', async (t) => {
+  const f = await chatFixture(t, { local: true });
+  await f.start();
+  await f.select(target);
+  await until(f, (s) => s.transcript.observation === 'local');
+  const update = (
+    to: typeof target,
+    change: Parameters<ChatSelectionShape['updateTranscriptView']>[1],
+  ) => f.run(Effect.flatMap(ChatSelection, (s) => s.updateTranscriptView(to, change)));
+  await update(target, (view) => ({ ...view, expanded: [...view.expanded, 'kept'] }));
+  // Each update reads the view the one before saved.
+  await update(target, (view) => ({ ...view, anchor: { key: 'entry:e1', offset: 4 } }));
+  let { view } = (await f.state()).transcript;
+  assert.deepEqual(view, { anchor: { key: 'entry:e1', offset: 4 }, expanded: ['kept'] });
+  // A view saved by a chat no longer open lands nowhere.
+  await update({ ...target, conversationId: 'other' }, (view) => ({ ...view, anchor: null }));
+  ({ view } = (await f.state()).transcript);
+  assert.deepEqual(view.anchor, { key: 'entry:e1', offset: 4 });
 });

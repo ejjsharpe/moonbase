@@ -162,8 +162,10 @@ export function ChatView({
       {state.selected && (
         <Transcript
           key={controller.backendId + JSON.stringify(state.selected)}
-          controller={controller}
-          state={state}
+          services={controller.context}
+          atoms={controller.atoms}
+          backendId={controller.backendId}
+          target={state.selected}
           native={transcriptNative}
           runner={runner}
         />

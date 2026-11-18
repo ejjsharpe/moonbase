@@ -32,6 +32,7 @@ export function reuseEntry(old: ChatEntry | undefined, next: ChatEntry): ChatEnt
       ...next,
       transcript: {
         ...next.transcript,
+        source: old.transcript.source,
         parts: reuseParts(old.transcript.parts, next.transcript.parts),
       },
     };
@@ -88,7 +89,10 @@ export function checkSnapshotSources(input: ChatSnapshot, target: ChatTarget) {
   )
     throw new TranscriptReadError({ problem: 'live-run-mismatch' });
 }
-/** Reuses retained values the snapshot repeats, so unchanged rows keep their identity. */
+/**
+ * Reuses retained values the snapshot repeats, so unchanged rows, sources and parts keep their
+ * identity.
+ */
 export function reuseSnapshot(
   input: ChatSnapshot,
   old: ChatSnapshot | undefined,
@@ -110,6 +114,7 @@ export function reuseSnapshot(
       ...run,
       transcript: {
         ...run.transcript,
+        source: old.run.transcript.source,
         parts: reuseParts(old.run.transcript.parts, run.transcript.parts),
       },
     };

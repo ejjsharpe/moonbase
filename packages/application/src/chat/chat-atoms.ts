@@ -39,6 +39,12 @@ export function makeChatAtoms(context: Context.Context<ChatServices>) {
         sends: get(sends),
       }),
     ),
+    /** The open chat's latest snapshot. */
+    snapshot: Atom.readable((get) => get(selection).snapshot),
+    /** The open chat's transcript. */
+    transcript: Atom.readable((get) => get(selection).transcript),
+    /** Whether the host is verified and the chat can act. */
+    ready: Atom.readable((get) => get(link).ready),
     /** Provider setup as a view shows it, or null when the host serves none. */
     providers: Atom.readable((get) => {
       if (!setup.available) return null;

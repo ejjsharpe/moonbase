@@ -1,26 +1,25 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import type { TranscriptContentState } from '@moonbase/application/chat';
 import type { ChatTranscriptPart, ChatTranscriptSource } from '@moonbase/contracts/chat';
-import type { DesktopChat } from '../desktop-chat.ts';
+import { useTranscript } from '../transcript-context.ts';
 
 /**
  * A part's loaded content: its retained chunks, decoded from `base`, or the summary text when the
  * part is not truncated. `wanted` reads a truncated part's first chunk.
  */
 export function usePartContent({
-  controller,
   source,
   part,
   contents,
   wanted,
 }: {
-  controller: DesktopChat;
   source: ChatTranscriptSource;
   part: ChatTranscriptPart;
   /** Loaded content of this part's source. */
   contents: readonly TranscriptContentState[];
   wanted: boolean;
 }) {
+  const { act, selection } = useTranscript();
   const content = contents.find(
     (item) =>
       item.selection.partId === part.partId &&
@@ -29,13 +28,15 @@ export function usePartContent({
   );
   const load = useCallback(
     (restart = false) => {
-      void controller.loadTranscriptPart(
-        source,
-        { partId: part.partId, bytes: part.bytes, revision: part.revision },
-        restart,
+      void act(
+        selection.loadTranscriptPart(
+          source,
+          { partId: part.partId, bytes: part.bytes, revision: part.revision },
+          restart,
+        ),
       );
     },
-    [controller, source, part.partId, part.bytes, part.revision],
+    [act, selection, source, part.partId, part.bytes, part.revision],
   );
   useEffect(() => {
     if (wanted && part.truncated && !content) load();

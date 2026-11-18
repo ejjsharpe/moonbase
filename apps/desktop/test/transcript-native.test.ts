@@ -4,7 +4,7 @@ import { test, after } from 'node:test';
 import { visit } from 'unist-util-visit';
 import type { Code } from 'mdast';
 import { parseTranscriptMarkdown } from '../src/ipc/transcript-markdown.ts';
-import { MarkdownCache } from '../src/renderer/chat/transcript/markdown-model.ts';
+import { MarkdownCache } from '../src/renderer/chat/transcript/markdown/markdown-model.ts';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import {
   maximumChatReplyBytes,

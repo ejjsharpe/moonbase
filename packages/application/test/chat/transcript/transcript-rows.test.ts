@@ -80,6 +80,7 @@ test('the live response is a row after the stored entries', async (t) => {
   rows = f.state.rows;
   assert.notEqual(rows.at(-1), live);
   assert.equal(rows.at(-1)!.key, 'live:send');
+  assert.equal(rows.at(-1)!.entry.transcript?.source, live.entry.transcript?.source, 'same source');
   assert(rows.slice(0, -1).every((row, index) => row === stored[index]));
   // A run whose task is completing has no transcript; its live row shows the text preview alone.
   await f.publish(running(f.snapshot, 'completing', false));
