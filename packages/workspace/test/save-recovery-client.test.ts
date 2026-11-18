@@ -1,3 +1,4 @@
+import { isConflict, isRefusal, isUncertain } from '@moonbase/contracts/error-groups';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { writeFileSync, readFileSync, chmodSync, existsSync } from 'node:fs';
@@ -5,7 +6,7 @@ import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
 import { makeWorkspaceClient } from './workspace-client-fixture.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
-import { fixture, rejects } from './workspace-fixture.ts';
+import { fixture } from './workspace-fixture.ts';
 import { draftsOf, seed } from './recovery-fixture.ts';
 
 const bufferId = 'file';
@@ -33,7 +34,7 @@ test('public client saves, rejects changed retries and preserves original dirty 
     );
     await assert.rejects(
       f.client.command('saveFile', { ...input, text: 'changed retry' }),
-      rejects('Conflict'),
+      isConflict,
     );
     assert.deepEqual(await f.client.command('saveFile', input), conflict);
     assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'external');
@@ -93,7 +94,7 @@ test("independent clients' recoveries do not overwrite one another; an invalid b
         text: 'safe',
         disk: { ...disk, version: 'wrong' },
       }),
-      rejects('InvalidInput'),
+      isRefusal,
     );
   } finally {
     await f.close();
@@ -263,7 +264,7 @@ test('save rejects a replaced staging object and never publishes or removes the 
         text: 'intended bytes',
         expectedVersion: disk.version,
       }),
-      rejects('Uncertain'),
+      isUncertain,
     );
     const stage = readFileSync(stageRecord, 'utf8');
     assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'original');
@@ -306,7 +307,7 @@ test('restart recovers the admitted Save text even when no earlier draft publica
       text: 'admitted unsaved text',
       expectedVersion: disk.version,
     };
-    await assert.rejects(client.command('saveFile', save), rejects('Uncertain'));
+    await assert.rejects(client.command('saveFile', save), isUncertain);
     await runtime.dispose();
     const restarted = f.start();
     try {

@@ -137,7 +137,12 @@ export const HostRequestRecordSchema = struct({
     hostInputSchemas.turnChatIntoProject,
   ]),
   result: optional(CheckoutTargetSchema),
-  error: optional(struct({ code: Schema.String, message: Schema.String })),
+  error: optional(
+    struct({
+      refusal: Schema.Literals(['invalid', 'unauthorized', 'conflict', 'incompatible']),
+      message: Schema.String,
+    }),
+  ),
 });
 export type Approval = typeof ApprovalSchema.Type;
 export type HostSaveRecord = typeof HostSaveRecordSchema.Type;

@@ -1,3 +1,9 @@
+import {
+  isConflict,
+  isRefusal,
+  isStorageFailure,
+  isUncertain,
+} from '@moonbase/contracts/error-groups';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -12,7 +18,6 @@ import {
   draftsOf,
   quote,
   fixture,
-  isError,
   seed,
   waitFor,
   type SeedDraft,
@@ -149,7 +154,7 @@ test('copy recovery overflow retains a valid snapshot and pending evidence acros
         operationClientId: 'alice',
         id: 'overflow',
       }),
-      isError('Persistence'),
+      isStorageFailure,
     );
     await current.runtime.dispose();
     current = f.start();
@@ -185,7 +190,7 @@ for (const competing of [false, true])
           expectedVersion: admittedBaseline.version,
           text: 'newest admitted text',
         }),
-        isError('Uncertain'),
+        isUncertain,
       );
       if (competing) await retype(current.client, seeded, () => 'later competing text');
       writeFileSync(join(f.root, 'file.txt'), 'external bytes');
@@ -284,7 +289,7 @@ for (const kind of ['move', 'copy'] as const)
       ])
         await assert.rejects(
           current.client.command('updateLayout', { clientId: 'alice', layout: invalid }),
-          isError('InvalidInput'),
+          isRefusal,
         );
     } finally {
       await current.runtime.dispose();
@@ -323,7 +328,7 @@ for (const competing of [false, true])
             expectedVersion: disk.version,
             text: 'admitted ' + target.path,
           }),
-          isError('Uncertain'),
+          isUncertain,
         );
       if (competing) await retype(current.client, drafts, (d) => 'later ' + d.target.path);
       if (!competing)
@@ -382,7 +387,7 @@ test('interrupted Save group capacity overflow retains the entire prior valid sn
           expectedVersion: disk.version,
           text: 'admitted ' + path,
         }),
-        isError('Uncertain'),
+        isUncertain,
       );
     for (const path of ['a.txt', 'b.txt']) writeFileSync(join(f.root, path), 'external');
     for (let restart = 0; restart < 2; restart++) {
@@ -427,7 +432,7 @@ test('a client publication during grouped disk inspection stays authoritative', 
           text: 'admitted ' + path,
           expectedVersion: disk.version,
         }),
-        isError('Uncertain'),
+        isUncertain,
       );
     await current.runtime.dispose();
     current = f.start(paused);
@@ -525,7 +530,7 @@ test('retries cannot split an overflowing interrupted Save restoration group', a
       text: 'admitted ' + path,
     }));
     for (const input of inputs)
-      await assert.rejects(current.client.command('saveFile', input), isError('Uncertain'));
+      await assert.rejects(current.client.command('saveFile', input), isUncertain);
     for (let restart = 0; restart < 2; restart++) {
       await current.runtime.dispose();
       current = f.start();
@@ -535,7 +540,7 @@ test('retries cannot split an overflowing interrupted Save restoration group', a
         inputs.map((input) => current.client.command('saveFile', input)),
       );
       assert(
-        retries.every((r) => r.status === 'rejected' && isError('Persistence')(r.reason)),
+        retries.every((r) => r.status === 'rejected' && isStorageFailure(r.reason)),
         'Every retry must preserve the complete rejected group and report its persistence failure.',
       );
       const after = await load(current.client);
@@ -580,7 +585,7 @@ for (const sibling of ['save', 'move'] as const)
             expectedVersion: drafts[0].disk.version,
             text: 'admitted a',
           }),
-          isError('Uncertain'),
+          isUncertain,
         );
         writeFileSync(join(f.root, 'a.txt'), 'external');
         if (sibling === 'save') {
@@ -667,7 +672,7 @@ test('an edit during Save preflight wins over the interrupted save it began befo
     await waitFor(ready);
     await retype(current.client, seeded, () => 'newer client edit');
     writeFileSync(release, 'continue');
-    await assert.rejects(saving, isError('Uncertain'));
+    await assert.rejects(saving, isUncertain);
     writeFileSync(join(f.root, 'file.txt'), 'external');
     await current.runtime.dispose();
     current = f.start();
@@ -702,7 +707,7 @@ test('unresolved same-target text blocks newer Save and Move effects', async () 
         expectedVersion: disk.version,
         text: 'pending text',
       }),
-      isError('Uncertain'),
+      isUncertain,
     );
     await assert.rejects(
       client.command('saveFile', {
@@ -712,7 +717,7 @@ test('unresolved same-target text blocks newer Save and Move effects', async () 
         expectedVersion: disk.version,
         text: 'later text',
       }),
-      isError('Uncertain'),
+      isUncertain,
     );
     const sources = await client.command('inspectEntries', { checkout, paths: ['file.txt'] });
     await assert.rejects(
@@ -724,7 +729,7 @@ test('unresolved same-target text blocks newer Save and Move effects', async () 
         sources,
         destination: 'moved.txt',
       }),
-      isError('Uncertain'),
+      isUncertain,
     );
     assert.equal(readFileSync(count, 'utf8'), 'interrupted\n');
     assert.equal(draftsOf((await load(client)).state)[0]?.text, 'pending text');
@@ -757,7 +762,7 @@ test('an interrupted save the disk no longer shows settles as a conflict and blo
           expectedVersion,
         }),
       );
-    await assert.rejects(save('alice', 'admitted', disk.version), isError('Uncertain'));
+    await assert.rejects(save('alice', 'admitted', disk.version), isUncertain);
     writeFileSync(join(f.root, 'file.txt'), 'external');
     const external = await Effect.runPromise(host.readFile(target));
     // Another client may still save there: the host settles the first save from the disk.
@@ -804,7 +809,7 @@ for (const sibling of ['save', 'move'] as const)
           expectedVersion: disk.version,
           text: 'pending a',
         }),
-        isError('Uncertain'),
+        isUncertain,
       );
       writeFileSync(join(f.root, 'file.txt'), 'external');
       const saveInput = {
@@ -890,7 +895,7 @@ test('complete restoration retries wait for an active sibling admission without 
       expectedVersion: disk.version,
       text: 'pending a',
     };
-    await assert.rejects(client.command('saveFile', input), isError('Uncertain'));
+    await assert.rejects(client.command('saveFile', input), isUncertain);
     const lock = new DatabaseSync(join(f.base, 'state/moonbase-workspace-v1.sqlite'));
     try {
       lock.exec('BEGIN IMMEDIATE');
@@ -908,7 +913,7 @@ test('complete restoration retries wait for an active sibling admission without 
       text: 'saved b',
     });
     await waitFor(ready);
-    await assert.rejects(client.command('saveFile', input), isError('Persistence'));
+    await assert.rejects(client.command('saveFile', input), isStorageFailure);
     const during = await load(client);
     assert.deepEqual(during.state, snapshot);
     writeFileSync(release, 'continue');
@@ -961,7 +966,7 @@ if [ "$1" = replace ]; then printf 'replace\\n' >> ${quote(count)}; if [ "$2" = 
       await waitFor(ready);
       await retype(current.client, seeded, (d) => 'later explicit ' + d.target.path);
       writeFileSync(release, 'continue');
-      await assert.rejects(saving, isError('Uncertain'));
+      await assert.rejects(saving, isUncertain);
       if (lost === 'stage') writeFileSync(join(f.root, 'file.txt'), 'external');
       const actual = await current.client.command('readFile', target);
       const saved = await assertOnePublication(f.base, () =>
@@ -991,7 +996,7 @@ if [ "$1" = replace ]; then printf 'replace\\n' >> ${quote(count)}; if [ "$2" = 
         assert.deepEqual(replay.disk, actual);
         await assert.rejects(
           current.client.command('saveFile', { ...input, text: 'changed payload' }),
-          isError('Conflict'),
+          isConflict,
         );
       }
       assert.equal(

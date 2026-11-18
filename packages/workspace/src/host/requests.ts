@@ -6,11 +6,17 @@ import {
   CheckoutChangedError,
   InvalidRequestError,
   isWorkspaceHostError,
-  toWireError,
   WorkspaceConflictError,
-  WorkspaceUnavailableError,
   WorkspaceUnsupportedError,
+  type RecordedRefusalError,
 } from '@moonbase/contracts/workspace-host-errors';
+import {
+  isAccessRefusal,
+  isConflict,
+  isIncompatible,
+  isRefusal,
+  isUncertain,
+} from '@moonbase/contracts/error-groups';
 import { join } from 'node:path';
 import { asWorkspaceFailure, attempt, type WorkspaceFailure } from '../attempt.ts';
 import type { HostRequestRecord } from '../schema.ts';
@@ -20,18 +26,18 @@ import { HostJournal, type RequestOperation } from './host-journal.ts';
 import { HostSettings } from './host-settings.ts';
 import { WorkspaceWorktrees } from './worktrees.ts';
 
-/** Refusals that repeat for the same input; every other failure may succeed on retry. */
-const deterministicRefusals: ReadonlySet<string> = new Set([
-  'InvalidInput',
-  'Unauthorized',
-  'Conflict',
-  'Incompatible',
-]);
-/** The wire code and text a request's failure is recorded with; anything unknown is `Unavailable`. */
-const recordedFailure = (error: unknown) =>
-  toWireError(
-    isWorkspaceHostError(error) ? error : new WorkspaceUnavailableError({ cause: 'failed' }),
-  );
+/**
+ * The refusal a request's failure is recorded as, for one that repeats for the same input; none for
+ * a failure that may succeed on retry, an unknown one included.
+ */
+const getRecordedRefusal = (error: unknown): RecordedRefusalError['refusal'] | undefined => {
+  if (!isWorkspaceHostError(error)) return undefined;
+  if (isRefusal(error)) return 'invalid';
+  if (isAccessRefusal(error)) return 'unauthorized';
+  if (isConflict(error)) return 'conflict';
+  if (isIncompatible(error)) return 'incompatible';
+  return undefined;
+};
 
 /**
  * Runs a request not seen before and records its outcome; a repeat gets that outcome, and one
@@ -82,17 +88,18 @@ const settleRequest = <A extends CheckoutTarget, R>(
       yield* Effect.exit(attempt(() => journal.settleRequest(id, { input, result: exit.value })));
       return exit.value;
     }
-    const failure = Cause.findErrorOption(exit.cause);
-    const recorded = Option.isSome(failure) ? recordedFailure(failure.value) : undefined;
+    const failure = Option.getOrUndefined(Cause.findErrorOption(exit.cause));
+    const refusal = getRecordedRefusal(failure);
     // A failed record makes a replay of this ID report the request interrupted.
     yield* Effect.exit(
       attempt(() => {
-        if (recorded && deterministicRefusals.has(recorded.code))
+        if (refusal)
           journal.settleRequest(id, {
             input,
-            error: { code: recorded.code, message: recorded.message },
+            error: { refusal, message: (failure as WorkspaceFailure).message },
           });
-        else if (recorded?.code !== 'Uncertain') journal.releaseRequest(id);
+        else if (!(isWorkspaceHostError(failure) && isUncertain(failure)))
+          journal.releaseRequest(id);
       }),
     );
     return yield* Effect.failCause(exit.cause);

@@ -1,9 +1,10 @@
+import { isRefusal } from '@moonbase/contracts/error-groups';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { fixture, isError, quote } from './recovery-fixture.ts';
+import { fixture, quote } from './recovery-fixture.ts';
 import { captureNative } from './workspace-fixture.ts';
 
 /**
@@ -61,7 +62,7 @@ test('a batch import refuses a replacement no dropped source lands on, and chang
         replacements,
       }),
       (error) =>
-        isError('InvalidInput')(error) &&
+        isRefusal(error) &&
         (error as Error).message.includes('Replacement must name the exact captured destination.'),
     );
     assert.equal(readFileSync(join(t.f.root, 'dest/c.txt'), 'utf8'), 'keep');

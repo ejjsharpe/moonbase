@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { ManagedRuntime } from 'effect';
 import { makeWorkspaceClient } from './workspace-client-fixture.ts';
-import { ApplicationError } from '@moonbase/contracts/workspace';
+import { isStorageFailure } from '@moonbase/contracts/error-groups';
 import { bufferIdOf, draftsOf, seed } from './recovery-fixture.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 process.on('SIGXFSZ', () => {});
@@ -20,7 +20,7 @@ try {
       text: 'x'.repeat(1024 * 1024),
       disk,
     }),
-    (error) => error instanceof ApplicationError && error.code === 'Persistence',
+    isStorageFailure,
   );
   assert.equal(
     draftsOf((await client.command('loadRecovery', { clientId: 'alice' })).state)[0]?.text,

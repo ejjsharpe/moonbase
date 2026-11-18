@@ -2,7 +2,6 @@ import { Cause, Clock, Context, Effect, FiberSet, Layer, type Scope, Stream } fr
 import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import type { HostInput } from '@moonbase/contracts/workspace-host';
 import {
-  toWireError,
   WorkspaceUnsupportedError,
   type WorkspaceHostError,
 } from '@moonbase/contracts/workspace-host-errors';
@@ -215,15 +214,13 @@ export function makeFileHostLayer(configuration: WorkspaceHostConfiguration) {
     Layer.provide(helpers),
     Layer.provide(HostStore.layer),
     Layer.provide(settings),
-    // A host that cannot start fails its composition with the wire error its owners expect,
-    // until the workspace moves to Effect RPC (CL-07).
+    // A host that cannot start fails its composition with a workspace error, never a helper's
+    // or system call's own diagnostics.
     Layer.catchCause((cause) =>
       Layer.effect(
         FileHost,
         Effect.fail(
-          toWireError(
-            asWorkspaceError(Cause.squash(cause) as WorkspaceFailure, true) as WorkspaceHostError,
-          ),
+          asWorkspaceError(Cause.squash(cause) as WorkspaceFailure, true) as WorkspaceHostError,
         ),
       ),
     ),

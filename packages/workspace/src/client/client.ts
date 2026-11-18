@@ -14,7 +14,13 @@ import type {
   WorkspaceOperation,
 } from '@moonbase/contracts/workspace';
 import {
-  getErrorCode,
+  isAccessRefusal,
+  isCancelled,
+  isIncompatible,
+  isRefusal,
+  isUncertain,
+} from '@moonbase/contracts/error-groups';
+import {
   InvalidRecoveryRequestError,
   isWorkspaceError,
   RecoveryConflictError,
@@ -70,14 +76,14 @@ function makePorts(
     listOperations: (input) => port(host.listOperations(input)),
   };
 }
-/** The code a failed exit ends with, or `Cancelled` when it was only interrupted. */
-const exitCode = (cause: Cause.Cause<WorkspaceFailure>) => {
-  if (Cause.hasInterruptsOnly(cause)) return 'Cancelled' as const;
+/** The workspace error a failed exit ends with; none for an interruption or another failure. */
+const findWorkspaceError = (cause: Cause.Cause<WorkspaceFailure>) => {
   const failure = Cause.findErrorOption(cause);
-  return Option.isSome(failure) && isWorkspaceError(failure.value)
-    ? getErrorCode(failure.value)
-    : 'Unavailable';
+  return Option.isSome(failure) && isWorkspaceError(failure.value) ? failure.value : undefined;
 };
+/** Whether a failed exit was only interrupted, or failed with `CancelledError`. */
+const isCancelledExit = (cause: Cause.Cause<WorkspaceFailure>) =>
+  Cause.hasInterruptsOnly(cause) || isCancelled(findWorkspaceError(cause));
 
 /**
  * The editor's workspace: file operations go to the file host, while this client keeps the
@@ -140,8 +146,10 @@ export const makeClientWorkspace = ({
             const requestId = kept ?? randomUUID();
             if (!kept) yield* attempt(() => store.put('requests', name, { requestId }));
             const sent = yield* Effect.exit(send(requestId));
-            const code = Exit.isFailure(sent) ? exitCode(sent.cause) : undefined;
-            const unknown = code === 'Cancelled' || (code === 'Uncertain' && !kept);
+            const unknown =
+              Exit.isFailure(sent) &&
+              (isCancelledExit(sent.cause) ||
+                (isUncertain(findWorkspaceError(sent.cause)) && !kept));
             if (!unknown) yield* attempt(() => store.delete('requests', name));
             return yield* sent;
           }),
@@ -201,10 +209,9 @@ export const makeClientWorkspace = ({
             // nothing to resolve. After a cancellation, a malformed reply or a host-side
             // cancellation only the host can say whether it was admitted. Anything else is kept
             // with its text until the next load asks for its status.
-            const code = exitCode(sent.cause);
-            const refused = code === 'InvalidInput' || code === 'Unauthorized';
-            let admitted = !refused;
-            if (code === 'Cancelled' || code === 'Incompatible')
+            const error = findWorkspaceError(sent.cause);
+            let admitted = !(isRefusal(error) || isAccessRefusal(error));
+            if (isCancelledExit(sent.cause) || isIncompatible(error))
               admitted = yield* settled.host
                 .saveStatus({ clientId: input.clientId, requestId: input.requestId })
                 .pipe(

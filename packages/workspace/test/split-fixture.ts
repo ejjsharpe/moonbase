@@ -6,7 +6,8 @@ import { Clock, Duration, Effect, Layer, ManagedRuntime, Scope } from 'effect';
 import { TestClock } from 'effect/testing';
 import { makeWorkspaceClient } from './workspace-client-fixture.ts';
 import { WorkspaceHostService, type WorkspaceHostServiceShape } from '@moonbase/contracts/services';
-import { ApplicationError } from '@moonbase/contracts/workspace';
+import { HostUnavailableError } from '@moonbase/contracts/host-errors';
+import type { WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
 import { WorkspaceHostLive, WorkspaceRecoveryLive } from '../src/index.ts';
 import { initRepository } from './repository-fixture.ts';
 
@@ -76,10 +77,8 @@ export function harness() {
     },
   };
 }
-export const lost = new ApplicationError({
-  code: 'Unavailable',
-  message: 'The host did not answer.',
-});
+/** The link to the host went down: the request or its reply never arrived. */
+export const lost = new HostUnavailableError({ reason: 'unreachable' });
 export const dropRequest =
   <K extends 'saveFile' | 'mutate'>(operation: K) =>
   (host: WorkspaceHostServiceShape): WorkspaceHostServiceShape => ({
@@ -90,13 +89,13 @@ export const dropRequest =
 export const dropReply =
   <K extends 'saveFile' | 'mutate' | 'createWorktree'>(
     operation: K,
-    failure: ApplicationError = lost,
+    failure: WorkspaceHostError = lost,
   ) =>
   (host: WorkspaceHostServiceShape): WorkspaceHostServiceShape => ({
     ...host,
     [operation]: (input: never) =>
       Effect.flatMap(
-        (host[operation] as (input: never) => Effect.Effect<unknown, ApplicationError>)(input),
+        (host[operation] as (input: never) => Effect.Effect<unknown, WorkspaceHostError>)(input),
         () => Effect.fail(failure),
       ),
     saveStatus: () => Effect.fail(lost),

@@ -1,3 +1,4 @@
+import { isAccessRefusal, isConflict, isRefusal } from '@moonbase/contracts/error-groups';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -7,7 +8,7 @@ import { ManagedRuntime } from 'effect';
 import { makeWorkspaceClient } from './workspace-client-fixture.ts';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
-import { fixture, rejects } from './workspace-fixture.ts';
+import { fixture } from './workspace-fixture.ts';
 import { recordWatchDeliveries } from './watch-fixture.ts';
 
 /** A plain folder beside the fixture's repository, in no repository itself. */
@@ -78,7 +79,7 @@ test('a plain folder opens without Git; Git reads are empty and Git changes are 
         target: { checkout, path: 'todo.txt' },
         area: 'unstaged',
       }),
-      rejects('InvalidInput'),
+      isRefusal,
     );
     await assert.rejects(
       f.client.command('createWorktree', {
@@ -87,7 +88,7 @@ test('a plain folder opens without Git; Git reads are empty and Git changes are 
         branch: 'topic',
         location: join(f.base, 'topic'),
       }),
-      rejects('InvalidInput'),
+      isRefusal,
     );
     // A Git-shaped copy of the target is not the approved checkout.
     await assert.rejects(
@@ -95,7 +96,7 @@ test('a plain folder opens without Git; Git reads are empty and Git changes are 
         checkout: { ...checkout, vcs: 'git', branch: 'main', worktree: 'main' },
         path: 'todo.txt',
       }),
-      rejects('Unauthorized'),
+      isAccessRefusal,
     );
 
     // Watching needs no Git folder.
@@ -130,7 +131,7 @@ test('initializeRepository turns a plain folder into a Git checkout without comm
     const repository = await f.client.command('openCheckout', { root: f.root });
     await assert.rejects(
       f.client.command('initializeRepository', { checkout: repository }),
-      rejects('InvalidInput'),
+      isRefusal,
     );
     assert(!existsSync(join(root, '.git')));
 
@@ -147,15 +148,15 @@ test('initializeRepository turns a plain folder into a Git checkout without comm
     // The Git target replaces the folder's approval.
     await assert.rejects(
       f.client.command('readFile', { checkout: plain, path: 'todo.txt' }),
-      rejects('Unauthorized'),
+      isAccessRefusal,
     );
     await assert.rejects(
       f.client.command('initializeRepository', { checkout: plain }),
-      rejects('Unauthorized'),
+      isAccessRefusal,
     );
     await assert.rejects(
       f.client.command('initializeRepository', { checkout: initialized }),
-      rejects('InvalidInput'),
+      isRefusal,
     );
     const status = await f.client.command('gitStatus', { checkout: initialized });
     assert.equal(status.branch, initialized.branch);
@@ -228,8 +229,7 @@ test('a plain folder opens, and a folder inside a repository is refused, with a 
     await assert.rejects(
       client.command('openCheckout', { root: join(f.root, 'src') }),
       (error: unknown) =>
-        rejects('InvalidInput')(error) &&
-        (error as Error).message === 'Choose the repository checkout root.',
+        isRefusal(error) && (error as Error).message === 'Choose the repository checkout root.',
     );
   } finally {
     if (locale === undefined) delete process.env.LC_ALL;
@@ -246,10 +246,7 @@ test('initializeRepository refuses a folder that already has a .git entry', asyn
     const plain = await f.client.command('openCheckout', { root });
     const pointer = `gitdir: ${join(f.root, '.git')}\n`;
     writeFileSync(join(root, '.git'), pointer);
-    await assert.rejects(
-      f.client.command('initializeRepository', { checkout: plain }),
-      rejects('Conflict'),
-    );
+    await assert.rejects(f.client.command('initializeRepository', { checkout: plain }), isConflict);
     assert.equal(readFileSync(join(root, '.git'), 'utf8'), pointer);
     // The folder's approval is unchanged.
     assert.equal(
@@ -272,14 +269,11 @@ test('a plain folder whose .git now points at another repository does not reopen
     await assert.rejects(
       f.client.command('openCheckout', { root }),
       (error: unknown) =>
-        rejects('InvalidInput')(error) &&
+        isRefusal(error) &&
         /Checkout or repository identity changed/.test((error as Error).message),
     );
     // The folder's own approval still holds and nothing else was approved.
-    await assert.rejects(
-      f.client.command('initializeRepository', { checkout: plain }),
-      rejects('Conflict'),
-    );
+    await assert.rejects(f.client.command('initializeRepository', { checkout: plain }), isConflict);
   } finally {
     await f.close();
   }
@@ -303,8 +297,7 @@ test('initializeRepository waits for the folder’s file operations to settle', 
     // Completed, but alice has not yet acknowledged it.
     await assert.rejects(
       f.client.command('initializeRepository', { checkout }),
-      (error: unknown) =>
-        rejects('InvalidInput')(error) && /file operation/.test((error as Error).message),
+      (error: unknown) => isRefusal(error) && /file operation/.test((error as Error).message),
     );
     assert(!existsSync(join(root, '.git')));
     await f.client.command('acknowledgeOperation', {

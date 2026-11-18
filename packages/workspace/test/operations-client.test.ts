@@ -1,3 +1,9 @@
+import {
+  isAccessRefusal,
+  isCancelled,
+  isConflict,
+  isStorageFailure,
+} from '@moonbase/contracts/error-groups';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
@@ -17,7 +23,7 @@ import { ManagedRuntime } from 'effect';
 import { makeWorkspaceClient } from './workspace-client-fixture.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 
-import { captureNative, fixture, rejects } from './workspace-fixture.ts';
+import { captureNative, fixture } from './workspace-fixture.ts';
 import { bufferIdOf, draftsOf, seed } from './recovery-fixture.ts';
 import { initRepository } from './repository-fixture.ts';
 test('known move preserves drafts and exact target, acknowledgement needs only its publication; replay does not move twice', async () => {
@@ -55,7 +61,7 @@ test('known move preserves drafts and exact target, acknowledgement needs only i
     assert.deepEqual(await f.client.command('mutate', operation), result);
     await assert.rejects(
       f.client.command('mutate', { ...operation, destination: 'other.txt' }),
-      rejects('Conflict'),
+      isConflict,
     );
     await f.runtime.dispose();
     const restarted = f.start();
@@ -150,7 +156,7 @@ test('create/copy and scoped native import use actual files; single-use referenc
         nativeReferences: references,
         destination: 'again.txt',
       }),
-      rejects('Unauthorized'),
+      isAccessRefusal,
     );
   } finally {
     await f.close();
@@ -219,7 +225,7 @@ test('real SQLite write contention vetoes recovery discard and mutation before a
           bufferId: bufferIdOf(target),
           discard: true,
         }),
-        rejects('Persistence'),
+        isStorageFailure,
       );
       const sources = await f.client.command('inspectEntries', { checkout, paths: ['file.txt'] });
       await assert.rejects(
@@ -432,7 +438,7 @@ test('unavailable persistence and real filesystem file-size exhaustion report ty
     try {
       await assert.rejects(
         makeWorkspaceClient(unavailable).command('loadRecovery', { clientId: 'alice' }),
-        rejects('Persistence'),
+        isStorageFailure,
       );
     } finally {
       await unavailable.dispose();
@@ -510,7 +516,7 @@ test('batch move reports partial success and explicit replacement revalidates th
         replacements,
         destination: 'target/second',
       }),
-      rejects('Conflict'),
+      isConflict,
     );
     assert.equal(readFileSync(join(f.root, 'target/second'), 'utf8'), 'replacement changed');
     const fresh = await f.client.command('inspectEntries', { checkout, paths: ['target/second'] });
@@ -578,7 +584,7 @@ test('cancelling admitted native copy is typed, preserves source and leaves unre
       },
       { signal: abort.signal },
     );
-    const rejected = assert.rejects(pending, rejects('Cancelled'));
+    const rejected = assert.rejects(pending, isCancelled);
     const deadline = Date.now() + 3000;
     while (!existsSync(ready)) {
       assert(Date.now() < deadline);

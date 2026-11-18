@@ -464,7 +464,7 @@ export class Journal {
     if (record.result) return record.result;
     if (record.error)
       throw new RecordedRefusalError({
-        code: record.error.code as RecordedRefusalError['code'],
+        refusal: record.error.refusal,
         text: record.error.message,
       });
     throw new InterruptedRequestError({ operation });
