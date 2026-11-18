@@ -1,12 +1,12 @@
 import { getParentPath, getPathName, isPathAtOrInside, joinPath } from '@moonbase/contracts/paths';
-import { compareMatches, matchPath } from '@moonbase/contracts/lookup';
-import { checkoutKey, readOwn } from '../editor/index.ts';
+import { checkoutKey } from '../editor/index.ts';
 import { Effect, Layer, Queue, Stream } from 'effect';
 import {
   WorkspaceService,
   type WorkspaceServiceShape,
 } from '@moonbase/contracts/workspace-service';
 import { fauxRecovery } from './faux-recovery.ts';
+import { lookupFauxFiles, searchFauxFiles } from './faux-search.ts';
 import {
   ApplicationError,
   maximumFileBytes,
@@ -19,11 +19,7 @@ import {
   type OperationResult,
   type SaveResult,
   type WorkspaceEvent,
-  type LookupMatch,
 } from '@moonbase/contracts/workspace';
-
-// The workspace host's own matcher, so lookups rank here as they do on disk.
-const match = (path: string, query: string) => matchPath(path, query) ?? undefined;
 
 type Seed = {
   checkout: CheckoutTarget;
@@ -34,6 +30,16 @@ type Seed = {
   /** Unmerged paths, each reported as one conflicted change; one absent from `files` is `missing`. */
   conflicted?: string[];
 };
+/** A seed as the faux workspace holds it: its Git baselines by path. */
+type HeldSeed = Omit<Seed, 'head' | 'index'> & {
+  head?: ReadonlyMap<string, string>;
+  index?: ReadonlyMap<string, string>;
+};
+const holdSeed = ({ head, index, ...seed }: Seed): HeldSeed => ({
+  ...seed,
+  ...(head && { head: new Map(Object.entries(head)) }),
+  ...(index && { index: new Map(Object.entries(index)) }),
+});
 type Entry = FileDocument & { directory: boolean };
 const fail = (message: string, code: ApplicationError['code'] = 'InvalidInput'): never => {
   throw new ApplicationError({ code, message });
@@ -52,7 +58,7 @@ const pathCheck = (path: string, directory = false) => {
 };
 
 /** Concrete volatile adapter for demos/tests. It makes no filesystem or durability claim. */
-export function fauxWorkspace(seeds: Seed[]) {
+export function fauxWorkspace(given: Seed[]) {
   let version = 0;
   const files = new Map<string, Map<string, Entry>>();
   const saves = new Map<string, { payload: string; result: SaveResult }>();
@@ -100,7 +106,7 @@ export function fauxWorkspace(seeds: Seed[]) {
         watcher.notify({ checkout, paths });
   };
   const recovery = fauxRecovery({ exact, fail });
-  const addSeed = (seed: Seed) => {
+  const addSeed = (seed: HeldSeed) => {
     const map = new Map<string, Entry>();
     files.set(checkoutKey(seed.checkout), map);
     for (const [path, text] of Object.entries(seed.files)) {
@@ -115,7 +121,7 @@ export function fauxWorkspace(seeds: Seed[]) {
         });
     }
   };
-  seeds = [...seeds];
+  const seeds = given.map(holdSeed);
   for (const seed of seeds) addSeed(seed);
   const projectSeeds = (checkout: CheckoutTarget) =>
     seeds.filter((seed) => seed.checkout.projectId === exact(checkout).checkout.projectId);
@@ -223,8 +229,8 @@ export function fauxWorkspace(seeds: Seed[]) {
           changes: GitChange[] = [],
           paths = new Set([
             ...working.keys(),
-            ...Object.keys(seed.head ?? {}),
-            ...Object.keys(seed.index ?? {}),
+            ...(seed.head?.keys() ?? []),
+            ...(seed.index?.keys() ?? []),
           ]);
         if (checkout.vcs === 'none') return { branch: '', changes: [] };
         for (const path of paths) {
@@ -238,8 +244,8 @@ export function fauxWorkspace(seeds: Seed[]) {
             );
             continue;
           }
-          const head = readOwn(seed.head, path),
-            staged = readOwn(seed.index, path),
+          const head = seed.head?.get(path),
+            staged = seed.index?.get(path),
             index = staged ?? head;
           if (index === undefined) {
             if (!seed.ignored?.some((item) => isPathAtOrInside(path, item)))
@@ -269,15 +275,15 @@ export function fauxWorkspace(seeds: Seed[]) {
       call('createWorktree', () => {
         const from = requireGit(checkout);
         const project = projectSeeds(checkout).filter((seed) => seed.checkout.vcs === 'git');
-        const branchOf = (seed: Seed) => seed.checkout.vcs === 'git' && seed.checkout.branch;
+        const branchOf = (seed: HeldSeed) => seed.checkout.vcs === 'git' && seed.checkout.branch;
         const source = project.find((seed) => branchOf(seed) === base);
         if (!source) fail(`Base ${base} is not a commit.`);
         if (project.some((seed) => branchOf(seed) === branch))
           fail(`Branch ${branch} already exists.`, 'Conflict');
         if (seeds.some((seed) => seed.checkout.root === location))
           fail('The worktree location already exists.', 'Conflict');
-        const head = { ...(source!.head ?? source!.files) };
-        const seed: Seed = {
+        const head = new Map(source!.head ?? Object.entries(source!.files));
+        const seed: HeldSeed = {
           checkout: {
             ...from,
             checkoutId: `${checkout.projectId}:${location}`,
@@ -285,7 +291,7 @@ export function fauxWorkspace(seeds: Seed[]) {
             branch,
             worktree: 'linked',
           },
-          files: head,
+          files: Object.fromEntries(head),
           head,
         };
         seeds.push(seed);
@@ -305,7 +311,12 @@ export function fauxWorkspace(seeds: Seed[]) {
           branch: 'main',
           worktree: 'main',
         };
-        seeds[seeds.indexOf(seed)] = { ...seed, checkout: initialized, head: {}, index: {} };
+        seeds[seeds.indexOf(seed)] = {
+          ...seed,
+          checkout: initialized,
+          head: new Map(),
+          index: new Map(),
+        };
         files.set(checkoutKey(initialized), files.get(checkoutKey(checkout))!);
         files.delete(checkoutKey(checkout));
         return initialized;
@@ -320,9 +331,9 @@ export function fauxWorkspace(seeds: Seed[]) {
           original = '';
         } else {
           if (area === 'staged') {
-            original = readOwn(seed.head, target.path);
+            original = seed.head?.get(target.path);
           } else {
-            original = readOwn(seed.index, target.path) ?? readOwn(seed.head, target.path);
+            original = seed.index?.get(target.path) ?? seed.head?.get(target.path);
           }
         }
         if (original === undefined) fail('Git baseline unavailable.', 'Unavailable');
@@ -333,75 +344,15 @@ export function fauxWorkspace(seeds: Seed[]) {
           title: `${area} · ${target.path}`,
         };
       }),
-    lookupFiles: ({ checkout, query, limit = 100, history = [] }) =>
-      call('lookupFiles', () => {
-        const seed = exact(checkout);
-        const eligible = (path: string) =>
-          entries(checkout).has(path) &&
-          !entries(checkout).get(path)!.directory &&
-          !seed.ignored?.some((item) => isPathAtOrInside(path, item));
-        const recent = [...new Set(history)]
-          .filter((path) => entries(checkout).has(path) && !entries(checkout).get(path)!.directory)
-          .map((path) => match(path, query))
-          .filter((row): row is LookupMatch => !!row);
-        const matches = query.trim()
-          ? [...entries(checkout).keys()]
-              .filter((path) => eligible(path) && !history.includes(path))
-              .map((path) => match(path, query))
-              .filter((row): row is LookupMatch => !!row)
-              .sort(compareMatches)
-          : [];
-        return {
-          matches: matches.slice(0, Math.max(1, Math.min(limit, 100))),
-          history: recent.slice(0, 100),
-          partial: matches.length > limit || recent.length > 100,
-        };
-      }),
-    searchText: ({ checkout, query, matchCase, wholeWord, regex }) =>
-      call('searchText', () => {
-        const seed = exact(checkout);
-        let pattern: RegExp;
-        try {
-          const source = regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          pattern = new RegExp(wholeWord ? `\\b(?:${source})\\b` : source, matchCase ? 'g' : 'gi');
-        } catch {
-          return fail('Invalid regular expression.', 'InvalidInput');
-        }
-        let capped = false;
-        const files = [...entries(checkout)]
-          .filter(
-            ([path, entry]) =>
-              !entry.directory && !seed.ignored?.some((item) => isPathAtOrInside(path, item)),
-          )
-          .map(([path]) => {
-            // The same limits as the workspace: 512-character lines, 64 ranges, 50 matches a file.
-            const lines = read({ checkout, path })
-              .text.split('\n')
-              .map((line) => line.slice(0, 512));
-            const matches = lines.flatMap((text, index) => {
-              const ranges = [...text.matchAll(pattern)]
-                .map((found) => ({ start: found.index, end: found.index + found[0].length }))
-                .filter((range) => range.end > range.start)
-                .slice(0, 64);
-              return ranges.length
-                ? [
-                    {
-                      line: index + 1,
-                      text,
-                      ranges,
-                      before: lines.slice(Math.max(0, index - 3), index),
-                      after: lines.slice(index + 1, index + 4),
-                    },
-                  ]
-                : [];
-            });
-            if (matches.length > 50) capped = true;
-            return { path, matches: matches.slice(0, 50) };
-          })
-          .filter((file) => file.matches.length)
-          .sort((a, b) => a.path.localeCompare(b.path));
-        return { files: files.slice(0, 200), partial: capped || files.length > 200 };
-      }),
+    lookupFiles: ({ checkout, ...query }) =>
+      call('lookupFiles', () => lookupFauxFiles(entries(checkout), exact(checkout).ignored, query)),
+    searchText: ({ checkout, ...query }) =>
+      call(
+        'searchText',
+        () =>
+          searchFauxFiles(entries(checkout), exact(checkout).ignored, query) ??
+          fail('Invalid regular expression.', 'InvalidInput'),
+      ),
     inspectEntries: ({ checkout, paths }) =>
       call('inspectEntries', () => {
         if (!Array.isArray(paths) || paths.length < 1 || paths.length > 256)

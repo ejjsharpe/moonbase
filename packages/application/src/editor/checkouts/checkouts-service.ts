@@ -1,7 +1,6 @@
 import { Context, Effect, Exit, Layer } from 'effect';
 import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import type { CheckoutTarget, CommandInput, CommandOutput } from '@moonbase/contracts/workspace';
-import { writeOwn } from '../record.ts';
 import { EditorError, type EditorFailure } from '../editor-errors.ts';
 import { describeEditorFailure } from '../alerts/alerts.ts';
 import { EditorSession } from '../session/session-service.ts';
@@ -148,7 +147,7 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
           const reopening = yield* views.modify(({ recovery }) => {
             if (!isCheckoutListed(recovery, target)) {
               recovery.checkouts.push(target);
-              writeOwn(recovery.views, target.checkoutId, emptyCheckoutView());
+              recovery.views.set(target.checkoutId, emptyCheckoutView());
             }
             const reopening = !recovery.openCheckoutIds.includes(target.checkoutId);
             if (reopening) recovery.openCheckoutIds.push(target.checkoutId);

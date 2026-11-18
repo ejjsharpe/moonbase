@@ -14,7 +14,7 @@ import { titleBar } from './title-bar.stylex.ts';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import type { Place } from '@moonbase/application';
 import { ChatConnection, ChatSelection, findComposerPlace } from '@moonbase/application/chat';
-import { EditorWorktrees, readOwn } from '@moonbase/application/editor';
+import { EditorWorktrees } from '@moonbase/application/editor';
 import { colors, rail } from '@moonbase/ui/tokens.stylex';
 import { workbench } from '@moonbase/ui/workbench';
 import { checkoutName } from '@moonbase/ui/projects';
@@ -129,8 +129,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   const { panels, focus, focusView, restoreFocus } = useViewFocus(view);
   // One ChatView at a time: in the project dock while it shows, otherwise in Agents.
   const dockVisible = view !== 'chat' && !!selected && !!chat && dockOpen;
-  const activePath =
-    selected && state && readOwn(state.recovery.views, selected.checkoutId)?.active;
+  const activePath = selected && state && state.recovery.views.get(selected.checkoutId)?.active;
   const projectCheckouts = selected
     ? openCheckouts.filter(
         (checkout) =>

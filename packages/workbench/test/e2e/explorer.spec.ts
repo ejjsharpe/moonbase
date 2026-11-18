@@ -181,7 +181,8 @@ test('large expanded trees keep navigation, selection and scroll virtualized', a
   const savedScroll = () =>
     page.evaluate(
       () =>
-        window.demo.first.getSnapshot().recovery.views[window.demo.checkout.checkoutId].tree.scroll,
+        window.demo.first.getSnapshot().recovery.views.get(window.demo.checkout.checkoutId)!.tree
+          .scroll,
     );
   await tree.evaluate((element) => element.scrollTo({ top: 4200 }));
   const middleFolder = tree.getByRole('treeitem', { name: 'folder-155', exact: true });
@@ -202,7 +203,7 @@ test('large expanded trees keep navigation, selection and scroll virtualized', a
   expect(
     await page.evaluate(
       () =>
-        window.demo.first.getSnapshot().recovery.views[window.demo.checkout.checkoutId].tree
+        window.demo.first.getSnapshot().recovery.views.get(window.demo.checkout.checkoutId)!.tree
           .selected.length,
     ),
   ).toBe(300);

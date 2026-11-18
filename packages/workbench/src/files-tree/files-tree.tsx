@@ -13,7 +13,6 @@ import { filesUI } from '@moonbase/ui/files';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
   checkoutKey,
-  readOwn,
   type EditorSnapshot,
   type MutationAction,
 } from '@moonbase/application/editor';
@@ -125,7 +124,7 @@ export function FilesTree({
   /** Pastes into `folder`, as ⌘V does into the focused one. */
   onPaste: (folder: string) => void;
 }) {
-  const tree = readOwn(state.recovery.views, checkout.checkoutId)!.tree,
+  const tree = state.recovery.views.get(checkout.checkoutId)!.tree,
     treeElement = useRef<HTMLDivElement>(null),
     anchor = useRef<string | null>(null),
     mounted = useRef(true),

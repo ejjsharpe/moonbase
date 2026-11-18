@@ -1,6 +1,13 @@
-import { acquireEditor, answering } from './editor-model-fixture.ts';
-import type { EditorDriver } from './editor-model-fixture.ts';
-import * as controllerFixture from './editor-fixture.ts';
+import * as controllerFixture from '../editor-fixture.ts';
+import {
+  acquireEditor,
+  answering,
+  type EditorDriver,
+  checkout,
+  second,
+  target,
+  fixture,
+} from '../editor-fixture.ts';
 import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
 import { ManagedRuntime } from 'effect';
@@ -8,7 +15,11 @@ import {
   toWorkspaceClient as makeEditorClient,
   type WorkspaceClient,
 } from '@moonbase/application/testing/editor-fixture';
-import { ApplicationError, type WorkspaceCommand } from '@moonbase/contracts/workspace';
+import {
+  ApplicationError,
+  type WorkspaceCommand,
+  type CommandInput,
+} from '@moonbase/contracts/workspace';
 import { fileKey } from '@moonbase/application/editor';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 
@@ -18,6 +29,7 @@ const recoveryEdits: readonly WorkspaceCommand[] = [
   'updateDraft',
   'updateLayout',
 ];
+
 const isRecoveryEdit = (name: WorkspaceCommand) => recoveryEdits.includes(name);
 
 describe('checkout discovery and activation', () => {
@@ -110,7 +122,7 @@ describe('checkout discovery and activation', () => {
       await editor.selectCheckout(checkout);
       assert.equal(editor.buffer(target('a.ts'))?.text, 'current source after close');
       assert.equal(
-        editor.getSnapshot().recovery.views[checkout.checkoutId].fileViews['a.ts'],
+        editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.fileViews.get('a.ts'),
         'staged',
       );
       assert.equal(
@@ -184,7 +196,7 @@ describe('checkout discovery and activation', () => {
         assert.equal(f.editor.getSnapshot().recovery.selectedCheckoutId, checkout.checkoutId);
         assert.equal(f.editor.buffer(target('a.ts'))?.text, 'latest selected source');
         assert.equal(
-          f.editor.getSnapshot().recovery.views[checkout.checkoutId].fileViews['a.ts'],
+          f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.fileViews.get('a.ts'),
           'staged',
         );
       } finally {
@@ -491,4 +503,202 @@ describe('checkout discovery and activation', () => {
         await f.dispose();
       }
     });
+});
+
+test('preview replacement follows successful activation; dirty, Keep Open and reordered previews remain', async () => {
+  const f = await fixture();
+  try {
+    await f.editor.open(target('a.ts'), { intent: 'preview' });
+    f.memory.failNext('readFile');
+    assert.equal(await f.editor.open(target('b.ts'), { intent: 'preview' }), false);
+    assert.equal(f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.active, 'a.ts');
+    await f.editor.open(target('b.ts'), { intent: 'preview' });
+    assert.equal(f.editor.buffer(target('a.ts')), undefined);
+    f.editor.edit(target('b.ts'), 'dirty');
+    await f.editor.open(target('c.ts'), { intent: 'preview' });
+    f.editor.reorder(checkout, 'c.ts', 0);
+    await f.editor.open(target('a.ts'), { intent: 'preview' });
+    assert.deepEqual(f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.openFiles, [
+      'c.ts',
+      'a.ts',
+      'b.ts',
+    ]);
+    f.editor.keepOpen(target('a.ts'));
+    assert.equal(f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.preview, null);
+  } finally {
+    await f.dispose();
+  }
+});
+
+test('stale file activation cannot replace a later successful comparison', async () => {
+  const f = await fixture();
+  let release!: () => void, reading!: () => void;
+  const started = new Promise<void>((resolve) => {
+    reading = resolve;
+  });
+  const wait = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const client: WorkspaceClient = {
+    ...f.client,
+    async command(name, input, options) {
+      if (name === 'readFile' && (input as CommandInput<'readFile'>).path === 'b.ts') {
+        reading();
+        await wait;
+      }
+      return f.client.command(name, input, options);
+    },
+  };
+  const editor = await acquireEditor(f.runtime, { client, clientId: 'stale' });
+  try {
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    const slow = editor.open(target('b.ts'));
+    await started;
+    await editor.open(target('a.ts'), { view: 'staged' });
+    release();
+    assert.equal(await slow, false);
+    assert.equal(editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.active, 'a.ts');
+    assert.equal(editor.buffer(target('b.ts')), undefined);
+  } finally {
+    release();
+    await editor.dispose();
+    await f.dispose();
+  }
+});
+
+test('removed checkout ignores late position recording', async () => {
+  const f = await fixture();
+  try {
+    await f.editor.open(target('a.ts'));
+    assert.equal(
+      await answering(
+        f.editor,
+        () => f.editor.closeCheckout(checkout),
+        async () => 'discard',
+      ),
+      true,
+    );
+    assert.doesNotThrow(() =>
+      f.editor.position(target('a.ts'), 'file', { line: 1, column: 2, top: 0, left: 0 }),
+    );
+  } finally {
+    await f.dispose();
+  }
+});
+
+test('missing retained dirty tab stays accessible after Trash and new missing opens leave selection alone', async () => {
+  const f = await fixture('trash-activation', false);
+  try {
+    await f.editor.open(target('a.ts'));
+    f.editor.edit(target('a.ts'), 'recover these edits');
+    await f.editor.mutate({
+      checkout,
+      sources: await f.editor.inspect(checkout, ['a.ts']),
+      kind: 'trash',
+    });
+    await f.editor.open(target('b.ts'));
+    assert.equal(await f.editor.open(target('a.ts')), true);
+    assert.equal(f.editor.buffer(target('a.ts'))!.text, 'recover these edits');
+    assert.equal(await f.editor.open(target('missing.ts')), false);
+    assert.equal(f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.active, 'a.ts');
+    assert.match(f.editor.getSnapshot().errors.join(' '), /unavailable|retained/i);
+  } finally {
+    await f.dispose();
+  }
+});
+
+test('a newer explicit checkout selection defeats a delayed file activation in another checkout', async () => {
+  const f = await fixture('unused', false);
+  await f.editor.dispose();
+  let admit!: () => void, release!: () => void;
+  const admitted = new Promise<void>((resolve) => {
+      admit = resolve;
+    }),
+    wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+  const editor = await acquireEditor(f.runtime, {
+    clientId: 'checkout-race',
+    client: {
+      ...f.client,
+      watch: () => async () => {},
+      async command(name, input, options) {
+        if (name === 'readFile') {
+          admit();
+          await wait;
+        }
+        return f.client.command(name, input, options);
+      },
+    },
+  });
+  try {
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    await editor.openCheckout(second.root);
+    editor.selectCheckout(checkout);
+    const opening = editor.open(target('a.ts'));
+    await admitted;
+    editor.selectCheckout(second);
+    release();
+    assert.equal(await opening, false);
+    assert.equal(editor.getSnapshot().recovery.selectedCheckoutId, second.checkoutId);
+  } finally {
+    release();
+    await editor.dispose();
+    await f.dispose();
+  }
+});
+
+test('an unavailable retained comparison activates its buffer while a new comparison failure preserves selection', async () => {
+  const f = await fixture('retained-comparison', false);
+  try {
+    await f.editor.open(target('a.ts'), { view: 'staged' });
+    f.editor.edit(target('a.ts'), 'retain in any view');
+    await f.editor.open(target('b.ts'));
+    f.memory.failNext('readComparison');
+    assert.equal(await f.editor.open(target('a.ts')), true);
+    assert.equal(f.editor.buffer(target('a.ts'))!.text, 'retain in any view');
+    f.memory.failNext('readComparison');
+    assert.equal(await f.editor.open(target('new.ts'), { view: 'staged' }), false);
+    assert.equal(f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.active, 'a.ts');
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("closing a restored active clean file loads its survivor's remembered comparison", async () => {
+  const f = await fixture('close-survivor', false);
+  try {
+    await f.editor.open(target('a.ts'), { view: 'staged' });
+    await f.editor.open(target('b.ts'));
+    await f.editor.flush();
+    await f.editor.dispose();
+    const restored = await acquireEditor(f.runtime, {
+      client: f.client,
+      clientId: 'close-survivor',
+    });
+    try {
+      await restored.load();
+      assert.equal(restored.buffer(target('a.ts')), undefined);
+      assert.equal(
+        await answering(
+          restored,
+          () => restored.close([target('b.ts')]),
+          async () => 'discard',
+        ),
+        true,
+      );
+      assert.equal(restored.getSnapshot().recovery.views.get(checkout.checkoutId)!.active, 'a.ts');
+      assert.equal(restored.buffer(target('a.ts'))!.text, 'const a = 1;');
+      assert.equal(
+        restored.getSnapshot().comparisons[fileKey(target('a.ts'))].original,
+        'const a = 0;',
+      );
+    } finally {
+      await restored.dispose();
+    }
+  } finally {
+    await f.dispose();
+  }
 });

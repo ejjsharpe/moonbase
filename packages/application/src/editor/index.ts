@@ -9,7 +9,6 @@ export {
   type EditorFailure,
 } from './editor-errors.ts';
 export { describeEditorFailure, isCancelled } from './alerts/alerts.ts';
-export { readOwn } from './record.ts';
 export { checkoutKey, fileKey, sameCheckout } from './recovery/recovery-references.ts';
 export type { CheckoutView, EditorRecovery, EditorTab } from './recovery/recovery-layout.ts';
 

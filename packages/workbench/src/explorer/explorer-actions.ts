@@ -1,6 +1,6 @@
 import type { RefObject } from 'react';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { readOwn, type MutationAction } from '@moonbase/application/editor';
+import { type MutationAction } from '@moonbase/application/editor';
 import type { FollowedFiles } from '../files-tree/use-follow-active-file.ts';
 import type { useMoveUndo } from '../files-tree/use-move-undo.ts';
 import { formatKeys } from '../shortcuts.ts';
@@ -119,8 +119,8 @@ export function listExplorerActions({
       checked: hideIgnoredFiles,
       run: () =>
         actions.tree(checkout, {
-          hideIgnoredFiles: !readOwn(actions.getSnapshot().recovery.views, checkout.checkoutId)
-            ?.tree.hideIgnoredFiles,
+          hideIgnoredFiles: !actions.getSnapshot().recovery.views.get(checkout.checkoutId)?.tree
+            .hideIgnoredFiles,
         }),
     },
     'separator',

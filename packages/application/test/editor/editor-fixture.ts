@@ -1,11 +1,24 @@
-import { acquireEditor } from './editor-model-fixture.ts';
 import { ManagedRuntime } from 'effect';
 import {
+  acquireEditorDriver,
   toWorkspaceClient,
+  type EditorDriverOptions,
   type WorkspaceClient,
 } from '@moonbase/application/testing/editor-fixture';
 import { type CheckoutTarget, type WorkspaceCommand } from '@moonbase/contracts/workspace';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
+import type { RecoveryState } from '@moonbase/contracts/recovery';
+
+// The editor tests' one fixture: an editor driver over a faux workspace, the two checkouts it
+// seeds, and helpers that hold or inspect what the editor sends its store.
+
+export { answering, type EditorDriver } from '@moonbase/application/testing/editor-fixture';
+
+/** An editor over `dependencies.client`; the workspace's runtime stays the caller's. */
+export const acquireEditor = (
+  _runtime: ManagedRuntime.ManagedRuntime<never, unknown> | unknown,
+  dependencies: EditorDriverOptions,
+) => acquireEditorDriver(dependencies);
 
 export const checkout: CheckoutTarget = {
   hostId: 'local',
@@ -112,6 +125,20 @@ export const recoveryEdits: ReadonlySet<string> = new Set([
   'updateDraft',
   'updateLayout',
 ]);
+
+/** A client's recovery as the store holds it. */
+export const loadStoredState = async (client: WorkspaceClient, clientId: string) =>
+  (await client.command('loadRecovery', { clientId })).state;
+/** The drafts a recovery holds, as the file each is for, its text and its baseline. */
+export const draftsOf = (state: RecoveryState) =>
+  state.buffers.flatMap((b) =>
+    b.draft ? [{ target: b.target, text: b.draft.text, disk: b.draft.disk }] : [],
+  );
+/** The paths of a checkout's tabs in a recovery, in order. */
+export const tabPathsOf = (state: RecoveryState, c: CheckoutTarget = checkout) =>
+  (state.views[c.checkoutId]?.tabs ?? []).map(
+    (id) => state.buffers.find((b) => b.id === id)!.target.path,
+  );
 
 /** A client's durable recovery: its drafts, and each checkout's tab paths. */
 export async function storedRecovery(client: WorkspaceClient, clientId: string) {

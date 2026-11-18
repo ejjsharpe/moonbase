@@ -72,7 +72,8 @@ const item = (page: Page, name: string) => menu(page).getByRole('menuitem', { na
 const selected = (page: Page) =>
   page.evaluate(
     () =>
-      window.demo.first.getSnapshot().recovery.views[window.demo.checkout.checkoutId].tree.selected,
+      window.demo.first.getSnapshot().recovery.views.get(window.demo.checkout.checkoutId)!.tree
+        .selected,
   );
 
 test('row secondary and Control-click target without opening, listing or toggling folders', async ({

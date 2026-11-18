@@ -1,12 +1,61 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { acquireEditor } from './editor-model-fixture.ts';
-import { checkout, fixture, held, target } from './editor-fixture.ts';
+import {
+  acquireEditor,
+  checkout,
+  fixture,
+  held,
+  target,
+  type EditorDriver,
+} from '../editor-fixture.ts';
 import { fileKey } from '@moonbase/application/editor';
-import type { EditorDriver } from './editor-model-fixture.ts';
 
 const treeOf = (editor: EditorDriver) =>
-  editor.getSnapshot().recovery.views[checkout.checkoutId].tree;
+  editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.tree;
+
+/** An editor whose workspace commands are counted by name and can be held once. */
+async function countedEditor(f: Awaited<ReturnType<typeof fixture>>, clientId: string) {
+  const counts = new Map<string, number>(),
+    hold: { path?: string; entered: ReturnType<typeof held>; release: ReturnType<typeof held> } = {
+      entered: held(),
+      release: held(),
+    };
+  const editor = await acquireEditor(f.runtime, {
+    clientId,
+    client: {
+      ...f.client,
+      watch: () => async () => {},
+      async command(name, input, options) {
+        counts.set(name, (counts.get(name) ?? 0) + 1);
+        if (name === 'listDirectory' && (input as { path: string }).path === hold.path) {
+          hold.path = undefined;
+          hold.entered.release();
+          await hold.release.promise;
+        }
+        return f.client.command(name, input, options);
+      },
+    },
+  });
+  await editor.load();
+  await editor.openCheckout(checkout.root);
+  return { editor, counts, hold };
+}
+
+/** Waits until every listed entry under these folders has Git's classification. */
+async function waitForClassification(editor: EditorDriver, folders: string[]) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const listings = editor.getSnapshot().listings;
+    if (
+      folders.every((folder) =>
+        listings[fileKey(target(folder))]?.entries.every((entry) => entry.ignored !== undefined),
+      )
+    )
+      return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.fail(`Unclassified: ${folders.join(', ')}`);
+}
 
 test('reveal shows an ignored file by turning Hide Ignored Files off, unless told to skip it', async () => {
   const f = await fixture('reveal-ignored');
@@ -69,49 +118,6 @@ test('a newer reveal, or one no longer current, abandons a reveal still listing'
     await f.dispose();
   }
 });
-
-/** An editor whose workspace commands are counted by name and can be held once. */
-async function countedEditor(f: Awaited<ReturnType<typeof fixture>>, clientId: string) {
-  const counts = new Map<string, number>(),
-    hold: { path?: string; entered: ReturnType<typeof held>; release: ReturnType<typeof held> } = {
-      entered: held(),
-      release: held(),
-    };
-  const editor = await acquireEditor(f.runtime, {
-    clientId,
-    client: {
-      ...f.client,
-      watch: () => async () => {},
-      async command(name, input, options) {
-        counts.set(name, (counts.get(name) ?? 0) + 1);
-        if (name === 'listDirectory' && (input as { path: string }).path === hold.path) {
-          hold.path = undefined;
-          hold.entered.release();
-          await hold.release.promise;
-        }
-        return f.client.command(name, input, options);
-      },
-    },
-  });
-  await editor.load();
-  await editor.openCheckout(checkout.root);
-  return { editor, counts, hold };
-}
-/** Waits until every listed entry under these folders has Git's classification. */
-async function waitForClassification(editor: EditorDriver, folders: string[]) {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    const listings = editor.getSnapshot().listings;
-    if (
-      folders.every((folder) =>
-        listings[fileKey(target(folder))]?.entries.every((entry) => entry.ignored !== undefined),
-      )
-    )
-      return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  assert.fail(`Unclassified: ${folders.join(', ')}`);
-}
 
 test('revealing listed, classified levels again lists nothing and asks Git nothing', async () => {
   const f = await fixture('reveal-cached-source', false);
@@ -197,6 +203,30 @@ test('Follow Active File is saved with the editor recovery and loads back', asyn
     } finally {
       await reloaded.dispose();
     }
+  } finally {
+    await f.dispose();
+  }
+});
+
+test('tree keeps ignored files visible and revealable while lookup retains its filtering', async () => {
+  const f = await fixture();
+  try {
+    f.editor.tree(checkout, { hideIgnoredFiles: true });
+    assert.equal(
+      (await f.editor.list(checkout)).entries.some((entry) => entry.path === 'c.ts'),
+      true,
+    );
+    await f.editor.reveal(target('c.ts'));
+    await f.editor.reveal(target('folder/nested.ts'));
+    assert.deepEqual(
+      f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.tree.selected,
+      ['folder/nested.ts'],
+    );
+    assert.deepEqual(
+      (await f.editor.lookup(checkout, 'nested')).matches.map((row) => row.path),
+      ['folder/nested.ts'],
+    );
+    await assert.rejects(f.editor.open(target('../escape')), /relative path/);
   } finally {
     await f.dispose();
   }

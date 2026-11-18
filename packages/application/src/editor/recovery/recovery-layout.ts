@@ -11,7 +11,6 @@ import type {
   FileTarget,
   FileView,
 } from '@moonbase/contracts/workspace';
-import { readOwn, writeOwn } from '../record.ts';
 import { fileKey } from './recovery-references.ts';
 
 // The recovery store names an open file by its buffer (epic #273 D3); the editor shows its tabs
@@ -24,14 +23,14 @@ export type CheckoutView = {
   /** The active tab's path, or `''`. */
   active: string;
   preview: string | null;
-  fileViews: Record<string, FileView>;
-  positions: Record<string, FilePositions>;
+  fileViews: Map<string, FileView>;
+  positions: Map<string, FilePositions>;
   tree: CheckoutTree;
 };
 /** The editor's recovery as it shows it: the store's layout, with tabs named by path. */
 export type EditorRecovery = Omit<RecoveryLayout, 'views'> & {
   clientId: string;
-  views: Record<string, CheckoutView>;
+  views: Map<string, CheckoutView>;
 };
 /** An open tab: its buffer in the store and the file it shows. */
 export type EditorTab = { id: string; target: FileTarget };
@@ -41,7 +40,7 @@ export const emptyEditorRecovery = (clientId: string): EditorRecovery => ({
   checkouts: [],
   openCheckoutIds: [],
   selectedCheckoutId: null,
-  views: {},
+  views: new Map(),
   recentFiles: [],
   sidebarWidth: 270,
   followActiveFile: true,
@@ -50,15 +49,15 @@ export const emptyCheckoutView = (): CheckoutView => ({
   openFiles: [],
   active: '',
   preview: null,
-  fileViews: {},
-  positions: {},
+  fileViews: new Map(),
+  positions: new Map(),
   tree: { expanded: [], selected: [], focus: '', scroll: 0, hideIgnoredFiles: false },
 });
 
 /** A stored recovery as the editor shows it, with every buffer by its file's key. */
 export function readRecoveryState(state: RecoveryState) {
   const buffers = new Map(state.buffers.map((b) => [b.id, b]));
-  const views: Record<string, CheckoutView> = {};
+  const views = new Map<string, CheckoutView>();
   for (const [checkoutId, view] of Object.entries(state.views)) {
     const pathOf = (id: string | null) => {
       const buffer = id === null ? undefined : buffers.get(id);
@@ -71,24 +70,24 @@ export function readRecoveryState(state: RecoveryState) {
         (view.active !== null && view.tabs.includes(view.active) && pathOf(view.active)) || '',
       preview:
         (view.preview !== null && view.tabs.includes(view.preview) && pathOf(view.preview)) || null,
-      fileViews: {},
-      positions: {},
+      fileViews: new Map(),
+      positions: new Map(),
       tree: structuredClone(view.tree),
     };
     // What the view remembers of closed files, then what its buffers have.
     for (const [path, memory] of Object.entries(view.remembered)) {
-      if (memory.view) writeOwn(shown.fileViews, path, memory.view);
-      if (memory.positions) writeOwn(shown.positions, path, structuredClone(memory.positions));
+      if (memory.view) shown.fileViews.set(path, memory.view);
+      if (memory.positions) shown.positions.set(path, structuredClone(memory.positions));
     }
     for (const [id, mode] of Object.entries(view.fileViews)) {
       const path = pathOf(id);
-      if (path !== undefined) writeOwn(shown.fileViews, path, mode);
+      if (path !== undefined) shown.fileViews.set(path, mode);
     }
     for (const [id, positions] of Object.entries(view.positions)) {
       const path = pathOf(id);
-      if (path !== undefined) writeOwn(shown.positions, path, structuredClone(positions));
+      if (path !== undefined) shown.positions.set(path, structuredClone(positions));
     }
-    writeOwn(views, checkoutId, shown);
+    views.set(checkoutId, shown);
   }
   const { version: _version, buffers: _buffers, views: _views, ...layout } = state;
   const recovery: EditorRecovery = { ...structuredClone(layout), views };
@@ -104,8 +103,9 @@ export function toRecoveryLayout(
   tabs: ReadonlyMap<string, EditorTab>,
 ): RecoveryLayout {
   const checkouts = new Map(recovery.checkouts.map((c) => [c.checkoutId, c]));
-  const views: Record<string, BufferView> = {};
-  for (const [checkoutId, view] of Object.entries(recovery.views)) {
+  // Built as maps and written as own properties, so a path such as `__proto__` stays a key.
+  const views = new Map<string, BufferView>();
+  for (const [checkoutId, view] of recovery.views) {
     const checkout: CheckoutTarget | undefined = checkouts.get(checkoutId);
     if (!checkout) continue;
     const idOf = (path: string) => tabs.get(fileKey({ checkout, path }))?.id;
@@ -114,29 +114,34 @@ export function toRecoveryLayout(
       const id = path ? idOf(path) : undefined;
       return id !== undefined && ids.includes(id) ? id : null;
     };
-    const written: BufferView = {
+    const fileViews = new Map<string, FileView>(),
+      positions = new Map<string, FilePositions>(),
+      remembered = new Map<string, RememberedFile>();
+    const remember = (path: string) => {
+      const memory = remembered.get(path) ?? {};
+      remembered.set(path, memory);
+      return memory;
+    };
+    for (const [path, mode] of view.fileViews) {
+      const id = tabOf(path);
+      if (id) fileViews.set(id, mode);
+      else remember(path).view = mode;
+    }
+    for (const [path, filePositions] of view.positions) {
+      const id = tabOf(path);
+      if (id) positions.set(id, structuredClone(filePositions));
+      else remember(path).positions = structuredClone(filePositions);
+    }
+    views.set(checkoutId, {
       tabs: ids,
       active: tabOf(view.active),
       preview: tabOf(view.preview),
-      fileViews: {},
-      positions: {},
-      remembered: {},
+      fileViews: Object.fromEntries(fileViews),
+      positions: Object.fromEntries(positions),
+      remembered: Object.fromEntries(remembered),
       tree: structuredClone(view.tree),
-    };
-    const remember = (path: string): RememberedFile =>
-      readOwn(written.remembered, path) ?? writeOwn(written.remembered, path, {});
-    for (const [path, mode] of Object.entries(view.fileViews)) {
-      const id = tabOf(path);
-      if (id) writeOwn(written.fileViews, id, mode);
-      else remember(path).view = mode;
-    }
-    for (const [path, positions] of Object.entries(view.positions)) {
-      const id = tabOf(path);
-      if (id) writeOwn(written.positions, id, structuredClone(positions));
-      else remember(path).positions = structuredClone(positions);
-    }
-    writeOwn(views, checkoutId, written);
+    });
   }
   const { clientId: _clientId, views: _views, ...layout } = recovery;
-  return { ...structuredClone(layout), views };
+  return { ...structuredClone(layout), views: Object.fromEntries(views) };
 }

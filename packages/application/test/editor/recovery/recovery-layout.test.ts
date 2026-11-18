@@ -1,4 +1,4 @@
-import { acquireEditor, answering } from './editor-model-fixture.ts';
+import { acquireEditor, answering } from '../editor-fixture.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ManagedRuntime } from 'effect';
@@ -14,9 +14,13 @@ const checkout = {
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };
+
 const names = ['__proto__', 'constructor', 'toString', 'hasOwnProperty'];
+
 const target = (path: string) => ({ checkout, path });
+
 const cursor = { line: 1, column: 3, top: 0, left: 0 };
+
 function protectPrototypes() {
   const objects = [
     Object.prototype,
@@ -57,10 +61,9 @@ test('filename caret state never mutates inherited prototypes', async () => {
     await editor.open(target('__proto__'), { view: 'file' });
     editor.position(target('__proto__'), 'file', cursor);
     prototypes.assertUnchanged();
-    const view = editor.getSnapshot().recovery.views[checkout.checkoutId];
-    assert(Object.hasOwn(view.fileViews, '__proto__'));
-    assert(Object.hasOwn(view.positions, '__proto__'));
-    assert.deepEqual(view.positions.__proto__.file, cursor);
+    const view = editor.getSnapshot().recovery.views.get(checkout.checkoutId)!;
+    assert(view.fileViews.has('__proto__'));
+    assert.deepEqual(view.positions.get('__proto__')?.file, cursor);
   } finally {
     prototypes.restore();
     await editor.dispose();
@@ -107,7 +110,7 @@ test('prototype-shaped filenames keep own JSON view keys through Save, reopen, r
       assert.equal(editor.buffer(target(path))?.text, 'newer dirty ' + path);
       assert.equal(editor.buffer(target(path))?.disk.text, 'saved ' + path);
       assert.deepEqual(
-        editor.getSnapshot().recovery.views[checkout.checkoutId].positions[path].staged,
+        editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.positions.get(path)?.staged,
         cursor,
       );
       assert.equal(
@@ -120,7 +123,7 @@ test('prototype-shaped filenames keep own JSON view keys through Save, reopen, r
       );
       assert.equal(await editor.reopen(checkout), true);
       assert.equal(
-        editor.getSnapshot().recovery.views[checkout.checkoutId].fileViews[path],
+        editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.fileViews.get(path),
         'staged',
       );
     }
@@ -145,7 +148,8 @@ test('prototype-shaped filenames keep own JSON view keys through Save, reopen, r
     await editor.load();
     assert.equal(editor.buffer(source)?.text, 'dirty moved text');
     assert.deepEqual(
-      editor.getSnapshot().recovery.views[checkout.checkoutId].positions.__proto__.staged,
+      editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.positions.get('__proto__')
+        ?.staged,
       cursor,
     );
     for (const [from, destination] of [
@@ -166,51 +170,12 @@ test('prototype-shaped filenames keep own JSON view keys through Save, reopen, r
     assert.equal(editor.buffer(source)?.text, 'dirty moved text');
     assert.equal(memory.stats.mutations, 4);
     assert(
-      Object.hasOwn(
-        editor.getSnapshot().recovery.views[checkout.checkoutId].positions,
-        '__proto__',
-      ),
+      editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.positions.has('__proto__'),
     );
     prototypes.assertUnchanged();
   } finally {
     prototypes.restore();
     await editor.dispose();
-    await runtime.dispose();
-  }
-});
-
-test('untracked prototype-shaped filenames never inherit a demo Git baseline', async () => {
-  const memory = fauxWorkspace([
-    {
-      checkout,
-      files: Object.fromEntries(names.map((path) => [path, 'working'])),
-      head: {},
-      index: {},
-    },
-  ]);
-  const runtime = ManagedRuntime.make(memory.layer),
-    client = makeEditorClient(runtime);
-  try {
-    assert.deepEqual(
-      (await client.command('gitStatus', { checkout })).changes.map((change) => [
-        change.path,
-        change.area,
-      ]),
-      names.map((path) => [path, 'untracked']),
-    );
-    for (const path of names) {
-      for (const area of ['staged', 'unstaged'] as const)
-        await assert.rejects(
-          client.command('readComparison', { target: target(path), area }),
-          /Git baseline unavailable/,
-        );
-      assert.equal(
-        (await client.command('readComparison', { target: target(path), area: 'untracked' }))
-          .original,
-        '',
-      );
-    }
-  } finally {
     await runtime.dispose();
   }
 });

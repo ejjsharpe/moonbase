@@ -3,7 +3,7 @@ import * as monaco from 'monaco-editor';
 import * as stylex from '@stylexjs/stylex';
 import { workbench } from '@moonbase/ui/workbench';
 import { colors, syntax, type } from '@moonbase/ui/tokens.stylex';
-import { checkoutKey, fileKey, readOwn, type EditorSnapshot } from '@moonbase/application/editor';
+import { checkoutKey, fileKey, type EditorSnapshot } from '@moonbase/application/editor';
 import type { FileTarget, FileView } from '@moonbase/contracts/workspace';
 import type { EditorActions } from './editor-actions.ts';
 
@@ -196,13 +196,10 @@ export function MonacoView({
       editor: monaco.editor.ICodeEditor,
       selected: FileView | `${FileView}:original`,
     ) => {
-      const position = readOwn(
-        readOwn(
-          readOwn(actions.getSnapshot().recovery.views, target.checkout.checkoutId)?.positions,
-          target.path,
-        ),
-        selected,
-      );
+      const position = actions
+        .getSnapshot()
+        .recovery.views.get(target.checkout.checkoutId)
+        ?.positions.get(target.path)?.[selected];
       if (position) {
         editor.setPosition({ lineNumber: position.line, column: position.column });
         editor.setScrollPosition({ scrollTop: position.top, scrollLeft: position.left });
@@ -300,12 +297,12 @@ export function MonacoView({
   useLayoutEffect(() => {
     const editor = mounted.current;
     if (!editor || !target) return;
-    const positions = readOwn(
-      readOwn(actions.getSnapshot().recovery.views, target.checkout.checkoutId)?.positions,
-      target.path,
-    );
-    const modified = readOwn(positions, mode),
-      original = readOwn(positions, `${mode}:original`);
+    const positions = actions
+      .getSnapshot()
+      .recovery.views.get(target.checkout.checkoutId)
+      ?.positions.get(target.path);
+    const modified = positions?.[mode],
+      original = positions?.[`${mode}:original`];
     editor.updateOptions({ automaticLayout: visible });
     if (!visible) return;
     editor.layout();

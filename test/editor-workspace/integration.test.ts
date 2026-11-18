@@ -390,8 +390,8 @@ test(
       assert.equal(closedReads, 0);
       assert.equal(restored.getSnapshot().recovery.openCheckoutIds.length, 0);
       // A closed checkout's tabs close; what its view remembers of the files stays, by path.
-      const view = restored.getSnapshot().recovery.views[checkout.checkoutId];
-      assert.equal(view.fileViews['a.ts'], 'staged');
+      const view = restored.getSnapshot().recovery.views.get(checkout.checkoutId)!;
+      assert.equal(view.fileViews.get('a.ts'), 'staged');
       assert.deepEqual(view.tree.expanded, ['folder']);
       renameSync(f.roots[0] + '-unavailable', f.roots[0]);
       assert.deepEqual(await restored.openCheckout(f.roots[0]), checkout);
@@ -399,7 +399,8 @@ test(
       assert.equal(restored.buffer(target)?.text, 'WORKING\n');
       assert.equal(restored.getSnapshot().comparisons[fileKey(target)].original, 'HEAD\n');
       assert.deepEqual(
-        restored.getSnapshot().recovery.views[checkout.checkoutId].positions['a.ts'].staged,
+        restored.getSnapshot().recovery.views.get(checkout.checkoutId)!.positions.get('a.ts')!
+          .staged,
         { line: 1, column: 2, top: 3, left: 4 },
       );
       assert(closedReads > 0);

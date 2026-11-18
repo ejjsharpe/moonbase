@@ -1,11 +1,19 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { ReplacePrompt } from '@moonbase/application/editor';
-import type { EditorDriver } from './editor-model-fixture.ts';
+import { type ReplacePrompt, getFailureCode } from '@moonbase/application/editor';
+import {
+  type EditorDriver,
+  acquireEditor,
+  checkout,
+  fixture,
+  target,
+  answering,
+  loadStoredState,
+  draftsOf,
+  tabPathsOf,
+} from '../editor-fixture.ts';
 import type { WorkspaceOperation } from '@moonbase/contracts/workspace';
 import type { WorkspaceClient } from '@moonbase/application/testing/editor-fixture';
-import { acquireEditor } from './editor-model-fixture.ts';
-import { checkout, fixture, target } from './editor-fixture.ts';
 
 /**
  * The fixture's editor (over `wrap`'s client, if given) with each replace prompt recorded in
@@ -59,7 +67,9 @@ const done = (...pairs: [string, string][]) => ({
   error: '',
   items: pairs.map(([source, destination]) => ({ source, destination, outcome: 'completed' })),
 });
+
 const declined = { completed: false, error: '', items: [] };
+
 const unavailable = {
   completed: false,
   error:
@@ -263,6 +273,275 @@ test('a batch import with known names asks before replacing what they would land
     });
     assert.equal(dispatched.length, 2);
     assert.deepEqual(f.asked, [['folder/nested.ts'], ['folder/nested.ts']]);
+  } finally {
+    await f.dispose();
+  }
+});
+
+test('memory inspection rejects empty and oversized selections like the production service', async () => {
+  const f = await fixture();
+  try {
+    for (const paths of [[], Array(257).fill('a.ts')])
+      await assert.rejects(
+        f.client.command('inspectEntries', { checkout, paths }),
+        (error) => getFailureCode(error) === 'InvalidInput',
+      );
+    assert.equal(
+      (await f.client.command('inspectEntries', { checkout, paths: ['a.ts'] })).length,
+      1,
+    );
+  } finally {
+    await f.dispose();
+  }
+});
+
+test('lost move response resolves status once and keeps dirty drafts at the exact successful destination', async () => {
+  const f = await fixture('editor-one', false);
+  try {
+    await f.editor.open(target('a.ts'));
+    f.editor.edit(target('a.ts'), 'dirty source');
+    const sources = await f.editor.inspect(checkout, ['a.ts']);
+    f.memory.failNext('mutate', 'Response lost', true);
+    await assert.rejects(
+      f.editor.mutate({
+        id: 'move-one',
+        checkout,
+        kind: 'move',
+        sources,
+        destination: 'renamed.ts',
+      }),
+    );
+    assert.equal(f.editor.buffer(target('a.ts'))!.text, 'dirty source');
+    assert.equal(
+      await answering(
+        f.editor,
+        () => f.editor.close([target('a.ts')]),
+        async () => 'discard',
+      ),
+      false,
+    );
+    assert.equal(await f.editor.save(target('a.ts')), false);
+    await f.editor.open(target('b.ts'));
+    f.editor.edit(target('b.ts'), 'unrelated remains usable');
+    assert.equal(await f.editor.save(target('b.ts')), true);
+    await f.editor.resolveOperation('move-one');
+    await f.editor.resolveOperation('move-one');
+    assert.equal(f.memory.stats.mutations, 1);
+    assert.equal(f.editor.buffer(target('a.ts')), undefined);
+    assert.equal(f.editor.buffer(target('renamed.ts'))!.text, 'dirty source');
+    assert.deepEqual(
+      draftsOf(await loadStoredState(f.client, f.editor.clientId)).map((d) => d.target.path),
+      ['renamed.ts'],
+    );
+  } finally {
+    await f.dispose();
+  }
+});
+
+test('a pending batch into the root guards the paths it lands at, and a root batch is guarded too', async () => {
+  const f = await fixture('editor-one', false);
+  const pending = /Resolve the pending operation on these entries/;
+  try {
+    await f.editor.mutate({
+      checkout,
+      kind: 'create-file',
+      sources: [],
+      destination: 'folder/d.ts',
+    });
+    await f.editor.mutate({ checkout, kind: 'create-directory', sources: [], destination: 'out' });
+    // A move into the root whose reply is lost stays pending; the entries did move.
+    f.memory.failNext('mutate', 'Response lost', true);
+    await assert.rejects(
+      f.editor.mutate({
+        id: 'to-root',
+        checkout,
+        kind: 'move',
+        sources: await f.editor.inspect(checkout, ['folder/nested.ts', 'folder/d.ts']),
+        destination: '',
+      }),
+    );
+    const landed = await f.editor.inspect(checkout, ['nested.ts']);
+    await assert.rejects(f.editor.mutate({ checkout, kind: 'trash', sources: landed }), pending);
+    await f.editor.resolveOperation('to-root');
+    // A create whose reply is lost before it ran stays pending at its path.
+    f.memory.failNext('mutate', 'Response lost', false, 'Uncertain');
+    await assert.rejects(
+      f.editor.mutate({ checkout, kind: 'create-file', sources: [], destination: 'b.ts.bak' }),
+    );
+    for (const destination of ['out/b.ts.bak', 'out/e.ts'])
+      await f.editor.mutate({ checkout, kind: 'create-file', sources: [], destination });
+    const before = f.memory.stats.mutations;
+    await assert.rejects(
+      f.editor.mutate({
+        checkout,
+        kind: 'move',
+        sources: await f.editor.inspect(checkout, ['out/b.ts.bak', 'out/e.ts']),
+        destination: '',
+      }),
+      pending,
+    );
+    assert.equal(f.memory.stats.mutations, before);
+  } finally {
+    await f.dispose();
+  }
+});
+
+test('a rejected memory transfer preserves its destination instead of partially deleting it', async () => {
+  const f = await fixture();
+  try {
+    const sources = await f.editor.inspect(checkout, ['a.ts']),
+      replacements = await f.editor.inspect(checkout, ['b.ts']);
+    await assert.rejects(
+      f.client.command('mutate', {
+        id: 'invalid-transfer',
+        clientId: 'raw',
+        checkout,
+        kind: 'copy',
+        sources,
+        destination: 'missing/b.ts',
+        replacements,
+      }),
+    );
+    assert.equal((await f.client.command('readFile', target('b.ts'))).text, 'second');
+    assert.equal((await f.client.command('readFile', target('a.ts'))).text, 'const a = 1;');
+  } finally {
+    await f.dispose();
+  }
+});
+
+test('a failed recovery edit stops a mutation before its effects; the operation is acknowledged once followed', async () => {
+  const f = await fixture();
+  try {
+    await f.editor.open(target('a.ts'));
+    f.editor.edit(target('a.ts'), 'dirty');
+    const sources = await f.editor.inspect(checkout, ['a.ts']);
+    f.memory.failNext('updateDraft');
+    await assert.rejects(
+      f.editor.mutate({ checkout, sources, kind: 'move', destination: 'moved.ts' }),
+    );
+    assert.equal(f.memory.stats.mutations, 0);
+    await f.editor.flush();
+    await f.editor.mutate({ checkout, sources, kind: 'move', destination: 'moved.ts' });
+    assert.equal(
+      (await f.client.command('loadRecovery', { clientId: f.editor.clientId })).operations.length,
+      0,
+    );
+  } finally {
+    await f.dispose();
+  }
+});
+
+for (const kind of ['move', 'copy'] as const)
+  test(`${kind} keeps edits made while the mutation response is pending`, async () => {
+    const f = await fixture('unused', false);
+    await f.editor.dispose();
+    let ready!: () => void, release!: () => void;
+    const admitted = new Promise<void>((resolve) => {
+        ready = resolve;
+      }),
+      wait = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    const client: WorkspaceClient = {
+      ...f.client,
+      watch: () => async () => {},
+      async command(name, input, options) {
+        const result = await f.client.command(name, input, options);
+        if (name === 'mutate') {
+          ready();
+          await wait;
+        }
+        return result;
+      },
+    };
+    const editor = await acquireEditor(f.runtime, { client, clientId: 'pending-' + kind });
+    try {
+      await editor.load();
+      await editor.openCheckout(checkout.root);
+      await editor.open(target('a.ts'));
+      editor.edit(target('a.ts'), 'captured draft');
+      const sources = await editor.inspect(checkout, ['a.ts']),
+        baseline = editor.buffer(target('a.ts'))!.disk;
+      const operation = editor.mutate({ checkout, sources, kind, destination: 'destination.ts' });
+      await admitted;
+      editor.edit(target('a.ts'), 'newer live text');
+      release();
+      await operation;
+      assert.equal(f.memory.stats.mutations, 1);
+      assert.equal(
+        editor.buffer(target('destination.ts'))!.text,
+        kind === 'move' ? 'newer live text' : 'captured draft',
+      );
+      if (kind === 'move') {
+        assert.equal(editor.buffer(target('a.ts')), undefined);
+        assert.deepEqual(editor.buffer(target('destination.ts'))!.disk, baseline);
+      } else assert.equal(editor.buffer(target('a.ts'))!.text, 'newer live text');
+      await editor.flush();
+      const durable = await f.client.command('loadRecovery', { clientId: editor.clientId });
+      assert.equal(durable.operations.length, 0);
+      assert.deepEqual(
+        draftsOf(durable.state)
+          .map((d) => [d.target.path, d.text])
+          .sort(),
+        kind === 'move'
+          ? [['destination.ts', 'newer live text']]
+          : [
+              ['a.ts', 'newer live text'],
+              ['destination.ts', 'captured draft'],
+            ],
+      );
+      // The moved tab is re-pathed; the copy's draft is adopted as a tab of its own.
+      assert.deepEqual(
+        tabPathsOf(durable.state).sort(),
+        kind === 'move' ? ['destination.ts'] : ['a.ts', 'destination.ts'],
+      );
+    } finally {
+      release();
+      await editor.dispose();
+      await f.dispose();
+    }
+  });
+
+test('definitive rejected mutation releases pending state and leaves Save, Close and Quit usable', async () => {
+  const f = await fixture('rejected-move', false);
+  try {
+    await f.editor.open(target('a.ts'));
+    f.editor.edit(target('a.ts'), 'retained after rejection');
+    const sources = await f.editor.inspect(checkout, ['a.ts']);
+    await assert.rejects(
+      f.editor.mutate({
+        id: 'self-move',
+        checkout,
+        kind: 'move',
+        sources,
+        replacements: sources,
+        destination: 'a.ts',
+      }),
+      (error) => getFailureCode(error) === 'InvalidInput',
+    );
+    assert.equal(f.memory.stats.mutations, 0);
+    assert.equal(f.editor.getSnapshot().operations.length, 0);
+    assert.equal(
+      await f.client.command('operationStatus', { clientId: f.editor.clientId, id: 'self-move' }),
+      null,
+    );
+    assert.equal(await f.editor.save(target('a.ts')), true);
+    assert.equal(
+      await answering(
+        f.editor,
+        () => f.editor.close([target('a.ts')]),
+        async () => 'discard',
+      ),
+      true,
+    );
+    assert.equal(
+      await answering(
+        f.editor,
+        () => f.editor.prepareQuit(),
+        async () => 'discard',
+      ),
+      true,
+    );
   } finally {
     await f.dispose();
   }

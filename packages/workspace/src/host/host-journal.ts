@@ -21,21 +21,9 @@ import { Checkouts } from './checkouts.ts';
 import { HostSettings } from './host-settings.ts';
 import { HostStore } from './host-store.ts';
 import { Leases } from './leases.ts';
-import type {
-  HostOperationRecord,
-  HostRequestRecord,
-  HostSaveRecord,
-  PlannedItem,
-} from '../schema.ts';
-import {
-  canonical,
-  errorText,
-  folded,
-  isOriginalResult,
-  key,
-  overlaps,
-  same,
-} from '../validation.ts';
+import { hasUnsettledItems, readOperationItems, readSaveOutcome } from './interrupted-work.ts';
+import type { HostOperationRecord, HostRequestRecord, HostSaveRecord } from '../schema.ts';
+import { canonical, errorText, isOriginalResult, key, overlaps, same } from '../validation.ts';
 
 /** The operations whose first outcome is remembered by request ID and replayed. */
 export type RequestOperation =
@@ -227,20 +215,12 @@ export class Journal {
       return record.result;
     });
   }
-  /**
-   * Settles an interrupted save from the disk without repeating it: its own text there is `saved`,
-   * anything else a `conflict` with what is there, over which the client keeps its draft. A file
-   * that can't be read leaves it uncertain.
-   */
+  /** Settles an interrupted save from the disk without repeating it (see `readSaveOutcome`). */
   private resolveSave(id: string, record: HostSaveRecord) {
-    const target = record.input.target;
-    return this.checkouts.directory(target.checkout).pipe(
-      Effect.flatMap((directory) => directory.read(target.path)),
-      Effect.map((disk) => {
-        record.result =
-          disk.version === record.input.version
-            ? { kind: 'saved', version: disk.version }
-            : { kind: 'conflict', disk };
+    return this.checkouts.directory(record.input.target.checkout).pipe(
+      Effect.flatMap((directory) => readSaveOutcome(directory, record)),
+      Effect.map((result) => {
+        record.result = result;
         this.settleOrRetain(id, record);
       }),
       Effect.catch(() => Effect.void),
@@ -392,55 +372,14 @@ export class Journal {
       return record.result;
     });
   }
-  /**
-   * Settles an interrupted operation from disk evidence, never repeating a mutation. Each item
-   * without an outcome is `completed` when the disk shows its effect (a move's object at its
-   * destination, Trash's object gone from its path, a new object at a copy's, import's or
-   * creation's destination) and `failed` otherwise, so drafts stay where they are.
-   */
+  /** Settles an interrupted operation from the disk, never repeating it (see `readOperationItems`). */
   private recoverOperation(id: string, record: HostOperationRecord) {
     return Effect.gen({ self: this }, function* () {
       if (record.result.outcome !== 'uncertain' && !this.volatileOperations.has(id)) return;
-      const kind = record.input.kind;
-      const settled = (item: PlannedItem) =>
-        record.result.items.some(
-          (i) => isOriginalResult(kind, i) && i.source === item.source && i.outcome !== 'uncertain',
-        );
-      const open = record.planned.filter((item) => !settled(item));
-      if (open.length) {
+      if (hasUnsettledItems(record)) {
         const opened = yield* Effect.exit(this.checkouts.directory(record.input.checkout));
         if (opened._tag === 'Failure') return;
-        const directory = opened.value;
-        const identityAt = (p: string | undefined) =>
-          p === undefined
-            ? Effect.succeed(null)
-            : directory.entry(p).pipe(
-                Effect.map((entry): string | null => entry.identity),
-                Effect.orElseSucceed(() => null),
-              );
-        for (const item of open) {
-          const to = yield* identityAt(item.destination);
-          const replaced = record.input.replacements?.find(
-            (r) =>
-              item.destination !== undefined && folded(r.target.path) === folded(item.destination),
-          )?.identity;
-          let completed = to !== null && to !== replaced;
-          if (kind === 'move' || kind === 'trash') {
-            const left = (yield* identityAt(item.source)) !== item.identity;
-            completed = left && (kind === 'trash' || to === item.identity);
-          }
-          record.result.items = record.result.items.filter(
-            (i) => !isOriginalResult(kind, i) || i.source !== item.source,
-          );
-          record.result.items.push({
-            source: item.source,
-            ...(item.destination === undefined ? {} : { destination: item.destination }),
-            outcome: completed ? 'completed' : 'failed',
-            message: completed
-              ? 'Recovered from disk; no mutation repeated.'
-              : 'The disk does not show this item done; no mutation repeated. Inspect it.',
-          });
-        }
+        record.result.items = yield* readOperationItems(opened.value, record);
       }
       yield* this.finalizeOperation(id, record).pipe(
         Effect.catch(() => Effect.sync(() => this.retainOperation(id, record))),

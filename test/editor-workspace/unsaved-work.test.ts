@@ -378,7 +378,7 @@ test(
       assert.equal(await restored.open(discarding), true);
       assert.equal(restored.buffer(discarding)?.text, 'B\n');
       assert.deepEqual(
-        [...restored.getSnapshot().recovery.views[checkout.checkoutId].openFiles].sort(),
+        [...restored.getSnapshot().recovery.views.get(checkout.checkoutId)!.openFiles].sort(),
         ['a.ts', 'b.ts'],
       );
     } finally {

@@ -13,8 +13,9 @@ const menu = (page: Page) => page.getByRole('menu', { name: 'File actions', exac
 const item = (page: Page, name: string) => menu(page).getByRole('menuitem', { name, exact: true });
 const treeState = (page: Page) =>
   page.evaluate(() => {
-    const { tree } =
-      window.demo.first.getSnapshot().recovery.views[window.demo.checkout.checkoutId];
+    const { tree } = window.demo.first
+      .getSnapshot()
+      .recovery.views.get(window.demo.checkout.checkoutId)!;
     return { focus: tree.focus, selected: tree.selected };
   });
 const mutations = (page: Page) => page.evaluate(() => window.demo.memory.stats.mutations);

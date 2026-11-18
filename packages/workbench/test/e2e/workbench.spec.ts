@@ -630,8 +630,10 @@ test('Tab switches to Find, which previews matches and opens the file at the mat
     .poll(() =>
       page.evaluate(
         () =>
-          window.demo.first.getSnapshot().recovery.views.sample.positions['src/example.ts']?.file
-            ?.line,
+          window.demo.first
+            .getSnapshot()
+            .recovery.views.get('sample')!
+            .positions.get('src/example.ts')?.file?.line,
       ),
     )
     .toBe(2);
@@ -692,8 +694,10 @@ test('a change on disk keeps the picker highlight at its position, and Enter ope
     .poll(() =>
       page.evaluate(
         () =>
-          window.demo.first.getSnapshot().recovery.views.sample.positions['src/example.ts']?.file
-            ?.line,
+          window.demo.first
+            .getSnapshot()
+            .recovery.views.get('sample')!
+            .positions.get('src/example.ts')?.file?.line,
       ),
     )
     .toBe(1);

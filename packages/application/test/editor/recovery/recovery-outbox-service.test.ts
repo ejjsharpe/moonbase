@@ -1,5 +1,4 @@
-import { acquireEditor, answering } from './editor-model-fixture.ts';
-import { holding, storedRecovery } from './editor-fixture.ts';
+import { acquireEditor, answering, holding, storedRecovery } from '../editor-fixture.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Effect, ManagedRuntime } from 'effect';
@@ -16,8 +15,11 @@ const checkout: CheckoutTarget = {
   branch: 'main',
   worktree: 'main' as 'main' | 'linked',
 };
+
 const target = { checkout, path: 'a.ts' };
+
 const other = { checkout, path: 'b.ts' };
+
 const third = { checkout, path: 'c.ts' };
 
 /** An editor whose commands the test can hold, with a.ts open; `testClock` runs its debounce. */
@@ -53,6 +55,7 @@ async function fixture(testClock = false) {
     },
   };
 }
+
 const settled = (promise: Promise<unknown>) => {
   const state = { done: false };
   void promise.then(
@@ -61,6 +64,7 @@ const settled = (promise: Promise<unknown>) => {
   );
   return state;
 };
+
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 test('a change makes recovery unready at once until its edit commits, and survives a restart', async () => {
@@ -263,7 +267,7 @@ test('a failed preview close leaves no stale buffer: reopening its file ends in 
     assert(f.sent.length - before < 12, 'the open was sent again and again');
     assert.equal(f.editor.getSnapshot().recoveryReady, true);
     const stored = await f.stored();
-    const shown = f.editor.getSnapshot().recovery.views[checkout.checkoutId]!.openFiles;
+    const shown = f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.openFiles;
     assert.deepEqual(stored.tabs(checkout.checkoutId), shown);
     assert.deepEqual([...shown].sort(), ['a.ts', 'b.ts', 'c.ts']);
     assert.equal(stored.state.buffers.filter((b) => b.target.path === 'b.ts').length, 1);

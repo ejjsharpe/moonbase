@@ -10,7 +10,6 @@ import {
   type FileTarget,
   type FileView,
 } from '@moonbase/contracts/workspace';
-import { readOwn, writeOwn } from '../record.ts';
 import { EditorError, type EditorFailure } from '../editor-errors.ts';
 import { isRelativePath } from '../relative-path.ts';
 import { EditorSession } from '../session/session-service.ts';
@@ -187,7 +186,7 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
           const held = yield* buffers.get;
           const opened = held.buffers.get(key);
           const placed = yield* views.modify(({ recovery }) => {
-            const selected = readOwn(recovery.views, target.checkout.checkoutId)!;
+            const selected = recovery.views.get(target.checkout.checkoutId)!;
             const placed = placeOpenedFile(
               selected,
               target.path,
@@ -198,7 +197,7 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
               },
               !opened || !isDirty(opened),
             );
-            writeOwn(selected.fileViews, target.path, mode);
+            selected.fileViews.set(target.path, mode);
             recovery.selectedCheckoutId = target.checkout.checkoutId;
             recovery.recentFiles = [
               target,
@@ -222,7 +221,7 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
             return yield* new EditorError({ reason: 'invalid-path' });
           if ((yield* session.get).preserving) return false;
           const key = fileKey(target),
-            mode = options.view ?? readOwn(selected.fileViews, target.path) ?? 'file';
+            mode = options.view ?? selected.fileViews.get(target.path) ?? 'file';
           const isCurrent = Effect.map(
             Effect.all([session.get, views.get]),
             ([{ closing, preserving }, { recovery }]) =>
@@ -266,11 +265,11 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
           yield* FiberHandle.clear(activation);
           return true;
         }
-        const path = readOwn(recovery.views, checkout.checkoutId)?.active;
+        const path = recovery.views.get(checkout.checkoutId)?.active;
         if (!path) return true;
         const target = { checkout, path },
           key = fileKey(target),
-          mode = readOwn((yield* views.view(checkout)).fileViews, path) ?? 'file';
+          mode = (yield* views.view(checkout)).fileViews.get(path) ?? 'file';
         const { comparisons, comparisonAttempts } = yield* discovery.get;
         const attempt = comparisonAttempts[key],
           working = comparisons[key]?.working,
@@ -284,7 +283,7 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
             const { recovery } = SubscriptionRef.getUnsafe(views.state);
             return (
               recovery.selectedCheckoutId === checkout.checkoutId &&
-              readOwn(recovery.views, checkout.checkoutId)?.active === path
+              recovery.views.get(checkout.checkoutId)?.active === path
             );
           },
         });
@@ -295,7 +294,7 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
           const view = yield* views.view(target.checkout);
           if (view.preview !== target.path) return;
           yield* views.modify(({ recovery }) => {
-            readOwn(recovery.views, target.checkout.checkoutId)!.preview = null;
+            recovery.views.get(target.checkout.checkoutId)!.preview = null;
           });
           yield* outbox.changed;
         });
@@ -364,7 +363,7 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
               const selected = yield* views.view(checkout);
               if ((yield* session.get).preserving || !selected.openFiles.includes(from)) return;
               yield* views.modify(({ recovery }) => {
-                const view = readOwn(recovery.views, checkout.checkoutId)!;
+                const view = recovery.views.get(checkout.checkoutId)!;
                 view.openFiles.splice(view.openFiles.indexOf(from), 1);
                 view.openFiles.splice(Math.max(0, Math.min(to, view.openFiles.length)), 0, from);
               });
@@ -378,12 +377,11 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
             if (!admissionsOpen || closing || preserving) return;
             const changed = yield* views.modify(({ recovery }) => {
               if (!isCheckoutOpen(recovery, target.checkout)) return false;
-              const selected = readOwn(recovery.views, target.checkout.checkoutId);
+              const selected = recovery.views.get(target.checkout.checkoutId);
               if (!selected?.openFiles.includes(target.path)) return false;
-              const positions =
-                readOwn(selected.positions, target.path) ??
-                writeOwn(selected.positions, target.path, {});
-              writeOwn(positions, mode, position);
+              const positions = selected.positions.get(target.path) ?? {};
+              positions[mode] = position;
+              selected.positions.set(target.path, positions);
               return true;
             });
             if (changed) yield* outbox.changed;
