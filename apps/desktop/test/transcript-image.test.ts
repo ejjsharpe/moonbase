@@ -3,12 +3,18 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { Effect } from 'effect';
-import type { ChatClient, ChatTranscriptSource } from '@moonbase/contracts/chat';
-import type { ConnectionClient } from '@moonbase/contracts/connection';
+import type { ChatTranscriptSource } from '@moonbase/contracts/chat';
 import { transcriptImageTokenLifetime } from '../src/main/chat/transcript-images.ts';
 import { respondTranscriptImage } from '../src/main/chat/transcript-native.ts';
 import type { TranscriptImage } from '../src/ipc/chat-rpcs.ts';
-import { fakeChatTargets, makeIpcFixture } from './fixtures/ipc-fixture.ts';
+import {
+  fakeChatTargets,
+  toChatService,
+  type FakeChat,
+  type FakeConnection,
+  toConnectionService,
+  makeIpcFixture,
+} from './fixtures/ipc-fixture.ts';
 
 const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' };
 const source: ChatTranscriptSource = {
@@ -24,7 +30,7 @@ const snapshot = {
   state: 'disconnected',
   connectionId: null,
 };
-const idleConnection: ConnectionClient = {
+const idleConnection: FakeConnection = {
   command: async () => undefined as never,
   watch: () => async () => {},
 };
@@ -37,7 +43,7 @@ async function fixture(
   bytes: Buffer,
   options: {
     perf?: { now(): number };
-    connection?: ConnectionClient;
+    connection?: FakeConnection;
   } = {},
 ) {
   const selection = {
@@ -48,8 +54,8 @@ async function fixture(
   const signals: AbortSignal[] = [];
   let reads = 0,
     hold: Promise<void> | undefined;
-  // Trusted ChatClient: chunks past the selected size are rejected at the ChatClient boundary.
-  const chat: ChatClient = {
+  // Trusted FakeChat: chunks past the selected size are rejected at the FakeChat boundary.
+  const chat: FakeChat = {
     watchChatList: () => async () => {},
     async command(operation, input, commandOptions) {
       assert.equal(operation, 'getChatTranscriptContent');
@@ -74,7 +80,11 @@ async function fixture(
   const ipc = await makeIpcFixture({
     chat: {
       backends: fakeChatTargets({
-        remote: { chat, context, connection: options.connection ?? idleConnection },
+        remote: {
+          chat: toChatService(chat),
+          context,
+          connection: toConnectionService(options.connection ?? idleConnection),
+        },
       }),
       ...(options.perf ? { perf: options.perf } : {}),
     },
@@ -172,7 +182,7 @@ test('an unrequested token expires while each request extends its lifetime', asy
 
 test('connecting or disconnecting revokes issued tokens', async () => {
   const operations: string[] = [];
-  const connection: ConnectionClient = {
+  const connection: FakeConnection = {
     command: async (operation) => {
       operations.push(operation);
       return (operation === 'disconnect' ? undefined : snapshot) as never;
@@ -199,7 +209,7 @@ test('connecting or disconnecting revokes issued tokens', async () => {
 test('a token issued while connect is held is revoked once connect settles', async () => {
   const gate = Promise.withResolvers<void>(),
     entered = Promise.withResolvers<void>();
-  const connection: ConnectionClient = {
+  const connection: FakeConnection = {
     command: async () => {
       entered.resolve();
       await gate.promise;
@@ -221,7 +231,7 @@ test('a token issued while connect is held is revoked once connect settles', asy
 });
 
 test('revocation fails queued reads and cancels in-flight ones', async () => {
-  const connection: ConnectionClient = {
+  const connection: FakeConnection = {
     command: async () => undefined as never,
     watch: () => async () => {},
   };

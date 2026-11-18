@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { Deferred, Effect, Exit, Fiber, Scope } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { UncertainError, UnauthorizedError } from '@moonbase/contracts/errors';
+import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
+import { HostUnavailableError } from '@moonbase/contracts/host-errors';
+import { getErrorGroup } from '@moonbase/contracts/error-groups';
 import { makeChatBackends, type ChatBackendsOptions } from '../src/main/chat/chat-backends.ts';
 import { makeChatDocument } from '../src/main/chat/chat-document.ts';
 import type { DaemonClients } from '../src/main/daemon/local-daemon.ts';
@@ -32,7 +35,7 @@ function makeBackend(
   rest: Partial<Record<'chat' | 'providers' | 'workspace', unknown>> = {},
 ) {
   const effect = (run: (input: never) => unknown) => (input: never) =>
-    Effect.try({ try: () => run(input), catch: (error) => error as ApplicationError });
+    Effect.try({ try: () => run(input), catch: (error) => error as never });
   return {
     session,
     chat: {},
@@ -82,9 +85,7 @@ test('a document releases its provider sign-ins as it goes, on the remote host t
     (owner: string) =>
       Effect.suspend(() => {
         released.push(`${name}:${owner}`);
-        return failing
-          ? Effect.fail(new ApplicationError({ code: 'Unavailable', message: 'Gone.' }))
-          : Effect.void;
+        return failing ? Effect.fail(new HostUnavailableError({ reason: 'closed' })) : Effect.void;
       });
   const backend = makeBackend(
     { host: { hostId: 'local', storeId: 'store' }, actorId: 'owner' },
@@ -138,8 +139,7 @@ test('a new worktree starts only from a folder the daemon approves, under the re
     session,
     {
       checkApprovedFolder: ({ path }: { path: string }) => {
-        if (path !== '/repo')
-          throw new ApplicationError({ code: 'Unauthorized', message: 'Choose this folder.' });
+        if (path !== '/repo') throw new FolderRefusedError({ refusal: 'not-approved' });
       },
     },
     {
@@ -162,8 +162,8 @@ test('a new worktree starts only from a folder the daemon approves, under the re
   });
   // Even a worktree Git lists for an approved checkout is the daemon's to approve.
   assert.equal(
-    (await fail(owner.createWorktree('/repo-worktrees/listed', 'chat/a', 'first'))).code,
-    'Unauthorized',
+    getErrorGroup(await fail(owner.createWorktree('/repo-worktrees/listed', 'chat/a', 'first'))),
+    'access',
   );
   assert.equal(requests.length, 0);
   assert.equal(
@@ -197,7 +197,7 @@ test('turning a chat into a project is one daemon operation, asked again only wh
       target: { conversationId: string };
     }[] = [],
     adopted: string[] = [];
-  let refusal: ApplicationError | undefined;
+  let refusal: Error | undefined;
   const backend = makeBackend(
     session,
     {},
@@ -221,14 +221,14 @@ test('turning a chat into a project is one daemon operation, asked again only wh
       adoptCheckout: (target) => adopted.push(target.root),
     });
   const owner = make();
-  refusal = new ApplicationError({ code: 'Unauthorized', message: 'Not a chat folder.' });
-  assert.equal((await fail(owner.turnIntoProject('planted'))).code, 'Unauthorized');
+  refusal = new UnauthorizedError({ operation: 'turnChatIntoProject' });
+  assert.equal(getErrorGroup(await fail(owner.turnIntoProject('planted'))), 'access');
   assert.deepEqual(adopted, []);
   // An unknown outcome is asked for again under its request, after a restart too; an answer,
   // a refusal included, is final.
-  refusal = new ApplicationError({ code: 'Uncertain', message: 'Reply lost.' });
-  assert.equal((await fail(owner.turnIntoProject('own'))).code, 'Uncertain');
-  assert.equal((await fail(make().turnIntoProject('own'))).code, 'Uncertain');
+  refusal = new UncertainError({ operation: 'turnChatIntoProject' });
+  assert.equal(getErrorGroup(await fail(owner.turnIntoProject('own'))), 'uncertain');
+  assert.equal(getErrorGroup(await fail(make().turnIntoProject('own'))), 'uncertain');
   refusal = undefined;
   assert.equal(await run(owner.turnIntoProject('own')), '/profile/chats/own');
   assert.deepEqual(adopted, ['/profile/chats/own']);

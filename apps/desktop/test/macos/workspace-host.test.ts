@@ -43,11 +43,11 @@ test('a save sent as the daemon is stopped keeps its text, and resolves once the
       return yield* LocalDaemon;
     }),
   );
-  const { client } = await composeWorkspace(t, userData, local);
+  const { workspace } = await composeWorkspace(t, userData, local);
 
-  const checkout = await client.command('openCheckout', { root: project });
-  const disk = await client.command('readFile', { checkout, path: 'a.txt' });
-  await editDraft(client, checkout, 'edited', disk);
+  const checkout = await workspace((w) => w.openCheckout({ root: project }));
+  const disk = await workspace((w) => w.readFile({ checkout, path: 'a.txt' }));
+  await editDraft(workspace, checkout, 'edited', disk);
   const save = {
     target: { checkout, path: 'a.txt' },
     clientId: 'desktop-primary',
@@ -58,20 +58,20 @@ test('a save sent as the daemon is stopped keeps its text, and resolves once the
   const before = await readDaemonPid(directory);
   // The daemon is stopped (what Restart daemon does) just as the editor saves.
   await stopDaemon(directory);
-  const sent = await client.command('saveFile', save).then(
+  const sent = await workspace((w) => w.saveFile(save)).then(
     (result) => result,
     (error: unknown) => error,
   );
-  const loaded = await client.command('loadRecovery', { clientId: 'desktop-primary' });
+  const loaded = await workspace((w) => w.loadRecovery({ clientId: 'desktop-primary' }));
   // Whether the request reached the old daemon or not, the text is in a draft or on disk, never lost.
   const onDisk = (await readFile(join(project, 'a.txt'), 'utf8')) === 'edited';
   assert(onDisk || draftsOf(loaded).some((d) => d.text === 'edited'), String(sent));
   // The next request started a new daemon in a new connection, and files are served again.
-  const again = await client.command('readFile', { checkout, path: 'a.txt' });
+  const again = await workspace((w) => w.readFile({ checkout, path: 'a.txt' }));
   assert.equal(again.text, onDisk ? 'edited' : 'one');
   assert.equal(await Effect.runPromise(local.isRunning), true);
   assert.notEqual(await readDaemonPid(directory), before);
   // The save is settled now: its text is on disk or in the draft, and nothing is left unresolved.
-  const settled = await client.command('loadRecovery', { clientId: 'desktop-primary' });
+  const settled = await workspace((w) => w.loadRecovery({ clientId: 'desktop-primary' }));
   assert.deepEqual(settled.errors, []);
 });

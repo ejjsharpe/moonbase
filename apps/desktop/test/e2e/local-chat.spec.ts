@@ -166,7 +166,7 @@ test('local chat runs in the daemon: setup, picker folders, tools, @ search; Qui
         },
       },
     });
-    expect(unauthorized).toMatchObject({ ok: false, error: { code: 'Unauthorized' } });
+    expect(unauthorized).toMatchObject({ ok: false, error: { _tag: 'FolderRefusedError' } });
     await addProviderKey(page, 'sk-controlled-private-key');
     for (const [index, folder] of [first, second].entries()) {
       await pickWith(app, folder);

@@ -22,7 +22,11 @@ globalThis.moonbaseTestIpc = (request, proceed) => {
   if (process.env.MOONBASE_TEST_STARTUP_FAILURE === 'editor' && request.tag === 'loadRecovery')
     return Promise.resolve({
       ok: false,
-      error: { code: 'Persistence', message: 'Controlled startup failure' },
+      error: {
+        _tag: 'WorkspaceStoreError',
+        failure: 'publication',
+        detail: 'Controlled startup failure',
+      },
     });
   return proceed();
 };

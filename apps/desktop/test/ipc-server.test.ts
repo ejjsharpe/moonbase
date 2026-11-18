@@ -1,19 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Effect, Exit } from 'effect';
+import { Effect, Exit, Stream } from 'effect';
 import { maximumChatInputBytes } from '@moonbase/contracts/chat';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { UncertainError } from '@moonbase/contracts/errors';
+import type { ChatServiceShape, WorkspaceServiceShape } from '@moonbase/contracts/services';
+import { WorkspaceStoreError } from '@moonbase/contracts/workspace-host-errors';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { ipcLimits } from '../src/ipc/ipc-limits.ts';
 import { makePortSocket } from '../src/ipc/port-socket.ts';
 import { toMessagePortLike } from '../src/renderer/ipc/desktop-ipc.ts';
-import {
-  fakeChatTargets,
-  makeIpcFixture,
-  waitFor,
-  type FakeWorkspaceClient,
-} from './fixtures/ipc-fixture.ts';
-import type { ChatClient } from '@moonbase/contracts/chat';
+import { fakeChatTargets, makeIpcFixture, waitFor, watched } from './fixtures/ipc-fixture.ts';
 import { ManagedRuntime, Layer } from 'effect';
 
 const target: CheckoutTarget = {
@@ -27,22 +23,20 @@ const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' }
 /** A workspace whose reads wait until their request is cancelled, and whose watches stay open. */
 function heldWorkspace() {
   const state = { reads: 0, cancelled: 0, watches: 0, closed: 0 };
-  const client: FakeWorkspaceClient = {
-    command: (_operation, _input, options) =>
-      new Promise((_resolve, reject) => {
-        state.reads++;
-        options?.signal?.addEventListener('abort', () => {
-          state.cancelled++;
-          reject(new ApplicationError({ code: 'Cancelled', message: 'Cancelled' }));
-        });
+  /** A request that waits until it is interrupted. */
+  const held = Effect.andThen(
+    Effect.sync(() => void state.reads++),
+    Effect.onInterrupt(Effect.never, () => Effect.sync(() => void state.cancelled++)),
+  );
+  const workspace: Partial<WorkspaceServiceShape> = {
+    readFile: () => held,
+    watch: () =>
+      watched(() => {
+        state.watches++;
+        return () => void state.closed++;
       }),
-    watch: () => {
-      state.watches++;
-      return async () => void state.closed++;
-    },
-    watchRecovery: () => async () => {},
   };
-  return { state, client };
+  return { state, held, workspace };
 }
 const read = { checkout: target, path: 'a.ts' };
 
@@ -94,7 +88,7 @@ test('a document holds at most its connection limit, and a closed one frees its 
 
 test('main refuses a frame it cannot read, an unknown procedure and an input its schema refuses, before dispatch', async () => {
   const workspace = heldWorkspace();
-  const f = await makeIpcFixture({ editor: { client: workspace.client } });
+  const f = await makeIpcFixture({ editor: { workspace: workspace.workspace } });
   try {
     f.approvals.adoptCheckout(target);
     for (const [tag, payload] of [
@@ -106,11 +100,11 @@ test('main refuses a frame it cannot read, an unknown procedure and an input its
       // Exact shapes: a field no schema declares is refused, not dropped.
       ['loadRecovery', { clientId: 'desktop-primary', extra: true }],
       ['readFile', { checkout: { ...target, private: 'x' }, path: 'a.ts' }],
-      // A cleanup failure's message is bounded and its code one Moonbase knows.
+      // A cleanup failure's text is bounded, and it is a window failure, not any error.
       ...[
-        { _tag: 'ApplicationError', code: 'Persistence', message: 'x'.repeat(513) },
-        { _tag: 'ApplicationError', code: 'Unknown', message: 'bad' },
-        { _tag: 'ApplicationError', code: 'Persistence', message: 'bad', private: true },
+        { _tag: 'WindowFailure', text: 'x'.repeat(ipcLimits.errorMessageLength + 1) },
+        { _tag: 'WorkspaceStoreError', failure: 'publication' },
+        { _tag: 'WindowFailure', text: 'bad', private: true },
       ].map((cleanupError) => ['answerQuit', { id: 'quit', consent: true, cleanupError }] as const),
     ] as const)
       assert.equal((await f.call(tag, payload)).error?._tag, 'Die', tag);
@@ -126,14 +120,9 @@ test('main refuses a frame it cannot read, an unknown procedure and an input its
 
 test('each kind runs at most its limit of requests and of watches at once, refusing more', async () => {
   const workspace = heldWorkspace();
-  const chat: ChatClient = {
-    command: (_operation, _input, options) =>
-      workspace.client.command('readFile', read, options) as never,
-    watch: () => async () => {},
-    watchChatList: () => async () => {},
-  };
+  const chat: Partial<ChatServiceShape> = { getChat: () => workspace.held };
   const f = await makeIpcFixture({
-    editor: { client: workspace.client },
+    editor: { workspace: workspace.workspace },
     chat: {
       backends: {
         ...fakeChatTargets({ local: { chat, context }, remote: { chat, context } }),
@@ -189,13 +178,12 @@ test('each kind runs at most its limit of requests and of watches at once, refus
 
 test('the chat request size bound admits the largest escaped message', async () => {
   const sent: unknown[] = [];
-  const chat: ChatClient = {
-    command: async (_operation, input) => {
-      sent.push(input);
-      throw new ApplicationError({ code: 'Uncertain', message: 'Admission reply lost' });
-    },
-    watch: () => async () => {},
-    watchChatList: () => async () => {},
+  const chat: Partial<ChatServiceShape> = {
+    sendChat: (input) =>
+      Effect.andThen(
+        Effect.sync(() => void sent.push(input)),
+        Effect.fail(new UncertainError({ operation: 'sendChat' })),
+      ),
   };
   const f = await makeIpcFixture({
     chat: { backends: fakeChatTargets({ local: { chat, context } }) },
@@ -208,7 +196,7 @@ test('the chat request size bound admits the largest escaped message', async () 
       requestId: 'escaped',
       text: 'x' + '\u0001'.repeat(maximumChatInputBytes - 1),
     };
-    await assert.rejects(Effect.runPromise(chat.sendChat(input)), { code: 'Uncertain' });
+    await assert.rejects(Effect.runPromise(chat.sendChat(input)), { _tag: 'UncertainError' });
     assert.deepEqual(sent, [input]);
     assert.equal(sent.length, 1);
   } finally {
@@ -216,37 +204,24 @@ test('the chat request size bound admits the largest escaped message', async () 
   }
 });
 
-test('a handler’s defect reaches the renderer without its diagnostics, and an error’s message is bounded', async () => {
+test('a handler’s defect reaches the renderer without its diagnostics, and its error as itself', async () => {
   const secret = '/Users/someone/private';
-  let failure: unknown = Error(secret);
+  let failure: Effect.Effect<never, WorkspaceStoreError> = Effect.die(Error(secret));
   const f = await makeIpcFixture({
-    editor: {
-      client: {
-        command: async () => {
-          throw failure;
-        },
-        watch: () => async () => {},
-        watchRecovery: () => async () => {},
-      },
-    },
+    editor: { workspace: { readFile: () => failure } },
   });
   try {
     f.approvals.adoptCheckout(target);
-    const defect = await f.call('readFile', read);
-    assert.deepEqual(defect, {
+    assert.deepEqual(await f.call('readFile', read), {
       ok: false,
-      error: {
-        _tag: 'ApplicationError',
-        code: 'Unavailable',
-        message: 'Application effect failed',
-      },
+      error: { _tag: 'IpcFailedError' },
     });
-    failure = new ApplicationError({ code: 'Persistence', message: 'x'.repeat(1000) });
-    await assert.rejects(f.editor.command('readFile', read), (error: ApplicationError) => {
-      assert.equal(error.code, 'Persistence');
-      assert.equal(error.message.length, ipcLimits.errorMessageLength);
-      return true;
-    });
+    const declared = new WorkspaceStoreError({ failure: 'publication', detail: 'Disk full.' });
+    failure = Effect.fail(declared);
+    await assert.rejects(
+      f.workspace((w) => w.readFile(read)),
+      declared,
+    );
   } finally {
     await f.dispose();
   }
@@ -254,17 +229,13 @@ test('a handler’s defect reaches the renderer without its diagnostics, and an 
 
 test('releasing a document interrupts its requests, closes its watches and connections, and refuses none after', async () => {
   const workspace = heldWorkspace();
-  const f = await makeIpcFixture({ editor: { client: workspace.client } });
+  const f = await makeIpcFixture({ editor: { workspace: workspace.workspace } });
   try {
     f.approvals.adoptCheckout(target);
     const raw = (await f.connectRaw())!;
-    const reading = f.editor.command('readFile', read);
+    const reading = f.workspace((w) => w.readFile(read));
     void reading.catch(() => {});
-    f.editor.watch(
-      { checkout: target, paths: [] },
-      () => {},
-      () => {},
-    );
+    f.forkWorkspace((w) => Stream.runDrain(w.watch({ checkout: target, paths: [] })));
     await waitFor(() => workspace.state.reads === 1 && workspace.state.watches === 1);
     await f.releaseDocument();
     assert.equal(workspace.state.cancelled, 1);
@@ -272,7 +243,7 @@ test('releasing a document interrupts its requests, closes its watches and conne
     await raw.closed;
     await assert.rejects(reading);
     // The next document is served as usual.
-    const next = f.editor.command('readFile', read);
+    const next = f.workspace((w) => w.readFile(read));
     void next.catch(() => {});
     await waitFor(() => workspace.state.reads === 2);
     await f.close();

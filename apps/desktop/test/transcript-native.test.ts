@@ -8,7 +8,6 @@ import { MarkdownCache } from '../src/renderer/chat/transcript/markdown/markdown
 import { Effect } from 'effect';
 import {
   maximumChatReplyBytes,
-  type ChatClient,
   type ChatSnapshot,
   type ChatTranscriptPart,
   type ChatTranscriptSource,
@@ -18,17 +17,23 @@ import {
   maximumTranscriptCopyBytes,
   type NativeTranscriptActions,
 } from '../src/main/chat/transcript-native.ts';
-import { ApplicationError } from '@moonbase/contracts/errors';
-import { fakeChatTargets, makeIpcFixture, waitFor } from './fixtures/ipc-fixture.ts';
+import { TranscriptChangedError } from '@moonbase/contracts/chat-errors';
+import {
+  fakeChatTargets,
+  toChatService,
+  type FakeChat,
+  makeIpcFixture,
+  waitFor,
+} from './fixtures/ipc-fixture.ts';
 /** A chat target's fakes: its chat, and the OS clipboard and browser main's Copy and links use. */
-type Owner = { chat: ChatClient; transcript: NativeTranscriptActions };
+type Owner = { chat: FakeChat; transcript: NativeTranscriptActions };
 /** Desktop IPC with `local` (and `remote`) as its chat targets, as the renderer reaches them. */
 const overIpc = (local: Owner, remote?: Owner) =>
   makeIpcFixture({
     chat: {
       backends: fakeChatTargets({
-        local: { chat: local.chat, context },
-        ...(remote ? { remote: { chat: remote.chat, context } } : {}),
+        local: { chat: toChatService(local.chat), context },
+        ...(remote ? { remote: { chat: toChatService(remote.chat), context } } : {}),
       }),
       transcript: local.transcript,
     },
@@ -261,8 +266,8 @@ async function fixture(live = false, text = '  **raw**\r\n\t🌔 é\r\n' + 'α'
       receive?.(structuredClone(snapshot));
     },
   };
-  // Trusted ChatClient: it stands in for a boundary that already decoded and bounded replies.
-  const chat: ChatClient = {
+  // Trusted FakeChat: it stands in for a boundary that already decoded and bounded replies.
+  const chat: FakeChat = {
     watchChatList: () => async () => {},
     async command(operation, input) {
       if (operation === 'getChat') return structuredClone(snapshot) as never;
@@ -288,7 +293,7 @@ async function fixture(live = false, text = '  **raw**\r\n\t🌔 é\r\n' + 'α'
         assert.equal(request.selection.partId, 'm0.b0');
         const bytes = Buffer.from(text).subarray(0, request.selection.bytes);
         if (revision(bytes.toString()) !== request.selection.revision)
-          throw Object.assign(Error('Source changed'), { code: 'Conflict' });
+          throw new TranscriptChangedError({ change: 'prefix' });
         const offset = Number(request.cursor ?? 0);
         let end = Math.min(offset + 16000, bytes.length);
         while (end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--;
@@ -433,7 +438,9 @@ test('held content/final proof cannot authorize replacement, rollover, finalizat
     // The host refuses a replaced prefix on the next read; main refuses observed source changes.
     await assert.rejects(
       f.actions.copy({ source: f.source, selection: selected }),
-      change === 'replace' ? ApplicationError : { code: 'Conflict' },
+      change === 'replace'
+        ? { _tag: 'TranscriptChangedError' }
+        : { _tag: 'TranscriptNativeError', problem: 'source-changed' },
     );
     assert.deepEqual(f.writes, []);
     await f.dispose();
@@ -557,14 +564,14 @@ test('Copy code is independent of highlight/DOM limits, including a large nested
   await f.dispose();
 });
 
-test('native Copy trusts main ChatClient replies and snapshots without decoding them again', async () => {
+test('native Copy trusts main FakeChat replies and snapshots without decoding them again', async () => {
   const f = await fixture(true);
   const padding = 'x'.repeat(maximumChatReplyBytes);
   const { command, watch } = f.chat;
   f.chat.command = async (operation, input, options) =>
-    ({ ...(await command(operation, input, options)), padding }) as never;
+    ({ ...((await command(operation, input, options)) as object), padding }) as never;
   f.chat.watch = (input, receive, onError) =>
-    watch(input, (snapshot) => receive({ ...snapshot, padding } as ChatSnapshot), onError);
+    watch!(input, (snapshot) => receive({ ...snapshot, padding } as ChatSnapshot), onError);
   await f.actions.copy({ source: f.source });
   assert.deepEqual(f.writes, [f.original]);
   await f.dispose();
@@ -620,7 +627,7 @@ test('a cancelled Copy never reports success, and its document waits for the cli
   const copying = f.actions.copy({ source: f.source }, abort.signal);
   await entered.promise;
   abort.abort();
-  await assert.rejects(copying, { code: 'Cancelled' });
+  await assert.rejects(copying, { _tag: 'CancelledError' });
   let released = false;
   const closing = f.desktop.releaseDocument().then(() => {
     released = true;
@@ -632,7 +639,7 @@ test('a cancelled Copy never reports success, and its document waits for the cli
   assert.equal(f.writes.length, 1);
   await f.dispose();
 });
-// Unfiltered duplicates are rejected at the ChatClient boundary (chat-runtime transport test).
+// Unfiltered duplicates are rejected at the FakeChat boundary (chat-runtime transport test).
 test('native Copy rejects repeated copied parts within and across manifest pages before writing', async () => {
   for (const acrossPages of [false, true]) {
     const f = await fixture(),
@@ -658,7 +665,6 @@ test('native Copy rejects repeated copied parts within and across manifest pages
       return value as never;
     };
     await assert.rejects(f.actions.copy({ source: f.source }), {
-      code: 'Incompatible',
       message: acrossPages
         ? 'Transcript manifest repeats a selected part.'
         : 'Transcript manifest repeats a part.',
@@ -696,7 +702,7 @@ test('a cancelled link waits in its document for the opener to settle', async ()
   const opening = f.actions.openLink('https://example.com/read', abort.signal);
   await entered.promise;
   abort.abort();
-  await assert.rejects(opening, { code: 'Cancelled' });
+  await assert.rejects(opening, { _tag: 'CancelledError' });
   let released = false;
   const closing = f.desktop.releaseDocument().then(() => {
     released = true;
@@ -719,7 +725,7 @@ test('native rejects a partial parser node reinterpreted as another block in the
     assert.equal(start, 15995);
     await assert.rejects(
       f.actions.copy({ source: f.source, selection: select(f.part), code: { start } }),
-      { code: 'Conflict' },
+      { _tag: 'TranscriptNativeError', problem: 'code-changed' },
     );
     assert.deepEqual(f.writes, []);
     await f.actions.copy({
@@ -773,7 +779,7 @@ test('Copy accepts an empty authored text part', async () => {
     truncated: false,
   };
   const writes: string[] = [];
-  const chat: ChatClient = {
+  const chat: FakeChat = {
     watchChatList: () => async () => {},
     async command(_operation, input) {
       const { selection } = input as { selection?: object };
@@ -831,7 +837,7 @@ async function partsFixture(texts: string[], chunkBytes = 4) {
   }));
   const reads: string[] = [],
     writes: string[] = [];
-  const chat: ChatClient = {
+  const chat: FakeChat = {
     watchChatList: () => async () => {},
     async command(_operation, input) {
       const { selection, cursor } = input as { selection?: { partId: string }; cursor?: string };
@@ -901,7 +907,7 @@ test('Copy refuses more than its byte limit as soon as a part would exceed it', 
     mib,
   );
   try {
-    await assert.rejects(f.copy(), { code: 'Unavailable', message: /8 MiB/ });
+    await assert.rejects(f.copy(), { _tag: 'TranscriptNativeError', problem: 'text-too-large' });
     assert.deepEqual(f.writes, []);
     assert.deepEqual(
       f.reads.filter((partId) => partId === 'm0.b2'),
@@ -910,7 +916,10 @@ test('Copy refuses more than its byte limit as soon as a part would exceed it', 
     );
     const over = { ...select(f.parts[0]!), bytes: maximumTranscriptCopyBytes + 1 };
     const reads = f.reads.length;
-    await assert.rejects(f.copy({ selection: over }), { code: 'Unavailable', message: /8 MiB/ });
+    await assert.rejects(f.copy({ selection: over }), {
+      _tag: 'TranscriptNativeError',
+      problem: 'text-too-large',
+    });
     assert.equal(f.reads.length, reads, 'an over-limit selection is refused before reading');
     assert.deepEqual(f.writes, []);
   } finally {
@@ -931,7 +940,7 @@ test('Copy accepts exactly its byte limit including part separators', async () =
   }
   const over = await partsFixture([first, second + 'b'], mib);
   try {
-    await assert.rejects(over.copy(), { code: 'Unavailable', message: /8 MiB/ });
+    await assert.rejects(over.copy(), { _tag: 'TranscriptNativeError', problem: 'text-too-large' });
     assert.deepEqual(over.writes, []);
   } finally {
     await over.dispose();
@@ -954,8 +963,8 @@ test('code Copy refuses parts too large to parse on main without reading them', 
   const f = await partsFixture([text], 64 * 1024);
   try {
     await assert.rejects(f.copy({ selection: select(f.parts[0]!), code: { start: 0 } }), {
-      code: 'Unavailable',
-      message: /1 MiB/,
+      _tag: 'TranscriptNativeError',
+      problem: 'code-too-large',
     });
     assert.deepEqual(f.reads, []);
     await f.copy({ selection: select(f.parts[0]!) });
@@ -977,8 +986,8 @@ test('a third concurrent Copy is refused as busy, not invalid', async () => {
     const copies = [0, 1].map(() => f.actions.copy({ source: f.source }));
     await waitFor(() => entered === 2);
     await assert.rejects(f.actions.copy({ source: f.source }), {
-      code: 'Unavailable',
-      message: /Another Copy is in progress/,
+      _tag: 'IpcBusyError',
+      limit: 'copies',
     });
     held.resolve();
     await Promise.all(copies);

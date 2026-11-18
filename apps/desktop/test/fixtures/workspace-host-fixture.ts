@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { TestContext } from 'node:test';
 import { ManagedRuntime } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { makeWorkspaceClient, type FakeWorkspaceClient } from './workspace-client-fixture.ts';
+import { makeWorkspaceRunner, type WorkspaceRunner } from './workspace-client-fixture.ts';
 import { WorkspaceRecoveryLive } from '@moonbase/workspace';
 import { createDaemonWorkspaceHost } from '../../src/main/daemon/workspace-host.ts';
 import type { LocalDaemon } from '../../src/main/daemon/local-daemon.ts';
@@ -26,7 +26,7 @@ export async function composeWorkspace(
     ),
   );
   t.after(() => runtime.dispose());
-  return { runtime, client: makeWorkspaceClient(runtime) };
+  return { runtime, workspace: makeWorkspaceRunner(runtime) };
 }
 /** A temporary profile; `stops` run in order, even after a failure, before the profile is removed. */
 export async function temporaryProfile(t: TestContext, stops: (() => Promise<unknown>)[] = []) {
@@ -43,18 +43,16 @@ export async function temporaryProfile(t: TestContext, stops: (() => Promise<unk
 export const one = { text: 'one', version: createHash('sha256').update('one').digest('hex') };
 /** Opens `a.txt` of `target` as buffer `a` with `text` over `disk`, as the editor does. */
 export async function editDraft(
-  client: FakeWorkspaceClient,
+  workspace: WorkspaceRunner,
   target: CheckoutTarget,
   text: string,
   disk = one,
 ) {
   const clientId = 'desktop-primary';
-  await client.command('openTab', {
-    clientId,
-    bufferId: 'a',
-    target: { checkout: target, path: 'a.txt' },
-  });
-  await client.command('updateDraft', { clientId, bufferId: 'a', text, disk });
+  await workspace((w) =>
+    w.openTab({ clientId, bufferId: 'a', target: { checkout: target, path: 'a.txt' } }),
+  );
+  await workspace((w) => w.updateDraft({ clientId, bufferId: 'a', text, disk }));
 }
 export const draftsOf = (load: { state: { buffers: { draft?: { text: string } }[] } }) =>
   load.state.buffers.flatMap((b) => (b.draft ? [b.draft] : []));

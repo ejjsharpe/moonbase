@@ -11,7 +11,7 @@ import { createRegistry, defineExtension, defineTool } from '@earendil-works/pi-
 import { Type } from 'typebox';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { fauxModel, fauxModelOptions, installFaux } from '../../../../test/chat/faux-model.ts';
-import { makeChatClient } from '@moonbase/application/chat/clients';
+import { makeChatCalls } from '@moonbase/application/testing/service-calls';
 import type { ChatSession } from '@moonbase/contracts/chat';
 
 export const retainedImage = readFileSync(new URL('./images/retained.png', import.meta.url));
@@ -70,5 +70,5 @@ export function createImageRuntime(config: ChatSession & { databasePath: string 
       registry,
     }).pipe(Layer.provide(NodeServices.layer)),
   );
-  return { runtime, model, client: makeChatClient(runtime) };
+  return { runtime, model, client: makeChatCalls(runtime) };
 }

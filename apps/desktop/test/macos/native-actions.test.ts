@@ -22,7 +22,7 @@ test('Finder files on the clipboard are read through plutil, and a list that is 
       ['/Users/me/a.txt', '/Users/me/b c'],
       ['/Users/me/a.txt', '/Users/me/b c'],
     ],
-    [{ not: 'a list' }, 'InvalidInput'],
+    [{ not: 'a list' }, 'finder-files'],
   ] as const) {
     const f = nativeActionsFixture(plist(value));
     f.finderFiles = true;
@@ -34,7 +34,7 @@ test('Finder files on the clipboard are read through plutil, and a list that is 
       Effect.result(actions.choosePaths(f.checkout, 'clipboard')),
     );
     if (typeof expected === 'string')
-      assert.equal(result._tag === 'Failure' && result.failure.code, expected);
+      assert.equal(result._tag === 'Failure' && result.failure.failure, expected);
     else assert.deepEqual(succeeded(result), expected);
   }
 });

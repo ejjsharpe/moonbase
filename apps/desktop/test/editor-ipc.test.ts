@@ -3,25 +3,18 @@ import { test } from 'node:test';
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  ApplicationError,
-  type CheckoutTarget,
-  type WorkspaceEvent,
-} from '@moonbase/contracts/workspace';
+import type { CheckoutTarget, WorkspaceEvent } from '@moonbase/contracts/workspace';
+import type { WorkspaceServiceShape } from '@moonbase/contracts/services';
+import { WorkspaceStoreError } from '@moonbase/contracts/workspace-host-errors';
 import {
   emptyBufferView,
   emptyRecoveryState,
   type RecoveryLayout,
   type RecoveryOutline,
 } from '@moonbase/contracts/recovery';
-import { Effect } from 'effect';
+import { Effect, Stream } from 'effect';
 import type { NativeActions } from '../src/main/native-actions.ts';
-import {
-  makeIpcFixture,
-  unusedNative,
-  waitFor,
-  type FakeWorkspaceClient,
-} from './fixtures/ipc-fixture.ts';
+import { makeIpcFixture, unusedNative, waitFor, watched } from './fixtures/ipc-fixture.ts';
 
 const target: CheckoutTarget = {
   hostId: 'local-host',
@@ -42,40 +35,50 @@ const worktree = (root: string) => ({
 /** A workspace that answers what these tests ask and counts what reached it. */
 function fakeWorkspace(overrides: Partial<Record<string, (input: never) => unknown>> = {}) {
   const dispatched: string[] = [];
-  const client: FakeWorkspaceClient = {
-    command: async (operation, input) => {
-      dispatched.push(operation);
-      const override = overrides[operation];
-      if (override) return (await override(input as never)) as never;
-      if (operation === 'openCheckout') return target as never;
-      if (operation === 'listWorktrees')
-        return { worktrees: [worktree('/approved-topic')] } as never;
-      if (operation === 'loadRecovery')
-        return {
-          state: { ...emptyRecoveryState('desktop-primary'), checkouts: [target] },
-          operations: [
-            {
-              id: 'earlier-operation',
-              clientId: 'earlier-client',
-              checkout: target,
-              kind: 'trash',
-              outcome: 'completed',
-              items: [],
-            },
-          ],
-          errors: [],
-        } as never;
-      if (operation === 'operationStatus') return null as never;
-      return { paths: [] } as never;
-    },
-    watch: () => async () => {},
-    watchRecovery: (input, receive) => {
-      dispatched.push('watchRecovery');
-      receive({ ...emptyRecoveryState(input.clientId), buffers: [] });
-      return async () => {};
-    },
+  const answer = (operation: string, input: never) => {
+    const override = overrides[operation];
+    if (override) return override(input);
+    if (operation === 'openCheckout') return target;
+    if (operation === 'listWorktrees') return { worktrees: [worktree('/approved-topic')] };
+    if (operation === 'loadRecovery')
+      return {
+        state: { ...emptyRecoveryState('desktop-primary'), checkouts: [target] },
+        operations: [
+          {
+            id: 'earlier-operation',
+            clientId: 'earlier-client',
+            checkout: target,
+            kind: 'trash',
+            outcome: 'completed',
+            items: [],
+          },
+        ],
+        errors: [],
+      };
+    if (operation === 'operationStatus') return null;
+    return { paths: [] };
   };
-  return { client, dispatched };
+  const workspace = new Proxy({} as Partial<WorkspaceServiceShape>, {
+    get: (_, operation) => {
+      if (typeof operation !== 'string' || operation === 'then') return undefined;
+      if (operation === 'watch') return () => Stream.never;
+      if (operation === 'watchRecovery')
+        return (input: { clientId: string }) =>
+          Stream.unwrap(
+            Effect.sync(() => {
+              dispatched.push('watchRecovery');
+              const outline = { ...emptyRecoveryState(input.clientId), buffers: [] };
+              return Stream.concat(Stream.make(outline), Stream.never);
+            }),
+          );
+      return (input: never) =>
+        Effect.sync(() => {
+          dispatched.push(operation);
+          return answer(operation, input);
+        });
+    },
+  });
+  return { workspace, dispatched };
 }
 /** A layout with `checkouts` open and nothing else. */
 const layout = (checkouts: CheckoutTarget[]): RecoveryLayout => {
@@ -99,7 +102,7 @@ const native = (overrides: Partial<NativeActions> = {}): NativeActions => ({
 
 test('a command reaches the workspace only for what main approved for this window', async () => {
   const workspace = fakeWorkspace();
-  const f = await makeIpcFixture({ editor: { client: workspace.client, native: native() } });
+  const f = await makeIpcFixture({ editor: { workspace: workspace.workspace, native: native() } });
   try {
     const refused = async (operation: string, input: unknown, refusal: string) =>
       assert.deepEqual(
@@ -114,10 +117,10 @@ test('a command reaches the workspace only for what main approved for this windo
     assert.deepEqual(workspace.dispatched, []);
     // The picker's root opens once.
     assert.equal(await f.shell.chooseCheckout(), '/approved');
-    await f.editor.command('openCheckout', { root: '/approved' });
+    await f.workspace((w) => w.openCheckout({ root: '/approved' }));
     await refused('openCheckout', { root: '/elsewhere' }, 'root');
     // A known checkout's root opens again once its picker grant is spent.
-    await f.editor.command('openCheckout', { root: '/approved' });
+    await f.workspace((w) => w.openCheckout({ root: '/approved' }));
     // An exact approved checkout only: another host's copy of it is refused.
     await refused(
       'readFile',
@@ -147,45 +150,53 @@ test('a command reaches the workspace only for what main approved for this windo
       'foreign-client',
     );
     await refused('watchRecovery', { clientId: 'foreign' }, 'foreign-client');
-    await f.editor.command('openTab', {
-      clientId: 'desktop-primary',
-      bufferId: 'b1',
-      target: { checkout: target, path: 'a.ts' },
-    });
-    await f.editor.command('updateDraft', {
-      clientId: 'desktop-primary',
-      bufferId: 'b1',
-      text: 'draft',
-      disk: { text: 'A', version: 'v' },
-    });
-    await f.editor.command('updateLayout', {
-      clientId: 'desktop-primary',
-      layout: layout([target]),
-    });
-    await f.editor.command('closeTab', { clientId: 'desktop-primary', bufferId: 'b1' });
+    await f.workspace((w) =>
+      w.openTab({
+        clientId: 'desktop-primary',
+        bufferId: 'b1',
+        target: { checkout: target, path: 'a.ts' },
+      }),
+    );
+    await f.workspace((w) =>
+      w.updateDraft({
+        clientId: 'desktop-primary',
+        bufferId: 'b1',
+        text: 'draft',
+        disk: { text: 'A', version: 'v' },
+      }),
+    );
+    await f.workspace((w) =>
+      w.updateLayout({
+        clientId: 'desktop-primary',
+        layout: layout([target]),
+      }),
+    );
+    await f.workspace((w) => w.closeTab({ clientId: 'desktop-primary', bufferId: 'b1' }));
     const outlines: RecoveryOutline[] = [];
-    const close = f.editor.watchRecovery(
-      { clientId: 'desktop-primary' },
-      (outline) => outlines.push(outline),
-      () => {},
+    const close = f.forkWorkspace((w) =>
+      Stream.runForEach(w.watchRecovery({ clientId: 'desktop-primary' }), (outline) =>
+        Effect.sync(() => void outlines.push(outline)),
+      ),
     );
     await waitFor(() => outlines.length === 1);
     await close();
     // Git's listed worktrees of an approved checkout may open; a renderer location never makes one.
     await refused('openCheckout', { root: '/approved-topic' }, 'root');
-    await f.editor.command('listWorktrees', { checkout: target });
-    await f.editor.command('openCheckout', { root: '/approved-topic' });
+    await f.workspace((w) => w.listWorktrees({ checkout: target }));
+    await f.workspace((w) => w.openCheckout({ root: '/approved-topic' }));
     await refused(
       'createWorktree',
       { checkout: target, base: 'main', branch: 'feature', location: '/anywhere/feature' },
       'worktree-location',
     );
     // Recovery's operations of an earlier client may be asked after; others may not.
-    await f.editor.command('loadRecovery', { clientId: 'desktop-primary' });
-    await f.editor.command('operationStatus', {
-      clientId: 'earlier-client',
-      id: 'earlier-operation',
-    });
+    await f.workspace((w) => w.loadRecovery({ clientId: 'desktop-primary' }));
+    await f.workspace((w) =>
+      w.operationStatus({
+        clientId: 'earlier-client',
+        id: 'earlier-operation',
+      }),
+    );
     await refused('operationStatus', { clientId: 'earlier-client', id: 'other' }, 'foreign-client');
     await refused(
       'acknowledgeOperation',
@@ -216,7 +227,7 @@ test('a command reaches the workspace only for what main approved for this windo
 
 test('approvals outlive a document, but its picker grants do not', async () => {
   const workspace = fakeWorkspace();
-  const f = await makeIpcFixture({ editor: { client: workspace.client, native: native() } });
+  const f = await makeIpcFixture({ editor: { workspace: workspace.workspace, native: native() } });
   try {
     await f.shell.chooseCheckout();
     await f.releaseDocument();
@@ -226,11 +237,11 @@ test('approvals outlive a document, but its picker grants do not', async () => {
       error: { _tag: 'IpcAuthorityError', refusal: 'root' },
     });
     await f.shell.chooseCheckout();
-    await f.editor.command('openCheckout', { root: '/approved' });
+    await f.workspace((w) => w.openCheckout({ root: '/approved' }));
     await f.releaseDocument();
     // An opened checkout stays approved, and its root opens again.
-    await f.editor.command('listWorktrees', { checkout: target });
-    await f.editor.command('openCheckout', { root: '/approved' });
+    await f.workspace((w) => w.listWorktrees({ checkout: target }));
+    await f.workspace((w) => w.openCheckout({ root: '/approved' }));
   } finally {
     await f.dispose();
   }
@@ -255,13 +266,13 @@ test('a plain folder main adopts opens for the renderer, and Initialize Git repl
     openCheckout: () => folder,
     initializeRepository: () => initialized,
   });
-  const f = await makeIpcFixture({ editor: { client: workspace.client } });
+  const f = await makeIpcFixture({ editor: { workspace: workspace.workspace } });
   try {
     const ignored = (checkout: unknown) =>
       f.call('getIgnoredPaths', { checkout, path: '', paths: ['a.txt'] });
     assert.equal((await f.call('openCheckout', { root: folder.root })).ok, false);
     f.approvals.adoptCheckout(folder);
-    await f.editor.command('openCheckout', { root: folder.root });
+    await f.workspace((w) => w.openCheckout({ root: folder.root }));
     assert((await ignored(folder)).ok);
     // A Git-shaped copy of the folder's target is not its approval.
     assert.equal(
@@ -269,7 +280,7 @@ test('a plain folder main adopts opens for the renderer, and Initialize Git repl
       false,
     );
     assert.deepEqual(
-      await f.editor.command('initializeRepository', { checkout: folder }),
+      await f.workspace((w) => w.initializeRepository({ checkout: folder })),
       initialized,
     );
     assert.equal((await ignored(folder)).ok, false);
@@ -281,7 +292,7 @@ test('a plain folder main adopts opens for the renderer, and Initialize Git repl
 
 test('an editor command is held to its input bounds before it reaches the workspace', async () => {
   const workspace = fakeWorkspace();
-  const f = await makeIpcFixture({ editor: { client: workspace.client } });
+  const f = await makeIpcFixture({ editor: { workspace: workspace.workspace } });
   try {
     f.approvals.adoptCheckout(target);
     const ignored = (paths: string[]) =>
@@ -400,7 +411,7 @@ test('captured imports belong to the document: released with it, or at once when
   let capture = Promise.withResolvers<string[]>();
   const choose = Promise.withResolvers<string[]>();
   let captures = 0;
-  let release: () => Promise<void> = async () => {};
+  let release: Effect.Effect<void, WorkspaceStoreError> = Effect.void;
   const f = await makeIpcFixture({
     editor: {
       native: native({
@@ -411,10 +422,10 @@ test('captured imports belong to the document: released with it, or at once when
             return capture.promise;
           }),
         release: ({ references }) =>
-          Effect.promise(async () => {
-            released.push(references);
-            await release();
-          }),
+          Effect.andThen(
+            Effect.sync(() => void released.push(references)),
+            Effect.suspend(() => release),
+          ),
       }),
     },
   });
@@ -441,17 +452,13 @@ test('captured imports belong to the document: released with it, or at once when
     await assert.rejects(late);
     assert.deepEqual(released, [['kept'], ['late']]);
     // A failed release has no request to answer with, so it is reported.
-    release = async () => {
-      throw new ApplicationError({ code: 'Persistence', message: 'Release failed' });
-    };
+    const failure = new WorkspaceStoreError({ failure: 'publication', detail: 'Release failed' });
+    release = Effect.fail(failure);
     capture = Promise.withResolvers();
     capture.resolve(['failing']);
     await f.shell.pasteImports(target);
     await f.releaseDocument();
-    assert.deepEqual(
-      f.cleanupFailures.map((error) => (error as ApplicationError).code),
-      ['Persistence'],
-    );
+    assert.deepEqual(f.cleanupFailures, [failure]);
   } finally {
     await f.dispose();
   }
@@ -462,24 +469,22 @@ test('a workspace watch delivers its events until closed, and closing it closes 
   let closes = 0;
   const f = await makeIpcFixture({
     editor: {
-      client: {
-        ...fakeWorkspace().client,
-        watch: (_input, deliver) => {
-          receive = deliver;
-          return async () => {
-            closes++;
-          };
-        },
+      workspace: {
+        watch: () =>
+          watched<WorkspaceEvent>((deliver) => {
+            receive = deliver;
+            return () => void closes++;
+          }),
       },
     },
   });
   try {
     f.approvals.adoptCheckout(target);
     const events: WorkspaceEvent[] = [];
-    const close = f.editor.watch(
-      { checkout: target, paths: [] },
-      (event) => events.push(event),
-      () => {},
+    const close = f.forkWorkspace((w) =>
+      Stream.runForEach(w.watch({ checkout: target, paths: [] }), (event) =>
+        Effect.sync(() => void events.push(event)),
+      ),
     );
     await waitFor(() => receive);
     receive!({ checkout: target, paths: ['a.ts'] });

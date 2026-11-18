@@ -9,10 +9,10 @@ import { type Effect, Layer, ManagedRuntime } from 'effect';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
 import { LocalHostService, WorkspaceHostService } from '@moonbase/contracts/services';
 import {
-  makeChatClient,
-  makeConnectionClient,
-  makeProviderSetupClient,
-} from '@moonbase/application/chat/clients';
+  makeChatCalls,
+  makeConnectionCalls,
+  makeProviderSetupCalls,
+} from '@moonbase/application/testing/service-calls';
 import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
 import { RemoteDaemonLive, RemoteWorkspaceHostLive } from '@moonbase/daemon-protocol/remote';
 import { findDaemonCommand } from '../src/main/daemon/daemon-command.ts';
@@ -137,12 +137,12 @@ test('the packaged daemon serves a chat from temporary data, and its Claude Code
       }).pipe(Layer.provideMerge(LoopbackConnectionLive({ directory }))),
     );
     runtime = clients as ManagedRuntime.ManagedRuntime<unknown, unknown>;
-    const connected = await makeConnectionClient(clients).command('connect', {
+    const connected = await makeConnectionCalls(clients).command('connect', {
       profileId: 'loopback',
     });
     assert.equal(connected.state, 'connected');
     // Provider setup sees the subscription through the faux CLI's login.
-    const providers = await makeProviderSetupClient(clients, 'smoke').command('getProviders', {});
+    const providers = await makeProviderSetupCalls(clients, 'smoke').command('getProviders', {});
     const subscription = providers.providers.find((provider) => provider.id === 'claude-code');
     assert.equal(subscription?.configured, true, JSON.stringify(subscription));
     const folders = await clients.runPromise(LocalHostService);
@@ -153,7 +153,7 @@ test('the packaged daemon serves a chat from temporary data, and its Claude Code
         path: project,
       }),
     );
-    const chat = makeChatClient(clients);
+    const chat = makeChatCalls(clients);
     // The project is no Git repository and PATH has no `rg`, so only the app's ripgrep lists it.
     await writeFile(join(project, 'readme.md'), 'hello');
     const found = await chat.command('findChatFiles', {
@@ -264,7 +264,7 @@ test('the packaged daemon opens, saves, searches and trashes in a temporary repo
       ),
     );
     runtime = clients as ManagedRuntime.ManagedRuntime<unknown, unknown>;
-    await makeConnectionClient(clients).command('connect', { profileId: 'loopback' });
+    await makeConnectionCalls(clients).command('connect', { profileId: 'loopback' });
     const host = await clients.runPromise(WorkspaceHostService);
     const run = <A>(effect: Effect.Effect<A, unknown>) => clients.runPromise(effect);
     const checkout = await run(host.openCheckout({ root: project }));

@@ -1,8 +1,12 @@
 import { openActivity, openActivityGroups, stepToggle } from '../fixtures/transcript-list.ts';
 import { test, expect, type Page, type Locator } from '@playwright/test';
-import type { ChatClient } from '@moonbase/contracts/chat';
 import type { TranscriptCopy } from '../../src/ipc/chat-rpcs.ts';
-import { fakeChatTargets, makeIpcFixture } from '../fixtures/ipc-fixture.ts';
+import {
+  fakeChatTargets,
+  toChatService,
+  type FakeChat,
+  makeIpcFixture,
+} from '../fixtures/ipc-fixture.ts';
 
 async function open(page: Page) {
   await page.goto('/?local&design&transcript');
@@ -55,7 +59,7 @@ async function installCopy(page: Page) {
   const context = await page.evaluate(() => window.demo.chat.dependencies.context);
   const writes: string[] = [],
     inputs: TranscriptCopy[] = [];
-  const client: ChatClient = {
+  const client: FakeChat = {
     watchChatList: () => async () => {},
     command: (operation, input) =>
       page.evaluate(
@@ -83,7 +87,7 @@ async function installCopy(page: Page) {
   // Copy as the desktop renderer sends it: over IPC to main, for this target.
   const desktop = await makeIpcFixture({
     chat: {
-      backends: fakeChatTargets({ local: { chat: client, context } }),
+      backends: fakeChatTargets({ local: { chat: toChatService(client), context } }),
       transcript: {
         writeText: async (text: string) => {
           writes.push(text);

@@ -1,18 +1,21 @@
 import { Cause, Effect, Exit, Layer, ManagedRuntime, PubSub, Queue, Scope, Stream } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/errors';
-import type { ObservationClose } from '@moonbase/contracts/common';
-import type { RecoveryOutline } from '@moonbase/contracts/recovery';
 import type {
   ChatServiceShape,
   ConnectionServiceShape,
   ProviderSetupService,
   WorkspaceServiceShape,
 } from '@moonbase/contracts/services';
-import type { ChatClient, ChatSession } from '@moonbase/contracts/chat';
-import type { ConnectionClient } from '@moonbase/contracts/connection';
-import type { ProviderSetupClient } from '@moonbase/contracts/providers';
-import { normalizeApplicationError } from '@moonbase/effect';
-import type { WorkspaceCommand, WorkspaceEvent } from '@moonbase/contracts/workspace';
+import type {
+  ChatCommand,
+  ChatListUpdate,
+  ChatSession,
+  ChatSnapshot,
+  ChatTarget,
+} from '@moonbase/contracts/chat';
+import type { ConnectionCommand, ConnectionSnapshot } from '@moonbase/contracts/connection';
+import { isKnownError } from '@moonbase/contracts/error-groups';
+import { HostUnavailableError } from '@moonbase/contracts/host-errors';
+import type { ChatServiceError } from '@moonbase/contracts/services';
 import type { MessagePortLike } from '../../src/ipc/port-socket.ts';
 import type { WindowAction } from '../../src/ipc/window-rpcs.ts';
 import {
@@ -20,7 +23,7 @@ import {
   type DocumentHandlersOptions,
 } from '../../src/main/ipc/document-handlers.ts';
 import type { ChatIpcOptions } from '../../src/main/ipc/chat-ipc.ts';
-import type { ChatTargetClients } from '../../src/main/chat/chat-backends.ts';
+import type { ChatBackends, ChatTargetClients } from '../../src/main/chat/chat-backends.ts';
 import { makeChatDocuments, type ChatDocumentOptions } from '../../src/main/chat/chat-document.ts';
 import { EditorApprovals } from '../../src/main/ipc/editor-approvals.ts';
 import type { EditorIpcOptions } from '../../src/main/ipc/editor-ipc.ts';
@@ -33,15 +36,13 @@ import {
 } from '../../src/renderer/ipc/application-clients.ts';
 import { makeDesktopIpcLayer, toMessagePortLike } from '../../src/renderer/ipc/desktop-ipc.ts';
 import { WorkspaceIpcLive } from '../../src/renderer/ipc/workspace-ipc.ts';
-import { makeWorkspaceClient, type FakeWorkspaceClient } from './workspace-client-fixture.ts';
+import { forkWorkspace, makeWorkspaceRunner } from './workspace-client-fixture.ts';
 
-export type { FakeWorkspaceClient };
-
-/** A callback watch as a stream, closed (ignoring a close failure) when the stream ends. */
-export const watched = <A>(
-  watch: (receive: (value: A) => void, fail: (error: ApplicationError) => void) => ObservationClose,
+/** A test's callback watch as a stream, closed (ignoring a close failure) when the stream ends. */
+export const watched = <A, E = never>(
+  watch: (receive: (value: A) => void, fail: (error: E) => void) => () => unknown,
 ) =>
-  Stream.callback<A, ApplicationError>((queue) =>
+  Stream.callback<A, E>((queue) =>
     Effect.acquireRelease(
       Effect.sync(() =>
         watch(
@@ -49,64 +50,100 @@ export const watched = <A>(
           (error) => Queue.failCauseUnsafe(queue, Cause.fail(error)),
         ),
       ),
-      (close) => Effect.promise(() => close().catch(() => {})),
+      (close) => Effect.promise(async () => close()).pipe(Effect.ignore),
     ),
   );
-/** A Promise command as the Effect a service returns, aborted when interrupted. */
-const command = <A>(run: (signal: AbortSignal) => Promise<A>) =>
-  Effect.tryPromise({ try: run, catch: (error) => normalizeApplicationError(error) });
+/**
+ * `partial` as a whole service: each method a test leaves out dies, as not part of the test (a
+ * `watch…` one as a stream).
+ */
+export const fakeService = <S extends object>(name: string, partial: Partial<S> = {}): S =>
+  new Proxy(partial, {
+    get: (target, key) => {
+      if (typeof key !== 'string' || key === 'then') return undefined;
+      const value = Reflect.get(target, key);
+      if (value !== undefined) return value;
+      const unused = `${name}'s ${key} is not part of this test.`;
+      return key.startsWith('watch') ? () => Stream.die(unused) : () => Effect.die(unused);
+    },
+  }) as S;
+/** A test's Promise fake of a chat service, as tests that hold replies write one. */
+export type FakeChat = {
+  command(
+    operation: ChatCommand,
+    input: unknown,
+    options: { signal?: AbortSignal },
+  ): Promise<never>;
+  watch?(
+    input: { target: ChatTarget },
+    receive: (snapshot: ChatSnapshot) => void,
+    fail: (error: unknown) => void,
+  ): () => Promise<void>;
+  watchChatList?(
+    input: { session: ChatSession },
+    receive: (update: ChatListUpdate) => void,
+    fail: (error: unknown) => void,
+  ): () => Promise<void>;
+};
+/** A fake's failure as a service's: one of contracts' errors as it is, anything else unavailable. */
+const asServiceError = (error: unknown) =>
+  isKnownError(error)
+    ? (error as ChatServiceError)
+    : new HostUnavailableError({ reason: 'failed' });
 /** The chat service main calls, over a test's Promise fake. */
-export const toChatService = (client: ChatClient): ChatServiceShape =>
-  new Proxy({} as ChatServiceShape, {
+export const toChatService = (fake: FakeChat): Partial<ChatServiceShape> =>
+  new Proxy({} as Partial<ChatServiceShape>, {
     get: (_, name: string) => {
-      if (name === 'watch')
-        return (input: Parameters<ChatClient['watch']>[0]) =>
-          watched((receive, fail) => client.watch(input, receive as never, fail));
-      if (name === 'watchChatList')
-        return (input: Parameters<ChatClient['watchChatList']>[0]) =>
-          watched((receive, fail) => client.watchChatList(input, receive as never, fail));
+      if (name === 'watch' || name === 'watchChatList') {
+        const watch = fake[name];
+        return watch
+          ? (input: never) =>
+              watched<unknown, unknown>((receive, fail) =>
+                watch(input, receive as never, fail),
+              ).pipe(Stream.mapError(asServiceError))
+          : undefined;
+      }
       return (input: never) =>
-        command((signal) => client.command(name as never, input, { signal }));
+        Effect.tryPromise({
+          try: (signal) => fake.command(name as ChatCommand, input, { signal }),
+          catch: asServiceError,
+        });
     },
   });
-/** The provider setup main calls, over a test's Promise fake for every owner. */
-export const toProviderService = (
-  client: ProviderSetupClient,
-): ProviderSetupService['Service'] => ({
-  forOwner: () =>
-    new Proxy({} as ReturnType<ProviderSetupService['Service']['forOwner']>, {
-      get: (_, name: string) => (input: never) =>
-        command((signal) => client.command(name as never, input, { signal })),
-    }),
-  releaseOwner: () => Effect.void,
-  watch: () => watched((receive, fail) => client.watch(receive as never, fail)),
-  getProviderUrl: () => Effect.die('unused'),
-});
+/** A test's Promise fake of the remote connection. */
+export type FakeConnection = {
+  command(
+    operation: ConnectionCommand,
+    input: unknown,
+    options: { signal?: AbortSignal },
+  ): Promise<never>;
+  watch(
+    receive: (snapshot: ConnectionSnapshot) => void,
+    fail: (error: unknown) => void,
+  ): () => Promise<void>;
+};
 /** The remote connection main calls, over a test's Promise fake. */
-export const toConnectionService = (client: ConnectionClient): ConnectionServiceShape =>
-  new Proxy({} as ConnectionServiceShape, {
-    get: (_, name: string) => {
-      if (name === 'watch')
-        return () => watched((receive, fail) => client.watch(receive as never, fail));
-      return (input: never) =>
-        command((signal) => client.command(name as never, input, { signal }));
-    },
+export const toConnectionService = (fake: FakeConnection): Partial<ConnectionServiceShape> =>
+  new Proxy({} as Partial<ConnectionServiceShape>, {
+    get: (_, name: string) =>
+      name === 'watch'
+        ? () =>
+            watched<ConnectionSnapshot, unknown>((receive, fail) => fake.watch(receive, fail)).pipe(
+              Stream.mapError(asServiceError),
+            )
+        : (input: never) =>
+            Effect.tryPromise({
+              try: (signal) => fake.command(name as ConnectionCommand, input, { signal }),
+              catch: asServiceError,
+            }),
   });
+type ProviderSetup = ProviderSetupService['Service'];
 /** A test's fakes of one chat target, as main reaches them. */
 export type FakeChatTarget = {
-  chat: ChatClient;
+  chat: Partial<ChatServiceShape>;
   context: ChatSession;
-  providers?: ProviderSetupClient;
-  connection?: ConnectionClient;
-};
-const unusedProviders: ProviderSetupClient = {
-  command: async () => {
-    throw new ApplicationError({
-      code: 'Unavailable',
-      message: 'Providers are not part of this test.',
-    });
-  },
-  watch: () => async () => {},
+  providers?: Partial<ProviderSetup>;
+  connection?: Partial<ConnectionServiceShape>;
 };
 /** Chat backends whose targets are `targets`' fakes, as their clients reach main. */
 export const fakeChatTargets = (
@@ -116,10 +153,13 @@ export const fakeChatTargets = (
     Object.entries(targets).map(([id, target]) => [
       id,
       {
-        chat: toChatService(target.chat),
+        chat: fakeService('The chat', target.chat),
         context: target.context,
-        providers: toProviderService(target.providers ?? unusedProviders),
-        connection: target.connection ? toConnectionService(target.connection) : null,
+        providers: fakeService<ProviderSetup>('Provider setup', {
+          releaseOwner: () => Effect.void,
+          ...target.providers,
+        }),
+        connection: target.connection ? fakeService('The connection', target.connection) : null,
       } satisfies ChatTargetClients,
     ]),
   ) as Partial<Record<'local' | 'remote', ChatTargetClients>>;
@@ -130,24 +170,6 @@ export const fakeChatTargets = (
     findTarget: (id) => Effect.succeed(clients[id]),
   };
 };
-
-/** The `WorkspaceService` main serves, over a test's fake. */
-export const toWorkspaceService = (client: FakeWorkspaceClient): WorkspaceServiceShape =>
-  new Proxy({} as WorkspaceServiceShape, {
-    get: (_, name: string) => {
-      if (name === 'watch')
-        return (input: Parameters<FakeWorkspaceClient['watch']>[0]) =>
-          watched<WorkspaceEvent>((receive, fail) => client.watch(input, receive, fail));
-      if (name === 'watchRecovery')
-        return (input: { clientId: string }) =>
-          watched<RecoveryOutline>((receive, fail) => client.watchRecovery(input, receive, fail));
-      return (input: never) =>
-        Effect.tryPromise({
-          try: (signal) => client.command(name as WorkspaceCommand, input, { signal }),
-          catch: (error) => normalizeApplicationError(error),
-        });
-    },
-  });
 
 /** Node's port as main's: Node reports the other end closing as a `close` event, as Electron does. */
 const toMainPortLike = (port: MessagePort): MessagePortLike => {
@@ -164,14 +186,6 @@ const toMainPortLike = (port: MessagePort): MessagePortLike => {
       };
     },
   };
-};
-const unused = (name: string) => () => {
-  throw new ApplicationError({ code: 'Unavailable', message: `${name} is not part of this test.` });
-};
-export const unusedEditorClient: FakeWorkspaceClient = {
-  command: unused('The workspace') as never,
-  watch: unused('The workspace watch') as never,
-  watchRecovery: unused('The recovery watch') as never,
 };
 export const unusedNative: NativeActions = {
   chooseCheckout: Effect.die('The picker is not part of this test.'),
@@ -221,10 +235,12 @@ export type RawConnection = {
  */
 export async function makeIpcFixture(
   options: {
-    editor?: Partial<Omit<EditorIpcOptions, 'workspace'>> & { client?: FakeWorkspaceClient };
+    editor?: Partial<Omit<EditorIpcOptions, 'workspace'>> & {
+      workspace?: Partial<WorkspaceServiceShape>;
+    };
     chat?: Partial<Omit<DocumentHandlersOptions['chat'], 'documents' | 'backends'>> & {
       backends?: Partial<ChatIpcOptions['backends']>;
-      releaseOwner?: (ownerId: string) => Effect.Effect<void, ApplicationError>;
+      releaseOwner?: ChatBackends['releaseOwner'];
       perf?: ChatDocumentOptions['perf'];
     };
     lifecycle?: Partial<DocumentHandlersOptions['lifecycle']>;
@@ -258,7 +274,7 @@ export async function makeIpcFixture(
             localHostId: Effect.succeed('local-host'),
             reportCleanup,
             ...options.editor,
-            workspace: toWorkspaceService(options.editor?.client ?? unusedEditorClient),
+            workspace: fakeService('The workspace', options.editor?.workspace),
             approvals,
           },
           chat: { ...chat, backends, documents },
@@ -367,9 +383,12 @@ export async function makeIpcFixture(
     findImages: () => main.runPromise(documents.findImages),
     /** Runs `effect` on main's runtime, as main's own work runs. */
     run: <A, E>(effect: Effect.Effect<A, E>) => main.runPromise(effect),
-    get editor() {
-      return makeWorkspaceClient(renderer);
-    },
+    /** Runs `use` of the renderer's `WorkspaceService`, as the editor calls main. */
+    workspace: ((use, callOptions) =>
+      makeWorkspaceRunner(renderer)(use, callOptions)) as ReturnType<typeof makeWorkspaceRunner>,
+    /** Forks `use` (a watch, say) of the renderer's workspace; the returned close interrupts it. */
+    forkWorkspace: <A, E>(use: (workspace: WorkspaceServiceShape) => Effect.Effect<A, E>) =>
+      forkWorkspace(renderer, use),
     get shell() {
       return makeShellClients(renderer, {
         connect: async () => {},
