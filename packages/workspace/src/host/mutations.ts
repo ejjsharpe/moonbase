@@ -115,7 +115,7 @@ export const mutate = (input: HostInput<'mutate'>) =>
     const retained = (error: unknown) => {
       record.result.message =
         'Filesystem outcome retained in memory; durable publication failed: ' + errorText(error);
-      journal.retainOperation(id, record);
+      journal.keepUnpersistedOperation(id, record);
       return record.result;
     };
     for (const { source, destination, staging: temporary } of items) {

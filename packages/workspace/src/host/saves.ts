@@ -72,7 +72,7 @@ export const saveFile = (input: HostInput<'saveFile'>) =>
       try {
         journal.settleSave(id, record);
       } catch (error) {
-        journal.retainSave(id, record);
+        journal.keepUnpersistedSave(id, record);
         if (result.kind === 'saved')
           return {
             ...result,
@@ -85,7 +85,7 @@ export const saveFile = (input: HostInput<'saveFile'>) =>
       // The disk may have changed: the request stays journalled, for its status to settle.
       Effect.catchCause((cause) => {
         record.message = errorText(Cause.squash(cause));
-        journal.retainSave(id, record);
+        journal.keepUnpersistedSave(id, record);
         return Effect.fail(new UncertainError({ operation: 'Save', target: input.target }));
       }),
       Effect.ensuring(Effect.sync(() => journal.finishSave(id))),

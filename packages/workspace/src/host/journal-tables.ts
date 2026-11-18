@@ -1,7 +1,7 @@
 /**
  * The journal tables. `retained_at` starts a row's retention window: when its client acknowledged
  * it (saves, operations), when it was reserved or last settled (requests) or when the host answered
- * that it never saw the ID (a fence, which has no body). A row without it is never discarded.
+ * that it never saw the ID (a tombstone, which has no body). A row without it is never discarded.
  * `unsettled` marks a save with no outcome and an uncertain operation.
  */
 export const journalSchema = `

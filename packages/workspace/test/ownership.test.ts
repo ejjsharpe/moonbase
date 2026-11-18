@@ -844,7 +844,7 @@ test('mutation cancellation during preflight reserves no ID and consumes no nati
       queueMicrotask(() => abort.abort());
       await rejected;
       await client.command('readFile', { checkout, path: 'file.txt' });
-      // The host reserved nothing, but a status query fences the ID, so the selection runs again
+      // The host reserved nothing, but a status query leaves a tombstone for the ID, so the selection runs again
       // under a new one.
       assert.equal(
         (await client.command('mutate', { ...input, id: input.id + '-again' })).outcome,
