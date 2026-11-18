@@ -2,7 +2,7 @@
 
 `@moonbase/config` supplies the repository's lint, formatting and TypeScript defaults:
 
-- `./oxlint` exports `base`, `node` and `web` presets.
+- `./oxlint` exports `base`, `node` and `web` presets, and `effectNativeRules`/`effectNativeOff` for D15: production code (`apps/*/src`, `packages/*/src`) may not use `setTimeout`, `setInterval`, `Date.now`, `performance.now`, `AbortController`, `new Promise` or a runtime `run*` call. The root `oxlint.config.mts` lists the edge files that may, each lifting only what it names, with its reason.
 - `./oxfmt` exports formatting settings.
 - `./typescript/base.json` exports the shared TypeScript configuration.
 
