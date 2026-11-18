@@ -1,34 +1,46 @@
-import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Context } from 'effect';
+import * as Atom from 'effect/reactivity/Atom';
+import { useAtomValue } from '@effect/atom-react';
 import * as stylex from '@stylexjs/stylex';
 import { Button } from '@base-ui/react/button';
 import { Dialog } from '@base-ui/react/dialog';
 import { Tabs } from '@base-ui/react/tabs';
-import type { DesktopApplicationView } from './desktop-application.ts';
+import type { DesktopApplicationView, DesktopRunner } from './desktop-application.ts';
 import { controls } from '@moonbase/ui/controls';
 import { colors, radius, shadow, space, type } from '@moonbase/ui/tokens.stylex';
 import { workbench } from '@moonbase/ui/workbench';
 import { ProviderSetup } from '../chat/provider-setup.tsx';
 import { Icon } from '@moonbase/ui/icons';
-import type { DesktopChat } from '../chat/desktop-chat.ts';
+import {
+  ChatConfig,
+  ChatConnection,
+  ChatProviderSetup,
+  type ChatServices,
+  type LinkState,
+} from '@moonbase/application/chat';
+import { makeChatShared, useChatShared } from '../chat/chat-context.ts';
 
 export type SettingsSection = 'hosts' | 'providers';
-const noSubscription = () => () => {};
-const noChat = () => undefined;
 
 /** Hosts, their connection and IDs, and local provider setup: what used to sit under the chats. */
 export function Settings({
   application,
   chat,
+  runner,
   section,
   onSectionChange,
   close,
 }: {
   application: DesktopApplicationView;
-  chat: DesktopChat | null;
+  /** The open chat's services, or null while no chat is open. */
+  chat: Context.Context<ChatServices> | null;
+  runner: DesktopRunner;
   section: SettingsSection;
   onSectionChange(section: SettingsSection): void;
   close(): void;
 }) {
+  const providers = chat && Context.get(chat, ChatProviderSetup).available;
   return (
     <Dialog.Root
       open
@@ -62,12 +74,12 @@ export function Settings({
               </Tabs.List>
             </nav>
             <Tabs.Panel value="hosts" {...stylex.props(styles.panel)}>
-              <Hosts application={application} chat={chat} />
+              <Hosts application={application} chat={chat} runner={runner} />
             </Tabs.Panel>
             <Tabs.Panel value="providers" {...stylex.props(styles.panel)}>
               <h2 {...stylex.props(styles.heading)}>Providers</h2>
-              {chat?.providers ? (
-                <ProviderSetup controller={chat.providers} />
+              {chat && providers ? (
+                <OpenChatProviders services={chat} runner={runner} />
               ) : (
                 <p {...stylex.props(styles.note)}>
                   {chat
@@ -88,18 +100,38 @@ export function Settings({
   );
 }
 
+function OpenChatProviders({
+  services,
+  runner,
+}: {
+  services: Context.Context<ChatServices>;
+  runner: DesktopRunner;
+}) {
+  return <ProviderSetup chat={useChatShared(services, runner)} />;
+}
+
+const noLink = Atom.make<LinkState | null>(null);
+const noActive = Atom.make<readonly string[]>([]);
+const noNotice = Atom.make('');
+
 function Hosts({
   application,
-  chat,
+  chat: services,
+  runner,
 }: {
   application: DesktopApplicationView;
-  chat: DesktopChat | null;
+  chat: Context.Context<ChatServices> | null;
+  runner: DesktopRunner;
 }) {
   const { lifecycle } = application;
-  const state = useSyncExternalStore(
-    chat?.subscribe ?? noSubscription,
-    chat?.getSnapshot ?? noChat,
-  );
+  const chat = useMemo(() => services && makeChatShared(services, runner), [services, runner]);
+  const link = useAtomValue(chat ? chat.atoms.link : noLink);
+  const active = useAtomValue(chat ? chat.atoms.active : noActive);
+  const notice = useAtomValue(chat ? chat.atoms.notice : noNotice);
+  const state = link && { ...link, active, notice };
+  const connect = (action: 'connect' | 'disconnect') =>
+    chat && void chat.act(Context.get(chat.services, ChatConnection)[action]);
+  const session = services && Context.get(services, ChatConfig).session;
   // A host on this Mac; a remote one is connected explicitly.
   const local = !!state && !state.remote;
   const busy = (id: string) => !!state?.active.includes(id);
@@ -156,7 +188,7 @@ function Hosts({
                   {...stylex.props(controls.button)}
                   disabled={busy('disconnect')}
                   focusableWhenDisabled
-                  onClick={() => void chat?.disconnect()}>
+                  onClick={() => connect('disconnect')}>
                   Disconnect
                 </Button>
               ) : (
@@ -168,7 +200,7 @@ function Hosts({
                     state.connection.state === 'disconnecting'
                   }
                   focusableWhenDisabled
-                  onClick={() => void chat?.connect()}>
+                  onClick={() => connect('connect')}>
                   {busy('connect') ? 'Connecting…' : 'Connect'}
                 </Button>
               );
@@ -195,7 +227,7 @@ function Hosts({
           {switchError}
         </p>
       )}
-      {state && chat && (
+      {state && session && (
         <div {...stylex.props(styles.details)}>
           <p {...stylex.props(styles.para)}>
             {local
@@ -211,8 +243,7 @@ function Hosts({
             </p>
           )}
           <p {...stylex.props(styles.para, styles.ids)}>
-            Host {chat.session.host.hostId} · Store {chat.session.host.storeId} · Actor{' '}
-            {chat.session.actorId}
+            Host {session.host.hostId} · Store {session.host.storeId} · Actor {session.actorId}
           </p>
         </div>
       )}

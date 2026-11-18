@@ -1,10 +1,15 @@
-import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { Context } from 'effect';
+import * as Atom from 'effect/reactivity/Atom';
+import * as AsyncResult from 'effect/reactivity/AsyncResult';
+import { useAtomValue } from '@effect/atom-react';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { overlays } from '@moonbase/ui/overlays';
 import { colors, radius, space, syntax, type } from '@moonbase/ui/tokens.stylex';
 import { maximumChatMentions, type ChatMention } from '@moonbase/contracts/chat';
 import {
+  ChatDrafts,
   findMentionQuery,
   findMentionRanges,
   insertMention,
@@ -21,7 +26,7 @@ import {
   type ChatCommandOption,
 } from './commands.ts';
 import { Icon } from '@moonbase/ui/icons';
-import type { DesktopChat, DesktopFileSearch } from '../desktop-chat.ts';
+import { useChat } from '../chat-context.ts';
 
 /**
  * The message textarea. Typing `@` searches the chat's working folder on its host; a picked file is
@@ -29,7 +34,6 @@ import type { DesktopChat, DesktopFileSearch } from '../desktop-chat.ts';
  * lists the composer's commands, and a command's choices once its name is typed.
  */
 export function MessageInput({
-  controller,
   draft,
   mentions,
   searchable,
@@ -41,7 +45,6 @@ export function MessageInput({
   onMention,
   refuseMention,
 }: {
-  controller: DesktopChat;
   draft: string;
   mentions: ChatMention[];
   /** Whether `@` can search: the host supports it and the chat has a working folder. */
@@ -65,22 +68,17 @@ export function MessageInput({
   const [selection, setSelection] = useState({ text: draft, caret: 0 }),
     [active, setActive] = useState(0),
     [dismissed, setDismissed] = useState<string | null>(null),
-    [search, setSearch] = useState<DesktopFileSearch | null>(null),
     // The query (`queryKey`) the search last started; its answer belongs to no other.
     [searched, setSearched] = useState<string | null>(null),
     // Why the query (`queryKey`) couldn't pick a file, shown while it is typed.
     [refusal, setRefusal] = useState<{ key: string; message: string } | null>(null);
   const id = useId();
-  useEffect(() => {
-    const acquired = controller.createFileSearch();
-    // oxlint-disable-next-line react/set-state-in-effect -- React owns this picker's attachment; the search owns its async work.
-    setSearch(acquired);
-    return () => acquired.dispose();
-  }, [controller]);
-  const results = useSyncExternalStore(
-    search?.subscribe ?? noSubscription,
-    search?.getSnapshot ?? noResults,
-  );
+  const { atoms, services, act } = useChat();
+  const drafts = Context.get(services, ChatDrafts);
+  // This view's file picker, made while it is mounted; unmounting it cancels its search.
+  const made = useAtomValue(atoms.fileSearch.search(id));
+  const search = AsyncResult.isSuccess(made) ? made.value : null;
+  const results = useAtomValue(search ? atoms.fileSearch.state(search) : noResults);
   const caret = selection.text === draft ? selection.caret : null;
   const typedCommand = caret === null ? null : findCommandQuery(draft, caret, commands);
   const commandKey =
@@ -101,11 +99,12 @@ export function MessageInput({
     if (!search) return;
     if (queryKey) {
       const [, text, folder] = JSON.parse(queryKey) as [number, string, string | undefined];
-      search.search(text, folder ?? undefined);
-    } else search.clear();
-    // oxlint-disable-next-line react/set-state-in-effect -- A new query starts at its first match.
+      void act(search.search(text, folder ?? undefined));
+    } else void act(search.clear);
+    // A new query starts at its first match.
     setActive(0);
     setSearched(queryKey);
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- `act` is the chat's, fixed while it is open.
   }, [search, queryKey, commandText]);
   useEffect(() => {
     // Restores the caret after a programmatic edit, once React has rendered the edited text.
@@ -130,7 +129,7 @@ export function MessageInput({
     // Unchanged text renders nothing new, so its caret moves now rather than after the render.
     if (text === draft) textarea.current?.setSelectionRange(at, at);
     else caretAfter.current = { text, caret: at };
-    controller.setDraft(text, next);
+    void act(drafts.setDraft(text, next));
   }
   function pickActive() {
     const index = Math.min(active, count - 1);
@@ -210,7 +209,7 @@ export function MessageInput({
           const element = event.currentTarget;
           setSelection({ text: element.value, caret: element.selectionStart });
           setDismissed(null);
-          controller.setDraft(element.value);
+          void act(drafts.setDraft(element.value));
         }}
         onSelect={(event) =>
           setSelection({
@@ -401,15 +400,13 @@ function Highlighted({
     ),
   );
 }
-const noSubscription = () => () => {};
-const emptyResults: ChatFileSearchSnapshot = {
+const noResults = Atom.make<ChatFileSearchSnapshot>({
   query: null,
   matches: [],
   partial: false,
   busy: false,
   error: null,
-};
-const noResults = () => emptyResults;
+});
 const styles = stylex.create({
   field: { position: 'relative', flex: 1, minWidth: 0, display: 'flex' },
   // The mirror and the textarea share every metric, so highlights sit under the typed mentions.

@@ -1,31 +1,31 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
+import { Context } from 'effect';
+import { useAtomValue } from '@effect/atom-react';
 import { Button } from '@base-ui/react/button';
 import { Input } from '@base-ui/react/input';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { colors, space, type } from '@moonbase/ui/tokens.stylex';
-import type { TranscriptFindState } from '@moonbase/application/chat';
-import type { DesktopChat } from './desktop-chat.ts';
+import { ChatSelection } from '@moonbase/application/chat';
+import type { ChatShared } from './chat-context.ts';
 
-/** Opens Find for the conversation `element` belongs to, and focuses an already open field. */
+/** The chat Find belongs to (its backend and target, as `data-chat-find-owner` names it). */
+export type ChatFindOwner = { owner: string; selected: boolean; open: boolean };
+
+/**
+ * Opens Find for the conversation `element` belongs to. A newly opened bar focuses its own field
+ * when it mounts; an open one is focused here.
+ */
 export function activateChatFind(
-  controller: DesktopChat,
+  chat: ChatShared,
+  find: ChatFindOwner,
   element: Element,
   input: RefObject<HTMLInputElement | null>,
 ) {
   const owner = element.closest<HTMLElement>('[data-chat-find-owner]');
-  const selected = controller.getSnapshot().selected;
-  const identity = JSON.stringify([controller.backendId, selected]);
-  if (!selected || !owner?.isConnected || owner.dataset.chatFindOwner !== identity) return;
-  controller.openFind();
-  const current = controller.getSnapshot();
-  if (
-    !current.transcript.find.open ||
-    JSON.stringify([controller.backendId, current.selected]) !== identity
-  )
-    return;
-  // A newly opened bar focuses its own field when it mounts.
-  input.current?.focus({ preventScroll: true });
+  if (!find.selected || !owner?.isConnected || owner.dataset.chatFindOwner !== find.owner) return;
+  if (find.open) input.current?.focus({ preventScroll: true });
+  else void chat.act(Context.get(chat.services, ChatSelection).openFind);
 }
 /** Cmd/Ctrl+F by the layout's letter, or by the physical F key when the layout's isn't Latin. */
 function isFindShortcut(event: KeyboardEvent) {
@@ -39,7 +39,8 @@ function isFindShortcut(event: KeyboardEvent) {
  */
 export function handleChatFindKeyDown(
   event: KeyboardEvent<HTMLElement>,
-  controller: DesktopChat,
+  chat: ChatShared,
+  find: ChatFindOwner,
   input: RefObject<HTMLInputElement | null>,
 ) {
   const target = event.target;
@@ -51,10 +52,10 @@ export function handleChatFindKeyDown(
   )
     return;
   if (event.key === 'Escape') {
-    if (!controller.getSnapshot().transcript.find.open) return;
+    if (!find.open) return;
     event.preventDefault();
     event.stopPropagation();
-    controller.closeFind();
+    void chat.act(Context.get(chat.services, ChatSelection).closeFind);
     return;
   }
   if (!isFindShortcut(event)) return;
@@ -63,21 +64,22 @@ export function handleChatFindKeyDown(
     (target instanceof HTMLElement && target.isContentEditable)
   )
     return;
-  if (!controller.getSnapshot().selected) return;
+  if (!find.selected) return;
   event.preventDefault();
   event.stopPropagation();
-  activateChatFind(controller, event.currentTarget, input);
+  activateChatFind(chat, find, event.currentTarget, input);
 }
 export function FindBar({
-  controller,
-  state,
+  chat,
   input,
 }: {
-  controller: DesktopChat;
-  state: TranscriptFindState;
+  chat: ChatShared;
   /** Holds the field, so a repeated Find request can focus it. */
   input: RefObject<HTMLInputElement | null>;
 }) {
+  const state = useAtomValue(chat.atoms.find);
+  const selection = Context.get(chat.services, ChatSelection);
+  const act = chat.act;
   /** Focus returns here when Find closes, or to the transcript once a jump unmounted its row. */
   const [focusReturn] = useState(() => document.activeElement);
   useEffect(() => {
@@ -85,7 +87,7 @@ export function FindBar({
   }, [input]);
   const bar = useRef<HTMLElement>(null);
   const close = () => {
-    controller.closeFind();
+    void act(selection.closeFind);
     const target =
       focusReturn instanceof HTMLElement && focusReturn.isConnected
         ? focusReturn
@@ -119,7 +121,7 @@ export function FindBar({
         if (event.key === 'Enter' && event.target === input.current) {
           event.preventDefault();
           event.stopPropagation();
-          void (event.shiftKey ? controller.previousFindMatch() : controller.nextFindMatch());
+          void act(event.shiftKey ? selection.previousFindMatch : selection.nextFindMatch);
         }
       }}>
       <div {...stylex.props(controls.row, styles.row)}>
@@ -129,18 +131,18 @@ export function FindBar({
           value={state.query}
           placeholder="Find in conversation"
           {...stylex.props(controls.field, styles.input)}
-          onValueChange={(query) => void controller.findTranscript(query)}
+          onValueChange={(query) => void act(selection.findTranscript(query))}
         />
         <Button
           {...stylex.props(controls.button, controls.quietButton)}
           disabled={state.activeIndex === null || state.activeIndex === 0}
-          onClick={() => void controller.previousFindMatch()}>
+          onClick={() => void act(selection.previousFindMatch)}>
           Previous
         </Button>
         <Button
           {...stylex.props(controls.button, controls.quietButton)}
           disabled={state.activeIndex === null || state.activeIndex + 1 >= state.count}
-          onClick={() => void controller.nextFindMatch()}>
+          onClick={() => void act(selection.nextFindMatch)}>
           Next
         </Button>
         <Button {...stylex.props(controls.button, controls.quietButton)} onClick={close}>
@@ -154,7 +156,7 @@ export function FindBar({
         {(state.refreshAvailable || state.error) && state.query && (
           <Button
             {...stylex.props(controls.button)}
-            onClick={() => void controller.findTranscript(state.query)}>
+            onClick={() => void act(selection.findTranscript(state.query))}>
             {state.error ? 'Retry Find' : 'Refresh results'}
           </Button>
         )}

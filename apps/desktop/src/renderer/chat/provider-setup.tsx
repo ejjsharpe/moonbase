@@ -1,5 +1,7 @@
 import type { ProviderState } from '@moonbase/contracts/providers';
-import { useState, useSyncExternalStore } from 'react';
+import { useState } from 'react';
+import { Context } from 'effect';
+import { useAtomValue } from '@effect/atom-react';
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
 import { colors, radius, space, syntax, type } from '@moonbase/ui/tokens.stylex';
@@ -8,11 +10,15 @@ import { Choice } from './choice.tsx';
 import { Icon } from '@moonbase/ui/icons';
 import { vendorOf, type Provider } from './vendors.ts';
 import { projectTiles } from '@moonbase/ui/projects';
-import type { DesktopProviderSetup } from './desktop-chat.ts';
+import { ChatProviderSetup } from '@moonbase/application/chat';
+import type { ChatShared } from './chat-context.ts';
 
 /** One card per vendor, listing its ways to connect; a running sign-in opens under its way. */
-export function ProviderSetup({ controller }: { controller: DesktopProviderSetup }) {
-  const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
+export function ProviderSetup({ chat }: { chat: ChatShared }) {
+  const setup = Context.get(chat.services, ChatProviderSetup);
+  const act = chat.act;
+  // Shown only for a host that serves provider setup.
+  const state = useAtomValue(chat.atoms.providers)!;
   const flow = state.status?.flow;
   const vendors = new Map<string, Provider[]>();
   for (const provider of state.status?.providers ?? [])
@@ -32,7 +38,7 @@ export function ProviderSetup({ controller }: { controller: DesktopProviderSetup
           aria-label={key ? `Remove key for ${provider.name}` : `Sign out of ${provider.name}`}
           {...stylex.props(controls.button, controls.quietButton)}
           disabled={state.busy}
-          onClick={() => void controller.logout(provider.id)}>
+          onClick={() => void act(setup.logout(provider.id))}>
           {key ? 'Remove key' : 'Sign out'}
         </Button>
       );
@@ -42,7 +48,7 @@ export function ProviderSetup({ controller }: { controller: DesktopProviderSetup
           aria-label={key ? `Add key for ${provider.name}` : `Sign in to ${provider.name}`}
           {...stylex.props(controls.button)}
           disabled={starting}
-          onClick={() => void controller.login(provider.id)}>
+          onClick={() => void act(setup.login(provider.id))}>
           {key ? 'Add key' : 'Sign in'}
         </Button>
       );
@@ -98,7 +104,7 @@ export function ProviderSetup({ controller }: { controller: DesktopProviderSetup
             {running && own.canOpenUrl && (
               <Button
                 {...stylex.props(controls.button)}
-                onClick={() => void controller.openUrl(own.id)}>
+                onClick={() => void act(setup.openUrl(own.id))}>
                 Open sign-in page
               </Button>
             )}
@@ -106,13 +112,13 @@ export function ProviderSetup({ controller }: { controller: DesktopProviderSetup
               <PromptForm
                 key={own.prompt.id}
                 prompt={own.prompt}
-                submit={(answer) => void controller.answer(own.id, own.prompt!.id, answer)}
+                submit={(answer) => void act(setup.answer(own.id, own.prompt!.id, answer))}
               />
             )}
             {running && (
               <Button
                 {...stylex.props(controls.button, controls.quietButton)}
-                onClick={() => void controller.cancel(own.id)}>
+                onClick={() => void act(setup.cancel(own.id))}>
                 Cancel setup
               </Button>
             )}
@@ -132,7 +138,7 @@ export function ProviderSetup({ controller }: { controller: DesktopProviderSetup
           title="Refresh providers"
           {...stylex.props(controls.button, controls.iconButton)}
           disabled={state.busy}
-          onClick={() => void controller.refresh()}>
+          onClick={() => void act(setup.refresh)}>
           <Icon name="refresh" />
         </Button>
       </div>

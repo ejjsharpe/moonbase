@@ -1,4 +1,6 @@
 import { useLayoutEffect, useRef } from 'react';
+import { Context } from 'effect';
+import { useAtomValue } from '@effect/atom-react';
 import { Button } from '@base-ui/react/button';
 import { motion, useReducedMotion } from 'motion/react';
 import * as stylex from '@stylexjs/stylex';
@@ -8,16 +10,18 @@ import { workbench } from '@moonbase/ui/workbench';
 import { Icon } from '@moonbase/ui/icons';
 import { colors, radius, space, syntax, type } from '@moonbase/ui/tokens.stylex';
 import {
+  ChatConnection,
+  ChatList as ChatListService,
+  ChatSelection,
   groupChatsByActivity,
   type ActiveChat,
   type ChatActivityReason,
-  type ChatState,
 } from '@moonbase/application/chat';
 import { useStoredToggle } from '../hooks/use-stored-toggle.ts';
 import { formatChatAge } from './age.ts';
 import { getChatPlace } from './folder.ts';
 import { focusMessage, isBusy } from './open-chat.ts';
-import type { DesktopChat } from './desktop-chat.ts';
+import { useChat } from './chat-context.ts';
 
 const glyphs: Record<ChatActivityReason, string> = {
   unconfirmed: '?',
@@ -43,15 +47,11 @@ const reasonLabels: Record<ChatActivityReason, string> = {
  * and Connect for a remote host that isn't connected.
  */
 export function ChatList({
-  controller,
-  state,
   compact,
   hidden,
   onChosen,
   startNewChat,
 }: {
-  controller: DesktopChat;
-  state: ChatState;
   /** Whether the list is the compact layout's drawer. */
   compact: boolean;
   /** Whether the list is hidden beside the chat, leaving the chat the full width. */
@@ -61,31 +61,34 @@ export function ChatList({
   startNewChat(): void;
 }) {
   const [settledShown, toggleSettled] = useStoredToggle('moonbase.chats.settled');
-  const connected = state.ready,
-    busy = (id: string) => isBusy(state, id);
-  const groups = groupChatsByActivity({
-    chats: state.chats,
-    seen: state.seen,
-    pending: state.pending,
-    dispatching: state.dispatching,
-    open: state.snapshot,
-  });
+  const { atoms, services, act } = useChat();
+  const list = Context.get(services, ChatListService);
+  const { remote, connection, ready: connected } = useAtomValue(atoms.link);
+  const { chats, nextChats } = useAtomValue(atoms.list);
+  const seen = useAtomValue(atoms.seen);
+  const pending = useAtomValue(atoms.pending);
+  const dispatching = useAtomValue(atoms.dispatching);
+  const snapshot = useAtomValue(atoms.snapshot);
+  const selected = useAtomValue(atoms.selected);
+  const active = useAtomValue(atoms.active);
+  const busy = (id: string) => isBusy(active, id);
+  const groups = groupChatsByActivity({ chats, seen, pending, dispatching, open: snapshot });
   const reducedMotion = useReducedMotion();
   const settledMotion = { duration: reducedMotion ? 0 : 0.22, ease: [0.2, 0.8, 0.2, 1] as const };
   const chatRow = ({ chat: c, reason, at }: ActiveChat) => (
     <Button
       key={c.target.conversationId}
-      aria-pressed={state.selected?.conversationId === c.target.conversationId}
+      aria-pressed={selected?.conversationId === c.target.conversationId}
       {...stylex.props(
         controls.button,
         controls.listButton,
         styles.chat,
         (reason === 'idle' || reason === 'settled') && styles.restingChat,
-        state.selected?.conversationId === c.target.conversationId && styles.selected,
+        selected?.conversationId === c.target.conversationId && styles.selected,
       )}
       disabled={!connected || busy('open')}
       onClick={() => {
-        void controller.select(c.target);
+        void act(Context.get(services, ChatSelection).select(c.target));
         onChosen();
       }}>
       <span
@@ -107,7 +110,7 @@ export function ChatList({
   );
   let emptyList = '';
   if (connected) emptyList = 'Your conversations will appear here.';
-  else if (!state.remote) emptyList = 'Loading chats…';
+  else if (!remote) emptyList = 'Loading chats…';
   // Hiding the list while focus is in it hands focus to the composer rather than the page.
   const focusInList = useRef(false);
   useLayoutEffect(() => {
@@ -145,7 +148,7 @@ export function ChatList({
             title="Refresh saved chats"
             {...stylex.props(controls.button, controls.iconButton)}
             disabled={!connected || busy('refresh')}
-            onClick={() => void controller.firstChats()}>
+            onClick={() => void act(Context.get(services, ChatConnection).refresh)}>
             <Icon name="refresh" />
           </Button>
           <Button
@@ -160,19 +163,19 @@ export function ChatList({
             New <kbd {...stylex.props(styles.newKey)}>⌘N</kbd>
           </Button>
         </div>
-        {state.remote && !connected && (
+        {remote && !connected && (
           <div {...stylex.props(controls.row, styles.offline)}>
             <span role="status" {...stylex.props(styles.offlineText)}>
-              {state.connection?.state === 'connecting' ? 'Connecting…' : 'Not connected'}
+              {connection?.state === 'connecting' ? 'Connecting…' : 'Not connected'}
             </span>
             <Button
               {...stylex.props(controls.button)}
               disabled={
-                !state.connection ||
+                !connection ||
                 busy('connect') ||
-                ['connecting', 'disconnecting'].includes(state.connection.state)
+                ['connecting', 'disconnecting'].includes(connection.state)
               }
-              onClick={() => void controller.connect()}>
+              onClick={() => void act(Context.get(services, ChatConnection).connect)}>
               {busy('connect') ? 'Connecting…' : 'Connect'}
             </Button>
           </div>
@@ -180,18 +183,18 @@ export function ChatList({
         <nav
           aria-label="Conversations"
           {...stylex.props(styles.chatList, !settledShown && styles.clipList)}>
-          {!state.chats.length &&
+          {!chats.length &&
             // Offline, the Connect line above says why the list is empty.
             emptyList && <p {...stylex.props(styles.small)}>{emptyList}</p>}
           {group('Ready', groups.ready)}
           {group('Working', groups.working)}
           {group('Idle', groups.idle)}
-          {state.nextChats && (
+          {nextChats && (
             // Older pages hold idle and settled chats alike, so this sits outside the drawer.
             <Button
               {...stylex.props(controls.button, controls.quietButton, styles.older)}
               disabled={!connected || busy('chats')}
-              onClick={() => void controller.moreChats()}>
+              onClick={() => void act(list.more)}>
               Show older
             </Button>
           )}
@@ -226,9 +229,7 @@ export function ChatList({
               {!settledShown &&
                 // The open chat stays in view after it settles, until another is chosen.
                 groups.settled
-                  .filter(
-                    (row) => row.chat.target.conversationId === state.selected?.conversationId,
-                  )
+                  .filter((row) => row.chat.target.conversationId === selected?.conversationId)
                   .map(chatRow)}
               <div
                 inert={!settledShown}

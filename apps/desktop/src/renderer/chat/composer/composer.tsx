@@ -1,5 +1,4 @@
-import { useSyncExternalStore } from 'react';
-import { Effect } from 'effect';
+import { Context, Effect } from 'effect';
 import { useAtomValue } from '@effect/atom-react';
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
@@ -7,6 +6,9 @@ import { controls } from '@moonbase/ui/controls';
 import { Icon } from '@moonbase/ui/icons';
 import { colors, layout, radius, shadow, space, type } from '@moonbase/ui/tokens.stylex';
 import {
+  ChatDrafts,
+  ChatList,
+  ChatSends,
   composerAtoms,
   findComposerPlace,
   findMentionClash,
@@ -14,13 +16,12 @@ import {
   isMessageFor,
   readChoices,
   type ChatComposer,
-  type ChatState,
 } from '@moonbase/application/chat';
-import type { DesktopRunner } from '../../shell/desktop-application.ts';
 import { ModelPicker } from '../model-picker.tsx';
 import type { ChatFolderProject } from '../folder-picker.tsx';
 import { effortLabels, readModelChoice } from '../model-choice.ts';
-import { focusMessage, isBusy, readOpenSettled, settleOpenChat } from '../open-chat.ts';
+import { focusMessage, isBusy, readOpenSettled } from '../open-chat.ts';
+import { useChat } from '../chat-context.ts';
 import type { ChatHosts } from '../chat-view.tsx';
 import { MessageInput } from './message-input.tsx';
 import { NewChatPlace } from './new-chat-place.tsx';
@@ -31,10 +32,6 @@ import {
   type ChatCommand,
   type ChatCommandOption,
 } from './commands.ts';
-import type { DesktopChat } from '../desktop-chat.ts';
-
-const noSubscription = () => () => {};
-const noProviders = () => null;
 
 /**
  * The composer: the draft and its commands, a new chat's folder, model and host, Stop and Send,
@@ -42,10 +39,7 @@ const noProviders = () => null;
  * the chat's composer, so they outlive this view.
  */
 export function Composer({
-  controller,
   composer,
-  runner,
-  state,
   dockProject,
   dockCwd,
   hosts,
@@ -55,10 +49,7 @@ export function Composer({
   createWorktree,
   setUpProviders,
 }: {
-  controller: DesktopChat;
   composer: ChatComposer;
-  runner: DesktopRunner;
-  state: ChatState;
   /** The project whose dock this is, if it is one, and its root. */
   dockProject?: string;
   dockCwd?: string;
@@ -69,31 +60,38 @@ export function Composer({
   createWorktree?: (root: string, branch: string, requestId: string) => Promise<string>;
   setUpProviders?: () => void;
 }) {
+  const { atoms, services, runner, act } = useChat();
+  const drafts = Context.get(services, ChatDrafts),
+    sends = Context.get(services, ChatSends);
   const composerState = useAtomValue(composerAtoms.state(composer));
-  const providerState = useSyncExternalStore(
-    controller.providers?.subscribe ?? noSubscription,
-    controller.providers?.getSnapshot ?? noProviders,
-  );
+  const providerState = useAtomValue(atoms.providers);
+  // The draft and its mentions change with each keystroke; this view alone reads them.
+  const { draft, mentions, storageError, saved } = useAtomValue(atoms.drafts);
+  const { selected, pending } = saved;
+  const modelPreference = saved.modelPreference ?? null;
+  const snapshot = useAtomValue(atoms.snapshot);
+  const { chats } = useAtomValue(atoms.list);
+  const active = useAtomValue(atoms.active);
   // A remote host's chats use its folders, never this Mac's: no picker, editor projects,
   // worktrees or dock folder apply to them.
-  const remote = state.remote,
-    connected = state.ready,
-    busy = (id: string) => isBusy(state, id);
+  const { remote, ready: connected } = useAtomValue(atoms.link),
+    busy = (id: string) => isBusy(active, id);
+  const openChatSummary = findSelectedChat({ selected, snapshot, chats });
   const place = findComposerPlace(dockCwd, remote);
   const { cwd, newWorktree } = readChoices(composerState, place),
     creatingWorktree = composerState.creatingWorktree;
-  const openChat = state.selected?.conversationId ?? '';
+  const openChat = selected?.conversationId ?? '';
   // The one message the composer shows, where it applies: this chat, this view, this draft.
   const message = isMessageFor(composerState.message, {
     chat: openChat,
     place: place.key,
-    draft: state.draft,
+    draft,
   })
     ? composerState.message
     : null;
-  const choice = readModelChoice(providerState, state.modelPreference);
+  const choice = readModelChoice(providerState, modelPreference);
   const { models, entry, effort, effortUnavailable, selection } = choice;
-  const run = state.snapshot?.run;
+  const run = snapshot?.run;
   const choose = (change: Parameters<ChatComposer['choose']>[1]) =>
     runner.runSync(composer.choose(place, change));
   const setFolderError = (text: string | null) =>
@@ -105,36 +103,42 @@ export function Composer({
   const chooseModel = (value: string) => {
     const model = models.find((item) => item.value === value);
     if (model)
-      controller.setModelPreference({
-        model: model.model,
-        ...(model.defaultReasoningEffort ? { reasoningEffort: model.defaultReasoningEffort } : {}),
-      });
+      void act(
+        drafts.setModelPreference({
+          model: model.model,
+          ...(model.defaultReasoningEffort
+            ? { reasoningEffort: model.defaultReasoningEffort }
+            : {}),
+        }),
+      );
   };
   const chooseEffort = (value: string) => {
     const chosen = entry?.reasoningEfforts?.find((item) => item === value);
     if (entry && chosen)
-      controller.setModelPreference({ model: entry.model, reasoningEffort: chosen });
+      void act(drafts.setModelPreference({ model: entry.model, reasoningEffort: chosen }));
   };
   const tools = remote ? 'Tools on the host' : 'Local tools';
   let toolNotice =
-    state.selected || cwd
+    selected || cwd
       ? `${tools} can access files outside the working folder.`
       : `Runs in a new empty folder. ${tools} are not sandboxed.`;
-  if (!state.selected && !models.length)
+  if (!selected && !models.length)
     toolNotice = `Set up a provider to send. ${tools} are not sandboxed.`;
-  const choosing = !state.selected && !busy('send') && !creatingWorktree;
+  const choosing = !selected && !busy('send') && !creatingWorktree;
   // A new worktree is made only when the first message is sent, so an unsent chat leaves no trace.
   // A project without Git has no worktrees to make.
   const worktreeChoice =
-    !state.selected &&
+    !selected &&
     !remote &&
     !!createWorktree &&
     !!cwd &&
     !folderProjects.some((project) => project.root === cwd && project.branch === undefined);
-  const settled = readOpenSettled(state);
+  const settled = readOpenSettled({ selected, chat: openChatSummary, ready: connected, active });
+  const settle = (value: boolean) =>
+    selected && void act(Context.get(services, ChatList).settle(selected, value));
   const commands = listChatCommands({
-    selected: !!state.selected,
-    running: !!run && connected && !busy('stop') && !state.storageError,
+    selected: !!selected,
+    running: !!run && connected && !busy('stop') && !storageError,
     settled,
     models: choosing
       ? models.map((model) => ({
@@ -153,18 +157,12 @@ export function Composer({
     // The lines after `/new` start the new chat's draft; the open chat's is left empty.
     newChat: () =>
       void runner
-        .run(
-          composer.startNewChat(
-            removeCommandLine(state.draft),
-            state.mentions,
-            findSelectedChat(state)?.cwd,
-          ),
-        )
+        .run(composer.startNewChat(removeCommandLine(draft), mentions, openChatSummary?.cwd))
         .then((started) => started && focusMessage()),
-    stop: () => void controller.stop(),
-    settle: () => settleOpenChat(controller, state, true),
-    unsettle: () => settleOpenChat(controller, state, false),
-    clearDraft: () => controller.setDraft(''),
+    stop: () => void act(sends.stop),
+    settle: () => settle(true),
+    unsettle: () => settle(false),
+    clearDraft: () => void act(drafts.setDraft('')),
     chooseModel,
     chooseEffort,
   });
@@ -172,29 +170,29 @@ export function Composer({
   // rest to the new chat itself.
   const runCommand = (command: ChatCommand, option?: ChatCommandOption) => {
     runner.runSync(composer.dismiss({ chat: openChat, place: place.key }));
-    if (command.name !== 'new') controller.setDraft(removeCommandLine(state.draft), state.mentions);
+    if (command.name !== 'new') void act(drafts.setDraft(removeCommandLine(draft), mentions));
     command.run(option);
   };
-  const typedCommand = resolveCommandLine(state.draft, commands);
+  const typedCommand = resolveCommandLine(draft, commands);
   const browse = !remote ? chooseFolder : undefined;
   const sendDisabled = typedCommand
     ? false
     : !connected ||
-      !state.draft.trim() ||
+      !draft.trim() ||
       creatingWorktree ||
       busy('send') ||
       busy('create') ||
-      !!state.storageError ||
-      (!state.selected && !selection) ||
-      state.pending.some(
+      !!storageError ||
+      (!selected && !selection) ||
+      pending.some(
         (p) =>
           (p.operation === 'sendChat' &&
-            p.input.target.conversationId === state.selected?.conversationId) ||
-          (!state.selected && p.operation === 'createChat' && !!p.firstMessage),
+            p.input.target.conversationId === selected?.conversationId) ||
+          (!selected && p.operation === 'createChat' && !!p.firstMessage),
       );
   return (
-    <div {...stylex.props(styles.area, !state.selected && styles.starter)}>
-      {!state.selected && (
+    <div {...stylex.props(styles.area, !selected && styles.starter)}>
+      {!selected && (
         <h2 {...stylex.props(styles.starterHeading)}>
           {dockProject ? `What should we work on in ${dockProject}?` : 'What should we work on?'}
         </h2>
@@ -204,25 +202,20 @@ export function Composer({
           {message.text}
         </p>
       )}
-      {!state.selected &&
-        state.modelPreference &&
-        providerState?.status &&
-        (!entry || effortUnavailable) && (
-          <p role="status" {...stylex.props(styles.warning)}>
-            {!entry
-              ? `Your saved model (${state.modelPreference.model.modelId}) is unavailable. Choose another model to send.`
-              : 'Your saved reasoning effort is unavailable for this model. Choose another effort to send.'}
-          </p>
-        )}
+      {!selected && modelPreference && providerState?.status && (!entry || effortUnavailable) && (
+        <p role="status" {...stylex.props(styles.warning)}>
+          {!entry
+            ? `Your saved model (${modelPreference.model.modelId}) is unavailable. Choose another model to send.`
+            : 'Your saved reasoning effort is unavailable for this model. Choose another effort to send.'}
+        </p>
+      )}
       <form
-        {...stylex.props(styles.composer, !state.selected && styles.starterComposer)}
+        {...stylex.props(styles.composer, !selected && styles.starterComposer)}
         onSubmit={(event) => {
           event.preventDefault();
           if (typedCommand) {
             if ('error' in typedCommand)
-              runner.runSync(
-                composer.report({ chat: openChat, draft: state.draft, text: typedCommand.error }),
-              );
+              runner.runSync(composer.report({ chat: openChat, draft, text: typedCommand.error }));
             else runCommand(typedCommand.command, typedCommand.option);
             return;
           }
@@ -246,35 +239,34 @@ export function Composer({
             ❯
           </span>
           <MessageInput
-            controller={controller}
-            draft={state.draft}
-            mentions={state.mentions}
-            searchable={connected && (!!state.selected || (!!cwd && !creatingWorktree))}
-            cwd={!state.selected && cwd ? cwd : undefined}
+            draft={draft}
+            mentions={mentions}
+            searchable={connected && (!!selected || (!!cwd && !creatingWorktree))}
+            cwd={!selected && cwd ? cwd : undefined}
             onMention={
-              !state.selected && cwd
+              !selected && cwd
                 ? (path) => runner.runSync(composer.noteMentions([path], cwd))
                 : undefined
             }
             refuseMention={
-              !state.selected && cwd
-                ? (path) => findMentionClash(composerState.folders, state, path, cwd)
+              !selected && cwd
+                ? (path) =>
+                    findMentionClash(composerState.folders, { selected, mentions }, path, cwd)
                 : undefined
             }
             placeholder={
-              state.selected
+              selected
                 ? 'Message the agent…'
                 : 'Describe a task — @ to mention files, / for commands'
             }
-            starter={!state.selected}
+            starter={!selected}
             commands={commands}
             onCommand={runCommand}
           />
         </div>
         <div {...stylex.props(controls.row, styles.actions)}>
-          {!state.selected && (
+          {!selected && (
             <NewChatPlace
-              state={state}
               cwd={cwd}
               newWorktree={newWorktree}
               worktreeChoice={worktreeChoice}
@@ -310,7 +302,7 @@ export function Composer({
             />
           )}
           <div {...stylex.props(controls.row, styles.modelActions)}>
-            {!state.selected ? (
+            {!selected ? (
               <div {...stylex.props(styles.modelChoice)}>
                 <ModelPicker
                   providers={
@@ -328,9 +320,9 @@ export function Composer({
               </div>
             ) : (
               <span {...stylex.props(styles.small, controls.truncate)}>
-                {state.snapshot?.conversation.model}
-                {state.snapshot?.conversation.reasoningEffort
-                  ? ` · ${effortLabels[state.snapshot.conversation.reasoningEffort]}`
+                {snapshot?.conversation.model}
+                {snapshot?.conversation.reasoningEffort
+                  ? ` · ${effortLabels[snapshot.conversation.reasoningEffort]}`
                   : ''}
               </span>
             )}
@@ -339,8 +331,8 @@ export function Composer({
                 aria-label="Stop"
                 title="Stop"
                 {...stylex.props(controls.button, controls.iconButton)}
-                disabled={!connected || busy('stop') || !!state.storageError}
-                onClick={() => void controller.stop()}>
+                disabled={!connected || busy('stop') || !!storageError}
+                onClick={() => void act(sends.stop)}>
                 <Icon name="stop" />
               </Button>
             )}
@@ -357,8 +349,7 @@ export function Composer({
       </form>
       <div {...stylex.props(styles.help)}>
         <span>{toolNotice}</span>
-        <span
-          title={`${new TextEncoder().encode(state.draft).length.toLocaleString()} / 32,768 bytes`}>
+        <span title={`${new TextEncoder().encode(draft).length.toLocaleString()} / 32,768 bytes`}>
           ⇧ Enter for a new line
         </span>
       </div>

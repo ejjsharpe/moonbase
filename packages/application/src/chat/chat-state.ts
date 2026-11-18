@@ -71,7 +71,7 @@ export const toChatState = (parts: {
   modelPreference: parts.drafts.saved.modelPreference ?? null,
   pending: parts.drafts.saved.pending,
   dispatching: Object.keys(parts.sends.dispatching),
-  active: parts.actions.closing ? [] : listActive(parts.actions),
+  active: listActive(parts.actions),
   error: parts.actions.error,
   storageError: parts.drafts.storageError,
   notice: parts.actions.notice,

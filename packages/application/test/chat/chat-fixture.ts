@@ -325,6 +325,8 @@ export async function chatFixture(
     ...actions,
     run,
     service,
+    /** The chat's services, as views read them. */
+    services: () => current.services,
     composer,
     runtime,
     storage,

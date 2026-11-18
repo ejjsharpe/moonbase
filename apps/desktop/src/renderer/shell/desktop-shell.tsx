@@ -6,14 +6,14 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
-import { Context } from 'effect';
+import { Context, type Effect } from 'effect';
 import { useAtomValue } from '@effect/atom-react';
 import { Tabs } from '@base-ui/react/tabs';
 import * as stylex from '@stylexjs/stylex';
 import { titleBar } from './title-bar.stylex.ts';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import type { Place } from '@moonbase/application';
-import { findComposerPlace } from '@moonbase/application/chat';
+import { ChatConnection, ChatSelection, findComposerPlace } from '@moonbase/application/chat';
 import { EditorWorktrees, readOwn } from '@moonbase/application/editor';
 import { colors, rail } from '@moonbase/ui/tokens.stylex';
 import { workbench } from '@moonbase/ui/workbench';
@@ -28,6 +28,7 @@ import {
 import { useStoredToggle } from '../hooks/use-stored-toggle.ts';
 import type { TranscriptNative } from '../chat/transcript/transcript-actions.ts';
 import { focusMessage, focusMessageEnd } from '../chat/open-chat.ts';
+import { runChatAction } from '../chat/chat-context.ts';
 import { Settings, type SettingsSection } from './settings.tsx';
 import { Rail, tabValue } from './rail/rail.tsx';
 import { TitleBar } from './title-bar.tsx';
@@ -152,10 +153,15 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   const run = (task: Promise<unknown>) => {
     void task.catch(report);
   };
+  /** Runs one of the open chat's actions; it shows its own failure. */
+  const actInChat = (action: (selection: ChatSelection['Service']) => Effect.Effect<void>) =>
+    chat
+      ? runChatAction(desktopApplication, action(Context.get(chat, ChatSelection)))
+      : Promise.resolve();
   const startNewChat = () => {
     if (!chat) return;
     setDestination('chat');
-    run(chat.closeView().then(focusMessage));
+    run(actInChat((selection) => selection.closeView).then(focusMessage));
   };
   const showChat = () => {
     setDestination('chat');
@@ -165,7 +171,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     if (place.kind === 'chat') {
       if (!chat) return;
       setDestination('chat');
-      await (place.chat ? chat.select(place.chat) : chat.closeView());
+      const target = place.chat;
+      await actInChat((selection) => (target ? selection.select(target) : selection.closeView));
       return;
     }
     const checkout = openCheckouts.find((open) => open.checkoutId === place.checkoutId);
@@ -216,7 +223,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       const consent = await application.prepareQuit();
       if (
         !consent &&
-        (application.getChat()?.getSnapshot().storageError ||
+        (application.readChat((atoms) => atoms.storageError) ||
           application.getSnapshot().chat.state === 'initialization-failed')
       )
         setDestination('chat');
@@ -232,8 +239,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   // Chat stays attached while it exists, behind a project or a hidden window too, so coming back
   // shows the transcript as it was, still following a running reply. Disposal detaches it.
   useEffect(() => {
-    if (chat) void chat.start().catch(report);
-  }, [chat, report]);
+    if (chat) void runChatAction(desktopApplication, Context.get(chat, ChatConnection).start);
+  }, [chat, desktopApplication]);
   const checkoutActions = makeCheckoutActions({
     editor: controller,
     isLive: () => application.getSnapshot().phase === 'live',
@@ -277,7 +284,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   // What both chat views (Agents and the dock) take.
   const chatViews = chat &&
     composer && {
-      controller: chat,
+      services: chat,
       composer,
       runner: desktopApplication,
       chooseFolder: chooseChatFolder,
@@ -431,11 +438,11 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
               // Read only while the picker is open.
               pickerEntries={() =>
                 makePickerEntries({
-                  chats: chat?.getSnapshot().chats ?? [],
+                  chats: application.readChat((atoms) => atoms.list)?.chats ?? [],
                   checkouts: openCheckouts,
                   showChat: chat
                     ? (summary) => {
-                        run(chat.select(summary.target));
+                        run(actInChat((selection) => selection.select(summary.target)));
                         showChat();
                       }
                     : undefined,
@@ -460,7 +467,8 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                   ? (checkout, paths) => {
                       setDockOpen(true);
                       // The dock's chat takes them, relative to its folder, then has focus.
-                      const place = findComposerPlace(selected.root, chat.getSnapshot().remote);
+                      const remote = !!application.readChat((atoms) => atoms.link)?.remote;
+                      const place = findComposerPlace(selected.root, remote);
                       const files = paths.map((path) => `${checkout.root}/${path}`);
                       run(
                         desktopApplication
@@ -549,6 +557,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         <Settings
           application={application}
           chat={chat}
+          runner={desktopApplication}
           section={settings}
           onSectionChange={setSettings}
           close={() => setSettings(null)}
