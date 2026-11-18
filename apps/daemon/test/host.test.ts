@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { chmod, lstat, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { ProviderSetupRefusedError } from '@moonbase/contracts/provider-errors';
 import {
   bounded,
   connectClients,
@@ -49,43 +48,47 @@ test('a host-mode daemon signs ChatGPT in by pasted code, runs chats without a p
     const identity = await readJson(join(directory, 'identity.json'));
     const session = { host: identity.host, actorId: identity.actorId };
     // A remote client: its browser is not on the host's machine.
-    const clients = connectClients(directory, ready.host, false);
+    const clients = await connectClients(directory, ready.host, false);
     try {
-      await clients.connection.command('connect', { profileId: 'loopback' });
+      await clients.run(clients.connection.connect({ profileId: 'loopback' }));
       // ChatGPT signs in on the host through the redirect URL the user pastes back.
-      const owner = clients.owner('remote-document');
-      const chatgpt = (await owner.command('startProviderLogin', { providerId: 'openai' })).flow!;
+      const owner = clients.providers.forOwner('remote-document');
+      const chatgpt = (await clients.run(owner.startProviderLogin({ providerId: 'openai' }))).flow!;
       const pasted = await until(
-        () => owner.command('getProviders', {}),
+        () => clients.run(owner.getProviders({})),
         (state) => state.flow?.prompt?.type === 'manual_code',
       );
-      await owner.command('openProviderUrl', { flowId: chatgpt.id });
+      await clients.run(owner.openProviderUrl({ flowId: chatgpt.id }));
       assert.match(clients.opened[0]!, /^https:\/\/auth\.openai\.com\//);
-      await owner.command('answerProviderPrompt', {
-        flowId: chatgpt.id,
-        promptId: pasted.flow!.prompt!.id,
-        answer: fauxSignInCode,
-      });
+      await clients.run(
+        owner.answerProviderPrompt({
+          flowId: chatgpt.id,
+          promptId: pasted.flow!.prompt!.id,
+          answer: fauxSignInCode,
+        }),
+      );
       await until(
-        () => owner.command('getProviders', {}),
+        () => clients.run(owner.getProviders({})),
         (state) => state.providers.find((p) => p.id === 'openai')?.configured === true,
       );
       // Credentials are encrypted under the key file the host names, created at the first sign-in.
       assert.equal((await lstat(keyFile)).mode & 0o777, 0o600);
 
       // A chat without a project runs in a new folder in the host's own `chats/`.
-      const own = await clients.chat.command('createChat', {
-        session,
-        requestId: 'create-own',
-        title: 'No project',
-        settings: { model },
-      });
+      const own = await clients.run(
+        clients.chat.createChat({
+          session,
+          requestId: 'create-own',
+          title: 'No project',
+          settings: { model },
+        }),
+      );
       assert.equal(own.conversation.ownFolder, true);
       assert.equal(dirname(own.conversation.cwd), join(directory, 'chats'));
       const target = own.conversation.target;
-      await clients.chat.command('sendChat', { target, requestId: 'send', text: 'Hello host' });
+      await clients.run(clients.chat.sendChat({ target, requestId: 'send', text: 'Hello host' }));
       await until(
-        () => clients.chat.command('getChat', { target }),
+        () => clients.run(clients.chat.getChat({ target })),
         (value) => !value.run && value.entries.some((entry) => entry.text === 'Faux reply'),
       );
     } finally {
@@ -123,19 +126,19 @@ test('the real host entry uses its key file and the host’s own Claude Code log
     });
     started.push(daemon);
     const ready = await bounded(daemon.ready, 30000);
-    const clients = connectClients(directory, ready.host, false);
+    const clients = await connectClients(directory, ready.host, false);
     try {
-      await clients.connection.command('connect', { profileId: 'loopback' });
-      const owner = clients.owner('remote-document');
+      await clients.run(clients.connection.connect({ profileId: 'loopback' }));
+      const owner = clients.providers.forOwner('remote-document');
       const state = await until(
-        () => owner.command('getProviders', {}),
+        () => clients.run(owner.getProviders({})),
         (value) => value.providers.find((p) => p.id === 'claude-code')?.configured === true,
       );
       assert.ok(state.providers.some((p) => p.id === 'openai' && !p.configured));
       // Moonbase never signs Claude Code in or out; the host's own login does.
-      await assert.rejects(owner.command('startProviderLogin', { providerId: 'claude-code' }), {
-        code: 'InvalidInput',
-        message: new ProviderSetupRefusedError({ reason: 'claude-code-sign-in' }).message,
+      await assert.rejects(clients.run(owner.startProviderLogin({ providerId: 'claude-code' })), {
+        _tag: 'ProviderSetupRefusedError',
+        reason: 'claude-code-sign-in',
       });
     } finally {
       await clients.runtime.dispose();

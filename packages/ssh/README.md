@@ -1,6 +1,6 @@
 # SSH
 
-`@moonbase/ssh` exports `SshLive(config, { verify, startupMs })`, a scoped `ConnectionService` that forwards a local loopback port to a remote chat host over OpenSSH. It holds no protocol code: the consumer injects `verify`, the daemon protocol's signed health check (`checkHostHealth` from `@moonbase/daemon-protocol/health`), which it runs on the forwarded port. `@moonbase/ssh/configuration` exports the configuration schema and `decodeSshConfiguration`, which the consumer applies where it reads the configuration (`SshLive` trusts what it is given) and which fails with `SshConfigurationError`. The connection fails with the `ConnectionService` port's `ConnectionError` (with a `reason`), the health check's `HostVerificationError` and `CancelledError`; it builds no `ApplicationError`.
+`@moonbase/ssh` exports `SshLive(config, { verify, startupMs })`, a scoped `ConnectionService` that forwards a local loopback port to a remote chat host over OpenSSH. It holds no protocol code: the consumer injects `verify`, the daemon protocol's signed health check (`checkHostHealth` from `@moonbase/daemon-protocol/health`), which it runs on the forwarded port. `@moonbase/ssh/configuration` exports the configuration schema and `decodeSshConfiguration`, which the consumer applies where it reads the configuration (`SshLive` trusts what it is given) and which fails with `SshConfigurationError`. The connection fails with the `ConnectionService` port's `ConnectionError` (with a `reason`), the health check's `HostVerificationError` and `CancelledError`.
 
 ## Configuration
 

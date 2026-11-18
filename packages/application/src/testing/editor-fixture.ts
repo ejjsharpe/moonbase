@@ -14,16 +14,13 @@ import {
   Stream,
   SubscriptionRef,
 } from 'effect';
-import { ApplicationError, CancelledError } from '@moonbase/contracts/errors';
+import { CancelledError } from '@moonbase/contracts/errors';
+import { WorkspaceUnavailableError } from '@moonbase/contracts/workspace-host-errors';
 import {
   WorkspaceService,
   type WorkspaceServiceShape,
 } from '@moonbase/contracts/workspace-service';
-import {
-  isWorkspaceError,
-  toWireError,
-  type WorkspaceError,
-} from '@moonbase/contracts/workspace-errors';
+import { isWorkspaceError, type WorkspaceError } from '@moonbase/contracts/workspace-errors';
 import type { RecoveryOutline } from '@moonbase/contracts/recovery';
 import type {
   CheckoutTarget,
@@ -91,18 +88,18 @@ export type WorkspaceClient = {
   watch(
     input: { checkout: CheckoutTarget; paths: string[] },
     receive: (event: WorkspaceEvent) => void,
-    onError: (error: ApplicationError) => void,
+    onError: (error: WorkspaceError) => void,
   ): () => Promise<void>;
   watchRecovery(
     input: { clientId: string },
     receive: (outline: RecoveryOutline) => void,
-    onError: (error: ApplicationError) => void,
+    onError: (error: WorkspaceError) => void,
   ): () => Promise<void>;
 };
 
-/** A failure as tests read it: an `ApplicationError` with its legacy code, else as it is. */
-const asTestFailure = (error: unknown): unknown =>
-  !ApplicationError.is(error) && isWorkspaceError(error) ? toWireError(error) : error;
+/** A client's failure as the workspace's: its own error, else the fixed unavailable one. */
+const asWorkspaceError = (error: unknown): WorkspaceError =>
+  isWorkspaceError(error) ? error : new WorkspaceUnavailableError({ cause: 'failed' });
 
 /**
  * Throws an exit's failure itself. An interrupted one is `cancelled`: a closing editor's own
@@ -111,21 +108,21 @@ const asTestFailure = (error: unknown): unknown =>
 function unwrap<A>(exit: Exit.Exit<A, unknown>, cancelled: () => unknown = () => closed()): A {
   if (Exit.isSuccess(exit)) return exit.value;
   const failure = exit.cause.reasons.find((reason) => reason._tag === 'Fail');
-  if (failure?._tag === 'Fail') throw asTestFailure(failure.error);
+  if (failure?._tag === 'Fail') throw failure.error;
   const defect = exit.cause.reasons.find((reason) => reason._tag === 'Die');
   if (defect?._tag === 'Die') throw defect.defect;
   throw cancelled();
 }
 const closed = () => new EditorError({ reason: 'closed' });
 
-/** A Promise client over a runtime that provides the workspace, its errors as wire errors. */
+/** A Promise client over a runtime that provides the workspace, failing with its errors. */
 export function toWorkspaceClient(
   runtime: ManagedRuntime.ManagedRuntime<WorkspaceService, unknown>,
 ): WorkspaceClient {
   const observe = <A>(
     stream: Stream.Stream<A, WorkspaceError, WorkspaceService>,
     receive: (value: A) => void,
-    onError: (error: ApplicationError) => void,
+    onError: (error: WorkspaceError) => void,
   ) => {
     let closing = false;
     const fiber = runtime.runFork(
@@ -136,7 +133,7 @@ export function toWorkspaceClient(
       ).pipe(
         Effect.catch((error) =>
           Effect.sync(() => {
-            if (!closing) onError(toWireError(error));
+            if (!closing) onError(error);
           }),
         ),
       ),
@@ -176,7 +173,7 @@ const watchOf =
     watch: (
       input: I,
       receive: (value: A) => void,
-      onError: (error: ApplicationError) => void,
+      onError: (error: WorkspaceError) => void,
     ) => () => Promise<void>,
   ) =>
   (input: I) =>
@@ -193,7 +190,7 @@ const watchOf =
                 Queue.failCauseUnsafe(queue, Cause.fail(error));
               },
             ),
-          catch: (error) => (ApplicationError.is(error) ? error : toWireError(error as never)),
+          catch: asWorkspaceError,
         }),
         (close) => Effect.promise(() => close().catch(() => {})),
       ),
@@ -210,13 +207,7 @@ export const workspaceLayer = (client: WorkspaceClient) =>
         return (input: unknown) =>
           Effect.tryPromise({
             try: (signal) => client.command(name as WorkspaceCommand, input as never, { signal }),
-            catch: (error) =>
-              ApplicationError.is(error)
-                ? error
-                : new ApplicationError({
-                    code: 'Unavailable',
-                    message: 'Application effect failed',
-                  }),
+            catch: asWorkspaceError,
           });
       },
     }),
@@ -244,7 +235,7 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
   );
   const context = await runtime.context().catch((error) => {
     void runtime.dispose();
-    throw asTestFailure(error);
+    throw error;
   });
   const get = <I, S>(tag: Context.Key<I, S>) => Context.get(context as Context.Context<I>, tag);
   const session = get(EditorSession),

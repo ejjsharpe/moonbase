@@ -6,8 +6,8 @@ import { join } from 'node:path';
 import { readConfiguration } from '../src/main/chat/config.ts';
 test('private configuration is owner-only, bounded, explicit and projected; bad files never initialize transport', async (t) => {
   await assert.rejects(readConfiguration(''), {
-    code: 'InvalidInput',
-    message: 'Set MOONBASE_CHAT_CONFIG to an absolute private configuration file.',
+    _tag: 'StartupError',
+    problem: 'chat-config-path',
   });
   const directory = await mkdtemp(join(tmpdir(), 'moonbase-chat-config-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -52,7 +52,7 @@ test('private configuration is owner-only, bounded, explicit and projected; bad 
   ]) {
     await writeFile(path, JSON.stringify(invalid));
     await assert.rejects(readConfiguration(path), (error: unknown) => {
-      assert.equal((error as { code: string }).code, 'InvalidInput');
+      assert.equal((error as { _tag?: unknown })._tag, 'StartupError');
       assert(!String(error).includes(value.token));
       assert(!String(error).includes(path));
       return true;
@@ -70,7 +70,7 @@ test('private configuration is owner-only, bounded, explicit and projected; bad 
   await writeFile(path, ' '.repeat(16385));
   await assert.rejects(readConfiguration(path));
   await writeFile(path, '{not-json');
-  await assert.rejects(readConfiguration(path), { code: 'InvalidInput' });
+  await assert.rejects(readConfiguration(path), { _tag: 'StartupError' });
   await assert.rejects(readConfiguration(join(directory, 'missing.json')));
   await assert.rejects(readConfiguration('relative.json'));
 });

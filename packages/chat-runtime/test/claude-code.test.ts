@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { ManagedRuntime, Layer } from 'effect';
-import { makeChatClient, makeProviderSetupClient } from '@moonbase/application/chat/clients';
+import { makeChatCalls, makeProviderSetupCalls } from '@moonbase/application/testing/service-calls';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { LocalPiRuntimeLive } from './src/index.ts';
 import { createLocalModels } from './src/local-models.ts';
@@ -38,14 +38,14 @@ async function main() {
     ProviderSetupLive({models,openUrl:async()=>{},deviceId:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',getCheckProblem:(id,signal)=>id===subscription.id?subscription.getCheckProblem(signal):undefined}),
   ));
   try {
-    const providers = makeProviderSetupClient(runtime, 'document');
+    const providers = makeProviderSetupCalls(runtime, 'document');
     const status = await providers.command('getProviders', {});
     const claude = status.providers.find((provider) => provider.id === 'claude-code');
     assert.equal(claude.auth, 'claude_code');
     assert.equal(claude.configured, true);
     assert.deepEqual(claude.defaultModel, {model:{provider:'claude-code',modelId:'claude-opus-5-5'},reasoningEffort:'high'});
-    await assert.rejects(providers.command('startProviderLogin', {providerId:'claude-code'}), {code:'InvalidInput'});
-    await assert.rejects(providers.command('logoutProvider', {providerId:'claude-code'}), {code:'InvalidInput'});
+    await assert.rejects(providers.command('startProviderLogin', {providerId:'claude-code'}), {_tag:'ProviderSetupRefusedError',reason:'claude-code-sign-in'});
+    await assert.rejects(providers.command('logoutProvider', {providerId:'claude-code'}), {_tag:'ProviderSetupRefusedError',reason:'claude-code-sign-in'});
     process.env.FAKE_CLAUDE_LOGGED_OUT = '1';
     const signedOut = await providers.command('getProviders', {});
     assert.equal(signedOut.providers.find((provider) => provider.id === 'claude-code').configured, false);
@@ -57,7 +57,7 @@ async function main() {
     assert.equal(failing.configured, false);
     assert.match(failing.problem, /status check failed \\(exit 127\\).*moonbase-missing-node/s);
     command = working;
-    const client = makeChatClient(runtime);
+    const client = makeChatCalls(runtime);
     const created = await client.command('createChat',{session,requestId:'create',title:'Claude subscription',settings:{cwd:directory,model:claude.defaultModel.model,reasoningEffort:'high'}});
     await client.command('sendChat',{target:created.conversation.target,requestId:'send',text:'Write a file'});
     let state;

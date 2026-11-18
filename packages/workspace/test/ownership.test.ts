@@ -1,4 +1,11 @@
 import assert from 'node:assert/strict';
+import {
+  isAccessRefusal,
+  isCancelled,
+  isRefusal,
+  isStorageFailure,
+  isUnavailable,
+} from '@moonbase/contracts/error-groups';
 import { test, mock } from 'node:test';
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
@@ -7,26 +14,22 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
-import { ApplicationError } from '@moonbase/contracts/workspace';
 import type { RecoveryState } from '@moonbase/contracts/recovery';
 import { makeWorkspaceClient } from './workspace-client-fixture.ts';
-import { runApplicationEffect } from '@moonbase/application/chat/promises';
 import { reconcile } from '../src/client/reconcile.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { recordWatchDeliveries, startOnTestClock } from './watch-fixture.ts';
-import { fixture, isError, quote, seed, waitFor } from './recovery-fixture.ts';
+import { fixture, quote, seed, waitFor } from './recovery-fixture.ts';
 import { captureNative, releaseNative } from './workspace-fixture.ts';
 import { findNewDescriptors, readOpenDescriptors } from './open-descriptors.ts';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
 
-function native<R>(
-  runtime: ManagedRuntime.ManagedRuntime<WorkspaceHostService | R, ApplicationError>,
-) {
+function native<R>(runtime: ManagedRuntime.ManagedRuntime<WorkspaceHostService | R, unknown>) {
   return {
     capture: (input: Parameters<typeof captureNative>[0]) =>
-      runApplicationEffect(runtime, captureNative(input)),
+      runtime.runPromise(captureNative(input)),
     release: (input: Parameters<typeof releaseNative>[0]) =>
-      runApplicationEffect(runtime, releaseNative(input)),
+      runtime.runPromise(releaseNative(input)),
   };
 }
 
@@ -44,7 +47,7 @@ test('native release validates the whole known batch, is idempotent, and release
     ]);
     await assert.rejects(
       api.release({ checkout, clientId: 'alice', references: [...alice, ...bob] }),
-      isError('Unauthorized'),
+      isAccessRefusal,
     );
     const importAlice = {
       checkout,
@@ -72,7 +75,7 @@ test('native release validates the whole known batch, is idempotent, and release
         nativeReferences: bob,
         destination: 'never',
       }),
-      isError('Unauthorized'),
+      isAccessRefusal,
     );
     assert(!existsSync(join(f.root, 'never')));
   } finally {
@@ -109,7 +112,7 @@ test('unclaimed references expire in their owning scope and cannot be imported a
         nativeReferences: references,
         destination: 'never',
       }),
-      isError('Unauthorized'),
+      isAccessRefusal,
     );
     assert(!existsSync(join(f.root, 'never')));
     await api.release({ checkout, clientId: 'alice', references });
@@ -145,7 +148,7 @@ test('failed durable import reservation leaves native references unclaimed for t
     const lock = new DatabaseSync(join(f.base, 'state', 'moonbase-workspace-v1.sqlite'));
     try {
       lock.exec('BEGIN IMMEDIATE');
-      await assert.rejects(client.command('mutate', input), isError('Persistence'));
+      await assert.rejects(client.command('mutate', input), isStorageFailure);
       assert.equal(
         await client.command('operationStatus', { clientId: 'alice', id: input.id }),
         null,
@@ -190,7 +193,7 @@ test('cancelled queued Save releases its lease without admission and successors 
       { ...input, requestId: 'cancelled', text: 'must not publish' },
       { signal: abort.signal },
     );
-    const rejected = assert.rejects(queued, isError('Cancelled'));
+    const rejected = assert.rejects(queued, isCancelled);
     abort.abort();
     await rejected;
     const successor = client.command('saveFile', {
@@ -248,7 +251,7 @@ test('strict saved recovery blocks load and later edits without changing origina
       db.prepare('UPDATE recovery SET body=? WHERE client=?').run(original, 'alice');
       const before = db.prepare('SELECT revision,body FROM recovery WHERE client=?').get('alice');
       const safe = (error: unknown) => {
-        assert(isError('Persistence')(error));
+        assert(isStorageFailure(error));
         assert(!String(error).includes('retained evidence'));
         return true;
       };
@@ -302,11 +305,8 @@ test('strict private saved request rejection leaves pending journal data untouch
         original,
         row.key!,
       );
-      await assert.rejects(
-        client.command('loadRecovery', { clientId: 'alice' }),
-        isError('Persistence'),
-      );
-      await assert.rejects(client.command('saveFile', input), isError('Persistence'));
+      await assert.rejects(client.command('loadRecovery', { clientId: 'alice' }), isStorageFailure);
+      await assert.rejects(client.command('saveFile', input), isStorageFailure);
       assert.equal(
         db.prepare("SELECT body FROM records WHERE bucket='saves' AND key=?").get(row.key!)!.body,
         original,
@@ -334,12 +334,12 @@ test('capture cancellation settles its helper and releases descriptors before re
     await client.command('readFile', { checkout, path: 'file.txt' });
     writeFileSync(join(f.base, 'external'), 'native bytes');
     const before = await readOpenDescriptors();
-    const capturing = runApplicationEffect(
-      runtime,
+    const capturing = runtime.runPromise(
       captureNative({ checkout, clientId: 'alice', paths: [join(f.base, 'external')] }),
       { signal: abort.signal },
     );
-    const rejected = assert.rejects(capturing, isError('Cancelled'));
+    // Aborting interrupts the capture: it settles as interrupted, not with a result.
+    const rejected = assert.rejects(capturing, /interrupted/);
     await waitFor(ready);
     abort.abort();
     await rejected;
@@ -377,10 +377,7 @@ test('failing native releases remain observable and do not skip sibling referenc
       if (inode === directoryId) directoryClosed = true;
       if (sourceIds.has(inode)) {
         released.add(inode);
-        throw new ApplicationError({
-          code: 'Unavailable',
-          message: 'Controlled native release failure',
-        });
+        throw new Error('Controlled native release failure');
       }
     });
     syncBuiltinESMExports();
@@ -415,7 +412,7 @@ test('private configuration rejects unsafe shapes before creating a state direct
         await assert.rejects(
           makeWorkspaceClient(runtime).command('loadRecovery', { clientId: 'alice' }),
           (error: unknown) => {
-            assert(isError('InvalidInput')(error));
+            assert(isRefusal(error));
             assert(!String(error).includes('private-secret'));
             assert(!String(error).includes('relative-private-path'));
             return true;
@@ -453,7 +450,7 @@ test('admitted cancellation retains its overlap lease and root resources until t
       { checkout, clientId: 'alice', id: 'held-copy', kind: 'copy', sources, destination: 'copy' },
       { signal: abort.signal },
     );
-    const rejected = assert.rejects(mutation, isError('Cancelled'));
+    const rejected = assert.rejects(mutation, isCancelled);
     await waitFor(ready);
     abort.abort();
     await rejected;
@@ -644,7 +641,7 @@ test('public workspace IO normalizes unknown helper failures without rebranding 
     await assert.rejects(
       client.command('readFile', { checkout, path: 'file.txt' }),
       (error: unknown) => {
-        assert(isError('Unavailable')(error));
+        assert(isUnavailable(error));
         assert(!String(error).includes('credential-like-private-value'));
         assert(!String(error).includes('/private/host/configuration'));
         return true;
@@ -658,10 +655,7 @@ test('public workspace IO normalizes unknown helper failures without rebranding 
       assert(!diagnostic.error.includes('credential-like-private-value'));
       assert(!diagnostic.error.includes('/private/host/configuration'));
     }
-    await assert.rejects(
-      client.command('readFile', { checkout, path: '../escape' }),
-      isError('InvalidInput'),
-    );
+    await assert.rejects(client.command('readFile', { checkout, path: '../escape' }), isRefusal);
   } finally {
     await runtime.dispose();
     f.cleanup();
@@ -714,7 +708,7 @@ test('saved recovery naming a foreign checkout, an escaping path or a wrong base
           },
         }),
       ])
-        await assert.rejects(unreadable, isError('InvalidInput'));
+        await assert.rejects(unreadable, isRefusal);
       assert.deepEqual(row(), seeded);
       // A host's move to a path outside the checkout moves nothing in the recovery.
       const moved = structuredClone(state);
@@ -758,11 +752,11 @@ test('saved recovery naming a foreign checkout, an escaping path or a wrong base
         const before = row();
         await assert.rejects(
           client.command('loadRecovery', { clientId: 'alice' }),
-          isError('Persistence'),
+          isStorageFailure,
         );
         await assert.rejects(
           client.command('updateDraft', { clientId: 'alice', bufferId, text: 'replace', disk }),
-          isError('Persistence'),
+          isStorageFailure,
         );
         assert.deepEqual(row(), before);
       }
@@ -840,7 +834,7 @@ test('mutation cancellation during preflight reserves no ID and consumes no nati
       };
       const abort = new AbortController();
       const pending = client.command('mutate', input, { signal: abort.signal });
-      const rejected = assert.rejects(pending, isError('Cancelled'));
+      const rejected = assert.rejects(pending, isCancelled);
       queueMicrotask(() => abort.abort());
       await rejected;
       await client.command('readFile', { checkout, path: 'file.txt' });
@@ -928,10 +922,7 @@ test('failed observation release stays root-owned, is retried, and remains visib
         attempts++;
         if (firstFailure) {
           firstFailure = false;
-          throw new ApplicationError({
-            code: 'Unavailable',
-            message: 'Controlled watcher release failure',
-          });
+          throw new Error('Controlled watcher release failure');
         }
         close();
       };
@@ -950,9 +941,12 @@ test('failed observation release stays root-owned, is retried, and remains visib
       });
     off = await start();
     await start();
-    await assert.rejects(off(), /Controlled watcher release failure/);
+    // The failed close is the system failure it threw, kept visible to its caller.
+    const releaseFailed = (error: { cause?: unknown }) =>
+      /Controlled watcher release failure/.test(String(error.cause));
+    await assert.rejects(off(), releaseFailed);
     assert.equal(closed, 0);
-    await assert.rejects(runtime.dispose(), /Controlled watcher release failure/);
+    await assert.rejects(runtime.dispose(), releaseFailed);
     assert.equal(
       closed,
       handles.length,

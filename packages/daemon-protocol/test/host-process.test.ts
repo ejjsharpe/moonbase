@@ -11,8 +11,8 @@ import { createServer } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import { ConnectionService } from '@moonbase/contracts/services';
-import { ApplicationError } from '@moonbase/contracts/workspace';
-import { makeChatClient } from '@moonbase/application/chat/clients';
+import { ConnectionError } from '@moonbase/contracts/connection-errors';
+import { makeChatCalls } from '@moonbase/application/testing/service-calls';
 import { DaemonRpcLinkLive, RemoteChatLive } from '../src/client/remote.ts';
 import { createRequire } from 'node:module';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
@@ -108,10 +108,7 @@ test('actual child host crash resumes Pi-owned work without resubmitting reserve
     log,
   };
   await writeFile(file, JSON.stringify(config), { mode: 0o600 });
-  const unavailable = () =>
-    Effect.fail(
-      new ApplicationError({ code: 'Unavailable', message: 'Not a connection command.' }),
-    );
+  const unavailable = () => Effect.fail(new ConnectionError({ reason: 'closed' }));
   const runtime = ManagedRuntime.make(
     RemoteChatLive.pipe(
       Layer.provide(DaemonRpcLinkLive({ host })),
@@ -138,7 +135,7 @@ test('actual child host crash resumes Pi-owned work without resubmitting reserve
       ),
     ),
   );
-  const client = makeChatClient(runtime),
+  const client = makeChatCalls(runtime),
     children: ReturnType<typeof start>[] = [],
     rows = async () => {
       try {
@@ -227,13 +224,13 @@ test('compiled remote entry runs on Electron against the separate production hos
   const source = `import {readFileSync} from 'node:fs';
     import {Effect,Layer,ManagedRuntime,Stream} from 'effect';
     import { ConnectionService, LocalHostService } from '@moonbase/contracts/services';
-    import {makeChatClient} from '@moonbase/application/chat/clients';
+    import {makeChatCalls} from '@moonbase/application/testing/service-calls';
     import {DaemonRpcLinkLive,RemoteChatLive} from './src/client/remote.ts';
     async function main(){
       const config=JSON.parse(readFileSync(process.argv[2],'utf8'));
       const unavailable=()=>Effect.die('No implicit connection command');
       const connection=Layer.succeed(ConnectionService,{getConnection:unavailable,connect:unavailable,disconnect:unavailable,watch:()=>Stream.empty,endpoint:()=>Effect.succeed({origin:'http://127.0.0.1:'+config.port,token:config.token,expected:config.host,connectionId:'controlled',health:{...config.host,protocol:${chatProtocolVersion},version:'0.1.0',capabilities:['chat-v0','daemon-local-v1']}})});
-      const runtime=ManagedRuntime.make(RemoteChatLive.pipe(Layer.provide(DaemonRpcLinkLive({host:config.host})),Layer.provide(connection))),client=makeChatClient(runtime);
+      const runtime=ManagedRuntime.make(RemoteChatLive.pipe(Layer.provide(DaemonRpcLinkLive({host:config.host})),Layer.provide(connection))),client=makeChatCalls(runtime);
       try{const publicHost=await client.command('getChatHost',{host:config.host});const target=(await client.command('createChat',{session:{host:config.host,actorId:'personal'},requestId:'electron-create',title:'Electron remote',settings:{cwd:config.cwd,model:config.model}})).conversation.target;
         let off; await boundedWatch();
         async function boundedWatch(){await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('stream deadline')),4000);off=client.watch({target},value=>{if(value.observationStatus==='connected'){clearTimeout(timer);resolve();}},reject);});await off();}

@@ -92,11 +92,11 @@ test('sign-in progress comes from the watch, never from polling, and a dropped w
   first!.receive(completed);
   await waitFor(() => shown().status?.flow?.state === 'completed');
   // A dropped watch (a restarted daemon, say) opens again by itself after its backoff.
-  first!.fail(unavailable('Gone.'));
+  first!.fail(unavailable());
   await waitFor(() => providers.watches.length === 2);
   assert.equal(first!.closed, true);
   // Once the backoff runs out it stays closed until a sign-in step opens it again.
-  providers.watches[1]!.fail(unavailable('Gone again.'));
+  providers.watches[1]!.fail(unavailable());
   await waitFor(() => providers.watches[1]!.closed);
   await turn();
   assert.equal(providers.watches.length, 2);

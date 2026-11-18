@@ -1,5 +1,5 @@
 import * as Schema from 'effect/Schema';
-import { ApplicationError, maximumFileBytes } from './workspace.ts';
+import { maximumFileBytes } from './workspace.ts';
 import type { CommandInput, CommandOutput } from './workspace.ts';
 import { array, optional, struct, voidResult } from './schema.ts';
 import { getJsonKey } from './common.ts';
@@ -350,23 +350,15 @@ export function decodeWorkspaceInput<K extends WorkspaceCommand>(
   operation: K,
   value: unknown,
 ): CommandInput<K> {
-  try {
-    if (!isWorkspaceCommand(operation)) throw Error();
-    return inputs[operation](value) as CommandInput<K>;
-  } catch {
-    throw new ApplicationError({ code: 'InvalidInput', message: 'Invalid workspace input.' });
-  }
+  if (!isWorkspaceCommand(operation)) throw new TypeError('Unknown command.');
+  return inputs[operation](value) as CommandInput<K>;
 }
 export function decodeWorkspaceOutput<K extends WorkspaceCommand>(
   operation: K,
   value: unknown,
 ): CommandOutput<K> {
-  try {
-    if (!isWorkspaceCommand(operation)) throw Error();
-    return outputs[operation](value) as CommandOutput<K>;
-  } catch {
-    throw new ApplicationError({ code: 'Incompatible', message: 'Invalid workspace reply.' });
-  }
+  if (!isWorkspaceCommand(operation)) throw new TypeError('Unknown command.');
+  return outputs[operation](value) as CommandOutput<K>;
 }
 const event = Schema.decodeUnknownSync(WorkspaceEventSchema, { reportInput: false });
 const watch = Schema.decodeUnknownSync(WorkspaceWatchInputSchema, {
@@ -374,16 +366,8 @@ const watch = Schema.decodeUnknownSync(WorkspaceWatchInputSchema, {
   reportInput: false,
 });
 export function decodeWorkspaceEvent(value: unknown): typeof WorkspaceEventSchema.Type {
-  try {
-    return event(value);
-  } catch {
-    throw new ApplicationError({ code: 'Incompatible', message: 'Invalid workspace event.' });
-  }
+  return event(value);
 }
 export function decodeWorkspaceWatchInput(value: unknown): typeof WorkspaceWatchInputSchema.Type {
-  try {
-    return watch(value);
-  } catch {
-    throw new ApplicationError({ code: 'InvalidInput', message: 'Invalid workspace watch input.' });
-  }
+  return watch(value);
 }

@@ -5,7 +5,7 @@ import { Harness, createRegistry, type ConversationId } from '@earendil-works/pi
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
 import { Cause, Effect, Exit, FiberSet, PubSub, Ref, Scope } from 'effect';
-import { releaseResource } from '@moonbase/effect';
+import { releaseResource } from './release-resource.ts';
 import {
   ChatStoreMismatchError,
   ChatUnavailableError,

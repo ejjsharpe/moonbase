@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, open, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Layer, ManagedRuntime } from 'effect';
+import { Effect, Layer, ManagedRuntime } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { createModels } from '@earendil-works/pi-ai/models';
 import {
@@ -19,8 +19,8 @@ import {
   fauxToolCall,
   type FauxResponseStep,
 } from '@earendil-works/pi-ai/providers/faux';
-import { makeChatClient } from '@moonbase/application/chat/clients';
-import type { ChatTarget } from '@moonbase/contracts/chat';
+import { ChatService } from '@moonbase/contracts/services';
+import type { ChatCommand, ChatInput, ChatOutput, ChatTarget } from '@moonbase/contracts/chat';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 
 const userData = process.argv[2];
@@ -61,7 +61,15 @@ const runtime = ManagedRuntime.make(
     Layer.provide(NodeServices.layer),
   ),
 );
-const client = makeChatClient(runtime);
+/** Runs one chat command on the seeding runtime. */
+const client = {
+  command: <K extends ChatCommand>(operation: K, input: ChatInput<K>) =>
+    runtime.runPromise(
+      Effect.flatMap(ChatService, (chat) =>
+        (chat[operation] as (input: ChatInput<K>) => Effect.Effect<ChatOutput<K>, unknown>)(input),
+      ),
+    ),
+};
 
 const toolUse = { stopReason: 'toolUse' as const };
 async function seedChat(

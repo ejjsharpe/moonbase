@@ -30,7 +30,7 @@ for (const entry of [
     write: false,
     metafile: true,
   });
-  // `ApplicationError` is an Effect Schema class, so DTO entries carry portable Effect too.
+  // Errors are Effect Schema classes, so DTO entries carry portable Effect too.
   for (const input of Object.keys(result.metafile.inputs))
     assert(
       portableInput.test(input),
@@ -56,7 +56,7 @@ for (const entry of [
   'host-schema',
   'daemon-schema',
   'providers-schema',
-  'error-schema',
+  'error-groups',
   'schema',
   'services',
 ]) {
@@ -78,9 +78,10 @@ const typeOnly = await build({
   stdin: {
     contents: `
       import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-      import type { ChatClient } from '@moonbase/contracts/chat';
-      import type { ConnectionClient } from '@moonbase/contracts/connection';
-      export type Clients = [CheckoutTarget, ChatClient, ConnectionClient];
+      import type { ChatSnapshot } from '@moonbase/contracts/chat';
+      import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
+      import type { ErrorGroup } from '@moonbase/contracts/error-groups';
+      export type Clients = [CheckoutTarget, ChatSnapshot, ConnectionSnapshot, ErrorGroup];
     `,
     resolveDir: root,
     loader: 'ts',
@@ -154,9 +155,7 @@ for (const [entry, owner] of [
     );
     const module = input.match(/(?:^|\/)packages\/([^/]+)\//)?.[1];
     assert(
-      module === undefined ||
-        module === owner ||
-        ['application', 'contracts', 'effect'].includes(module),
+      module === undefined || module === owner || ['application', 'contracts'].includes(module),
       `Foreign package reached ${entry}: ${input}`,
     );
     assert(

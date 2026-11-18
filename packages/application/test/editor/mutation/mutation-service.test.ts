@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { type ReplacePrompt, getFailureCode } from '@moonbase/application/editor';
+import { type ReplacePrompt } from '@moonbase/application/editor';
 import {
   type EditorDriver,
   acquireEditor,
@@ -14,6 +14,7 @@ import {
 } from '../editor-fixture.ts';
 import type { WorkspaceOperation } from '@moonbase/contracts/workspace';
 import type { WorkspaceClient } from '@moonbase/application/testing/editor-fixture';
+import { UncertainError } from '@moonbase/contracts/errors';
 
 /**
  * The fixture's editor (over `wrap`'s client, if given) with each replace prompt recorded in
@@ -282,10 +283,10 @@ test('memory inspection rejects empty and oversized selections like the producti
   const f = await fixture();
   try {
     for (const paths of [[], Array(257).fill('a.ts')])
-      await assert.rejects(
-        f.client.command('inspectEntries', { checkout, paths }),
-        (error) => getFailureCode(error) === 'InvalidInput',
-      );
+      await assert.rejects(f.client.command('inspectEntries', { checkout, paths }), {
+        _tag: 'InvalidRequestError',
+        problem: 'invalid-input',
+      });
     assert.equal(
       (await f.client.command('inspectEntries', { checkout, paths: ['a.ts'] })).length,
       1,
@@ -364,7 +365,7 @@ test('a pending batch into the root guards the paths it lands at, and a root bat
     await assert.rejects(f.editor.mutate({ checkout, kind: 'trash', sources: landed }), pending);
     await f.editor.resolveOperation('to-root');
     // A create whose reply is lost before it ran stays pending at its path.
-    f.memory.failNext('mutate', 'Response lost', false, 'Uncertain');
+    f.memory.failNext('mutate', new UncertainError({ operation: 'mutate' }));
     await assert.rejects(
       f.editor.mutate({ checkout, kind: 'create-file', sources: [], destination: 'b.ts.bak' }),
     );
@@ -517,7 +518,7 @@ test('definitive rejected mutation releases pending state and leaves Save, Close
         replacements: sources,
         destination: 'a.ts',
       }),
-      (error) => getFailureCode(error) === 'InvalidInput',
+      { _tag: 'InvalidRequestError', problem: 'destination-inside-source' },
     );
     assert.equal(f.memory.stats.mutations, 0);
     assert.equal(f.editor.getSnapshot().operations.length, 0);

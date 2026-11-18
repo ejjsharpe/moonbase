@@ -1,5 +1,9 @@
 import { Effect, Queue, Stream } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { HostUnavailableError, IncompatibleHostError } from '@moonbase/contracts/host-errors';
+import { isKnownError } from '@moonbase/contracts/error-groups';
+import { IpcUnavailableError } from '@moonbase/contracts/ipc-errors';
+import { ProviderSetupRefusedError } from '@moonbase/contracts/provider-errors';
+import type { ChatServiceError } from '@moonbase/contracts/services';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
 import { chatInputSchemas } from '@moonbase/contracts/chat-schema';
 import { providerInputSchemas } from '@moonbase/contracts/providers-schema';
@@ -31,31 +35,22 @@ export type DemoChatCommands = {
 };
 type DemoChatCommand = (input: never, options: { signal?: AbortSignal }) => Promise<unknown>;
 
-/** A failure as the chat reads it: an `ApplicationError` as it is, anything else Unavailable. */
-const toApplicationError = (error: unknown) =>
-  ApplicationError.is(error)
-    ? error
-    : new ApplicationError({ code: 'Unavailable', message: 'Application effect failed' });
+/** A failure as the chat reads it: a host's error as it is, anything else the host unavailable. */
+const toHostError = (error: unknown) =>
+  isKnownError(error)
+    ? (error as ChatServiceError)
+    : new HostUnavailableError({ reason: 'failed' });
 const unexpected = (operation: string) => async (): Promise<never> => {
   throw Error(`Unexpected fake operation: ${operation}`);
 };
 const noTranscript = async (): Promise<never> => {
-  throw new ApplicationError({
-    code: 'Incompatible',
-    message: 'This demo serves no transcript reads.',
-  });
+  throw new IncompatibleHostError({ reason: 'not-served' });
 };
 /** Every provider command but `getProviders`, which the demo answers. */
 const readOnlyProviders = Object.fromEntries(
   Object.keys(providerInputSchemas).map((operation) => [
     operation,
-    () =>
-      Effect.fail(
-        new ApplicationError({
-          code: 'InvalidInput',
-          message: 'Demo provider setup is read-only.',
-        }),
-      ),
+    () => Effect.fail(new ProviderSetupRefusedError({ reason: 'unknown-provider' })),
   ]),
 );
 
@@ -183,10 +178,7 @@ export function chatCapabilities(local = false, activity = false) {
   /** Like main: a chat without a project's folder becomes a project where it is. */
   const turnIntoProject = async (conversationId: string) => {
     if (conversation.target.conversationId !== conversationId || !conversation.ownFolder)
-      throw new ApplicationError({
-        code: 'InvalidInput',
-        message: 'Only a chat without a project can become one.',
-      });
+      throw new IpcUnavailableError({ feature: 'turn-into-project' });
     delete conversation.ownFolder;
     controls.receiveChat(structuredClone({ ...snapshot, conversation: withSettled(conversation) }));
     return conversation.cwd;
@@ -207,7 +199,7 @@ export function chatCapabilities(local = false, activity = false) {
   };
   /** One watch: counted while open, and closed through `controls.release`, once. */
   const observe = <A>(register: (offer: (value: A) => void) => () => void) =>
-    Stream.callback<A, ApplicationError>((queue) =>
+    Stream.callback<A, ChatServiceError>((queue) =>
       Effect.acquireRelease(
         Effect.sync(() => {
           controls.observations++;
@@ -215,7 +207,7 @@ export function chatCapabilities(local = false, activity = false) {
         }),
         (unregister) =>
           Effect.sync(unregister).pipe(
-            Effect.andThen(Effect.tryPromise({ try: close(), catch: toApplicationError })),
+            Effect.andThen(Effect.tryPromise({ try: close(), catch: toHostError })),
             Effect.orDie,
           ),
       ),
@@ -318,7 +310,7 @@ export function chatCapabilities(local = false, activity = false) {
               calls.push(operation);
               return (commands[operation] as DemoChatCommand)(input, { signal });
             },
-            catch: toApplicationError,
+            catch: toHostError,
           }),
       ]),
     ),

@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import type { ApplicationError } from '@moonbase/contracts/errors';
+import type { IpcError } from '@moonbase/contracts/ipc-errors';
 import type { ChatServiceError } from '@moonbase/contracts/services';
 import type {
   ChatCommand,
@@ -26,10 +26,10 @@ import type { FindBoundary } from './transcript-find.ts';
 import { findRowEntryId, isLiveRowKey, listTranscriptRows } from './transcript-rows.ts';
 
 /** What a transcript read fails with: the host's errors, or what the read found wrong. */
-export type TranscriptFailure = TranscriptReadError | ChatServiceError | ApplicationError;
+export type TranscriptFailure = TranscriptReadError | ChatServiceError | IpcError;
 type PortRead<K extends ChatCommand> = (
   input: ChatInput<K>,
-) => Effect.Effect<ChatOutput<K>, ChatServiceError | ApplicationError>;
+) => Effect.Effect<ChatOutput<K>, ChatServiceError | IpcError>;
 
 /**
  * One open chat's retained transcript: the state it publishes, the accepted snapshot, the history

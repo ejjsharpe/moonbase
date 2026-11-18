@@ -1,6 +1,7 @@
 import { Effect, Stream } from 'effect';
-import { toWireError, type WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import type { WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
+import { LocalDaemonError } from '@moonbase/contracts/connection-errors';
+import { isIncompatible } from '@moonbase/contracts/error-groups';
 import { chatHostCapabilities } from '@moonbase/contracts/host';
 import type { VerifiedChatEndpoint, WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import type { HostCommand } from '@moonbase/contracts/workspace-host';
@@ -10,19 +11,9 @@ import {
   hostInputSchemas,
 } from '@moonbase/contracts/workspace-host-schema';
 import type { LocalDaemon } from './local-daemon.ts';
-import { toDaemonApplicationError } from './local-daemon-errors.ts';
 
-const unreachable = () =>
-  new ApplicationError({
-    code: 'Unavailable',
-    message: 'Moonbase could not reach its local daemon in time. Retry; drafts are kept.',
-  });
-const withoutFiles = () =>
-  new ApplicationError({
-    code: 'Unavailable',
-    message:
-      'The local daemon does not serve files yet. An older daemon is replaced once it has no work; Restart daemon replaces it now.',
-  });
+const unreachable = () => new LocalDaemonError({ reason: 'reach-timeout' });
+const withoutFiles = () => new LocalDaemonError({ reason: 'without-files' });
 
 /**
  * The local daemon's file host as the editor's recovery store uses it, reached on demand: the
@@ -38,7 +29,6 @@ export function createDaemonWorkspaceHost(
 ): WorkspaceHostServiceShape {
   const reach = (operation: HostCommand | 'watch') =>
     local.connect.pipe(
-      Effect.mapError(toDaemonApplicationError),
       Effect.timeoutOrElse({
         duration: deadlineMs(operation),
         orElse: () => Effect.fail(unreachable()),
@@ -46,9 +36,8 @@ export function createDaemonWorkspaceHost(
     );
   // A daemon without the workspace refuses it as `Incompatible`; to the editor that is unavailable.
   // Any other `Incompatible` failure, such as an invalid reply, is the editor's to see.
-  const explain = (endpoint: VerifiedChatEndpoint) => (error: ApplicationError) =>
-    error.code === 'Incompatible' &&
-    !endpoint.health.capabilities.includes(chatHostCapabilities.workspace)
+  const explain = (endpoint: VerifiedChatEndpoint) => (error: WorkspaceHostError) =>
+    isIncompatible(error) && !endpoint.health.capabilities.includes(chatHostCapabilities.workspace)
       ? withoutFiles()
       : error;
   const handlers = Object.fromEntries(
@@ -59,7 +48,7 @@ export function createDaemonWorkspaceHost(
           Effect.mapError(
             (workspace[operation] as (input: never) => Effect.Effect<unknown, WorkspaceHostError>)(
               input,
-            ).pipe(Effect.mapError(toWireError)),
+            ),
             explain(endpoint),
           ),
         ),
@@ -70,9 +59,7 @@ export function createDaemonWorkspaceHost(
     watch: (input) =>
       Stream.unwrap(
         Effect.map(reach('watch'), ({ workspace, endpoint }) =>
-          workspace
-            .watch(input)
-            .pipe(Stream.mapError((error) => explain(endpoint)(toWireError(error)))),
+          workspace.watch(input).pipe(Stream.mapError(explain(endpoint))),
         ),
       ),
   };

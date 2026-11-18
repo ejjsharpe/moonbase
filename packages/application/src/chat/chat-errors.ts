@@ -1,50 +1,51 @@
 import * as Schema from 'effect/Schema';
-import { ApplicationError, type ApplicationErrorCode } from '@moonbase/contracts/errors';
-import { getDaemonErrorCode, isDaemonServiceError } from '@moonbase/contracts/chat-legacy-errors';
-import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
+import {
+  isConflict,
+  isKnownError,
+  isUnavailable,
+  type ErrorGroup,
+} from '@moonbase/contracts/error-groups';
+import {
+  getTranscriptReadGroup,
+  type TranscriptReadError,
+} from './transcript/transcript-errors.ts';
 
 // What the chat application itself refuses or reports (epic #273 D14). Each reason names what
-// happened and its message is Moonbase's own. `describeChatFailure` is the one place a failure
-// becomes the text the chat shows.
+// happened, what it means for the request (`error-groups`) and its message, which is Moonbase's
+// own. `describeChatFailure` is the one place a failure becomes the text the chat shows.
 
 const reasons = {
-  'not-connected': ['Unavailable', 'Connect to the configured host first.'],
-  'host-mismatch': ['Incompatible', 'Host actor does not match the configured chat context.'],
-  'other-context': ['InvalidInput', 'Chat belongs to another context.'],
-  'no-folder': ['InvalidInput', 'Choose a working folder to search its files.'],
-  'no-settings': ['InvalidInput', 'Choose a folder and model for this chat.'],
-  title: ['InvalidInput', 'Use a chat title of 1–200 UTF-8 bytes.'],
-  'empty-message': ['InvalidInput', 'Write a message before sending.'],
-  'message-text': ['InvalidInput', 'Message must contain valid Unicode and at most 32 KiB.'],
-  'too-many-mentions': ['InvalidInput', 'A message can mention at most 32 files.'],
+  'not-connected': ['unavailable', 'Connect to the configured host first.'],
+  'host-mismatch': ['incompatible', 'Host actor does not match the configured chat context.'],
+  'other-context': ['refusal', 'Chat belongs to another context.'],
+  'no-folder': ['refusal', 'Choose a working folder to search its files.'],
+  'no-settings': ['refusal', 'Choose a folder and model for this chat.'],
+  title: ['refusal', 'Use a chat title of 1–200 UTF-8 bytes.'],
+  'empty-message': ['refusal', 'Write a message before sending.'],
+  'message-text': ['refusal', 'Message must contain valid Unicode and at most 32 KiB.'],
+  'too-many-mentions': ['refusal', 'A message can mention at most 32 files.'],
   'mention-path': [
-    'InvalidInput',
+    'refusal',
     'Mention a file by a relative path of at most 1 KiB, without quotes, backslashes, control characters or ./.. segments.',
   ],
-  'model-preference': ['InvalidInput', 'Choose a valid model and reasoning effort.'],
+  'model-preference': ['refusal', 'Choose a valid model and reasoning effort.'],
   'draft-limit': [
-    'InvalidInput',
+    'refusal',
     '32 conversation drafts are retained. Send or clear an existing draft before starting another conversation.',
   ],
   'created-draft-limit': [
-    'InvalidInput',
+    'refusal',
     'The conversation was created, but the draft limit was reached. Send or clear an existing draft, then retry the original Create.',
   ],
-  'pending-limit': ['InvalidInput', 'Resolve an existing pending command before creating another.'],
-  'pending-create': [
-    'InvalidInput',
-    'Resolve the retained new conversation before sending another.',
-  ],
-  'pending-send': [
-    'InvalidInput',
-    'Resolve the retained Send before starting another in this chat.',
-  ],
-  'pending-stop': ['InvalidInput', 'Resolve the captured Stop before requesting it again.'],
+  'pending-limit': ['refusal', 'Resolve an existing pending command before creating another.'],
+  'pending-create': ['refusal', 'Resolve the retained new conversation before sending another.'],
+  'pending-send': ['refusal', 'Resolve the retained Send before starting another in this chat.'],
+  'pending-stop': ['refusal', 'Resolve the captured Stop before requesting it again.'],
   'watch-stopped': [
-    'Unavailable',
+    'unavailable',
     'Live updates stopped and could not reconnect. Refresh or reopen the conversation to retry.',
   ],
-} as const satisfies Record<string, readonly [ApplicationErrorCode, string]>;
+} as const satisfies Record<string, readonly [ErrorGroup, string]>;
 export type ChatRefusalReason = keyof typeof reasons;
 
 /** What the chat refused or could not do, by reason. */
@@ -53,10 +54,6 @@ export class ChatRefusedError extends Schema.TaggedError<ChatRefusedError>()('Ch
 }) {
   override get message(): string {
     return reasons[this.reason][1];
-  }
-  /** The legacy code (D14) the reason had as an `ApplicationError`. */
-  get code(): ApplicationErrorCode {
-    return reasons[this.reason][0];
   }
 }
 
@@ -82,39 +79,26 @@ export class DraftStorageError extends Schema.TaggedError<DraftStorageError>()(
   override get message(): string {
     return storageProblems[this.problem];
   }
-  get code(): ApplicationErrorCode {
-    return 'Persistence';
-  }
 }
 
 const isTagged = (value: unknown, tag: string) =>
   value instanceof Error && (value as { _tag?: unknown })._tag === tag;
 const isOwnError = (value: unknown): value is ChatRefusedError | DraftStorageError =>
   isTagged(value, 'ChatRefusedError') || isTagged(value, 'DraftStorageError');
-const isTranscriptReadError = (value: unknown): value is Error & { code: ApplicationErrorCode } =>
+const isTranscriptReadError = (value: unknown): value is TranscriptReadError =>
   isTagged(value, 'TranscriptReadError');
-const isConnectionFailure = (value: unknown) =>
-  isTagged(value, 'ConnectionError') || isTagged(value, 'HostVerificationError');
-
-/**
- * The legacy code of a chat failure (D14), for decisions that still read codes: whether a watch
- * may retry (`Unavailable`) or a read found its source changed (`Conflict`).
- */
-export function getChatFailureCode(error: unknown): ApplicationErrorCode | undefined {
-  if (ApplicationError.is(error)) return error.code;
-  if (isOwnError(error) || isTranscriptReadError(error)) return error.code;
-  if (isConnectionFailure(error))
-    return toConnectionApplicationError(error as Parameters<typeof toConnectionApplicationError>[0])
-      .code;
-  if (isDaemonServiceError(error)) return getDaemonErrorCode(error);
-  if (isTagged(error, 'CancelledError')) return 'Cancelled';
-  return undefined;
-}
+const isRefusedFor = (error: unknown, group: ErrorGroup) =>
+  isTagged(error, 'ChatRefusedError') && reasons[(error as ChatRefusedError).reason][0] === group;
 
 /** The host could not be reached (a restarted daemon, say): watching again may succeed. */
-export const isChatUnavailable = (error: unknown) => getChatFailureCode(error) === 'Unavailable';
+export const isChatUnavailable = (error: unknown) =>
+  isUnavailable(error) ||
+  isRefusedFor(error, 'unavailable') ||
+  (isTranscriptReadError(error) && getTranscriptReadGroup(error) === 'unavailable');
 /** What a transcript read was reading changed under it. */
-export const isChatConflict = (error: unknown) => getChatFailureCode(error) === 'Conflict';
+export const isChatConflict = (error: unknown) =>
+  isConflict(error) ||
+  (isTranscriptReadError(error) && getTranscriptReadGroup(error) === 'conflict');
 
 const fixedText = {
   UncertainError: 'The outcome is uncertain. Check it before retrying; do not send it again.',
@@ -123,23 +107,26 @@ const fixedText = {
 const fallback = 'Chat action failed.';
 
 /**
+ * The fixed text the chat shows for a shared outcome, `UncertainError` or `UnauthorizedError`,
+ * whose own message names the operation; none for any other failure.
+ */
+export function describeChatOutcome(error: unknown): string | undefined {
+  const tag = error instanceof Error ? (error as { _tag?: unknown })._tag : undefined;
+  return typeof tag === 'string' && Object.hasOwn(fixedText, tag)
+    ? fixedText[tag as keyof typeof fixedText]
+    : undefined;
+}
+
+/**
  * The text the chat shows for a failure (D14), its one tag-to-text mapping. The chat's own errors,
- * a host's tagged errors and the legacy `ApplicationError` build their message from fixed text and
- * their fields (D11); `UncertainError` and `UnauthorizedError` show fixed text; anything else, such
- * as a defect, shows only fixed text.
+ * a host's and desktop IPC's build their message from fixed text and their fields (D11);
+ * `UncertainError` and `UnauthorizedError` show fixed text; anything else, such as a defect, shows
+ * only fixed text.
  */
 export function describeChatFailure(error: unknown): string {
-  const tag = error instanceof Error ? (error as { _tag?: unknown })._tag : undefined;
-  if (typeof tag === 'string' && Object.hasOwn(fixedText, tag))
-    return fixedText[tag as keyof typeof fixedText];
-  if (
-    ApplicationError.is(error) ||
-    isOwnError(error) ||
-    isTranscriptReadError(error) ||
-    isConnectionFailure(error) ||
-    isDaemonServiceError(error) ||
-    tag === 'CancelledError'
-  )
+  const outcome = describeChatOutcome(error);
+  if (outcome !== undefined) return outcome;
+  if (isOwnError(error) || isTranscriptReadError(error) || isKnownError(error))
     return (error as Error).message;
   return fallback;
 }

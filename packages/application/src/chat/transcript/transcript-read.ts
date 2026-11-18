@@ -41,7 +41,7 @@ export function trackTranscriptCursor() {
     }
   };
 }
-/** Checks that a reply echoes the input it answers; the ChatClient boundary checked its shape. */
+/** Checks that a reply echoes the input it answers; the port's boundary checked its shape. */
 export function checkTranscriptReply(
   input: ChatInput<'getChatTranscriptContent'>,
   reply: ChatOutput<'getChatTranscriptContent'>,

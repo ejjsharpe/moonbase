@@ -5,6 +5,7 @@ import { Effect, ManagedRuntime } from 'effect';
 import { toWorkspaceClient as makeEditorClient } from '@moonbase/application/testing/editor-fixture';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
+import { WorkspaceUnavailableError } from '@moonbase/contracts/workspace-host-errors';
 
 const checkout: CheckoutTarget = {
   hostId: 'local',
@@ -154,7 +155,7 @@ test('a failed edit keeps recovery failed and unready until a later flush succee
   try {
     f.editor.edit(target, 'kept after failure');
     f.memory.failNext('updateDraft', 'Store unavailable');
-    await assert.rejects(f.editor.flush(), /Store unavailable/);
+    await assert.rejects(f.editor.flush(), { _tag: 'WorkspaceStoreError' });
     assert.equal(f.editor.getSnapshot().recoveryFailed, true);
     assert.equal(f.editor.getSnapshot().recoveryReady, false);
     assert.deepEqual((await f.stored()).drafts, []);
@@ -248,9 +249,9 @@ test('a failed preview close leaves no stale buffer: reopening its file ends in 
     await f.editor.open(other, { intent: 'preview' });
     await f.editor.flush();
     // Replacing the preview closes b.ts; that close fails before reaching the store.
-    f.memory.failNext('closeTab', 'Store unavailable', false, 'Unavailable');
+    f.memory.failNext('closeTab', new WorkspaceUnavailableError({ cause: 'failed' }));
     await f.editor.open(third, { intent: 'preview' });
-    await assert.rejects(f.editor.flush(), /Store unavailable/);
+    await assert.rejects(f.editor.flush(), { _tag: 'WorkspaceUnavailableError' });
     assert.equal(f.editor.getSnapshot().recoveryFailed, true);
     await f.editor.flush();
     assert.equal(f.editor.getSnapshot().recoveryFailed, false);
@@ -300,7 +301,7 @@ for (const kind of ['close', 'quit', 'reload'] as const)
       await f.editor.flush();
       assert.equal((await f.stored()).drafts[0]?.text, 'discarded');
       // The store commits the close, then its reply is lost.
-      f.memory.failNext('closeTab', 'Reply lost', true, 'Uncertain');
+      f.memory.failNext('closeTab', 'Reply lost', true);
       let done: boolean;
       if (kind === 'reload') {
         f.memory.externalWrite(target, 'reloaded');
@@ -335,7 +336,7 @@ test('a Discard whose reply is lost, and not committed, keeps the draft shown an
   try {
     f.editor.edit(target, 'kept');
     await f.editor.flush();
-    f.memory.failNext('closeTab', 'Store unavailable', false, 'Unavailable');
+    f.memory.failNext('closeTab', new WorkspaceUnavailableError({ cause: 'failed' }));
     const done = await answering(
       f.editor,
       () => f.editor.close([target]),
@@ -363,8 +364,8 @@ test('a lost Discard reply the store cannot be asked about is settled by the nex
   try {
     f.editor.edit(target, 'discarded later');
     await f.editor.flush();
-    f.memory.failNext('closeTab', 'Reply lost', true, 'Uncertain');
-    f.memory.failNext('loadRecovery', 'Store unavailable', false, 'Unavailable');
+    f.memory.failNext('closeTab', 'Reply lost', true);
+    f.memory.failNext('loadRecovery', new WorkspaceUnavailableError({ cause: 'failed' }));
     const done = await answering(
       f.editor,
       () => f.editor.close([target]),
@@ -391,8 +392,8 @@ for (const kind of ['close', 'quit', 'reload'] as const)
       f.editor.edit(target, 'discarded later');
       await f.editor.flush();
       // The close commits but its reply is lost, and the store can't be asked about it yet.
-      f.memory.failNext('closeTab', 'Reply lost', true, 'Uncertain');
-      f.memory.failNext('loadRecovery', 'Store unavailable', false, 'Unavailable');
+      f.memory.failNext('closeTab', 'Reply lost', true);
+      f.memory.failNext('loadRecovery', new WorkspaceUnavailableError({ cause: 'failed' }));
       let done: boolean;
       if (kind === 'reload') {
         f.memory.externalWrite(target, 'reloaded');
@@ -436,7 +437,7 @@ test("a lost Discard reply behind another buffer's held draft still reopens the 
     await hold.entered;
     f.editor.edit(other, 'typed during the Save');
     // Reload's Discard commits but its reply is lost; the store then shows it committed.
-    f.memory.failNext('closeTab', 'Reply lost', true, 'Uncertain');
+    f.memory.failNext('closeTab', 'Reply lost', true);
     f.memory.externalWrite(target, 'reloaded');
     assert.equal(await f.editor.reload(target), true);
     hold.release();

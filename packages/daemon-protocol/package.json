@@ -16,8 +16,7 @@
   },
   "dependencies": {
     "effect": "4.1.0",
-    "@moonbase/contracts": "workspace:*",
-    "@moonbase/effect": "workspace:*"
+    "@moonbase/contracts": "workspace:*"
   },
   "devDependencies": {
     "@earendil-works/chord": "1.4.0",

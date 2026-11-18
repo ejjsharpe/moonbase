@@ -12,14 +12,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ManagedRuntime } from 'effect';
-import {
-  ApplicationError,
-  type CheckoutTarget,
-  type FileDocument,
-} from '@moonbase/contracts/workspace';
+import type { CheckoutTarget, FileDocument } from '@moonbase/contracts/workspace';
 import type { RecoveryLayout, RecoveryState } from '@moonbase/contracts/recovery';
 import { makeWorkspaceClient, type WorkspaceClient } from './workspace-client-fixture.ts';
-import { isWorkspaceHostError, toWireError } from '@moonbase/contracts/workspace-host-errors';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { initRepository } from './repository-fixture.ts';
 export const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
@@ -51,11 +46,6 @@ export function fixture() {
     cleanup: () => rmSync(base, { recursive: true, force: true }),
   };
 }
-/** Whether `value` is, or a host error sent as, the wire error with `code`. */
-export const isError = (code: ApplicationError['code']) => (value: unknown) => {
-  const wire = isWorkspaceHostError(value) ? toWireError(value) : value;
-  return ApplicationError.is(wire) && wire.code === code;
-};
 type Target = { checkout: CheckoutTarget; path: string };
 export type SeedDraft = { target: Target; text: string; disk: FileDocument; bufferId?: string };
 /** A buffer's ID as `seed` opens it. */

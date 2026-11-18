@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { ManagedRuntime } from 'effect';
 import type { RecoveryState } from '@moonbase/contracts/recovery';
-import { type ApplicationError } from '@moonbase/contracts/workspace';
+import { getErrorGroup, type ErrorGroup } from '@moonbase/contracts/error-groups';
 import {
   acquireEditorDriver,
   toWorkspaceClient,
@@ -13,7 +13,6 @@ import {
   type WorkspaceClient,
 } from '@moonbase/application/testing/editor-fixture';
 import { WorkspaceLocalLive } from '@moonbase/workspace';
-import { getFailureCode } from '@moonbase/application/editor';
 
 export { answering } from '@moonbase/application/testing/editor-fixture';
 
@@ -40,8 +39,8 @@ export async function until<T>(
   }
 }
 
-export const code = (expected: ApplicationError['code']) => (error: unknown) =>
-  getFailureCode(error) === expected;
+/** Whether a failure means `group` for its request. */
+export const inGroup = (group: ErrorGroup) => (error: unknown) => getErrorGroup(error) === group;
 
 /** The drafts a stored recovery holds, by path. */
 export const listDrafts = (state: RecoveryState) =>

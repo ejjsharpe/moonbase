@@ -7,7 +7,8 @@ import {
   type ChatTarget,
 } from '@moonbase/contracts/chat';
 import { Effect, Queue, Scope, Stream, SubscriptionRef } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { CancelledError, UnauthorizedError, UncertainError } from '@moonbase/contracts/errors';
+import { WorkspaceConflictError } from '@moonbase/contracts/workspace-host-errors';
 import {
   ChatComposers,
   findMentionClash,
@@ -232,18 +233,19 @@ test('a worktree send whose outcome is unknown is retried under its request; any
   chat.setDraft('Fix it');
   composer.sync(composer.composer.choose(agents, { cwd: '/repo', newWorktree: true }));
   const requests: string[] = [];
-  const send = async (code?: ApplicationError['code']) => {
+  const send = async (failure?: Error) => {
     composer.send(agents, async (_root, _branch, requestId) => {
       requests.push(requestId);
-      if (code) throw new ApplicationError({ code, message: code });
+      if (failure) throw failure;
       return '/repo-worktrees/chat-fix-it';
     });
     await until(() => !composer.snapshot.creatingWorktree);
   };
-  await send('Uncertain');
-  await send('Cancelled');
-  await send('Conflict');
-  await send('Uncertain');
+  const uncertain = new UncertainError({ operation: 'Create worktree' });
+  await send(uncertain);
+  await send(new CancelledError({ operation: 'Create worktree' }));
+  await send(new WorkspaceConflictError({ conflict: 'location-exists' }));
+  await send(uncertain);
   chat.setDraft('Fix another');
   await send();
   assert.equal(requests.length, 5);
@@ -306,6 +308,16 @@ test('a worktree outcome reaches every view, until the new chat is left for a ch
   assert.deepEqual(composer.place(dockB), { cwd: '/b', newWorktree: true });
   composer.sync(composer.composer.dismiss({ chat: '', place: dockB.key }));
   assert.equal(composer.message, null);
+  // A host's refusal shows the chat's fixed text, not the operation it names.
+  const refused = Promise.withResolvers<string>();
+  composer.send(dockB, () => refused.promise);
+  refused.reject(new UnauthorizedError({ operation: 'checkApprovedFolder' }));
+  await until(() => !composer.snapshot.creatingWorktree);
+  assert.equal(
+    composer.message,
+    'The worktree could not be created. This request is not authorized.',
+  );
+  composer.sync(composer.composer.dismiss({ chat: '', place: dockB.key }));
   // Leaving the new chat for a chat clears every place's messages too.
   composer.sync(composer.composer.report({ chat: '', place: agents.key, text: 'Stale' }));
   await chat.select(target('third'));

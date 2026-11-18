@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { toWireError, type WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
+import type { WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
@@ -19,7 +19,7 @@ import { test } from 'node:test';
 import { Effect, ManagedRuntime } from 'effect';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
 import type { ChatTarget } from '@moonbase/contracts/chat';
-import { ApplicationError } from '@moonbase/contracts/workspace';
+import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
 import {
   WorkspaceFolders,
   WorkspaceHostLive,
@@ -106,8 +106,9 @@ function setup({
   };
 }
 const run = <A>(effect: Effect.Effect<A, WorkspaceHostError>) => Effect.runPromise(effect);
-const code = async <A>(effect: Effect.Effect<A, WorkspaceHostError>) =>
-  toWireError(await Effect.runPromise(Effect.flip(effect))).code;
+/** The tag of the error `effect` fails with. */
+const tag = async <A>(effect: Effect.Effect<A, WorkspaceHostError>) =>
+  (await Effect.runPromise(Effect.flip(effect)))._tag;
 const request = (requestId: string, root: string, branch: string) => ({
   installationId: 'alice',
   requestId,
@@ -135,7 +136,10 @@ test('a chat worktree is made beside the repository, numbered when taken, and it
       'chat-topic-2',
     ]);
     // The same ID with another branch is a different payload.
-    assert.equal(await code(host.createChatWorktree(request('one', root, 'other'))), 'Conflict');
+    assert.equal(
+      await tag(host.createChatWorktree(request('one', root, 'other'))),
+      'WorkspaceConflictError',
+    );
     // A chat made from a worktree is placed beside the main one, not the worktree.
     const nested = await run(host.createChatWorktree(request('three', first.root, 'again')));
     assert.equal(nested.root, join(f.base, 'repo-worktrees', 'again'));
@@ -164,15 +168,21 @@ test('a branch named like a folder of the name falls back to a flat one; branche
     );
     chmodSync(hook, 0o755);
     assert.equal(
-      await code(host.createChatWorktree(request('three', root, 'feature/x'))),
-      'Unavailable',
+      await tag(host.createChatWorktree(request('three', root, 'feature/x'))),
+      'WorktreeGitError',
     );
     assert.equal(existsSync(join(f.base, 'repo-worktrees', 'feature-x')), false);
     assert.equal(f.git(root, 'branch', '--list', 'feature*'), '');
     // A repository with no commit has nothing to branch from.
     const empty = f.repository('empty', false);
-    assert.equal(await code(host.createChatWorktree(request('four', empty, 'x'))), 'InvalidInput');
-    assert.equal(await code(host.createChatWorktree(request('bad', root, 'a..b'))), 'InvalidInput');
+    assert.equal(
+      await tag(host.createChatWorktree(request('four', empty, 'x'))),
+      'InvalidBaseError',
+    );
+    assert.equal(
+      await tag(host.createChatWorktree(request('bad', root, 'a..b'))),
+      'InvalidRequestError',
+    );
   } finally {
     await f.close();
   }
@@ -193,12 +203,15 @@ test('a host that opens only some roots makes chat worktrees only where their pa
     assert.equal(made.root, join(f.base, 'roots', 'repo-worktrees', 'work'));
     // A repository that is itself the root has its `-worktrees` folder outside it.
     const solo = f.repository('solo');
-    assert.equal(await code(host.createChatWorktree(request('two', solo, 'work'))), 'Unauthorized');
+    assert.equal(
+      await tag(host.createChatWorktree(request('two', solo, 'work'))),
+      'CheckoutAccessError',
+    );
     assert.equal(existsSync(join(f.base, 'solo-worktrees')), false);
     const outside = f.repository('elsewhere');
     assert.equal(
-      await code(host.createChatWorktree(request('three', outside, 'w'))),
-      'Unauthorized',
+      await tag(host.createChatWorktree(request('three', outside, 'w'))),
+      'CheckoutAccessError',
     );
     assert.equal(existsSync(join(f.base, 'elsewhere-worktrees')), false);
   } finally {
@@ -213,11 +226,7 @@ test('turning a chat into a project opens its own folder once, and leaves the ch
   const f = setup({
     chats: {
       findOwnFolder: async () => {
-        if (!folder)
-          throw new ApplicationError({
-            code: 'Unauthorized',
-            message: 'Not a chat folder.',
-          });
+        if (!folder) throw new FolderRefusedError({ refusal: 'not-chat-folder' });
         return folder;
       },
       markAsProject: async (requestId) => {
@@ -234,11 +243,11 @@ test('turning a chat into a project opens its own folder once, and leaves the ch
       target: chat,
     });
     // A folder the daemon didn't make is refused before anything opens or is marked.
-    assert.equal(await code(host.turnChatIntoProject(input('refused'))), 'Unauthorized');
+    assert.equal(await tag(host.turnChatIntoProject(input('refused'))), 'FolderRefusedError');
     folder = f.repository('chats/one');
-    // A failure that is not an `ApplicationError` is `Unavailable` and frees the ID for a retry.
+    // A failure that is not one of the host's errors is unavailable and frees the ID for a retry.
     failMark = true;
-    assert.equal(await code(host.turnChatIntoProject(input('first'))), 'Unavailable');
+    assert.equal(await tag(host.turnChatIntoProject(input('first'))), 'WorkspaceUnavailableError');
     assert.deepEqual(marked, []);
     failMark = false;
     // A duplicate sent while the first runs waits for it instead of being reported interrupted.
@@ -254,12 +263,12 @@ test('turning a chat into a project opens its own folder once, and leaves the ch
     const real = f.repository('chats/two');
     symlinkSync(real, join(f.base, 'chats', 'link'));
     folder = join(f.base, 'chats', 'link');
-    assert.equal(await code(host.turnChatIntoProject(input('linked'))), 'Unauthorized');
+    assert.equal(await tag(host.turnChatIntoProject(input('linked'))), 'CheckoutAccessError');
     // A `.git` file naming another repository would make the folder that repository's checkout.
     folder = join(f.base, 'chats', 'foreign');
     mkdirSync(folder);
     writeFileSync(join(folder, '.git'), `gitdir: ${join(f.repository('other'), '.git')}\n`);
-    assert.equal(await code(host.turnChatIntoProject(input('foreign'))), 'Unauthorized');
+    assert.equal(await tag(host.turnChatIntoProject(input('foreign'))), 'CheckoutAccessError');
     assert.deepEqual(marked, ['first']);
   } finally {
     await f.close();
@@ -271,14 +280,14 @@ test('a host without chats cannot turn one into a project', async () => {
   try {
     const host = await f.host();
     assert.equal(
-      await code(
+      await tag(
         host.turnChatIntoProject({
           installationId: 'alice',
           requestId: 'r',
           target: chat,
         }),
       ),
-      'Incompatible',
+      'WorkspaceUnsupportedError',
     );
   } finally {
     await f.close();
@@ -315,7 +324,7 @@ test('a folder is the root of an approved checkout, checked again on every use',
     renameSync(root, join(f.base, 'old'));
     mkdirSync(root);
     assert.equal(await has(root), false);
-    assert.ok(await code(host.verifyCheckout({ checkout })));
+    assert.equal(await tag(host.verifyCheckout({ checkout })), 'CheckoutChangedError');
     // A plain folder checkout is a folder while the host's root policy allows it.
     const plain = join(f.base, 'plain');
     mkdirSync(plain);
@@ -338,12 +347,12 @@ test('a host that takes no native imports refuses to hold or release them', asyn
     writeFileSync(source, 'x');
     const checkout = await run(host.openCheckout({ root: plain }));
     assert.equal(
-      await code(host.captureImports({ checkout, clientId: 'c', paths: [source] })),
-      'Incompatible',
+      await tag(host.captureImports({ checkout, clientId: 'c', paths: [source] })),
+      'WorkspaceUnsupportedError',
     );
     assert.equal(
-      await code(host.releaseImports({ checkout, clientId: 'c', references: ['x'] })),
-      'Incompatible',
+      await tag(host.releaseImports({ checkout, clientId: 'c', references: ['x'] })),
+      'WorkspaceUnsupportedError',
     );
   } finally {
     await f.close();

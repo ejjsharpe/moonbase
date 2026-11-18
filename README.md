@@ -7,7 +7,6 @@ The daemon owns projects: it serves files, saves, Git, worktrees, search and wat
 | Module | Owns |
 | --- | --- |
 | [Contracts](packages/contracts/README.md) | Shared DTOs, schemas, client interfaces and Effect service ports |
-| [Effect helpers](packages/effect/README.md) | Shared failure normalization and resource release |
 | [Application](packages/application/README.md) | Headless editor/chat controllers, composition and lifecycle |
 | [Workbench](packages/workbench/README.md) | Project file sidebar, buffers and React/Monaco editor |
 | [Workspace](packages/workspace/README.md) | The macOS file host (files, Git, worktrees, search, watching, journals) and the client recovery store (drafts, editor state) |

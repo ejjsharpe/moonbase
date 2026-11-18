@@ -1,6 +1,6 @@
 import * as Schema from 'effect/Schema';
 import { InvalidRequestError } from './workspace-host-errors.ts';
-import { ChatTargetSchema, chatReplyErrorCodes } from './chat-schema.ts';
+import { ChatTargetSchema } from './chat-schema.ts';
 import { AbsolutePathSchema } from './daemon-schema.ts';
 import type { HostCommand, HostInput } from './workspace-host.ts';
 import { array, optional, struct, voidResult } from './schema.ts';
@@ -253,11 +253,11 @@ export function hostInputCheckout(input: unknown): { hostId: string } | undefine
 export const WorkspaceWatchTargetSchema = struct({ checkout: CheckoutTargetSchema });
 /**
  * The watch of a checkout: `ready` once files are watched, `revision` rising with every change
- * seen and `error` a watch failure the client should answer by watching again. A client rereads
- * after any update.
+ * seen and `failed` once the host's watch failed, which the client answers by watching again. A
+ * client rereads after any update.
  */
 export const WorkspaceWatchValueSchema = struct({
   ready: Schema.Boolean,
   revision: natural,
-  error: optional(Schema.Literals(chatReplyErrorCodes)),
+  failed: optional(Schema.Literal(true)),
 });

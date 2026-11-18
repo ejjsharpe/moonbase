@@ -1,3 +1,4 @@
+import { isAccessRefusal, isRefusal, isStorageFailure } from '@moonbase/contracts/error-groups';
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -12,9 +13,9 @@ import type {
   RecoveryOutline,
 } from '@moonbase/contracts/recovery';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { InvalidRecoveryRequestError, toWireError } from '@moonbase/contracts/workspace-errors';
+import { InvalidRecoveryRequestError } from '@moonbase/contracts/workspace-errors';
 import { dropReply, dropRequest, harness, openCheckout } from './split-fixture.ts';
-import { draftsOf, isError } from './recovery-fixture.ts';
+import { draftsOf } from './recovery-fixture.ts';
 
 type Client = ReturnType<ReturnType<typeof harness>['startClient']>;
 type Edit<K extends RecoveryEdit> = Omit<RecoveryEditInput<K>, 'clientId'>;
@@ -33,7 +34,7 @@ function editor({ runtime }: Client, clientId: string) {
             ...input,
             clientId,
           } as RecoveryEditInput<K>),
-        ).pipe(Effect.mapError(toWireError)),
+        ),
       );
   return {
     openTab: edit('openTab'),
@@ -126,16 +127,13 @@ test('edits apply in order by buffer, are durable once they return, and a restar
     assert.deepEqual(draftsOf(loaded), [{ target: at('file.txt'), text: 'draft 19', disk }]);
     assert.deepEqual(loaded.views[at('file.txt').checkout.checkoutId]?.tabs, ['b1']);
     // A buffer with a draft closes only when told to discard it.
-    await assert.rejects(restarted.closeTab({ bufferId: 'b1' }), isError('InvalidInput'));
+    await assert.rejects(restarted.closeTab({ bufferId: 'b1' }), isRefusal);
     // Text back at its baseline is no draft.
     await restarted.updateDraft({ bufferId: 'b1', text: 'original', disk });
     assert.deepEqual(await drafts(alice, 'window'), []);
     await restarted.closeTab({ bufferId: 'b1' });
     // An edit to a buffer that is not open is refused, never recreated at a path.
-    await assert.rejects(
-      restarted.updateDraft({ bufferId: 'b1', text: 'late', disk }),
-      isError('InvalidInput'),
-    );
+    await assert.rejects(restarted.updateDraft({ bufferId: 'b1', text: 'late', disk }), isRefusal);
     // The refused close published nothing; clearing the draft and closing did.
     await outlines.until(3);
     assert.deepEqual(outlines.seen.at(-1)?.buffers, []);
@@ -374,7 +372,7 @@ test('Trash keeps an open buffer and its draft, and an uncertain Trash keeps its
     assert.deepEqual(await drafts(alice, 'window'), [
       { target: at('file.txt'), text: 'edited after trash', disk },
     ]);
-    await assert.rejects(window.closeTab({ bufferId: 'b1' }), isError('InvalidInput'));
+    await assert.rejects(window.closeTab({ bufferId: 'b1' }), isRefusal);
 
     // This client's own Trash whose outcome is unknown may still own the draft.
     const otherDisk = await read('other.txt');
@@ -393,9 +391,9 @@ test('Trash keeps an open buffer and its draft, and an uncertain Trash keeps its
     );
     await assert.rejects(
       tab.updateDraft({ bufferId: 'b2', text: 'other', disk: otherDisk }),
-      isError('Persistence'),
+      isStorageFailure,
     );
-    await assert.rejects(tab.closeTab({ bufferId: 'b2', discard: true }), isError('Persistence'));
+    await assert.rejects(tab.closeTab({ bufferId: 'b2', discard: true }), isStorageFailure);
     assert.equal((await drafts(carol, 'window'))[0]?.text, 'unsaved');
     // Once the host says what happened, the user may discard it.
     await carol.runtime.dispose();
@@ -468,7 +466,7 @@ test('an edit naming a checkout the host never opened, or to an unreadable recov
         bufferId: 'foreign',
         target: { checkout: { ...checkout, hostId: 'unapproved-host' }, path: 'file.txt' },
       }),
-      isError('Unauthorized'),
+      isAccessRefusal,
     );
     await window.openTab({ bufferId: 'b1', target: at('file.txt') });
     await window.updateDraft({ bufferId: 'b1', text: 'unsaved', disk });
@@ -480,7 +478,7 @@ test('an edit naming a checkout the host never opened, or to an unreadable recov
       const restarted = h.startClient('alice', host);
       await assert.rejects(
         editor(restarted, 'window').updateDraft({ bufferId: 'b1', text: 'lost?', disk }),
-        isError('Persistence'),
+        isStorageFailure,
       );
       assert.deepEqual(database.prepare('SELECT revision, body FROM recovery').all(), before);
     } finally {

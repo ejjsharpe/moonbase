@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { type ErrorGroup, getErrorGroup } from '@moonbase/contracts/error-groups';
 import { test } from 'node:test';
 import { mkdtemp, realpath, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -10,14 +11,23 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import type { ChatSession } from '@moonbase/contracts/chat';
 import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
-import { makeChatClient } from '@moonbase/application/chat/clients';
-import { fakeChatTargets, makeIpcFixture } from './fixtures/ipc-fixture.ts';
+import { makeChatCalls } from '@moonbase/application/testing/service-calls';
+import {
+  fakeChatTargets,
+  toChatService,
+  type FakeChat,
+  makeIpcFixture,
+} from './fixtures/ipc-fixture.ts';
+/** Whether a failure means `group` for its request. */
+const inGroup = (group: ErrorGroup) => (error: unknown) => getErrorGroup(error) === group;
 
 /** Local chat over desktop IPC, as the renderer sends it, to `runtime`'s chat. */
 const overIpc = (runtime: ManagedRuntime.ManagedRuntime<never, never>, context: ChatSession) =>
   makeIpcFixture({
     chat: {
-      backends: fakeChatTargets({ local: { chat: makeChatClient(runtime as never), context } }),
+      backends: fakeChatTargets({
+        local: { chat: toChatService(makeChatCalls(runtime as never) as FakeChat), context },
+      }),
     },
   });
 
@@ -49,7 +59,7 @@ test('desktop recovers an exact committed Create before renewed folder approval,
   let runtime = ManagedRuntime.make(
     Layer.orDie(LocalPiRuntimeLive(config).pipe(Layer.provide(NodeServices.layer))),
   );
-  await makeChatClient(runtime).command('getChatHost', { host: context.host });
+  await makeChatCalls(runtime).command('getChatHost', { host: context.host });
   let ipc = await overIpc(runtime as never, context);
   t.after(async () => {
     await ipc.dispose();
@@ -71,14 +81,15 @@ test('desktop recovers an exact committed Create before renewed folder approval,
   runtime = ManagedRuntime.make(
     Layer.orDie(LocalPiRuntimeLive(config).pipe(Layer.provide(NodeServices.layer))),
   );
-  await makeChatClient(runtime).command('getChatHost', { host: context.host });
+  await makeChatCalls(runtime).command('getChatHost', { host: context.host });
   ipc = await overIpc(runtime as never, context);
   const { chat } = await ipc.ports('local');
   assert.deepEqual(await Effect.runPromise(chat.createChat(input)), committed);
   assert.equal(validations, 1);
   await mkdir(cwd);
-  await assert.rejects(Effect.runPromise(chat.createChat({ ...input, requestId: 'new' })), {
-    code: 'Unauthorized',
-  });
+  await assert.rejects(
+    Effect.runPromise(chat.createChat({ ...input, requestId: 'new' })),
+    inGroup('access'),
+  );
   assert.equal(validations, 2);
 });

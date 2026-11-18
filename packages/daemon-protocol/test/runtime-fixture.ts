@@ -5,7 +5,7 @@ import { Layer, ManagedRuntime } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
-import { makeChatClient } from '@moonbase/application/chat/clients';
+import { makeChatCalls } from '@moonbase/application/testing/service-calls';
 import { type Registry } from '@earendil-works/pi-durable';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { ChatService } from '@moonbase/contracts/services';
@@ -63,11 +63,11 @@ export async function fixture(
     /** The runtime's chat service, as a daemon serves it. */
     chat: () => runtime.runPromise(ChatService),
     get client() {
-      return makeChatClient(runtime);
+      return makeChatCalls(runtime);
     },
     async create(requestId = 'create') {
       return (
-        await makeChatClient(runtime).command('createChat', {
+        await makeChatCalls(runtime).command('createChat', {
           session,
           requestId,
           title: 'Saved chat',

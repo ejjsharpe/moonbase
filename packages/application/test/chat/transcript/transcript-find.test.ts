@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ChatOutput } from '@moonbase/contracts/chat';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { InvalidChatRequestError } from '@moonbase/contracts/chat-errors';
+import { HostUnavailableError } from '@moonbase/contracts/host-errors';
 import { scaledTranscriptLimits, tick, transcriptHarness, until } from './transcript-fixture.ts';
 
 test('selected Find scans empty intermediate slices, pins first match, bounds retention and replays the fixed cutoff', async (t) => {
@@ -43,8 +44,7 @@ test('query replacement, closing Find and closing the transcript fence late resu
       entered = true;
       signal = abort;
       await held;
-      if (action === 'close')
-        throw new ApplicationError({ code: 'Unavailable', message: 'obsolete failure' });
+      if (action === 'close') throw new HostUnavailableError({ reason: 'failed' });
       return fallback();
     });
     const find = f.transcript.findTranscript('same');
@@ -108,10 +108,10 @@ test('Find rejects wrong query/authority/cutoff/ranges and host read failures re
   }
   const f = await transcriptHarness(t, 32);
   f.handlers.set('findChatTranscript', async () => {
-    throw new ApplicationError({ code: 'Unavailable', message: 'host read failed' });
+    throw new HostUnavailableError({ reason: 'reply-lost' });
   });
   await f.transcript.findTranscript('same');
-  assert.match(f.state.find.error!, /host read failed/);
+  assert.equal(f.state.find.error, new HostUnavailableError({ reason: 'reply-lost' }).message);
 });
 
 test('retained text chunks retain UTF16 bases independently of byte offsets', async (t) => {
@@ -144,10 +144,10 @@ test('Find reaches beginning/middle/end and surfaces missing targets', async (t)
   assert.equal(f.state.find.refreshAvailable, true);
   assert.equal(f.state.find.upperEntryId, 'e137');
   f.handlers.set('getChatHistoryAround', async () => {
-    throw new ApplicationError({ code: 'InvalidInput', message: 'Saved entry is unavailable.' });
+    throw new InvalidChatRequestError({ problem: 'entry' });
   });
   await f.transcript.moveFind('previous');
-  assert.match(f.state.find.error!, /Saved entry is unavailable/);
+  assert.equal(f.state.find.error, new InvalidChatRequestError({ problem: 'entry' }).message);
 });
 
 test('empty Find slices remain searching until completion', async (t) => {
@@ -239,7 +239,7 @@ test('cancelled Find reveal cannot cancel or overwrite a newer manual history re
     if ((input as { entryId: string }).entryId === 'e0') {
       oldSignal = signal;
       await old;
-      throw new ApplicationError({ code: 'Unavailable', message: 'obsolete Find reveal error' });
+      throw new HostUnavailableError({ reason: 'failed' });
     }
     manualSignal = signal;
     await manual;
@@ -311,10 +311,7 @@ test('reconnecting and failed observations cancel Find and keep a visible retry 
     await until(() => !!signal);
     if (failure === 'reconnecting')
       await f.publish({ ...f.snapshot, observationStatus: 'reconnecting' });
-    else
-      await f.transcript.fail(
-        new ApplicationError({ code: 'Unavailable', message: 'Observation stopped' }),
-      );
+    else await f.transcript.fail(new HostUnavailableError({ reason: 'watch-ended' }));
     assert(signal?.aborted);
     let state = f.state.find;
     assert.equal(state.status, 'error');

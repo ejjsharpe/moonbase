@@ -1,13 +1,12 @@
-import { ManagedRuntime, Layer } from 'effect';
-import type { ConnectionService } from '@moonbase/contracts/services';
-import type { ApplicationError } from '@moonbase/contracts/workspace';
+import { Effect, Layer, ManagedRuntime } from 'effect';
+import { ChatService, type ConnectionService } from '@moonbase/contracts/services';
+import type { ConnectionError } from '@moonbase/contracts/connection-errors';
 import type { ChatSession } from '@moonbase/contracts/chat';
-import { makeChatClient } from '@moonbase/application/chat/clients';
 import { DaemonRpcLinkLive, RemoteChatLive } from '@moonbase/daemon-protocol/remote';
 
 /** Consumer process composition root; supply the application's existing connection capability. */
 export async function readSavedChats(
-  connections: Layer.Layer<ConnectionService, ApplicationError>,
+  connections: Layer.Layer<ConnectionService, ConnectionError>,
   session: ChatSession,
 ) {
   const runtime = ManagedRuntime.make(
@@ -17,10 +16,14 @@ export async function readSavedChats(
     ),
   );
   try {
-    const client = makeChatClient(runtime);
-    const host = await client.command('getChatHost', { host: session.host });
-    const saved = await client.command('listChats', { session });
-    return { host, saved };
+    return await runtime.runPromise(
+      Effect.gen(function* () {
+        const chat = yield* ChatService;
+        const host = yield* chat.getChatHost({ host: session.host });
+        const saved = yield* chat.listChats({ session });
+        return { host, saved };
+      }),
+    );
   } finally {
     await runtime.dispose();
   }

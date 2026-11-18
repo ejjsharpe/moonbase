@@ -10,8 +10,8 @@ import {
   shell,
 } from 'electron';
 import { Context, Effect, Layer, Option } from 'effect';
-import { toWireError } from '@moonbase/contracts/workspace-host-errors';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { isWorkspaceError } from '@moonbase/contracts/workspace-errors';
+import { StartupError } from './startup-errors.ts';
 import { WorkspaceService } from '@moonbase/contracts/services';
 import { readInstallationId, WorkspaceRecoveryLive } from '@moonbase/workspace';
 import { installAppMenu } from './app-menu.ts';
@@ -87,9 +87,7 @@ export const DesktopServicesLive = (options: DesktopServicesOptions) => {
       const installationId = yield* Effect.try({
         try: () => readInstallationId(workspaceData),
         catch: (error) =>
-          ApplicationError.is(error)
-            ? error
-            : new ApplicationError({ code: 'Persistence', message: 'Recovery is unavailable.' }),
+          isWorkspaceError(error) ? error : new StartupError({ problem: 'recovery' }),
       });
       const host = createDaemonWorkspaceHost(local);
       const workspace = Context.get(
@@ -106,16 +104,11 @@ export const DesktopServicesLive = (options: DesktopServicesOptions) => {
         // Picker and clipboard paths are native; a drop's paths come from the renderer (webUtils),
         // so the daemon's reserved-path check on every import is the authority.
         capture: (input) =>
-          host.captureImports(input).pipe(
-            Effect.map(({ references }) => references),
-            Effect.mapError(toWireError),
-          ),
+          host.captureImports(input).pipe(Effect.map(({ references }) => references)),
         // Releasing never starts a daemon: references of one that is not running expire on their own.
         release: (input) =>
           Effect.flatMap(Effect.zip(local.peek, local.isRunning), ([backend, running]) =>
-            backend && running
-              ? backend.workspace.releaseImports(input).pipe(Effect.mapError(toWireError))
-              : Effect.void,
+            backend && running ? backend.workspace.releaseImports(input) : Effect.void,
           ),
       });
       const approvals = new EditorApprovals();

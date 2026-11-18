@@ -1,4 +1,3 @@
-import type { CommandOptions } from './common.ts';
 import type { Effect } from 'effect';
 import type { FolderError, FolderRefusal } from './folder-errors.ts';
 import type * as Contracts from './daemon-schema.ts';
@@ -16,14 +15,6 @@ export type DaemonCommand = LocalHostCommand | HostProviderCommand;
 export type DaemonInput<K extends DaemonCommand> = (typeof Contracts.daemonInputSchemas)[K]['Type'];
 export type DaemonOutput<K extends DaemonCommand> =
   (typeof Contracts.daemonOutputSchemas)[K]['Type'];
-/** Privileged: a host's daemon operations, bound to its process root. */
-export interface DaemonClient {
-  command<K extends DaemonCommand>(
-    operation: K,
-    input: DaemonInput<K>,
-    options?: CommandOptions,
-  ): Promise<DaemonOutput<K>>;
-}
 
 /**
  * Which working folders a daemon's chats may use, and how a client chooses one. Folders that can't

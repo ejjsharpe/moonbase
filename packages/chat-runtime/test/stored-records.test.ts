@@ -7,7 +7,7 @@ import { Harness, defineDocFamily } from '@earendil-works/pi-durable';
 import { openNodeSqliteDatabase } from '@earendil-works/chord/sqlite/node';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
-import { session, until, fixture } from './runtime-fixture.ts';
+import { session, until, fixture, runChat } from './runtime-fixture.ts';
 
 for (const family of ['store', 'metadata', 'request', 'binding'] as const)
   test(`strict ${family} saved payload preserves its exact bytes and refuses admission/reconciliation`, async (t) => {
@@ -22,9 +22,11 @@ for (const family of ['store', 'metadata', 'request', 'binding'] as const)
     const f = await fixture(t),
       target = await f.create();
     f.faux.setResponses([fauxAssistantMessage('Original completed')]);
-    await f.client.command('sendChat', { target, requestId: 'saved-send', text: 'Original' });
+    await runChat(f.runtime, (chat) =>
+      chat.sendChat({ target, requestId: 'saved-send', text: 'Original' }),
+    );
     await until(
-      () => f.client.command('getChat', { target }),
+      () => runChat(f.runtime, (chat) => chat.getChat({ target })),
       (value) => !value.run,
     );
     const kind = family === 'binding' ? 'request' : family;
@@ -78,17 +80,21 @@ for (const family of ['store', 'metadata', 'request', 'binding'] as const)
     });
     try {
       if (kind === 'store')
-        await assert.rejects(f.client.command('getChatHost', { host: session.host }), {
-          code: 'Persistence',
-        });
+        await assert.rejects(
+          runChat(f.runtime, (chat) => chat.getChatHost({ host: session.host })),
+          { _tag: 'ChatStoreError' },
+        );
       else {
         await assert.rejects(
-          f.client.command('sendChat', { target, requestId: 'saved-send', text: 'Original' }),
-          { code: 'Persistence' },
+          runChat(f.runtime, (chat) =>
+            chat.sendChat({ target, requestId: 'saved-send', text: 'Original' }),
+          ),
+          { _tag: 'ChatStoreError' },
         );
-        await assert.rejects(f.client.command('getChatSend', { target, requestId: 'saved-send' }), {
-          code: 'Persistence',
-        });
+        await assert.rejects(
+          runChat(f.runtime, (chat) => chat.getChatSend({ target, requestId: 'saved-send' })),
+          { _tag: 'ChatStoreError' },
+        );
       }
       assert.equal(commits, 0);
       assert.equal(JSON.stringify(await get()), before);
@@ -100,9 +106,10 @@ for (const family of ['store', 'metadata', 'request', 'binding'] as const)
     if (kind === 'store')
       await assert.rejects(f.runtime.runPromise(ChatService), { _tag: 'ChatStoreError' });
     else
-      await assert.rejects(f.client.command('getChatSend', { target, requestId: 'saved-send' }), {
-        code: 'Persistence',
-      });
+      await assert.rejects(
+        runChat(f.runtime, (chat) => chat.getChatSend({ target, requestId: 'saved-send' })),
+        { _tag: 'ChatStoreError' },
+      );
     await f.dispose();
     const database = await openNodeSqliteDatabase(f.config.databasePath),
       storage = await SqliteStorage.open(database);

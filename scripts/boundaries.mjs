@@ -91,7 +91,7 @@ export const processRoots = new Set([
 ]);
 // The daemon protocol is infrastructure beside the chat engine; neither imports the other.
 const infrastructure = new Set(['workspace', 'chat-runtime', 'daemon-protocol', 'ssh']);
-const portable = new Set(['application', 'contracts', 'effect']);
+const portable = new Set(['application', 'contracts']);
 // Browser-safe, dependency-free externals portable packages may import.
 const portableExternal = /^(?:effect|lru-cache)(?:\/|$)/;
 const forbiddenPortable =
@@ -151,15 +151,8 @@ export function checkBoundaries({ files, packages }) {
         reject(path, edge, 'cross-package source import; use public exports');
       if (resolved && files.has(resolved)) graph.get(path).push({ ...edge, target: resolved });
       if (processRoots.has(path)) {
-        if (
-          edge.specifier.startsWith('@moonbase/application') &&
-          !/^@moonbase\/application\/chat\/(?:clients|promises)$/.test(edge.specifier)
-        )
-          reject(
-            path,
-            edge,
-            'process roots consume only public dispatch/runtime APIs from application',
-          );
+        if (edge.specifier.startsWith('@moonbase/application'))
+          reject(path, edge, 'process roots compose infrastructure services, not the application');
         continue;
       }
       if (!production(path)) continue;
@@ -174,11 +167,7 @@ export function checkBoundaries({ files, packages }) {
           !portableExternal.test(edge.specifier)
         )
           reject(path, edge, 'portable external dependency is not allowlisted');
-        if (
-          destination &&
-          destination !== sourceOwner &&
-          !['contracts', 'effect'].includes(destination)
-        )
+        if (destination && destination !== sourceOwner && destination !== 'contracts')
           reject(path, edge, 'portable package depends on implementation');
         if (sourceOwner === 'contracts' && destination && destination !== 'contracts')
           reject(path, edge, 'contracts depends on executable application/helper');
@@ -215,7 +204,7 @@ export function checkBoundaries({ files, packages }) {
         infrastructure.has(sourceOwner) &&
         destination &&
         destination !== sourceOwner &&
-        !['contracts', 'effect', 'application'].includes(destination)
+        !['contracts', 'application'].includes(destination)
       )
         reject(path, edge, 'infrastructure imports another implementation');
     }

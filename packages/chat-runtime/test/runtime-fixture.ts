@@ -2,17 +2,25 @@ import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Cause, Effect, Exit, Layer, ManagedRuntime } from 'effect';
+import { ChatService } from '@moonbase/contracts/services';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { isChatError } from '@moonbase/contracts/chat-errors';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
-import { makeChatClient } from '@moonbase/application/chat/clients';
+import { makeChatCalls } from '@moonbase/application/testing/service-calls';
 import { type Registry } from '@earendil-works/pi-durable';
 import { LocalPiRuntimeLive, type LocalPiRuntimeConfiguration } from '../src/index.ts';
 
 /** The runtime with the platform services a process root would give it. */
 export const localPiRuntime = (config: LocalPiRuntimeConfiguration) =>
   LocalPiRuntimeLive(config).pipe(Layer.provide(NodeServices.layer));
+/** Runs `use` with the runtime's `ChatService`; a failure rejects with the tagged error itself. */
+export type ChatRuntime = ManagedRuntime.ManagedRuntime<ChatService, unknown>;
+export const runChat = <A, E>(
+  runtime: ChatRuntime,
+  use: (chat: ChatService['Service']) => Effect.Effect<A, E>,
+  options?: { readonly signal?: AbortSignal },
+) => runtime.runPromise(Effect.flatMap(ChatService, use), options);
 export const session = {
   host: { hostId: 'test-host', storeId: 'test-store' },
   actorId: 'personal',
@@ -77,7 +85,7 @@ export async function fixture(
       return runtime;
     },
     get client() {
-      return makeChatClient(runtime);
+      return makeChatCalls(runtime);
     },
     async restart() {
       await runtime.dispose();
@@ -97,12 +105,9 @@ export async function fixture(
     },
     async create(requestId = 'create') {
       return (
-        await makeChatClient(runtime).command('createChat', {
-          session,
-          requestId,
-          title: 'Saved chat',
-          settings,
-        })
+        await runChat(runtime, (chat) =>
+          chat.createChat({ session, requestId, title: 'Saved chat', settings }),
+        )
       ).conversation.target;
     },
   };

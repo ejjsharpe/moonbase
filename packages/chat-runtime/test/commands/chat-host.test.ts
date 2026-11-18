@@ -5,10 +5,10 @@ import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
-import { makeChatClient } from '@moonbase/application/chat/clients';
 import { ChatService } from '@moonbase/contracts/services';
+import { isStorageFailure, isUncertain } from '@moonbase/contracts/error-groups';
 import { NodeSqliteDatabase } from '@earendil-works/chord/sqlite/node';
-import { session, fixture, localPiRuntime } from '../runtime-fixture.ts';
+import { session, fixture, localPiRuntime, runChat } from '../runtime-fixture.ts';
 
 test('real SQLite full failure is visible and old committed chats survive reopen', async (t) => {
   const original = NodeSqliteDatabase.prototype.transaction;
@@ -26,23 +26,25 @@ test('real SQLite full failure is visible and old committed chats survive reopen
   const pages = await database!.get<{ page_count: number }>('PRAGMA page_count');
   await database!.exec('PRAGMA max_page_count=' + pages!.page_count);
   await assert.rejects(
-    f.client.command('sendChat', { target, requestId: 'full', text: 'x'.repeat(32768) }),
-    (e) =>
-      !!e &&
-      typeof e === 'object' &&
-      'code' in e &&
-      ['Persistence', 'Uncertain'].includes(String(e.code)),
+    runChat(f.runtime, (chat) =>
+      chat.sendChat({ target, requestId: 'full', text: 'x'.repeat(32768) }),
+    ),
+    (e) => isStorageFailure(e) || isUncertain(e),
   );
-  await assert.rejects(f.client.command('getChatHost', { host: session.host }), {
-    code: 'Persistence',
-  });
+  await assert.rejects(
+    runChat(f.runtime, (chat) => chat.getChatHost({ host: session.host })),
+    { _tag: 'ChatStoreError' },
+  );
   assert.equal(f.faux.state.callCount, 0);
   await f.restart();
   assert.deepEqual(
-    (await f.client.command('listChats', { session })).conversations[0].target,
+    (await runChat(f.runtime, (chat) => chat.listChats({ session }))).conversations[0].target,
     target,
   );
-  assert.equal(await f.client.command('getChatSend', { target, requestId: 'full' }), null);
+  assert.equal(
+    await runChat(f.runtime, (chat) => chat.getChatSend({ target, requestId: 'full' })),
+    null,
+  );
 });
 test('store authority rejects actor/host retargeting without executing work', async (t) => {
   const f = await fixture(t);
@@ -67,7 +69,10 @@ test('store authority rejects actor/host retargeting without executing work', as
     }
   }
   await f.restart();
-  assert.equal((await f.client.command('listChats', { session })).conversations.length, 1);
+  assert.equal(
+    (await runChat(f.runtime, (chat) => chat.listChats({ session }))).conversations.length,
+    1,
+  );
   assert.equal(f.faux.state.callCount, 0);
 });
 test('escaped identity components open and reopen without an extra serialized identity limit', async (t) => {
@@ -94,21 +99,23 @@ test('escaped identity components open and reopen without an extra serialized id
       await rm(directory, { recursive: true, force: true });
     }
   });
-  const host = await makeChatClient(runtime).command('getChatHost', { host: session.host });
-  const created = await makeChatClient(runtime).command('createChat', {
-    session,
-    requestId: 'create',
-    title: 'Escaped identity',
-    settings: { cwd, model },
-  });
+  const host = await runChat(runtime, (chat) => chat.getChatHost({ host: session.host }));
+  const created = await runChat(runtime, (chat) =>
+    chat.createChat({
+      session,
+      requestId: 'create',
+      title: 'Escaped identity',
+      settings: { cwd, model },
+    }),
+  );
   await runtime.dispose();
   runtime = ManagedRuntime.make(localPiRuntime(config));
   assert.deepEqual(
-    await makeChatClient(runtime).command('getChatHost', { host: session.host }),
+    await runChat(runtime, (chat) => chat.getChatHost({ host: session.host })),
     host,
   );
   assert.deepEqual(
-    (await makeChatClient(runtime).command('listChats', { session })).conversations[0],
+    (await runChat(runtime, (chat) => chat.listChats({ session }))).conversations[0],
     // A listing adds the chat's activity: never run, so idle since it was created.
     {
       ...created.conversation,

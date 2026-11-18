@@ -14,9 +14,13 @@ import {
 } from 'effect';
 import { RpcClient, RpcSerialization, type Rpc, type RpcGroup } from 'effect/rpc';
 import * as Socket from 'effect/socket/Socket';
-import { ConnectionError, HostVerificationError } from '@moonbase/contracts/connection-errors';
+import {
+  ConnectionError,
+  HostVerificationError,
+  LocalDaemonError,
+} from '@moonbase/contracts/connection-errors';
 import { InvalidChatRequestError } from '@moonbase/contracts/chat-errors';
-import { ApplicationError, CancelledError, UncertainError } from '@moonbase/contracts/errors';
+import { CancelledError, UncertainError } from '@moonbase/contracts/errors';
 import {
   HostUnavailableError,
   IncompatibleHostError,
@@ -240,8 +244,8 @@ export const makeRpcLink = <Rpcs extends Rpc.Any>(config: RpcLinkConfiguration<R
       ...config.errors,
       ConnectionError,
       HostVerificationError,
+      LocalDaemonError,
       CancelledError,
-      ApplicationError,
     ];
     /** Whether a failure is the daemon's (as presented) or the link's own, rather than unknown. */
     const isLinkError = (error: unknown): error is DaemonLinkError => isOneOf(linkErrors, error);

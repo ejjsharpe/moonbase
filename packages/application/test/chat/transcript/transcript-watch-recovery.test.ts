@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { IncompatibleHostError } from '@moonbase/contracts/host-errors';
 import {
   chatFixture,
   snapshot,
@@ -97,9 +97,7 @@ test('consecutive stream failures stop at the cap with a clear error and a manua
   await until(async () => f.chatWatches.length === 3 && (await observation(f)) === 'local');
 
   // A failure that is not retryable stops at once.
-  f.chatWatches[2].fail(
-    new ApplicationError({ code: 'Incompatible', message: 'Bad stream frame.' }),
-  );
+  f.chatWatches[2].fail(new IncompatibleHostError({ reason: 'invalid-update' }));
   await until(async () => (await observation(f)) === 'failed');
   await f.adjust(20);
   assert.equal(f.chatWatches.length, 3);

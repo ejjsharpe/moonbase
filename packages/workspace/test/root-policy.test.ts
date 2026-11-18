@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { toWireError, type WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
+import type { WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
 import { execFileSync } from 'node:child_process';
 import {
   existsSync,
@@ -69,8 +69,9 @@ function setup({
     },
   };
 }
-const code = async <A>(effect: Effect.Effect<A, WorkspaceHostError>) =>
-  toWireError(await Effect.runPromise(Effect.flip(effect))).code;
+/** The tag of the error `effect` fails with. */
+const tag = async <A>(effect: Effect.Effect<A, WorkspaceHostError>) =>
+  (await Effect.runPromise(Effect.flip(effect)))._tag;
 
 test('a root that holds, is or sits inside a reserved path is refused, whether or not the path exists yet', async () => {
   const f = setup({
@@ -87,14 +88,14 @@ test('a root that holds, is or sits inside a reserved path is refused, whether o
       join(f.base, 'data', 'credentials'),
       join(f.base, 'data', 'credentials', 'deeper'),
     ])
-      assert.equal(await code(open(root)), 'InvalidInput');
+      assert.equal(await tag(open(root)), 'InvalidPathError');
     // A reserved path that does not exist yet is held by its folder all the same.
     f.folder('data', 'later.key', 'x');
-    assert.equal(await code(open(join(f.base, 'data', 'later.key', 'x'))), 'InvalidInput');
+    assert.equal(await tag(open(join(f.base, 'data', 'later.key', 'x'))), 'InvalidPathError');
     // A checkout approved before a path in it was reserved is refused on its next use.
     const checkout = await Effect.runPromise(open(f.folder('project')));
     await f.restart([join(f.base, 'project', 'key')]);
-    assert.equal(await code((await f.host()).verifyCheckout({ checkout })), 'InvalidInput');
+    assert.equal(await tag((await f.host()).verifyCheckout({ checkout })), 'InvalidPathError');
   } finally {
     await f.close();
   }
@@ -112,12 +113,12 @@ test('the root predicate sees the real and requested path, denies on refusal or 
     symlinkSync(good, join(f.base, 'link'));
     await Effect.runPromise(host.openCheckout({ root: join(f.base, 'link') }));
     assert.deepEqual(f.calls.at(-1), [good, join(f.base, 'link')]);
-    assert.equal(await code(host.openCheckout({ root: f.folder('denied') })), 'Unauthorized');
+    assert.equal(await tag(host.openCheckout({ root: f.folder('denied') })), 'CheckoutAccessError');
     allowed = () => {
       throw Error('The policy failed.');
     };
-    assert.equal(await code(host.verifyCheckout({ checkout })), 'Unauthorized');
-    assert.equal(await code(host.readFile({ checkout, path: 'x' })), 'Unauthorized');
+    assert.equal(await tag(host.verifyCheckout({ checkout })), 'CheckoutAccessError');
+    assert.equal(await tag(host.readFile({ checkout, path: 'x' })), 'CheckoutAccessError');
     allowed = (real) => real.includes('allowed');
     await Effect.runPromise(host.verifyCheckout({ checkout }));
   } finally {
@@ -161,8 +162,8 @@ test('a worktree location is made only inside a folder the predicate allows, and
     });
     const forbidden = f.folder('forbidden');
     assert.equal(
-      await code(host.createWorktree(request(join(forbidden, 'wt'), 'f/one'))),
-      'Unauthorized',
+      await tag(host.createWorktree(request(join(forbidden, 'wt'), 'f/one'))),
+      'CheckoutAccessError',
     );
     assert.equal(existsSync(join(forbidden, 'wt')), false);
     assert.equal(git('branch', '--list', 'f/one').toString(), '');
@@ -178,8 +179,8 @@ test('a worktree location is made only inside a folder the predicate allows, and
       symlinkSync(forbidden, swapped);
     };
     assert.equal(
-      await code(host.createWorktree(request(join(swapped, 'wt'), 'f/three'))),
-      'InvalidInput',
+      await tag(host.createWorktree(request(join(swapped, 'wt'), 'f/three'))),
+      'CheckoutChangedError',
     );
     assert.equal(existsSync(join(forbidden, 'wt')), false);
     assert.equal(git('branch', '--list', 'f/three').toString(), '');

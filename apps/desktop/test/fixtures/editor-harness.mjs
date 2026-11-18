@@ -26,22 +26,26 @@ const control = {
   },
 };
 globalThis.desktopTest = control;
-const failure = (code, message) => ({ ok: false, error: { code, message } });
+// A failure as the procedure declares it, encoded; main decodes it with the procedure's schema.
+const failure = (error) => ({ ok: false, error });
 globalThis.moonbaseTestIpc = async (request, proceed) => {
   const { tag, payload } = request;
   const seq = control.sequence++;
   const seen = { tag, payload: structuredClone(payload), seq };
   control.calls.push(seen);
   if (control.startupFailure === 'chat-context' && tag === 'getChatContext')
-    return failure('Unavailable', 'Controlled chat context initialization failure');
+    return failure({ _tag: 'LocalDaemonError', reason: 'unreachable' });
   if (control.startupFailure === 'editor' && tag === 'loadRecovery')
-    return failure('Persistence', 'Controlled editor recovery initialization failure');
+    return failure({
+      _tag: 'WorkspaceStoreError',
+      failure: 'publication',
+      detail: 'Controlled editor recovery initialization failure',
+    });
   if (control.restoreOn === tag) {
     control.outage = null;
     control.restoreOn = null;
   }
-  if (control.outage === tag)
-    return failure('Unavailable', 'Controlled observation transport outage');
+  if (control.outage === tag) return failure({ _tag: 'HostUnavailableError', reason: 'closed' });
   control.active.set(seq, seen);
   let reply;
   try {
@@ -59,7 +63,7 @@ globalThis.moonbaseTestIpc = async (request, proceed) => {
   }
   if (control.fault === tag && reply.ok) {
     control.fault = null;
-    return failure('Uncertain', 'Controlled committed reply loss');
+    return failure({ _tag: 'UncertainError', operation: tag });
   }
   return reply;
 };

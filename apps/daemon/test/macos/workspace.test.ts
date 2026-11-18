@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { toWireError, type WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
+import { getErrorGroup } from '@moonbase/contracts/error-groups';
+import type { WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
 import { execFileSync } from 'node:child_process';
 import { chmod, mkdir, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -8,8 +9,7 @@ import { Duration, Effect, Fiber, Layer, ManagedRuntime, Scope, Stream } from 'e
 import { TestClock } from 'effect/testing';
 import * as BunServices from '@effect/platform-bun/BunServices';
 import { makeKeyFileSource } from '@moonbase/chat-runtime/credentials';
-import { WorkspaceHostService } from '@moonbase/contracts/services';
-import { makeConnectionClient } from '@moonbase/application/chat/clients';
+import { ConnectionService, WorkspaceHostService } from '@moonbase/contracts/services';
 import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
 import { EndpointConnectionLive, RemoteWorkspaceHostLive } from '@moonbase/daemon-protocol/remote';
 import type { DaemonExit } from '../../src/daemon.ts';
@@ -31,9 +31,10 @@ import { createFauxProviders, fauxModelId, fauxProviderId } from '../faux-provid
 
 const minute = 60_000;
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
-/** The error code a refused workspace call carries. */
+/** The tag a refused workspace call fails with. */
+/** What a refused workspace call's error means for the request. */
 const refusal = async <A>(effect: Effect.Effect<A, WorkspaceHostError>) =>
-  toWireError(await run(Effect.flip(effect))).code;
+  getErrorGroup(await run(Effect.flip(effect)));
 const gone = (pid: number) => {
   try {
     process.kill(pid, 0);
@@ -92,7 +93,11 @@ async function startDaemon(
       Layer.provideMerge(LoopbackConnectionLive({ directory })),
     ),
   );
-  await makeConnectionClient(clients).command('connect', { profileId: 'loopback' });
+  await clients.runPromise(
+    Effect.flatMap(ConnectionService, (connection) =>
+      connection.connect({ profileId: 'loopback' }),
+    ),
+  );
   const host = await clients.runPromise(WorkspaceHostService);
   return {
     directory,
@@ -154,8 +159,8 @@ test('a local daemon opens its own host id and refuses its data directory, what 
         join(daemon.directory, 'credentials'),
         join(daemon.directory, 'workspace'),
       ])
-        assert.equal(await refusal(open(path)), 'InvalidInput', path);
-      assert.equal(await refusal(open(join(daemon.directory, 'logs'))), 'Unauthorized');
+        assert.equal(await refusal(open(path)), 'refusal', path);
+      assert.equal(await refusal(open(join(daemon.directory, 'logs'))), 'access');
       assert.equal((await run(open(join(daemon.directory, 'chats', 'one')))).vcs, 'none');
     } finally {
       await daemon.stop();
@@ -233,10 +238,10 @@ test('a host-mode daemon opens only roots under approvedRoots by real path, and 
       const a = await run(open(join(work, 'a')));
       assert.equal(a.root, join(work, 'a'));
       for (const path of [outside, join(work, 'out-link'), join(work, 'in-link')])
-        assert.equal(await refusal(open(path)), 'Unauthorized', path);
+        assert.equal(await refusal(open(path)), 'access', path);
       // Holding or being the credential key's folder is reserved state.
       for (const path of [root, join(root, 'keys')])
-        assert.equal(await refusal(open(path)), 'InvalidInput', path);
+        assert.equal(await refusal(open(path)), 'refusal', path);
       await run(daemon.host.verifyCheckout({ checkout: a }));
 
       // A worktree can't be created outside the approved roots.
@@ -254,7 +259,7 @@ test('a host-mode daemon opens only roots under approvedRoots by real path, and 
             location: join(outside, 'tree'),
           }),
         ),
-        'Unauthorized',
+        'access',
       );
 
       // A chat worktree is made inside a root.
@@ -270,14 +275,14 @@ test('a host-mode daemon opens only roots under approvedRoots by real path, and 
       // Native imports are never held for a host: their sources are held to no root.
       assert.equal(
         await refusal(daemon.host.captureImports({ checkout: a, clientId: 'w', paths: [outside] })),
-        'Incompatible',
+        'incompatible',
       );
 
       // The root becomes another folder: it approves nothing new and nothing opened under it.
       await rename(work, join(root, 'work-old'));
       await mkdir(join(work, 'a'), { recursive: true });
-      assert.equal(await refusal(open(join(work, 'a'))), 'Unauthorized');
-      assert.equal(await refusal(daemon.host.verifyCheckout({ checkout: a })), 'Unauthorized');
+      assert.equal(await refusal(open(join(work, 'a'))), 'access');
+      assert.equal(await refusal(daemon.host.verifyCheckout({ checkout: a })), 'access');
     } finally {
       await daemon.stop();
     }
@@ -315,12 +320,14 @@ test('a local daemon lets chats use its checkouts and worktrees, makes chat work
       // The editor's checkout needs no grant from the picker.
       assert.equal(await approved(repo), true);
       assert.equal(await approved(stray), false);
-      await client.command('createChat', {
-        session,
-        requestId: 'in-checkout',
-        title: 'In the checkout',
-        settings: { cwd: repo, model },
-      });
+      await client.chat((chat) =>
+        chat.createChat({
+          session,
+          requestId: 'in-checkout',
+          title: 'In the checkout',
+          settings: { cwd: repo, model },
+        }),
+      );
 
       const request = {
         installationId: 'test',
@@ -331,32 +338,40 @@ test('a local daemon lets chats use its checkouts and worktrees, makes chat work
       const made = await run(daemon.host.createChatWorktree(request));
       assert.equal(made.root, join(root, 'repo-worktrees', 'chat-a'));
       assert.equal(await approved(made.root), true);
-      await client.command('createChat', {
-        session,
-        requestId: 'in-worktree',
-        title: 'In the worktree',
-        settings: { cwd: made.root, model },
-      });
+      await client.chat((chat) =>
+        chat.createChat({
+          session,
+          requestId: 'in-worktree',
+          title: 'In the worktree',
+          settings: { cwd: made.root, model },
+        }),
+      );
 
       // A chat's own folder opens where it is; a chat in a project is not one the daemon made.
-      const own = await client.command('createChat', {
-        session,
-        requestId: 'own',
-        title: 'Own folder',
-        settings: { model },
-      });
+      const own = await client.chat((chat) =>
+        chat.createChat({
+          session,
+          requestId: 'own',
+          title: 'Own folder',
+          settings: { model },
+        }),
+      );
       const turn = (requestId: string, target: typeof own.conversation.target) =>
         daemon.host.turnChatIntoProject({ installationId: 'test', requestId, target });
-      const inProject = await client.command('createChat', {
-        session,
-        requestId: 'project-chat',
-        title: 'In a project',
-        settings: { cwd: repo, model },
-      });
-      assert.equal(await refusal(turn('refused', inProject.conversation.target)), 'Unauthorized');
+      const inProject = await client.chat((chat) =>
+        chat.createChat({
+          session,
+          requestId: 'project-chat',
+          title: 'In a project',
+          settings: { cwd: repo, model },
+        }),
+      );
+      assert.equal(await refusal(turn('refused', inProject.conversation.target)), 'access');
       const turned = await run(turn('turn', own.conversation.target));
       assert.equal(turned.root, own.conversation.cwd);
-      const { conversation } = await client.command('getChat', { target: own.conversation.target });
+      const { conversation } = await client.chat((chat) =>
+        chat.getChat({ target: own.conversation.target }),
+      );
       assert.equal(conversation.ownFolder, undefined);
 
       // A checkout replaced after it was approved grants chats nothing, nor do its worktrees.
@@ -364,15 +379,17 @@ test('a local daemon lets chats use its checkouts and worktrees, makes chat work
       await mkdir(repo);
       assert.equal(await approved(repo), false);
       await assert.rejects(
-        client.command('createChat', {
-          session,
-          requestId: 'replaced',
-          title: 'Replaced',
-          settings: { cwd: repo, model },
-        }),
-        { code: 'Unauthorized' },
+        client.chat((chat) =>
+          chat.createChat({
+            session,
+            requestId: 'replaced',
+            title: 'Replaced',
+            settings: { cwd: repo, model },
+          }),
+        ),
+        { _tag: 'FolderRefusedError', refusal: 'not-approved' },
       );
-      assert.equal(await refusal(daemon.host.verifyCheckout({ checkout })), 'Unauthorized');
+      assert.equal(await refusal(daemon.host.verifyCheckout({ checkout })), 'access');
     } finally {
       await daemon.stop();
     }
@@ -427,7 +444,7 @@ test('stopping during a long helper operation stops its process group, exits cle
     assert.equal(first.settled, undefined);
 
     first.abort();
-    assert.equal(await refusal(first.host.verifyCheckout({ checkout })), 'Unavailable');
+    assert.equal(await refusal(first.host.verifyCheckout({ checkout })), 'unavailable');
     assert.equal(await bounded(first.running, 30_000), 'stopped');
     assert.ok(gone(pid), 'the hook outlived the daemon');
     assert.ok(await creating);
@@ -469,13 +486,13 @@ test('a daemon without the filesystem helper composes no workspace and still run
       ),
     );
     const host = await clients.runPromise(WorkspaceHostService);
-    assert.equal(await refusal(host.openCheckout({ root })), 'Incompatible');
+    assert.equal(await refusal(host.openCheckout({ root })), 'incompatible');
     await clients.dispose();
     assert.equal(await daemon.stop(), 'stopped');
   });
 });
 
-test('closing a workspace that fails or never finishes is journalled by code and shutdown goes on', async () => {
+test('closing a workspace that fails or never finishes is journalled by its tag and shutdown goes on', async () => {
   await withRoot(async (root) => {
     await mkdir(root, { recursive: true, mode: 0o700 });
     await chmod(root, 0o700);
@@ -507,7 +524,7 @@ test('closing a workspace that fails or never finishes is journalled by code and
       });
     assert.deepEqual(lines, [
       { event: 'workspace', reason: 'close-timeout' },
-      { event: 'workspace', reason: 'close-failed', code: 'Unavailable' },
+      { event: 'workspace', reason: 'close-failed', error: 'UnknownError' },
     ]);
   });
 });

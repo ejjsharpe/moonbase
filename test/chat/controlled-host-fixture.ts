@@ -6,10 +6,10 @@ import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { Effect, ManagedRuntime, Layer, Stream } from 'effect';
 import {
-  makeChatClient,
-  makeConnectionClient,
-  makeProviderSetupClient,
-} from '@moonbase/application/chat/clients';
+  makeChatCalls,
+  makeConnectionCalls,
+  makeProviderSetupCalls,
+} from '@moonbase/application/testing/service-calls';
 import { RemoteDaemonLive } from '@moonbase/daemon-protocol/remote';
 import { ChatService, ConnectionService, LocalHostService } from '@moonbase/contracts/services';
 import type { ChatPort, ConnectionPort } from '@moonbase/application/chat';
@@ -250,9 +250,9 @@ export async function controlledHostFixture(behaviour: URL, hold = false) {
         chat: portOf(runtime, ChatService) as ChatPort,
         connection: portOf(runtime, ConnectionService) as ConnectionPort,
       },
-      chat: makeChatClient(runtime),
-      connection: makeConnectionClient(runtime),
-      providers: (ownerId: string) => makeProviderSetupClient(runtime, ownerId),
+      chat: makeChatCalls(runtime),
+      connection: makeConnectionCalls(runtime),
+      providers: (ownerId: string) => makeProviderSetupCalls(runtime, ownerId),
       folders: () => runtime.runPromise(LocalHostService),
     };
   }

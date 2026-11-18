@@ -6,7 +6,6 @@ import {
   ChatReasoningEffortSchema,
 } from './chat-schema.ts';
 import { optional } from './schema.ts';
-import { ApplicationError } from './errors.ts';
 import type { ProviderCommand, ProviderInput, ProviderOutput } from './providers.ts';
 
 const text = (limit: number) =>
@@ -107,26 +106,18 @@ export function decodeProviderInput<K extends ProviderCommand>(
   operation: K,
   value: unknown,
 ): ProviderInput<K> {
-  try {
-    if (!isProviderCommand(operation)) throw Error();
-    return Schema.decodeUnknownSync(providerInputSchemas[operation], {
-      onExcessProperty: 'error',
-      reportInput: false,
-    })(value) as ProviderInput<K>;
-  } catch {
-    throw new ApplicationError({ code: 'InvalidInput', message: 'Invalid provider setup input.' });
-  }
+  if (!isProviderCommand(operation)) throw new TypeError('Unknown command.');
+  return Schema.decodeUnknownSync(providerInputSchemas[operation], {
+    onExcessProperty: 'error',
+    reportInput: false,
+  })(value) as ProviderInput<K>;
 }
 export function decodeProviderOutput<K extends ProviderCommand>(
   _operation: K,
   value: unknown,
 ): ProviderOutput<K> {
-  try {
-    return Schema.decodeUnknownSync(ProviderStateSchema, {
-      onExcessProperty: 'ignore',
-      reportInput: false,
-    })(value);
-  } catch {
-    throw new ApplicationError({ code: 'Incompatible', message: 'Invalid provider setup reply.' });
-  }
+  return Schema.decodeUnknownSync(ProviderStateSchema, {
+    onExcessProperty: 'ignore',
+    reportInput: false,
+  })(value);
 }

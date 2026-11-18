@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { BrowserWindow } from 'electron';
 import { Cause, Context, Deferred, Effect, Exit, FiberSet, PubSub, SubscriptionRef } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/errors';
-import { boundApplicationError } from '../ipc/ipc-errors.ts';
+import { makeWindowFailure } from '../ipc/ipc-errors.ts';
 import type { WindowAction } from '../ipc/window-rpcs.ts';
 import * as WindowState from './window-state.ts';
 
@@ -13,13 +12,6 @@ export const describeCause = (cause: Cause.Cause<unknown>) =>
   Cause.prettyErrors(cause)
     .map((error) => error.message)
     .join('\n');
-/** A cleanup failure as the document hears of it. */
-const toApplicationError = (cause: Cause.Cause<unknown>) => {
-  const error = Cause.squash(cause);
-  return ApplicationError.is(error)
-    ? error
-    : new ApplicationError({ code: 'Unavailable', message: describeCause(cause) });
-};
 
 /**
  * The window's Quit handshake and its document's readiness: it asks the document to prepare Quit
@@ -101,7 +93,7 @@ export const makeWindowLifecycle = ({ window, deliver }: WindowLifecycleOptions)
           WindowState.reportCleanup(current, {
             action: 'cleanup-error',
             id: randomUUID(),
-            error: boundApplicationError(toApplicationError(cause)),
+            error: makeWindowFailure(describeCause(cause)),
           }),
         ),
       );

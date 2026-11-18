@@ -1,3 +1,4 @@
+import { isAccessRefusal, isConflict, isRefusal } from '@moonbase/contracts/error-groups';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
@@ -16,7 +17,7 @@ import { Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
 import { makeWorkspaceClient } from './workspace-client-fixture.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
-import { quote, fixture, isError, seed, waitFor } from './recovery-fixture.ts';
+import { quote, fixture, seed, waitFor } from './recovery-fixture.ts';
 import { captureNative, releaseNative } from './workspace-fixture.ts';
 
 // The check is the same for every kind; each alias folds to the same destination differently.
@@ -61,7 +62,7 @@ test('batch move rejects duplicate replacement destinations before admission', a
             { ...replacement, target: { checkout, path: 'dest/' + alias } },
           ],
         }),
-        { code: 'InvalidInput', message: 'A destination cannot have multiple replacements.' },
+        { _tag: 'InvalidRequestError', problem: 'duplicate-replacement' },
         alias,
       );
       assert.equal(await client.command('operationStatus', { clientId: 'alice', id }), null);
@@ -211,10 +212,7 @@ test('aliases cannot authorize two same-baseline saves of one macOS object', asy
       1,
     );
     assert.equal(results[1].status, 'rejected');
-    await assert.rejects(
-      client.command('readFile', { checkout, path: 'FILE.TXT' }),
-      isError('InvalidInput'),
-    );
+    await assert.rejects(client.command('readFile', { checkout, path: 'FILE.TXT' }), isRefusal);
     const sources = await client.command('inspectEntries', { checkout, paths: ['file.txt'] });
     assert.equal(
       (
@@ -273,7 +271,7 @@ for (const kind of ['save', 'move'] as const)
       );
       assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
       assert.equal(
-        results.filter((r) => r.status === 'rejected' && isError('Conflict')(r.reason)).length,
+        results.filter((r) => r.status === 'rejected' && isConflict(r.reason)).length,
         1,
       );
       assert.equal(readFileSync(count, 'utf8'), 'effect\n');
@@ -312,7 +310,7 @@ test('concurrent different operations can consume a native token only once', asy
       1,
     );
     assert.equal(
-      outcomes.filter((r) => r.status === 'rejected' && isError('Unauthorized')(r.reason)).length,
+      outcomes.filter((r) => r.status === 'rejected' && isAccessRefusal(r.reason)).length,
       1,
     );
     assert.equal(readFileSync(count, 'utf8'), 'effect\n');
@@ -407,7 +405,7 @@ for (const kind of ['move', 'copy'] as const)
           replacements,
           destination: 'folder',
         }),
-        isError('InvalidInput'),
+        isRefusal,
       );
       assert(!existsSync(count), 'Ancestor replacement must reject before native Trash.');
       assert.equal(
@@ -450,7 +448,7 @@ test('a native import onto a path holding a draft is refused', async () => {
         nativeReferences,
         destination: 'child.txt',
       }),
-      isError('InvalidInput'),
+      isRefusal,
     );
     assert.equal(readFileSync(join(f.root, 'child.txt'), 'utf8'), 'must survive');
   } finally {

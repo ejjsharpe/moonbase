@@ -23,13 +23,10 @@ const prohibited = inputs.filter((path) =>
 );
 assert.deepEqual(prohibited, [], 'Privileged or reference application code reached renderer entry');
 assert(inputs.some((path) => path.endsWith('application/src/editor/editor-layer.ts')));
-assert(inputs.some((path) => path.endsWith('contracts/src/errors.ts')));
+// The editor's error model: what a failure means for its request, by its tag.
+assert(inputs.some((path) => path.endsWith('contracts/src/error-groups.ts')));
 assert.deepEqual(
-  inputs.filter((path) =>
-    /application[/\\]src[/\\](?:runtime[/\\]|chat[/\\]chat-(?:handlers|clients|promises)\.ts$)/.test(
-      path,
-    ),
-  ),
+  inputs.filter((path) => /application[/\\]src[/\\]runtime[/\\]/.test(path)),
   [],
 );
 assert(inputs.some((path) => path.includes('monaco-editor')));

@@ -1,5 +1,4 @@
 import * as Schema from 'effect/Schema';
-import { ApplicationError } from './errors.ts';
 import { chatHostVersion, chatProtocolVersion } from './host.ts';
 import { array, struct } from './schema.ts';
 
@@ -25,19 +24,8 @@ const target = Schema.decodeUnknownSync(ChatHostTargetSchema, {
 });
 const health = Schema.decodeUnknownSync(ChatHostHealthSchema, { reportInput: false });
 export function decodeChatHostTarget(value: unknown): typeof ChatHostTargetSchema.Type {
-  try {
-    return target(value);
-  } catch {
-    throw new ApplicationError({ code: 'InvalidInput', message: 'Invalid chat host target.' });
-  }
+  return target(value);
 }
 export function decodeChatHostHealth(value: unknown): typeof ChatHostHealthSchema.Type {
-  try {
-    return health(value);
-  } catch {
-    throw new ApplicationError({
-      code: 'Incompatible',
-      message: 'Chat host protocol, version or capabilities are incompatible.',
-    });
-  }
+  return health(value);
 }

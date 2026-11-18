@@ -9,8 +9,9 @@ import {
   type ChatServiceShape,
   type VerifiedChatEndpoint,
 } from '@moonbase/contracts/services';
-import { ApplicationError } from '@moonbase/contracts/errors';
-import { makeChatClient } from '@moonbase/application/chat/clients';
+import { ConnectionError } from '@moonbase/contracts/connection-errors';
+import { isUnavailable } from '@moonbase/contracts/error-groups';
+import { makeChatCalls } from '@moonbase/application/testing/service-calls';
 import { DaemonRpcLinkLive, RemoteChatLive, RemoteLocalHostLive } from '../src/client/remote.ts';
 import { serveChat } from '../src/server/server.ts';
 import { refusingDaemon } from './served-services.ts';
@@ -89,13 +90,7 @@ async function daemon(t: TestContext) {
 function remote(t: TestContext, d: Awaited<ReturnType<typeof daemon>>, testClock = false) {
   let endpoint = d.endpoint();
   const changes = new Set<() => void>();
-  const unavailable = () =>
-    Effect.fail(
-      new ApplicationError({
-        code: 'Unavailable',
-        message: 'Not served here.',
-      }),
-    );
+  const unavailable = () => Effect.fail(new ConnectionError({ reason: 'closed' }));
   const connection = Layer.succeed(ConnectionService, {
     getConnection: unavailable,
     connect: unavailable,
@@ -127,7 +122,7 @@ function remote(t: TestContext, d: Awaited<ReturnType<typeof daemon>>, testClock
   );
   t.after(() => runtime.dispose());
   return {
-    chat: makeChatClient(runtime),
+    chat: makeChatCalls(runtime),
     /** Moves the deadlines of requests made through this client. */
     run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
     advance: (ms: number) => runtime.runPromise(TestClock.adjust(ms)),
@@ -140,12 +135,12 @@ function remote(t: TestContext, d: Awaited<ReturnType<typeof daemon>>, testClock
 }
 function record<A>() {
   const values: A[] = [],
-    errors: ApplicationError[] = [];
+    errors: unknown[] = [];
   return {
     values,
     errors,
     receive: (value: A) => void values.push(value),
-    fail: (error: ApplicationError) => void errors.push(error),
+    fail: (error: unknown) => void errors.push(error),
   };
 }
 
@@ -265,7 +260,7 @@ test('a dropped daemon shows reconnecting, then resets its watches; healthy traf
   // Failed reconnects through the whole budget in one outage end the watch.
   await d.stop();
   await advanceUntil(() => chat.errors.length, Boolean);
-  assert.equal(chat.errors[0]!.code, 'Unavailable');
+  assert(isUnavailable(chat.errors[0]));
   // A new connection generation ends a watch at once.
   await d.start();
   const again = record<ChatSnapshot>();
@@ -274,5 +269,5 @@ test('a dropped daemon shows reconnecting, then resets its watches; healthy traf
   await until(async () => again.values.length, Boolean);
   client.replace();
   await until(async () => again.errors.length, Boolean);
-  assert.equal(again.errors[0]!.code, 'Unavailable');
+  assert(isUnavailable(again.errors[0]));
 });

@@ -4,52 +4,40 @@ import { randomBytes } from 'node:crypto';
 import { test } from 'node:test';
 import { chmod, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Context, Effect, Exit, Layer, Scope } from 'effect';
-import type { ApplicationError } from '@moonbase/contracts/errors';
-import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
-import { ConnectionService, LocalHostService } from '@moonbase/contracts/services';
+import { Cause, Context, Effect, Exit, Layer, Scope } from 'effect';
+import type { ConnectionFailure } from '@moonbase/contracts/connection-errors';
+import { ConnectionService } from '@moonbase/contracts/services';
 import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
 import { bounded, connectClients, readJson, startDaemon, withRoot } from './daemon-fixture.ts';
 
-/** The error an exit failed with, or `ok`. */
-const describeExit = (exit: Exit.Exit<unknown, ApplicationError>) =>
-  Exit.isFailure(exit)
-    ? (exit.cause.reasons.find((reason) => reason._tag === 'Fail') as { error: ApplicationError })
-        .error
-    : 'ok';
+/** The tag and reason of the error a connection failed with. */
+const describeFailure = (cause: Cause.Cause<ConnectionFailure>) => {
+  const error = Cause.squash(cause) as ConnectionFailure;
+  return { error: error._tag, reason: 'reason' in error ? error.reason : undefined };
+};
 
 /**
  * Builds a loopback connection alone, then connects it, and reports the state it reached or the
- * code (and message) that stopped it at either step.
+ * error that stopped it at either step.
  */
-async function connectLoopback(directory: string) {
+async function connectLoopback(directory: string): Promise<{
+  step: 'build' | 'connect';
+  initial?: string;
+  state?: string;
+  error?: string;
+  reason?: string;
+}> {
   const scope = Effect.runSync(Scope.make());
   try {
     const built = await Effect.runPromiseExit(
       Layer.buildWithScope(LoopbackConnectionLive({ directory }), scope),
     );
-    const failure = describeExit(built);
-    if (failure !== 'ok' || !Exit.isSuccess(built))
-      return {
-        step: 'build',
-        code: (failure as ApplicationError).code,
-        message: (failure as ApplicationError).message,
-      };
+    if (Exit.isFailure(built)) return { step: 'build', ...describeFailure(built.cause) };
     const service = Context.get(built.value, ConnectionService);
     const initial = await Effect.runPromise(service.getConnection({}));
-    const connected = await Effect.runPromiseExit(
-      service
-        .connect({ profileId: 'loopback' })
-        .pipe(Effect.mapError(toConnectionApplicationError)),
-    );
-    const refused = describeExit(connected);
-    if (refused !== 'ok')
-      return {
-        step: 'connect',
-        initial: initial.state,
-        code: refused.code,
-        message: refused.message,
-      };
+    const connected = await Effect.runPromiseExit(service.connect({ profileId: 'loopback' }));
+    if (Exit.isFailure(connected))
+      return { step: 'connect', initial: initial.state, ...describeFailure(connected.cause) };
     await Effect.runPromise(Scope.close(scope, Exit.void));
     // Once closed, the connection neither connects again nor hands out its endpoint.
     const host = (await Effect.runPromise(service.getConnection({}))).profile.expected;
@@ -58,14 +46,14 @@ async function connectLoopback(directory: string) {
     return {
       step: 'connect',
       initial: initial.state,
-      code: Exit.isSuccess(connected) && connected.value.state,
+      state: connected.value.state,
     };
   } finally {
     await Effect.runPromise(Scope.close(scope, Exit.void));
   }
 }
 
-const unsafeMessage = 'The daemon data directory or one of its files is not private to this user.';
+const unsafe = { error: 'ConnectionError', reason: 'daemon-files-unsafe' };
 
 test('the loopback connection builds from the identity alone while the daemon is stopped', async () => {
   await withRoot(async (root, started) => {
@@ -75,23 +63,23 @@ test('the loopback connection builds from the identity alone while the daemon is
     const { host } = await bounded(first.ready);
     await first.stop();
     await assert.rejects(readFile(join(directory, 'endpoint.json')), { code: 'ENOENT' });
-    const clients = connectClients(directory, host);
+    const clients = await connectClients(directory, host);
     try {
-      const initial = await clients.connection.command('getConnection', {});
+      const initial = await clients.run(clients.connection.getConnection({}));
       assert.equal(initial.state, 'disconnected');
       assert.equal(initial.profile.remotePort, undefined);
       assert.deepEqual(initial.profile.expected, host);
-      await assert.rejects(clients.connection.command('connect', { profileId: 'loopback' }), {
-        code: 'Unavailable',
-        message: 'The daemon is not running.',
+      await assert.rejects(clients.run(clients.connection.connect({ profileId: 'loopback' })), {
+        _tag: 'ConnectionError',
+        reason: 'daemon-not-running',
       });
       const daemon = startDaemon([directory]);
       started.push(daemon);
       const ready = await bounded(daemon.ready);
-      const connected = await clients.connection.command('connect', { profileId: 'loopback' });
+      const connected = await clients.run(clients.connection.connect({ profileId: 'loopback' }));
       assert.equal(connected.state, 'connected');
       assert.equal(connected.profile.remotePort, ready.port);
-      assert.deepEqual((await clients.chat.command('getChatHost', { host })).host, host);
+      assert.deepEqual((await clients.run(clients.chat.getChatHost({ host }))).host, host);
     } finally {
       await clients.runtime.dispose();
     }
@@ -106,7 +94,7 @@ test('the loopback connection never follows a link to its data directory or file
     const daemon = startDaemon([directory]);
     started.push(daemon);
     await bounded(daemon.ready);
-    assert.equal((await connectLoopback(directory)).code, 'connected');
+    assert.equal((await connectLoopback(directory)).state, 'connected');
     // Each file in turn becomes a link to an identical private copy; only the link is wrong.
     for (const [name, step] of [
       ['identity.json', 'build'],
@@ -117,24 +105,16 @@ test('the loopback connection never follows a link to its data directory or file
         copy = join(elsewhere, name);
       await rename(file, copy);
       await symlink(copy, file);
-      const refused = await connectLoopback(directory);
-      assert.deepEqual(
-        { step: refused.step, code: refused.code, message: refused.message },
-        { step, code: 'Unavailable', message: unsafeMessage },
-        name,
-      );
+      const { step: refusedAt, error, reason } = await connectLoopback(directory);
+      assert.deepEqual({ step: refusedAt, error, reason }, { step, ...unsafe }, name);
       await rm(file);
       await rename(copy, file);
-      assert.equal((await connectLoopback(directory)).code, 'connected', name);
+      assert.equal((await connectLoopback(directory)).state, 'connected', name);
     }
     // A link to the whole private data directory is refused too.
     const linked = join(root, 'linked');
     await symlink(directory, linked);
-    assert.deepEqual(await connectLoopback(linked), {
-      step: 'build',
-      code: 'Unavailable',
-      message: unsafeMessage,
-    });
+    assert.deepEqual(await connectLoopback(linked), { step: 'build', ...unsafe });
   });
 });
 
@@ -144,7 +124,7 @@ test('the loopback connection refuses unsafe files, another protocol, another id
       other = join(root, 'other');
     assert.deepEqual(
       await connectLoopback(directory),
-      { step: 'build', code: 'Unavailable', message: 'The daemon is not running.' },
+      { step: 'build', error: 'ConnectionError', reason: 'daemon-not-running' },
       'no daemon directory yet, so no identity to bind to',
     );
     const daemon = startDaemon([directory]),
@@ -154,7 +134,7 @@ test('the loopback connection refuses unsafe files, another protocol, another id
     assert.deepEqual(await connectLoopback(directory), {
       step: 'connect',
       initial: 'disconnected',
-      code: 'connected',
+      state: 'connected',
     });
     await chmod(directory, 0o755);
     assert.equal((await connectLoopback(directory)).step, 'build', 'a directory others can read');
@@ -168,43 +148,44 @@ test('the loopback connection refuses unsafe files, another protocol, another id
     await chmod(tokenFile, 0o644);
     assert.deepEqual(
       await connectLoopback(directory),
-      { step: 'connect', initial: 'disconnected', code: 'Unavailable', message: unsafeMessage },
+      { step: 'connect', initial: 'disconnected', ...unsafe },
       'a token others can read',
     );
     await chmod(tokenFile, 0o600);
     await writeFile(endpointFile, JSON.stringify({ ...JSON.parse(endpoint), protocol: 1 }));
-    assert.equal((await connectLoopback(directory)).code, 'Incompatible', 'an old protocol');
+    assert.equal((await connectLoopback(directory)).reason, 'daemon-protocol', 'an old protocol');
     await writeFile(endpointFile, endpoint);
 
-    const clients = connectClients(directory, ready.host);
+    const clients = await connectClients(directory, ready.host);
     try {
-      const connect = () => clients.connection.command('connect', { profileId: 'loopback' });
+      const connect = (profileId = 'loopback') =>
+        clients.run(clients.connection.connect({ profileId }));
       assert.equal((await connect()).state, 'connected');
-      await assert.rejects(clients.connection.command('connect', { profileId: 'other' }), {
-        code: 'InvalidInput',
+      await assert.rejects(connect('other'), {
+        _tag: 'ConnectionError',
+        reason: 'loopback-profile',
       });
-      const connections = await clients.runtime.runPromise(ConnectionService);
       await assert.rejects(
-        clients.runtime.runPromise(
-          connections.endpoint({ host: { ...ready.host, storeId: 'another-store' } }),
+        clients.run(
+          clients.connection.endpoint({ host: { ...ready.host, storeId: 'another-store' } }),
         ),
-        { code: 'Conflict' },
+        { _tag: 'ConnectionError', reason: 'daemon-mismatch' },
       );
       // Another daemon's endpoint and token: its health names another host and store.
       await writeFile(endpointFile, await readFile(join(other, 'endpoint.json')));
       await writeFile(tokenFile, await readFile(join(other, 'token')));
-      await assert.rejects(connect(), { code: 'Incompatible' });
-      assert.equal((await clients.connection.command('getConnection', {})).state, 'failed');
+      await assert.rejects(connect(), { _tag: 'HostVerificationError', reason: 'identity' });
+      assert.equal((await clients.run(clients.connection.getConnection({}))).state, 'failed');
       // The right daemon with the wrong token proves nothing.
       await writeFile(endpointFile, endpoint);
-      await assert.rejects(connect(), { code: 'Unauthorized' });
+      await assert.rejects(connect(), { _tag: 'HostVerificationError', reason: 'rejected' });
       await writeFile(tokenFile, token);
       // A directory whose identity changed is another daemon.
       await writeFile(
         identityFile,
         JSON.stringify({ ...JSON.parse(identity), host: { hostId: 'x', storeId: 'y' } }),
       );
-      await assert.rejects(connect(), { code: 'Incompatible' });
+      await assert.rejects(connect(), { _tag: 'ConnectionError', reason: 'daemon-identity' });
       await writeFile(identityFile, identity);
       assert.equal((await connect()).state, 'connected');
     } finally {
@@ -247,18 +228,15 @@ test('the built daemon searches files with the ripgrep shipped beside its bundle
     const ready = await bounded(daemon.ready);
     const identity = await readJson(join(directory, 'identity.json'));
     const session = { host: identity.host, actorId: identity.actorId };
-    const clients = connectClients(directory, ready.host);
+    const clients = await connectClients(directory, ready.host);
     try {
-      await clients.connection.command('connect', { profileId: 'loopback' });
-      const folders = await clients.runtime.runPromise(LocalHostService);
+      await clients.run(clients.connection.connect({ profileId: 'loopback' }));
       await clients.run(
-        folders.approveFolder({ host: session.host, requestId: 'approve', path: project }),
+        clients.folders.approveFolder({ host: session.host, requestId: 'approve', path: project }),
       );
-      const found = await clients.chat.command('findChatFiles', {
-        session,
-        cwd: project,
-        query: '',
-      });
+      const found = await clients.run(
+        clients.chat.findChatFiles({ session, cwd: project, query: '' }),
+      );
       assert.deepEqual(
         found.matches.map((match) => match.path),
         ['listed-by-bundled-ripgrep.md'],

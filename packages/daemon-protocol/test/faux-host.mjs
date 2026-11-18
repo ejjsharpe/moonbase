@@ -11,7 +11,7 @@ import {
 import { createRegistry, defineExtension, defineTool } from '@earendil-works/pi-durable';
 import { Type } from 'typebox';
 import { chatHostCapabilities } from '@moonbase/contracts/host';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { HostUnavailableError } from '@moonbase/contracts/host-errors';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { serveChat } from '../src/server/server.ts';
 const config = JSON.parse(await readFile(process.argv[2], 'utf8'));
@@ -73,8 +73,7 @@ try {
     Effect.scoped(
       Effect.gen(function* () {
         // A local-mode chat host advertises local mode; it serves no other daemon operation.
-        const refused = () =>
-          Effect.fail(new ApplicationError({ code: 'Unavailable', message: 'Not served here.' }));
+        const refused = () => Effect.fail(new HostUnavailableError({ reason: 'failed' }));
         const handlers = new Proxy({}, { get: () => refused });
         yield* serveChat(
           { host: config.host, token: config.token, port: config.port },

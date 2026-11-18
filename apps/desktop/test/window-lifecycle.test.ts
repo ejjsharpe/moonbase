@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
 import { Cause, Deferred, Effect, Exit, Fiber, ManagedRuntime, Layer, Scope } from 'effect';
 import type { App, Dialog } from 'electron';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { WindowFailure } from '../src/ipc/ipc-errors.ts';
 import type { WindowAction } from '../src/ipc/window-rpcs.ts';
 import { installWindowEvents } from '../src/main/window-events.ts';
 import {
@@ -190,15 +190,11 @@ test('Quit waits for a document release under way, and reports its failure, earl
   const f = await fixture({
     release: Effect.andThen(
       Deferred.await(held),
-      Effect.fail(new ApplicationError({ code: 'Persistence', message: 'Old document failed' })),
+      Effect.fail(new WindowFailure({ text: 'Old document failed' })),
     ),
   });
   try {
-    await f.run(
-      f.lifecycle.reportCleanup(
-        Cause.fail(new ApplicationError({ code: 'Persistence', message: 'Earlier' })),
-      ),
-    );
+    await f.run(f.lifecycle.reportCleanup(Cause.fail(new WindowFailure({ text: 'Earlier' }))));
     await f.ready();
     // A ready document hears of earlier cleanup failures.
     assert.deepEqual(
@@ -212,7 +208,7 @@ test('Quit waits for a document release under way, and reports its failure, earl
     await f.answer({
       id: f.last().id,
       consent: true,
-      cleanupError: new ApplicationError({ code: 'Persistence', message: 'Disposal failed' }),
+      cleanupError: new WindowFailure({ text: 'Disposal failed' }),
     });
     assert.equal(await f.finished(), false);
     await f.run(Deferred.succeed(held, undefined));
@@ -264,9 +260,7 @@ test('Quit, its answer and a cleanup failure survive the actions watch’s conne
     // More failures than main holds for its exit code.
     for (let index = 0; index < 9; index++)
       await f.run(
-        f.lifecycle.reportCleanup(
-          Cause.fail(new ApplicationError({ code: 'Persistence', message: `Gap ${index}` })),
-        ),
+        f.lifecycle.reportCleanup(Cause.fail(new WindowFailure({ text: `Gap ${index}` }))),
       );
     await f.requestQuit();
     await waitFor(() => received.length > 9);

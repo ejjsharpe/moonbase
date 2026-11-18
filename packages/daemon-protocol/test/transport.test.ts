@@ -19,7 +19,7 @@ import { Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
-import { makeChatClient, makeProviderSetupClient } from '@moonbase/application/chat/clients';
+import { makeChatCalls, makeProviderSetupCalls } from '@moonbase/application/testing/service-calls';
 import {
   ChatService,
   ConnectionService,
@@ -28,13 +28,17 @@ import {
   type ChatServiceShape,
   type VerifiedChatEndpoint,
 } from '@moonbase/contracts/services';
-import { ApplicationError } from '@moonbase/contracts/workspace';
+import { getErrorGroup, type ErrorGroup } from '@moonbase/contracts/error-groups';
+import { ConnectionError } from '@moonbase/contracts/connection-errors';
+import { ChatBusyError } from '@moonbase/contracts/chat-errors';
 import { LocalHostLive, LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { ProviderSetupLive, localProviderIds } from '@moonbase/chat-runtime/providers';
 import { DaemonRpcLinkLive, RemoteChatLive, RemoteDaemonLive } from '../src/client/remote.ts';
 import { localDaemonCapabilities, serveChat } from '../src/server/server.ts';
 import { hooked, hookedProviders, refusingDaemon } from './served-services.ts';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
+/** Whether a failure means `group` for its request. */
+const inGroup = (group: ErrorGroup) => (error: unknown) => getErrorGroup(error) === group;
 
 const host = { hostId: 'transport-host', storeId: 'transport-store' },
   session = { host, actorId: 'personal' },
@@ -64,7 +68,7 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     }).pipe(Layer.provide(NodeServices.layer)),
   );
   const settings = { cwd: dir, model: { provider: faux.provider.id, modelId: faux.getModel().id } };
-  const client = makeChatClient(runtime),
+  const client = makeChatCalls(runtime),
     calls: string[] = [];
   let intercept: ((operation: string, signal?: AbortSignal) => Promise<void>) | undefined,
     afterDispatch: ((operation: string) => Promise<void>) | undefined;
@@ -90,8 +94,7 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
     health,
   };
   let available = true;
-  const unavailable = () =>
-    Effect.fail(new ApplicationError({ code: 'Unavailable', message: 'Disconnected' }));
+  const unavailable = () => Effect.fail(new ConnectionError({ reason: 'closed' }));
   const connections = Layer.succeed(ConnectionService, {
     getConnection: unavailable,
     connect: unavailable,
@@ -107,7 +110,7 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   const remoteRuntime = ManagedRuntime.make(
       RemoteChatLive.pipe(Layer.provide(DaemonRpcLinkLive({ host })), Layer.provide(connections)),
     ),
-    remote = makeChatClient(remoteRuntime);
+    remote = makeChatCalls(remoteRuntime);
   t.after(async () => {
     await remoteRuntime.dispose();
     await runtime.runPromise(Scope.close(scope, Exit.void));
@@ -199,16 +202,17 @@ test('production remote/server route shared commands and immutable retries witho
   const input = { target, requestId: 'send', text: 'Private prompt' };
   const first = await f.remote.command('sendChat', input);
   assert.deepEqual(await f.remote.command('sendChat', input), first);
-  await assert.rejects(f.remote.command('sendChat', { ...input, text: 'Changed' }), {
-    code: 'InvalidInput',
-  });
+  await assert.rejects(
+    f.remote.command('sendChat', { ...input, text: 'Changed' }),
+    inGroup('refusal'),
+  );
   assert.deepEqual(await f.remote.command('getChatSend', { target, requestId: 'send' }), first);
   const view = await f.remote.command('getChat', { target });
   assert(!JSON.stringify(view).includes(f.token));
   assert.equal(f.faux.state.callCount, 1);
   f.disconnect();
   const count = f.calls.length;
-  await assert.rejects(f.remote.command('getChat', { target }), { code: 'Unavailable' });
+  await assert.rejects(f.remote.command('getChat', { target }), inGroup('unavailable'));
   assert.equal(f.calls.length, count);
 });
 test('a handler failure reaches the client as a fixed failure that carries none of its text', async (t) => {
@@ -218,8 +222,7 @@ test('a handler failure reaches the client as a fixed failure that carries none 
     if (operation === 'listChats') throw new Error(secret);
   };
   await assert.rejects(f.remote.command('listChats', { session }), (error: unknown) => {
-    assert(ApplicationError.is(error));
-    assert.equal(error.code, 'Unavailable');
+    assert.equal(getErrorGroup(error), 'unavailable');
     assert(!JSON.stringify(error).includes(secret));
     return true;
   });
@@ -232,9 +235,8 @@ test('a handler failure reaches the client as a fixed failure that carries none 
   };
   const create = { session, requestId: 'outcome', title: 'Outcome', settings: f.settings };
   await assert.rejects(f.remote.command('createChat', create), (error: unknown) => {
-    assert(ApplicationError.is(error));
-    assert.equal(error.code, 'Uncertain');
-    assert(!JSON.stringify(error).includes(secret) && !error.message.includes(secret));
+    assert.equal(getErrorGroup(error), 'uncertain');
+    assert(!JSON.stringify(error).includes(secret) && !(error as Error).message.includes(secret));
     return true;
   });
   f.afterDispatch = undefined;
@@ -250,14 +252,14 @@ test('remote drops successful and error responses from a stale connection genera
       if (operation === 'listChats') {
         entered();
         await gate;
-        if (failed) throw new ApplicationError({ code: 'Conflict', message: 'Private detail' });
+        if (failed) throw new ChatBusyError();
       }
     };
     const call = f.remote.command('listChats', { session });
     await waiting;
     f.endpoint = { ...f.endpoint, connectionId: nonce() };
     release();
-    await assert.rejects(call, { code: 'Unavailable' });
+    await assert.rejects(call, inGroup('unavailable'));
   }
   f.intercept = undefined;
 });
@@ -344,7 +346,7 @@ for (const operation of ['createChat', 'sendChat', 'stopChat'] as const)
           if (loss === 'disconnect') f.disconnect();
           else f.endpoint = { ...f.endpoint, connectionId: nonce() };
           release();
-          await assert.rejects(pending, { code: 'Uncertain' });
+          await assert.rejects(pending, inGroup('uncertain'));
           f.afterDispatch = undefined;
           f.reconnect();
           assert.equal(f.calls.filter((name) => name === operation).length, 1);
@@ -404,7 +406,7 @@ test('a lost Send acknowledgement resolves through reconnect lookup without anot
       pending = f.remote.command('sendChat', input, { signal: abort.signal });
     await admitted;
     abort.abort();
-    await assert.rejects(pending, { code: 'Cancelled' });
+    await assert.rejects(pending, inGroup('cancelled'));
     release();
     f.afterDispatch = undefined;
     f.endpoint = { ...f.endpoint, connectionId: 'reconnected' };
@@ -429,9 +431,10 @@ test('authenticated file search reaches the host and refuses another folder', as
     query: 'chatsqlite',
   });
   assert.equal(found.matches[0]?.path, 'chat.sqlite');
-  await assert.rejects(f.remote.command('findChatFiles', { session, cwd: '/', query: '' }), {
-    code: 'Unauthorized',
-  });
+  await assert.rejects(
+    f.remote.command('findChatFiles', { session, cwd: '/', query: '' }),
+    inGroup('access'),
+  );
 });
 
 test('authenticated settling reaches the remote host, and a lost reply is uncertain', async (t) => {
@@ -457,9 +460,10 @@ test('authenticated settling reaches the remote host, and a lost reply is uncert
   f.afterDispatch = async (operation) => {
     if (operation === 'settleChat') f.disconnect();
   };
-  await assert.rejects(f.remote.command('settleChat', { target, settled: true }), {
-    code: 'Uncertain',
-  });
+  await assert.rejects(
+    f.remote.command('settleChat', { target, settled: true }),
+    inGroup('uncertain'),
+  );
 });
 
 test('authenticated Find transports saved matches, rejects foreign continuations and cancels peer waits', async (t) => {
@@ -501,7 +505,7 @@ test('authenticated Find transports saved matches, rejects foreign continuations
       query: 'different',
       cursor: first.startCursor,
     }),
-    { code: 'InvalidInput' },
+    inGroup('refusal'),
   );
   await assert.rejects(
     f.remote.command('findChatTranscript', {
@@ -527,7 +531,7 @@ test('authenticated Find transports saved matches, rejects foreign continuations
     { target, query: 'literal' },
     { signal: abort.signal },
   );
-  const rejected = assert.rejects(pending, { code: 'Cancelled' });
+  const rejected = assert.rejects(pending, inGroup('cancelled'));
   const until19648 = Date.now() + 10_000;
   while (!entered && Date.now() < until19648)
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -669,8 +673,7 @@ async function setupLocal(t: { after: (fn: () => Promise<void>) => void }) {
       capabilities: daemonCapabilities,
     },
   };
-  const unavailable = () =>
-    Effect.fail(new ApplicationError({ code: 'Unavailable', message: 'Disconnected' }));
+  const unavailable = () => Effect.fail(new ConnectionError({ reason: 'closed' }));
   const connections = Layer.succeed(ConnectionService, {
     getConnection: unavailable,
     connect: unavailable,
@@ -704,11 +707,11 @@ async function setupLocal(t: { after: (fn: () => Promise<void>) => void }) {
     opened,
     dispatched,
     origin: server.origin,
-    remote: makeChatClient(remoteRuntime),
+    remote: makeChatCalls(remoteRuntime),
     host: <A>(effect: Effect.Effect<A, unknown>) => remoteRuntime.runPromise(effect),
     folders: localHostService,
     providers,
-    owner: (ownerId: string) => makeProviderSetupClient(remoteRuntime, ownerId),
+    owner: (ownerId: string) => makeProviderSetupCalls(remoteRuntime, ownerId),
     set afterDispatch(value: typeof afterDispatch) {
       afterDispatch = value;
     },
@@ -750,8 +753,8 @@ test('provider setup runs over the protocol per owner, returns validated sign-in
     ['openProviderUrl', { flowId }],
     ['cancelProviderLogin', { flowId }],
   ] as const)
-    await assert.rejects(b.command(operation, input as never), (error: ApplicationError) => {
-      assert.equal(error.code, 'InvalidInput');
+    await assert.rejects(b.command(operation, input as never), (error: Error) => {
+      assert.equal(getErrorGroup(error), 'refusal');
       assert(!error.message.includes(flowId));
       return true;
     });
@@ -791,22 +794,24 @@ test('provider setup runs over the protocol per owner, returns validated sign-in
     'cancelled',
   );
   await f.host(f.providers.releaseOwner('document-a'));
-  await assert.rejects(a.command('startProviderLogin', { providerId: 'openai' }), {
-    code: 'InvalidInput',
-  });
+  await assert.rejects(
+    a.command('startProviderLogin', { providerId: 'openai' }),
+    inGroup('refusal'),
+  );
   // A lost reply to a mutation is Uncertain, and the mutation was dispatched exactly once.
   f.afterDispatch = async (operation) => {
     if (operation === 'startProviderLogin') f.reconnect();
   };
   const before = f.dispatched.length;
-  await assert.rejects(b.command('startProviderLogin', { providerId: 'openrouter' }), {
-    code: 'Uncertain',
-  });
+  await assert.rejects(
+    b.command('startProviderLogin', { providerId: 'openrouter' }),
+    inGroup('uncertain'),
+  );
   assert.deepEqual(f.dispatched.slice(before), ['startProviderLogin']);
   f.afterDispatch = async (operation) => {
     if (operation === 'getProviders') f.reconnect();
   };
-  await assert.rejects(b.command('getProviders', {}), { code: 'Unavailable' });
+  await assert.rejects(b.command('getProviders', {}), inGroup('unavailable'));
   f.afterDispatch = undefined;
 });
 
@@ -828,9 +833,10 @@ test('a provider sign-in URL outside the expected origins never reaches the clie
     );
     assert.equal(failed.flow!.canOpenUrl, false);
     assert(!JSON.stringify(failed).includes(url));
-    await assert.rejects(a.command('openProviderUrl', { flowId: started.flow!.id }), {
-      code: 'InvalidInput',
-    });
+    await assert.rejects(
+      a.command('openProviderUrl', { flowId: started.flow!.id }),
+      inGroup('refusal'),
+    );
   }
   assert.deepEqual(f.opened, []);
 });
@@ -852,10 +858,10 @@ test('a folder approval reaches the daemon, which refuses chats and search elsew
   assert.deepEqual((await f.host(f.folders.listRecentFolders({ host: localHost }))).folders, [
     folder,
   ]);
-  await assert.rejects(create('unapproved', other), { code: 'Unauthorized' });
+  await assert.rejects(create('unapproved', other), inGroup('access'));
   await assert.rejects(
     f.remote.command('findChatFiles', { session: localSession, cwd: other, query: '' }),
-    { code: 'Unauthorized' },
+    inGroup('access'),
   );
   // A lost reply to an approval is Uncertain and is not sent again.
   f.afterDispatch = async (operation) => {
@@ -897,15 +903,18 @@ test('a refused daemon mutation may be sent again; one that may have applied is 
 test('daemon refusals reach the client as their tags and reasons with its own text, never host text', async (t) => {
   const f = await setupLocal(t);
   const owner = f.owner('document-reasons');
-  // Provider setup reaches the renderer through the legacy client: its codes and fixed text.
+  // Provider setup refusals reach the client as their tag and reason, with the client's text.
   const refusesWith = async (
     promise: Promise<unknown>,
     reason: ProviderSetupRefusedError['reason'],
   ) =>
-    assert.rejects(promise, (error: ApplicationError) => {
+    assert.rejects(promise, (error: Error) => {
       assert.deepEqual(
-        { code: error.code, message: error.message },
-        { code: 'InvalidInput', message: new ProviderSetupRefusedError({ reason }).message },
+        { tag: (error as ProviderSetupRefusedError)._tag, message: error.message },
+        {
+          tag: 'ProviderSetupRefusedError',
+          message: new ProviderSetupRefusedError({ reason }).message,
+        },
       );
       return true;
     });
@@ -1011,10 +1020,8 @@ test('a client refuses a chat host that does not advertise local mode, and its l
     ),
   );
   t.after(() => unadvertised.dispose());
-  const remote = makeChatClient(unadvertised);
-  await assert.rejects(remote.command('getChatHost', { host: localHost }), {
-    code: 'Incompatible',
-  });
+  const remote = makeChatCalls(unadvertised);
+  await assert.rejects(remote.command('getChatHost', { host: localHost }), inGroup('incompatible'));
   const folders = await unadvertised.runPromise(LocalHostService);
   const notServed = { _tag: 'IncompatibleHostError', reason: 'not-served' };
   await assert.rejects(
@@ -1028,8 +1035,8 @@ test('a client refuses a chat host that does not advertise local mode, and its l
     notServed,
   );
   await assert.rejects(
-    makeProviderSetupClient(unadvertised, 'document').command('getProviders', {}),
-    { code: 'Incompatible' },
+    makeProviderSetupCalls(unadvertised, 'document').command('getProviders', {}),
+    inGroup('incompatible'),
   );
   await assert.rejects(
     remote.command('createChat', {
@@ -1038,7 +1045,7 @@ test('a client refuses a chat host that does not advertise local mode, and its l
       title: 'Local settings',
       settings: { model: { provider: 'faux', modelId: 'faux' } },
     }),
-    { code: 'Incompatible' },
+    inGroup('incompatible'),
   );
   // Only the host read reached it.
   assert.deepEqual(

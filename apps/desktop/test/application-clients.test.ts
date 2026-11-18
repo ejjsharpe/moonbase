@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
+import { type ErrorGroup, getErrorGroup } from '@moonbase/contracts/error-groups';
 import { test } from 'node:test';
 import { Effect, ManagedRuntime } from 'effect';
 import { makeShellClients } from '../src/renderer/ipc/application-clients.ts';
 import { makeDesktopIpcLayer, toMessagePortLike } from '../src/renderer/ipc/desktop-ipc.ts';
+/** Whether a failure means `group` for its request. */
+const inGroup = (group: ErrorGroup) => (error: unknown) => getErrorGroup(error) === group;
 
 test('a reply the renderer cannot decode is Incompatible, and a request its schemas refuse is InvalidInput', async () => {
   const { port1, port2 } = new MessageChannel();
@@ -24,12 +27,16 @@ test('a reply the renderer cannot decode is Incompatible, and a request its sche
   const runtime = ManagedRuntime.make(
     makeDesktopIpcLayer(Effect.succeed(toMessagePortLike(port1))),
   );
-  const shell = makeShellClients(runtime, { connect: async () => {}, pathForFile: () => '' });
+  const shell = makeShellClients((effect, options) => runtime.runPromiseExit(effect, options), {
+    connect: async () => {},
+    pathForFile: () => '',
+  });
   try {
-    await assert.rejects(shell.chatTargets(), { code: 'Incompatible' });
-    await assert.rejects(shell.createChatWorktree('/root', 'chat\0branch', 'request'), {
-      code: 'InvalidInput',
-    });
+    await assert.rejects(shell.chatTargets(), inGroup('incompatible'));
+    await assert.rejects(
+      shell.createChatWorktree('/root', 'chat\0branch', 'request'),
+      inGroup('refusal'),
+    );
     assert.deepEqual(sent, ['getChatTargets']);
   } finally {
     await runtime.dispose();

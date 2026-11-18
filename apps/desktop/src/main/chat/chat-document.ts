@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Effect, Ref, Semaphore } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { TranscriptNativeError } from '../../ipc/ipc-errors.ts';
 import type { ChatTargetId } from '../../ipc/chat-rpcs.ts';
 import type { ChatBackends } from './chat-backends.ts';
 import { makeTranscriptImages, type TranscriptImages } from './transcript-images.ts';
@@ -47,9 +47,7 @@ export const makeChatDocument = (
             Effect.flatMap(backends.findTarget(target), (clients) =>
               clients
                 ? readTranscriptImage(clients.chat, image)
-                : Effect.fail(
-                    new ApplicationError({ code: 'Unavailable', message: 'Image read cancelled.' }),
-                  ),
+                : Effect.fail(new TranscriptNativeError({ problem: 'image-cancelled' })),
             ),
           options.perf,
         );

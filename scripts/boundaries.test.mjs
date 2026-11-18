@@ -8,7 +8,6 @@ const packages = new Map([
       directory: 'packages/application',
       exports: {
         '.': './src/index.ts',
-        './chat/clients': './src/index.ts',
         './editor': './src/editor.ts',
         './chat': './src/chat.ts',
       },
@@ -30,7 +29,6 @@ const packages = new Map([
     { directory: 'packages/daemon-protocol', exports: { './remote': './src/remote.ts' } },
   ],
   ['@moonbase/ssh', { directory: 'packages/ssh', exports: { '.': './src/index.ts' } }],
-  ['@moonbase/effect', { directory: 'packages/effect', exports: { '.': './src/index.ts' } }],
 ]);
 function check(sources) {
   return checkBoundaries({
@@ -81,7 +79,7 @@ for (const source of [
   "import type {} from '@effect/platform-node';",
   "import type {} from '@moonbase/desktop';",
   "import type {} from '@moonbase/contracts/services';",
-  "import type {} from '@moonbase/application/chat/clients';",
+  "import type {} from '@moonbase/application/chat';",
 ])
   assert(check({ 'packages/workbench/src/index.ts': source }).length, source);
 assert(
@@ -126,11 +124,10 @@ assert(
     'packages/contracts/src/index.ts': "import type {} from '@moonbase/application';",
   }).some((error) => error.includes('package cycle')),
 );
-assert.deepEqual(
+assert(
   check({
-    'packages/daemon-protocol/examples/remote.ts': "import '@moonbase/application/chat/clients';",
-  }),
-  [],
+    'packages/daemon-protocol/examples/remote.ts': "import '@moonbase/application/chat';",
+  }).some((error) => error.includes('process roots compose infrastructure services')),
 );
 assert(
   check({
@@ -163,8 +160,8 @@ for (const [path, specifier] of [
   );
 assert(
   check({
-    'packages/contracts/src/index.ts': "import '@moonbase/effect';",
-    'packages/effect/src/application-error.ts': '',
+    'packages/contracts/src/index.ts': "import '@moonbase/application';",
+    'packages/application/src/index.ts': '',
   }).some((error) => error.includes('contracts depends on executable')),
 );
 console.log(

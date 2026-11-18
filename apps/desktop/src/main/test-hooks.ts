@@ -1,14 +1,20 @@
 import { Cause, Effect, Exit } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/errors';
-import { toLegacyApplicationError, type DesktopIpcError } from '../ipc/ipc-errors.ts';
+import * as Schema from 'effect/Schema';
+import { CancelledError } from '@moonbase/contracts/errors';
+import { IpcFailedError } from '@moonbase/contracts/ipc-errors';
+import { DesktopRpcs } from '../ipc/desktop-rpcs.ts';
 import type { WindowAction } from '../ipc/window-rpcs.ts';
 import type { DaemonCommand } from './daemon/daemon-command.ts';
 import type { IpcInterception } from './ipc/admission.ts';
 
-/** A request's outcome as an unpackaged test entry sees and replaces it. */
+/**
+ * A request's outcome as an unpackaged test entry sees and replaces it. A failure is one of the
+ * errors its procedure declares; one the entry writes itself is that error encoded, which main
+ * decodes with the procedure's schema.
+ */
 type TestIpcReply =
   | { ok: true; value: unknown }
-  | { ok: false; error: ApplicationError; interrupted?: boolean };
+  | { ok: false; error: unknown; interrupted?: boolean };
 /** An unpackaged test entry's view of each IPC request: it may observe, hold or replace it. */
 type TestIpcHook = (
   request: { tag: string; payload: unknown },
@@ -31,12 +37,11 @@ function toInterception(hook: TestIpcHook): IpcInterception {
     let reply: TestIpcReply;
     const failure = Exit.isFailure(exit) ? Cause.findErrorOption(exit.cause) : undefined;
     if (Exit.isSuccess(exit)) reply = { ok: true, value: exit.value };
-    else if (failure?._tag === 'Some')
-      reply = { ok: false, error: toLegacyApplicationError(failure.value as DesktopIpcError) };
+    else if (failure?._tag === 'Some') reply = { ok: false, error: failure.value };
     else
       reply = {
         ok: false,
-        error: new ApplicationError({ code: 'Cancelled', message: 'Command cancelled' }),
+        error: new CancelledError({ operation: 'Command' }),
         interrupted: true,
       };
     exits.set(reply, exit);
@@ -51,18 +56,18 @@ function toInterception(hook: TestIpcHook): IpcInterception {
           hook(request, () =>
             Effect.runPromiseExitWith(context)(handler, { signal }).then(toReply),
           ),
-        catch: (error) =>
-          ApplicationError.is(error)
-            ? error
-            : new ApplicationError({ code: 'Unavailable', message: 'Test hook failed.' }),
+        catch: () => new IpcFailedError(),
       }),
     ).pipe(
       Effect.flatMap((reply) => {
         const exit = exits.get(reply);
         if (exit) return exit;
-        return reply.ok
-          ? Effect.succeed(reply.value)
-          : Effect.fail(new ApplicationError(reply.error));
+        if (reply.ok) return Effect.succeed(reply.value);
+        const schema = DesktopRpcs.requests.get(request.tag)!.errorSchema as Schema.Top;
+        const decode = Schema.decodeUnknownEffect(Schema.toCodecJson(schema)) as (
+          value: unknown,
+        ) => Effect.Effect<unknown, Schema.SchemaError>;
+        return Effect.flatMap(Effect.orDie(decode(reply.error)), Effect.fail);
       }),
     );
 }

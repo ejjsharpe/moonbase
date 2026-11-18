@@ -73,7 +73,7 @@ export const noWorkspace: Workspace = { hasFolder: () => Effect.succeed(false) }
 
 /**
  * Closes the workspace's scope, waiting at most `deadline`. A close that fails (a stale lock, say)
- * or never finishes (a helper that never exits) is journalled by code and shutdown goes on.
+ * or never finishes (a helper that never exits) is journalled by its tag and shutdown goes on.
  */
 export const closeWorkspace = (scope: Scope.Closeable, deadline: Duration.Duration) =>
   Effect.gen(function* () {
@@ -85,7 +85,7 @@ export const closeWorkspace = (scope: Scope.Closeable, deadline: Duration.Durati
       yield* journal({
         event: 'workspace',
         reason: 'close-failed',
-        code: describeFailure(Cause.squash(closed.value.cause)).code,
+        error: describeFailure(Cause.squash(closed.value.cause)).error,
       });
   });
 
@@ -107,7 +107,7 @@ export type WorkspaceOptions = {
 /**
  * Composes the workspace file host on macOS in a scope of its own, with the data in `workspace/`,
  * this daemon's host ID and the root policy of its mode. A host that can't be composed (no helper,
- * an unqualified runtime, an unusable store) is journalled by code and left out: chats are
+ * an unqualified runtime, an unusable store) is journalled by its tag and left out: chats are
  * unaffected. `current` holds the open workspace, and none once closing begins, so chats never
  * ask a closed one. The close it returns (also run when the daemon's scope closes) runs once: it cancels
  * the helper process groups and waits for them, at most `closeDeadline`, so a helper that never
@@ -163,7 +163,7 @@ export const openWorkspace = (options: WorkspaceOptions) =>
       yield* journal({
         event: 'workspace',
         reason: 'unavailable',
-        code: describeFailure(Cause.squash(opened.cause)).code,
+        error: describeFailure(Cause.squash(opened.cause)).error,
       });
       return close;
     }

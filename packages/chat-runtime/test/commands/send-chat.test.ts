@@ -6,7 +6,7 @@ import { Harness, createRegistry, defineDocFamily } from '@earendil-works/pi-dur
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { readFile } from 'node:fs/promises';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import { session, until, fixture } from '../runtime-fixture.ts';
+import { session, until, fixture, runChat } from '../runtime-fixture.ts';
 
 test('duplicate/lost Send, read-only lookup, restart and cross-operation reuse never resend', async (t) => {
   const f = await fixture(t),
@@ -14,28 +14,33 @@ test('duplicate/lost Send, read-only lookup, restart and cross-operation reuse n
   f.faux.setResponses([fauxAssistantMessage('Hello')]);
   const input = { target, requestId: 'send', text: 'Question' };
   const receipts = await Promise.all([
-    f.client.command('sendChat', input),
-    f.client.command('sendChat', input),
+    runChat(f.runtime, (chat) => chat.sendChat(input)),
+    runChat(f.runtime, (chat) => chat.sendChat(input)),
   ]);
   assert.deepEqual(receipts[0], receipts[1]);
   await until(
-    () => f.client.command('getChat', { target }),
+    () => runChat(f.runtime, (chat) => chat.getChat({ target })),
     (s) => s.run === null && s.entries.some((e) => e.text === 'Hello'),
   );
   assert.equal(f.faux.state.callCount, 1);
-  await assert.rejects(f.client.command('sendChat', { ...input, text: 'changed' }), {
-    code: 'InvalidInput',
-  });
-  await assert.rejects(f.client.command('sendChat', { ...input, requestId: 'create' }), {
-    code: 'InvalidInput',
-  });
-  assert.equal(await f.client.command('getChatSend', { target, requestId: 'unknown' }), null);
+  await assert.rejects(
+    runChat(f.runtime, (chat) => chat.sendChat({ ...input, text: 'changed' })),
+    { _tag: 'RequestReusedError' },
+  );
+  await assert.rejects(
+    runChat(f.runtime, (chat) => chat.sendChat({ ...input, requestId: 'create' })),
+    { _tag: 'RequestReusedError' },
+  );
+  assert.equal(
+    await runChat(f.runtime, (chat) => chat.getChatSend({ target, requestId: 'unknown' })),
+    null,
+  );
   await f.restart();
   assert.deepEqual(
-    await f.client.command('getChatSend', { target, requestId: 'send' }),
+    await runChat(f.runtime, (chat) => chat.getChatSend({ target, requestId: 'send' })),
     receipts[0],
   );
-  assert.deepEqual(await f.client.command('sendChat', input), receipts[0]);
+  assert.deepEqual(await runChat(f.runtime, (chat) => chat.sendChat(input)), receipts[0]);
   assert.equal(f.faux.state.callCount, 1);
 });
 for (const admitted of [false, true])
@@ -67,27 +72,35 @@ for (const admitted of [false, true])
       target = await f.create();
     f.faux.setResponses([fauxAssistantMessage('Once')]);
     const input = { target, requestId: 'lost', text: 'Retained' };
-    await assert.rejects(f.client.command('sendChat', input), { code: 'Uncertain' });
+    await assert.rejects(
+      runChat(f.runtime, (chat) => chat.sendChat(input)),
+      { _tag: 'UncertainError' },
+    );
     await f.restart();
-    const receipt = await f.client.command('getChatSend', { target, requestId: 'lost' });
+    const receipt = await runChat(f.runtime, (chat) =>
+      chat.getChatSend({ target, requestId: 'lost' }),
+    );
     assert.equal(receipt?.admission, admitted ? 'admitted' : 'reserved');
     // An admitted run resumes on reopen by itself; reads add no model call to it.
     if (admitted)
       await until(
-        () => f.client.command('getChat', { target }),
+        () => runChat(f.runtime, (chat) => chat.getChat({ target })),
         (s) => s.run === null && s.entries.some((e) => e.text === 'Once'),
       );
     const before = f.faux.state.callCount;
-    await f.client.command('getChat', { target });
-    await f.client.command('listChats', { session });
+    await runChat(f.runtime, (chat) => chat.getChat({ target }));
+    await runChat(f.runtime, (chat) => chat.listChats({ session }));
     assert.equal(f.faux.state.callCount, before);
     if (!admitted) {
       assert.equal(before, 0);
-      assert.equal((await f.client.command('getChat', { target })).state, 'uncertain');
+      assert.equal(
+        (await runChat(f.runtime, (chat) => chat.getChat({ target }))).state,
+        'uncertain',
+      );
     }
-    assert.equal((await f.client.command('sendChat', input)).admission, 'admitted');
+    assert.equal((await runChat(f.runtime, (chat) => chat.sendChat(input))).admission, 'admitted');
     await until(
-      () => f.client.command('getChat', { target }),
+      () => runChat(f.runtime, (chat) => chat.getChat({ target })),
       (s) => s.run === null && s.entries.some((e) => e.text === 'Once'),
     );
     assert.equal(f.faux.state.callCount, 1);
@@ -105,9 +118,9 @@ test('selected Pi coding-tool runtime executes in the fixed cwd once and retaine
     fauxAssistantMessage('Native complete'),
   ]);
   const input = { target, requestId: 'native', text: 'One controlled native effect' };
-  const receipt = await f.client.command('sendChat', input);
+  const receipt = await runChat(f.runtime, (chat) => chat.sendChat(input));
   await until(
-    () => f.client.command('getChat', { target }),
+    () => runChat(f.runtime, (chat) => chat.getChat({ target })),
     (s) => !s.run && s.entries.some((e) => e.text === 'Native complete'),
   );
   assert.equal(await readFile(join(f.config.cwd, 'counted.txt'), 'utf8'), 'x');
@@ -117,7 +130,7 @@ test('selected Pi coding-tool runtime executes in the fixed cwd once and retaine
     (e: unknown) => !!e && typeof e === 'object' && 'code' in e && e.code === 'ESRCH',
   );
   await f.restart();
-  assert.deepEqual(await f.client.command('sendChat', input), receipt);
+  assert.deepEqual(await runChat(f.runtime, (chat) => chat.sendChat(input)), receipt);
   assert.equal(await readFile(join(f.config.cwd, 'counted.txt'), 'utf8'), 'x');
   assert.equal(f.faux.state.callCount, 2);
 });
@@ -127,19 +140,19 @@ test('maximum escaped Send text retains its original serialized binding across r
   f.faux.setResponses([fauxAssistantMessage('Escaped input completed')]);
   const input = { target, requestId: 'escaped-binding', text: '\u0001'.repeat(32768) };
   assert(Buffer.byteLength(JSON.stringify({ operation: 'sendChat', ...input })) > 64 * 1024);
-  const receipt = await f.client.command('sendChat', input);
+  const receipt = await runChat(f.runtime, (chat) => chat.sendChat(input));
   await until(
-    () => f.client.command('getChat', { target }),
+    () => runChat(f.runtime, (chat) => chat.getChat({ target })),
     (value) =>
       !value.run && value.entries.some((entry) => entry.text === 'Escaped input completed'),
   );
-  assert.deepEqual(await f.client.command('sendChat', input), receipt);
+  assert.deepEqual(await runChat(f.runtime, (chat) => chat.sendChat(input)), receipt);
   await f.restart();
   assert.deepEqual(
-    await f.client.command('getChatSend', { target, requestId: input.requestId }),
+    await runChat(f.runtime, (chat) => chat.getChatSend({ target, requestId: input.requestId })),
     receipt,
   );
-  assert.deepEqual(await f.client.command('sendChat', input), receipt);
+  assert.deepEqual(await runChat(f.runtime, (chat) => chat.sendChat(input)), receipt);
   assert.equal(f.faux.state.callCount, 1);
 });
 for (const state of ['admitted', 'pending', 'empty'] as const)
@@ -167,11 +180,14 @@ for (const state of ['admitted', 'pending', 'empty'] as const)
       input = { target, requestId: 'captured', text: 'Original' };
     f.faux.setResponses([fauxAssistantMessage('Original completed')]);
     if (state === 'pending')
-      await assert.rejects(f.client.command('sendChat', input), { code: 'Uncertain' });
+      await assert.rejects(
+        runChat(f.runtime, (chat) => chat.sendChat(input)),
+        { _tag: 'UncertainError' },
+      );
     else {
-      await f.client.command('sendChat', input);
+      await runChat(f.runtime, (chat) => chat.sendChat(input));
       await until(
-        () => f.client.command('getChat', { target }),
+        () => runChat(f.runtime, (chat) => chat.getChat({ target })),
         (value) => !value.run,
       );
     }
@@ -204,10 +220,13 @@ for (const state of ['admitted', 'pending', 'empty'] as const)
       commits++;
     });
     try {
-      await assert.rejects(f.client.command('sendChat', input), { code: 'Persistence' });
       await assert.rejects(
-        f.client.command('getChatSend', { target, requestId: input.requestId }),
-        { code: 'Persistence' },
+        runChat(f.runtime, (chat) => chat.sendChat(input)),
+        { _tag: 'ChatStoreError' },
+      );
+      await assert.rejects(
+        runChat(f.runtime, (chat) => chat.getChatSend({ target, requestId: input.requestId })),
+        { _tag: 'ChatStoreError' },
       );
       assert.equal(commits, 0);
       assert.equal(

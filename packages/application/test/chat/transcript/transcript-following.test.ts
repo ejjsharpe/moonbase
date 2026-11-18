@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { HostUnavailableError } from '@moonbase/contracts/host-errors';
 import {
   digest,
   scaledTranscriptLimits,
@@ -95,11 +95,11 @@ test('a reading anchor saved during an earlier read keeps the reader in history'
 test('a failed page read leaves following as it was', async (t) => {
   const f = await transcriptHarness(t, 640);
   f.handlers.set('getChatHistoryAround', async () => {
-    throw new ApplicationError({ code: 'Unavailable', message: 'history unavailable' });
+    throw new HostUnavailableError({ reason: 'failed' });
   });
   await f.transcript.showEarlier();
   let state = f.state;
-  assert.match(state.error!, /history unavailable/);
+  assert.equal(state.error, new HostUnavailableError({ reason: 'failed' }).message);
   assert.equal(state.atLatest, true, 'the reader follows as before the read');
   await f.transcript.setView({ anchor: { key: 'entry:e620', offset: 0 }, expanded: [] });
   assert.equal(f.state.atLatest, false);

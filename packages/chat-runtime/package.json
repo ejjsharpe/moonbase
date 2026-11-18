@@ -24,7 +24,6 @@
     "@earendil-works/pi-claude-code": "github:earendil-works/pi-claude-code#d5b5e04c314d3452d357174d16d10dda34daa2d2",
     "@earendil-works/chord": "1.4.0",
     "@moonbase/contracts": "workspace:*",
-    "@moonbase/effect": "workspace:*",
     "lru-cache": "11.5.3"
   },
   "devDependencies": {

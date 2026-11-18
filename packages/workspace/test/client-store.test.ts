@@ -1,10 +1,11 @@
+import { isConflict } from '@moonbase/contracts/error-groups';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { openOperations, pendingSaves } from '../src/client/client-store.ts';
-import { fixture as recoveryFixture, isError } from './recovery-fixture.ts';
+import { fixture as recoveryFixture } from './recovery-fixture.ts';
 
 function fixture() {
   const f = recoveryFixture();
@@ -85,7 +86,7 @@ test('growing settled Save history is not parsed by later Save or recovery load'
       );
       await assert.rejects(
         restarted.client.command('saveFile', { ...inputs[0].input, text: 'changed' }),
-        isError('Conflict'),
+        isConflict,
       );
     } finally {
       await restarted.runtime.dispose();
@@ -140,7 +141,7 @@ test('completed conflict history is not parsed by recovery and replays exactly a
       );
       await assert.rejects(
         restarted.client.command('saveFile', { ...inputs[0].input, text: 'changed' }),
-        isError('Conflict'),
+        isConflict,
       );
     } finally {
       await restarted.runtime.dispose();

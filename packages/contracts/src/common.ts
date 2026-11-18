@@ -1,15 +1,13 @@
-import { fail } from './errors.ts';
-
-export type ObservationClose = () => Promise<void>;
-export type CommandOptions = { signal?: AbortSignal };
-
-/** Reads a plain object, rejecting arrays and, when `keys` is given, any other field. */
+/**
+ * Reads a plain object, rejecting arrays and, when `keys` is given, any other field. Throws a
+ * `TypeError` for anything else, for a parser that turns it into its own error.
+ */
 export function readObject(value: unknown, keys?: string[]): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value))
-    return fail('InvalidInput', 'Expected an object.');
+    throw new TypeError('Expected an object.');
   const record = value as Record<string, unknown>;
   if (keys && Object.keys(record).some((key) => !keys.includes(key)))
-    fail('InvalidInput', 'Unexpected fields.');
+    throw new TypeError('Unexpected fields.');
   return record;
 }
 

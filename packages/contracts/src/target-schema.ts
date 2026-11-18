@@ -2,7 +2,7 @@ import * as Effect from 'effect/Effect';
 import * as Schema from 'effect/Schema';
 import { struct } from './schema.ts';
 
-// Checkout and file targets, apart from the workspace schemas so `ApplicationError` can carry a
+// Checkout and file targets, apart from the workspace schemas so `UncertainError` can carry a
 // target without a runtime import cycle.
 const string = Schema.String.check(Schema.isMaxLength(4096));
 export const PathSchema = string.check(Schema.makeFilter((value) => !value.includes('\0')));

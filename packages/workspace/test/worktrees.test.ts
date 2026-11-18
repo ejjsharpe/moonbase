@@ -1,3 +1,11 @@
+import {
+  isAccessRefusal,
+  isCancelled,
+  isConflict,
+  isRefusal,
+  isUnavailable,
+  isUncertain,
+} from '@moonbase/contracts/error-groups';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
@@ -14,7 +22,7 @@ import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
 import { makeWorkspaceClient } from './workspace-client-fixture.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
-import { fixture, rejects } from './workspace-fixture.ts';
+import { fixture } from './workspace-fixture.ts';
 
 function repository() {
   const f = fixture();
@@ -90,7 +98,7 @@ test('a plain folder opens without Git and lists no worktrees', async () => {
     const checkout = await f.client.command('openCheckout', { root: f.root });
     await assert.rejects(
       f.client.command('listWorktrees', { checkout: { ...checkout, root: folder } }),
-      rejects('Unauthorized'),
+      isAccessRefusal,
     );
   } finally {
     await f.close();
@@ -168,25 +176,19 @@ test('createWorktree refuses taken branches and locations, bad bases and names, 
         location: join(f.base, 'fresh'),
         ...input,
       });
-    await assert.rejects(create({ branch: 'taken' }), rejects('Conflict'));
-    await assert.rejects(create({ branch: 'main' }), rejects('Conflict'));
-    await assert.rejects(create({ location: taken }), rejects('Conflict'));
-    await assert.rejects(create({ location: f.root }), rejects('Conflict'));
-    await assert.rejects(
-      create({ location: join(f.base, 'missing/fresh') }),
-      rejects('InvalidInput'),
-    );
-    await assert.rejects(create({ location: f.base + '/a/../fresh' }), rejects('InvalidInput'));
-    await assert.rejects(create({ location: 'relative' }), rejects('InvalidInput'));
-    await assert.rejects(
-      create({ location: join(f.dataDirectory, 'fresh') }),
-      rejects('InvalidInput'),
-    );
-    await assert.rejects(create({ base: 'nonexistent' }), rejects('InvalidInput'));
-    await assert.rejects(create({ branch: 'bad..name' }), rejects('InvalidInput'));
-    await assert.rejects(create({ branch: 'bad.lock' }), rejects('InvalidInput'));
-    await assert.rejects(create({ branch: '@{-1}' }), rejects('InvalidInput'));
-    await assert.rejects(create({ branch: '-b' }), rejects('InvalidInput'));
+    await assert.rejects(create({ branch: 'taken' }), isConflict);
+    await assert.rejects(create({ branch: 'main' }), isConflict);
+    await assert.rejects(create({ location: taken }), isConflict);
+    await assert.rejects(create({ location: f.root }), isConflict);
+    await assert.rejects(create({ location: join(f.base, 'missing/fresh') }), isRefusal);
+    await assert.rejects(create({ location: f.base + '/a/../fresh' }), isRefusal);
+    await assert.rejects(create({ location: 'relative' }), isRefusal);
+    await assert.rejects(create({ location: join(f.dataDirectory, 'fresh') }), isRefusal);
+    await assert.rejects(create({ base: 'nonexistent' }), isRefusal);
+    await assert.rejects(create({ branch: 'bad..name' }), isRefusal);
+    await assert.rejects(create({ branch: 'bad.lock' }), isRefusal);
+    await assert.rejects(create({ branch: '@{-1}' }), isRefusal);
+    await assert.rejects(create({ branch: '-b' }), isRefusal);
     assert.deepEqual(branches(f.git), before);
     assert.equal(readFileSync(join(taken, 'keep.txt'), 'utf8'), 'user data');
     assert.equal(existsSync(join(f.base, 'fresh')), false);
@@ -211,7 +213,7 @@ test('a failed creation removes the worktree and branch it added', async () => {
     const location = join(f.base, 'hooked');
     await assert.rejects(
       f.client.command('createWorktree', { checkout, base: 'main', branch: 'hooked', location }),
-      (error) => rejects('Unavailable')(error) && /hook refused/.test((error as Error).message),
+      (error) => isUnavailable(error) && /hook refused/.test((error as Error).message),
     );
     assert.equal(existsSync(location), false);
     assert.deepEqual(branches(f.git), before);
@@ -248,7 +250,7 @@ test('cancelling creation removes what Git had added', async () => {
     );
     while (!existsSync(marker)) await new Promise((resolve) => setTimeout(resolve, 10));
     abort.abort();
-    await assert.rejects(pending, rejects('Cancelled'));
+    await assert.rejects(pending, isCancelled);
     // Cleanup continues after the caller is released; it never outlives the workspace scope.
     const deadline = Date.now() + 10_000;
     while ((existsSync(location) || branches(f.git).includes('cancelled')) && Date.now() < deadline)
@@ -276,7 +278,7 @@ test("cleanup removes what a failed creation's own hook wrote, and a success sta
     const location = join(f.base, 'hooked-files');
     await assert.rejects(
       f.client.command('createWorktree', { checkout, base: 'main', branch: 'hooked', location }),
-      rejects('Unavailable'),
+      isUnavailable,
     );
     assert.equal(existsSync(location), false);
     assert.equal(branches(f.git).includes('hooked'), false);
@@ -332,10 +334,7 @@ test("a removed worktree's location and branch name can be created again", async
     // Only a creation supersedes an approval: a directory replaced by anything else is refused.
     f.git(['worktree', 'remove', location]);
     f.git(['worktree', 'add', '-q', '--detach', location, 'main']);
-    await assert.rejects(
-      f.client.command('openCheckout', { root: location }),
-      rejects('InvalidInput'),
-    );
+    await assert.rejects(f.client.command('openCheckout', { root: location }), isRefusal);
     await assert.rejects(f.client.command('readFile', { checkout: second, path: 'file.txt' }));
   } finally {
     await f.close();
@@ -369,7 +368,7 @@ test('cancelling during checkout stops Git and its children and removes the lock
     assert.match(f.git(['worktree', 'list', '--porcelain']), /\nlocked/, 'checkout under way');
     const cancelledAt = Date.now();
     abort.abort();
-    await assert.rejects(pending, rejects('Cancelled'));
+    await assert.rejects(pending, isCancelled);
     const deadline = Date.now() + 10_000;
     while (
       (existsSync(location) || branches(f.git).includes('checkout-cancelled')) &&
@@ -437,8 +436,7 @@ test('cleanup removes a worktree this creation still has locked, and its branch'
     const location = join(f.base, 'interrupted');
     await assert.rejects(
       client.command('createWorktree', { checkout, base: 'main', branch: 'interrupted', location }),
-      (error) =>
-        rejects('Unavailable')(error) && /checkout interrupted/.test((error as Error).message),
+      (error) => isUnavailable(error) && /checkout interrupted/.test((error as Error).message),
     );
     assert.equal(existsSync(location), false);
     assert.deepEqual(branches(f.git), before);
@@ -460,7 +458,7 @@ test('cleanup never forces a worktree locked for any other reason', async () => 
     const location = join(f.base, 'user-locked');
     await assert.rejects(
       client.command('createWorktree', { checkout, base: 'main', branch: 'user-locked', location }),
-      (error) => rejects('Uncertain')(error) && (error as Error).message.includes(location),
+      (error) => isUncertain(error) && (error as Error).message.includes(location),
     );
     assert.equal(readFileSync(join(location, 'file.txt'), 'utf8'), 'main');
     assert.equal(registered(f), 2);
@@ -483,7 +481,7 @@ test('a new worktree is approved only at the location it was made, else kept for
     const location = join(f.base, 'swapped');
     await assert.rejects(
       client.command('createWorktree', { checkout, base: 'main', branch: 'swapped', location }),
-      (error) => rejects('Uncertain')(error) && /location changed/.test((error as Error).message),
+      (error) => isUncertain(error) && /location changed/.test((error as Error).message),
     );
     assert.ok(branches(f.git).includes('swapped'), 'a branch still checked out is kept');
     assert.equal(readFileSync(join(location + '-moved', 'file.txt'), 'utf8'), 'main');
@@ -513,7 +511,7 @@ test("a location registered to a missing worktree is refused and the user's regi
           branch: `chat/${name}`,
           location,
         }),
-        rejects('Conflict'),
+        isConflict,
       );
       assert.deepEqual(branches(f.git), before, 'no branch was created');
       assert.equal(existsSync(join(admin, 'HEAD')), true);
@@ -541,7 +539,7 @@ test('concurrent creations at one location never remove each other', async () =>
       result.status === 'rejected' ? [result.reason] : [],
     );
     assert.equal(created.length, 1);
-    assert.ok(rejects('Conflict')(refused[0]));
+    assert.ok(isConflict(refused[0]));
     const file = await f.client.command('readFile', { checkout: created[0]!, path: 'file.txt' });
     assert.equal(file.text, 'main');
     assert.equal(registered(f), 2);
@@ -564,7 +562,7 @@ test('cleanup leaves a worktree another tool added at the location meanwhile', a
     const checkout = await client.command('openCheckout', { root: f.root });
     await assert.rejects(
       client.command('createWorktree', { checkout, base: 'main', branch: 'chat-x', location }),
-      (error) => rejects('Uncertain')(error) && /another worktree/.test((error as Error).message),
+      (error) => isUncertain(error) && /another worktree/.test((error as Error).message),
     );
     assert.equal(readFileSync(join(location, '.env'), 'utf8'), 'SECRET\n');
     assert.equal(registered(f), 2);
@@ -598,7 +596,7 @@ test("cancelling around the branch's creation deletes only a branch this creatio
       );
       await waitFor(marker);
       abort.abort();
-      await assert.rejects(pending, rejects('Cancelled'));
+      await assert.rejects(pending, isCancelled);
       // Cleanup outlives the released caller but never the workspace.
       await runtime.dispose();
       assert.equal(
@@ -632,7 +630,7 @@ test('a new worktree that resolves into another repository is not approved', asy
     const location = join(f.base, 'elsewhere');
     await assert.rejects(
       client.command('createWorktree', { checkout, base: 'main', branch: 'elsewhere', location }),
-      (error) => rejects('Uncertain')(error) && /another repository/.test((error as Error).message),
+      (error) => isUncertain(error) && /another repository/.test((error as Error).message),
     );
     assert.equal(readFileSync(join(location, 'other.txt'), 'utf8'), 'other');
   } finally {
@@ -672,7 +670,7 @@ test('a creation cancelled while queued behind another ends at once and adds not
       { signal: abort.signal },
     );
     abort.abort();
-    await assert.rejects(queued, rejects('Cancelled'));
+    await assert.rejects(queued, isCancelled);
     assert.equal(firstDone, false, 'the queued creation did not wait for the running one');
     writeFileSync(release, '');
     const made = await first;
@@ -699,7 +697,7 @@ test('a registered location differing only in case is refused as taken', async (
         branch: 'chat-x',
         location: join(f.base, 'chat-x'),
       }),
-      rejects('Conflict'),
+      isConflict,
     );
     assert.equal(branches(f.git).includes('chat-x'), false);
     assert.equal(existsSync(join(f.root, '.git/worktrees/Chat-X/HEAD')), true);
@@ -721,7 +719,7 @@ test('cleanup leaves a worktree someone else added on this creation’s branch a
     const location = join(f.base, 'taken-over');
     await assert.rejects(
       client.command('createWorktree', { checkout, base: 'main', branch: 'taken-over', location }),
-      (error) => rejects('Uncertain')(error) && /another worktree/.test((error as Error).message),
+      (error) => isUncertain(error) && /another worktree/.test((error as Error).message),
     );
     assert.equal(readFileSync(join(location, 'notes.txt'), 'utf8'), 'mine\n');
     assert.equal(registered(f), 2);
@@ -757,7 +755,7 @@ test('cleanup keeps a branch that moved or became a symbolic ref', async () => {
           location: join(f.base, change),
         }),
         (error) =>
-          rejects('Uncertain')(error) &&
+          isUncertain(error) &&
           (change === 'moved' ? /moved/ : /symbolic/).test((error as Error).message),
       );
       assert.ok(branches(f.git).includes('userbr'), 'the branch a symbolic ref names is kept');
@@ -782,7 +780,7 @@ test('a branch step that dies without a cancel (as at the time limit) is still c
         branch: 'killed',
         location: join(f.base, 'killed'),
       }),
-      rejects('Unavailable'),
+      isUnavailable,
     );
     assert.equal(branches(f.git).includes('killed'), false);
   } finally {

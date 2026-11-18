@@ -58,11 +58,6 @@ const effectNativeEdges: { files: string[]; allow: string[]; reason: string }[] 
     reason:
       "Following settles on the last of rapid active-file switches, in a React effect's cleanup.",
   },
-  {
-    files: ['packages/application/src/chat/chat-promises.ts'],
-    allow: ['runPromiseExit', 'AbortController'],
-    reason: 'Temporary: the Promise chat client, removed by #353.',
-  },
 ];
 
 export default defineConfig({

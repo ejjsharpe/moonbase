@@ -1,6 +1,5 @@
 import * as Schema from 'effect/Schema';
 import { Rpc, RpcGroup } from 'effect/rpc';
-import { CancelledError } from '@moonbase/contracts/errors';
 import { array, voidResult } from '@moonbase/contracts/schema';
 import {
   CheckoutTargetSchema,
@@ -17,22 +16,24 @@ import {
 } from '@moonbase/contracts/recovery-schema';
 import { IpcAdmission } from './ipc-admission.ts';
 import {
-  IpcApplicationErrorSchema,
   IpcAuthorityError,
   IpcInputError,
   NativeActionError,
-} from './ipc-errors.ts';
+} from '@moonbase/contracts/ipc-errors';
+import { workspaceServiceErrors } from './ipc-errors.ts';
 import { exact, RelativeCheckoutPathSchema } from './ipc-limits.ts';
 
 /** The editor's client ID, the only one its document may act as. */
 export const editorClientId = 'desktop-primary';
-const errors = [
-  IpcApplicationErrorSchema,
-  IpcInputError,
-  IpcAuthorityError,
-  CancelledError,
-] as const;
-const error = Schema.Union(errors);
+// Each procedure's errors: what its handler refuses, and what the workspace fails with.
+const union = <const E extends readonly Schema.Top[]>(errors: E) =>
+  Schema.Union([...new Set(errors)] as unknown as E);
+/** A workspace command or watch for something main never approved for this document. */
+const error = union([IpcAuthorityError, ...workspaceServiceErrors]);
+/** An operation's status or acknowledgement: also a malformed request identity. */
+const statusError = union([IpcAuthorityError, IpcInputError, ...workspaceServiceErrors]);
+/** A native import: also the native action's own refusals. */
+const importError = union([IpcAuthorityError, NativeActionError, ...workspaceServiceErrors]);
 /** A reply's schema on the wire: no reply is `Schema.Void`, which encodes as JSON. */
 const wire = <S extends Schema.Top>(schema: S) =>
   (schema === (voidResult as unknown) ? Schema.Void : schema) as S;
@@ -41,6 +42,12 @@ const command = <const K extends keyof typeof workspaceInputSchemas>(operation: 
     payload: exact(workspaceInputSchemas[operation]),
     success: wire(workspaceOutputSchemas[operation]),
     error,
+  });
+const statusCommand = <const K extends 'operationStatus' | 'acknowledgeOperation'>(operation: K) =>
+  Rpc.make(operation, {
+    payload: exact(workspaceInputSchemas[operation]),
+    success: wire(workspaceOutputSchemas[operation]),
+    error: statusError,
   });
 const recovery = <const K extends keyof typeof recoveryInputSchemas>(operation: K) =>
   Rpc.make(operation, {
@@ -72,8 +79,8 @@ export class EditorRpcs extends RpcGroup.make(
   command('searchText'),
   command('inspectEntries'),
   command('mutate'),
-  command('operationStatus'),
-  command('acknowledgeOperation'),
+  statusCommand('operationStatus'),
+  statusCommand('acknowledgeOperation'),
   recovery('loadRecovery'),
   recovery('openTab'),
   recovery('closeTab'),
@@ -93,10 +100,10 @@ export class EditorRpcs extends RpcGroup.make(
     stream: true,
   }),
   /** The native folder picker; the chosen root may then be opened once. */
-  Rpc.make('chooseCheckout', { success: Schema.NullOr(Schema.String), error }),
-  Rpc.make('chooseImports', { payload: checkout, success: imports, error }),
+  Rpc.make('chooseCheckout', { success: Schema.NullOr(Schema.String) }),
+  Rpc.make('chooseImports', { payload: checkout, success: imports, error: importError }),
   /** Finder files on the clipboard, after the user consents. */
-  Rpc.make('pasteImports', { payload: checkout, success: imports, error }),
+  Rpc.make('pasteImports', { payload: checkout, success: imports, error: importError }),
   Rpc.make('dropImports', {
     payload: exact(
       Schema.Struct({
@@ -108,7 +115,7 @@ export class EditorRpcs extends RpcGroup.make(
       }),
     ),
     success: imports,
-    error,
+    error: importError,
   }),
   /** Main writes the clipboard, so the renderer can put only checkout paths on it. */
   Rpc.make('copyPaths', {
@@ -122,10 +129,10 @@ export class EditorRpcs extends RpcGroup.make(
         relative: Schema.Boolean,
       }),
     ),
-    error,
+    error: union([IpcAuthorityError, IpcInputError]),
   }),
   Rpc.make('revealPath', {
     payload: exact(Schema.Struct({ ...checkoutField, path: RelativeCheckoutPathSchema })),
-    error: Schema.Union([...errors, NativeActionError]),
+    error: union([IpcAuthorityError, IpcInputError, NativeActionError]),
   }),
 ).middleware(IpcAdmission) {}

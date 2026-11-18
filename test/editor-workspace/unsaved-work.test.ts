@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ApplicationError, type FileTarget } from '@moonbase/contracts/workspace';
+import type { FileTarget } from '@moonbase/contracts/workspace';
+import { UncertainError } from '@moonbase/contracts/errors';
 import type { WorkspaceClient as EditorClient } from '@moonbase/application/testing/editor-fixture';
 import {
   answering,
@@ -106,7 +107,7 @@ test(
           requests.add((input as { requestId: string }).requestId);
           if (lose) {
             lose = false;
-            throw new ApplicationError({ code: 'Uncertain', message: 'Controlled reply loss' });
+            throw new UncertainError({ operation: 'saveFile' });
           }
         }
         return result;

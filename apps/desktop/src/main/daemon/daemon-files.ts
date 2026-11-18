@@ -5,7 +5,7 @@ import { Effect, Option } from 'effect';
 import * as Schema from 'effect/Schema';
 import { ChatSessionSchema } from '@moonbase/contracts/chat-schema';
 import { isPrivateTo } from '@moonbase/contracts/files';
-import { LocalDaemonError } from './local-daemon-errors.ts';
+import { LocalDaemonError } from '@moonbase/contracts/connection-errors';
 
 /** A local daemon's data directory inside a Moonbase user-data directory (one per profile). */
 export const findDaemonDirectory = (userData: string) => join(userData, 'daemon-v1');

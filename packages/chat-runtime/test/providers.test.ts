@@ -1,16 +1,19 @@
 import assert from 'node:assert/strict';
+import { type ErrorGroup, getErrorGroup } from '@moonbase/contracts/error-groups';
 import { test } from 'node:test';
 import { Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
-import { makeProviderSetupClient } from '@moonbase/application/chat/clients';
+import { makeProviderSetupCalls } from '@moonbase/application/testing/service-calls';
 import { ProviderSetupLive, inactiveProviderOwnerMs, localProviderIds } from '../src/providers.ts';
 import { ProviderSetupService } from '@moonbase/contracts/services';
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
 import { googleProvider } from '@earendil-works/pi-ai/providers/google';
 import { openrouterProvider } from '@earendil-works/pi-ai/providers/openrouter';
+/** Whether a failure means `group` for its request. */
+const inGroup = (group: ErrorGroup) => (error: unknown) => getErrorGroup(error) === group;
 
 test('maintained defaults and reasoning options match the pinned provider catalogs', async (t) => {
   const models = createModels({
@@ -41,7 +44,7 @@ test('maintained defaults and reasoning options match the pinned provider catalo
     }),
   );
   t.after(() => runtime.dispose());
-  const client = makeProviderSetupClient(runtime, 'defaults');
+  const client = makeProviderSetupCalls(runtime, 'defaults');
   const status = await client.command('getProviders', {});
   for (const provider of status.providers) {
     assert(provider.defaultModel, `Missing default for ${provider.id}`);
@@ -97,7 +100,7 @@ test('an unconfigured provider reports why its check failed, bounded for the sta
     }),
   );
   t.after(() => runtime.dispose());
-  const status = await makeProviderSetupClient(runtime, 'problem').command('getProviders', {});
+  const status = await makeProviderSetupCalls(runtime, 'problem').command('getProviders', {});
   const claude = status.providers.find((provider) => provider.id === 'claude-code')!;
   assert.equal(claude.configured, false);
   assert.match(claude.problem!, /^Claude Code status check failed \(exit 127\): é+$/);
@@ -176,8 +179,8 @@ test('provider-owned setup binds prompts and URLs to the live document, supports
     }),
   );
   t.after(() => runtime.dispose());
-  const client = makeProviderSetupClient(runtime, 'document-a'),
-    foreign = makeProviderSetupClient(runtime, 'document-b');
+  const client = makeProviderSetupCalls(runtime, 'document-a'),
+    foreign = makeProviderSetupCalls(runtime, 'document-b');
   let state = await client.command('startProviderLogin', { providerId: 'openai' });
   assert.equal(state.providers[0]!.defaultModel, undefined);
   const initial = state.flow!;
@@ -188,7 +191,7 @@ test('provider-owned setup binds prompts and URLs to the live document, supports
       promptId: initial.prompt.id,
       answer: 'browser',
     }),
-    { code: 'InvalidInput' },
+    inGroup('refusal'),
   );
   await client.command('answerProviderPrompt', {
     flowId: initial.id,
@@ -205,7 +208,7 @@ test('provider-owned setup binds prompts and URLs to the live document, supports
       promptId: initial.prompt.id,
       answer: 'browser',
     }),
-    { code: 'InvalidInput' },
+    inGroup('refusal'),
   );
   const prompt = state.flow!.prompt!;
   await client.command('answerProviderPrompt', {
@@ -222,9 +225,10 @@ test('provider-owned setup binds prompts and URLs to the live document, supports
   assert.equal(state.flow?.state, 'completed');
   assert.equal(state.providers.find((provider) => provider.id === 'openai')?.configured, true);
   assert(!/private-(?:code|access|refresh)/.test(JSON.stringify(state)));
-  await assert.rejects(client.command('openProviderUrl', { flowId: initial.id }), {
-    code: 'InvalidInput',
-  });
+  await assert.rejects(
+    client.command('openProviderUrl', { flowId: initial.id }),
+    inGroup('refusal'),
+  );
   state = await client.command('startProviderLogin', { providerId: 'openai-api-key' });
   const old = state.flow!;
   const service = await runtime.runPromise(ProviderSetupService);
@@ -235,7 +239,7 @@ test('provider-owned setup binds prompts and URLs to the live document, supports
       promptId: old.prompt!.id,
       answer: 'private-key',
     }),
-    { code: 'InvalidInput' },
+    inGroup('refusal'),
   );
   const second = await foreign.command('startProviderLogin', { providerId: 'anthropic' });
   assert.equal(
@@ -248,8 +252,8 @@ test('provider-owned setup binds prompts and URLs to the live document, supports
   );
   for (const operation of ['startProviderLogin', 'logoutProvider'] as const)
     await assert.rejects(foreign.command(operation, { providerId: 'claude-code' }), {
-      code: 'InvalidInput',
-      message: /claude auth login/,
+      _tag: 'ProviderSetupRefusedError',
+      reason: 'claude-code-sign-in',
     });
   await foreign.command('logoutProvider', { providerId: 'openai' });
   assert.equal(
@@ -302,12 +306,13 @@ test('a status failure unwinds a newly started login before returning an error w
     }),
   );
   t.after(() => runtime.dispose());
-  const client = makeProviderSetupClient(runtime, 'document');
+  const client = makeProviderSetupCalls(runtime, 'document');
   assert.equal((await client.command('getProviders', {})).flow, null);
   broken = true;
-  await assert.rejects(client.command('startProviderLogin', { providerId: 'openai' }), {
-    code: 'Unavailable',
-  });
+  await assert.rejects(
+    client.command('startProviderLogin', { providerId: 'openai' }),
+    inGroup('unavailable'),
+  );
   assert.equal(signal?.aborted, true);
   broken = false;
   assert.equal((await client.command('getProviders', {})).flow, null);
@@ -372,7 +377,7 @@ test('one sign-in per provider at a time, and owners that went quiet or exceed t
   );
   const advance = (ms: number) => runtime.runPromise(TestClock.adjust(ms));
   t.after(() => runtime.dispose());
-  const owner = (id: string) => makeProviderSetupClient(runtime, id);
+  const owner = (id: string) => makeProviderSetupCalls(runtime, id);
   const flowOf = async (id: string) => (await owner(id).command('getProviders', {})).flow;
 
   // A client that restarted under a new owner takes over the provider's sign-in.
@@ -418,8 +423,8 @@ test('one sign-in per provider at a time, and owners that went quiet or exceed t
   for (let index = 0; index < 300; index++)
     await runtime.runPromise(providers.releaseOwner(`released-${index}`));
   await assert.rejects(owner('released-299').command('getProviders', {}), {
-    code: 'InvalidInput',
-    message: 'The owning document was released.',
+    _tag: 'ProviderSetupRefusedError',
+    reason: 'owner-released',
   });
   assert.equal(await flowOf('released-0'), null);
 });

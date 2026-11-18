@@ -3,9 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Effect, ManagedRuntime } from 'effect';
 import { WorkspaceHostService } from '@moonbase/contracts/services';
-import { isWorkspaceHostError, toWireError } from '@moonbase/contracts/workspace-host-errors';
 import { makeWorkspaceClient } from './workspace-client-fixture.ts';
-import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
+import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { initRepository } from './repository-fixture.ts';
 
@@ -40,11 +39,6 @@ export function fixture() {
     },
   };
 }
-/** Whether `error` is, or a host error sent as, the wire error with `code`. */
-export const rejects = (code: ApplicationError['code']) => (error: unknown) => {
-  const wire = isWorkspaceHostError(error) ? toWireError(error) : error;
-  return wire instanceof ApplicationError && wire.code === code;
-};
 /** Captures native files through the host, as a native picker's owner does. */
 export const captureNative = (input: {
   checkout: CheckoutTarget;
@@ -53,13 +47,10 @@ export const captureNative = (input: {
 }) =>
   Effect.flatMap(WorkspaceHostService, (host) =>
     Effect.map(host.captureImports(input), (captured) => captured.references),
-  ).pipe(Effect.mapError(toWireError));
+  );
 /** Releases captured native files through the host. */
 export const releaseNative = (input: {
   checkout: CheckoutTarget;
   clientId: string;
   references: string[];
-}) =>
-  Effect.flatMap(WorkspaceHostService, (host) => host.releaseImports(input)).pipe(
-    Effect.mapError(toWireError),
-  );
+}) => Effect.flatMap(WorkspaceHostService, (host) => host.releaseImports(input));

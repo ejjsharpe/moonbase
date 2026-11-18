@@ -3,11 +3,7 @@ import { before, test } from 'node:test';
 import { build, type Metafile } from 'esbuild';
 import * as Schema from 'effect/Schema';
 import { fileURLToPath } from 'node:url';
-import {
-  ApplicationError,
-  type CommandInput,
-  type CommandOutput,
-} from '@moonbase/contracts/workspace';
+import type { CommandInput, CommandOutput } from '@moonbase/contracts/workspace';
 import {
   decodeWorkspaceInput,
   decodeWorkspaceOutput,
@@ -23,7 +19,6 @@ import {
   decodeConnectionSnapshot,
   isConnectionCommand,
 } from '@moonbase/contracts/connection-schema';
-import { decodeApplicationErrorDTO } from '@moonbase/contracts/error-schema';
 import { UncertainError } from '@moonbase/contracts/errors';
 import { decodeChatHostHealth } from '@moonbase/contracts/host-schema';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
@@ -143,7 +138,7 @@ for (const operation of Object.keys(inputs) as FileCommand[]) {
     assert.deepEqual(decodeWorkspaceOutput(operation, outputs[operation]), expected);
     assert.throws(
       () => decodeWorkspaceInput(operation, { ...inputs[operation], unknown: 'secret' }),
-      (e) => ApplicationError.is(e) && e.code === 'InvalidInput' && !e.message.includes('secret'),
+      (e) => Schema.isSchemaError(e) && !e.message.includes('secret'),
     );
   });
 }
@@ -242,38 +237,6 @@ test('connection and health decoders preserve states, void, order, and configura
   ])
     assert.throws(() => decodeChatHostHealth({ ...health, ...changed }));
 });
-test('error DTOs decode strictly without authenticating a plain value as ApplicationError', () => {
-  const dto = { code: 'Uncertain', message: '', target };
-  const decoded = decodeApplicationErrorDTO(dto);
-  assert.deepEqual(decoded, dto);
-  assert.equal(ApplicationError.is(decoded), false);
-  for (const bad of [
-    { ...dto, extra: true },
-    { ...dto, code: 'unknown' },
-    { ...dto, target: { ...target, extra: 'secret' } },
-  ])
-    assert.throws(
-      () => decodeApplicationErrorDTO(bad),
-      (e) => ApplicationError.is(e) && e.code === 'Incompatible' && !e.message.includes('secret'),
-    );
-});
-test('ApplicationError round-trips through its schema and rejects an unknown code', () => {
-  const error = new ApplicationError({ code: 'Conflict', message: 'Changed on disk', target });
-  const encoded = Schema.encodeSync(ApplicationError)(error);
-  assert.deepEqual(encoded, {
-    _tag: 'ApplicationError',
-    code: 'Conflict',
-    message: 'Changed on disk',
-    target,
-  });
-  const decoded = Schema.decodeUnknownSync(ApplicationError)(encoded);
-  assert(ApplicationError.is(decoded));
-  assert.deepEqual(
-    [decoded.code, decoded.message, decoded.target],
-    [error.code, error.message, target],
-  );
-  assert.throws(() => Schema.decodeUnknownSync(ApplicationError)({ ...encoded, code: 'unknown' }));
-});
 test('a shared outcome error round-trips and builds its message from its fields', () => {
   const error = new UncertainError({ operation: 'Save', target });
   const decoded = Schema.decodeUnknownSync(UncertainError)(
@@ -283,7 +246,7 @@ test('a shared outcome error round-trips and builds its message from its fields'
   assert.deepEqual(decoded.target, target);
   assert.match(decoded.message, /^Save /);
 });
-const bundled = ['workspace-schema', 'connection-schema', 'host-schema', 'error-schema'];
+const bundled = ['workspace-schema', 'connection-schema', 'host-schema', 'error-groups'];
 // One build of every entry; each entry's graph is the files reachable from it.
 let metafile: Metafile;
 before(async () => {

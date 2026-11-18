@@ -1,54 +1,51 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Effect, Fiber, Stream } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/errors';
-import type { ChatClient, ChatListUpdate } from '@moonbase/contracts/chat';
-import type { ConnectionClient } from '@moonbase/contracts/connection';
-import type { ProviderSetupClient, ProviderState } from '@moonbase/contracts/providers';
-import { fakeChatTargets, makeIpcFixture, waitFor } from './fixtures/ipc-fixture.ts';
+import { UncertainError } from '@moonbase/contracts/errors';
+import type { ChatListUpdate } from '@moonbase/contracts/chat';
+import type { ProviderState } from '@moonbase/contracts/providers';
+import type {
+  ChatServiceShape,
+  ConnectionServiceShape,
+  ProviderSetupHandlers,
+  ProviderSetupService,
+} from '@moonbase/contracts/services';
+import {
+  fakeChatTargets,
+  fakeService,
+  makeIpcFixture,
+  waitFor,
+  watched,
+} from './fixtures/ipc-fixture.ts';
 
 const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' };
 const target = { ...context, conversationId: 'chat' };
-const waitForAbort = (signal: AbortSignal | undefined) =>
-  new Promise<never>((_resolve, reject) =>
-    signal?.addEventListener('abort', () =>
-      reject(new ApplicationError({ code: 'Cancelled', message: 'Cancelled' })),
-    ),
-  );
 /** A local target and a remote one, whose chat, provider and connection calls are recorded. */
 async function chatFixture(
-  options: { providers?: ProviderSetupClient; quitting?: () => boolean } = {},
+  options: { providers?: Partial<ProviderSetupService['Service']>; quitting?: () => boolean } = {},
 ) {
   const calls: { operation: string; input: unknown }[] = [];
-  const watched: Record<string, (value: unknown) => void> = {};
+  const watched_: Record<string, (value: unknown) => void> = {};
   let closes = 0;
-  const chat: ChatClient = {
-    command: async (operation, input, options) => {
-      calls.push({ operation, input });
-      if (operation === 'sendChat')
-        throw new ApplicationError({ code: 'Uncertain', message: 'Admission reply lost' });
-      if (operation === 'getChatHistory') return waitForAbort(options?.signal);
-      return null as never;
-    },
-    watch: (_input, receive) => {
-      watched.chat = receive as never;
-      return async () => void closes++;
-    },
-    watchChatList: (_input, receive) => {
-      watched.chatList = receive as never;
-      return async () => void closes++;
-    },
+  const record = (operation: string, input: unknown) =>
+    Effect.sync(() => void calls.push({ operation, input }));
+  /** A watch whose receiver is kept under `name`, counting its close. */
+  const watch = (name: string) => () =>
+    watched<never>((receive) => {
+      watched_[name] = receive as never;
+      return () => void closes++;
+    });
+  const chat: Partial<ChatServiceShape> = {
+    sendChat: (input) =>
+      Effect.andThen(
+        record('sendChat', input),
+        Effect.fail(new UncertainError({ operation: 'sendChat' })),
+      ),
+    getChatHistory: (input) => Effect.andThen(record('getChatHistory', input), Effect.never),
+    watch: watch('chat'),
+    watchChatList: watch('chatList'),
   };
-  const connection: ConnectionClient = {
-    command: async (operation, input) => {
-      calls.push({ operation, input });
-      return undefined as never;
-    },
-    watch: (receive) => {
-      watched.connection = receive as never;
-      return async () => void closes++;
-    },
-  };
+  const connection: Partial<ConnectionServiceShape> = { watch: watch('connection') };
   const f = await makeIpcFixture({
     chat: {
       backends: {
@@ -64,7 +61,7 @@ async function chatFixture(
   return {
     f,
     calls,
-    watched,
+    watched: watched_,
     get closes() {
       return closes;
     },
@@ -107,24 +104,26 @@ test('a chat request reaches its target only for the configured host and actor, 
   }
 });
 
-test('a Send keeps its exact payload and Uncertain outcome; provider replies keep only their schema', async () => {
+test('a Send keeps its exact payload and uncertain outcome; provider replies keep only their schema', async () => {
   let state: unknown = { providers: [], flow: null, privateToken: 'private' };
-  const providers: ProviderSetupClient = {
-    command: async () => state as ProviderState,
-    watch: () => async () => {},
+  const providers: Partial<ProviderSetupService['Service']> = {
+    forOwner: () =>
+      fakeService<ProviderSetupHandlers>('Provider setup', {
+        getProviders: () => Effect.sync(() => state as ProviderState),
+      }),
   };
   const { f, calls } = await chatFixture({ providers });
   try {
     const { chat, providers: setup } = await f.ports('local');
     const input = { target, requestId: 'original', text: 'captured' };
-    await assert.rejects(Effect.runPromise(chat.sendChat(input)), { code: 'Uncertain' });
+    await assert.rejects(Effect.runPromise(chat.sendChat(input)), { _tag: 'UncertainError' });
     assert.deepEqual(calls, [{ operation: 'sendChat', input }]);
     assert.deepEqual(await Effect.runPromise(setup.getProviders({})), {
       providers: [],
       flow: null,
     });
     state = { providers: [], flow: { id: 'incomplete' } };
-    await assert.rejects(Effect.runPromise(setup.getProviders({})), { code: 'Incompatible' });
+    await assert.rejects(Effect.runPromise(setup.getProviders({})), { _tag: 'IpcReplyError' });
   } finally {
     await f.dispose();
   }

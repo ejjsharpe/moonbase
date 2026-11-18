@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { Effect, Fiber, FiberSet, Option, Semaphore } from 'effect';
 import { LRUCache } from 'lru-cache';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { TranscriptNativeError } from '../../ipc/ipc-errors.ts';
 import type { TranscriptImage } from '../../ipc/chat-rpcs.ts';
 import { transcriptImagePath, type TranscriptImageReader } from './transcript-native.ts';
 
@@ -29,7 +29,7 @@ export type TranscriptImages = {
  * them all and cancels their reads.
  */
 export const makeTranscriptImages = (
-  read: (image: TranscriptImage) => Effect.Effect<Uint8Array<ArrayBuffer>, ApplicationError>,
+  read: (image: TranscriptImage) => Effect.Effect<Uint8Array<ArrayBuffer>, unknown>,
   /** lru-cache clock for image URL expiry; tests inject one. */
   perf?: { now(): number },
 ) =>
@@ -49,7 +49,7 @@ export const makeTranscriptImages = (
     const permits = yield* Semaphore.make(maximumImageReads);
     /** A place for each read running or waiting; one asked for when none is free is busy. */
     const places = yield* Semaphore.make(maximumImageReads + maximumQueuedImageReads);
-    const reads = yield* FiberSet.make<Uint8Array<ArrayBuffer>, ApplicationError>();
+    const reads = yield* FiberSet.make<Uint8Array<ArrayBuffer>, unknown>();
     yield* Effect.addFinalizer(() => Effect.sync(() => images.clear()));
     const readImage = (image: TranscriptImage) =>
       places
@@ -61,10 +61,7 @@ export const makeTranscriptImages = (
         .pipe(
           Effect.flatMap(
             Option.match({
-              onNone: () =>
-                Effect.fail(
-                  new ApplicationError({ code: 'Unavailable', message: 'Image reads are busy.' }),
-                ),
+              onNone: () => Effect.fail(new TranscriptNativeError({ problem: 'images-busy' })),
               onSome: Effect.succeed,
             }),
           ),

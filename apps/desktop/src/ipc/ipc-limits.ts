@@ -26,7 +26,7 @@ export const ipcLimits = {
   arrayLength: 8192,
   /** `getIgnoredPaths` asks about a whole folder listing. */
   ignoredPathsLength: 20000,
-  /** An error's message as it crosses IPC, either way. */
+  /** A cleanup failure's text (`WindowFailure`), as the window and main report it to each other. */
   errorMessageLength: 512,
 } as const;
 

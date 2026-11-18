@@ -1,5 +1,4 @@
 import * as Schema from 'effect/Schema';
-import { ApplicationError } from './errors.ts';
 import { array, optional, struct, voidResult } from './schema.ts';
 import { ChatHostTargetSchema, ChatIdentifierSchema } from './host-schema.ts';
 import { ChatTargetSchema } from './chat-schema.ts';
@@ -142,21 +141,13 @@ export function decodeDaemonInput<K extends DaemonCommand>(
   operation: K,
   value: unknown,
 ): DaemonInput<K> {
-  try {
-    if (!isDaemonCommand(operation)) throw Error();
-    return inputs[operation](value) as DaemonInput<K>;
-  } catch {
-    throw new ApplicationError({ code: 'InvalidInput', message: 'Invalid daemon input.' });
-  }
+  if (!isDaemonCommand(operation)) throw new TypeError('Unknown command.');
+  return inputs[operation](value) as DaemonInput<K>;
 }
 export function decodeDaemonOutput<K extends DaemonCommand>(
   operation: K,
   value: unknown,
 ): DaemonOutput<K> {
-  try {
-    if (!isDaemonCommand(operation)) throw Error();
-    return outputs[operation](value) as DaemonOutput<K>;
-  } catch {
-    throw new ApplicationError({ code: 'Incompatible', message: 'Invalid daemon reply.' });
-  }
+  if (!isDaemonCommand(operation)) throw new TypeError('Unknown command.');
+  return outputs[operation](value) as DaemonOutput<K>;
 }

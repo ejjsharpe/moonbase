@@ -1019,7 +1019,7 @@ if (!packaged) {
         if (failure === 'chat-context') {
           // Main's reason reaches the renderer through the context bridge.
           await expect(p.getByLabel('Chat configuration')).toContainText(
-            'Controlled chat context initialization failure',
+            'Moonbase could not start or reach its local daemon.',
           );
           await local(p, app, f);
           await expect(p.getByRole('alert', { name: 'Chat initialization failed' })).toBeVisible();
@@ -1027,7 +1027,7 @@ if (!packaged) {
           await expect.poll(() => readFile(join(f.cwd, 'a.ts'), 'utf8')).toBe('local dirty draft');
           await tab(p, 'Agents').click();
           await expect(p.getByLabel('Chat configuration')).toContainText(
-            'Controlled chat context initialization failure',
+            'Moonbase could not start or reach its local daemon.',
           );
           expect(await reloadOutcome(app)).toBe('veto');
           await app.evaluate(({ app }) => app.quit());

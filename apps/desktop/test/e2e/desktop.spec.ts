@@ -576,7 +576,7 @@ test('native picker creates scoped single-use tokens through the actual bridge; 
   expect(readFileSync(join(checkout, 'imported.txt'), 'utf8')).toBe('CONTROLLED NATIVE IMPORT');
   const reused = await importAs('reused.txt', refs);
   expect(reused.ok).toBe(false);
-  expect(reused.error?.code).toBe('Unauthorized');
+  expect(reused.error).toMatchObject({ _tag: 'CheckoutAccessError' });
   expect(existsSync(join(checkout, 'reused.txt'))).toBe(false);
   // A dropped file's path comes from the preload's webUtils: a File the page made has none.
   const pathsOf = (selector?: string) =>

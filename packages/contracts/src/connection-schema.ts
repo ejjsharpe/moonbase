@@ -1,5 +1,4 @@
 import * as Schema from 'effect/Schema';
-import { ApplicationError } from './errors.ts';
 import type { ConnectionCommand, ConnectionInput, ConnectionOutput } from './connection.ts';
 import { ChatHostHealthSchema, ChatHostTargetSchema, ChatIdentifierSchema } from './host-schema.ts';
 import { optional, struct, voidResult } from './schema.ts';
@@ -66,37 +65,21 @@ export function decodeConnectionInput<K extends ConnectionCommand>(
   operation: K,
   value: unknown,
 ): ConnectionInput<K> {
-  try {
-    if (!isConnectionCommand(operation)) throw Error();
-    return inputs[operation](value) as ConnectionInput<K>;
-  } catch {
-    throw new ApplicationError({ code: 'InvalidInput', message: 'Invalid connection input.' });
-  }
+  if (!isConnectionCommand(operation)) throw new TypeError('Unknown command.');
+  return inputs[operation](value) as ConnectionInput<K>;
 }
 export function decodeConnectionOutput<K extends ConnectionCommand>(
   operation: K,
   value: unknown,
 ): ConnectionOutput<K> {
-  try {
-    if (!isConnectionCommand(operation)) throw Error();
-    return outputs[operation](value) as ConnectionOutput<K>;
-  } catch {
-    throw new ApplicationError({ code: 'Incompatible', message: 'Invalid connection reply.' });
-  }
+  if (!isConnectionCommand(operation)) throw new TypeError('Unknown command.');
+  return outputs[operation](value) as ConnectionOutput<K>;
 }
 const profile = Schema.decodeUnknownSync(ConnectionProfileSchema, { reportInput: false });
 const snapshot = Schema.decodeUnknownSync(ConnectionSnapshotSchema, { reportInput: false });
 export function decodeConnectionProfile(value: unknown): typeof ConnectionProfileSchema.Type {
-  try {
-    return profile(value);
-  } catch {
-    throw new ApplicationError({ code: 'InvalidInput', message: 'Invalid connection profile.' });
-  }
+  return profile(value);
 }
 export function decodeConnectionSnapshot(value: unknown): typeof ConnectionSnapshotSchema.Type {
-  try {
-    return snapshot(value);
-  } catch {
-    throw new ApplicationError({ code: 'Incompatible', message: 'Invalid connection snapshot.' });
-  }
+  return snapshot(value);
 }

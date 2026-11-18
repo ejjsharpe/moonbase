@@ -1,13 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Effect, Fiber, Stream } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/errors';
-import {
-  streamTranscriptSource,
-  defaultTranscriptLimits,
-  type TranscriptRead,
-} from '@moonbase/application/chat';
-import type { ChatClient } from '@moonbase/contracts/chat';
+import { ChatAccessError } from '@moonbase/contracts/chat-errors';
+import { HostUnavailableError } from '@moonbase/contracts/host-errors';
+import { streamTranscriptSource, defaultTranscriptLimits } from '@moonbase/application/chat';
 import { maximumChatReplyBytes } from '@moonbase/contracts/chat';
 import type { ChatSnapshot, ChatTranscriptSource } from '@moonbase/contracts/chat';
 import type { TranscriptLimits, TranscriptState } from '@moonbase/application/chat';
@@ -32,14 +28,6 @@ const collect = <E>(stream: Stream.Stream<{ data: string }, E>) =>
       (text, chunk) => text + chunk.data,
     ),
   );
-/** Reads through the fixture's chat client, interrupting a read by its signal. */
-const readFrom =
-  (chat: ChatClient): TranscriptRead<unknown> =>
-  (input) =>
-    Effect.tryPromise({
-      try: (signal) => chat.command('getChatTranscriptContent', input, { signal }),
-      catch: (error) => error,
-    });
 const serialized = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 /** Published summaries and content stay within their budgets. */
 function assertBounds(state: TranscriptState, limits: TranscriptLimits = defaultTranscriptLimits) {
@@ -154,14 +142,10 @@ test('cloned live-only DTOs preserve summary/part/cache identity and unrelated r
   await f.publish(structuredClone(value));
   assert.equal(f.state, before);
   assert.equal(f.publications, publications);
-  await f.transcript.fail(
-    new ApplicationError({
-      code: 'Unauthorized',
-      message: 'authority revoked',
-    }),
-  );
+  const revoked = new ChatAccessError({ refusal: 'other-owner' });
+  await f.transcript.fail(revoked);
   assert.equal(f.state.observation, 'failed');
-  assert.equal(f.state.error, 'authority revoked');
+  assert.equal(f.state.error, revoked.message);
   assert.equal(await f.transcript.failed(), true);
   assert(f.publications > publications);
 });
@@ -181,7 +165,7 @@ test("Load more parts reads a source's first manifest page and then its next, bu
   let reads = 0;
   f.handlers.set('getChatTranscriptContent', async () => {
     reads++;
-    throw new ApplicationError({ code: 'Unavailable', message: 'held network failed' });
+    throw new HostUnavailableError({ reason: 'failed' });
   });
   await f.transcript.loadMoreParts(second);
   assert.equal(reads, 1);
@@ -198,10 +182,7 @@ test('selected manifest hydration advances and retries errors; content validates
   await f.transcript.loadManifest(source);
   assert.equal(f.state.manifest!.parts.length, 32);
   f.handlers.set('getChatTranscriptContent', async () => {
-    throw new ApplicationError({
-      code: 'Unavailable',
-      message: 'held network failed',
-    });
+    throw new HostUnavailableError({ reason: 'failed' });
   });
   await f.transcript.loadManifest(source);
   assert.equal(f.state.manifest!.status, 'error');
@@ -216,7 +197,7 @@ test('selected manifest hydration advances and retries errors; content validates
   f.sources.set(JSON.stringify(source), { source, data: [data] });
   await f.transcript.loadPart(source, chosen);
   assert.equal(f.state.content[0].loadedBytes, 32768);
-  // A short terminal chunk is rejected by the ChatClient boundary's reply schema.
+  // A short terminal chunk is rejected by the port boundary's reply schema.
   for (const corrupt of ['offset', 'target', 'revision'] as const) {
     f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) => {
       const reply = structuredClone(fallback()) as ContentReply;
@@ -251,7 +232,7 @@ test('one oversized part stays incrementally readable within the LRU; complete-s
   assert.equal(
     await collect(
       streamTranscriptSource({
-        read: readFrom(f.chat),
+        read: f.read,
         source,
         selection: chosen,
       }),
@@ -269,10 +250,7 @@ test('summary byte and record budgets include hydrated descriptors and envelopes
   const state = f.state;
   assertBounds(state, f.limits);
   assert(state.manifest!.omittedParts > 0);
-  assert.equal(
-    await collect(streamTranscriptSource({ read: readFrom(f.chat), source })),
-    data.join(''),
-  );
+  assert.equal(await collect(streamTranscriptSource({ read: f.read, source })), data.join(''));
 });
 
 test('closing the transcript aborts a held read at once, and its late reply never lands', async (t) => {
@@ -332,7 +310,7 @@ test('complete-source stream works with injected reads, reports progress, stops 
   assert.equal(
     await collect(
       streamTranscriptSource({
-        read: readFrom(f.chat),
+        read: f.read,
         source,
         onProgress: (value) => progress.push(value.bytes),
       }),
@@ -347,7 +325,7 @@ test('complete-source stream works with injected reads, reports progress, stops 
     return Promise.withResolvers<never>().promise;
   });
   const reading = Effect.runFork(
-    Stream.runDrain(streamTranscriptSource({ read: readFrom(f.chat), source, selection: chosen })),
+    Stream.runDrain(streamTranscriptSource({ read: f.read, source, selection: chosen })),
   );
   await entered.promise;
   await Effect.runPromise(Fiber.interrupt(reading));
@@ -359,7 +337,7 @@ test('complete-source stream works with injected reads, reports progress, stops 
   await assert.rejects(
     collect(
       streamTranscriptSource({
-        read: readFrom(f.chat),
+        read: f.read,
         source,
         selection: chosen,
       }),
@@ -376,7 +354,7 @@ test('complete-source stream works with injected reads, reports progress, stops 
   await assert.rejects(
     collect(
       streamTranscriptSource({
-        read: readFrom(f.chat),
+        read: f.read,
         source: liveSource,
         selection: chosen,
       }),
@@ -385,9 +363,9 @@ test('complete-source stream works with injected reads, reports progress, stops 
   );
 });
 
-// The fixture client is trusted: the chat runtime's ChatClient services own decoding and size bounds
+// The fixture client is trusted: the chat runtime's services own decoding and size bounds
 // and test them. Shared code checks only meaning.
-test('trusted ChatClient replies and snapshots are not decoded or size-bounded again', async (t) => {
+test('trusted port replies and snapshots are not decoded or size-bounded again', async (t) => {
   const f = await transcriptHarness(t, 1);
   const source = f.entries[0].transcript!.source,
     chosen = selection(f.entries[0].transcript!.parts[0]),
@@ -396,10 +374,7 @@ test('trusted ChatClient replies and snapshots are not decoded or size-bounded a
     ...(fallback() as object),
     padding,
   }));
-  assert.equal(
-    await collect(streamTranscriptSource({ read: readFrom(f.chat), source })),
-    'same text',
-  );
+  assert.equal(await collect(streamTranscriptSource({ read: f.read, source })), 'same text');
   await f.transcript.loadManifest(source, true);
   assert.equal(f.state.manifest!.status, 'complete');
   await f.transcript.loadPart(source, chosen, true);
@@ -413,15 +388,12 @@ test('trusted ChatClient replies and snapshots are not decoded or size-bounded a
   await assert.rejects(
     collect(
       streamTranscriptSource({
-        read: readFrom(f.chat),
+        read: f.read,
         source,
         selection: chosen,
       }),
     ),
-    {
-      code: 'Incompatible',
-      message: 'Transcript reply does not match the captured selection.',
-    },
+    { _tag: 'TranscriptReadError', problem: 'reply-mismatch' },
   );
 });
 
@@ -519,10 +491,7 @@ test('complete iteration rejects a manifest continuation cycle', async (t) => {
       thinking: 'none',
     };
   });
-  await assert.rejects(
-    collect(streamTranscriptSource({ read: readFrom(f.chat), source })),
-    /advance/,
-  );
+  await assert.rejects(collect(streamTranscriptSource({ read: f.read, source })), /advance/);
 });
 
 test('changed entry descriptors invalidate relevant hydration', async (t) => {
@@ -549,7 +518,7 @@ test('a source stream captures its source before the first pull', async (t) => {
   const injectedSource = structuredClone(f.entries[0].transcript!.source);
   const injected = streamTranscriptSource({
     source: injectedSource,
-    read: readFrom(f.chat),
+    read: f.read,
   });
   if (injectedSource.kind === 'entry') injectedSource.entryId = 'mutated';
   assert.equal(await collect(injected), 'same text');
@@ -628,18 +597,14 @@ test('terminal onError invalidates completed live hydration even when a local wa
   await f.transcript.loadManifest(source);
   await f.transcript.loadPart(source, chosen);
   assert.equal(f.state.content[0].status, 'complete');
-  await f.transcript.fail(
-    new ApplicationError({
-      code: 'Unauthorized',
-      message: 'authority revoked',
-    }),
-  );
+  const revoked = new ChatAccessError({ refusal: 'other-owner' });
+  await f.transcript.fail(revoked);
   assert.equal(f.state.content[0].status, 'source-changed');
   assert.equal(f.state.manifest!.status, 'source-changed');
   const calls = f.calls.length;
   await f.transcript.loadPart(source, chosen);
   assert.equal(f.calls.length, calls);
-  assert.equal(f.state.error, 'authority revoked');
+  assert.equal(f.state.error, revoked.message);
 });
 
 test('history traverses every entry backward and forward across summary eviction', async (t) => {
@@ -811,11 +776,7 @@ for (const replacement of ['around', 'latest'] as const)
         if ((raw as { entryId: string }).entryId === 'e32') {
           oldEntered.resolve();
           await oldHeld.promise;
-          if (oldOutcome === 'error')
-            throw new ApplicationError({
-              code: 'Unavailable',
-              message: 'obsolete history failed',
-            });
+          if (oldOutcome === 'error') throw new HostUnavailableError({ reason: 'failed' });
         } else {
           newEntered.resolve();
           await newHeld.promise;
@@ -850,16 +811,11 @@ for (const replacement of ['around', 'latest'] as const)
         await old;
         assert.equal(f.state, loading, 'old cancellation/finally cannot clear newer loading');
         assert.equal(loading.loading, true);
-        newHeld.reject(
-          new ApplicationError({
-            code: 'Unavailable',
-            message: 'newer navigation failed',
-          }),
-        );
+        newHeld.reject(new HostUnavailableError({ reason: 'reply-lost' }));
         await current;
         const failed = f.state;
         assert.equal(failed.loading, false);
-        assert.match(failed.error!, /newer navigation failed/);
+        assert.equal(failed.error, new HostUnavailableError({ reason: 'reply-lost' }).message);
         oldHeld.resolve();
         await tick();
         assert.equal(f.state, failed, 'old settlement cannot clear newer error or merge its page');
@@ -934,12 +890,8 @@ test('navigation at an unavailable boundary or failed observation does not move 
   await f.transcript.showEarlier();
   assert.equal(f.state, beginning);
   assert.equal(f.calls.length, reads);
-  await f.transcript.fail(
-    new ApplicationError({
-      code: 'Unauthorized',
-      message: 'observation authority revoked',
-    }),
-  );
+  const revoked = new ChatAccessError({ refusal: 'other-owner' });
+  await f.transcript.fail(revoked);
   const failed = f.state;
   await f.transcript.showEarlier();
   await f.transcript.showLater();
@@ -947,7 +899,7 @@ test('navigation at an unavailable boundary or failed observation does not move 
   await f.transcript.jumpToLatest();
   assert.equal(f.state, failed);
   assert.equal(f.calls.length, reads);
-  assert.match(failed.error!, /observation authority revoked/);
+  assert.equal(failed.error, revoked.message);
 });
 
 test('large part manifests release descriptors before evicting navigable history', async (t) => {
@@ -1009,11 +961,7 @@ for (const outcome of ['success', 'error'] as const)
       const reply = fallback();
       entered.resolve();
       await held.promise;
-      if (outcome === 'error')
-        throw new ApplicationError({
-          code: 'Unavailable',
-          message: 'obsolete restore failed',
-        });
+      if (outcome === 'error') throw new HostUnavailableError({ reason: 'failed' });
       return reply;
     });
     try {
@@ -1051,14 +999,11 @@ test('Retry after a failed view restore keeps the saved offset; other jumps plac
   f.handlers.set('getChatHistoryAround', async (_raw, _signal, fallback) => {
     if (failed) return fallback();
     failed = true;
-    throw new ApplicationError({
-      code: 'Unavailable',
-      message: 'Controlled restore failure',
-    });
+    throw new HostUnavailableError({ reason: 'reply-lost' });
   });
   await f.transcript.restoreView();
   let state = f.state;
-  assert.match(state.error ?? '', /Controlled restore failure/);
+  assert.equal(state.error, new HostUnavailableError({ reason: 'reply-lost' }).message);
   assert(!state.entries.some((entry) => entry.id === 'e100'));
   assert.deepEqual(state.view.anchor, { key: 'entry:e100', offset: 37 });
   // Retry jumps to the saved anchor's entry, which isn't retained.
@@ -1117,10 +1062,7 @@ test('a reconnecting snapshot cancels an evicted live part read without an error
     if ((raw as { source: ChatTranscriptSource }).source.kind !== 'live') return fallback();
     signal = abort;
     await held.promise;
-    throw new ApplicationError({
-      code: 'Unavailable',
-      message: 'late live failure',
-    });
+    throw new HostUnavailableError({ reason: 'failed' });
   });
   const pending = f.transcript.loadPart(transcript.source, selection(transcript.parts[0]));
   await until(() => !!signal);

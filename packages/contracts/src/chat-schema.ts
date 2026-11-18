@@ -2,7 +2,6 @@ import * as Schema from 'effect/Schema';
 import { struct, optional } from './schema.ts';
 import { ChatIdentifierSchema, ChatHostTargetSchema } from './host-schema.ts';
 export { ChatIdentifierSchema, ChatHostTargetSchema } from './host-schema.ts';
-import { ApplicationError } from './errors.ts';
 import { IncompatibleHostError } from './host-errors.ts';
 import {
   chatPageSize,
@@ -273,17 +272,6 @@ export const ChatSnapshotSchema = struct({
   transcriptBoundary: Schema.NullOr(ChatIdentifierSchema),
   observationStatus: optional(Schema.Literals(['connected', 'reconnecting'])),
 });
-/** Error codes a daemon may sign in a reply or a subscription's end. */
-export const chatReplyErrorCodes = [
-  'InvalidInput',
-  'Unauthorized',
-  'Incompatible',
-  'Conflict',
-  'Persistence',
-  'Unavailable',
-  'Cancelled',
-  'Uncertain',
-] as const;
 const receipt = { target: ChatTargetSchema, requestId: ChatIdentifierSchema };
 export const ChatSendReceiptSchema = Schema.Union([
   struct({ ...receipt, admission: Schema.Literal('reserved'), submissionId: Schema.Null }),
@@ -443,19 +431,15 @@ export const isChatCommand = (value: unknown): value is ChatCommand =>
   typeof value === 'string' && Object.hasOwn(chatInputSchemas, value);
 
 export function decodeChatInput<K extends ChatCommand>(operation: K, value: unknown): ChatInput<K> {
-  try {
-    if (!isChatCommand(operation)) throw Error('Unknown command');
-    return inputs[operation](value) as ChatInput<K>;
-  } catch {
-    throw new ApplicationError({ code: 'InvalidInput', message: 'Invalid chat input.' });
-  }
+  if (!isChatCommand(operation)) throw new TypeError('Unknown command.');
+  return inputs[operation](value) as ChatInput<K>;
 }
 export function decodeChatOutput<K extends ChatCommand>(
   operation: K,
   value: unknown,
 ): ChatOutput<K> {
   try {
-    if (!isChatCommand(operation)) throw Error('Unknown command');
+    if (!isChatCommand(operation)) throw new TypeError('Unknown command.');
     return outputs[operation](value) as ChatOutput<K>;
   } catch {
     throw new IncompatibleHostError({ reason: 'invalid-reply' });

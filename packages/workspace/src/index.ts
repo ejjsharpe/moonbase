@@ -1,7 +1,6 @@
 import { Context, Effect, Layer } from 'effect';
 import { WorkspaceHostService, WorkspaceService } from '@moonbase/contracts/services';
 import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
-import type { ApplicationError } from '@moonbase/contracts/workspace';
 import { makeClientWorkspace } from './client/client.ts';
 import { attempt } from './attempt.ts';
 import { asWorkspaceError } from './owned-work.ts';
@@ -9,7 +8,7 @@ import { ClientStore } from './client/client-store.ts';
 import { decodeClientConfiguration } from './client/client-schema.ts';
 import { FileHost, makeFileHostLayer } from './host/host.ts';
 import type { WorkspaceHostConfiguration } from './schema.ts';
-import { toWireError } from '@moonbase/contracts/workspace-errors';
+import type { WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
 
 export type {
   ChatFolders,
@@ -43,10 +42,7 @@ export function WorkspaceHostLive(configuration: WorkspaceHostConfiguration) {
     ),
     Layer.effect(
       WorkspaceFolders,
-      // The daemon reads its refusals as wire errors, until CL-07.
-      Effect.map(FileHost, (host) => ({
-        has: (path: string) => host.hasFolder(path).pipe(Effect.mapError(toWireError)),
-      })),
+      Effect.map(FileHost, (host) => ({ has: host.hasFolder })),
     ),
   ).pipe(Layer.provide(makeFileHostLayer(configuration)));
 }
@@ -83,9 +79,8 @@ export function WorkspaceRecoveryLive(
       );
       return yield* makeClientWorkspace({ store, host, hostWaitMs: config.hostWaitMs ?? 5000 });
     }).pipe(
-      // A client store that cannot open fails its composition with the wire error its owners
-      // expect, until the workspace moves to Effect RPC (CL-07).
-      Effect.mapError((failure) => toWireError(asWorkspaceError(failure, true))),
+      // A client store that cannot open fails with a workspace error, never a system call's own.
+      Effect.mapError((failure) => asWorkspaceError(failure, true)),
     ),
   );
 }
@@ -113,5 +108,5 @@ export function WorkspaceLocalLive(
  */
 export class WorkspaceFolders extends Context.Service<
   WorkspaceFolders,
-  { has(path: string): Effect.Effect<boolean, ApplicationError> }
+  { has(path: string): Effect.Effect<boolean, WorkspaceHostError> }
 >()('moonbase/WorkspaceFolders') {}

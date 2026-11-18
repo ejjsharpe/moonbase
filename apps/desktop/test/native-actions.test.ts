@@ -27,7 +27,7 @@ test('clipboard imports ask only when Finder files are there, and read them only
   assert.deepEqual([f.prompts, f.reads], [1, 0]);
   f.consent = 1;
   const empty = await paste();
-  assert.equal(empty._tag === 'Failure' && empty.failure.code, 'InvalidInput');
+  assert.equal(empty._tag === 'Failure' && empty.failure.failure, 'no-finder-files');
   assert.deepEqual([f.prompts, f.reads], [2, 1]);
   assert.equal(await Effect.runPromise(actions.chooseCheckout), '/picked');
   assert.deepEqual(await Effect.runPromise(actions.choosePaths(f.checkout, 'picker')), ['/picked']);

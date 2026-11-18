@@ -1,6 +1,6 @@
 # Chat integration
 
-Runs public application clients against the real daemon in host mode, in temporary data on Bun, reached through a controlled TCP forwarder in place of SSH. Covers connection and authentication, reply loss and retry for Create/Send/Stop, restart without resend, streaming, transcript reads, approved roots and `@` search, provider setup and model choice, and cleanup. Providers are counted fakes; no real provider or SSH host is used.
+Runs the public application services against the real daemon in host mode, in temporary data on Bun, reached through a controlled TCP forwarder in place of SSH. Covers connection and authentication, reply loss and retry for Create/Send/Stop, restart without resend, streaming, transcript reads, approved roots and `@` search, provider setup and model choice, and cleanup. Providers are counted fakes; no real provider or SSH host is used.
 
 ```sh
 bun run --cwd test/chat test

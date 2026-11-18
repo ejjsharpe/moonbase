@@ -1,5 +1,5 @@
 import { Effect, PubSub, Queue, Stream, type Scope } from 'effect';
-import { releaseResource } from '@moonbase/effect';
+import { releaseResource } from '../release-resource.ts';
 import type { ChatError } from '@moonbase/contracts/chat-errors';
 import { watchError } from './safe-error.ts';
 

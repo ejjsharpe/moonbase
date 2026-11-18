@@ -6,7 +6,7 @@ import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
 import { ChatService, type ChatServiceShape } from '@moonbase/contracts/services';
 import type { ChatTranscriptSource } from '@moonbase/contracts/chat';
-import { fixture } from './runtime-fixture.ts';
+import { fixture, runChat } from './runtime-fixture.ts';
 
 type Read = 'manifest' | 'content' | 'around' | 'find';
 const reads: Read[] = ['manifest', 'content', 'around', 'find'];
@@ -235,8 +235,9 @@ test('list and history cursor envelopes reject unfamiliar fields without executi
     { kind: 'history', scan: [] },
     { kind: 'unknown', scan: null },
   ])
-    await assert.rejects(f.client.command('getChatHistory', { target, cursor: encode(payload) }), {
-      code: 'InvalidInput',
-    });
+    await assert.rejects(
+      runChat(f.runtime, (chat) => chat.getChatHistory({ target, cursor: encode(payload) })),
+      { _tag: 'InvalidChatRequestError', problem: 'history-cursor' },
+    );
   assert.equal(f.faux.state.callCount, 0);
 });

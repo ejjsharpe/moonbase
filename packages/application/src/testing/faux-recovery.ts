@@ -2,6 +2,10 @@ import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import { Effect, Queue, Schema, Stream } from 'effect';
 import { RecoveryStateSchema } from '@moonbase/contracts/recovery-schema';
 import {
+  InvalidRecoveryRequestError,
+  type WorkspaceError,
+} from '@moonbase/contracts/workspace-errors';
+import {
   emptyBufferView,
   emptyRecoveryState,
   type RecoveryBuffer,
@@ -20,7 +24,7 @@ import { checkoutKey, fileKey } from '../editor/index.ts';
 type FauxRecoveryDependencies = {
   /** The seeded checkout, or a failure for one the fake doesn't hold. */
   exact(checkout: CheckoutTarget): unknown;
-  fail(message: string): never;
+  fail(error: WorkspaceError): never;
 };
 const sameCheckout = (a: CheckoutTarget, b: CheckoutTarget) => checkoutKey(a) === checkoutKey(b);
 const sameTarget = (a: FileTarget, b: FileTarget) => fileKey(a) === fileKey(b);
@@ -56,7 +60,7 @@ export function fauxRecovery({ exact, fail }: FauxRecoveryDependencies) {
     const state = read(clientId);
     change(state);
     // Like the store, an edit that would leave an invalid recovery is refused and changes nothing.
-    if (!isValidState(state)) fail('The edit would leave an invalid recovery.');
+    if (!isValidState(state)) fail(new InvalidRecoveryRequestError({ problem: 'invalid-state' }));
     stats.edits++;
     write(clientId, state);
   };
@@ -72,7 +76,7 @@ export function fauxRecovery({ exact, fail }: FauxRecoveryDependencies) {
         return;
       }
       if (state.buffers.some((b) => sameTarget(b.target, target)))
-        fail('Another buffer is already open for this file.');
+        fail(new InvalidRecoveryRequestError({ problem: 'buffer-target' }));
       exact(target.checkout);
       if (!state.checkouts.some((c) => sameCheckout(c, target.checkout)))
         state.checkouts.push(target.checkout);
@@ -89,8 +93,7 @@ export function fauxRecovery({ exact, fail }: FauxRecoveryDependencies) {
       const index = state.buffers.findIndex((b) => b.id === bufferId);
       if (index < 0) return;
       const { target, draft } = state.buffers[index];
-      if (draft && !discard)
-        fail('The buffer has unsaved changes. Save or discard them before closing it.');
+      if (draft && !discard) fail(new InvalidRecoveryRequestError({ problem: 'draft-open' }));
       state.buffers.splice(index, 1);
       const view = state.views[target.checkout.checkoutId];
       if (!view) return;
@@ -110,7 +113,7 @@ export function fauxRecovery({ exact, fail }: FauxRecoveryDependencies) {
   const updateDraft = ({ clientId, bufferId, text, disk }: RecoveryEditInput<'updateDraft'>) =>
     edit(clientId, (state) => {
       const buffer = state.buffers.find((b) => b.id === bufferId);
-      if (!buffer) return fail('No such buffer is open in this recovery.');
+      if (!buffer) return fail(new InvalidRecoveryRequestError({ problem: 'unknown-buffer' }));
       if (!buffer.draft) {
         if (text !== disk.text) buffer.draft = { text, disk };
       } else if (text === buffer.draft.disk.text && disk.version === buffer.draft.disk.version)

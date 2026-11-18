@@ -161,7 +161,7 @@ test('an Uncertain Send whose failure note cannot be kept stays retained as it w
   await f.setDraft('original uncertain input');
   f.answers.set('sendChat', () => {
     f.storage.fail = true;
-    throw uncertain('Controlled mutation outcome uncertainty');
+    throw uncertain();
   });
   await f.send();
   const state = await f.state();
@@ -219,7 +219,7 @@ for (const operation of operations)
     const reply = Promise.withResolvers<void>();
     f.answers.set(operation, async () => {
       await reply.promise;
-      throw unavailable('Connection generation gone after dispatch');
+      throw unavailable();
     });
     const call = begin(f, operation, running({ target, submissionId: 'admitted', taskId: 'task' }));
     await waitFor(() => f.count(operation) === 1);

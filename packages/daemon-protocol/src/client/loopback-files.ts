@@ -2,24 +2,20 @@ import { constants } from 'node:fs';
 import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Effect } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { ConnectionError } from '@moonbase/contracts/connection-errors';
 import { decodeChatInput } from '@moonbase/contracts/chat-schema';
 import { chatProtocolVersion, hostTokenPattern } from '@moonbase/contracts/host';
 import { readObject } from '@moonbase/contracts/common';
 import { isPrivateTo } from '@moonbase/contracts/files';
 
-// The loopback connection is still on the legacy error; these are the ones it has always had.
-const failure = (code: ApplicationError['code'], message: string) =>
-  new ApplicationError({ code, message });
-const notRunning = () => failure('Unavailable', 'The daemon is not running.');
-const unsafe = () =>
-  failure(
-    'Unavailable',
-    'The daemon data directory or one of its files is not private to this user.',
-  );
-const malformed = () => failure('Unavailable', 'The daemon’s connection files are malformed.');
-const unreadable = () => failure('Unavailable', 'The daemon’s connection files could not be read.');
-const thrown = (error: unknown) => (ApplicationError.is(error) ? error : unreadable());
+// What reading the daemon's files fails with: a `ConnectionError`, since they are how the loopback
+// connection reaches it.
+const failure = (reason: ConnectionError['reason']) => new ConnectionError({ reason });
+const notRunning = () => failure('daemon-not-running');
+const unsafe = () => failure('daemon-files-unsafe');
+const malformed = () => failure('daemon-files-malformed');
+const unreadable = () => failure('daemon-files-unreadable');
+const thrown = (error: unknown) => (error instanceof ConnectionError ? error : unreadable());
 
 /**
  * Reads an existing private file without following a link, checking what was opened. Node's
@@ -40,7 +36,7 @@ const readPrivateFile = (path: string, maxBytes: number) =>
           if (info.size > maxBytes) throw malformed();
           return new TextDecoder('utf8', { fatal: true }).decode(await file.readFile());
         },
-        catch: (error) => (ApplicationError.is(error) ? error : malformed()),
+        catch: (error) => (error instanceof ConnectionError ? error : malformed()),
       }),
     (file) => Effect.ignore(Effect.tryPromise(() => file.close())),
   );
@@ -99,10 +95,7 @@ export const readDaemonFiles = (directory: string) =>
         protocol: record.protocol as number,
       };
     });
-    if (protocol !== chatProtocolVersion)
-      return yield* Effect.fail(
-        failure('Incompatible', 'The daemon speaks another protocol version.'),
-      );
+    if (protocol !== chatProtocolVersion) return yield* Effect.fail(failure('daemon-protocol'));
     const key = token.trim();
     if (!hostTokenPattern.test(key)) return yield* Effect.fail(malformed());
     return { expected: host, origin: `http://127.0.0.1:${port}`, port, pid, token: key };

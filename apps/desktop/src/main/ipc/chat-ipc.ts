@@ -3,8 +3,6 @@ import type { ChatCommand, ChatInput } from '@moonbase/contracts/chat';
 import type { ConnectionCommand, ConnectionInput } from '@moonbase/contracts/connection';
 import type { ProviderCommand, ProviderInput } from '@moonbase/contracts/providers';
 import type { ChatHandlers, ConnectionHandlers } from '@moonbase/contracts/services';
-import { toChatApplicationError } from '@moonbase/contracts/chat-legacy-errors';
-import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
 import { DesktopChatRpcs, type ChatTargetId } from '../../ipc/chat-rpcs.ts';
 import {
   IpcAuthorityError,
@@ -12,7 +10,7 @@ import {
   IpcInputError,
   IpcUnavailableError,
   NativeActionError,
-} from '../../ipc/ipc-errors.ts';
+} from '@moonbase/contracts/ipc-errors';
 import type { ChatBackends, ChatTargetClients } from '../chat/chat-backends.ts';
 import type { ChatDocument } from '../chat/chat-document.ts';
 import { copyTranscript, type NativeTranscriptActions } from '../chat/transcript-native.ts';
@@ -88,31 +86,26 @@ export function makeChatIpcHandlers(
   const remoteConnection = Effect.flatMap(findTarget('remote'), ({ connection }) =>
     connection ? Effect.succeed(connection) : Effect.fail(unsupported()),
   );
-  // The services' errors reach the renderer as the legacy error with its code (CL-22).
+  // The services' errors reach the renderer as they are.
   const chat =
     <K extends ChatCommand>(operation: K) =>
     ({ backendId, input }: { backendId: ChatTargetId; input: ChatInput<K> }) =>
       Effect.flatMap(findTarget(backendId, input), (clients) => {
         const handlers: ChatHandlers = clients.chat;
-        return handlers[operation](input).pipe(Effect.mapError(toChatApplicationError));
+        return handlers[operation](input);
       });
   const providers =
     <K extends ProviderCommand>(operation: K) =>
     ({ backendId, input }: { backendId: ChatTargetId; input: ProviderInput<K> }) =>
       Effect.flatMap(providersOf(backendId), (service) =>
-        service
-          .forOwner(document.id)
-          [operation](input)
-          .pipe(Effect.mapError(toChatApplicationError)),
+        service.forOwner(document.id)[operation](input),
       );
   const connection =
     <K extends ConnectionCommand>(operation: K) =>
     ({ input }: { input: ConnectionInput<K> }) =>
       Effect.flatMap(remoteConnection, (service) => {
         const handlers: ConnectionHandlers = service;
-        const command = handlers[operation](input).pipe(
-          Effect.mapError(toConnectionApplicationError),
-        );
+        const command = handlers[operation](input);
         if (operation === 'getConnection') return command;
         // Image URLs belong to the connection that issued them, including ones issued mid-change.
         const revoke = document.targets.remote.images.revoke;
@@ -144,14 +137,12 @@ export function makeChatIpcHandlers(
     findChatFiles: chat('findChatFiles'),
     watchChat: ({ backendId, target }) =>
       Stream.unwrap(
-        Effect.map(findTarget(backendId, { target }), (clients) =>
-          clients.chat.watch({ target }).pipe(Stream.mapError(toChatApplicationError)),
-        ),
+        Effect.map(findTarget(backendId, { target }), (clients) => clients.chat.watch({ target })),
       ),
     watchChatList: ({ backendId, session }) =>
       Stream.unwrap(
         Effect.map(findTarget(backendId, { session }), (clients) =>
-          clients.chat.watchChatList({ session }).pipe(Stream.mapError(toChatApplicationError)),
+          clients.chat.watchChatList({ session }),
         ),
       ),
     getProviders: providers('getProviders'),
@@ -161,20 +152,12 @@ export function makeChatIpcHandlers(
     openProviderUrl: providers('openProviderUrl'),
     logoutProvider: providers('logoutProvider'),
     watchProviders: ({ backendId }) =>
-      Stream.unwrap(
-        Effect.map(providersOf(backendId), (service) =>
-          service.watch(document.id).pipe(Stream.mapError(toChatApplicationError)),
-        ),
-      ),
+      Stream.unwrap(Effect.map(providersOf(backendId), (service) => service.watch(document.id))),
     getConnection: connection('getConnection'),
     connect: connection('connect'),
     disconnect: connection('disconnect'),
     watchConnection: () =>
-      Stream.unwrap(
-        Effect.map(remoteConnection, (service) =>
-          service.watch().pipe(Stream.mapError(toConnectionApplicationError)),
-        ),
-      ),
+      Stream.unwrap(Effect.map(remoteConnection, (service) => service.watch())),
     copyTranscript: ({ backendId, copy }) =>
       Effect.gen(function* () {
         const clients = yield* findTarget(backendId, copy);

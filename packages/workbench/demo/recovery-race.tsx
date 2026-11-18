@@ -6,7 +6,8 @@ import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { Effect, ManagedRuntime } from 'effect';
 import { WorkspaceService } from '@moonbase/contracts/workspace-service';
-import { ApplicationError, type CommandOutput } from '@moonbase/contracts/workspace';
+import type { CommandOutput } from '@moonbase/contracts/workspace';
+import { WorkspaceUnavailableError } from '@moonbase/contracts/workspace-host-errors';
 import { Workbench } from '../src/index.ts';
 import {
   buildDemoEditor,
@@ -106,10 +107,7 @@ const racing: DemoClient = {
     if (loseFinal && name === 'closeTab') {
       loseFinal = false;
       await client.command(name, input, options);
-      throw new ApplicationError({
-        code: 'Unavailable',
-        message: 'Controlled lost final close response',
-      });
+      throw new WorkspaceUnavailableError({ cause: 'failed' });
     }
     return client.command(name, input, options);
   },

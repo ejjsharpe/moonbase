@@ -5,20 +5,23 @@ import { Context, Effect, Exit, Layer, ManagedRuntime, Scope, SubscriptionRef } 
 import { RegistryProvider } from '@effect/atom-react';
 import {
   MoonbaseApplication,
-  ApplicationLifecycleError,
   describeApplicationFailure,
   makeApplicationAtoms,
 } from '@moonbase/application';
-import { EditorAlerts, getFailureCode } from '@moonbase/application/editor';
+import { EditorAlerts } from '@moonbase/application/editor';
 import { makeWorkbenchEditor, type WorkbenchEditor } from '@moonbase/workbench';
 import { configureMonacoWorkers } from '@moonbase/workbench/workers';
-import { ApplicationError, CancelledError } from '@moonbase/contracts/errors';
+import { CancelledError } from '@moonbase/contracts/errors';
 import { DesktopShell, type DesktopShellHandle } from './shell/desktop-shell.tsx';
 import type { DesktopApplication } from './shell/desktop-application.ts';
 import { WorkbenchStartupFailure } from './shell/startup-failure.tsx';
 import type { DesktopBridge } from '../ipc/desktop-bridge.ts';
-import { boundApplicationError } from '../ipc/ipc-errors.ts';
-import { makeChatTargetClients, makeShellClients } from './ipc/application-clients.ts';
+import { makeWindowFailure, type WindowFailure } from '../ipc/ipc-errors.ts';
+import {
+  makeChatTargetClients,
+  makeShellClients,
+  type DesktopIpcRunner,
+} from './ipc/application-clients.ts';
 import { makeDocumentLayer, makeIpcLayer } from './renderer-layer.ts';
 import * as stylex from '@stylexjs/stylex';
 import { workbench } from '@moonbase/ui/workbench';
@@ -36,29 +39,22 @@ const targetClients = new Map<string, ReturnType<typeof makeChatTargetClients>>(
 /** Captured per target once, so a selected target change cannot reroute a pending action. */
 function getTargetClients(target: 'local' | 'remote'): ReturnType<typeof makeChatTargetClients> {
   let clients = targetClients.get(target);
-  if (!clients) targetClients.set(target, (clients = makeChatTargetClients(runtime, target)));
+  if (!clients) targetClients.set(target, (clients = makeChatTargetClients(runIpc, target)));
   return clients;
 }
 // The renderer's one runtime: every request to main runs here, over this document's IPC port,
 // and it holds the workspace, the editor and the application.
 const runtime = ManagedRuntime.make(makeIpcLayer(window.moonbase));
+/** The root's runner for the shell's and transcripts' Promise clients over IPC. */
+const runIpc: DesktopIpcRunner = (effect, options) => runtime.runPromiseExit(effect, options);
 /** Where the editor and application live, closed as the document goes, before main is told. */
 const documentScope = Scope.makeUnsafe();
-/** A failure as the window's lifecycle reports it to main: the legacy error, Moonbase's text. */
-const toWindowError = (error: unknown) =>
-  ApplicationError.is(error)
-    ? error
-    : new ApplicationError({
-        code:
-          getFailureCode(error) ??
-          (error instanceof ApplicationLifecycleError ? error.code : undefined) ??
-          'Unavailable',
-        message: describeApplicationFailure(error),
-      });
-const shell = makeShellClients(runtime, window.moonbase);
+/** A failure as the window's lifecycle reports it to main: Moonbase's text of it. */
+const toWindowError = (error: unknown) => makeWindowFailure(describeApplicationFailure(error));
+const shell = makeShellClients(runIpc, window.moonbase);
 /** Runs main's window actions through `on` for as long as the document lives, each once. */
 function useWindowActions(
-  on: (action: 'quit' | 'dispose' | 'cleanup-error', id: string, error?: ApplicationError) => void,
+  on: (action: 'quit' | 'dispose' | 'cleanup-error', id: string, error?: WindowFailure) => void,
   dependency: unknown,
 ) {
   useEffect(() => {
@@ -75,10 +71,8 @@ function useWindowActions(
  * Answers main's Quit request, as a message: main may close the window before replying. A lost
  * answer is sent again while main can't be reached, and whenever main asks again.
  */
-const answerQuit = (id: string, consent: boolean, cleanupError?: ApplicationError) =>
-  void shell
-    .answerQuit(id, consent, cleanupError && boundApplicationError(cleanupError))
-    .catch(() => {});
+const answerQuit = (id: string, consent: boolean, cleanupError?: WindowFailure) =>
+  void shell.answerQuit(id, consent, cleanupError).catch(() => {});
 function Desktop({
   application,
   editor,
@@ -108,7 +102,7 @@ function Desktop({
         setClosing(true);
         setReleasing(true);
       });
-      const acknowledge = (error?: ApplicationError) => {
+      const acknowledge = (error?: WindowFailure) => {
         root.unmount();
         answerQuit(id, true, error);
       };
@@ -145,7 +139,7 @@ function Desktop({
     />
   );
 }
-function StartupFailure({ error }: { error: ApplicationError }) {
+function StartupFailure({ error }: { error: WindowFailure }) {
   useWindowActions((action, id) => {
     if (action === 'quit') answerQuit(id, true);
     if (action === 'dispose') {
@@ -221,5 +215,5 @@ try {
     </RegistryProvider>,
   );
 } catch (error) {
-  root.render(<StartupFailure error={boundApplicationError(toWindowError(error))} />);
+  root.render(<StartupFailure error={toWindowError(error)} />);
 }

@@ -83,7 +83,7 @@ export function makeWorkspaceHandlers(services: WorkspaceRpcServices) {
                   };
                   return [
                     next,
-                    [{ ...next, ...(event.error === undefined ? {} : { error: 'Unavailable' }) }],
+                    [{ ...next, ...(event.error === undefined ? {} : { failed: true as const }) }],
                   ];
                 },
               ),

@@ -8,12 +8,8 @@ export {
   streamTranscriptSource,
 } from '@moonbase/application/chat';
 export { editorLayer, makeEditorAtoms } from '@moonbase/application/editor';
-export { makeChatClient } from '@moonbase/application/chat/clients';
-export {
-  runApplicationEffect,
-  observeApplicationStream,
-} from '@moonbase/application/chat/promises';
-export { ApplicationError } from '@moonbase/contracts/errors';
+export { UncertainError } from '@moonbase/contracts/errors';
+export { isUncertain } from '@moonbase/contracts/error-groups';
 export { WorkspaceService, ConnectionService, ChatService } from '@moonbase/contracts/services';
 export { decodeChatInput } from '@moonbase/contracts/chat-schema';
 export { checkHeadlessApplication } from '../../packages/application/examples/headless.ts';

@@ -8,29 +8,16 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
-import { ApplicationError } from '@moonbase/contracts/workspace';
+import { getErrorGroup, type ErrorGroup } from '@moonbase/contracts/error-groups';
 import { chatHostVersion, chatProtocolVersion } from '@moonbase/contracts/host';
-import {
-  ConnectionError,
-  HostVerificationError,
-  toConnectionApplicationError,
-} from '@moonbase/contracts/connection-errors';
-import { CancelledError } from '@moonbase/contracts/errors';
+import { HostVerificationError } from '@moonbase/contracts/connection-errors';
 import type { ChatHostEndpoint } from '@moonbase/contracts/services';
 import type { ChatHostHealth } from '@moonbase/contracts/host';
 import { ConnectionService } from '@moonbase/contracts/services';
-import { makeConnectionClient } from '@moonbase/application/chat/clients';
+import { makeConnectionCalls } from '@moonbase/application/testing/service-calls';
 import { SshLive, type SshConfiguration, type SshOptions } from '@moonbase/ssh';
-/** An error with the legacy code `code`, as clients see it. */
-export const failure = (code: ApplicationError['code']) => (e: unknown) => {
-  const error =
-    e instanceof ConnectionError ||
-    e instanceof HostVerificationError ||
-    e instanceof CancelledError
-      ? toConnectionApplicationError(e)
-      : e;
-  return ApplicationError.is(error) && error.code === code;
-};
+/** An error that means `group` for its request, as clients see it. */
+export const failure = (group: ErrorGroup) => (e: unknown) => getErrorGroup(e) === group;
 export const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 10));
 export async function until(
   check: () => boolean | Promise<boolean>,
@@ -170,7 +157,7 @@ export async function fixture(
   const start = (configuration: SshConfiguration = config) => {
     const layer = SshLive(configuration, { verify, ...options });
     const runtime = ManagedRuntime.make(testClock ? Layer.merge(layer, TestClock.layer()) : layer);
-    return { runtime, client: makeConnectionClient(runtime) };
+    return { runtime, client: makeConnectionCalls(runtime) };
   };
   const current = start();
   const spawned = () => rows(log).filter((r) => r.event === 'preflight' || r.event === 'forward');
@@ -226,10 +213,10 @@ export async function checkSystemPolicy(flag: string, extra: string, enabled: bo
     if (enabled) {
       await assert.rejects(
         f.client.command('connect', { profileId: 'configured' }),
-        failure('InvalidInput'),
+        failure('refusal'),
       );
       assert.equal(f.forwards().length, 0);
-      await assert.rejects(f.endpoint(), failure('Unavailable'));
+      await assert.rejects(f.endpoint(), failure('unavailable'));
     } else
       assert.equal(
         (await f.client.command('connect', { profileId: 'configured' })).state,

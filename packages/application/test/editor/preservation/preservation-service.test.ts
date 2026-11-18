@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
 import { Effect, ManagedRuntime, Layer, SubscriptionRef } from 'effect';
-import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
+import { type CheckoutTarget } from '@moonbase/contracts/workspace';
+import { WorkspaceStoreError } from '@moonbase/contracts/workspace-host-errors';
 import {
   toWorkspaceClient as makeEditorClient,
   type WorkspaceClient,
@@ -723,7 +724,7 @@ describe('Quit preparation on its own', () => {
       ...store,
       updateLayout: (input) =>
         loseLayout
-          ? Effect.fail(new ApplicationError({ code: 'Persistence', message: 'Layout lost' }))
+          ? Effect.fail(new WorkspaceStoreError({ failure: 'publication' }))
           : store.updateLayout(input),
     });
     const runtime = ManagedRuntime.make(

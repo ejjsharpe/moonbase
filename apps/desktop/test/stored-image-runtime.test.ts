@@ -1,18 +1,20 @@
 import assert from 'node:assert/strict';
+import { getErrorGroup } from '@moonbase/contracts/error-groups';
 import { test } from 'node:test';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Effect } from 'effect';
-import type {
-  ChatClient,
-  ChatTranscriptPart,
-  ChatTranscriptSource,
-} from '@moonbase/contracts/chat';
+import type { ChatTranscriptPart, ChatTranscriptSource } from '@moonbase/contracts/chat';
 import { controlledHostFixture, until } from '../../../test/chat/controlled-host-fixture.ts';
 import { createImageRuntime, retainedImage } from './fixtures/stored-image-fixture.ts';
 import { respondTranscriptImage } from '../src/main/chat/transcript-native.ts';
-import { fakeChatTargets, makeIpcFixture } from './fixtures/ipc-fixture.ts';
+import {
+  fakeChatTargets,
+  toChatService,
+  type FakeChat,
+  makeIpcFixture,
+} from './fixtures/ipc-fixture.ts';
 
 for (const mode of ['local', 'remote'] as const)
   test(`${mode} retained real images are served by main from exact record ownership and independently padded authenticated chunks`, async () => {
@@ -36,7 +38,7 @@ for (const mode of ['local', 'remote'] as const)
         connectionId =
           (await root.connection.command('connect', { profileId: root.profile.id })).connectionId ??
           undefined;
-      const client: ChatClient = root?.chat ?? local!.client;
+      const client = root?.chat ?? local!.client;
       const create = async (requestId: string) =>
         (
           await client.command('createChat', {
@@ -67,19 +69,21 @@ for (const mode of ['local', 'remote'] as const)
       assert.equal(images.length, 3);
       let chunks = 0,
         padded = 0;
-      const reader: ChatClient = {
+      const reader: FakeChat = {
         ...client,
         command: async (operation, input, options) => {
-          const reply = await client.command(operation, input, options);
+          const reply = await client.command(operation, input as never, options);
           if (operation === 'getChatTranscriptContent' && reply && 'data' in reply) {
             chunks++;
             if (reply.data.endsWith('=')) padded++;
           }
-          return reply;
+          return reply as never;
         },
       };
       const desktop = await makeIpcFixture({
-        chat: { backends: fakeChatTargets({ local: { chat: reader, context: session } }) },
+        chat: {
+          backends: fakeChatTargets({ local: { chat: toChatService(reader), context: session } }),
+        },
       });
       const serve = async (source: ChatTranscriptSource, part: ChatTranscriptPart) => {
         const url = await desktop
@@ -89,7 +93,7 @@ for (const mode of ['local', 'remote'] as const)
             selection: { partId: part.partId, bytes: part.bytes, revision: part.revision },
             mimeType: part.mimeType as 'image/png',
           })
-          .catch((error: { code: string }) => error.code);
+          .catch((error: unknown) => getErrorGroup(error) ?? 'unknown');
         if (!url.startsWith('moonbase:')) return url;
         const response = await Effect.runPromise(
           respondTranscriptImage(new Request(url), 'csp', await desktop.findImages()),
@@ -106,7 +110,7 @@ for (const mode of ['local', 'remote'] as const)
           target: { ...target, host: { ...target.host, storeId: 'foreign' } },
         },
       ] as ChatTranscriptSource[])
-        assert.equal(await serve(source, images[0]!), 'Unauthorized');
+        assert.equal(await serve(source, images[0]!), 'access');
       for (const source of [
         { ...transcript.source, target: other },
         { ...transcript.source, entryId: '999999999' },

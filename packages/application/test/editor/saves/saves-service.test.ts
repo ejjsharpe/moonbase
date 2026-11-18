@@ -1,4 +1,4 @@
-import { getFailureCode, fileKey } from '@moonbase/application/editor';
+import { fileKey } from '@moonbase/application/editor';
 import {
   acquireEditor,
   answering,
@@ -18,12 +18,10 @@ import {
   toWorkspaceClient as makeEditorClient,
   type WorkspaceClient,
 } from '@moonbase/application/testing/editor-fixture';
-import {
-  ApplicationError,
-  type CheckoutTarget,
-  type CommandInput,
-} from '@moonbase/contracts/workspace';
+import { type CheckoutTarget, type CommandInput } from '@moonbase/contracts/workspace';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
+import { WorkspaceUnavailableError } from '@moonbase/contracts/workspace-host-errors';
+import { UncertainError } from '@moonbase/contracts/errors';
 
 describe('Save races', () => {
   const checkout: CheckoutTarget = {
@@ -90,7 +88,7 @@ describe('Save races', () => {
             requests.push(request);
             if (lose && request.target.path === path) {
               lose = false;
-              throw new ApplicationError({ code: 'Uncertain', message: 'Lost committed reply' });
+              throw new UncertainError({ operation: 'Save' });
             }
           }
           return result;
@@ -109,7 +107,7 @@ describe('Save races', () => {
     const requests: CommandInput<'saveFile'>[] = [];
     const f = await fixture(losingReply('a.ts', requests));
     try {
-      await assert.rejects(f.editor.save(target('a.ts')), /Lost committed/);
+      await assert.rejects(f.editor.save(target('a.ts')), { _tag: 'UncertainError' });
       const a = structuredClone(f.editor.buffer(target('a.ts'))!.pendingSave!);
       f.editor.edit(target('a.ts'), 'newer A');
       assert.equal(f.editor.getSnapshot().recoveryReady, false);
@@ -198,7 +196,7 @@ describe('Save races', () => {
     test(`a close after a retried lost Save keeps completed saves and drafts when it ends in ${outcome}`, async () => {
       const f = await fixture(losingReply('a.ts'));
       try {
-        await assert.rejects(f.editor.save(target('a.ts')), /Lost committed/);
+        await assert.rejects(f.editor.save(target('a.ts')), { _tag: 'UncertainError' });
         assert.equal(await f.editor.save(target('b.ts')), true);
         assert.equal(await f.editor.save(target('a.ts')), true);
         assert.equal(f.memory.stats.saves, 2);
@@ -368,10 +366,10 @@ describe('Save races', () => {
     const f = await fixture();
     try {
       f.editor.edit(target('a.ts'), 'bad\0text');
-      await assert.rejects(
-        f.editor.save(target('a.ts')),
-        (error) => getFailureCode(error) === 'InvalidInput',
-      );
+      await assert.rejects(f.editor.save(target('a.ts')), {
+        _tag: 'InvalidRequestError',
+        problem: 'text-too-large',
+      });
       assert.equal(f.editor.buffer(target('a.ts'))!.pendingSave, undefined);
       assert.equal(f.memory.stats.saves, 0);
       f.editor.edit(target('a.ts'), 'corrected');
@@ -475,7 +473,7 @@ describe('saves and reloads', () => {
     try {
       await f.editor.open(target('a.ts'));
       f.editor.edit(target('a.ts'), 'kept through a failed read');
-      f.memory.failNext('readFile', 'Permission denied', false, 'Unavailable');
+      f.memory.failNext('readFile', new WorkspaceUnavailableError({ cause: 'failed' }));
       await f.editor.open(target('a.ts'));
       assert.equal(f.editor.buffer(target('a.ts'))!.text, 'kept through a failed read');
       assert.equal(await f.editor.save(target('a.ts')), true);
@@ -497,7 +495,7 @@ describe('saves and reloads', () => {
         await other.openCheckout(checkout.root);
         await other.open(target('b.ts'));
         other.edit(target('b.ts'), 'kept through a cut listing');
-        f.memory.failNext('readFile', 'Permission denied', false, 'Unavailable');
+        f.memory.failNext('readFile', new WorkspaceUnavailableError({ cause: 'failed' }));
         await other.open(target('b.ts'));
         assert.equal(await other.save(target('b.ts')), true);
         assert.equal(

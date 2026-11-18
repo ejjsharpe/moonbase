@@ -1,3 +1,4 @@
+import { isAccessRefusal, isRefusal } from '@moonbase/contracts/error-groups';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
@@ -13,7 +14,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 
-import { fixture, rejects } from './workspace-fixture.ts';
+import { fixture } from './workspace-fixture.ts';
 import { recordWatchDeliveries, startOnTestClock } from './watch-fixture.ts';
 
 test('entries-only listings bypass Git ignore policy and leave classification unknown', async () => {
@@ -45,7 +46,7 @@ test('entries-only listings bypass Git ignore policy and leave classification un
         includeIgnoredStatus: false,
         hideIgnored: true,
       }),
-      rejects('InvalidInput'),
+      isRefusal,
     );
   } finally {
     await f.close();
@@ -76,7 +77,7 @@ test('ignore classification validates exact checkout and immediate child paths',
     ])
       await assert.rejects(
         f.client.command('getIgnoredPaths', { checkout, path: 'src', paths }),
-        rejects('InvalidInput'),
+        isRefusal,
       );
     await assert.rejects(
       f.client.command('getIgnoredPaths', {
@@ -84,7 +85,7 @@ test('ignore classification validates exact checkout and immediate child paths',
         path: 'src',
         paths: ['src/hidden.ts'],
       }),
-      rejects('Unauthorized'),
+      isAccessRefusal,
     );
   } finally {
     await f.close();
@@ -208,7 +209,7 @@ test('local/remote and root replacement identities, traversal, symlinks, binary,
         checkout: { ...checkout, hostId: 'remote' },
         path: 'file.txt',
       }),
-      rejects('Unauthorized'),
+      isAccessRefusal,
     );
     const disk = await f.client.command('readFile', { checkout, path: 'file.txt' });
     linkSync(join(f.root, 'file.txt'), join(f.root, 'hard-link'));
@@ -482,12 +483,12 @@ test('text search honours ignore policies, options, context lines and UTF-16 ran
     );
     assert.equal((await search('follow.nd(')).files.length, 0);
     assert.equal((await search('follow.nd\\(', { regex: true })).files[0].path, 'src/view.ts');
-    await assert.rejects(search('(', { regex: true }), rejects('InvalidInput'));
+    await assert.rejects(search('(', { regex: true }), isRefusal);
     // ripgrep's reason is shown, not its trailing hint, and every pattern refusal is invalid input.
     await assert.rejects(
       search('(?<=x)y', { regex: true }),
       (error) =>
-        rejects('InvalidInput')(error) &&
+        isRefusal(error) &&
         /^Invalid regular expression: look-around.* is not supported$/.test(
           (error as Error).message,
         ),
@@ -495,7 +496,7 @@ test('text search honours ignore policies, options, context lines and UTF-16 ran
     await assert.rejects(
       search('a\\nb', { regex: true }),
       (error) =>
-        rejects('InvalidInput')(error) &&
+        isRefusal(error) &&
         (error as Error).message ===
           'Invalid regular expression: the literal "\\n" is not allowed in a regex',
     );
@@ -628,7 +629,7 @@ test('lookup honors nested ignore policies, ranks and highlights all pieces, quo
     assert((await f.client.command('lookupFiles', { checkout, query: 'ts', limit: 1 })).partial);
     await assert.rejects(
       f.client.command('lookupFiles', { checkout, query: 'ts', history: ['../outside'] }),
-      rejects('InvalidInput'),
+      isRefusal,
     );
     writeFileSync(join(f.base, 'outside-ignore'), '*\n');
     rmSync(join(f.root, '.ignore'));
@@ -716,10 +717,10 @@ test('the file host opens only on exactly Bun 1.4.4', async () => {
     value: { ...process.versions, bun: '1.4.5' },
   });
   try {
-    await assert.rejects(
-      f.client.command('openCheckout', { root: f.root }),
-      (error: { code?: unknown }) => error.code === 'Incompatible',
-    );
+    await assert.rejects(f.client.command('openCheckout', { root: f.root }), {
+      _tag: 'WorkspaceUnsupportedError',
+      feature: 'runtime',
+    });
   } finally {
     Object.defineProperty(process, 'versions', original);
     await f.close();

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { type ErrorGroup, getErrorGroup } from '@moonbase/contracts/error-groups';
 import { test, type TestContext } from 'node:test';
 import {
   Harness,
@@ -12,37 +13,43 @@ import {
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import { Type } from 'typebox';
-import type {
-  ChatClient,
-  ChatTranscriptPart,
-  ChatTranscriptSource,
-} from '@moonbase/contracts/chat';
-import { fixture, until } from '../runtime-fixture.ts';
+import type { ChatTranscriptPart, ChatTranscriptSource } from '@moonbase/contracts/chat';
+import { fixture, until, runChat, type ChatRuntime } from '../runtime-fixture.ts';
+/** Whether a failure means `group` for its request. */
+const inGroup = (group: ErrorGroup) => (error: unknown) => getErrorGroup(error) === group;
 
-async function manifest(client: ChatClient, source: ChatTranscriptSource) {
+async function manifest(runtime: ChatRuntime, source: ChatTranscriptSource) {
   const parts: ChatTranscriptPart[] = [];
   let cursor: string | undefined;
   do {
-    const page = await client.command('getChatTranscriptContent', {
-      source,
-      ...(cursor ? { cursor } : {}),
-    });
+    const page = await runChat(runtime, (chat) =>
+      chat.getChatTranscriptContent({
+        source,
+        ...(cursor ? { cursor } : {}),
+      }),
+    );
     assert(page.kind === 'manifest');
     parts.push(...page.parts);
     cursor = page.nextCursor ?? undefined;
   } while (cursor);
   return parts;
 }
-async function content(client: ChatClient, source: ChatTranscriptSource, part: ChatTranscriptPart) {
+async function content(
+  runtime: ChatRuntime,
+  source: ChatTranscriptSource,
+  part: ChatTranscriptPart,
+) {
   const selection = { partId: part.partId, bytes: part.bytes, revision: part.revision };
   const chunks: Buffer[] = [];
   let cursor: string | undefined;
   do {
-    const page = await client.command('getChatTranscriptContent', {
-      source,
-      selection,
-      ...(cursor ? { cursor } : {}),
-    });
+    const page = await runChat(runtime, (chat) =>
+      chat.getChatTranscriptContent({
+        source,
+        selection,
+        ...(cursor ? { cursor } : {}),
+      }),
+    );
     assert(page.kind === 'content');
     chunks.push(Buffer.from(page.data, page.encoding === 'utf8' ? 'utf8' : 'base64'));
     cursor = page.nextCursor ?? undefined;
@@ -117,13 +124,15 @@ test('live manifest cursors survive growing running output and appended parts, n
     ),
     fauxAssistantMessage('Released'),
   ]);
-  await f.client.command('sendChat', { target, requestId: 'send', text: 'Hold three' });
+  await runChat(f.runtime, (chat) =>
+    chat.sendChat({ target, requestId: 'send', text: 'Hold three' }),
+  );
   await until(
     async () => held.controls.filter(Boolean).length,
     (count) => count === 3,
   );
   const view = await until(
-    () => f.client.command('getChat', { target }),
+    () => runChat(f.runtime, (chat) => chat.getChat({ target })),
     (view) =>
       !!view.run?.transcript?.nextCursor &&
       view.run.transcript.parts.every((part) => part.kind !== 'result' || !!part.text),
@@ -137,14 +146,16 @@ test('live manifest cursors survive growing running output and appended parts, n
   );
   const firstOutput = embedded.parts[1];
   async function readPage() {
-    const page = await f.client.command('getChatTranscriptContent', { source, cursor });
+    const page = await runChat(f.runtime, (chat) =>
+      chat.getChatTranscriptContent({ source, cursor }),
+    );
     assert(page.kind === 'manifest');
     return page;
   }
   held.controls[0].grow('grown before the cursor');
   held.controls[2].grow('grown after the cursor');
   await until(
-    () => manifest(f.client, source),
+    () => manifest(f.runtime, source),
     (parts) =>
       parts.some((part) => part.partId === 'tool0.output' && part.bytes > 6) &&
       parts.some((part) => part.partId === 'tool2.output' && part.bytes > 6),
@@ -154,10 +165,10 @@ test('live manifest cursors survive growing running output and appended parts, n
     page.parts.map((part) => part.partId),
     ['tool2.executed', 'tool2.output'],
   );
-  assert.equal((await content(f.client, source, firstOutput)).toString(), 'first ');
-  const grown = (await manifest(f.client, source)).find((part) => part.partId === 'tool0.output')!;
+  assert.equal((await content(f.runtime, source, firstOutput)).toString(), 'first ');
+  const grown = (await manifest(f.runtime, source)).find((part) => part.partId === 'tool0.output')!;
   assert.equal(
-    (await content(f.client, source, grown)).toString(),
+    (await content(f.runtime, source, grown)).toString(),
     'first grown before the cursor',
   );
   await held.controls[2].detail({ added: 2 });
@@ -172,10 +183,10 @@ test('live manifest cursors survive growing running output and appended parts, n
   assert.equal(appended.nextCursor, null);
   await held.controls[0].detail({ added: 0 });
   await until(
-    async () => (await manifest(f.client, source)).map((part) => part.partId),
+    async () => (await manifest(f.runtime, source)).map((part) => part.partId),
     (ids) => ids.includes('tool0.details'),
   );
-  await assert.rejects(readPage(), { code: 'Conflict' });
+  await assert.rejects(readPage(), inGroup('conflict'));
   held.release();
 });
 
@@ -218,7 +229,9 @@ test('snapshots read nested sources only for their embedded page while manifests
     fauxAssistantMessage([fauxToolCall('parent', {})], { stopReason: 'toolUse' }),
     fauxAssistantMessage('Done'),
   ]);
-  await f.client.command('sendChat', { target, requestId: 'nested', text: 'Six children' });
+  await runChat(f.runtime, (chat) =>
+    chat.sendChat({ target, requestId: 'nested', text: 'Six children' }),
+  );
   await until(async () => ready, Boolean);
   const harness = getHarness(),
     snapshot = harness.snapshot.bind(harness);
@@ -227,12 +240,12 @@ test('snapshots read nested sources only for their embedded page while manifests
     if (args[0] === NestedCallDoc) reads++;
     return snapshot(...args);
   });
-  const view = await f.client.command('getChat', { target });
+  const view = await runChat(f.runtime, (chat) => chat.getChat({ target }));
   assert.equal(view.run!.transcript!.parts.length, 4);
   assert(view.run!.transcript!.nextCursor);
   assert(reads > 0 && reads < 6, `nested reads: ${reads}`);
   reads = 0;
-  const parts = await manifest(f.client, view.run!.transcript!.source);
+  const parts = await manifest(f.runtime, view.run!.transcript!.source);
   assert.equal(new Set(parts.map((part) => part.taskId).filter(Boolean)).size, 7);
   assert(reads >= 6);
   release();
@@ -252,7 +265,7 @@ function countEntryLoads(t: TestContext, harness: Harness) {
   return loads;
 }
 async function readFirstChunks(
-  client: ChatClient,
+  runtime: ChatRuntime,
   source: ChatTranscriptSource,
   part: ChatTranscriptPart,
   count: number,
@@ -260,11 +273,13 @@ async function readFirstChunks(
   const selection = { partId: part.partId, bytes: part.bytes, revision: part.revision };
   let cursor: string | undefined;
   for (let i = 0; i < count; i++) {
-    const page = await client.command('getChatTranscriptContent', {
-      source,
-      selection,
-      ...(cursor ? { cursor } : {}),
-    });
+    const page = await runChat(runtime, (chat) =>
+      chat.getChatTranscriptContent({
+        source,
+        selection,
+        ...(cursor ? { cursor } : {}),
+      }),
+    );
     assert(page.kind === 'content' && page.nextCursor);
     cursor = page.nextCursor;
   }
@@ -295,22 +310,21 @@ test('chunked reads of a saved entry reuse its built parts without reloading the
   const loads = countEntryLoads(t, getHarness()),
     id = String(entry.id);
   const source: ChatTranscriptSource = { kind: 'entry', target, entryId: id };
-  const parts = await manifest(f.client, source);
+  const parts = await manifest(f.runtime, source);
   assert.equal(loads.get(id), 1);
-  assert.equal((await content(f.client, source, parts[0])).toString(), text);
-  assert.deepEqual(JSON.parse((await content(f.client, source, parts[1])).toString()), {
+  assert.equal((await content(f.runtime, source, parts[0])).toString(), text);
+  assert.deepEqual(JSON.parse((await content(f.runtime, source, parts[1])).toString()), {
     content: text,
   });
-  assert.deepEqual(await content(f.client, source, parts[2]), image);
-  assert.deepEqual(await manifest(f.client, source), parts);
+  assert.deepEqual(await content(f.runtime, source, parts[2]), image);
+  assert.deepEqual(await manifest(f.runtime, source), parts);
   assert.equal(loads.get(id), 1);
   // A cached transcript still authorizes the conversation it belongs to.
-  await assert.rejects(manifest(f.client, { ...source, target: other }), {
-    code: 'InvalidInput',
-  });
-  await assert.rejects(content(f.client, { ...source, target: other }, parts[0]), {
-    code: 'InvalidInput',
-  });
+  await assert.rejects(manifest(f.runtime, { ...source, target: other }), inGroup('refusal'));
+  await assert.rejects(
+    content(f.runtime, { ...source, target: other }, parts[0]),
+    inGroup('refusal'),
+  );
 });
 
 test('the saved transcript cache holds entries within its byte budget and evicts beyond it', async (t) => {
@@ -337,13 +351,13 @@ test('the saved transcript cache holds entries within its byte budget and evicts
     target,
     entryId: String(entry.id),
   }));
-  const [firstPart] = await manifest(f.client, sources[0]);
-  await readFirstChunks(f.client, sources[0], firstPart, 3);
+  const [firstPart] = await manifest(f.runtime, sources[0]);
+  await readFirstChunks(f.runtime, sources[0], firstPart, 3);
   assert.equal(loads.get(String(first.id)), 1);
-  const [secondPart] = await manifest(f.client, sources[1]);
-  await readFirstChunks(f.client, sources[1], secondPart, 3);
+  const [secondPart] = await manifest(f.runtime, sources[1]);
+  await readFirstChunks(f.runtime, sources[1], secondPart, 3);
   assert.equal(loads.get(String(second.id)), 1);
-  await readFirstChunks(f.client, sources[0], firstPart, 1);
+  await readFirstChunks(f.runtime, sources[0], firstPart, 1);
   assert.equal(loads.get(String(first.id)), 2);
 });
 
@@ -391,16 +405,18 @@ test('empty interrupted, failed and completed messages are labelled in manifests
     [failedTool, 'tool', 'failed', 'Tool failed without output.'],
     [emptyTool, 'tool', 'completed', 'Tool returned no output.'],
   ] as const;
-  const view = await f.client.command('getChat', { target });
+  const view = await runChat(f.runtime, (chat) => chat.getChat({ target }));
   for (const [entry, role, state, text] of expected) {
-    const parts = await manifest(f.client, { kind: 'entry', target, entryId: String(entry.id) });
+    const parts = await manifest(f.runtime, { kind: 'entry', target, entryId: String(entry.id) });
     assert.deepEqual(
       parts.map((part) => [part.partId, part.kind, part.role, part.state, part.text]),
       [['m0.empty', 'notice', role, state, text]],
     );
     assert.equal(view.entries.find((row) => row.id === String(entry.id))!.text, text);
   }
-  const found = await f.client.command('findChatTranscript', { target, query: 'interrupted' });
+  const found = await runChat(f.runtime, (chat) =>
+    chat.findChatTranscript({ target, query: 'interrupted' }),
+  );
   assert.deepEqual(
     found.matches.map((match) => [
       match.source.kind === 'entry' && match.source.entryId,
@@ -424,16 +440,19 @@ test('every live tool slot is read in the captured transaction and a missing res
     ),
     fauxAssistantMessage('All slots done'),
   ]);
-  await f.client.command('sendChat', { target, requestId: 'send', text: 'Ten slots' });
+  await runChat(f.runtime, (chat) =>
+    chat.sendChat({ target, requestId: 'send', text: 'Ten slots' }),
+  );
   const parts = await until(
     async () => {
-      const view = await f.client.command('getChat', { target });
+      const view = await runChat(f.runtime, (chat) => chat.getChat({ target }));
       // Tools finish while this polls, so a source may change between capture and read.
-      return view.run ? manifest(f.client, view.run.transcript!.source).catch(() => []) : [];
+      return view.run ? manifest(f.runtime, view.run.transcript!.source).catch(() => []) : [];
     },
     (parts) => parts.filter((part) => part.committed).length === 9,
   );
-  const source = (await f.client.command('getChat', { target })).run!.transcript!.source;
+  const source = (await runChat(f.runtime, (chat) => chat.getChat({ target }))).run!.transcript!
+    .source;
   const last = parts.find((part) => part.partId.startsWith('tool9.'))!;
   assert(last.committed);
   const harness = getHarness(),
@@ -464,10 +483,10 @@ test('every live tool slot is read in the captured transaction and a missing res
       captured.push(...reads);
     return result;
   });
-  assert.deepEqual(await manifest(f.client, source), parts);
+  assert.deepEqual(await manifest(f.runtime, source), parts);
   assert(captured.includes(last.committed!.entryId));
   hidden.add(last.committed!.entryId);
-  await assert.rejects(manifest(f.client, source), { code: 'Persistence' });
+  await assert.rejects(manifest(f.runtime, source), inGroup('storage'));
   held.release();
 });
 
@@ -488,7 +507,7 @@ test('records without messages carry the unsupported marker in manifests and Fin
     ],
     context,
   );
-  const marker = await manifest(f.client, {
+  const marker = await manifest(f.runtime, {
     kind: 'entry',
     target,
     entryId: String(unsupported.id),
@@ -498,15 +517,17 @@ test('records without messages carry the unsupported marker in manifests and Fin
     [['marker', 'notice', 'unsupported', 'Unsupported transcript record.']],
   );
   assert.deepEqual(
-    await manifest(f.client, { kind: 'entry', target, entryId: String(empty.id) }),
+    await manifest(f.runtime, { kind: 'entry', target, entryId: String(empty.id) }),
     [],
   );
-  const view = await f.client.command('getChat', { target });
+  const view = await runChat(f.runtime, (chat) => chat.getChat({ target }));
   assert.equal(
     view.entries.find((entry) => entry.id === String(unsupported.id))!.text,
     'Unsupported transcript record.',
   );
-  const found = await f.client.command('findChatTranscript', { target, query: 'Unsupported' });
+  const found = await runChat(f.runtime, (chat) =>
+    chat.findChatTranscript({ target, query: 'Unsupported' }),
+  );
   assert.deepEqual(found.matches, []);
   assert.equal(found.nextCursor, null);
   assert.equal(found.progress.entries, 2);

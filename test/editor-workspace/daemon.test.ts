@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Layer, ManagedRuntime } from 'effect';
-import { makeConnectionClient } from '@moonbase/application/chat/clients';
+import { makeConnectionCalls } from '@moonbase/application/testing/service-calls';
 import {
   acquireEditorDriver,
   mutateReplying,
@@ -66,7 +66,7 @@ test("two clients of one daemon share a checkout: a move re-paths the other draf
       ),
     );
     disposers.push(() => connection.dispose());
-    await makeConnectionClient(connection).command('connect', { profileId: 'loopback' });
+    await makeConnectionCalls(connection).command('connect', { profileId: 'loopback' });
     const host = await connection.runPromise(WorkspaceHostService);
     const runtime = ManagedRuntime.make(
       WorkspaceRecoveryLive({ dataDirectory: join(base, name), installationId: name }, host),

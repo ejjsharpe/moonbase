@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Effect, Exit, Scope } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { TranscriptChangedError } from '@moonbase/contracts/chat-errors';
 import type {
-  ChatClient,
   ChatEntry,
   ChatInput,
   ChatOutput,
@@ -16,7 +15,12 @@ import {
   type TranscriptLimits,
   type TranscriptState,
 } from '@moonbase/application/chat';
-import { makeTranscript, type ChatPort, type Transcript } from '@moonbase/application/chat';
+import {
+  makeTranscript,
+  type ChatPort,
+  type Transcript,
+  type TranscriptRead,
+} from '@moonbase/application/chat';
 
 export { scaledTranscriptLimits } from './transcript-limits-fixture.ts';
 export const digest = (text: string) => createHash('sha256').update(text).digest('hex');
@@ -177,7 +181,7 @@ export function transcriptFixture(count = 640) {
     if (operation === 'getChatTranscriptContent') {
       const request = input as ChatInput<'getChatTranscriptContent'>;
       const found = sources.get(JSON.stringify(request.source));
-      if (!found) throw new ApplicationError({ code: 'Conflict', message: 'source changed' });
+      if (!found) throw new TranscriptChangedError({ change: 'view' });
       if (!request.selection) {
         const offset = Number(request.cursor ?? 0),
           parts = found.data.map((text, index) => part(`m0.b${index}`, text));
@@ -196,7 +200,7 @@ export function transcriptFixture(count = 640) {
         prefix.length !== request.selection.bytes ||
         digest(prefix.toString()) !== request.selection.revision
       )
-        throw new ApplicationError({ code: 'Conflict', message: 'prefix changed' });
+        throw new TranscriptChangedError({ change: 'prefix' });
       const offset = Number(request.cursor ?? 0),
         end = Math.min(request.selection.bytes, offset + 32768);
       return {
@@ -219,23 +223,19 @@ export function transcriptFixture(count = 640) {
         fallback(operation, input)),
     ) as never;
   };
-  // The Promise client the desktop's whole-source iteration reads through.
-  const chat: ChatClient = {
-    command: (operation, input, options) => command(operation, input, options?.signal),
-    watch: () => async () => {},
-    watchChatList: () => async () => {},
-  };
   // Interrupting a port read aborts its signal without waiting for the handler.
   const port = new Proxy({} as ChatPort, {
     get: (_port, operation: string) => (input: unknown) =>
       Effect.tryPromise({
         try: (signal) => command(operation, input, signal),
-        catch: (error) => error as ApplicationError,
+        catch: (error) => error as never,
       }),
   });
+  // The content read a whole-source stream reads through.
+  const read: TranscriptRead<unknown> = (input) => port.getChatTranscriptContent(input);
   return {
     target,
-    chat,
+    read,
     port,
     entries,
     calls,
