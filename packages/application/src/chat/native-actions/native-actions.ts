@@ -1,3 +1,5 @@
+import { describeChatOutcome } from '../chat-errors.ts';
+
 /** What a transcript asks of its platform: Copy, or opening a link. */
 export type NativeActionKind = 'copy' | 'open';
 /** `success` clears itself; `error` stays until replaced. Neither ever reports another's outcome. */
@@ -29,8 +31,13 @@ export const offlineNotice: TranscriptNotice = {
   tone: 'error',
   text: 'Native action cancelled because this view is offline. Reconnect and try again.',
 };
-/** A failed action's notice: Moonbase's own message for it, else fixed text. */
+/**
+ * A failed action's notice: the chat's fixed text for a shared outcome, else Moonbase's own
+ * message for it, else fixed text.
+ */
 export const failedNotice = (error: unknown): TranscriptNotice => ({
   tone: 'error',
-  text: error instanceof Error ? error.message : 'The action failed. Try again.',
+  text:
+    describeChatOutcome(error) ??
+    (error instanceof Error ? error.message : 'The action failed. Try again.'),
 });

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Deferred, Effect, Exit, Scope, SubscriptionRef } from 'effect';
 import { TestClock } from 'effect/testing';
+import { UnauthorizedError } from '@moonbase/contracts/errors';
 import {
   busyNotice,
   doneNotice,
@@ -34,6 +35,13 @@ test('two native actions run at once, a third is refused, and a success clears i
       assert.deepEqual(notice(), doneNotice('copy'));
       yield* TestClock.adjust('4 seconds');
       assert.equal(notice(), null);
+      // A shared outcome shows the chat's fixed text, not the operation it names.
+      yield* actions.run(
+        Effect.fail(new UnauthorizedError({ operation: 'getChatTranscriptContent' })),
+        'copy',
+      );
+      yield* Effect.yieldNow;
+      assert.equal(notice()?.text, 'This request is not authorized.');
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 });

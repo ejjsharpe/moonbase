@@ -107,15 +107,25 @@ const fixedText = {
 const fallback = 'Chat action failed.';
 
 /**
+ * The fixed text the chat shows for a shared outcome, `UncertainError` or `UnauthorizedError`,
+ * whose own message names the operation; none for any other failure.
+ */
+export function describeChatOutcome(error: unknown): string | undefined {
+  const tag = error instanceof Error ? (error as { _tag?: unknown })._tag : undefined;
+  return typeof tag === 'string' && Object.hasOwn(fixedText, tag)
+    ? fixedText[tag as keyof typeof fixedText]
+    : undefined;
+}
+
+/**
  * The text the chat shows for a failure (D14), its one tag-to-text mapping. The chat's own errors,
  * a host's and desktop IPC's build their message from fixed text and their fields (D11);
  * `UncertainError` and `UnauthorizedError` show fixed text; anything else, such as a defect, shows
  * only fixed text.
  */
 export function describeChatFailure(error: unknown): string {
-  const tag = error instanceof Error ? (error as { _tag?: unknown })._tag : undefined;
-  if (typeof tag === 'string' && Object.hasOwn(fixedText, tag))
-    return fixedText[tag as keyof typeof fixedText];
+  const outcome = describeChatOutcome(error);
+  if (outcome !== undefined) return outcome;
   if (isOwnError(error) || isTranscriptReadError(error) || isKnownError(error))
     return (error as Error).message;
   return fallback;

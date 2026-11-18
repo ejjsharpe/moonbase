@@ -1,4 +1,4 @@
-import { isCancelled, isUncertain } from '@moonbase/contracts/error-groups';
+import { isAccessRefusal, isCancelled, isUncertain } from '@moonbase/contracts/error-groups';
 import {
   Cause,
   Context,
@@ -18,6 +18,7 @@ import type {
   ChatModelPreference,
   ChatTarget,
 } from '@moonbase/contracts/chat';
+import { describeChatOutcome } from '../chat-errors.ts';
 import type { ChatState } from '../chat-state.ts';
 import { rebaseMentions } from './mention-text.ts';
 import { chatWorktreeBranch } from './worktree-branch.ts';
@@ -188,7 +189,10 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
           // A worktree that may have been made keeps its request, so a retry asks for it again.
           if (!isUncertain(error.value) && !isCancelled(error.value))
             yield* Ref.set(unknownRequest, undefined);
-          const detail = error.value instanceof Error ? error.value.message : '';
+          // A folder the host refused shows the chat's fixed text; any other failure its own.
+          const detail =
+            (isAccessRefusal(error.value) && describeChatOutcome(error.value)) ||
+            (error.value instanceof Error ? error.value.message : '');
           return yield* report({
             chat: '',
             text: `The worktree could not be created. ${detail}`.trim(),

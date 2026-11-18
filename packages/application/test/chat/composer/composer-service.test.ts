@@ -7,7 +7,7 @@ import {
   type ChatTarget,
 } from '@moonbase/contracts/chat';
 import { Effect, Queue, Scope, Stream, SubscriptionRef } from 'effect';
-import { CancelledError, UncertainError } from '@moonbase/contracts/errors';
+import { CancelledError, UnauthorizedError, UncertainError } from '@moonbase/contracts/errors';
 import { WorkspaceConflictError } from '@moonbase/contracts/workspace-host-errors';
 import {
   ChatComposers,
@@ -308,6 +308,16 @@ test('a worktree outcome reaches every view, until the new chat is left for a ch
   assert.deepEqual(composer.place(dockB), { cwd: '/b', newWorktree: true });
   composer.sync(composer.composer.dismiss({ chat: '', place: dockB.key }));
   assert.equal(composer.message, null);
+  // A host's refusal shows the chat's fixed text, not the operation it names.
+  const refused = Promise.withResolvers<string>();
+  composer.send(dockB, () => refused.promise);
+  refused.reject(new UnauthorizedError({ operation: 'checkApprovedFolder' }));
+  await until(() => !composer.snapshot.creatingWorktree);
+  assert.equal(
+    composer.message,
+    'The worktree could not be created. This request is not authorized.',
+  );
+  composer.sync(composer.composer.dismiss({ chat: '', place: dockB.key }));
   // Leaving the new chat for a chat clears every place's messages too.
   composer.sync(composer.composer.report({ chat: '', place: agents.key, text: 'Stale' }));
   await chat.select(target('third'));
