@@ -1,7 +1,7 @@
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import type { CommandInput, CommandOutput, WorkspaceCommand } from '@moonbase/contracts/workspace';
 import { editorClientId } from '../../ipc/editor-rpcs.ts';
-import type { IpcAuthorityError } from '../../ipc/ipc-errors.ts';
+import type { IpcAuthorityError } from '@moonbase/contracts/ipc-errors';
 
 const sameCheckout = (a: CheckoutTarget, b: CheckoutTarget) => {
   const [x, y]: Record<string, unknown>[] = [a, b];

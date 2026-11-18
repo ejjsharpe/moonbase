@@ -1,5 +1,4 @@
 import { Effect, Stream, SubscriptionRef } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/errors';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import type {
   ChatInput,
@@ -8,9 +7,9 @@ import type {
   ChatTranscriptSelection,
   ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
-import { toChatApplicationError } from '@moonbase/contracts/chat-legacy-errors';
-import type { ChatServiceShape } from '@moonbase/contracts/services';
+import type { ChatServiceError, ChatServiceShape } from '@moonbase/contracts/services';
 import {
+  checkTranscript,
   checkTranscriptReply,
   countDecodedTranscriptBytes,
   TranscriptReadError,
@@ -23,6 +22,7 @@ import {
   type TranscriptCopy,
   type TranscriptImage,
 } from '../../ipc/chat-rpcs.ts';
+import { TranscriptNativeError } from '../../ipc/ipc-errors.ts';
 
 /** The OS actions Copy and links take: Electron's clipboard and browser. */
 export type NativeTranscriptActions = {
@@ -35,21 +35,12 @@ export const maximumTranscriptCopyBytes = 8 * 1024 * 1024;
 export const maximumTranscriptCodeCopyBytes = 1024 * 1024;
 /** Whole-message Copy separates authored text parts like paragraphs. */
 const transcriptPartSeparator = '\n\n';
-const failure = (code: ApplicationError['code'], message: string) =>
-  new ApplicationError({ code, message });
-/** A read's problem as the legacy error main's procedures still fail with (until the UI reads tags). */
-const toLegacyFailure = (error: TranscriptReadError) => failure(error.code, error.message);
-const readFailure = (problem: TranscriptReadProblem) =>
-  toLegacyFailure(new TranscriptReadError({ problem }));
-/** A synchronous transcript check, failing with the legacy error its problem had. */
-const checkRead = <A>(check: () => A) =>
-  Effect.try({
-    try: check,
-    catch: (error) =>
-      error instanceof TranscriptReadError ? toLegacyFailure(error) : (error as ApplicationError),
-  });
-const sourceChanged = () =>
-  failure('Conflict', 'Transcript source changed. Reload the content and try Copy again.');
+/** What a Copy or image read fails with: the chat's errors, a read's problem, or main's own. */
+type CopyFailure = ChatServiceError | TranscriptReadError | TranscriptNativeError;
+const failure = (problem: TranscriptNativeError['problem']) =>
+  new TranscriptNativeError({ problem });
+const readFailure = (problem: TranscriptReadProblem) => new TranscriptReadError({ problem });
+const sourceChanged = () => failure('source-changed');
 export const transcriptImagePath = '/transcript-image/';
 const imageSignatures: Record<TranscriptImage['mimeType'], number[]> = {
   'image/png': [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
@@ -99,10 +90,10 @@ export const respondTranscriptImage = (
 type Observation =
   | { _tag: 'Waiting' }
   | { _tag: 'Seen'; snapshot: ChatSnapshot }
-  | { _tag: 'Failed'; error: ApplicationError };
+  | { _tag: 'Failed'; error: ChatServiceError };
 type ContentInput = ChatInput<'getChatTranscriptContent'>;
 type ContentReply = ChatOutput<'getChatTranscriptContent'>;
-type Limit = { bytes: number; message: string };
+type Limit = { bytes: number; problem: TranscriptNativeError['problem'] };
 
 /**
  * Watches a live source's chat while the scope is open, from its first snapshot: the check fails
@@ -113,7 +104,6 @@ const watchSource = (chat: ChatServiceShape, source: ChatTranscriptSource) =>
     if (source.kind !== 'live') return Effect.void;
     const observed = yield* SubscriptionRef.make<Observation>({ _tag: 'Waiting' });
     yield* chat.watch({ target: source.target }).pipe(
-      Stream.mapError(toChatApplicationError),
       Stream.runForEach((snapshot) => SubscriptionRef.set(observed, { _tag: 'Seen', snapshot })),
       Effect.catch((error) => SubscriptionRef.set(observed, { _tag: 'Failed', error })),
       Effect.forkScoped,
@@ -126,7 +116,7 @@ const watchSource = (chat: ChatServiceShape, source: ChatTranscriptSource) =>
     // A yield first, so a snapshot already received is the one checked.
     return Effect.flatMap(
       Effect.andThen(Effect.yieldNow, SubscriptionRef.get(observed)),
-      (observation) => {
+      (observation): Effect.Effect<void, CopyFailure> => {
         if (observation._tag === 'Failed') return Effect.fail(observation.error);
         if (observation._tag === 'Waiting') return Effect.fail(sourceChanged());
         const { snapshot } = observation;
@@ -144,24 +134,24 @@ const watchSource = (chat: ChatServiceShape, source: ChatTranscriptSource) =>
  * continuation is validated; the replies themselves were decoded at the chat client's boundary.
  */
 const readSource = (
-  read: (input: ContentInput) => Effect.Effect<ContentReply, ApplicationError>,
+  read: (input: ContentInput) => Effect.Effect<ContentReply, CopyFailure>,
   input: Pick<TranscriptCopy, 'source' | 'selection'>,
-  check: Effect.Effect<void, ApplicationError>,
+  check: Effect.Effect<void, CopyFailure>,
   receive: (chunk: {
     selection: ChatTranscriptSelection;
     offset: number;
     encoding: string;
     data: string;
-  }) => Effect.Effect<void, ApplicationError>,
+  }) => Effect.Effect<void, CopyFailure>,
 ) =>
   Effect.gen(function* () {
     const { source, selection } = input;
-    const readChecked = (request: ContentInput): Effect.Effect<ContentReply, ApplicationError> =>
+    const readChecked = (request: ContentInput): Effect.Effect<ContentReply, CopyFailure> =>
       Effect.gen(function* () {
         yield* check;
         const reply = yield* read(request);
         yield* check;
-        return yield* checkRead(() => checkTranscriptReply(request, reply));
+        return yield* checkTranscript(() => checkTranscriptReply(request, reply));
       });
     const advance = trackTranscriptCursor();
     let manifestCursor: string | null = null;
@@ -207,7 +197,7 @@ const readSource = (
         } while (cursor !== null);
         if (offset !== selected.bytes) return yield* Effect.fail(readFailure('content-incomplete'));
       }
-      yield* checkRead(() => advance(manifestCursor, next));
+      yield* checkTranscript(() => advance(manifestCursor, next));
       manifestCursor = next;
     } while (manifestCursor !== null);
     yield* check;
@@ -226,11 +216,10 @@ const readTranscript = (
 ) =>
   Effect.gen(function* () {
     const { source, selection } = input;
-    const tooLarge = () => failure('Unavailable', limit.message);
+    const tooLarge = () => failure(limit.problem);
     if (selection && selection.bytes > limit.bytes) return yield* Effect.fail(tooLarge());
     const check = yield* watchSource(chat, source);
-    const read = (request: ContentInput) =>
-      chat.getChatTranscriptContent(request).pipe(Effect.mapError(toChatApplicationError));
+    const read = (request: ContentInput) => chat.getChatTranscriptContent(request);
     const parts: string[][] = [];
     const selections: ChatTranscriptSelection[] = [];
     let total = 0;
@@ -252,19 +241,10 @@ const readTranscript = (
       (chunk) =>
         Effect.gen(function* () {
           if (chunk.encoding !== encoding)
-            return yield* Effect.fail(
-              failure(
-                'InvalidInput',
-                encoding === 'utf8'
-                  ? 'This part is binary and cannot be copied as text.'
-                  : 'This part is text, not stored image data.',
-              ),
-            );
+            return yield* Effect.fail(failure(encoding === 'utf8' ? 'binary' : 'not-image'));
           if (chunk.offset === 0) {
             if (selections.some(({ partId }) => partId === chunk.selection.partId))
-              return yield* Effect.fail(
-                failure('Incompatible', 'Transcript manifest repeats a selected part.'),
-              );
+              return yield* Effect.fail(failure('repeated-part'));
             // Each part delivers exactly its selected bytes, so refuse before buffering it.
             total += chunk.selection.bytes + (parts.length ? transcriptPartSeparator.length : 0);
             if (total > limit.bytes) return yield* Effect.fail(tooLarge());
@@ -274,8 +254,7 @@ const readTranscript = (
           parts.at(-1)!.push(chunk.data);
         }),
     );
-    if (!selections.length)
-      return yield* Effect.fail(failure('Unavailable', 'No authored text is available to copy.'));
+    if (!selections.length) return yield* Effect.fail(failure('no-text'));
     if (source.kind === 'live')
       for (const selected of selections) {
         yield* check;
@@ -307,14 +286,8 @@ export const copyTranscript = (
     Effect.gen(function* () {
       const { code } = input;
       const limit = code
-        ? {
-            bytes: maximumTranscriptCodeCopyBytes,
-            message: 'Code Copy supports parts up to 1 MiB. Copy the whole message instead.',
-          }
-        : {
-            bytes: maximumTranscriptCopyBytes,
-            message: 'Copy supports up to 8 MiB of text. This content is larger.',
-          };
+        ? { bytes: maximumTranscriptCodeCopyBytes, problem: 'code-too-large' as const }
+        : { bytes: maximumTranscriptCopyBytes, problem: 'text-too-large' as const };
       const { parts, check } = yield* readTranscript(chat, input, 'utf8', limit);
       // Code Copy always selects one part, so its parser offsets match the renderer's per-part parse.
       let text = parts.map((chunks) => chunks.join('')).join(transcriptPartSeparator);
@@ -322,13 +295,7 @@ export const copyTranscript = (
         const block = parseTranscriptMarkdown(text).codeBlocks.find(
           (node) => node.position?.start.offset === code.start,
         );
-        if (!block)
-          return yield* Effect.fail(
-            failure(
-              'Conflict',
-              'The displayed code block changed as more Markdown was loaded. Read more and try Copy again.',
-            ),
-          );
+        if (!block) return yield* Effect.fail(failure('code-changed'));
         text = block.value;
       }
       yield* check;
@@ -336,7 +303,7 @@ export const copyTranscript = (
       yield* Effect.uninterruptible(
         Effect.tryPromise({
           try: () => native.writeText(text),
-          catch: () => failure('Unavailable', 'Could not write to the clipboard. Try Copy again.'),
+          catch: () => failure('clipboard'),
         }),
       );
     }),
@@ -348,7 +315,7 @@ export const readTranscriptImage = (chat: ChatServiceShape, image: TranscriptIma
     Effect.map(
       readTranscript(chat, image, 'base64', {
         bytes: maximumTranscriptImageBytes,
-        message: 'Stored image exceeds the 4 MiB preview limit.',
+        problem: 'image-too-large',
       }),
       ({ parts }) =>
         new Uint8Array(Buffer.concat(parts.flat().map((chunk) => Buffer.from(chunk, 'base64')))),

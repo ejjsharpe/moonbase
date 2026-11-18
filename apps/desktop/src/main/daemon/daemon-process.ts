@@ -3,7 +3,7 @@ import { ChildProcess, ChildProcessSpawner } from 'effect/process';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
 import type { DaemonCommand } from './daemon-command.ts';
 import { readDaemonEndpoint, type DaemonEndpoint } from './daemon-files.ts';
-import { LocalDaemonError } from './local-daemon-errors.ts';
+import { LocalDaemonError } from '@moonbase/contracts/connection-errors';
 
 export type DaemonProcessOptions = {
   /** The daemon's absolute data directory, `<userData>/daemon-v1`. */

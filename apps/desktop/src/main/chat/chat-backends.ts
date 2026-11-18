@@ -1,19 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { Cause, Effect, Exit } from 'effect';
-import { toWireError } from '@moonbase/contracts/workspace-host-errors';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import type { ApplicationError } from '@moonbase/contracts/errors';
-import { toChatApplicationError } from '@moonbase/contracts/chat-legacy-errors';
+import { isCancelled, isUncertain } from '@moonbase/contracts/error-groups';
 import type {
   ChatServiceShape,
   ConnectionServiceShape,
-  LocalHostServiceError,
   ProviderSetupService,
-  ProviderSetupServiceError,
 } from '@moonbase/contracts/services';
 import type { ChatSession } from '@moonbase/contracts/chat';
 import type { DaemonClients, LocalDaemon } from '../daemon/local-daemon.ts';
-import { toDaemonApplicationError } from '../daemon/local-daemon-errors.ts';
 import type { ChatConfiguration } from './config.ts';
 import type { ChatTargetId, DesktopChatTarget } from '../../ipc/chat-rpcs.ts';
 import type { RequestIds } from '../request-ids.ts';
@@ -33,10 +28,6 @@ export type ChatTargetClients = {
   providers: ProviderSetupService['Service'];
   connection: ConnectionServiceShape | null;
 };
-
-// Folder and provider setup errors reach the renderer as the legacy error with its code (CL-22).
-const legacy = <A>(effect: Effect.Effect<A, LocalHostServiceError | ProviderSetupServiceError>) =>
-  Effect.mapError(effect, toChatApplicationError);
 
 export type ChatBackendsOptions = {
   /** The local daemon, found or started on demand. */
@@ -64,8 +55,7 @@ export function makeChatBackends({
   adoptCheckout = () => {},
   requestIds,
 }: ChatBackendsOptions) {
-  // The local daemon's failures reach the renderer as the legacy error with its code.
-  const reachLocal = Effect.mapError(local.get, toDaemonApplicationError);
+  const reachLocal = local.get;
   const targets: DesktopChatTarget[] = [
     { id: 'local', label: 'Local', mode: 'local' },
     ...(remote
@@ -83,10 +73,7 @@ export function makeChatBackends({
    * reload or a restart asks for the first outcome. The ID is kept only while the outcome is
    * unknown (`Uncertain`, or cancelled); an answer, a refusal included, is final.
    */
-  const withRequestId = <A>(
-    key: string,
-    send: (requestId: string) => Effect.Effect<A, ApplicationError>,
-  ) =>
+  const withRequestId = <A, E>(key: string, send: (requestId: string) => Effect.Effect<A, E>) =>
     Effect.suspend(() => {
       const requestId = requestIds.get(key) ?? randomUUID();
       requestIds.put(key, requestId);
@@ -98,7 +85,7 @@ export function makeChatBackends({
             const unknown =
               error._tag === 'None'
                 ? Cause.hasInterrupts(exit.cause)
-                : ['Uncertain', 'Cancelled'].includes(error.value.code);
+                : isUncertain(error.value) || isCancelled(error.value);
             if (!unknown) requestIds.delete(key);
           }),
         ),
@@ -138,13 +125,11 @@ export function makeChatBackends({
       const backend = yield* reachLocal;
       const selection = yield* pickFolder;
       if (!selection) return null;
-      const { path } = yield* legacy(
-        backend.folders.approveFolder({
-          host: backend.session.host,
-          requestId: randomUUID(),
-          path: selection,
-        }),
-      );
+      const { path } = yield* backend.folders.approveFolder({
+        host: backend.session.host,
+        requestId: randomUUID(),
+        path: selection,
+      });
       return path;
     }),
     /**
@@ -157,12 +142,11 @@ export function makeChatBackends({
         if (backendId === 'remote') {
           if (!remote) return [];
           const { host } = remote.configuration.context;
-          return (yield* legacy(remote.folders.listHostFolders({ host }))).folders;
+          return (yield* remote.folders.listHostFolders({ host })).folders;
         }
         const backend = yield* local.peek;
         if (!backend) return [];
-        return (yield* legacy(backend.folders.listRecentFolders({ host: backend.session.host })))
-          .folders;
+        return (yield* backend.folders.listRecentFolders({ host: backend.session.host })).folders;
       }),
     /**
      * Starts a new local chat's worktree from a folder the daemon lets local chat use: it derives
@@ -175,12 +159,13 @@ export function makeChatBackends({
     createWorktree: (root: string, branch: string, requestId: string) =>
       Effect.gen(function* () {
         const backend = yield* reachLocal;
-        yield* legacy(
-          backend.folders.checkApprovedFolder({ host: backend.session.host, path: root }),
-        );
-        const created = yield* backend.workspace
-          .createChatWorktree({ installationId, requestId, root, branch })
-          .pipe(Effect.mapError(toWireError));
+        yield* backend.folders.checkApprovedFolder({ host: backend.session.host, path: root });
+        const created = yield* backend.workspace.createChatWorktree({
+          installationId,
+          requestId,
+          root,
+          branch,
+        });
         yield* Effect.sync(() => adoptCheckout(created));
         return created.root;
       }),
@@ -195,13 +180,11 @@ export function makeChatBackends({
         const created = yield* withRequestId(
           JSON.stringify(['turnChatIntoProject', conversationId]),
           (requestId) =>
-            backend.workspace
-              .turnChatIntoProject({
-                installationId,
-                requestId,
-                target: { ...backend.session, conversationId },
-              })
-              .pipe(Effect.mapError(toWireError)),
+            backend.workspace.turnChatIntoProject({
+              installationId,
+              requestId,
+              target: { ...backend.session, conversationId },
+            }),
         );
         yield* Effect.sync(() => adoptCheckout(created));
         return created.root;
@@ -216,7 +199,7 @@ export function makeChatBackends({
         const backend = yield* local.peek;
         const [released] = yield* Effect.all(
           [
-            Effect.exit(backend ? legacy(backend.providers.releaseOwner(ownerId)) : Effect.void),
+            Effect.exit(backend ? backend.providers.releaseOwner(ownerId) : Effect.void),
             remote ? Effect.ignore(remote.providers.releaseOwner(ownerId)) : Effect.void,
           ],
           { concurrency: 'unbounded' },

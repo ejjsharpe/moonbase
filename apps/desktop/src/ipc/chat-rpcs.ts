@@ -1,6 +1,5 @@
 import * as Schema from 'effect/Schema';
 import { Rpc, RpcGroup } from 'effect/rpc';
-import { CancelledError } from '@moonbase/contracts/errors';
 import { array, optional, struct, voidResult } from '@moonbase/contracts/schema';
 import {
   ChatSessionSchema,
@@ -19,13 +18,14 @@ import {
   connectionOutputSchemas,
 } from '@moonbase/contracts/connection-schema';
 import { IpcAdmission } from './ipc-admission.ts';
+import { IpcBusyError, NativeActionError } from '@moonbase/contracts/ipc-errors';
+import { TranscriptReadError } from '@moonbase/application/chat';
 import {
-  IpcApplicationErrorSchema,
-  IpcAuthorityError,
-  IpcBusyError,
-  IpcInputError,
-  IpcUnavailableError,
-  NativeActionError,
+  chatTargetErrors,
+  connectionErrors,
+  ipcErrors,
+  TranscriptNativeError,
+  workspaceErrors,
 } from './ipc-errors.ts';
 import { exact, IpcRequestIdSchema, IpcTextSchema } from './ipc-limits.ts';
 
@@ -79,14 +79,9 @@ export const isTranscriptLink = (value: string) => {
   }
 };
 
-const errors = [
-  IpcApplicationErrorSchema,
-  IpcInputError,
-  IpcAuthorityError,
-  IpcUnavailableError,
-  CancelledError,
-] as const;
-const error = Schema.Union(errors);
+const error = Schema.Union(chatTargetErrors);
+const connectionError = Schema.Union(connectionErrors);
+const workspaceError = Schema.Union(workspaceErrors);
 const backendField = { backendId: ChatTargetIdSchema };
 const backend = exact(Schema.Struct(backendField));
 /** A payload of exactly `fields`. */
@@ -109,7 +104,7 @@ const connection = <const K extends keyof typeof connectionInputSchemas>(operati
   Rpc.make(operation, {
     payload: fields({ input: connectionInputSchemas[operation] }),
     success: wire(connectionOutputSchemas[operation]),
-    error,
+    error: connectionError,
   });
 
 /**
@@ -117,7 +112,10 @@ const connection = <const K extends keyof typeof connectionInputSchemas>(operati
  * native actions a transcript and a new chat need.
  */
 export class DesktopChatRpcs extends RpcGroup.make(
-  Rpc.make('getChatTargets', { success: array(DesktopChatTargetSchema), error }),
+  Rpc.make('getChatTargets', {
+    success: array(DesktopChatTargetSchema),
+    error: Schema.Union(ipcErrors),
+  }),
   Rpc.make('getChatContext', { payload: backend, success: ChatSessionSchema, error }),
   /** The native picker; the daemon approves the chosen folder for local chat. */
   Rpc.make('chooseChatFolder', { success: Schema.NullOr(Schema.String), error }),
@@ -127,13 +125,13 @@ export class DesktopChatRpcs extends RpcGroup.make(
   Rpc.make('createChatWorktree', {
     payload: fields({ root: IpcTextSchema, branch: IpcTextSchema, requestId: IpcRequestIdSchema }),
     success: Schema.String,
-    error,
+    error: workspaceError,
   }),
   /** Opens a local chat without a project's folder as a project where it is; its root. */
   Rpc.make('turnChatIntoProject', {
     payload: fields({ conversationId: Schema.String.check(Schema.isBetweenLength(1, 512)) }),
     success: Schema.String,
-    error,
+    error: workspaceError,
   }),
   chat('getChatHost'),
   chat('listChats'),
@@ -175,17 +173,26 @@ export class DesktopChatRpcs extends RpcGroup.make(
   connection('getConnection'),
   connection('connect'),
   connection('disconnect'),
-  Rpc.make('watchConnection', { success: ConnectionSnapshotSchema, error, stream: true }),
+  Rpc.make('watchConnection', {
+    success: ConnectionSnapshotSchema,
+    error: connectionError,
+    stream: true,
+  }),
   Rpc.make('copyTranscript', {
     payload: fields({ ...backendField, copy: TranscriptCopySchema }),
-    error: Schema.Union([...errors, IpcBusyError]),
+    error: Schema.Union([
+      ...chatTargetErrors,
+      IpcBusyError,
+      TranscriptReadError,
+      TranscriptNativeError,
+    ]),
   }),
   Rpc.make('openTranscriptLink', {
     payload: fields({
       ...backendField,
       url: Schema.String.check(Schema.makeFilter(isTranscriptLink)),
     }),
-    error: Schema.Union([...errors, NativeActionError]),
+    error: Schema.Union([...ipcErrors, NativeActionError]),
   }),
   Rpc.make('getTranscriptImageUrl', {
     payload: fields({ ...backendField, image: TranscriptImageSchema }),

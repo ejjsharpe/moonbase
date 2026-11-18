@@ -13,8 +13,8 @@ import {
   SynchronizedRef,
 } from 'effect';
 import type { ChatSession } from '@moonbase/contracts/chat';
-import type { ApplicationError } from '@moonbase/contracts/errors';
-import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
+import { LocalDaemonError, type ConnectionFailure } from '@moonbase/contracts/connection-errors';
+import { isUnavailable } from '@moonbase/contracts/error-groups';
 import {
   ChatService,
   ConnectionService,
@@ -28,7 +28,6 @@ import { LoopbackConnectionLive, loopbackProfileId } from '@moonbase/daemon-prot
 import { DaemonServicesLive } from './daemon-services.ts';
 import { readDaemonSession } from './daemon-files.ts';
 import { makeDaemonProcess, type DaemonProcessOptions } from './daemon-process.ts';
-import { LocalDaemonError, toDaemonApplicationError } from './local-daemon-errors.ts';
 
 /**
  * How long a failed attempt to find, start or reach the local daemon is answered again, to every
@@ -56,8 +55,8 @@ type ClientState =
   | { _tag: 'Bound'; clients: Bound; connectedTo: number | undefined }
   | { _tag: 'Released' };
 
-/** Why an attempt failed: the daemon's own reason, or the loopback connection's legacy error. */
-type AttemptError = LocalDaemonError | ApplicationError;
+/** Why an attempt failed: the daemon's own reason, or the loopback connection's. */
+type AttemptError = LocalDaemonError | ConnectionFailure;
 /** The one attempt under way, or the failure the last one ended with, kept for a moment. */
 type Attempt =
   | { _tag: 'Idle' }
@@ -170,14 +169,15 @@ export const LocalDaemonLive = ({ openUrl, replaceMs = 30_000, ...options }: Loc
        * answer, and notes which daemon process the clients now reach.
        */
       const connectLoopback = (bound: Bound) => {
-        const connect = bound.loopback.connect({ profileId: loopbackProfileId }).pipe(
-          Effect.mapError(toConnectionApplicationError),
-          Effect.tapError(({ message }) =>
-            Effect.logError('The local daemon is unreachable:', message),
-          ),
-        );
+        const connect = bound.loopback
+          .connect({ profileId: loopbackProfileId })
+          .pipe(
+            Effect.tapError(({ message }) =>
+              Effect.logError('The local daemon is unreachable:', message),
+            ),
+          );
         return Effect.catch(connect, (error): Effect.Effect<unknown, AttemptError> =>
-          error.code === 'Unavailable' ? Effect.andThen(daemon.start, connect) : Effect.fail(error),
+          isUnavailable(error) ? Effect.andThen(daemon.start, connect) : Effect.fail(error),
         ).pipe(Effect.andThen(daemon.pid));
       };
       /** The daemon's clients over loopback, in the scope `own`. */
@@ -310,15 +310,8 @@ export const LocalDaemonLive = ({ openUrl, replaceMs = 30_000, ...options }: Loc
       function reaching(loopback: ConnectionServiceShape): ConnectionServiceShape {
         return {
           ...loopback,
-          // The attempt's own failure, as the old connection gave it: the daemon's reason, or the
-          // loopback connection's error with its code.
-          endpoint: (input) =>
-            Effect.andThen(
-              Effect.mapError(ready, (error) =>
-                error._tag === 'LocalDaemonError' ? toDaemonApplicationError(error) : error,
-              ),
-              loopback.endpoint(input),
-            ),
+          // The attempt's own failure: the daemon's reason, or the loopback connection's.
+          endpoint: (input) => Effect.andThen(ready, loopback.endpoint(input)),
         };
       }
       const connect = Effect.flatMap(

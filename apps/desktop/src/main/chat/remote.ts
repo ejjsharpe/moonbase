@@ -7,7 +7,6 @@ import {
   LocalHostService,
   ProviderSetupService,
 } from '@moonbase/contracts/services';
-import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
 import { DaemonServicesLive } from '../daemon/daemon-services.ts';
 import type { ChatConfiguration } from './config.ts';
 import type { RemoteChat } from './chat-backends.ts';
@@ -44,7 +43,7 @@ export const RemoteHostLive = (
             }),
           );
           const connection = Context.get(services, ConnectionService);
-          yield* connection.getConnection({}).pipe(Effect.mapError(toConnectionApplicationError));
+          yield* connection.getConnection({});
           return Option.some<RemoteChat>({
             configuration,
             chat: Context.get(services, ChatService),

@@ -8,16 +8,20 @@ import type {
   WorkspaceCommand,
 } from '@moonbase/contracts/workspace';
 import type { WorkspaceServiceShape } from '@moonbase/contracts/services';
-import { toWireError } from '@moonbase/contracts/workspace-errors';
+import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
 import { EditorRpcs, editorClientId } from '../../ipc/editor-rpcs.ts';
-import { IpcAuthorityError, IpcInputError, NativeActionError } from '../../ipc/ipc-errors.ts';
+import {
+  IpcAuthorityError,
+  IpcInputError,
+  NativeActionError,
+} from '@moonbase/contracts/ipc-errors';
 import { IpcRequestIdSchema } from '../../ipc/ipc-limits.ts';
 import type { NativeActions } from '../native-actions.ts';
 import type { DocumentGrants, EditorApprovals } from './editor-approvals.ts';
 import * as Schema from 'effect/Schema';
 
 export type EditorIpcOptions = {
-  /** The root's workspace; its errors cross as the legacy `ApplicationError` codes and text. */
+  /** The root's workspace; its errors cross as they are. */
   workspace: WorkspaceServiceShape;
   native: NativeActions;
   approvals: EditorApprovals;
@@ -64,8 +68,8 @@ export function makeEditorIpcHandlers(options: EditorIpcOptions, document: Scope
         if (refusal) return yield* new IpcAuthorityError({ refusal });
         const run = workspace[operation] as (
           input: CommandInput<K>,
-        ) => Effect.Effect<CommandOutput<K>, Parameters<typeof toWireError>[0]>;
-        const output = yield* run(input).pipe(Effect.mapError(toWireError));
+        ) => Effect.Effect<CommandOutput<K>, WorkspaceError>;
+        const output = yield* run(input);
         yield* Effect.sync(() => approvals.record(operation, output, grants));
         return output;
       });
@@ -138,16 +142,11 @@ export function makeEditorIpcHandlers(options: EditorIpcOptions, document: Scope
           input.clientId === editorClientId
             ? Effect.void
             : Effect.fail(new IpcAuthorityError({ refusal: 'foreign-client' })),
-          workspace.watchRecovery(input).pipe(Stream.mapError(toWireError)),
+          workspace.watchRecovery(input),
         ),
       ),
     watchWorkspace: (input) =>
-      Stream.unwrap(
-        Effect.as(
-          checkApproved(input.checkout),
-          workspace.watch(input).pipe(Stream.mapError(toWireError)),
-        ),
-      ),
+      Stream.unwrap(Effect.as(checkApproved(input.checkout), workspace.watch(input))),
     chooseCheckout: () =>
       native.chooseCheckout.pipe(
         Effect.tap((root) =>

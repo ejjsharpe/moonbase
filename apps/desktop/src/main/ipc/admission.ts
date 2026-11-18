@@ -1,10 +1,9 @@
 import { Effect, Option, Semaphore } from 'effect';
 import { RpcSchema } from 'effect/rpc';
-import { ApplicationError } from '@moonbase/contracts/errors';
 import { DesktopChatRpcs } from '../../ipc/chat-rpcs.ts';
 import { EditorRpcs } from '../../ipc/editor-rpcs.ts';
 import { IpcAdmission } from '../../ipc/ipc-admission.ts';
-import { boundApplicationError, IpcBusyError, IpcInputError } from '../../ipc/ipc-errors.ts';
+import { IpcBusyError, IpcFailedError, IpcInputError } from '@moonbase/contracts/ipc-errors';
 import { findInputBoundBreach, ipcLimits, isWithinChatRequestBytes } from '../../ipc/ipc-limits.ts';
 
 /** One request as a test entry may see it: its procedure and decoded payload. */
@@ -42,8 +41,6 @@ const chatTargetOf = (tag: string, payload: unknown) =>
   (localChatProcedures.has(tag) ? 'local' : 'remote');
 /** Answers only from main's own state, so it holds no place (as before Effect RPC). */
 const unlimited = new Set(['getChatTargets']);
-const failed = () =>
-  new ApplicationError({ code: 'Unavailable', message: 'Application effect failed' });
 
 /**
  * The admission of one document's requests. Each kind (the editor, each chat target, the window)
@@ -78,10 +75,7 @@ export function makeIpcAdmission(intercept?: IpcInterception) {
       }
       const handle = () =>
         (intercept ? intercept({ tag, payload }, effect) : effect).pipe(
-          Effect.mapError((error) =>
-            ApplicationError.is(error) ? boundApplicationError(error) : error,
-          ),
-          Effect.catchDefect(() => Effect.fail(failed())),
+          Effect.catchDefect(() => Effect.fail(new IpcFailedError())),
         ) as typeof effect;
       if (unlimited.has(tag)) return handle();
       const key = `${kind}:${watch ? 'watches' : 'requests'}`;

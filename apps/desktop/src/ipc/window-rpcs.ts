@@ -2,7 +2,8 @@ import * as Schema from 'effect/Schema';
 import { Rpc, RpcGroup } from 'effect/rpc';
 import { optional, struct } from '@moonbase/contracts/schema';
 import { IpcAdmission } from './ipc-admission.ts';
-import { IpcApplicationErrorSchema, IpcInputError } from './ipc-errors.ts';
+import { IpcFailedError, IpcInputError } from '@moonbase/contracts/ipc-errors';
+import { WindowFailure } from './ipc-errors.ts';
 import { exact, IpcRequestIdSchema } from './ipc-limits.ts';
 
 /** What main asks of the window's document: to prepare Quit, to dispose, or to report a cleanup failure. */
@@ -11,11 +12,11 @@ export const WindowActionSchema = Schema.Union([
   struct({
     action: Schema.Literal('cleanup-error'),
     id: IpcRequestIdSchema,
-    error: IpcApplicationErrorSchema,
+    error: WindowFailure,
   }),
 ]);
 export type WindowAction = typeof WindowActionSchema.Type;
-const error = Schema.Union([IpcApplicationErrorSchema, IpcInputError]);
+const error = Schema.Union([IpcInputError, IpcFailedError]);
 
 /** The window's Quit handshake with its document. */
 export class WindowRpcs extends RpcGroup.make(
@@ -27,7 +28,7 @@ export class WindowRpcs extends RpcGroup.make(
       Schema.Struct({
         id: IpcRequestIdSchema,
         consent: Schema.Boolean,
-        cleanupError: optional(IpcApplicationErrorSchema),
+        cleanupError: optional(WindowFailure),
       }),
     ),
     error,

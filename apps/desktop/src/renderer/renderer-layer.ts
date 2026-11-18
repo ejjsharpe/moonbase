@@ -22,7 +22,7 @@ export const makeIpcLayer = (bridge: DesktopBridge) =>
 export function makeDocumentLayer() {
   const application = Layer.unwrap(
     Effect.gen(function* () {
-      const targets = yield* callEffect('getChatTargets', undefined, 'Invalid desktop request.');
+      const targets = yield* callEffect('getChatTargets', undefined, 'desktop-request');
       const ipc = yield* Effect.context<DesktopIpc>();
       return MoonbaseApplication.layer({
         defaultChatTargetId: 'local',
@@ -40,7 +40,7 @@ export function makeDocumentLayer() {
               context: yield* callEffect(
                 'getChatContext',
                 { backendId: target.id },
-                'Invalid chat request.',
+                'chat-request',
               ),
               // Drafts saved for a fixed-settings remote host (`moonbase.chat.v1`) are left
               // alone: their pending chats name no folder or model, so a daemon host can't take

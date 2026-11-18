@@ -2,7 +2,7 @@ import { mkdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import type { App } from 'electron';
 import { Effect } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { StartupError } from './startup-errors.ts';
 
 /**
  * The profile's user-data directory, made private if new: `MOONBASE_USER_DATA`, or the packaged
@@ -16,20 +16,12 @@ export const prepareUserData = (app: Pick<App, 'isPackaged' | 'getPath' | 'setPa
         process.env.MOONBASE_USER_DATA ??
         (app.isPackaged ? join(app.getPath('appData'), 'Moonbase') : undefined);
       if (!requested || !isAbsolute(requested))
-        throw new ApplicationError({
-          code: 'InvalidInput',
-          message: 'Set MOONBASE_USER_DATA to an explicit new Moonbase user-data directory.',
-        });
+        throw new StartupError({ problem: 'user-data-path' });
       mkdirSync(requested, { recursive: true, mode: 0o700 });
       const userData = realpathSync(requested);
       app.setPath('userData', userData);
       return userData;
     },
     catch: (error) =>
-      ApplicationError.is(error)
-        ? error
-        : new ApplicationError({
-            code: 'Unavailable',
-            message: 'The Moonbase user-data directory is unavailable.',
-          }),
+      error instanceof StartupError ? error : new StartupError({ problem: 'user-data' }),
   });

@@ -1,6 +1,5 @@
 import * as Schema from 'effect/Schema';
 import { Rpc, RpcGroup } from 'effect/rpc';
-import { CancelledError } from '@moonbase/contracts/errors';
 import { array, voidResult } from '@moonbase/contracts/schema';
 import {
   CheckoutTargetSchema,
@@ -16,23 +15,15 @@ import {
   recoveryOutputSchemas,
 } from '@moonbase/contracts/recovery-schema';
 import { IpcAdmission } from './ipc-admission.ts';
-import {
-  IpcApplicationErrorSchema,
-  IpcAuthorityError,
-  IpcInputError,
-  NativeActionError,
-} from './ipc-errors.ts';
+import { NativeActionError } from '@moonbase/contracts/ipc-errors';
+import { workspaceErrors } from './ipc-errors.ts';
 import { exact, RelativeCheckoutPathSchema } from './ipc-limits.ts';
 
 /** The editor's client ID, the only one its document may act as. */
 export const editorClientId = 'desktop-primary';
-const errors = [
-  IpcApplicationErrorSchema,
-  IpcInputError,
-  IpcAuthorityError,
-  CancelledError,
-] as const;
-const error = Schema.Union(errors);
+const error = Schema.Union(workspaceErrors);
+/** A native import: also the native action's own refusals. */
+const importError = Schema.Union([...workspaceErrors, NativeActionError]);
 /** A reply's schema on the wire: no reply is `Schema.Void`, which encodes as JSON. */
 const wire = <S extends Schema.Top>(schema: S) =>
   (schema === (voidResult as unknown) ? Schema.Void : schema) as S;
@@ -94,9 +85,9 @@ export class EditorRpcs extends RpcGroup.make(
   }),
   /** The native folder picker; the chosen root may then be opened once. */
   Rpc.make('chooseCheckout', { success: Schema.NullOr(Schema.String), error }),
-  Rpc.make('chooseImports', { payload: checkout, success: imports, error }),
+  Rpc.make('chooseImports', { payload: checkout, success: imports, error: importError }),
   /** Finder files on the clipboard, after the user consents. */
-  Rpc.make('pasteImports', { payload: checkout, success: imports, error }),
+  Rpc.make('pasteImports', { payload: checkout, success: imports, error: importError }),
   Rpc.make('dropImports', {
     payload: exact(
       Schema.Struct({
@@ -108,7 +99,7 @@ export class EditorRpcs extends RpcGroup.make(
       }),
     ),
     success: imports,
-    error,
+    error: importError,
   }),
   /** Main writes the clipboard, so the renderer can put only checkout paths on it. */
   Rpc.make('copyPaths', {
@@ -126,6 +117,6 @@ export class EditorRpcs extends RpcGroup.make(
   }),
   Rpc.make('revealPath', {
     payload: exact(Schema.Struct({ ...checkoutField, path: RelativeCheckoutPathSchema })),
-    error: Schema.Union([...errors, NativeActionError]),
+    error: importError,
   }),
 ).middleware(IpcAdmission) {}

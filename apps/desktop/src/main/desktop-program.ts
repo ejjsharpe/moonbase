@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { app, dialog, protocol } from 'electron';
 import { Context, Effect, Exit, Layer, Scope } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { StartupError } from './startup-errors.ts';
 import { readConfiguration } from './chat/config.ts';
 import { DesktopServicesLive } from './desktop-services.ts';
 import { IpcServer } from './ipc/ipc-server.ts';
@@ -91,12 +91,9 @@ export const desktopProgram = Effect.gen(function* () {
       : yield* Effect.tryPromise({
           try: () => readConfiguration(configurationPath),
           catch: (error) =>
-            ApplicationError.is(error)
+            error instanceof StartupError
               ? error
-              : new ApplicationError({
-                  code: 'InvalidInput',
-                  message: 'The chat configuration is unreadable.',
-                }),
+              : new StartupError({ problem: 'chat-config-unreadable' }),
         });
   return yield* runWindow({
     userData,

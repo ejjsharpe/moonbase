@@ -1,7 +1,9 @@
 import type { BrowserWindow, Clipboard, Dialog, Shell } from 'electron';
 import { Effect, Stream } from 'effect';
 import { ChildProcess, ChildProcessSpawner } from 'effect/process';
-import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
+import type { CheckoutTarget } from '@moonbase/contracts/workspace';
+import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
+import { NativeActionError } from '@moonbase/contracts/ipc-errors';
 
 /** What the editor's document may ask of this Mac, through main. */
 export type NativeActions = {
@@ -13,18 +15,18 @@ export type NativeActions = {
   choosePaths(
     checkout: CheckoutTarget,
     kind: 'picker' | 'clipboard',
-  ): Effect.Effect<string[] | null, ApplicationError>;
+  ): Effect.Effect<string[] | null, NativeActionError>;
   /** Captures `paths` for the editor, returning the references it may import. */
   capture(input: {
     checkout: CheckoutTarget;
     clientId: string;
     paths: string[];
-  }): Effect.Effect<string[], ApplicationError>;
+  }): Effect.Effect<string[], WorkspaceError>;
   release(input: {
     checkout: CheckoutTarget;
     clientId: string;
     references: string[];
-  }): Effect.Effect<void, ApplicationError>;
+  }): Effect.Effect<void, WorkspaceError>;
   /** Writes text to the OS clipboard. */
   copyText(text: string): Effect.Effect<void>;
   /** Shows an absolute path in the OS file manager. */
@@ -35,7 +37,7 @@ export type NativeActions = {
 const finderFiles = 'electron application/osclipboard;format="NSFilenamesPboardType"';
 /** The most `plutil` may print for one clipboard's Finder files. */
 const maximumFileListBytes = 2 ** 20;
-const invalid = (message: string) => new ApplicationError({ code: 'InvalidInput', message });
+const invalid = (failure: NativeActionError['failure']) => new NativeActionError({ failure });
 
 /** A Finder file list (a binary or XML plist) as its paths, converted by `/usr/bin/plutil`. */
 const readFinderFiles = (plist: Uint8Array) =>
@@ -57,7 +59,7 @@ const readFinderFiles = (plist: Uint8Array) =>
               () => '',
               (text, chunk) =>
                 text.length + chunk.length > maximumFileListBytes
-                  ? Effect.fail(invalid('Invalid Finder file list.'))
+                  ? Effect.fail(invalid('finder-files'))
                   : Effect.succeed(text + chunk),
             ),
           ),
@@ -66,23 +68,23 @@ const readFinderFiles = (plist: Uint8Array) =>
         ],
         { concurrency: 'unbounded' },
       );
-      if (status !== 0) return yield* Effect.fail(invalid('Invalid Finder file list.'));
+      if (status !== 0) return yield* Effect.fail(invalid('finder-files'));
       return json;
     }),
   ).pipe(
     Effect.mapError((error) =>
-      ApplicationError.is(error) ? error : invalid('Invalid Finder file list.'),
+      error instanceof NativeActionError ? error : invalid('finder-files'),
     ),
     Effect.flatMap((json) =>
       Effect.try({
         try: () => JSON.parse(json) as unknown,
-        catch: () => invalid('Invalid Finder file list.'),
+        catch: () => invalid('finder-files'),
       }),
     ),
     Effect.flatMap((parsed) =>
       Array.isArray(parsed) && parsed.every((path) => typeof path === 'string')
         ? Effect.succeed(parsed as string[])
-        : Effect.fail(invalid('Invalid Finder file list.')),
+        : Effect.fail(invalid('finder-files')),
     ),
   );
 
@@ -130,8 +132,7 @@ export const makeNativeActions = ({
             ? new Uint8Array(await payload.arrayBuffer())
             : new Uint8Array();
         });
-        if (!bytes.length)
-          return yield* Effect.fail(invalid('Clipboard contains no Finder files.'));
+        if (!bytes.length) return yield* Effect.fail(invalid('no-finder-files'));
         return yield* readFinderFiles(bytes).pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         );

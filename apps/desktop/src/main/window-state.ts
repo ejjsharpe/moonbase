@@ -1,8 +1,8 @@
-import type { ApplicationError } from '@moonbase/contracts/errors';
+import type { WindowFailure } from '../ipc/ipc-errors.ts';
 import type { WindowAction } from '../ipc/window-rpcs.ts';
 
 /** What the window's document answers a `quit` or `dispose` request with. */
-export type QuitAnswer = { id: string; consent: boolean; cleanupError?: ApplicationError };
+export type QuitAnswer = { id: string; consent: boolean; cleanupError?: WindowFailure };
 export type CleanupReport = Extract<WindowAction, { action: 'cleanup-error' }>;
 
 /**
@@ -23,7 +23,7 @@ export type WindowState = {
    */
   reports: readonly CleanupReport[];
   /** Cleanup failures Quit reports, and exits with code 1 for. */
-  failures: readonly ApplicationError[];
+  failures: readonly WindowFailure[];
 };
 /** What a transition asks of the window, besides its next state. */
 export type WindowEffects = {
@@ -43,7 +43,7 @@ export const initialWindowState: WindowState = {
   reports: [],
   failures: [],
 };
-const keepFailure = (failures: readonly ApplicationError[], error: ApplicationError) =>
+const keepFailure = (failures: readonly WindowFailure[], error: WindowFailure) =>
   failures.length < maximumFailures ? [...failures, error] : failures;
 const quitAction = (phase: Extract<WindowPhase, { _tag: 'Quitting' }>): WindowAction => ({
   action: phase.stage === 'preserve' ? 'quit' : 'dispose',
