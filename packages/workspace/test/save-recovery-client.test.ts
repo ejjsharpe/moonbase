@@ -275,7 +275,7 @@ test('save rejects a replaced staging object and never publishes or removes the 
   }
 });
 
-test('restart recovers the admitted Save text even when no earlier draft publication existed', async () => {
+test('restart recovers the sent Save text even when no earlier draft edit existed', async () => {
   const { fileURLToPath } = await import('node:url');
   const f = fixture(),
     helper = join(f.base, 'interrupt-save');
@@ -303,7 +303,7 @@ test('restart recovers the admitted Save text even when no earlier draft publica
       target,
       clientId: 'alice',
       requestId: 'interrupted-save',
-      text: 'admitted unsaved text',
+      text: 'sent unsaved text',
       expectedVersion: disk.version,
     };
     await assert.rejects(client.command('saveFile', save), rejects('Uncertain'));
@@ -311,7 +311,7 @@ test('restart recovers the admitted Save text even when no earlier draft publica
     const restarted = f.start();
     try {
       const restored = await restarted.client.command('loadRecovery', { clientId: 'alice' });
-      assert.equal(draftsOf(restored.state)[0]?.text, 'admitted unsaved text');
+      assert.equal(draftsOf(restored.state)[0]?.text, 'sent unsaved text');
       assert.deepEqual(draftsOf(restored.state)[0]?.disk, disk);
       assert.equal(readFileSync(join(f.root, 'file.txt'), 'utf8'), 'original');
       // A repeat asks the host, which finds the file as it was: the save settles as a conflict

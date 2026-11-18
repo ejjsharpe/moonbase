@@ -9,7 +9,7 @@ import { pendingSaves } from './client-store.ts';
 import { getFeedGapErrors, followRestoredCheckouts, syncFeed } from './feed-sync.ts';
 import {
   markOperationAcknowledged,
-  publishOperation,
+  recordOperationOutcome,
   resolveOperation,
 } from './operation-recovery.ts';
 import {
@@ -19,7 +19,7 @@ import {
   type HostPorts,
   type RecoveryContext,
 } from './recovery-context.ts';
-import { acknowledgeSaves, applySaveStatus, publishSaves } from './save-recovery.ts';
+import { acknowledgeSaves, applySaveStatus, recordSaveOutcomes } from './save-recovery.ts';
 
 /** Ports whose every call ends by `deadline`: one made after it fails at once. */
 function boundedHost(host: HostPorts, deadline: number): HostPorts {
@@ -46,7 +46,7 @@ function boundedHost(host: HostPorts, deadline: number): HostPorts {
 
 /**
  * Resolves what the host knows of every save and operation this client left open: a settled
- * outcome is applied, a request the host never admitted is restored as a draft, and anything
+ * outcome is applied, a request the host never received is restored as a draft, and anything
  * still unclear is kept with its text. Returns, per save, why its restoration is still pending.
  */
 const recoverEvidence = (context: RecoveryContext, openIds?: Set<string>) =>
@@ -70,19 +70,21 @@ const recoverEvidence = (context: RecoveryContext, openIds?: Set<string>) =>
                 .saveStatus({ clientId: record.input.clientId, requestId: record.input.requestId })
                 .pipe(
                   Effect.map((status) => applySaveStatus(record, status, notStarted)),
-                  // Restore admitted text without guessing an unavailable host's outcome.
+                  // Restore the sent text without guessing an unavailable host's outcome.
                   Effect.ignore,
                 ),
             { concurrency: 8, discard: true },
           );
           yield* followRestoredCheckouts(context, records);
-          const published = yield* Effect.exit(publishSaves(context, records, true, notStarted));
-          if (Exit.isFailure(published))
+          const recorded = yield* Effect.exit(
+            recordSaveOutcomes(context, records, true, notStarted),
+          );
+          if (Exit.isFailure(recorded))
             for (const record of records)
               notes.set(
                 saveKey(record.input),
-                'Admitted Save recovery publication pending; previous valid snapshot retained. ' +
-                  errorText(Cause.squash(published.cause)),
+                'The Save outcome is not in the recovery yet; the previous recovery is kept. ' +
+                  errorText(Cause.squash(recorded.cause)),
               );
         }),
       { concurrency: 8, discard: true },
@@ -95,7 +97,7 @@ const recoverEvidence = (context: RecoveryContext, openIds?: Set<string>) =>
         if (context.activeOperations.has(id)) return Effect.void;
         if (!record.remote && record.result.outcome === 'uncertain')
           return Effect.asVoid(resolveOperation(context, id, record));
-        return record.publicationError ? publishOperation(context, id, record) : Effect.void;
+        return record.applyError ? recordOperationOutcome(context, id, record) : Effect.void;
       },
       { concurrency: 8, discard: true },
     );
@@ -191,12 +193,11 @@ export const loadRecovery = (context: RecoveryContext, clientId: string, hostWai
               state.checkouts.some((c) => same(c, r.input.checkout))),
         );
       for (const record of relevant)
-        if (record.publicationRevisions[clientId] === undefined) {
-          record.publicationRevisions[clientId] = stored?.revision ?? 0;
+        if (record.clientRevisions[clientId] === undefined) {
+          record.clientRevisions[clientId] = stored?.revision ?? 0;
           context.putOperation(operationKey(record), record);
         }
-      for (const record of relevant)
-        if (record.publicationError) errors.push(record.publicationError);
+      for (const record of relevant) if (record.applyError) errors.push(record.applyError);
       const operations = relevant.map((r) => r.result);
       for (const operation of operations)
         if (operation.outcome === 'uncertain')

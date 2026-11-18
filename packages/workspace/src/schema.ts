@@ -101,7 +101,7 @@ export const ApprovalSchema = struct({
 });
 const { text: _text, ...hostSaveFields } = hostInputSchemas.saveFile.fields;
 /**
- * A save the host admitted. Its input keeps the text's version in place of the text, which the
+ * A save the host received. Its input keeps the text's version in place of the text, which the
  * client keeps; a `saved` outcome keeps only the version. When it was acknowledged is a column of
  * its journal row, not part of the record.
  */
@@ -115,7 +115,7 @@ export const HostSaveRecordSchema = struct({
   ),
   message: optional(Schema.String),
 });
-/** One item an admitted operation set out to do, durable before its first native mutation. */
+/** One item a received operation set out to do, durable before its first native mutation. */
 export const PlannedItemSchema = struct({
   source: Schema.String,
   identity: Schema.String,

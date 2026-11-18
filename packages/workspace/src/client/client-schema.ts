@@ -47,8 +47,8 @@ const { text: _text, ...saveRequestFields } = workspaceInputSchemas.saveFile.fie
  */
 export const StoredSaveSchema = struct({
   state: Schema.Literals(['sent', 'restored', 'settled', 'done']),
-  /** The client's publication count when the save began; text is restored only while it holds. */
-  recoveryPublication: natural,
+  /** The client's edit revision when the save began; text is restored only while it holds. */
+  editRevision: natural,
   request: struct(saveRequestFields),
   /**
    * The version of the text the draft held when the save began. Its text is the draft's baseline
@@ -111,16 +111,16 @@ export function fromStoredSave(
 }
 /** An operation the client sent, or one the host's feed reported from another client. */
 export const OperationRecordSchema = struct({
-  /** Something is left to do: an outcome, a publication or an acknowledgement (indexed). */
+  /** Something is left to do: an outcome, applying it to recoveries or an acknowledgement (indexed). */
   open: Schema.Boolean,
-  publicationError: optional(Schema.String),
-  publishedItems: optional(array(Schema.String)),
+  applyError: optional(Schema.String),
+  appliedItems: optional(array(Schema.String)),
   input: WorkspaceOperationSchema,
   /** Reported by the host's feed rather than issued here; `input` then names no sources. */
   remote: optional(Schema.Boolean),
   hostAcknowledged: optional(Schema.Boolean),
   result: OperationResultSchema,
-  publicationRevisions: Schema.Record(Schema.String, Schema.mutableKey(natural)),
+  clientRevisions: Schema.Record(Schema.String, Schema.mutableKey(natural)),
   acknowledgedBy: array(WorkspaceIdentifierSchema),
 });
 export const FeedCursorSchema = struct({ sequence: natural, epoch: Schema.String });
@@ -135,7 +135,7 @@ export type FeedCursor = typeof FeedCursorSchema.Type;
 export type FeedGap = typeof FeedGapSchema.Type;
 export const clientDecoders = {
   ...strictDecoders({
-    publications: natural,
+    'edit-revisions': natural,
     /** Per host and checkout, the last operation-feed sequence applied to the recovery. */
     'feed-cursors': FeedCursorSchema,
     /** Per host and checkout, a feed gap that left drafts at their old paths. */

@@ -6,7 +6,7 @@ import { attempt } from '../attempt.ts';
 import { canonical, errorText, key } from '../validation.ts';
 import type { FeedCursor, FeedGap, OperationRecord, SaveRecord } from './client-schema.ts';
 import type { StoredRecovery } from './client-store.ts';
-import { applyOperations, recordPublicationFailure } from './operation-recovery.ts';
+import { applyOperations, keepFailedOutcome } from './operation-recovery.ts';
 import { feedKey, type RecoveryContext } from './recovery-context.ts';
 
 /**
@@ -157,8 +157,7 @@ const applyFeedPage = (
       .pipe(
         Effect.catch((error) =>
           store.transaction(() => {
-            for (const { id, record } of records)
-              recordPublicationFailure(context, id, record, error);
+            for (const { id, record } of records) keepFailedOutcome(context, id, record, error);
             advance();
           }),
         ),
@@ -192,8 +191,8 @@ function readFeedRecords(context: RecoveryContext, entries: OperationFeedEntry[]
         outcome: 'completed',
         items: [],
       },
-      publishedItems: [],
-      publicationRevisions: {},
+      appliedItems: [],
+      clientRevisions: {},
       acknowledgedBy: [],
     };
     const known = new Set(record.result.items.map((item) => canonical(item)));

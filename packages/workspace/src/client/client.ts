@@ -38,7 +38,7 @@ import {
   adoptHostResult,
   getOperationStatus,
   markOperationAcknowledged,
-  publishOperation,
+  recordOperationOutcome,
   replayOperation,
 } from './operation-recovery.ts';
 import { RecoveryContext, type HostPorts, type Recoveries } from './recovery-context.ts';
@@ -47,7 +47,7 @@ import { makeKeyedLock } from '../keyed-lock.ts';
 import { makeSharedCalls } from '../shared-calls.ts';
 import { loadRecovery } from './recovery-load.ts';
 import { makeRecoveryOutlines } from './recovery-outlines.ts';
-import { acknowledgeSaves, getBaseline, publishSaves, replaySave } from './save-recovery.ts';
+import { acknowledgeSaves, getBaseline, recordSaveOutcomes, replaySave } from './save-recovery.ts';
 
 /**
  * The host as the recovery asks it. `cancellable` calls stop when their caller cancels; the
@@ -167,7 +167,7 @@ export const makeClientWorkspace = ({
       Effect.gen(function* () {
         yield* attempt(() => path(input.target.path));
         const proposed = { text: input.text, version: hash(input.text) };
-        const publication = yield* attempt(() => store.publication(input.clientId));
+        const editRevision = yield* attempt(() => store.editRevision(input.clientId));
         const id = key(input.clientId, input.requestId),
           previous = yield* attempt(() => store.readSave(id));
         if (previous) return yield* replaySave(context, id, input, previous);
@@ -178,7 +178,7 @@ export const makeClientWorkspace = ({
           state: 'sent',
           input,
           baseline,
-          recoveryPublication: publication,
+          editRevision,
         };
         // Reserved and marked running in one step, so a load never asks the host about it.
         const occupied = yield* store
@@ -197,21 +197,21 @@ export const makeClientWorkspace = ({
             ),
           );
           if (Exit.isFailure(sent)) {
-            // A request the host refused before admitting (invalid or unauthorized) leaves
+            // A request the host refused before receiving it (invalid or unauthorized) leaves
             // nothing to resolve. After a cancellation, a malformed reply or a host-side
-            // cancellation only the host can say whether it was admitted. Anything else is kept
+            // cancellation only the host can say whether it received it. Anything else is kept
             // with its text until the next load asks for its status.
             const code = exitCode(sent.cause);
             const refused = code === 'InvalidInput' || code === 'Unauthorized';
-            let admitted = !refused;
+            let received = !refused;
             if (code === 'Cancelled' || code === 'Incompatible')
-              admitted = yield* settled.host
+              received = yield* settled.host
                 .saveStatus({ clientId: input.clientId, requestId: input.requestId })
                 .pipe(
                   Effect.map((status) => status.kind !== 'not-started'),
                   Effect.orElseSucceed(() => true),
                 );
-            if (!admitted) yield* store.deleteSave(id);
+            if (!received) yield* store.deleteSave(id);
             return yield* Effect.failCause(sent.cause);
           }
           const reply = sent.value;
@@ -224,16 +224,16 @@ export const makeClientWorkspace = ({
                   ...(reply.message === undefined ? {} : { message: reply.message }),
                 }
               : reply;
-          const published = yield* Effect.exit(publishSaves(context, [record]));
-          if (Exit.isFailure(published)) {
+          const recorded = yield* Effect.exit(recordSaveOutcomes(context, [record]));
+          if (Exit.isFailure(recorded)) {
             // The intent stays as sent: a repeat or the next load asks the host for this outcome.
             if (record.result.kind !== 'saved') return record.result;
             return {
               ...record.result,
               persistencePending: true,
               message:
-                'Saved to disk; durable request publication failed: ' +
-                errorText(Cause.squash(published.cause)),
+                'Saved to disk; recording it in recovery failed: ' +
+                errorText(Cause.squash(recorded.cause)),
             };
           }
           yield* acknowledgeSaves(settled, [record]);
@@ -312,7 +312,7 @@ export const makeClientWorkspace = ({
         const record: OperationRecord = {
           open: true,
           input,
-          publicationRevisions: revisions,
+          clientRevisions: revisions,
           acknowledgedBy: [],
           result: {
             id: input.id,
@@ -322,7 +322,7 @@ export const makeClientWorkspace = ({
             outcome: 'uncertain',
             items: [],
             message:
-              'Admitted operation. Interrupted items must be inspected, never repeated automatically.',
+              'Operation sent. Interrupted items must be inspected, never repeated automatically.',
           },
         };
         yield* cancellationPoint;
@@ -340,7 +340,7 @@ export const makeClientWorkspace = ({
           let reply;
           if (Exit.isSuccess(sent)) reply = sent.value;
           else {
-            // The host answers for anything it admitted; a request it never saw leaves no intent.
+            // The host answers for anything it received; a request it never saw leaves no intent.
             const status = yield* Effect.option(
               settled.host.operationStatus({ clientId: input.clientId, id: input.id }),
             );
@@ -350,20 +350,20 @@ export const makeClientWorkspace = ({
             reply = status.value;
           }
           adoptHostResult(record, reply);
-          yield* publishOperation(context, id, record);
+          yield* recordOperationOutcome(context, id, record);
           return record.result;
         }).pipe(Effect.ensuring(Effect.sync(() => context.activeOperations.delete(id))));
       });
 
-    /** Work that may change recoveries: what it committed is published as it ends. */
-    const publishing =
+    /** Work that may change recoveries: the outlines are read again as it ends. */
+    const refreshingOutlines =
       <I, A>(work: (input: I) => Effect.Effect<A, WorkspaceFailure>, persistence = false) =>
       (input: I) =>
         run(Effect.ensuring(work(input), outlines.refresh), persistence);
     const call = <K extends WorkspaceCommand>(
       work: (input: CommandInput<K>) => Effect.Effect<CommandOutput<K>, WorkspaceFailure>,
       persistence = false,
-    ) => publishing(work, persistence);
+    ) => refreshingOutlines(work, persistence);
     const service: WorkspaceServiceShape = {
       openCheckout: (input) => fromHost(host.openCheckout(input)),
       readFile: (input) => fromHost(host.readFile(input)),
@@ -406,10 +406,10 @@ export const makeClientWorkspace = ({
         (input) => loadRecovery(context, input.clientId, hostWaitMs),
         true,
       ),
-      openTab: publishing(edits.openTab, true),
-      closeTab: publishing(edits.closeTab, true),
-      updateDraft: publishing(edits.updateDraft, true),
-      updateLayout: publishing(edits.updateLayout, true),
+      openTab: refreshingOutlines(edits.openTab, true),
+      closeTab: refreshingOutlines(edits.closeTab, true),
+      updateDraft: refreshingOutlines(edits.updateDraft, true),
+      updateLayout: refreshingOutlines(edits.updateLayout, true),
       watch: (input) =>
         host.watch(input).pipe(Stream.mapError((error) => asWorkspaceError(error, false))),
       watchRecovery: (input) => outlines.watch(input.clientId),

@@ -40,7 +40,7 @@ export const saveFile = (input: HostInput<'saveFile'>) =>
     );
     const directory = yield* checkouts.directory(input.target.checkout),
       disk = yield* Effect.interruptible(directory.read(input.target.path));
-    // A save cancelled before it is admitted never runs.
+    // A save cancelled before it is reserved never runs.
     yield* cancellationPoint;
     if (disk.version !== input.expectedVersion) {
       const result = { kind: 'conflict', disk } as const;
@@ -77,7 +77,7 @@ export const saveFile = (input: HostInput<'saveFile'>) =>
           return {
             ...result,
             persistencePending: true,
-            message: 'Saved to disk; durable request publication failed: ' + errorText(error),
+            message: 'Saved to disk; recording it in recovery failed: ' + errorText(error),
           };
       }
       return result;

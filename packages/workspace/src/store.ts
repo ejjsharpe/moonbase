@@ -108,7 +108,7 @@ export class Store {
     try {
       return this.statement(sql).run(...parameters);
     } catch (error) {
-      throw new WorkspaceStoreError({ failure: 'publication', detail: errorText(error) });
+      throw new WorkspaceStoreError({ failure: 'write', detail: errorText(error) });
     }
   }
   reserve<T>(bucket: string, key: string, value: T): T | null {

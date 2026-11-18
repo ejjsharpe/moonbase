@@ -165,7 +165,7 @@ test('failed durable import reservation leaves native references unclaimed for t
   }
 });
 
-test('cancelled queued Save releases its lease without admission and successors stay ordered', async () => {
+test('cancelled queued Save releases its lease without starting and successors stay ordered', async () => {
   const f = fixture(),
     ready = join(f.base, 'ready'),
     resume = join(f.base, 'resume'),
@@ -431,9 +431,9 @@ test('private configuration rejects unsafe shapes before creating a state direct
   }
 });
 
-test('admitted cancellation retains its overlap lease and root resources until the helper actually exits', async () => {
+test('cancelling a running copy retains its overlap lease and root resources until the helper actually exits', async () => {
   const f = fixture(),
-    ready = join(f.base, 'admitted'),
+    ready = join(f.base, 'started'),
     release = join(f.base, 'release-descendant');
   // The helper ignores the stop request, so it keeps running until released.
   const helper = f.wrapper(
@@ -487,7 +487,7 @@ test('admitted cancellation retains its overlap lease and root resources until t
     assert.equal(
       successorSettled,
       false,
-      'the interrupted waiter must not release its admitted overlap lease',
+      'the interrupted waiter must not release its running overlap lease',
     );
     let disposed = false;
     closing = runtime.dispose().then(() => {
@@ -525,7 +525,7 @@ test('admitted cancellation retains its overlap lease and root resources until t
 
 test('root disposal retains claimed native descriptors and journal ownership until actual helper exit', async () => {
   const f = fixture(),
-    ready = join(f.base, 'import-admitted'),
+    ready = join(f.base, 'import-started'),
     release = join(f.base, 'release-import');
   // The helper ignores the stop request, as above.
   const helper = f.wrapper(

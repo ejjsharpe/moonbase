@@ -10,7 +10,7 @@ import {
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
   InvalidRecoveryRequestError,
-  RecoveryPublicationError,
+  RecoveryUpdatePendingError,
 } from '@moonbase/contracts/workspace-errors';
 import { attempt } from '../attempt.ts';
 import { hash, key, same } from '../validation.ts';
@@ -24,8 +24,8 @@ const viewOf = (state: RecoveryState, checkoutId: string) =>
 /**
  * The recovery store's edits, keyed by buffer ID. Each client's edits apply one at a time in the
  * order they arrive; each reads, changes and writes the recovery in one transaction (so a save's
- * or an operation's publication never interleaves with it) and returns once it committed. An
- * edit is the client's own word: it advances the client's publication, so a save begun before it
+ * or an operation's outcome never interleaves with it) and returns once it committed. An
+ * edit is the client's own word: it advances the client's edit revision, so a save begun before it
  * never restores older text over it.
  */
 export const makeRecoveryEdits = (context: RecoveryContext, inOrder: KeyedLock) => {
@@ -39,7 +39,7 @@ export const makeRecoveryEdits = (context: RecoveryContext, inOrder: KeyedLock) 
       store.writeClientRecovery(clientId, stored?.revision ?? 0, state);
     });
   /** Verifies, and follows the feed of, the checkouts the recovery does not list yet. */
-  const admitCheckouts = (clientId: string, targets: CheckoutTarget[]) =>
+  const addCheckouts = (clientId: string, targets: CheckoutTarget[]) =>
     Effect.gen(function* () {
       const listed = (yield* attempt(() => store.readRecovery(clientId)))?.state.checkouts ?? [];
       const added = targets.filter((t) => !listed.some((c) => same(c, t)));
@@ -50,14 +50,14 @@ export const makeRecoveryEdits = (context: RecoveryContext, inOrder: KeyedLock) 
   /** Refuses to drop a draft an uncertain operation may still own. */
   const assertDroppable = (target: { checkout: CheckoutTarget; path: string }) => {
     if (context.isDraftHeld(target))
-      throw new RecoveryPublicationError({ pending: 'uncertain-draft' });
+      throw new RecoveryUpdatePendingError({ pending: 'uncertain-draft' });
   };
 
   const openTab = ({ clientId, bufferId, target }: RecoveryEditInput<'openTab'>) =>
     inOrder(
       clientId,
       Effect.gen(function* () {
-        const added = yield* admitCheckouts(clientId, [target.checkout]);
+        const added = yield* addCheckouts(clientId, [target.checkout]);
         yield* commit(clientId, (state) => {
           // An ID opened again names a buffer the client has, not one a move replaced.
           store.delete('replaced-buffers', key(clientId, bufferId));
@@ -170,7 +170,7 @@ export const makeRecoveryEdits = (context: RecoveryContext, inOrder: KeyedLock) 
     inOrder(
       clientId,
       Effect.gen(function* () {
-        const added = yield* admitCheckouts(clientId, layout.checkouts);
+        const added = yield* addCheckouts(clientId, layout.checkouts);
         yield* commit(clientId, (state) => {
           const known = (t: CheckoutTarget) =>
             state.checkouts.some((c) => same(c, t)) || added.some((c) => same(c, t));

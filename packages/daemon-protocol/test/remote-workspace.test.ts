@@ -260,7 +260,7 @@ test('a host’s errors reach the client with their codes and the client’s own
     new GitStatusFormatError({ record: secret }),
     new IncompleteCleanupError({ remains: secret, inspect: secret, failure: secret }),
     new RecordedRefusalError({ code: 'Conflict', text: secret }),
-    new WorkspaceStoreError({ failure: 'publication', detail: secret }),
+    new WorkspaceStoreError({ failure: 'write', detail: secret }),
     new InterruptedRequestError({ operation: secret }),
     new UncertainError({ operation: secret, target: { ...fileTarget, path: secret } }),
     new CheckoutAccessError({ refusal: 'not-approved' }),

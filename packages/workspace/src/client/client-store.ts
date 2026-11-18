@@ -117,12 +117,12 @@ export class ClientStore extends Store {
     }
     return { readable, unreadable };
   }
-  publication(client: string): number {
-    return this.get<number>('publications', client) ?? 0;
+  editRevision(client: string): number {
+    return this.get<number>('edit-revisions', client) ?? 0;
   }
   /**
    * Writes a state the caller read and checked in the same transaction, advancing the revision
-   * without impersonating a client publication.
+   * without counting as the client's own edit.
    */
   writeInternalRecovery(client: string, revision: number, state: RecoveryState) {
     this.writeRecovery(client, revision + 1, state);
@@ -133,7 +133,7 @@ export class ClientStore extends Store {
    */
   writeClientRecovery(client: string, revision: number, state: RecoveryState) {
     this.writeRecovery(client, revision + 1, state);
-    this.put('publications', client, revision + 1);
+    this.put('edit-revisions', client, revision + 1);
   }
   /**
    * Reserves a save's ID with its record and, in the same transaction, its text and the baseline's
@@ -200,7 +200,7 @@ export class ClientStore extends Store {
   }
   /**
    * Keeps `disk` as the baseline's text of the client's `sent` saves that began from it and kept
-   * only its version (it was a draft's baseline), but not of `except`: a publication is about to
+   * only its version (it was a draft's baseline), but not of `except`: an outcome is about to
    * replace it in the recovery, which would then no longer hold it for their restoration.
    */
   keepBaseline(client: string, disk: FileDocument, except: string[]) {

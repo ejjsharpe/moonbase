@@ -31,7 +31,7 @@ export type WorkspaceRecoveryConfiguration = {
 
 /**
  * The file host: approvals, reads, saves, file operations, Git, search and watching, with the
- * journals of the saves and operations it admitted. It keeps no client recovery. Scoped resources
+ * journals of the saves and operations it received. It keeps no client recovery. Scoped resources
  * only; the shared application composition root supplies the runtime. Its journal keeps time by
  * the `Clock` it is composed with.
  */

@@ -192,7 +192,7 @@ export class Journal {
           return {
             ...result,
             persistencePending: true,
-            message: 'Saved to disk; durable request publication pending. ' + errorText(error),
+            message: 'Saved to disk; recording it in the journal is pending. ' + errorText(error),
           };
       }
     }

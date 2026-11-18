@@ -90,7 +90,7 @@ export const mutate = (input: HostInput<'mutate'>) =>
         outcome: 'uncertain',
         items: [],
         message:
-          'Admitted operation. Interrupted items must be inspected, never repeated automatically.',
+          'Operation sent. Interrupted items must be inspected, never repeated automatically.',
       },
       // The complete immutable selection is durable before the first native mutation.
       planned: items.map(({ source, destination }) => ({
@@ -114,7 +114,8 @@ export const mutate = (input: HostInput<'mutate'>) =>
     /** Records a durable write that failed and returns the outcome held in memory. */
     const retained = (error: unknown) => {
       record.result.message =
-        'Filesystem outcome retained in memory; durable publication failed: ' + errorText(error);
+        'Filesystem outcome kept in memory; recording it in the journal failed: ' +
+        errorText(error);
       journal.keepUnpersistedOperation(id, record);
       return record.result;
     };
