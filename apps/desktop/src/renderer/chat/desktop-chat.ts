@@ -24,7 +24,7 @@ import {
 // The open chat as the chat view, list, header, pending commands, Find bar, composer, provider
 // setup, shell and browser demo use it: its services' actions bound to the root runtime, and its
 // state read through the atom registry. It holds no state of its own. The transcript reads the
-// chat's atoms and runs its selection's actions itself.
+// chat's atoms and runs its selection's actions itself; the other views move off it in #350.
 
 type Run = <A, E>(effect: Effect.Effect<A, E>) => Promise<A>;
 type RunSync = <A, E>(effect: Effect.Effect<A, E>) => A;
