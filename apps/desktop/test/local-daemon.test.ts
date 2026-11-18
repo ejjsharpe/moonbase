@@ -11,6 +11,7 @@ import {
   Context,
   Effect,
   Exit,
+  Fiber,
   Layer,
   Logger,
   ManagedRuntime,
@@ -18,6 +19,7 @@ import {
   Scope,
 } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
+import { TestClock } from 'effect/testing';
 import { ChatService } from '@moonbase/contracts/services';
 import { LoopbackConnectionLive, loopbackProfileId } from '@moonbase/daemon-protocol/loopback';
 import { DaemonRpcLinkLive, RemoteChatLive } from '@moonbase/daemon-protocol/remote';
@@ -116,6 +118,39 @@ test('every caller shares one attempt to reach the daemon; a failed one is the a
   assert.deepEqual(connected.endpoint.expected, clients.session.host);
   assert.equal(connected.endpoint.health.protocol, chatProtocolVersion);
   assert.equal(await run(local.peek), clients);
+});
+
+test('an attempt every caller gave up on still ends once, and its failure is the next caller’s answer for a moment', async (t) => {
+  const { userData, directory, command } = await profile(t);
+  const gate = join(userData, 'gate');
+  await mkdir(gate);
+  // The start is held until the test fails it.
+  const { local } = await makeLocal(t, { directory, command: gateDaemonCommand(command, gate) });
+  // Only the callers run on the test clock; the daemon's processes keep real time.
+  await run(
+    Effect.gen(function* () {
+      const waiting = yield* Effect.forEach([1, 2, 3], () =>
+        Effect.forkChild(Effect.timeoutOption(local.get, '1 second')),
+      );
+      yield* Effect.promise(() =>
+        until(async () => (await readGateIds(gate, 'starts')).length === 1),
+      );
+      // Every caller stops waiting; the attempt goes on.
+      yield* TestClock.adjust('1 second');
+      for (const fiber of waiting) assert.equal((yield* Fiber.join(fiber))._tag, 'None');
+      // A caller arriving now joins it, and gets its failure once it ends.
+      const later = yield* Effect.forkChild(Effect.flip(local.get));
+      yield* Effect.promise(() => writeFile(join(gate, 'fail'), ''));
+      assert.equal((yield* Fiber.join(later)).reason, 'unreachable');
+      // The failure is kept: answered again at once, with no new start.
+      assert.equal((yield* Effect.flip(local.get)).reason, 'unreachable');
+      assert.equal((yield* Effect.promise(() => readGateIds(gate, 'starts'))).length, 1);
+      // Once it has been answered long enough, the next caller tries again.
+      yield* TestClock.adjust('2 seconds');
+      yield* Effect.flip(local.get);
+      assert.equal((yield* Effect.promise(() => readGateIds(gate, 'starts'))).length, 2);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
 });
 
 test('a crashed or unanswering daemon is replaced on the next request, in a new connection generation', async (t) => {

@@ -106,7 +106,8 @@ export const makeDaemonProcess = ({
     /**
      * Stops a daemon of this directory with SIGTERM, and waits for it; false, signalling nothing,
      * when that process no longer runs a daemon here (it exited, and its ID was reused). Only the
-     * daemon is signalled: it may not be this app's child, and it stops its runs' tools itself.
+     * daemon is signalled: it is usually not this app's child, and one started by hand in
+     * development isn't the leader of its process group.
      */
     const stopDaemon = (pid: number) =>
       Effect.gen(function* () {
@@ -183,7 +184,8 @@ export const makeDaemonProcess = ({
             return yield* Effect.fail(failure('stopped-while-starting'));
           }
           // It listens: from here it outlives the start, and the app.
-          yield* child.unref;
+          // Node's unref can't fail.
+          yield* Effect.orDie(child.unref);
           yield* Ref.set(state, { pid: child.pid, child, outdated: false });
         }),
       );

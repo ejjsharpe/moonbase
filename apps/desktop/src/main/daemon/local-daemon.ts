@@ -1,6 +1,7 @@
 import {
+  Cause,
+  Clock,
   Context,
-  Duration,
   Effect,
   Exit,
   Fiber,
@@ -9,8 +10,10 @@ import {
   Ref,
   Scope,
   Semaphore,
+  SynchronizedRef,
 } from 'effect';
 import type { ChatSession } from '@moonbase/contracts/chat';
+import type { ApplicationError } from '@moonbase/contracts/errors';
 import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
 import {
   ChatService,
@@ -53,8 +56,30 @@ type ClientState =
   | { _tag: 'Bound'; clients: Bound; connectedTo: number | undefined }
   | { _tag: 'Released' };
 
+/** Why an attempt failed: the daemon's own reason, or the loopback connection's legacy error. */
+type AttemptError = LocalDaemonError | ApplicationError;
+/** The one attempt under way, or the failure the last one ended with, kept for a moment. */
+type Attempt =
+  | { _tag: 'Idle' }
+  | { _tag: 'Running'; fiber: Fiber.Fiber<Bound, AttemptError> }
+  | { _tag: 'Failed'; error: AttemptError; at: number };
+
 const quitting = () => new LocalDaemonError({ reason: 'quitting' });
 const unreachable = () => new LocalDaemonError({ reason: 'unreachable' });
+/** What `get` and `connect` fail with: an older daemon's or Quit's reason, else the generic one. */
+const toCallerError = (error: AttemptError) =>
+  error._tag === 'LocalDaemonError' &&
+  (error.reason === 'older-daemon' || error.reason === 'quitting')
+    ? error
+    : unreachable();
+/**
+ * Runs `effect` on the system clock: it waits on real processes, so it keeps real time even when
+ * the caller's clock is a TestClock.
+ */
+const onSystemClock = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
+  Effect.updateContext(effect, (context: Context.Context<never>) =>
+    Context.omit(Clock.Clock)(context),
+  );
 
 /**
  * Local chat's and the editor's files' one way to the profile's daemon. The daemon outlives the
@@ -98,9 +123,10 @@ export type LocalDaemonOptions = DaemonProcessOptions & {
  * bound yet, or the daemon in use exited (crashed, or stopped once idle) or its connection
  * dropped, the next request finds or starts a daemon, binds the clients if they aren't, and
  * connects them in a new generation; chat watches of the old one fail as `Unavailable` and their
- * clients reconnect them. Requests waiting meanwhile share that attempt, which runs to the end
- * even when they stop waiting; a failed one is every request's answer for `daemonRetryAfterMs`.
- * Attempts, replacing and stopping take one lock.
+ * clients reconnect them. There is one attempt at a time: requests waiting meanwhile, and those
+ * arriving later, join it, and it runs to the end even when they all stop waiting. Its failure is
+ * kept when it ends, and is every request's answer for `daemonRetryAfterMs` after that. Attempts,
+ * replacing and stopping take one lock.
  *
  * While the daemon in use is of another build, it is asked every `replaceMs` whether it has
  * active work (which keeps it from idling out); once it has none, it is replaced by this app's
@@ -122,7 +148,7 @@ export const LocalDaemonLive = ({ openUrl, replaceMs = 30_000, ...options }: Loc
       // Closed last: the clients outlive the attempts, and what is built after this layer.
       const clients = yield* Scope.fork(scope, 'sequential');
       // Closed before the clients: an attempt under way is interrupted and waited for.
-      const attempts = yield* FiberSet.make<Bound, LocalDaemonError>();
+      const attempts = yield* FiberSet.make<Bound, AttemptError>();
       const state = yield* Ref.make<ClientState>({ _tag: 'Unbound' });
 
       /**
@@ -150,10 +176,8 @@ export const LocalDaemonLive = ({ openUrl, replaceMs = 30_000, ...options }: Loc
             Effect.logError('The local daemon is unreachable:', message),
           ),
         );
-        return Effect.catch(connect, (error) =>
-          error.code === 'Unavailable'
-            ? Effect.andThen(daemon.start, Effect.mapError(connect, unreachable))
-            : Effect.fail(unreachable()),
+        return Effect.catch(connect, (error): Effect.Effect<unknown, AttemptError> =>
+          error.code === 'Unavailable' ? Effect.andThen(daemon.start, connect) : Effect.fail(error),
         ).pipe(Effect.andThen(daemon.pid));
       };
       /** The daemon's clients over loopback, in the scope `own`. */
@@ -194,7 +218,7 @@ export const LocalDaemonLive = ({ openUrl, replaceMs = 30_000, ...options }: Loc
         Effect.gen(function* () {
           const current = yield* Ref.get(state);
           if (current._tag === 'Released') return yield* Effect.fail(quitting());
-          // Another attempt, or a replacement, may have reconnected while this one waited.
+          // A replacement may have reconnected while this one waited.
           if (current._tag === 'Bound' && (yield* isReady(current))) return current.clients;
           yield* daemon.find;
           if (current._tag === 'Bound') {
@@ -220,25 +244,59 @@ export const LocalDaemonLive = ({ openUrl, replaceMs = 30_000, ...options }: Loc
           Effect.tapError(({ message }) =>
             Effect.logError('The local daemon is unavailable:', message),
           ),
-          // The daemon's own reason when an older one is still busy; otherwise the generic one.
-          Effect.mapError((error) =>
-            error.reason === 'older-daemon' || error.reason === 'quitting' ? error : unreachable(),
-          ),
         ),
       );
-      // The attempt runs in the layer's scope, so callers that stop waiting leave it running; one
-      // the scope's close interrupted, or that started after it closed, is answered as quitting.
-      const [shared, forget] = yield* Effect.cachedInvalidateWithTTL(
-        Effect.flatMap(FiberSet.run(attempts, attempt), Fiber.await).pipe(
-          Effect.flatMap((exit) => (Exit.hasInterrupts(exit) ? Effect.fail(quitting()) : exit)),
+      const current = yield* SynchronizedRef.make<Attempt>({ _tag: 'Idle' });
+      /**
+       * Ends the attempt running on this fiber: its failure is kept, at the time on the clock of the
+       * caller that started it. One interrupted (by Quit) keeps nothing.
+       */
+      const settle = (exit: Exit.Exit<Bound, AttemptError>) =>
+        Effect.withFiber((fiber) =>
+          Effect.flatMap(Clock.currentTimeMillis, (at) =>
+            SynchronizedRef.update(current, (now): Attempt => {
+              if (now._tag !== 'Running' || now.fiber !== fiber) return now;
+              const error = Exit.isFailure(exit) ? Cause.findErrorOption(exit.cause) : undefined;
+              return error?._tag === 'Some'
+                ? { _tag: 'Failed', error: error.value, at }
+                : { _tag: 'Idle' };
+            }),
+          ),
+        );
+      /** Waits for an attempt; one the layer's close interrupted, or never started, is Quit's. */
+      const join = (fiber: Fiber.Fiber<Bound, AttemptError>) =>
+        Effect.flatMap(Fiber.await(fiber), (exit) =>
+          Exit.hasInterrupts(exit) ? Effect.fail(quitting()) : exit,
+        );
+      /**
+       * The attempt under way, joined, or else the failure kept from the last one, or else a new
+       * attempt, decided in one step. It runs in the layer's attempts, so callers that stop waiting
+       * leave it running, and the layer's close interrupts it.
+       */
+      const shared = Effect.flatten(
+        SynchronizedRef.modifyEffect(current, (now) =>
+          Effect.gen(function* () {
+            if (now._tag === 'Running') return [join(now.fiber), now] as const;
+            if (now._tag === 'Failed') {
+              const since = (yield* Clock.currentTimeMillis) - now.at;
+              if (since >= 0 && since < daemonRetryAfterMs)
+                return [Effect.fail(now.error), now] as const;
+            }
+            const fiber = yield* FiberSet.run(
+              attempts,
+              Effect.onExit(onSystemClock(attempt), settle),
+            );
+            return [join(fiber), { _tag: 'Running', fiber } satisfies Attempt] as const;
+          }),
         ),
-        (exit) => (Exit.isSuccess(exit) ? Duration.zero : Duration.millis(daemonRetryAfterMs)),
+      );
+      /** Drops a failure kept from the last attempt; one under way is still joined. */
+      const forget = SynchronizedRef.update(current, (now): Attempt =>
+        now._tag === 'Failed' ? { _tag: 'Idle' } : now,
       );
       // Added after the clients' scope and the attempts, so it runs first as the scope closes:
       // from then on no caller reaches the clients being released.
-      yield* Effect.addFinalizer(() =>
-        Effect.andThen(Ref.set(state, { _tag: 'Released' }), forget),
-      );
+      yield* Effect.addFinalizer(() => Ref.set(state, { _tag: 'Released' }));
 
       /** The bound clients, connected to a running daemon: at once if they are, else by an attempt. */
       const ready = Effect.flatMap(Ref.get(state), (current) => {
@@ -252,18 +310,24 @@ export const LocalDaemonLive = ({ openUrl, replaceMs = 30_000, ...options }: Loc
       function reaching(loopback: ConnectionServiceShape): ConnectionServiceShape {
         return {
           ...loopback,
+          // The attempt's own failure, as the old connection gave it: the daemon's reason, or the
+          // loopback connection's error with its code.
           endpoint: (input) =>
             Effect.andThen(
-              Effect.mapError(ready, toDaemonApplicationError),
+              Effect.mapError(ready, (error) =>
+                error._tag === 'LocalDaemonError' ? toDaemonApplicationError(error) : error,
+              ),
               loopback.endpoint(input),
             ),
         };
       }
-      const connect = Effect.flatMap(ready, ({ loopback, ...bound }) =>
-        loopback.endpoint({ host: bound.session.host }).pipe(
-          Effect.map((endpoint) => ({ ...bound, endpoint })),
-          Effect.mapError(unreachable),
-        ),
+      const connect = Effect.flatMap(
+        Effect.mapError(ready, toCallerError),
+        ({ loopback, ...bound }) =>
+          loopback.endpoint({ host: bound.session.host }).pipe(
+            Effect.map((endpoint) => ({ ...bound, endpoint })),
+            Effect.mapError(unreachable),
+          ),
       );
 
       // Asking keeps the outdated daemon from idling out, so it is replaced rather than left.
@@ -295,7 +359,9 @@ export const LocalDaemonLive = ({ openUrl, replaceMs = 30_000, ...options }: Loc
       return {
         get: Effect.flatMap(Ref.get(state), (current) => {
           if (current._tag === 'Bound') return Effect.succeed(current.clients);
-          return current._tag === 'Released' ? Effect.fail(quitting()) : shared;
+          return current._tag === 'Released'
+            ? Effect.fail(quitting())
+            : Effect.mapError(shared, toCallerError);
         }),
         peek: Effect.map(Ref.get(state), (current) =>
           current._tag === 'Bound' ? current.clients : undefined,
