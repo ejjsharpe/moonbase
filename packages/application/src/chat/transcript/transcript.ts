@@ -19,7 +19,7 @@ import { TranscriptStore } from './transcript-store.ts';
 import { makeTranscriptJobs, manifestJob } from './transcript-jobs.ts';
 import { makeTranscriptSearch } from './transcript-search.ts';
 import { makeTranscriptNavigation } from './transcript-navigation.ts';
-import { makeTranscriptLoads } from './transcript-loads.ts';
+import { makeTranscriptLoads, type TranscriptLoads } from './transcript-loads.ts';
 
 export type TranscriptDependencies = {
   chat: ChatPort;
@@ -69,6 +69,8 @@ export type Transcript = {
     update: (view: TranscriptView) => TranscriptView,
   ) => Effect.Effect<void, TranscriptReadError>;
   readonly loadManifest: (source: ChatTranscriptSource, restart?: boolean) => Effect.Effect<void>;
+  readonly loadMoreParts: TranscriptLoads['loadMoreParts'];
+  readonly replayManifest: TranscriptLoads['replayManifest'];
   readonly loadPart: (
     source: ChatTranscriptSource,
     selection: ChatTranscriptSelection,
@@ -222,6 +224,8 @@ export const makeTranscript = (
       setView: navigation.setView,
       updateView: navigation.updateView,
       loadManifest: loads.loadManifest,
+      loadMoreParts: loads.loadMoreParts,
+      replayManifest: loads.replayManifest,
       loadPart: loads.loadPart,
     } satisfies Transcript;
   });

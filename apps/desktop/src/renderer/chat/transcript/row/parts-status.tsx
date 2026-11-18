@@ -1,10 +1,8 @@
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
-import { Effect, SubscriptionRef } from 'effect';
 import { controls } from '@moonbase/ui/controls';
 import type { LiveEntry, TranscriptManifestState } from '@moonbase/application/chat';
 import type { ChatTranscriptPart, ChatTranscriptSource } from '@moonbase/contracts/chat';
-import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import { useTranscript } from '../transcript-context.ts';
 import { Note } from '../transcript-note.tsx';
 
@@ -27,19 +25,6 @@ export function PartsStatus({
   missingMatch: boolean;
 }) {
   const { act, selection } = useTranscript();
-  /** Reads the manifest's first page if none is loaded, then its next. */
-  const loadMoreParts = (source: ChatTranscriptSource) =>
-    act(
-      Effect.gen(function* () {
-        if (!manifest) {
-          yield* selection.loadTranscriptManifest(source);
-          const first = (yield* SubscriptionRef.get(selection.state)).transcript.manifest;
-          if (first?.error || !first?.nextCursor || !areJsonValuesEqual(first.source, source))
-            return;
-        }
-        yield* selection.loadTranscriptManifest(source);
-      }),
-    );
   return (
     <>
       {missingMatch && (
@@ -54,7 +39,7 @@ export function PartsStatus({
         <Button
           {...stylex.props(controls.button)}
           disabled={manifest?.status === 'loading'}
-          onClick={() => void loadMoreParts(source)}>
+          onClick={() => void act(selection.loadMoreTranscriptParts(source))}>
           Load more parts
         </Button>
       )}
