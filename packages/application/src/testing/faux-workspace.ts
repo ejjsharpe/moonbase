@@ -55,6 +55,29 @@ const holdSeed = ({ head, index, ...seed }: Seed): HeldSeed => ({
 });
 type Entry = FileDocument & { directory: boolean };
 // It fails as the file host does, with the host's tagged errors.
+
+// A failure a test injects with its own text: the host's own error, so it means what the host's
+// does (a store failure, an outcome that may have committed), shown as the test's text.
+class InjectedStoreFailure extends WorkspaceStoreError {
+  readonly #text: string;
+  constructor(text: string) {
+    super({ failure: 'publication' });
+    this.#text = text;
+  }
+  override get message() {
+    return this.#text;
+  }
+}
+class InjectedUncertainty extends UncertainError {
+  readonly #text: string;
+  constructor(text: string) {
+    super({ operation: 'The injected request' });
+    this.#text = text;
+  }
+  override get message() {
+    return this.#text;
+  }
+}
 const fail = (error: WorkspaceError): never => {
   throw error;
 };
@@ -556,7 +579,8 @@ export function fauxWorkspace(given: Seed[]) {
     },
     /**
      * Fails `name`'s next call with `failure`, before it runs or, when `after`, once it has run. A
-     * string is the failure's text: a store failure, or when `after` an uncertain outcome naming it.
+     * string is the failure's text, shown as it is: a store failure, or when `after` an uncertain
+     * outcome.
      */
     failNext(
       name: WorkspaceCommand,
@@ -565,8 +589,8 @@ export function fauxWorkspace(given: Seed[]) {
     ) {
       let error: WorkspaceError;
       if (typeof failure !== 'string') error = failure;
-      else if (after) error = new UncertainError({ operation: failure });
-      else error = new WorkspaceStoreError({ failure: 'publication', detail: failure });
+      else if (after) error = new InjectedUncertainty(failure);
+      else error = new InjectedStoreFailure(failure);
       faults.set(name, { error, after });
     },
     /** Refuses `name`'s next call as given, before it runs, as a host replays a refusal with its text. */
