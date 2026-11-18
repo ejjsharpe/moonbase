@@ -31,7 +31,7 @@ export type EditorOperationsShape = {
   /** Whether an operation whose outcome is uncertain may touch `target`. */
   readonly isUncertainFor: (target: FileTarget) => Effect.Effect<boolean>;
   /** Takes an operation's completed items into what the editor remembers by path. */
-  readonly applyFacts: (result: OperationResult) => Effect.Effect<void, EditorError>;
+  readonly applyResult: (result: OperationResult) => Effect.Effect<void, EditorError>;
 };
 
 /** The file operations the editor has sent or been told of, until each is acknowledged. */
@@ -84,7 +84,7 @@ export class EditorOperations extends Context.Service<EditorOperations, EditorOp
           }),
         isUncertainFor: (target) =>
           Effect.map(SubscriptionRef.get(state), (ops) => isUncertainFor(ops, target)),
-        applyFacts: (result) =>
+        applyResult: (result) =>
           Effect.gen(function* () {
             const key = operationKey(result.clientId, result.id);
             const ops = yield* SubscriptionRef.get(state);

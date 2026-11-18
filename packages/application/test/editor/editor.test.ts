@@ -189,7 +189,7 @@ test('a file that exists but fails to read saves over itself, not as a new file'
   }
 });
 
-test('captured close defers Discards; earlier Save remains a fact after later Cancel', async () => {
+test('captured close defers Discards; earlier Save stays saved after a later Cancel', async () => {
   const f = await fixture();
   try {
     for (const path of ['a.ts', 'b.ts', 'c.ts']) {
@@ -798,7 +798,7 @@ test('origin acknowledgement cannot hide a move from another observer; the obser
     const baseline = observer.buffer(target('a.ts'))!.disk;
     const sources = await f.editor.inspect(checkout, ['a.ts']);
     await f.editor.mutate({
-      id: 'shared-fact',
+      id: 'shared-result',
       checkout,
       sources,
       kind: 'move',
@@ -810,7 +810,7 @@ test('origin acknowledgement cannot hide a move from another observer; the obser
     );
     const evidence = await f.client.command('loadRecovery', { clientId: 'observer' });
     assert.equal(evidence.operations[0].clientId, 'origin');
-    assert.equal(evidence.operations[0].id, 'shared-fact');
+    assert.equal(evidence.operations[0].id, 'shared-result');
     observer.edit(target('a.ts'), 'newer live observer text');
     await observer.reconcileRecovery();
     assert.equal(observer.buffer(target('a.ts')), undefined);
@@ -1208,8 +1208,8 @@ test('the memory store refuses a layout with composite view keys or invalid open
   }
 });
 
-test('closed checkout metadata receives operation facts without discovery or reopening', async () => {
-  const f = await fixture('closed-facts', false);
+test('closed checkout metadata receives operation results without discovery or reopening', async () => {
+  const f = await fixture('closed-results', false);
   try {
     await f.editor.open(target('a.ts'), { view: 'staged' });
     await f.editor.openCheckout(second.root);
@@ -1230,7 +1230,7 @@ test('closed checkout metadata receives operation facts without discovery or reo
     await f.editor.dispose();
     const observed: string[] = [];
     const restored = await acquireEditor(f.runtime, {
-      clientId: 'closed-facts',
+      clientId: 'closed-results',
       client: {
         ...f.client,
         watch(input, receive, error) {

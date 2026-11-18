@@ -55,7 +55,7 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
       const operations = yield* EditorOperations;
       const outbox = yield* RecoveryOutbox;
       const { clientId } = session;
-      const factsLock = yield* Semaphore.make(1);
+      const reconcileLock = yield* Semaphore.make(1);
       const sends = yield* FiberSet.make();
       const recoveryWatch = yield* FiberHandle.make();
       const closing = Effect.map(session.get, (s) => s.closing);
@@ -167,7 +167,7 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
 
       const reconcile: RecoverySyncShape['reconcile'] = (result, initial) =>
         session.run(
-          factsLock.withPermits(1)(
+          reconcileLock.withPermits(1)(
             Effect.gen(function* () {
               if (yield* closing) return;
               yield* session.awaitInitialization;
@@ -177,22 +177,26 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
               if (loaded.state.clientId !== clientId)
                 return yield* new EditorError({ reason: 'foreign-recovery' });
               yield* follow(loaded.state, true);
-              const facts = [
+              const results = [
                 ...new Map(
-                  [...loaded.operations, ...(result ? [result] : [])].map((fact) => [
-                    operationKey(fact.clientId, fact.id),
-                    fact,
+                  [...loaded.operations, ...(result ? [result] : [])].map((operation) => [
+                    operationKey(operation.clientId, operation.id),
+                    operation,
                   ]),
                 ).values(),
               ];
-              for (const fact of facts) yield* operations.applyFacts(fact);
-              if (facts.length) yield* outbox.changed;
-              for (const fact of facts) {
-                if (fact.outcome === 'uncertain' || (yield* closing)) continue;
+              for (const operation of results) yield* operations.applyResult(operation);
+              if (results.length) yield* outbox.changed;
+              for (const operation of results) {
+                if (operation.outcome === 'uncertain' || (yield* closing)) continue;
                 yield* workspace
-                  .acknowledgeOperation({ clientId, operationClientId: fact.clientId, id: fact.id })
+                  .acknowledgeOperation({
+                    clientId,
+                    operationClientId: operation.clientId,
+                    id: operation.id,
+                  })
                   .pipe(Effect.tapError(alerts.report));
-                yield* operations.acknowledge(fact.clientId, fact.id);
+                yield* operations.acknowledge(operation.clientId, operation.id);
               }
             }),
           ),

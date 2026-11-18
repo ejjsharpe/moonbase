@@ -66,7 +66,7 @@ test('retained snapshots stay stable across edits, positions, disk/conflict upda
   }
 });
 
-test('restored drafts and uncertain Save/move facts keep their exact identities', async () => {
+test('restored drafts and uncertain Save and move results keep their exact identities', async () => {
   const f = await fixture('snapshot-recovery', false);
   let editor = f.editor;
   try {
