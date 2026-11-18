@@ -67,27 +67,44 @@ export const acquireDaemonChat = (options: {
   });
 export type DaemonChat = Effect.Success<ReturnType<typeof acquireDaemonChat>>;
 
+/** Whether the daemon's clients are bound, and to which backend, or released for good. */
+type ClientState =
+  | { _tag: 'Unbound' }
+  | { _tag: 'Bound'; backend: DaemonChat }
+  | { _tag: 'Released' };
+const released = () =>
+  new ApplicationError({ code: 'Unavailable', message: 'Moonbase is quitting.' });
+
 /**
  * Local chat's and the editor's files' one way to the local daemon, while the scope is open. `get`
  * finds or starts it and binds its clients once (`acquire`), sharing an attempt under way; a
  * failed attempt is every caller's answer for `daemonRetryAfterMs` rather than started again by
  * each. `peek` never starts one. `connect` also makes sure the daemon in use answers, starting it
  * again if it exited.
+ *
+ * The clients live in a scope taken when this is built, however late they are first acquired, so
+ * what is built after it in the same scope (the recovery store, the documents and the imports
+ * they hold) is released while the clients still answer. Once the scope closes, nothing reaches
+ * the clients again.
  */
 export const makeLocalDaemonClient = (
   acquire: Effect.Effect<DaemonChat, ApplicationError, Scope.Scope>,
 ) =>
   Effect.gen(function* () {
-    const scope = yield* Effect.scope;
-    const acquired = yield* Ref.make<DaemonChat | undefined>(undefined);
+    const clients = yield* Scope.fork(yield* Effect.scope, 'sequential');
+    const state = yield* Ref.make<ClientState>({ _tag: 'Unbound' });
     /** One attempt, whose clients live in a scope of their own, closed if it fails. */
     const attempt = Effect.gen(function* () {
-      const clients = yield* Scope.fork(scope, 'sequential');
+      const own = yield* Scope.fork(clients, 'sequential');
       const backend = yield* acquire.pipe(
-        Scope.provide(clients),
-        Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : Scope.close(clients, exit))),
+        Scope.provide(own),
+        Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : Scope.close(own, exit))),
       );
-      yield* Ref.set(acquired, backend);
+      const bound = yield* Ref.modify(state, (current): readonly [boolean, ClientState] =>
+        current._tag === 'Released' ? [false, current] : [true, { _tag: 'Bound', backend }],
+      );
+      if (!bound)
+        return yield* Effect.andThen(Scope.close(own, Exit.void), Effect.fail(released()));
       return backend;
     }).pipe(
       Effect.tapError(({ message }) =>
@@ -105,15 +122,21 @@ export const makeLocalDaemonClient = (
           }),
       ),
     );
-    const shared = yield* Effect.cachedWithTTL(attempt, (exit) =>
+    const [shared, forget] = yield* Effect.cachedInvalidateWithTTL(attempt, (exit) =>
       Exit.isSuccess(exit) ? Duration.infinity : Duration.millis(daemonRetryAfterMs),
     );
-    const get = Effect.flatMap(Ref.get(acquired), (backend) =>
-      backend ? Effect.succeed(backend) : shared,
-    );
+    // Added after the clients' scope, so it runs first as the scope closes: from then on no
+    // caller reaches the clients being released.
+    yield* Effect.addFinalizer(() => Effect.andThen(Ref.set(state, { _tag: 'Released' }), forget));
+    const get = Effect.flatMap(Ref.get(state), (current) => {
+      if (current._tag === 'Bound') return Effect.succeed(current.backend);
+      return current._tag === 'Released' ? Effect.fail(released()) : shared;
+    });
     return {
       get,
-      peek: Ref.get(acquired),
+      peek: Effect.map(Ref.get(state), (current) =>
+        current._tag === 'Bound' ? current.backend : undefined,
+      ),
       connect: Effect.flatMap(get, (backend) =>
         Effect.map(
           backend.connection

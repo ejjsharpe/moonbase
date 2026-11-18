@@ -84,6 +84,8 @@ export const DesktopServicesLive = (options: DesktopServicesOptions) =>
             process.env,
           ),
       });
+      // Built first, so its clients, however late they are acquired, are released last: the
+      // recovery store and the documents' imports still reach the daemon as Quit releases them.
       const local = yield* makeLocalDaemonClient(acquireDaemonChat({ daemon, openUrl }));
       // The recovery store keeps this installation's identity to the daemon's file host.
       const workspaceData = join(userData, 'workspace-v1');
