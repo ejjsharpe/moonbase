@@ -33,7 +33,7 @@ for (const entry of [
   'apps/desktop/src/renderer/shell/desktop-shell.tsx',
   'apps/desktop/src/renderer/chat/chat-view.tsx',
   'apps/desktop/src/renderer/chat/transcript/transcript.tsx',
-  'apps/desktop/src/renderer/chat/transcript/markdown.tsx',
+  'apps/desktop/src/renderer/chat/transcript/markdown/markdown.tsx',
 ])
   assert(inputs.some((p) => p.endsWith(entry)));
 assert(!inputs.some((p) => /packages\/editor\//.test(p)));
