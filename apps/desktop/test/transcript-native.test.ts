@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { test, after } from 'node:test';
+import { test } from 'node:test';
 import { visit } from 'unist-util-visit';
 import type { Code } from 'mdast';
 import { parseTranscriptMarkdown } from '../src/ipc/transcript-markdown.ts';
 import { MarkdownCache } from '../src/renderer/chat/transcript/markdown/markdown-model.ts';
-import { Effect, Layer, ManagedRuntime } from 'effect';
+import { Effect } from 'effect';
 import {
   maximumChatReplyBytes,
   type ChatClient,
@@ -13,27 +13,24 @@ import {
   type ChatTranscriptPart,
   type ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
-import { ChatIpcSession } from '../src/main/chat/session.ts';
 import {
   maximumTranscriptCodeCopyBytes,
   maximumTranscriptCopyBytes,
+  type NativeTranscriptActions,
 } from '../src/main/chat/transcript-native.ts';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { makeIpcFixture, noChat, waitFor } from './fixtures/ipc-fixture.ts';
-const runtime = ManagedRuntime.make(Layer.empty);
-after(() => runtime.dispose());
-/** Desktop IPC with `local` (and `remote`) as its chat targets' sessions, as the renderer reaches them. */
-const overIpc = (local: ChatIpcSession, remote?: ChatIpcSession) =>
+import { fakeChatTargets, makeIpcFixture, waitFor } from './fixtures/ipc-fixture.ts';
+/** A chat target's fakes: its chat, and the OS clipboard and browser main's Copy and links use. */
+type Owner = { chat: ChatClient; transcript: NativeTranscriptActions };
+/** Desktop IPC with `local` (and `remote`) as its chat targets, as the renderer reaches them. */
+const overIpc = (local: Owner, remote?: Owner) =>
   makeIpcFixture({
     chat: {
-      backends: {
-        ...noChat,
-        getTargets: () => [
-          { id: 'local', label: 'Local', mode: 'local' },
-          ...(remote ? [{ id: 'remote' as const, label: 'Host', mode: 'remote' as const }] : []),
-        ],
-        getSession: (id) => (id === 'local' ? local : remote),
-      },
+      backends: fakeChatTargets({
+        local: { chat: local.chat, context },
+        ...(remote ? { remote: { chat: remote.chat, context } } : {}),
+      }),
+      transcript: local.transcript,
     },
   });
 const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' },
@@ -320,18 +317,19 @@ async function fixture(live = false, text = '  **raw**\r\n\t🌔 é\r\n' + 'α'
       };
     },
   };
-  const owner = new ChatIpcSession(chat, { mode: 'local' }, context, {
+  const owner: Owner = {
+    chat,
     transcript: {
-      writeText: async (value) => {
+      writeText: async (value: string) => {
         await controls.write(value);
         writes.push(value);
       },
-      openExternal: async (url) => {
+      openExternal: async (url: string) => {
         await controls.open(url);
         links.push(url);
       },
     },
-  });
+  };
   const desktop = await overIpc(owner);
   return {
     owner,
@@ -339,10 +337,7 @@ async function fixture(live = false, text = '  **raw**\r\n\t🌔 é\r\n' + 'α'
     desktop,
     actions: desktop.target('local').transcript,
     ports: await desktop.ports('local'),
-    async dispose() {
-      await desktop.dispose();
-      await runtime.runPromise(owner.dispose);
-    },
+    dispose: () => desktop.dispose(),
     source,
     part,
     original,
@@ -364,7 +359,7 @@ test('native Copy reads complete authored Markdown beyond previews with exact Un
   assert.ok(f.reads > 4);
   await f.dispose();
 });
-test('native actions keep the target they were made for, whichever is selected later', async () => {
+test('native Copy reads the target it was asked for, whichever is selected later', async () => {
   const first = await fixture(false, 'First backend 🌔\r\n'.repeat(5000)),
     second = await fixture(false, 'Different backend content');
   const desktop = await overIpc(first.owner, second.owner);
@@ -373,9 +368,8 @@ test('native actions keep the target they were made for, whichever is selected l
     await desktop.target('local').transcript.copy({ source: first.source });
     await desktop.target('local').transcript.openLink('https://example.com/retained-backend');
     assert.deepEqual(first.writes, [first.original]);
-    assert.deepEqual(second.writes, []);
+    assert.equal(second.reads, 0);
     assert.deepEqual(first.links, ['https://example.com/retained-backend']);
-    assert.deepEqual(second.links, []);
   } finally {
     await desktop.dispose();
     await Promise.all([first.dispose(), second.dispose()]);
@@ -456,7 +450,7 @@ test('a replacement after the host answers the proof copies the proven prefix', 
   assert.equal(f.reads, 7);
   await f.dispose();
 });
-test('a replaced document waits for a held code read, which then writes nothing', async () => {
+test('a replaced document ends a held code read, which then writes nothing', async () => {
   const f = await fixture(false, '```js\r\n  🌔\r\n```\r\n');
   const held = Promise.withResolvers<void>();
   let entered = false;
@@ -471,15 +465,10 @@ test('a replaced document waits for a held code read, which then writes nothing'
   });
   void copy.catch(() => {});
   await waitFor(() => entered);
-  let released = false;
-  const closing = f.desktop.releaseDocument().then(() => {
-    released = true;
-  });
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(released, false);
-  held.resolve();
+  await f.desktop.releaseDocument();
   await assert.rejects(copy);
-  await closing;
+  held.resolve();
+  await new Promise(setImmediate);
   assert.deepEqual(f.writes, []);
   await f.dispose();
 });
@@ -746,69 +735,26 @@ test('native rejects a partial parser node reinterpreted as another block in the
   }
 });
 
-test('a replaced document waits for a held read and its watch close, and reports a failed close', async () => {
+test('a replaced document ends a held live read and closes its watch', async () => {
   const f = await fixture(true, 'complete text');
   const readGate = Promise.withResolvers<void>(),
-    readEntered = Promise.withResolvers<void>(),
-    closeGate = Promise.withResolvers<void>(),
-    closeEntered = Promise.withResolvers<void>();
-  let readSettled = false,
-    released = false;
+    readEntered = Promise.withResolvers<void>();
   f.controls.beforeRead = async () => {
     readEntered.resolve();
     await readGate.promise;
-    readSettled = true;
-  };
-  f.controls.close = async () => {
-    closeEntered.resolve();
-    await closeGate.promise;
-    throw new ApplicationError({ code: 'Unavailable', message: 'Controlled watch close failure' });
   };
   const copying = f.actions.copy({ source: f.source, selection: select(f.part) });
   void copying.catch(() => {});
   try {
     await readEntered.promise;
-    const closing = f.desktop.releaseDocument().then(() => {
-      released = true;
-    });
-    // A Stop meanwhile is independent of the held Copy.
-    const command = f.chat.command;
-    f.chat.command = async (operation, input, options) =>
-      operation === 'stopChat' ? (null as never) : command(operation, input, options);
-    readGate.resolve();
-    await closeEntered.promise;
-    await new Promise(setImmediate);
-    assert.equal(readSettled, true);
-    assert.equal(released, false);
-    closeGate.resolve();
-    await closing;
+    await f.desktop.releaseDocument();
     await assert.rejects(copying);
+    readGate.resolve();
+    await new Promise(setImmediate);
     assert.deepEqual(f.writes, []);
     assert.equal(f.closed, 1);
-    assert.match(
-      String((f.desktop.cleanupFailures[0] as Error | undefined)?.message),
-      /Controlled watch close failure/,
-    );
   } finally {
     readGate.resolve();
-    closeGate.resolve();
-    await f.dispose();
-  }
-});
-
-test('a Copy whose watch fails to close fails, and the failure is reported though its reply went', async () => {
-  const f = await fixture(true, 'complete text');
-  f.controls.close = async () => {
-    throw new ApplicationError({ code: 'Unavailable', message: 'Controlled watch close failure' });
-  };
-  try {
-    await assert.rejects(f.actions.copy({ source: f.source, selection: select(f.part) }), {
-      code: 'Unavailable',
-    });
-    assert.deepEqual(f.writes, [f.original]);
-    assert.equal(f.closed, 1);
-    assert.equal(f.desktop.cleanupFailures.length, 1);
-  } finally {
     await f.dispose();
   }
 });
@@ -855,19 +801,18 @@ test('Copy accepts an empty authored text part', async () => {
     },
     watch: () => () => Promise.resolve(),
   };
-  const session = new ChatIpcSession(chat, { mode: 'local' }, context, {
+  const desktop = await overIpc({
+    chat,
     transcript: {
-      writeText: async (text) => {
+      writeText: async (text: string) => {
         writes.push(text);
       },
       openExternal: async () => {},
     },
   });
-  const desktop = await overIpc(session);
   await desktop.target('local').transcript.copy({ source });
   assert.deepEqual(writes, ['']);
   await desktop.dispose();
-  await runtime.runPromise(session.dispose);
 });
 
 /** An entry with several authored text parts, served in fixed-size chunks. */
@@ -917,26 +862,22 @@ async function partsFixture(texts: string[], chunkBytes = 4) {
     },
     watch: () => () => Promise.resolve(),
   };
-  const owner = new ChatIpcSession(chat, { mode: 'local' }, context, {
+  const desktop = await overIpc({
+    chat,
     transcript: {
-      writeText: async (text) => {
+      writeText: async (text: string) => {
         writes.push(text);
       },
       openExternal: async () => {},
     },
   });
-  const desktop = await overIpc(owner);
   return {
-    owner,
     source,
     parts,
     reads,
     writes,
     copy: (input: object = {}) => desktop.target('local').transcript.copy({ source, ...input }),
-    async dispose() {
-      await desktop.dispose();
-      await runtime.runPromise(owner.dispose);
-    },
+    dispose: () => desktop.dispose(),
   };
 }
 

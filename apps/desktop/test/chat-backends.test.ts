@@ -3,16 +3,13 @@ import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
-import { Effect, Layer, ManagedRuntime } from 'effect';
+import { Clock, Deferred, Effect, Exit, Fiber, Scope } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
-import { createChatBackends } from '../src/main/chat/chat-backends.ts';
-import {
-  createLocalDaemonClient,
-  type DaemonChat,
-} from '../src/main/daemon/local-daemon-client.ts';
+import { makeChatBackends, type ChatBackendsOptions } from '../src/main/chat/chat-backends.ts';
+import { makeChatDocument } from '../src/main/chat/chat-document.ts';
+import { makeLocalDaemonClient, type DaemonChat } from '../src/main/daemon/local-daemon-client.ts';
 import { createFileRequestIds } from '../src/main/request-ids.ts';
 
-type Dependencies = Parameters<typeof createChatBackends>[0];
 type Backend = DaemonChat;
 /** A new resolved temporary directory, removed after the test. */
 async function makeDirectory(t: TestContext) {
@@ -24,10 +21,10 @@ async function makeDirectory(t: TestContext) {
 const makeRequestIds = async (t: TestContext) =>
   createFileRequestIds(join(await makeDirectory(t), 'chat-requests.json'));
 /** A local daemon client already holding `backend`, or one that is never reached. */
-const reached = (backend: Backend | null) =>
+const reached = (backend: Backend | null): ChatBackendsOptions['local'] =>
   backend
-    ? { get: async () => backend, peek: () => backend }
-    : { get: () => new Promise<Backend>(() => {}), peek: () => null };
+    ? { get: Effect.succeed(backend), peek: Effect.succeed(backend) }
+    : { get: Effect.never, peek: Effect.succeed(undefined) };
 /** A daemon backend whose folder operations are the given handlers; others are never called. */
 function makeBackend(
   session: Backend['session'],
@@ -35,7 +32,7 @@ function makeBackend(
   rest: Partial<Record<'chat' | 'providers' | 'workspace', unknown>> = {},
 ) {
   const effect = (run: (input: never) => unknown) => (input: never) =>
-    Effect.tryPromise({ try: async () => run(input), catch: (error) => error as ApplicationError });
+    Effect.try({ try: () => run(input), catch: (error) => error as ApplicationError });
   return {
     session,
     chat: {},
@@ -44,94 +41,131 @@ function makeBackend(
     folders: Object.fromEntries(Object.entries(folders).map(([name, run]) => [name, effect(run!)])),
   } as unknown as Backend;
 }
+const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
+const fail = <A, E>(effect: Effect.Effect<A, E>) =>
+  Effect.runPromise(Effect.flip(effect)) as Promise<E>;
 
-test('local chat shares one attempt to reach the daemon, answers a failed one for a moment, and revokes pending folder selection on document replacement', async (t) => {
-  const runtime = ManagedRuntime.make(Layer.empty);
+test('local chat shares one attempt to reach the daemon, answers a failed one for a moment, and a cancelled folder choice approves nothing', async (t) => {
   const session = { host: { hostId: 'local', storeId: 'store' }, actorId: 'owner' };
-  const approved: string[] = [],
-    released: string[] = [];
-  let attempts = 0;
-  // Only folder approval and owner release are exercised; no chat/provider command is dispatched.
-  const backend = makeBackend(
-    session,
-    {
-      approveFolder: ({ path }: { path: string }) => {
-        approved.push(path);
-        return { requestId: 'r', path };
-      },
+  const approved: string[] = [];
+  let attempts = 0,
+    now = 0;
+  const backend = makeBackend(session, {
+    approveFolder: ({ path }: { path: string }) => {
+      approved.push(path);
+      return { requestId: 'r', path };
     },
-    {
-      providers: {
-        releaseOwner: (owner: string) =>
-          Effect.sync(() => {
-            released.push(owner);
-          }),
-      },
-    },
+  });
+  let acquiring = Effect.runSync(Deferred.make<Backend, ApplicationError>());
+  const scope = Scope.makeUnsafe();
+  t.after(() => run(Scope.close(scope, Exit.void)));
+  // A clock whose time the test moves; it sleeps as the real one does.
+  const clock: Clock.Clock = Object.create(Clock.Clock.defaultValue(), {
+    currentTimeMillisUnsafe: { value: () => now },
+    currentTimeMillis: { value: Effect.sync(() => now) },
+  });
+  const local = await run(
+    Scope.provide(
+      makeLocalDaemonClient(
+        Effect.suspend(() => {
+          attempts++;
+          acquiring = Effect.runSync(Deferred.make<Backend, ApplicationError>());
+          return Deferred.await(acquiring);
+        }),
+      ),
+      scope,
+    ),
   );
-  let acquiring!: PromiseWithResolvers<Backend>;
-  let completePicker!: (path: string | null) => void;
-  // The picker opens once the daemon is reached.
-  const pickerOpened = () => new Promise((resolve) => setImmediate(resolve));
-  let clock = 0;
-  const local = createLocalDaemonClient(
-    () => {
-      attempts++;
-      acquiring = Promise.withResolvers<Backend>();
-      return acquiring.promise;
-    },
-    () => clock,
-  );
-  const owner = createChatBackends({
-    runtime,
+  let picked = Effect.runSync(Deferred.make<string | null>());
+  const owner = makeChatBackends({
     installationId: 'installation',
     requestIds: await makeRequestIds(t),
-    local,
-    pickFolder: () =>
-      new Promise((resolve) => {
-        completePicker = resolve;
-      }),
+    local: {
+      get: local.get.pipe(Effect.provideService(Clock.Clock, clock)),
+      peek: local.peek,
+    },
+    pickFolder: Effect.suspend(() => Deferred.await(picked)),
   });
-  try {
-    assert.equal(attempts, 0);
-    assert.equal(owner.getSessions().length, 0);
-    // A failed attempt is every caller's answer for a moment, then tried anew.
-    const failing = owner.getContext('local');
-    acquiring.reject(Error('spawn failed'));
-    await assert.rejects(failing, { code: 'Unavailable' });
-    await assert.rejects(owner.getContext('local'), { code: 'Unavailable' });
-    assert.equal(attempts, 1);
-    clock += 2000;
-    const first = owner.getContext('local'),
-      second = owner.getContext('local');
-    assert.equal(attempts, 2);
-    acquiring.resolve(backend);
-    assert.deepEqual(await first, session);
-    assert.deepEqual(await second, session);
-    assert.equal(owner.getSessions().length, 1);
-    const previous = owner.getSession('local');
-    const picking = owner.chooseFolder();
-    await pickerOpened();
-    await owner.releaseDocument();
-    completePicker('/obsolete');
-    assert.equal(await picking, null);
-    assert.deepEqual(approved, []);
-    assert.notEqual(owner.getSession('local'), previous);
-    assert.equal(released.length, 1);
-    const current = owner.chooseFolder();
-    await pickerOpened();
-    completePicker('/current');
-    assert.equal(await current, '/current');
-    assert.deepEqual(approved, ['/current']);
-    await owner.getContext('local');
-    assert.equal(attempts, 2);
-    await owner.releaseDocument();
-    assert.equal(released.length, 2);
-    assert.notEqual(released[0], released[1]);
-  } finally {
-    for (const session of owner.getSessions()) await session.dispose();
-    await runtime.dispose();
-  }
+  assert.equal(attempts, 0);
+  // A failed attempt is every caller's answer for a moment, then tried anew.
+  const failing = run(Effect.flip(owner.getContext('local')));
+  await new Promise((resolve) => setImmediate(resolve));
+  await run(
+    Deferred.fail(
+      acquiring,
+      new ApplicationError({ code: 'Unavailable', message: 'spawn failed' }),
+    ),
+  );
+  assert.equal((await failing).code, 'Unavailable');
+  assert.equal((await fail(owner.getContext('local'))).code, 'Unavailable');
+  assert.equal(attempts, 1);
+  now += 2000;
+  const first = run(owner.getContext('local')),
+    second = run(owner.getContext('local'));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(attempts, 2);
+  await run(Deferred.succeed(acquiring, backend));
+  assert.deepEqual(await first, session);
+  assert.deepEqual(await second, session);
+  // A choice whose request is cancelled while the picker is open approves nothing.
+  const picking = Effect.runFork(owner.chooseFolder);
+  await new Promise((resolve) => setImmediate(resolve));
+  await run(Fiber.interrupt(picking));
+  await run(Deferred.succeed(picked, '/obsolete'));
+  assert.deepEqual(approved, []);
+  picked = Effect.runSync(Deferred.make<string | null>());
+  const current = run(owner.chooseFolder);
+  await run(Deferred.succeed(picked, '/current'));
+  assert.equal(await current, '/current');
+  assert.deepEqual(approved, ['/current']);
+  await run(owner.getContext('local'));
+  assert.equal(attempts, 2);
+});
+
+test('a document releases its provider sign-ins as it goes, on the remote host too, but not on Quit', async () => {
+  const released: string[] = [];
+  let closing = false;
+  const releaseOwner =
+    (name: string, failing = false) =>
+    (owner: string) =>
+      Effect.suspend(() => {
+        released.push(`${name}:${owner}`);
+        return failing
+          ? Effect.fail(new ApplicationError({ code: 'Unavailable', message: 'Gone.' }))
+          : Effect.void;
+      });
+  const backend = makeBackend(
+    { host: { hostId: 'local', storeId: 'store' }, actorId: 'owner' },
+    {},
+    { providers: { releaseOwner: releaseOwner('local') } },
+  );
+  const backends = makeChatBackends({
+    installationId: 'installation',
+    requestIds: createFileRequestIds('/nonexistent/never-written.json'),
+    local: reached(backend),
+    // A remote host that can't be reached is released on a best effort.
+    remote: {
+      configuration: { context: {}, ssh: { profile: { label: 'Host' } } },
+      providers: { releaseOwner: releaseOwner('remote', true) },
+    } as unknown as ChatBackendsOptions['remote'],
+    pickFolder: Effect.succeed(null),
+  });
+  const open = async () => {
+    const scope = Scope.makeUnsafe();
+    const document = await run(
+      Scope.provide(makeChatDocument(backends, { isClosing: Effect.sync(() => closing) }), scope),
+    );
+    return { document, close: () => run(Scope.close(scope, Exit.void)) };
+  };
+  const first = await open();
+  await first.close();
+  assert.deepEqual(released.sort(), [`local:${first.document.id}`, `remote:${first.document.id}`]);
+  const second = await open();
+  assert.notEqual(second.document.id, first.document.id);
+  // Quit closes the daemon connections, which releases every owner.
+  closing = true;
+  await second.close();
+  assert.equal(released.length, 2);
 });
 
 const checkout = (root: string) => ({
@@ -144,8 +178,7 @@ const checkout = (root: string) => ({
   worktree: 'linked' as const,
 });
 
-test('a new worktree starts only from a folder the daemon approves, under the renderer’s request, and a replaced document’s is not offered', async (t) => {
-  const runtime = ManagedRuntime.make(Layer.empty);
+test('a new worktree starts only from a folder the daemon approves, under the renderer’s request, and a cancelled one is not offered', async (t) => {
   const session = { host: { hostId: 'local', storeId: 'store' }, actorId: 'owner' };
   const requests: { requestId: string; root: string; branch: string }[] = [],
     adopted: string[] = [];
@@ -168,50 +201,43 @@ test('a new worktree starts only from a folder the daemon approves, under the re
       },
     },
   );
-  const owner = createChatBackends({
-    runtime,
+  const owner = makeChatBackends({
     installationId: 'installation',
     requestIds: await makeRequestIds(t),
     local: reached(backend),
-    pickFolder: async () => null,
+    pickFolder: Effect.succeed(null),
     adoptCheckout: (target) => adopted.push(target.root),
   });
-  try {
-    // Even a worktree Git lists for an approved checkout is the daemon's to approve.
-    await assert.rejects(owner.createWorktree('/repo-worktrees/listed', 'chat/a', 'first'), {
-      code: 'Unauthorized',
-    });
-    assert.equal(requests.length, 0);
-    assert.equal(await owner.createWorktree('/repo', 'chat/a', 'second'), '/repo-worktrees/chat-a');
-    assert.deepEqual(
-      requests.map(({ requestId, root }) => [requestId, root]),
-      [['second', '/repo']],
-    );
-    // The daemon's worktree is offered to the editor.
-    assert.deepEqual(adopted, ['/repo-worktrees/chat-a']);
-    // Replacing the document while a creation runs cancels it; its worktree is not offered.
-    adopted.length = 0;
-    let finish!: () => void;
-    backend.workspace.createChatWorktree = ((input: { root: string; branch: string }) =>
-      Effect.promise(
-        () =>
-          new Promise<void>((resolve) => {
-            finish = resolve;
-          }),
-      ).pipe(Effect.as(checkout(`${input.root}-worktrees/${input.branch}`)))) as never;
-    const pending = owner.createWorktree('/repo', 'slow', 'third');
-    await new Promise((resolve) => setImmediate(resolve));
-    await owner.releaseDocument();
-    finish?.();
-    await assert.rejects(pending, { code: 'Cancelled' });
-    assert.deepEqual(adopted, []);
-  } finally {
-    await owner.releaseDocument();
-    await runtime.dispose();
-  }
+  // Even a worktree Git lists for an approved checkout is the daemon's to approve.
+  assert.equal(
+    (await fail(owner.createWorktree('/repo-worktrees/listed', 'chat/a', 'first'))).code,
+    'Unauthorized',
+  );
+  assert.equal(requests.length, 0);
+  assert.equal(
+    await run(owner.createWorktree('/repo', 'chat/a', 'second')),
+    '/repo-worktrees/chat-a',
+  );
+  assert.deepEqual(
+    requests.map(({ requestId, root }) => [requestId, root]),
+    [['second', '/repo']],
+  );
+  // The daemon's worktree is offered to the editor.
+  assert.deepEqual(adopted, ['/repo-worktrees/chat-a']);
+  // A creation whose document goes is interrupted; its worktree is not offered.
+  adopted.length = 0;
+  const finish = Effect.runSync(Deferred.make<void>());
+  backend.workspace.createChatWorktree = ((input: { root: string; branch: string }) =>
+    Deferred.await(finish).pipe(
+      Effect.as(checkout(`${input.root}-worktrees/${input.branch}`)),
+    )) as never;
+  const pending = Effect.runFork(owner.createWorktree('/repo', 'slow', 'third'));
+  await new Promise((resolve) => setImmediate(resolve));
+  await run(Fiber.interrupt(pending));
+  await run(Deferred.succeed(finish, undefined));
+  assert.deepEqual(adopted, []);
 });
 test('turning a chat into a project is one daemon operation, asked again only while its outcome is unknown, and its checkout is offered to the editor', async (t) => {
-  const runtime = ManagedRuntime.make(Layer.empty);
   const session = { host: { hostId: 'local', storeId: 'store' }, actorId: 'owner' };
   const requests: {
       installationId: string;
@@ -235,71 +261,46 @@ test('turning a chat into a project is one daemon operation, asked again only wh
   // The request IDs outlive a backend, as they do across a reload or restart.
   const requestIds = await makeRequestIds(t);
   const make = () =>
-    createChatBackends({
-      runtime,
+    makeChatBackends({
       installationId: 'installation',
       requestIds,
       local: reached(backend),
-      pickFolder: async () => null,
+      pickFolder: Effect.succeed(null),
       adoptCheckout: (target) => adopted.push(target.root),
     });
   const owner = make();
-  try {
-    refusal = new ApplicationError({ code: 'Unauthorized', message: 'Not a chat folder.' });
-    await assert.rejects(owner.turnIntoProject('planted'), { code: 'Unauthorized' });
-    assert.deepEqual(adopted, []);
-    // An unknown outcome is asked for again under its request, after a restart too; an answer,
-    // a refusal included, is final.
-    refusal = new ApplicationError({ code: 'Uncertain', message: 'Reply lost.' });
-    await assert.rejects(owner.turnIntoProject('own'), { code: 'Uncertain' });
-    await assert.rejects(make().turnIntoProject('own'), { code: 'Uncertain' });
-    refusal = undefined;
-    assert.equal(await owner.turnIntoProject('own'), '/profile/chats/own');
-    assert.deepEqual(adopted, ['/profile/chats/own']);
-    await owner.turnIntoProject('own');
-    await owner.turnIntoProject('planted');
-    const ids = (conversationId: string) =>
-      requests.filter((r) => r.target.conversationId === conversationId).map((r) => r.requestId);
-    const own = ids('own'),
-      planted = ids('planted');
-    assert.deepEqual(new Set(own.slice(0, 3)).size, 1);
-    assert.notEqual(own[2], own[3]);
-    assert.notEqual(planted[0], planted[1]);
-    assert(requests.every((request) => request.installationId === 'installation'));
-  } finally {
-    await owner.releaseDocument();
-    await runtime.dispose();
-  }
+  refusal = new ApplicationError({ code: 'Unauthorized', message: 'Not a chat folder.' });
+  assert.equal((await fail(owner.turnIntoProject('planted'))).code, 'Unauthorized');
+  assert.deepEqual(adopted, []);
+  // An unknown outcome is asked for again under its request, after a restart too; an answer,
+  // a refusal included, is final.
+  refusal = new ApplicationError({ code: 'Uncertain', message: 'Reply lost.' });
+  assert.equal((await fail(owner.turnIntoProject('own'))).code, 'Uncertain');
+  assert.equal((await fail(make().turnIntoProject('own'))).code, 'Uncertain');
+  refusal = undefined;
+  assert.equal(await run(owner.turnIntoProject('own')), '/profile/chats/own');
+  assert.deepEqual(adopted, ['/profile/chats/own']);
+  await run(owner.turnIntoProject('own'));
+  await run(owner.turnIntoProject('planted'));
+  const ids = (conversationId: string) =>
+    requests.filter((r) => r.target.conversationId === conversationId).map((r) => r.requestId);
+  const own = ids('own'),
+    planted = ids('planted');
+  assert.deepEqual(new Set(own.slice(0, 3)).size, 1);
+  assert.notEqual(own[2], own[3]);
+  assert.notEqual(planted[0], planted[1]);
+  assert(requests.every((request) => request.installationId === 'installation'));
 });
 
-test('a remote daemon host offers its approved roots for folders, its own provider setup, and no local folder actions', async (t) => {
-  const runtime = ManagedRuntime.make(Layer.empty);
+test('a remote daemon host offers its approved roots for folders, and local chat nothing until reached', async (t) => {
   const context = { host: { hostId: 'remote-host', storeId: 'store' }, actorId: 'actor' };
-  const listed: unknown[] = [],
-    released: string[] = [],
-    providerCalls: [string, string][] = [];
-  const backends = createChatBackends({
-    runtime,
+  const listed: unknown[] = [];
+  const backends = makeChatBackends({
     installationId: 'installation',
     requestIds: await makeRequestIds(t),
     local: reached(null),
     remote: {
       configuration: { context, ssh: { profile: { label: 'Mac mini' } } },
-      chat: { command: async () => null as never, watch: () => async () => {} },
-      connection: { command: async () => ({}) as never, watch: () => async () => {} },
-      providers: {
-        forOwner: (owner: string) => ({
-          getProviders: () =>
-            Effect.sync(() => {
-              providerCalls.push([owner, 'getProviders']);
-              return { providers: [], flow: null };
-            }),
-        }),
-        releaseOwner: (owner: string) =>
-          Effect.sync(() => {
-            released.push(owner);
-          }),
-      },
       folders: {
         listHostFolders: (input: unknown) =>
           Effect.sync(() => {
@@ -307,34 +308,24 @@ test('a remote daemon host offers its approved roots for folders, its own provid
             return { folders: ['/Users/host/projects', '/Users/host/projects/site'] };
           }),
       },
-    } as unknown as Dependencies['remote'],
-    pickFolder: async () => assert.fail('A remote host has no native picker'),
+    } as unknown as ChatBackendsOptions['remote'],
+    pickFolder: Effect.sync(() => assert.fail('A remote host has no native picker')),
   });
-  try {
-    assert.deepEqual(
-      backends.getTargets().map(({ id, label, mode }) => ({ id, label, mode })),
-      [
-        { id: 'local', label: 'Local', mode: 'local' },
-        { id: 'remote', label: 'Mac mini', mode: 'remote' },
-      ],
-    );
-    assert.deepEqual(await backends.recentFolders('remote'), [
-      '/Users/host/projects',
-      '/Users/host/projects/site',
-    ]);
-    assert.deepEqual(listed, [{ host: context.host }]);
-    // Local chat is not available, so its recent folders are empty and nothing reaches the host.
-    assert.deepEqual(await backends.recentFolders('local'), []);
-    const session = backends.getSession('remote')!;
-    assert(session.capabilities.providers);
-    await session.capabilities.providers.command('getProviders', {});
-    assert.equal(providerCalls.length, 1);
-    await backends.releaseDocument();
-    assert.deepEqual(released, [providerCalls[0]![0]]);
-  } finally {
-    for (const session of backends.getSessions()) await session.dispose();
-    await runtime.dispose();
-  }
+  assert.deepEqual(
+    backends.targets.map(({ id, label, mode }) => ({ id, label, mode })),
+    [
+      { id: 'local', label: 'Local', mode: 'local' },
+      { id: 'remote', label: 'Mac mini', mode: 'remote' },
+    ],
+  );
+  assert.deepEqual(await run(backends.recentFolders('remote')), [
+    '/Users/host/projects',
+    '/Users/host/projects/site',
+  ]);
+  assert.deepEqual(listed, [{ host: context.host }]);
+  // Local chat is not available, so its recent folders are empty and it has no clients yet.
+  assert.deepEqual(await run(backends.recentFolders('local')), []);
+  assert.equal(await run(backends.findTarget('local')), undefined);
 });
 
 test('request ids last until deleted, across a new handle, and tolerate a corrupt file', async (t) => {

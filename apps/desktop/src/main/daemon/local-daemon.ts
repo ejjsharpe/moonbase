@@ -401,28 +401,3 @@ export const LocalDaemonConnectionLive = (
       return connection;
     }),
   ).pipe(Layer.provide(LoopbackConnectionLive({ directory: daemon.directory })));
-
-/**
- * The Restart daemon action: after the user confirms, stops the local daemon with `SIGTERM` (one
- * of an older protocol included) and starts this app's at once with `start`, which also connects
- * to it; its runs resume there. A failure is reported, never thrown.
- */
-export async function restartDaemon({
-  daemon,
-  start,
-  confirm,
-  report,
-}: {
-  daemon: Pick<LocalDaemon, 'stop'>;
-  start(): Promise<unknown>;
-  confirm(): Promise<boolean>;
-  report(message: string): void;
-}) {
-  if (!(await confirm())) return;
-  try {
-    await daemon.stop();
-    await start();
-  } catch (error) {
-    report(error instanceof Error ? error.message : 'The daemon could not be restarted.');
-  }
-}

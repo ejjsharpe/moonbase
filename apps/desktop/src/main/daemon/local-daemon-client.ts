@@ -1,5 +1,4 @@
-import { normalizeApplicationError } from '@moonbase/effect';
-import { Context, Effect, Exit, Layer, Scope, type ManagedRuntime } from 'effect';
+import { Context, Duration, Effect, Exit, Layer, Ref, Scope } from 'effect';
 import {
   ChatService,
   ConnectionService,
@@ -10,7 +9,6 @@ import {
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
 import { DaemonServicesLive } from './daemon-services.ts';
-import { runApplicationEffect } from '@moonbase/application/chat/promises';
 import {
   daemonRetryAfterMs,
   LocalDaemonConnectionLive,
@@ -19,45 +17,45 @@ import {
   readDaemonSession,
 } from './local-daemon.ts';
 
+const unreachable = (error: unknown) =>
+  ApplicationError.is(error)
+    ? error
+    : new ApplicationError({
+        code: 'Unavailable',
+        message: 'Moonbase could not start its local chat daemon.',
+      });
+
 /**
- * Local chat and files as a client of the local daemon: finds or starts it, then binds chat, folder,
- * provider and file host clients to it over loopback in a scope of the privileged root. Releasing the scope
+ * Local chat and files as a client of the local daemon, in the scope: finds or starts it, then
+ * binds chat, folder, provider and file host clients to it over loopback. Closing the scope
  * releases only these clients and their watches; the daemon and its runs keep going.
  */
-export async function acquireDaemonChat(
-  runtime: ManagedRuntime.ManagedRuntime<never, ApplicationError>,
-  options: {
-    daemon: LocalDaemon;
-    /** Opens a provider's sign-in page in the user's browser. */
-    openUrl(url: string): Promise<void>;
-  },
-) {
-  const { daemon } = options;
-  await daemon.ensure();
-  const session = await readDaemonSession(daemon.directory);
-  const scope = Scope.forkUnsafe(runtime.scope, 'sequential');
-  try {
-    const services = await runApplicationEffect(
-      runtime,
-      Layer.buildWithScope(
-        DaemonServicesLive({
-          host: session.host,
-          connection: LocalDaemonConnectionLive(daemon),
-          openUrl: options.openUrl,
-          sameMachine: true,
-          workspace: true,
-        }),
-        scope,
-      ),
+export const acquireDaemonChat = (options: {
+  daemon: LocalDaemon;
+  /** Opens a provider's sign-in page in the user's browser. */
+  openUrl(url: string): Promise<void>;
+}) =>
+  Effect.gen(function* () {
+    const { daemon } = options;
+    yield* Effect.tryPromise({ try: () => daemon.ensure(), catch: unreachable });
+    const session = yield* Effect.tryPromise({
+      try: () => readDaemonSession(daemon.directory),
+      catch: unreachable,
+    });
+    const services = yield* Layer.build(
+      DaemonServicesLive({
+        host: session.host,
+        connection: LocalDaemonConnectionLive(daemon),
+        openUrl: options.openUrl,
+        sameMachine: true,
+        workspace: true,
+      }),
     );
     const connection = Context.get(services, ConnectionService);
     // Connect now, so a daemon that can't be reached shows at startup.
-    await runApplicationEffect(
-      runtime,
-      connection
-        .endpoint({ host: session.host })
-        .pipe(Effect.mapError(toConnectionApplicationError)),
-    );
+    yield* connection
+      .endpoint({ host: session.host })
+      .pipe(Effect.mapError(toConnectionApplicationError));
     return {
       session,
       connection,
@@ -66,72 +64,87 @@ export async function acquireDaemonChat(
       folders: Context.get(services, LocalHostService),
       workspace: Context.get(services, WorkspaceHostService),
     };
-  } catch (error) {
-    await runApplicationEffect(runtime, Scope.close(scope, Exit.void));
-    throw error;
-  }
-}
-export type DaemonChat = Awaited<ReturnType<typeof acquireDaemonChat>>;
+  });
+export type DaemonChat = Effect.Success<ReturnType<typeof acquireDaemonChat>>;
 
-export type LocalDaemonClient = ReturnType<typeof createLocalDaemonClient>;
+/** Whether the daemon's clients are bound, and to which backend, or released for good. */
+type ClientState =
+  | { _tag: 'Unbound' }
+  | { _tag: 'Bound'; backend: DaemonChat }
+  | { _tag: 'Released' };
+const released = () =>
+  new ApplicationError({ code: 'Unavailable', message: 'Moonbase is quitting.' });
+
 /**
- * Local chat's and the editor's files' one way to the local daemon. `get` finds or starts it and
- * binds its clients once (`acquire`), sharing an attempt under way; a failed attempt is every
- * caller's answer for `daemonRetryAfterMs` rather than started again by each. `peek` never starts
- * one. `connect` also makes sure the daemon in use answers, starting it again if it exited.
+ * Local chat's and the editor's files' one way to the local daemon, while the scope is open. `get`
+ * finds or starts it and binds its clients once (`acquire`), sharing an attempt under way; a
+ * failed attempt is every caller's answer for `daemonRetryAfterMs` rather than started again by
+ * each. `peek` never starts one. `connect` also makes sure the daemon in use answers, starting it
+ * again if it exited.
+ *
+ * The clients live in a scope taken when this is built, however late they are first acquired, so
+ * what is built after it in the same scope (the recovery store, the documents and the imports
+ * they hold) is released while the clients still answer. Once the scope closes, nothing reaches
+ * the clients again.
  */
-export function createLocalDaemonClient(
-  acquire: () => Promise<DaemonChat>,
-  now: () => number = Date.now,
-) {
-  let backend: DaemonChat | undefined,
-    attempt: Promise<DaemonChat> | undefined,
-    failed: { error: ApplicationError; at: number } | undefined;
-  const get = (): Promise<DaemonChat> => {
-    if (backend) return Promise.resolve(backend);
-    const since = failed && now() - failed.at;
-    if (failed && since !== undefined && since >= 0 && since < daemonRetryAfterMs)
-      return Promise.reject(failed.error);
-    return (attempt ??= acquire()
-      .then(
-        (acquired) => {
-          failed = undefined;
-          return (backend = acquired);
-        },
-        (error: unknown) => {
-          const { code, message } = normalizeApplicationError(error);
-          console.error('The local daemon is unavailable:', message);
-          failed = {
-            error: new ApplicationError({
-              code: 'Unavailable',
-              // The daemon's own reason when it is still busy; otherwise the generic one.
-              message:
-                code === 'Unavailable' && message === olderDaemonMessage
-                  ? message
-                  : 'Moonbase could not start or reach its local daemon. Retry; drafts are kept.',
-            }),
-            at: now(),
-          };
-          throw failed.error;
-        },
-      )
-      .finally(() => {
-        attempt = undefined;
-      }));
-  };
-  return {
-    get,
-    peek: () => backend ?? null,
-    connect: () =>
-      Effect.flatMap(
-        Effect.tryPromise({ try: get, catch: (error) => error as ApplicationError }),
-        (acquired) =>
-          Effect.map(
-            acquired.connection
-              .endpoint({ host: acquired.session.host })
-              .pipe(Effect.mapError(toConnectionApplicationError)),
-            (endpoint) => ({ ...acquired, endpoint }),
-          ),
+export const makeLocalDaemonClient = (
+  acquire: Effect.Effect<DaemonChat, ApplicationError, Scope.Scope>,
+) =>
+  Effect.gen(function* () {
+    const clients = yield* Scope.fork(yield* Effect.scope, 'sequential');
+    const state = yield* Ref.make<ClientState>({ _tag: 'Unbound' });
+    /** One attempt, whose clients live in a scope of their own, closed if it fails. */
+    const attempt = Effect.gen(function* () {
+      const own = yield* Scope.fork(clients, 'sequential');
+      const backend = yield* acquire.pipe(
+        Scope.provide(own),
+        Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : Scope.close(own, exit))),
+      );
+      const bound = yield* Ref.modify(state, (current): readonly [boolean, ClientState] =>
+        current._tag === 'Released' ? [false, current] : [true, { _tag: 'Bound', backend }],
+      );
+      if (!bound)
+        return yield* Effect.andThen(Scope.close(own, Exit.void), Effect.fail(released()));
+      return backend;
+    }).pipe(
+      Effect.tapError(({ message }) =>
+        Effect.logError('The local daemon is unavailable:', message),
       ),
-  };
-}
+      Effect.mapError(
+        ({ code, message }) =>
+          new ApplicationError({
+            code: 'Unavailable',
+            // The daemon's own reason when it is still busy; otherwise the generic one.
+            message:
+              code === 'Unavailable' && message === olderDaemonMessage
+                ? message
+                : 'Moonbase could not start or reach its local daemon. Retry; drafts are kept.',
+          }),
+      ),
+    );
+    const [shared, forget] = yield* Effect.cachedInvalidateWithTTL(attempt, (exit) =>
+      Exit.isSuccess(exit) ? Duration.infinity : Duration.millis(daemonRetryAfterMs),
+    );
+    // Added after the clients' scope, so it runs first as the scope closes: from then on no
+    // caller reaches the clients being released.
+    yield* Effect.addFinalizer(() => Effect.andThen(Ref.set(state, { _tag: 'Released' }), forget));
+    const get = Effect.flatMap(Ref.get(state), (current) => {
+      if (current._tag === 'Bound') return Effect.succeed(current.backend);
+      return current._tag === 'Released' ? Effect.fail(released()) : shared;
+    });
+    return {
+      get,
+      peek: Effect.map(Ref.get(state), (current) =>
+        current._tag === 'Bound' ? current.backend : undefined,
+      ),
+      connect: Effect.flatMap(get, (backend) =>
+        Effect.map(
+          backend.connection
+            .endpoint({ host: backend.session.host })
+            .pipe(Effect.mapError(toConnectionApplicationError)),
+          (endpoint) => ({ ...backend, endpoint }),
+        ),
+      ),
+    };
+  });
+export type LocalDaemonClient = Effect.Success<ReturnType<typeof makeLocalDaemonClient>>;

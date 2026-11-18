@@ -48,20 +48,19 @@ test('a save sent as the daemon is stopped keeps its text, and resolves once the
   );
   stops.unshift(() => connection.dispose());
   const { client } = await composeWorkspace(t, userData, {
-    connect: () =>
-      Effect.tryPromise({
-        try: () =>
-          connection.runPromise(
-            Effect.gen(function* () {
-              const connections = yield* ConnectionService;
-              return {
-                workspace: yield* WorkspaceHostService,
-                endpoint: yield* connections.endpoint({ host: session.host }),
-              };
-            }),
-          ),
-        catch: (error) => error as ApplicationError,
-      }) as never,
+    connect: Effect.tryPromise({
+      try: () =>
+        connection.runPromise(
+          Effect.gen(function* () {
+            const connections = yield* ConnectionService;
+            return {
+              workspace: yield* WorkspaceHostService,
+              endpoint: yield* connections.endpoint({ host: session.host }),
+            };
+          }),
+        ),
+      catch: (error) => error as ApplicationError,
+    }) as never,
   });
 
   const checkout = await client.command('openCheckout', { root: project });

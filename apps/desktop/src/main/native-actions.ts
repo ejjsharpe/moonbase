@@ -1,32 +1,92 @@
-import { execFileSync } from 'node:child_process';
 import type { BrowserWindow, Clipboard, Dialog, Shell } from 'electron';
+import { Effect, Stream } from 'effect';
+import { ChildProcess, ChildProcessSpawner } from 'effect/process';
 import { ApplicationError, type CheckoutTarget } from '@moonbase/contracts/workspace';
 
 /** What the editor's document may ask of this Mac, through main. */
 export type NativeActions = {
-  chooseCheckout(): Promise<string | null>;
-  /** Captured references, none when there is nothing to import, or null for a declined prompt. */
-  imports(
-    target: CheckoutTarget,
+  readonly chooseCheckout: Effect.Effect<string | null>;
+  /**
+   * The paths to import: the picker's, or the Finder files on the clipboard. None when there is
+   * nothing to import, or null for a declined prompt.
+   */
+  choosePaths(
+    checkout: CheckoutTarget,
     kind: 'picker' | 'clipboard',
-    paths?: string[],
-    signal?: AbortSignal,
-  ): Promise<string[] | null>;
+  ): Effect.Effect<string[] | null, ApplicationError>;
+  /** Captures `paths` for the editor, returning the references it may import. */
+  capture(input: {
+    checkout: CheckoutTarget;
+    clientId: string;
+    paths: string[];
+  }): Effect.Effect<string[], ApplicationError>;
   release(input: {
     checkout: CheckoutTarget;
     clientId: string;
     references: string[];
-  }): Promise<void>;
+  }): Effect.Effect<void, ApplicationError>;
   /** Writes text to the OS clipboard. */
-  copyText(text: string): Promise<void>;
+  copyText(text: string): Effect.Effect<void>;
   /** Shows an absolute path in the OS file manager. */
-  reveal(path: string): Promise<void>;
+  reveal(path: string): Effect.Effect<void>;
 };
 
 /** The raw pasteboard type under which Finder lists copied files, all of them in one plist. */
 const finderFiles = 'electron application/osclipboard;format="NSFilenamesPboardType"';
+/** The most `plutil` may print for one clipboard's Finder files. */
+const maximumFileListBytes = 2 ** 20;
+const invalid = (message: string) => new ApplicationError({ code: 'InvalidInput', message });
 
-export function createNativeActions({
+/** A Finder file list (a binary or XML plist) as its paths, converted by `/usr/bin/plutil`. */
+const readFinderFiles = (plist: Uint8Array) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const handle = yield* spawner.spawn(
+        ChildProcess.make('/usr/bin/plutil', ['-convert', 'json', '-o', '-', '-'], {
+          stdin: Stream.make(plist),
+          // Closing the scope (a cancelled request, or too much output) kills it.
+          killSignal: 'SIGKILL',
+        }),
+      );
+      const [json, , status] = yield* Effect.all(
+        [
+          handle.stdout.pipe(
+            Stream.decodeText,
+            Stream.runFoldEffect(
+              () => '',
+              (text, chunk) =>
+                text.length + chunk.length > maximumFileListBytes
+                  ? Effect.fail(invalid('Invalid Finder file list.'))
+                  : Effect.succeed(text + chunk),
+            ),
+          ),
+          Stream.runDrain(handle.stderr),
+          handle.exitCode,
+        ],
+        { concurrency: 'unbounded' },
+      );
+      if (status !== 0) return yield* Effect.fail(invalid('Invalid Finder file list.'));
+      return json;
+    }),
+  ).pipe(
+    Effect.mapError((error) =>
+      ApplicationError.is(error) ? error : invalid('Invalid Finder file list.'),
+    ),
+    Effect.flatMap((json) =>
+      Effect.try({
+        try: () => JSON.parse(json) as unknown,
+        catch: () => invalid('Invalid Finder file list.'),
+      }),
+    ),
+    Effect.flatMap((parsed) =>
+      Array.isArray(parsed) && parsed.every((path) => typeof path === 'string')
+        ? Effect.succeed(parsed as string[])
+        : Effect.fail(invalid('Invalid Finder file list.')),
+    ),
+  );
+
+export const makeNativeActions = ({
   window,
   dialog,
   clipboard,
@@ -38,87 +98,71 @@ export function createNativeActions({
   dialog: Pick<Dialog, 'showOpenDialog' | 'showMessageBox'>;
   clipboard: Pick<Clipboard, 'has' | 'read' | 'writeText'>;
   shell: Pick<Shell, 'showItemInFolder'>;
-  capture(input: {
-    checkout: CheckoutTarget;
-    clientId: string;
-    paths: string[];
-  }): Promise<string[]>;
+  capture: NativeActions['capture'];
   release: NativeActions['release'];
-}): NativeActions {
-  return {
-    async chooseCheckout() {
-      const result = await dialog.showOpenDialog(window, {
-        title: 'Open a Git checkout',
-        properties: ['openDirectory'],
-      });
-      return result.canceled ? null : (result.filePaths[0] ?? null);
-    },
-    async imports(
-      checkout: CheckoutTarget,
-      kind: 'picker' | 'clipboard',
-      paths?: string[],
-      signal?: AbortSignal,
-    ) {
-      if (!paths && kind === 'picker') {
-        const result = await dialog.showOpenDialog(window, {
-          title: 'Import files into ' + checkout.root,
-          properties: ['openFile', 'openDirectory', 'multiSelections'],
-        });
-        if (result.canceled) return [];
-        paths = result.filePaths;
-      }
-      if (kind === 'clipboard') {
-        // Only Finder files import. Without them, such as after text was copied, there is
-        // nothing to ask about, and the renderer pastes its own entries instead. Until consent,
-        // only the type's presence is checked; nothing on the clipboard is read.
-        if (!(await clipboard.has(finderFiles))) return [];
-        const consent = await dialog.showMessageBox(window, {
-          type: 'question',
-          message: 'Import clipboard files?',
-          detail: 'Copy files from Finder, then confirm import into ' + checkout.root,
-          buttons: ['Cancel', 'Import files'],
-          defaultId: 0,
-          cancelId: 0,
-        });
+}) =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    // A native dialog can't be withdrawn, so a request cancelled meanwhile waits for its answer.
+    const ask = <A>(show: () => Promise<A>) => Effect.uninterruptible(Effect.promise(show));
+    const clipboardPaths = (checkout: CheckoutTarget) =>
+      Effect.gen(function* () {
+        // Only Finder files import. Without them, such as after text was copied, there is nothing
+        // to ask about, and the renderer pastes its own entries instead. Until consent, only the
+        // type's presence is checked; nothing on the clipboard is read.
+        if (!(yield* Effect.promise(async () => clipboard.has(finderFiles)))) return [];
+        const consent = yield* ask(() =>
+          dialog.showMessageBox(window, {
+            type: 'question',
+            message: 'Import clipboard files?',
+            detail: 'Copy files from Finder, then confirm import into ' + checkout.root,
+            buttons: ['Cancel', 'Import files'],
+            defaultId: 0,
+            cancelId: 0,
+          }),
+        );
         // Declined: the renderer pastes nothing, rather than its own entries.
         if (consent.response !== 1) return null;
-        const item = (await clipboard.read()).find((item) => item.types.includes(finderFiles));
-        const payload = item && (await item.getType(finderFiles));
-        const bytes =
-          payload && 'arrayBuffer' in payload
-            ? Buffer.from(await payload.arrayBuffer())
-            : Buffer.alloc(0);
+        const bytes = yield* Effect.promise(async () => {
+          const item = (await clipboard.read()).find((item) => item.types.includes(finderFiles));
+          const payload = item && (await item.getType(finderFiles));
+          return payload && 'arrayBuffer' in payload
+            ? new Uint8Array(await payload.arrayBuffer())
+            : new Uint8Array();
+        });
         if (!bytes.length)
-          throw new ApplicationError({
-            code: 'InvalidInput',
-            message: 'Clipboard contains no Finder files.',
-          });
-        const parsed: unknown = JSON.parse(
-          execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', '-'], {
-            input: bytes,
-            maxBuffer: 2 ** 20,
-          }).toString(),
+          return yield* Effect.fail(invalid('Clipboard contains no Finder files.'));
+        return yield* readFinderFiles(bytes).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         );
-        if (!Array.isArray(parsed) || parsed.some((p) => typeof p !== 'string'))
-          throw new ApplicationError({
-            code: 'InvalidInput',
-            message: 'Invalid Finder file list.',
-          });
-        paths = parsed;
-      }
-      if (signal?.aborted)
-        throw new ApplicationError({ code: 'Cancelled', message: 'Native request cancelled.' });
-      if (!paths?.length) return [];
-      return capture({ checkout, clientId: 'desktop-primary', paths });
-    },
-    release(input: { checkout: CheckoutTarget; clientId: string; references: string[] }) {
-      return release(input);
-    },
-    async copyText(text: string) {
-      await clipboard.writeText(text);
-    },
-    async reveal(path: string) {
-      shell.showItemInFolder(path);
-    },
-  };
-}
+      });
+    return {
+      chooseCheckout: Effect.map(
+        ask(() =>
+          dialog.showOpenDialog(window, {
+            title: 'Open a Git checkout',
+            properties: ['openDirectory'],
+          }),
+        ),
+        (result) => (result.canceled ? null : (result.filePaths[0] ?? null)),
+      ),
+      choosePaths: (checkout, kind) =>
+        kind === 'clipboard'
+          ? clipboardPaths(checkout)
+          : Effect.map(
+              ask(() =>
+                dialog.showOpenDialog(window, {
+                  title: 'Import files into ' + checkout.root,
+                  properties: ['openFile', 'openDirectory', 'multiSelections'],
+                }),
+              ),
+              (result) => (result.canceled ? [] : result.filePaths),
+            ),
+      capture,
+      release,
+      // A clipboard write under way is waited for, never left to finish unseen.
+      copyText: (text) =>
+        Effect.uninterruptible(Effect.promise(async () => clipboard.writeText(text))),
+      reveal: (path) => Effect.sync(() => shell.showItemInFolder(path)),
+    } satisfies NativeActions;
+  });

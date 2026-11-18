@@ -52,7 +52,13 @@ export {
   type TranscriptDependencies,
 } from './transcript/transcript.ts';
 export { TranscriptReadError, type TranscriptReadProblem } from './transcript/transcript-errors.ts';
-export { iterateTranscriptSource, makeTranscriptReader } from './transcript/transcript-read.ts';
+export {
+  checkTranscriptReply,
+  countDecodedTranscriptBytes,
+  iterateTranscriptSource,
+  makeTranscriptReader,
+  trackTranscriptCursor,
+} from './transcript/transcript-read.ts';
 export type { TranscriptRead, TranscriptChunk } from './transcript/transcript-read.ts';
 export { TranscriptViewMemory } from './transcript/transcript-view-memory.ts';
 export type { TranscriptView, TranscriptViewAnchor } from './transcript/transcript-view-memory.ts';

@@ -1,10 +1,8 @@
 import { openActivity, openActivityGroups, stepToggle } from '../fixtures/transcript-list.ts';
 import { test, expect, type Page, type Locator } from '@playwright/test';
-import { Layer, ManagedRuntime } from 'effect';
 import type { ChatClient } from '@moonbase/contracts/chat';
-import { ChatIpcSession } from '../../src/main/chat/session.ts';
 import type { TranscriptCopy } from '../../src/ipc/chat-rpcs.ts';
-import { makeIpcFixture, noChat } from '../fixtures/ipc-fixture.ts';
+import { fakeChatTargets, makeIpcFixture } from '../fixtures/ipc-fixture.ts';
 
 async function open(page: Page) {
   await page.goto('/?local&design&transcript');
@@ -55,7 +53,6 @@ async function publishOutput(page: Page, text: string, attempt = 0) {
 }
 async function installCopy(page: Page) {
   const context = await page.evaluate(() => window.demo.chat.dependencies.context);
-  const runtime = ManagedRuntime.make(Layer.empty);
   const writes: string[] = [],
     inputs: TranscriptCopy[] = [];
   const client: ChatClient = {
@@ -83,21 +80,15 @@ async function installCopy(page: Page) {
       };
     },
   };
-  const owner = new ChatIpcSession(client, { mode: 'local' }, context, {
-    transcript: {
-      writeText: async (text) => {
-        writes.push(text);
-      },
-      openExternal: async () => {},
-    },
-  });
-  // Copy as the desktop renderer sends it: over IPC to main's session for this target.
+  // Copy as the desktop renderer sends it: over IPC to main, for this target.
   const desktop = await makeIpcFixture({
     chat: {
-      backends: {
-        ...noChat,
-        getTargets: () => [{ id: 'local', label: 'Local', mode: 'local' }],
-        getSession: () => owner,
+      backends: fakeChatTargets({ local: { chat: client, context } }),
+      transcript: {
+        writeText: async (text: string) => {
+          writes.push(text);
+        },
+        openExternal: async () => {},
       },
     },
   });
@@ -117,8 +108,6 @@ async function installCopy(page: Page) {
     inputs,
     dispose: async () => {
       await desktop.dispose();
-      await runtime.runPromise(owner.dispose);
-      await runtime.dispose();
     },
   };
 }

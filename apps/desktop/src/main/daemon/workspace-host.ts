@@ -36,7 +36,7 @@ export function createDaemonWorkspaceHost(
     operation === 'watch' ? hostDeadlinesMs.read : hostDeadlineMs(operation),
 ): WorkspaceHostServiceShape {
   const reach = (operation: HostCommand | 'watch') =>
-    local.connect().pipe(
+    local.connect.pipe(
       Effect.timeoutOrElse({
         duration: deadlineMs(operation),
         orElse: () => Effect.fail(unreachable()),

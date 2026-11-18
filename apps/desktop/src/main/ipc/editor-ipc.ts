@@ -1,6 +1,6 @@
 import { realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative, sep } from 'node:path';
-import { Effect, Exit, Scope, Stream } from 'effect';
+import { Effect, Exit, Scope, Stream, type Cause } from 'effect';
 import type {
   CheckoutTarget,
   CommandInput,
@@ -14,7 +14,6 @@ import { IpcAuthorityError, IpcInputError, NativeActionError } from '../../ipc/i
 import { IpcRequestIdSchema } from '../../ipc/ipc-limits.ts';
 import type { NativeActions } from '../native-actions.ts';
 import type { DocumentGrants, EditorApprovals } from './editor-approvals.ts';
-import { settledPromise } from './settled-promise.ts';
 import * as Schema from 'effect/Schema';
 
 export type EditorIpcOptions = {
@@ -26,9 +25,9 @@ export type EditorIpcOptions = {
    * The host of this Mac's own files, the only one Reveal in Finder can show; a checkout of any
    * other host is refused.
    */
-  localHostId(): Promise<string | undefined>;
+  readonly localHostId: Effect.Effect<string | undefined>;
   /** Reports a cleanup failure no request is left to answer with. */
-  reportCleanup(error: unknown): void;
+  reportCleanup(cause: Cause.Cause<unknown>): Effect.Effect<void>;
 };
 
 /** Whether `path` is `root` or lies within it. */
@@ -78,21 +77,12 @@ export function makeEditorIpcHandlers(options: EditorIpcOptions, document: Scope
       : Effect.fail(new IpcInputError({ problem: 'checkout-path' }));
   };
   const release = (checkout: CheckoutTarget, references: string[]) =>
-    native
-      .release({ checkout, clientId: editorClientId, references })
-      .catch((error: unknown) => options.reportCleanup(error));
-  /**
-   * The native capture. Cancelled, it is told so and then waited for: a capture already under way
-   * finishes, and what it took is released, since nothing published it.
-   */
-  const capture = (checkout: CheckoutTarget, kind: 'picker' | 'clipboard', paths?: string[]) =>
-    settledPromise(
-      (signal) => native.imports(checkout, kind, paths, signal),
-      (references) => references && release(checkout, references),
-    );
+    native.release({ checkout, clientId: editorClientId, references });
   /**
    * Captured references belong to the document from the moment they exist, so it releases them
-   * however the request ends; a request cancelled before its reply releases them at once.
+   * however the request ends. A request cancelled while the user chooses captures nothing; one
+   * cancelled while the capture is under way waits for it and releases what it took at once,
+   * since nothing published it.
    */
   const captureImports = (
     checkout: CheckoutTarget,
@@ -103,15 +93,19 @@ export function makeEditorIpcHandlers(options: EditorIpcOptions, document: Scope
       yield* checkApproved(checkout);
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          const references = yield* restore(capture(checkout, kind, paths));
-          if (!references) return references;
-          const owned = yield* Scope.fork(document, 'sequential');
-          yield* Scope.addFinalizer(
-            owned,
-            Effect.promise(() => release(checkout, references)),
+          const chosen = paths ?? (yield* restore(native.choosePaths(checkout, kind)));
+          if (!chosen?.length) return chosen === null ? null : [];
+          const references = yield* restore(Effect.void).pipe(
+            Effect.andThen(native.capture({ checkout, clientId: editorClientId, paths: chosen })),
           );
+          const owned = yield* Scope.fork(document, 'sequential');
+          yield* Scope.addFinalizer(owned, release(checkout, references).pipe(Effect.orDie));
           return yield* restore(Effect.succeed(references)).pipe(
-            Effect.onInterrupt(() => Scope.close(owned, Exit.void)),
+            Effect.onInterrupt(() =>
+              Effect.flatMap(Effect.exit(Scope.close(owned, Exit.void)), (exit) =>
+                Exit.isFailure(exit) ? options.reportCleanup(exit.cause) : Effect.void,
+              ),
+            ),
           );
         }),
       );
@@ -155,7 +149,7 @@ export function makeEditorIpcHandlers(options: EditorIpcOptions, document: Scope
         ),
       ),
     chooseCheckout: () =>
-      settledPromise(() => native.chooseCheckout()).pipe(
+      native.chooseCheckout.pipe(
         Effect.tap((root) =>
           Effect.sync(() => {
             if (typeof root === 'string') grants.roots.add(root);
@@ -169,7 +163,7 @@ export function makeEditorIpcHandlers(options: EditorIpcOptions, document: Scope
       Effect.gen(function* () {
         yield* checkApproved(checkout);
         const absolute = yield* Effect.forEach(paths, (path) => resolvePath(checkout, path));
-        yield* settledPromise(() => native.copyText((relative ? paths : absolute).join('\n')));
+        yield* native.copyText((relative ? paths : absolute).join('\n'));
       }),
     revealPath: ({ checkout, path }) =>
       Effect.gen(function* () {
@@ -177,7 +171,7 @@ export function makeEditorIpcHandlers(options: EditorIpcOptions, document: Scope
         const target = yield* resolvePath(checkout, path);
         // Another host's files are not on this Mac, and a path that is only spelled like one of
         // its own would show the wrong file.
-        if (checkout.hostId !== (yield* Effect.promise(() => options.localHostId())))
+        if (checkout.hostId !== (yield* options.localHostId))
           return yield* new NativeActionError({ failure: 'reveal-other-host' });
         // Follow links before checking again, so a link inside the checkout can't point out of it.
         const [root, real] = yield* Effect.tryPromise({
@@ -185,7 +179,7 @@ export function makeEditorIpcHandlers(options: EditorIpcOptions, document: Scope
           catch: () => new NativeActionError({ failure: 'reveal-missing' }),
         });
         if (!isInside(root, real)) return yield* new IpcInputError({ problem: 'checkout-path' });
-        yield* settledPromise(() => native.reveal(real));
+        yield* native.reveal(real);
       }),
   });
 }

@@ -171,7 +171,7 @@ console.log(
   'Boundary negative fixtures passed: platform/type/dynamic/deep imports, cycles and hidden process-root back edges.',
 );
 
-for (const entry of ['main/main.ts', 'main/chat/session.ts', 'main/future-owner.ts'])
+for (const entry of ['main/main.ts', 'main/chat/chat-document.ts', 'main/future-owner.ts'])
   assert(isPrivilegedDesktopInput(`/checkout/apps/desktop/src/${entry}`), entry);
 assert(!isPrivilegedDesktopInput('/checkout/apps/desktop/src/renderer/main.tsx'));
 assert(!isPrivilegedDesktopInput('/checkout/apps/desktop/src/ipc/chat-rpcs.ts'));
