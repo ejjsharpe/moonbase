@@ -77,7 +77,7 @@ export const saveFile = (input: HostInput<'saveFile'>) =>
           return {
             ...result,
             persistencePending: true,
-            message: 'Saved to disk; recording it in recovery failed: ' + errorText(error),
+            message: 'Saved to disk; recording it in the journal failed: ' + errorText(error),
           };
       }
       return result;
