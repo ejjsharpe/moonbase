@@ -12,10 +12,10 @@ export type JournalRecord = {
   version?: string;
   port?: number;
   reason?: string;
-  code?: string;
+  error?: string;
   message?: string;
 };
-const fields = ['event', 'mode', 'pid', 'version', 'port', 'reason', 'code', 'message'] as const;
+const fields = ['event', 'mode', 'pid', 'version', 'port', 'reason', 'error', 'message'] as const;
 
 /** A journal entry as it is logged: anything else logged never reaches the journal. */
 class JournalEntry {

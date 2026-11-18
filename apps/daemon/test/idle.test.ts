@@ -74,7 +74,8 @@ test('a local daemon exits idle only after 5 minutes with no client; a request r
   try {
     daemon = await startInProcess(root, time);
     await time.advance(4 * minute);
-    await daemon.client.command('getChatHost', { host: daemon.session.host });
+    const { host } = daemon.session;
+    await daemon.client.chat((chat) => chat.getChatHost({ host }));
     await time.advance(4 * minute);
     assert.equal(daemon.settled, undefined, 'the request restarted the wait');
     await stat(join(daemon.directory, 'endpoint.json'));
@@ -109,11 +110,12 @@ test('unauthenticated requests never delay a local daemon going idle; an authent
       await response.arrayBuffer();
     }
     // A client holding the wrong key is refused at signed health, before it can upgrade.
+    const { session } = daemon;
     await assert.rejects(
-      createFauxClient(daemon.port, wrongKey, daemon.session.host).command('listChats', {
-        session: daemon.session,
-      }),
-      { code: 'Unauthorized' },
+      createFauxClient(daemon.port, wrongKey, session.host).chat((chat) =>
+        chat.listChats({ session }),
+      ),
+      { _tag: 'HostVerificationError', reason: 'rejected' },
     );
     await time.advance(minute + 30_000);
     assert.equal(
@@ -150,27 +152,29 @@ test('an open watch and active work keep a local daemon running; it idles once b
     );
     const { client, session } = daemon;
     const target = (
-      await client.command('createChat', {
-        session,
-        requestId: 'create',
-        title: 'Held',
-        settings: { model: { provider: fauxProviderId, modelId: fauxModelId } },
-      })
+      await client.chat((chat) =>
+        chat.createChat({
+          session,
+          requestId: 'create',
+          title: 'Held',
+          settings: { model: { provider: fauxProviderId, modelId: fauxModelId } },
+        }),
+      )
     ).conversation.target;
     const watch = await client.watch(target);
     await time.advance(20 * minute);
     assert.equal(daemon.settled, undefined, 'an open watch keeps the daemon');
     await watch.close();
-    await client.command('sendChat', { target, requestId: 'held', text: 'Hold this' });
+    await client.chat((chat) => chat.sendChat({ target, requestId: 'held', text: 'Hold this' }));
     const running = await until(
-      () => client.command('getChat', { target }),
+      () => client.chat((chat) => chat.getChat({ target })),
       (snapshot) => !!snapshot.run,
     );
     await time.advance(20 * minute);
     assert.equal(daemon.settled, undefined, 'active work keeps the daemon');
-    await client.command('stopChat', { stop: running.run!.stop, requestId: 'stop' });
+    await client.chat((chat) => chat.stopChat({ stop: running.run!.stop, requestId: 'stop' }));
     await until(
-      () => client.command('getChat', { target }),
+      () => client.chat((chat) => chat.getChat({ target })),
       (snapshot) => !snapshot.run,
     );
     await time.advance(5 * minute + 30_000);

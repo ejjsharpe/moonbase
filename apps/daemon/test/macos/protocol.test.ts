@@ -5,7 +5,6 @@ import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
 import type { ProviderState } from '@moonbase/contracts/providers';
-import { LocalHostService, ProviderSetupService } from '@moonbase/contracts/services';
 import {
   bounded,
   connectClients,
@@ -35,9 +34,9 @@ test('a token holder drives a local-mode daemon completely over the loopback con
     const ready = await bounded(daemon.ready);
     const identity = await readJson(join(directory, 'identity.json'));
     const session = { host: identity.host, actorId: identity.actorId };
-    const clients = connectClients(directory, ready.host);
+    const clients = await connectClients(directory, ready.host);
     try {
-      const connected = await clients.connection.command('connect', { profileId: 'loopback' });
+      const connected = await clients.run(clients.connection.connect({ profileId: 'loopback' }));
       assert.equal(connected.state, 'connected');
       assert.deepEqual(
         connected.state === 'connected' && connected.health.capabilities,
@@ -47,7 +46,7 @@ test('a token holder drives a local-mode daemon completely over the loopback con
       const token = (await readFile(join(directory, 'token'), 'utf8')).trim();
       assert(!JSON.stringify(connected).includes(token));
       // Connecting again to the same daemon keeps the generation.
-      const again = await clients.connection.command('connect', { profileId: 'loopback' });
+      const again = await clients.run(clients.connection.connect({ profileId: 'loopback' }));
       assert.equal(again.connectionId, connected.connectionId);
       // The token outlives a restart, so a daemon restarted on the same port is told apart by its
       // process: an endpoint naming another pid starts a new generation.
@@ -55,15 +54,15 @@ test('a token holder drives a local-mode daemon completely over the loopback con
       const endpoint = await readJson(endpointPath);
       await writeFile(endpointPath, JSON.stringify({ ...endpoint, pid: endpoint.pid + 1 }));
       await chmod(endpointPath, 0o600);
-      const replaced = await clients.connection.command('connect', { profileId: 'loopback' });
+      const replaced = await clients.run(clients.connection.connect({ profileId: 'loopback' }));
       assert.equal(replaced.state, 'connected');
       assert.notEqual(replaced.connectionId, connected.connectionId);
       await assert.rejects(
-        clients.connection.command('disconnect', { connectionId: connected.connectionId! }),
-        { code: 'Conflict' },
+        clients.run(clients.connection.disconnect({ connectionId: connected.connectionId! })),
+        { _tag: 'ConnectionError', reason: 'stale-generation' },
       );
 
-      const folders = await clients.runtime.runPromise(LocalHostService);
+      const { folders } = clients;
       const project = join(root, 'project');
       await mkdir(project);
       await writeFile(join(project, 'readme.md'), 'hello');
@@ -80,34 +79,39 @@ test('a token holder drives a local-mode daemon completely over the loopback con
         _tag: 'IncompatibleHostError',
         reason: 'not-served',
       });
-      const created = await clients.chat.command('createChat', {
-        session,
-        requestId: 'create-project',
-        title: 'Over loopback',
-        settings: { cwd: project, model },
-      });
+      const created = await clients.run(
+        clients.chat.createChat({
+          session,
+          requestId: 'create-project',
+          title: 'Over loopback',
+          settings: { cwd: project, model },
+        }),
+      );
       assert.equal(created.conversation.cwd, project);
-      const found = await clients.chat.command('findChatFiles', {
-        session,
-        cwd: project,
-        query: 'readme',
-      });
+      const found = await clients.run(
+        clients.chat.findChatFiles({
+          session,
+          cwd: project,
+          query: 'readme',
+        }),
+      );
       assert.deepEqual(
         found.matches.map((match) => match.path),
         ['readme.md'],
       );
       const views: ChatSnapshot[] = [];
-      const close = clients.chat.watch(
-        { target: created.conversation.target },
+      const close = clients.watch(
+        clients.chat.watch({ target: created.conversation.target }),
         (snapshot) => views.push(snapshot),
-        () => {},
       );
       try {
-        await clients.chat.command('sendChat', {
-          target: created.conversation.target,
-          requestId: 'send-project',
-          text: 'Hello daemon',
-        });
+        await clients.run(
+          clients.chat.sendChat({
+            target: created.conversation.target,
+            requestId: 'send-project',
+            text: 'Hello daemon',
+          }),
+        );
         await until(
           async () => views.at(-1),
           (snapshot) =>
@@ -122,12 +126,14 @@ test('a token holder drives a local-mode daemon completely over the loopback con
         active: false,
       });
 
-      const own = await clients.chat.command('createChat', {
-        session,
-        requestId: 'create-own',
-        title: 'No project',
-        settings: { model },
-      });
+      const own = await clients.run(
+        clients.chat.createChat({
+          session,
+          requestId: 'create-own',
+          title: 'No project',
+          settings: { model },
+        }),
+      );
       assert.equal(own.conversation.ownFolder, true);
       await clients.run(
         folders.checkChatFolder({ host: session.host, path: own.conversation.cwd }),
@@ -140,52 +146,50 @@ test('a token holder drives a local-mode daemon completely over the loopback con
         folders.markFolderAsProject({ requestId: 'mark-own', target: own.conversation.target }),
       );
       assert.equal(
-        (await clients.chat.command('getChat', { target: own.conversation.target })).conversation
+        (await clients.run(clients.chat.getChat({ target: own.conversation.target }))).conversation
           .ownFolder,
         undefined,
       );
 
       // ChatGPT sign-in: the daemon returns the validated link, the client opens it. Two watches
       // of one document share its subscription, and another document's never sees the flow.
-      const owner = clients.owner('document-one');
+      const owner = clients.providers.forOwner('document-one');
+      const watchOwner = (ownerId: string, states: ProviderState[]) =>
+        clients.watch(clients.providers.watch(ownerId), (state) => states.push(state));
       const leaving: ProviderState[] = [],
         kept: ProviderState[] = [],
         others: ProviderState[] = [];
-      const leave = owner.watch(
-          (state) => leaving.push(state),
-          () => {},
-        ),
-        closeKept = owner.watch(
-          (state) => kept.push(state),
-          () => {},
-        ),
-        closeOther = clients.owner('document-two').watch(
-          (state) => others.push(state),
-          () => {},
-        );
+      const leave = watchOwner('document-one', leaving),
+        closeKept = watchOwner('document-one', kept),
+        closeOther = watchOwner('document-two', others);
       await until(async () => leaving.length && kept.length && others.length, Boolean);
-      const flow = (await owner.command('startProviderLogin', { providerId: 'openai' })).flow!;
+      const flow = (await clients.run(owner.startProviderLogin({ providerId: 'openai' }))).flow!;
       const waiting = await until(
-        () => owner.command('getProviders', {}),
+        () => clients.run(owner.getProviders({})),
         (state) => !!state.flow?.canOpenUrl && state.flow.prompt?.type === 'manual_code',
       );
-      await owner.command('openProviderUrl', { flowId: flow.id });
+      await clients.run(owner.openProviderUrl({ flowId: flow.id }));
       assert.equal(clients.opened.length, 1);
       assert.match(clients.opened[0]!, /^https:\/\/auth\.openai\.com\//);
-      assert.equal((await clients.owner('document-two').command('getProviders', {})).flow, null);
+      assert.equal(
+        (await clients.run(clients.providers.forOwner('document-two').getProviders({}))).flow,
+        null,
+      );
       // One watch leaving keeps the other following the flow.
       await until(
         async () => leaving.at(-1)?.flow?.id,
         (id) => id === flow.id,
       );
       await leave();
-      await owner.command('answerProviderPrompt', {
-        flowId: flow.id,
-        promptId: waiting.flow!.prompt!.id,
-        answer: fauxSignInCode,
-      });
+      await clients.run(
+        owner.answerProviderPrompt({
+          flowId: flow.id,
+          promptId: waiting.flow!.prompt!.id,
+          answer: fauxSignInCode,
+        }),
+      );
       const signedIn = await until(
-        () => owner.command('getProviders', {}),
+        () => clients.run(owner.getProviders({})),
         (state) => state.flow?.state === 'completed',
       );
       assert.equal(signedIn.providers.find((p) => p.id === 'openai')?.configured, true);
@@ -198,32 +202,37 @@ test('a token holder drives a local-mode daemon completely over the loopback con
         false,
       );
       await Promise.all([closeKept(), closeOther()]);
-      const out = await owner.command('logoutProvider', { providerId: 'openai' });
+      const out = await clients.run(owner.logoutProvider({ providerId: 'openai' }));
       assert.equal(out.providers.find((p) => p.id === 'openai')?.configured, false);
-      const providers = await clients.runtime.runPromise(ProviderSetupService);
-      await clients.run(providers.releaseOwner('document-one'));
-      await assert.rejects(owner.command('getProviders', {}), { code: 'InvalidInput' });
+      await clients.run(clients.providers.releaseOwner('document-one'));
+      await assert.rejects(clients.run(owner.getProviders({})), {
+        _tag: 'ProviderSetupRefusedError',
+        reason: 'owner-released',
+      });
 
       // A restarted daemon listens elsewhere; connecting again finds it as a new generation.
       await daemon.stop();
-      await assert.rejects(clients.connection.command('connect', { profileId: 'loopback' }), {
-        code: 'Unavailable',
+      await assert.rejects(clients.run(clients.connection.connect({ profileId: 'loopback' })), {
+        _tag: 'ConnectionError',
+        reason: 'daemon-not-running',
       });
-      assert.equal((await clients.connection.command('getConnection', {})).state, 'failed');
-      await assert.rejects(clients.chat.command('getChatHost', { host: session.host }), {
-        code: 'Unavailable',
+      assert.equal((await clients.run(clients.connection.getConnection({}))).state, 'failed');
+      await assert.rejects(clients.run(clients.chat.getChatHost({ host: session.host })), {
+        _tag: 'ConnectionError',
+        reason: 'not-verified',
       });
       const restarted = startDaemon([directory]);
       started.push(restarted);
       await bounded(restarted.ready);
-      const reconnected = await clients.connection.command('connect', { profileId: 'loopback' });
+      const reconnected = await clients.run(clients.connection.connect({ profileId: 'loopback' }));
       assert.equal(reconnected.state, 'connected');
       assert.notEqual(reconnected.connectionId, replaced.connectionId);
-      const listed = await clients.chat.command('listChats', { session });
+      const listed = await clients.run(clients.chat.listChats({ session }));
       assert.equal(listed.conversations.length, 2);
-      await clients.connection.command('disconnect', { connectionId: reconnected.connectionId! });
-      await assert.rejects(clients.chat.command('listChats', { session }), {
-        code: 'Unavailable',
+      await clients.run(clients.connection.disconnect({ connectionId: reconnected.connectionId! }));
+      await assert.rejects(clients.run(clients.chat.listChats({ session })), {
+        _tag: 'ConnectionError',
+        reason: 'not-verified',
       });
     } finally {
       await clients.runtime.dispose();

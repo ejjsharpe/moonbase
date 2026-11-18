@@ -15,28 +15,16 @@ import {
   Scope,
   Stream,
 } from 'effect';
-import type { ChatCommand, ChatInput, ChatOutput, ChatTarget } from '@moonbase/contracts/chat';
-import type { ApplicationError } from '@moonbase/contracts/errors';
-import { toChatApplicationError } from '@moonbase/contracts/chat-legacy-errors';
+import type { ChatTarget } from '@moonbase/contracts/chat';
 import {
   ChatService,
-  LocalHostService as LocalHostServiceTag,
-  type ChatServiceError,
-  type LocalHostService,
-  type ProviderSetupService,
+  ConnectionService,
+  LocalHostService,
+  ProviderSetupService,
 } from '@moonbase/contracts/services';
-import {
-  makeChatClient,
-  makeConnectionClient,
-  makeProviderSetupClient,
-} from '@moonbase/application/chat/clients';
 import { EndpointConnectionLive, RemoteDaemonLive } from '@moonbase/daemon-protocol/remote';
 import { LoopbackConnectionLive } from '@moonbase/daemon-protocol/loopback';
 import type { ChatHostTarget } from '@moonbase/contracts/host';
-import {
-  HostVerificationError,
-  toConnectionApplicationError,
-} from '@moonbase/contracts/connection-errors';
 import * as BunServices from '@effect/platform-bun/BunServices';
 import { TestClock } from 'effect/testing';
 import { runDaemon, type DaemonExit, type DaemonOptions } from '../src/daemon.ts';
@@ -159,20 +147,10 @@ export function startDaemon(
 }
 
 /**
- * A faux client of the daemon's RPC. Each command runs on a connection of its own, and each watch
- * holds one until it closes, so neither keeps the daemon in use afterwards.
+ * A faux client of the daemon's RPC. Each call runs on a connection of its own, and each watch
+ * holds one until it closes, so neither keeps the daemon in use afterwards. A call rejects with
+ * the tagged error it failed with.
  */
-/** Runs `effect` on a faux client's runtime; a failed health check is the legacy error. */
-const runPromise = async <A, R>(
-  runtime: ManagedRuntime.ManagedRuntime<R, unknown>,
-  effect: Effect.Effect<A, ApplicationError, R>,
-) => {
-  try {
-    return await runtime.runPromise(effect);
-  } catch (error) {
-    throw error instanceof HostVerificationError ? toConnectionApplicationError(error) : error;
-  }
-};
 export function createFauxClient(port: number, token: string, host: ChatHostTarget) {
   const origin = `http://127.0.0.1:${port}`;
   const open = () =>
@@ -181,38 +159,21 @@ export function createFauxClient(port: number, token: string, host: ChatHostTarg
         Layer.provideMerge(EndpointConnectionLive({ origin, token, expected: host })),
       ),
     );
-  async function command<K extends ChatCommand>(
-    operation: K,
-    input: ChatInput<K>,
-  ): Promise<ChatOutput<K>> {
+  /** Runs `effect` on a connection of its own. */
+  async function once<A>(effect: Effect.Effect<A, unknown, ChatService | LocalHostService>) {
     const runtime = open();
     try {
-      return await runPromise(
-        runtime,
-        // Chat failures reach a client as the legacy error with its code.
-        Effect.flatMap(ChatService, (chat) =>
-          (
-            chat[operation] as (
-              input: ChatInput<K>,
-            ) => Effect.Effect<ChatOutput<K>, ChatServiceError>
-          )(input),
-        ).pipe(Effect.mapError(toChatApplicationError)),
-      );
+      return await runtime.runPromise(effect);
     } finally {
       await runtime.dispose();
     }
   }
+  /** A chat operation on a connection of its own. */
+  const chat = <A>(use: (chat: ChatService['Service']) => Effect.Effect<A, unknown>) =>
+    once(Effect.flatMap(ChatService, use));
   /** A daemon operation on a connection of its own. */
-  async function daemon<A>(
-    run: (host: LocalHostService['Service']) => Effect.Effect<A, unknown>,
-  ): Promise<A> {
-    const runtime = open();
-    try {
-      return await runtime.runPromise(Effect.flatMap(LocalHostServiceTag, run));
-    } finally {
-      await runtime.dispose();
-    }
-  }
+  const daemon = <A>(use: (host: LocalHostService['Service']) => Effect.Effect<A, unknown>) =>
+    once(Effect.flatMap(LocalHostService, use));
   /** Opens a watch and resolves once its first update arrives; `close` ends it. */
   async function watch(target: ChatTarget) {
     const runtime = open(),
@@ -235,7 +196,7 @@ export function createFauxClient(port: number, token: string, host: ChatHostTarg
       },
     };
   }
-  return { origin, command, daemon, watch };
+  return { origin, chat, daemon, watch };
 }
 
 /** Sends a health probe signed with `token`, as a client checks the host before connecting. */
@@ -361,10 +322,11 @@ export async function startInProcess(
 }
 
 /**
- * The clients a privileged process composes over a loopback connection to `directory`; with
+ * The services a privileged process composes over a loopback connection to `directory`; with
  * `sameMachine` false, they stand in for a remote client whose browser is on another machine.
+ * `run` runs an effect on their runtime, rejecting with the tagged error it failed with.
  */
-export function connectClients(
+export async function connectClients(
   directory: string,
   host: { hostId: string; storeId: string },
   sameMachine = true,
@@ -379,13 +341,32 @@ export function connectClients(
       },
     }).pipe(Layer.provideMerge(LoopbackConnectionLive({ directory }))),
   );
+  const services = await runtime
+    .runPromise(
+      Effect.all({
+        chat: ChatService,
+        connection: ConnectionService,
+        providers: ProviderSetupService,
+        folders: LocalHostService,
+      }),
+    )
+    .catch(async (error: unknown) => {
+      await runtime.dispose();
+      throw error;
+    });
   return {
     runtime,
     opened,
-    chat: makeChatClient(runtime),
-    connection: makeConnectionClient(runtime),
-    owner: (ownerId: string) => makeProviderSetupClient(runtime, ownerId),
-    run: <A>(effect: Effect.Effect<A, unknown, LocalHostService | ProviderSetupService>) =>
-      runtime.runPromise(effect),
+    ...services,
+    run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
+    /** Follows `stream`, handing each value to `onValue`, until the close it returns. */
+    watch: <A, E>(stream: Stream.Stream<A, E>, onValue: (value: A) => void) => {
+      const fiber = runtime.runFork(
+        Stream.runForEach(stream, (value) => Effect.sync(() => onValue(value))),
+      );
+      return async () => {
+        await runtime.runPromise(Fiber.interrupt(fiber));
+      };
+    },
   };
 }

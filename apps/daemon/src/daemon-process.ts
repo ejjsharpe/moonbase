@@ -21,7 +21,7 @@ export const runDaemonProcess = (
         Cause.hasInterruptsOnly(cause)
           ? Effect.void
           : Console.error(
-              JSON.stringify({ event: 'failed', error: describeFailure(Cause.squash(cause)) }),
+              JSON.stringify({ event: 'failed', ...describeFailure(Cause.squash(cause)) }),
             ),
       ),
       Effect.provide(Layer.merge(BunServices.layer, config)),

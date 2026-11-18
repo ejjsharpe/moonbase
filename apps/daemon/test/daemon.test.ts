@@ -92,7 +92,7 @@ test('a daemon makes a private data directory, prints ready, writes endpoint.jso
     // The first daemon is untouched: still listening, same endpoint.
     assert.deepEqual(await readJson(join(directory, 'endpoint.json')), endpoint);
     const client = createFauxClient(ready.port, token, identity.host);
-    assert.deepEqual(await client.command('getChatHost', { host: identity.host }), {
+    assert.deepEqual(await client.chat((chat) => chat.getChatHost({ host: identity.host })), {
       host: identity.host,
       actorId: identity.actorId,
       mode: 'local',
@@ -126,44 +126,52 @@ test('chat commands work through the authenticated WebSocket, and logs keep no t
 
     // Wrong token: signed health refuses it, so it never upgrades and no command runs.
     await assert.rejects(
-      createFauxClient(port, 'x'.repeat(43), identity.host).command('listChats', { session }),
-      { code: 'Unauthorized' },
+      createFauxClient(port, 'x'.repeat(43), identity.host).chat((chat) =>
+        chat.listChats({ session }),
+      ),
+      { _tag: 'HostVerificationError', reason: 'rejected' },
     );
-    const created = await client.command('createChat', {
-      session,
-      requestId: 'create-one',
-      title: 'Chat ' + canary,
-      settings: { model },
-    });
+    const created = await client.chat((chat) =>
+      chat.createChat({
+        session,
+        requestId: 'create-one',
+        title: 'Chat ' + canary,
+        settings: { model },
+      }),
+    );
     const target: ChatTarget = created.conversation.target;
     assert.equal(created.conversation.ownFolder, true);
     assert.equal((await readdir(join(directory, 'chats'))).length, 1);
     // A folder no client approved is refused.
     await assert.rejects(
-      client.command('createChat', {
-        session,
-        requestId: 'create-unapproved',
-        title: 'Unapproved',
-        settings: { model, cwd: root },
-      }),
-      { code: 'Unauthorized' },
+      client.chat((chat) =>
+        chat.createChat({
+          session,
+          requestId: 'create-unapproved',
+          title: 'Unapproved',
+          settings: { model, cwd: root },
+        }),
+      ),
+      { _tag: 'FolderRefusedError', refusal: 'not-approved' },
     );
-    const receipt = await client.command('sendChat', {
-      target,
-      requestId: 'send-one',
-      text: 'Hello ' + canary,
-    });
+    const receipt = await client.chat((chat) =>
+      chat.sendChat({
+        target,
+        requestId: 'send-one',
+        text: 'Hello ' + canary,
+      }),
+    );
     assert.equal(receipt.admission, 'admitted');
     const snapshot = await until(
-      () => client.command('getChat', { target }),
+      () => client.chat((chat) => chat.getChat({ target })),
       (value) => !value.run && value.entries.some((entry) => entry.text === 'Reply ' + canary),
     );
     assert.equal(snapshot.entries.filter((entry) => entry.role === 'user').length, 1);
     assert.deepEqual(
-      await client.command('getChatSend', { target, requestId: 'send-one' }),
+      await client.chat((chat) => chat.getChatSend({ target, requestId: 'send-one' })),
       receipt,
     );
-    const listed = await client.command('listChats', { session });
+    const listed = await client.chat((chat) => chat.listChats({ session }));
     assert.deepEqual(
       listed.conversations.map((chat) => chat.target.conversationId),
       [target.conversationId],
@@ -195,25 +203,29 @@ test('a daemon killed during a run resumes the run on its next start', async () 
       session = { host: identity.host, actorId: identity.actorId };
     let client = createFauxClient(port, token, identity.host);
     const target = (
-      await client.command('createChat', {
-        session,
-        requestId: 'create',
-        title: 'Interrupted',
-        settings: { model },
-      })
+      await client.chat((chat) =>
+        chat.createChat({
+          session,
+          requestId: 'create',
+          title: 'Interrupted',
+          settings: { model },
+        }),
+      )
     ).conversation.target;
-    const receipt = await client.command('sendChat', {
-      target,
-      requestId: 'original',
-      text: 'One original input',
-    });
+    const receipt = await client.chat((chat) =>
+      chat.sendChat({
+        target,
+        requestId: 'original',
+        text: 'One original input',
+      }),
+    );
     const calls = async () =>
       (await readFile(join(directory, 'faux-calls.jsonl'), 'utf8').catch(() => ''))
         .trim()
         .split('\n')
         .filter(Boolean).length;
     await until(calls, (count) => count === 1);
-    assert.equal((await client.command('getChat', { target })).state, 'running');
+    assert.equal((await client.chat((chat) => chat.getChat({ target }))).state, 'running');
 
     assert.equal((await first.stop('SIGKILL'))[1], 'SIGKILL');
 
@@ -230,11 +242,11 @@ test('a daemon killed during a run resumes the run on its next start', async () 
     });
     client = createFauxClient(ready.port, token, identity.host);
     assert.deepEqual(
-      await client.command('getChatSend', { target, requestId: 'original' }),
+      await client.chat((chat) => chat.getChatSend({ target, requestId: 'original' })),
       receipt,
     );
     const resumed = await until(
-      () => client.command('getChat', { target }),
+      () => client.chat((chat) => chat.getChat({ target })),
       (value) => !value.run && value.entries.some((entry) => entry.text === 'Faux reply'),
     );
     assert.equal(resumed.entries.filter((entry) => entry.role === 'user').length, 1);
@@ -277,9 +289,11 @@ test('the real local entry starts with a private key file and never needs the Ke
     const { port } = await bounded(daemon.ready);
     const token = (await readFile(join(directory, 'token'), 'utf8')).trim(),
       identity = await readJson(join(directory, 'identity.json'));
-    const host = await createFauxClient(port, token, identity.host).command('getChatHost', {
-      host: identity.host,
-    });
+    const host = await createFauxClient(port, token, identity.host).chat((chat) =>
+      chat.getChatHost({
+        host: identity.host,
+      }),
+    );
     assert.ok('mode' in host && host.mode === 'local');
     assert.deepEqual(await daemon.stop(), [0, null]);
   });
@@ -391,7 +405,8 @@ test('the daemon process reports a refusal on stderr alone and exits 1', async (
     assert.equal(daemon.output, '');
     const failure = JSON.parse(daemon.errors.trim());
     assert.equal(failure.event, 'failed');
-    assert.equal(typeof failure.error.message, 'string');
+    assert.equal(typeof failure.error, 'string');
+    assert.equal(typeof failure.message, 'string');
     for (const leaked of [root, secret])
       assert.ok(!daemon.errors.includes(leaked), 'discloses ' + leaked);
   });
