@@ -1,6 +1,7 @@
 import { Cause, Context, Effect, Exit, Layer, ManagedRuntime, Queue, Scope, Stream } from 'effect';
 import { TestClock } from 'effect/testing';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { UncertainError } from '@moonbase/contracts/errors';
+import { HostUnavailableError } from '@moonbase/contracts/host-errors';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
 import type {
   ChatCommand,
@@ -79,10 +80,8 @@ export const profile = {
   remotePort: 9876,
   expected: context.host,
 };
-export const uncertain = (message = 'Controlled response loss') =>
-  new ApplicationError({ code: 'Uncertain', message });
-export const unavailable = (message = 'Controlled restart') =>
-  new ApplicationError({ code: 'Unavailable', message });
+export const uncertain = () => new UncertainError({ operation: 'Controlled request' });
+export const unavailable = () => new HostUnavailableError({ reason: 'failed' });
 
 /** Draft storage that can refuse writes. */
 export class Storage implements DraftStorage {

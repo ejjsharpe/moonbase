@@ -12,7 +12,6 @@ export {
   ChatRefusedError,
   DraftStorageError,
   describeChatFailure,
-  getChatFailureCode,
   type ChatRefusalReason,
 } from './chat-errors.ts';
 export { ChatConfig } from './chat-config.ts';
@@ -51,12 +50,15 @@ export {
   type Transcript,
   type TranscriptDependencies,
 } from './transcript/transcript.ts';
-export { TranscriptReadError, type TranscriptReadProblem } from './transcript/transcript-errors.ts';
+export {
+  checkTranscript,
+  TranscriptReadError,
+  type TranscriptReadProblem,
+} from './transcript/transcript-errors.ts';
 export {
   checkTranscriptReply,
   countDecodedTranscriptBytes,
   iterateTranscriptSource,
-  makeTranscriptReader,
   trackTranscriptCursor,
 } from './transcript/transcript-read.ts';
 export type { TranscriptRead, TranscriptChunk } from './transcript/transcript-read.ts';

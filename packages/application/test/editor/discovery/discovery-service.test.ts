@@ -2,11 +2,9 @@ import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
 import { Deferred, Effect, Exit, Fiber, Layer, ManagedRuntime, Option } from 'effect';
 import { WorkspaceService } from '@moonbase/contracts/workspace-service';
-import {
-  type CheckoutTarget,
-  ApplicationError,
-  type WorkspaceEvent,
-} from '@moonbase/contracts/workspace';
+import { type CheckoutTarget, type WorkspaceEvent } from '@moonbase/contracts/workspace';
+import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
+import { WorkspaceUnavailableError } from '@moonbase/contracts/workspace-host-errors';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 import {
   EditorCheckouts,
@@ -315,7 +313,7 @@ test('a watch that fails as Unavailable is watched again after the backoff and r
   const f = await fixture('listing-rewatch-source', false);
   const watches: {
     receive: (event: WorkspaceEvent) => void;
-    fail: (error: ApplicationError) => void;
+    fail: (error: WorkspaceError) => void;
   }[] = [];
   const reports: unknown[] = [];
   const editor = await acquireEditor(f.runtime, {
@@ -347,7 +345,7 @@ test('a watch that fails as Unavailable is watched again after the backoff and r
       destination: 'folder/missed.ts',
       text: 'new',
     });
-    watches[0].fail(new ApplicationError({ code: 'Unavailable', message: 'Daemon restarted.' }));
+    watches[0].fail(new WorkspaceUnavailableError({ cause: 'failed' }));
     // The second watch replaces the failed one, and the change it missed is read once it is
     // ready, not before (a read then could miss a change made before the watch is live).
     await until(() => watches.length === 2);
@@ -363,7 +361,7 @@ test('a watch that fails as Unavailable is watched again after the backoff and r
     await until(missed);
     assert.equal(reports.length, 0);
     // The backoff has run out: the next failure is reported instead of watched again.
-    watches[1].fail(new ApplicationError({ code: 'Unavailable', message: 'Still down.' }));
+    watches[1].fail(new WorkspaceUnavailableError({ cause: 'failed' }));
     await until(() => reports.length > 0);
     assert.equal(watches.length, 2);
     // An explicit refresh watches again, so a daemon that returns later revives live updates.

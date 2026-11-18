@@ -90,7 +90,7 @@ test('a file picker shows only the latest answer and cancels the searches before
   });
   await f.run(picker.search('abc', '/work'));
   await waitFor(() => searches.length === 3);
-  searches[2]!.reply.reject(unavailable('No ripgrep or Git.'));
+  searches[2]!.reply.reject(unavailable());
   await waitFor(() => !shown().busy);
   assert.ok(shown().error);
   assert.deepEqual(shown().matches, []);

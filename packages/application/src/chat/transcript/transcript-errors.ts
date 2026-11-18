@@ -1,40 +1,40 @@
 import { Cause, Effect } from 'effect';
 import * as Schema from 'effect/Schema';
-import type { ApplicationErrorCode } from '@moonbase/contracts/errors';
+import type { ErrorGroup } from '@moonbase/contracts/error-groups';
 
 // What a transcript read found wrong with what it read (epic #273 D14). Each problem names what
 // happened and its message is Moonbase's own; `describeChatFailure` shows it.
 
 const problems = {
-  'source-changed': ['Conflict', 'Transcript source changed or is stale.'],
-  cancelled: ['Cancelled', 'Transcript read cancelled.'],
-  'live-authority': ['Conflict', 'Live transcript reads require current observation authority.'],
-  'cursor-stalled': ['Incompatible', 'Transcript cursor did not advance.'],
-  'reply-mismatch': ['Incompatible', 'Transcript reply does not match the captured selection.'],
-  'manifest-repeats-part': ['Incompatible', 'Transcript manifest repeats a part.'],
-  'manifest-continuation-repeats': ['Incompatible', 'Manifest continuation repeats a part.'],
-  'expected-manifest': ['Incompatible', 'Expected a transcript manifest.'],
-  'content-unavailable': ['Unavailable', 'Selected transcript content is unavailable.'],
-  'chunk-gap': ['Incompatible', 'Transcript content has a missing or overlapping chunk.'],
-  'encoding-changed': ['Incompatible', 'Transcript encoding changed within a selected part.'],
-  'content-incomplete': ['Incompatible', 'Transcript content is incomplete.'],
-  'history-repeats-entry': ['Incompatible', 'History repeats an entry.'],
-  'history-order-changed': ['Incompatible', 'History order changed within a navigation window.'],
-  'history-cursor-stalled': ['Incompatible', 'History cursor did not advance.'],
-  'around-mismatch': ['Incompatible', 'Around-entry reply does not match its navigation boundary.'],
-  'entry-source': ['Incompatible', 'Transcript entry belongs to another source.'],
-  'snapshot-conversation': ['Incompatible', 'Snapshot belongs to another conversation.'],
-  'live-run-mismatch': ['Incompatible', 'Live transcript does not match its run.'],
+  'source-changed': ['conflict', 'Transcript source changed or is stale.'],
+  cancelled: ['cancelled', 'Transcript read cancelled.'],
+  'live-authority': ['conflict', 'Live transcript reads require current observation authority.'],
+  'cursor-stalled': ['incompatible', 'Transcript cursor did not advance.'],
+  'reply-mismatch': ['incompatible', 'Transcript reply does not match the captured selection.'],
+  'manifest-repeats-part': ['incompatible', 'Transcript manifest repeats a part.'],
+  'manifest-continuation-repeats': ['incompatible', 'Manifest continuation repeats a part.'],
+  'expected-manifest': ['incompatible', 'Expected a transcript manifest.'],
+  'content-unavailable': ['unavailable', 'Selected transcript content is unavailable.'],
+  'chunk-gap': ['incompatible', 'Transcript content has a missing or overlapping chunk.'],
+  'encoding-changed': ['incompatible', 'Transcript encoding changed within a selected part.'],
+  'content-incomplete': ['incompatible', 'Transcript content is incomplete.'],
+  'history-repeats-entry': ['incompatible', 'History repeats an entry.'],
+  'history-order-changed': ['incompatible', 'History order changed within a navigation window.'],
+  'history-cursor-stalled': ['incompatible', 'History cursor did not advance.'],
+  'around-mismatch': ['incompatible', 'Around-entry reply does not match its navigation boundary.'],
+  'entry-source': ['incompatible', 'Transcript entry belongs to another source.'],
+  'snapshot-conversation': ['incompatible', 'Snapshot belongs to another conversation.'],
+  'live-run-mismatch': ['incompatible', 'Live transcript does not match its run.'],
   'find-reply-mismatch': [
-    'Incompatible',
+    'incompatible',
     'Find reply does not match the query or advance its fixed boundary.',
   ],
-  'find-match-order': ['Incompatible', 'Find repeats or reverses an original-text match.'],
-  'find-match-invalid': ['Incompatible', 'Find returned an invalid original-text match.'],
-  'find-match-gone': ['Conflict', 'Saved Find match is no longer available.'],
-  'find-replay-unavailable': ['Incompatible', 'Find must be refreshed before replay.'],
-  'invalid-view': ['Incompatible', 'Invalid transcript view.'],
-} as const satisfies Record<string, readonly [ApplicationErrorCode, string]>;
+  'find-match-order': ['incompatible', 'Find repeats or reverses an original-text match.'],
+  'find-match-invalid': ['incompatible', 'Find returned an invalid original-text match.'],
+  'find-match-gone': ['conflict', 'Saved Find match is no longer available.'],
+  'find-replay-unavailable': ['incompatible', 'Find must be refreshed before replay.'],
+  'invalid-view': ['incompatible', 'Invalid transcript view.'],
+} as const satisfies Record<string, readonly [ErrorGroup, string]>;
 export type TranscriptReadProblem = keyof typeof problems;
 
 /** A transcript read, or the view it was given, did not hold together. */
@@ -45,11 +45,11 @@ export class TranscriptReadError extends Schema.TaggedError<TranscriptReadError>
   override get message(): string {
     return problems[this.problem][1];
   }
-  /** The legacy code (D14) the problem had as an `ApplicationError`. */
-  get code(): ApplicationErrorCode {
-    return problems[this.problem][0];
-  }
 }
+
+/** What a transcript read's problem means for the read (see `error-groups`). */
+export const getTranscriptReadGroup = (error: TranscriptReadError): ErrorGroup =>
+  problems[error.problem][0];
 
 /** Runs a synchronous check, failing with the `TranscriptReadError` it throws. */
 export const checkTranscript = <A>(check: () => A): Effect.Effect<A, TranscriptReadError> =>

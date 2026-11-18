@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { UnauthorizedError } from '@moonbase/contracts/errors';
 import { ConnectionError } from '@moonbase/contracts/connection-errors';
 import {
   chatFixture,
@@ -195,7 +195,7 @@ test('a held Connect reply cannot bring back a generation its watch already lost
   const refused = Promise.withResolvers<void>();
   f.answers.set('connect', async () => {
     await refused.promise;
-    throw new ApplicationError({ code: 'Unauthorized', message: 'SSH authentication failed.' });
+    throw new UnauthorizedError({ operation: 'Connect' });
   });
   const retrying = f.connect();
   await waitFor(() => f.count('connect') === 2);
@@ -265,7 +265,7 @@ test('a repeated Disconnect sends one disconnect, and its failure is shown', asy
   f.answers.set('disconnect', async () => {
     f.publishConnection(disconnected);
     await held.promise;
-    throw unavailable('Disconnect response failed');
+    throw unavailable();
   });
   const first = f.disconnect();
   await waitFor(() => f.count('disconnect') === 1);

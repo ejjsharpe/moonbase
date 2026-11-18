@@ -156,7 +156,8 @@ test('a quiet reveal reports nothing, and closing its checkout abandons it', asy
     // A manual reveal still reports.
     f.memory.failNext('listDirectory', 'Temporary listing failure');
     await assert.rejects(editor.reveal(target('folder/nested.ts')), /Temporary listing failure/);
-    assert.deepEqual(editor.getSnapshot().errors, ['Temporary listing failure']);
+    assert.equal(editor.getSnapshot().errors.length, 1);
+    assert.match(editor.getSnapshot().errors[0]!, /Temporary listing failure/);
     editor.clearErrors();
 
     hold.path = 'folder';

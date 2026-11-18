@@ -6,8 +6,7 @@ import { build, type Metafile } from 'esbuild';
 const entries = {
   index: '',
   editor: '/editor',
-  'chat-clients': '/chat/clients',
-  'chat-promises': '/chat/promises',
+  chat: '/chat',
 };
 // One build of every entry; each entry's graph is the files reachable from it.
 let metafile: Metafile;

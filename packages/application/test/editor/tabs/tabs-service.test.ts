@@ -15,11 +15,8 @@ import {
   toWorkspaceClient as makeEditorClient,
   type WorkspaceClient,
 } from '@moonbase/application/testing/editor-fixture';
-import {
-  ApplicationError,
-  type WorkspaceCommand,
-  type CommandInput,
-} from '@moonbase/contracts/workspace';
+import { type WorkspaceCommand, type CommandInput } from '@moonbase/contracts/workspace';
+import { WorkspaceStoreError } from '@moonbase/contracts/workspace-host-errors';
 import { fileKey } from '@moonbase/application/editor';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 
@@ -151,10 +148,7 @@ describe('checkout discovery and activation', () => {
             entered.release();
             await release.promise;
             if (phase === 2 && outcome === 'failure')
-              throw new ApplicationError({
-                code: 'Persistence',
-                message: 'Controlled recovery failure',
-              });
+              throw new WorkspaceStoreError({ failure: 'publication' });
           }
           return f.clientCommand(name, input, options);
         };

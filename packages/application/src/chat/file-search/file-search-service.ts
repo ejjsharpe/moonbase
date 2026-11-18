@@ -1,6 +1,6 @@
 import { Context, Effect, FiberHandle, Layer, type Scope, SubscriptionRef } from 'effect';
 import type { ChatInput, ChatOutput } from '@moonbase/contracts/chat';
-import type { ApplicationError } from '@moonbase/contracts/errors';
+import type { IpcError } from '@moonbase/contracts/ipc-errors';
 import type { ChatServiceError } from '@moonbase/contracts/services';
 import { ChatConfig } from '../chat-config.ts';
 import { ChatRefusedError, describeChatFailure } from '../chat-errors.ts';
@@ -25,10 +25,7 @@ export type ChatFileSearchShape = {
   readonly findFiles: (
     query: string,
     cwd?: string,
-  ) => Effect.Effect<
-    ChatOutput<'findChatFiles'>,
-    ChatRefusedError | ChatServiceError | ApplicationError
-  >;
+  ) => Effect.Effect<ChatOutput<'findChatFiles'>, ChatRefusedError | ChatServiceError | IpcError>;
   /** A composer's file picker, for as long as its scope. */
   readonly make: Effect.Effect<FileSearch, never, Scope.Scope>;
 };

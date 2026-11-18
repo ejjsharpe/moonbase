@@ -6,8 +6,6 @@ import { ChatDrafts } from '../chat/drafts/drafts-service.ts';
 import { TranscriptViewMemory } from '../chat/transcript/transcript-view-memory.ts';
 import { ChatComposers, type ChatComposer } from '../chat/composer/composer-service.ts';
 import { makeComposerChat } from '../chat/composer/composer-chat.ts';
-import { getChatFailureCode } from '../chat/chat-errors.ts';
-import { getFailureCode } from '../editor/editor-errors.ts';
 import {
   ApplicationLifecycleError,
   describeApplicationFailure,
@@ -123,11 +121,8 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
           Effect.sync(() => transcriptMemory.clear()),
         );
         yield* Effect.addFinalizer(() => stopAll);
-        const fail = (
-          reason: ApplicationLifecycleError['reason'],
-          detail?: string,
-          code?: ApplicationLifecycleError['code'],
-        ) => Effect.fail(new ApplicationLifecycleError({ reason, detail, code }));
+        const fail = (reason: ApplicationLifecycleError['reason'], detail?: string) =>
+          Effect.fail(new ApplicationLifecycleError({ reason, detail }));
         const recordCleanupError = (error: unknown) =>
           update((s) => ({
             ...s,
@@ -326,13 +321,7 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
               ? yield* Effect.exit(pending)
               : Exit.void;
             if (Exit.isFailure(released)) {
-              const failure = failureOf(released);
-              // Main reads the code its cleanup failed with, as it always has (until CL-24).
-              return yield* fail(
-                'cleanup-failed',
-                joinFailures([failure]),
-                getFailureCode(failure) ?? getChatFailureCode(failure) ?? 'Unavailable',
-              );
+              return yield* fail('cleanup-failed', joinFailures([failureOf(released)]));
             }
           }),
           reportCleanup: recordCleanupError,

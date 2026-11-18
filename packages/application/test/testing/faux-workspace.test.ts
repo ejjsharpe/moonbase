@@ -42,10 +42,9 @@ describe('prototype-shaped filenames', () => {
       );
       for (const path of names) {
         for (const area of ['staged', 'unstaged'] as const)
-          await assert.rejects(
-            client.command('readComparison', { target: target(path), area }),
-            /Git baseline unavailable/,
-          );
+          await assert.rejects(client.command('readComparison', { target: target(path), area }), {
+            _tag: 'WorkspaceUnavailableError',
+          });
         assert.equal(
           (await client.command('readComparison', { target: target(path), area: 'untracked' }))
             .original,

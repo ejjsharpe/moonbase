@@ -4,7 +4,6 @@ export { toEditorSnapshot, type EditorSnapshot, type EditorParts } from './edito
 export {
   EditorError,
   isEditorError,
-  getFailureCode,
   type EditorErrorReason,
   type EditorFailure,
 } from './editor-errors.ts';

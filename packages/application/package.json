@@ -3,15 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./chat/clients": "./src/chat/chat-clients.ts",
-    "./chat/promises": "./src/chat/chat-promises.ts",
     "./chat": "./src/chat/index.ts",
     "./editor": "./src/editor/index.ts",
     "./testing/faux-workspace": "./src/testing/faux-workspace.ts",
     "./testing/faux-chat": "./src/testing/faux-chat.ts",
     "./testing/chat-fixture": "./src/testing/chat-fixture.ts",
     ".": "./src/index.ts",
-    "./testing/editor-fixture": "./src/testing/editor-fixture.ts"
+    "./testing/editor-fixture": "./src/testing/editor-fixture.ts",
+    "./testing/service-calls": "./src/testing/service-calls.ts"
   },
   "scripts": {
     "typecheck": "bun check --no-script -p tsconfig.json",
@@ -21,7 +20,6 @@
   "dependencies": {
     "effect": "4.1.0",
     "@moonbase/contracts": "workspace:*",
-    "@moonbase/effect": "workspace:*",
     "lru-cache": "11.5.3"
   },
   "devDependencies": {

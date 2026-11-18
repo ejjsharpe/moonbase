@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ChatCommands, ChatInput, ChatSummary } from '@moonbase/contracts/chat';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { UnauthorizedError } from '@moonbase/contracts/errors';
+import { IncompatibleHostError } from '@moonbase/contracts/host-errors';
 import { groupChatsByActivity } from '@moonbase/application/chat';
 import {
   chatFixture,
@@ -125,7 +126,7 @@ test('Settle shows the host’s reply in the list and the open chat, and is refu
   assert.deepEqual(state.active, []);
   // A refusal is shown and changes nothing.
   f.answers.set('settleChat', () => {
-    throw new ApplicationError({ code: 'Unauthorized', message: 'Not yours.' });
+    throw new UnauthorizedError({ operation: 'Settle' });
   });
   await f.settle(target, true);
   state = await f.state();
@@ -395,14 +396,14 @@ test('the chat list follows its watch: changes merge without listing, and a rese
   first.receive(page([other, summary], [], 1));
   await waitFor(() => listings(f) === listed + 3);
   // A dropped watch watches again after its backoff and lists once it delivers.
-  first.fail(unavailable('Dropped.'));
+  first.fail(unavailable());
   await waitFor(() => f.chatLists.at(-1) !== first);
   assert.equal(first.closed, true);
   const second = open();
   second.receive(page([summary, other]));
   await waitFor(() => listings(f) === listed + 4);
   // A refused watch stops; becoming visible watches again, and an open one is left alone.
-  second.fail(new ApplicationError({ code: 'Incompatible', message: 'Refused.' }));
+  second.fail(new IncompatibleHostError({ reason: 'not-served' }));
   await waitFor(() => second.closed);
   const watches = f.chatLists.length;
   await f.watchChats();

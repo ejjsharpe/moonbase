@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ManagedRuntime } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/workspace';
+import { CancelledError } from '@moonbase/contracts/errors';
+import { WorkspaceStoreError } from '@moonbase/contracts/workspace-host-errors';
 import {
   toWorkspaceClient as makeEditorClient,
   type WorkspaceClient,
@@ -9,7 +10,7 @@ import {
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 import { acquireEditor, checkout, target, fixture, held as gate } from '../editor-fixture.ts';
 
-test('UI report callbacks ignore only cancellation from a closed captured read owner', async () => {
+test('UI report callbacks ignore cancellation, from a closed read owner or not, and show real failures', async () => {
   const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A', 'folder/c.ts': 'C' } }]);
   const runtime = ManagedRuntime.make(memory.layer),
     raw = makeEditorClient(runtime),
@@ -41,47 +42,12 @@ test('UI report callbacks ignore only cancellation from a closed captured read o
     release.release();
     await Promise.all([reveal, refresh, tree]);
     assert.deepEqual(editor.getSnapshot().errors, []);
-    editor.report(new ApplicationError({ code: 'Persistence', message: 'Real cleanup failure' }));
-    assert.deepEqual(editor.getSnapshot().errors, ['Real cleanup failure']);
-    editor.report(
-      new ApplicationError({ code: 'Cancelled', message: 'Unrelated active cancellation' }),
-    );
-    assert.deepEqual(editor.getSnapshot().errors, [
-      'Real cleanup failure',
-      'Unrelated active cancellation',
-    ]);
+    const failure = new WorkspaceStoreError({ failure: 'publication' });
+    editor.report(failure);
+    editor.report(new CancelledError({ operation: 'Refresh' }));
+    assert.deepEqual(editor.getSnapshot().errors, [failure.message]);
   } finally {
     release.release();
-    await editor.dispose();
-    await runtime.dispose();
-  }
-});
-
-test('typed compound Cancelled failures stay visible', async () => {
-  const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
-  const runtime = ManagedRuntime.make(memory.layer),
-    raw = makeEditorClient(runtime);
-  const compound = new ApplicationError({
-    code: 'Cancelled',
-    message: 'Cancelled read; Real cleanup failure',
-  });
-  let fault = '';
-  const client: WorkspaceClient = {
-    ...raw,
-    command(name, input, options) {
-      return name === fault ? Promise.reject(compound) : raw.command(name, input, options);
-    },
-  };
-  const editor = await acquireEditor(runtime, { client, clientId: 'compound-read-errors' });
-  try {
-    await editor.load();
-    await editor.openCheckout(checkout.root);
-    await editor.open(target('a.ts'));
-    await editor.flush();
-    fault = 'gitStatus';
-    await editor.refresh(checkout);
-    assert(editor.getSnapshot().errors.includes(compound.message));
-  } finally {
     await editor.dispose();
     await runtime.dispose();
   }

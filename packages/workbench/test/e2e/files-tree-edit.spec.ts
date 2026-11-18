@@ -322,9 +322,7 @@ test('an Enter commit left while it runs leaves focus and selection with the use
   await row(page, 'README.md').click();
   await tree(page).press('F2');
   await input.fill('refused.md');
-  await page.evaluate(() =>
-    window.demo.memory.failNext('mutate', 'Injected refusal', false, 'InvalidInput'),
-  );
+  await page.evaluate(() => window.demo.memory.refuseNext('mutate', 'Injected refusal'));
   const reply = await holdNextMutation(page);
   await input.press('Enter');
   await reply.waiting();

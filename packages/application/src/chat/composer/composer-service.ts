@@ -1,3 +1,4 @@
+import { isCancelled, isUncertain } from '@moonbase/contracts/error-groups';
 import {
   Cause,
   Context,
@@ -184,8 +185,8 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
         if (Exit.isFailure(exit)) {
           const error = Cause.findErrorOption(exit.cause);
           if (Option.isNone(error)) return;
-          const code = (error.value as { code?: unknown } | undefined)?.code;
-          if (code !== 'Uncertain' && code !== 'Cancelled')
+          // A worktree that may have been made keeps its request, so a retry asks for it again.
+          if (!isUncertain(error.value) && !isCancelled(error.value))
             yield* Ref.set(unknownRequest, undefined);
           const detail = error.value instanceof Error ? error.value.message : '';
           return yield* report({

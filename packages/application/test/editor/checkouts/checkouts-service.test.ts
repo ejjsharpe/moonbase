@@ -1,13 +1,13 @@
-import { getFailureCode, checkoutKey } from '@moonbase/application/editor';
+import { checkoutKey } from '@moonbase/application/editor';
 import { acquireEditor } from '../editor-fixture.ts';
 import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
 import { ManagedRuntime } from 'effect';
+import { type CheckoutTarget, type CommandInput } from '@moonbase/contracts/workspace';
 import {
-  ApplicationError,
-  type CheckoutTarget,
-  type CommandInput,
-} from '@moonbase/contracts/workspace';
+  CheckoutAccessError,
+  WorkspaceUnavailableError,
+} from '@moonbase/contracts/workspace-host-errors';
 import {
   toWorkspaceClient as makeEditorClient,
   type WorkspaceClient,
@@ -82,24 +82,20 @@ describe('plain folders and initializeRepository', () => {
             (operation === 'updateLayout' &&
               (input as CommandInput<'updateLayout'>).layout.checkouts.some(isFolder)))
         )
-          throw new ApplicationError({
-            code: 'Unauthorized',
-            message: 'Exact checkout identity is not approved.',
-          });
+          throw new CheckoutAccessError({ refusal: 'not-approved' });
         const output = await inner.command(operation, input, options_);
         if (operation === 'initializeRepository') {
           initialized = true;
           options.initialization?.start();
           await options.initialization?.release;
-          if (options.loseInitReply)
-            throw new ApplicationError({ code: 'Unavailable', message: 'The reply was lost.' });
+          if (options.loseInitReply) throw new WorkspaceUnavailableError({ cause: 'failed' });
         }
         return output;
       },
       watch: (input, ...rest) => {
         if (failGitWatch && input.checkout.vcs === 'git' && input.checkout.root === folder.root) {
           failGitWatch = false;
-          throw new ApplicationError({ code: 'Unavailable', message: 'Watch could not start.' });
+          throw new WorkspaceUnavailableError({ cause: 'failed' });
         }
         return inner.watch(input, ...rest);
       },
@@ -151,10 +147,10 @@ describe('plain folders and initializeRepository', () => {
       assert.deepEqual(f.editor.getSnapshot().git[checkoutKey(folder)]?.changes, []);
       assert.deepEqual((await f.editor.listWorktrees(folder)).worktrees, []);
       await f.editor.openCheckout(repository.root);
-      await assert.rejects(
-        f.editor.initializeRepository(repository),
-        (error: unknown) => getFailureCode(error) === 'InvalidInput',
-      );
+      await assert.rejects(f.editor.initializeRepository(repository), {
+        _tag: 'EditorError',
+        reason: 'already-repository',
+      });
     } finally {
       await f.dispose();
     }
@@ -196,10 +192,10 @@ describe('plain folders and initializeRepository', () => {
         (await f.inner.command('readFile', { checkout: initialized, path: 'a.ts' })).text,
         'unsaved',
       );
-      await assert.rejects(
-        f.editor.initializeRepository(folder),
-        (error) => getFailureCode(error) !== undefined,
-      );
+      await assert.rejects(f.editor.initializeRepository(folder), {
+        _tag: 'EditorError',
+        reason: 'checkout-not-open',
+      });
     } finally {
       await f.dispose();
     }
@@ -360,11 +356,10 @@ describe('plain folders and initializeRepository', () => {
     const f = await fixture({ initialization });
     try {
       const { initializing, commands } = await startInitializing(f, initialization);
-      await assert.rejects(
-        f.editor.initializeRepository(folder),
-        (error: unknown) =>
-          getFailureCode(error) === 'Conflict' && /already being initialized/.test(String(error)),
-      );
+      await assert.rejects(f.editor.initializeRepository(folder), {
+        _tag: 'EditorError',
+        reason: 'initializing-already',
+      });
       assert.equal(
         f.commands.slice(commands).filter((name) => name === 'initializeRepository').length,
         0,
@@ -463,10 +458,10 @@ describe('worktrees', () => {
         { root: main.root, branch: 'main', main: true, locked: false, prunable: false },
         { root: linked.root, branch: 'topic', main: false, locked: false, prunable: false },
       ]);
-      await assert.rejects(
-        f.editor.listWorktrees(other),
-        (error) => getFailureCode(error) !== undefined,
-      );
+      await assert.rejects(f.editor.listWorktrees(other), {
+        _tag: 'EditorError',
+        reason: 'checkout-not-open',
+      });
     } finally {
       await f.dispose();
     }
@@ -504,7 +499,7 @@ describe('worktrees', () => {
           branch: 'topic',
           location: '/memory/elsewhere',
         }),
-        (error) => getFailureCode(error) === 'Conflict',
+        { _tag: 'BranchTakenError' },
       );
       assert.deepEqual(f.editor.getSnapshot().recovery.openCheckoutIds, before.openCheckoutIds);
       assert.equal(f.editor.getSnapshot().recovery.selectedCheckoutId, main.checkoutId);

@@ -1,10 +1,9 @@
 import * as Schema from 'effect/Schema';
-import { ApplicationError, type ApplicationErrorCode } from '@moonbase/contracts/errors';
 import {
-  getErrorCode,
-  isWorkspaceError,
-  type WorkspaceError,
-} from '@moonbase/contracts/workspace-errors';
+  isRefusal as isContractsRefusal,
+  isUnavailable as isContractsUnavailable,
+} from '@moonbase/contracts/error-groups';
+import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
 
 // What the editor itself refuses or reports (epic #273 D14): each reason names what happened and
 // its message is Moonbase's own. `describeEditorFailure` in `alerts/` is the one place a failure
@@ -58,12 +57,8 @@ const reasons = {
 } as const;
 export type EditorErrorReason = keyof typeof reasons;
 
-/** The code each reason had as an `ApplicationError`, for consumers still reading codes. */
-const codes: Partial<Record<EditorErrorReason, ApplicationErrorCode>> = {
-  'invalid-path': 'InvalidInput',
-  'already-repository': 'InvalidInput',
-  'initializing-already': 'Conflict',
-};
+/** The reasons that refuse a request as given; `initializing-already` conflicts, the rest are unavailable. */
+const refusals: ReadonlySet<EditorErrorReason> = new Set(['invalid-path', 'already-repository']);
 
 /** What the editor refused or could not do, by reason. */
 export class EditorError extends Schema.TaggedError<EditorError>()('EditorError', {
@@ -77,10 +72,6 @@ export class EditorError extends Schema.TaggedError<EditorError>()('EditorError'
       return `${text} ${this.detail ?? ''} Your tabs and drafts are kept on the repository.`;
     return text;
   }
-  /** The legacy code (D14): `Unavailable` unless the reason had another. */
-  get code(): ApplicationErrorCode {
-    return codes[this.reason] ?? 'Unavailable';
-  }
 }
 
 export const isEditorError = (value: unknown): value is EditorError =>
@@ -89,15 +80,10 @@ export const isEditorError = (value: unknown): value is EditorError =>
 /** Every way an editor action fails: the editor's own refusals and the workspace's errors. */
 export type EditorFailure = EditorError | WorkspaceError;
 
-/** The legacy code of a failure (D14): the workspace's wire code, or the editor reason's. */
-export function getFailureCode(error: unknown): ApplicationErrorCode | undefined {
-  if (isEditorError(error)) return error.code;
-  if (ApplicationError.is(error)) return error.code;
-  if (isWorkspaceError(error)) return getErrorCode(error);
-  return undefined;
-}
-
-/** The store or host refused the request as given: it was never admitted. */
-export const isRefusal = (error: unknown) => getFailureCode(error) === 'InvalidInput';
+/** The store, host or editor refused the request as given: it was never admitted. */
+export const isRefusal = (error: unknown) =>
+  isContractsRefusal(error) || (isEditorError(error) && refusals.has(error.reason));
 /** The host could not be reached (a restarted daemon, say): watching again may succeed. */
-export const isUnavailable = (error: unknown) => getFailureCode(error) === 'Unavailable';
+export const isUnavailable = (error: unknown) =>
+  isContractsUnavailable(error) ||
+  (isEditorError(error) && !refusals.has(error.reason) && error.reason !== 'initializing-already');

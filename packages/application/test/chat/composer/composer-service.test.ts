@@ -7,7 +7,8 @@ import {
   type ChatTarget,
 } from '@moonbase/contracts/chat';
 import { Effect, Queue, Scope, Stream, SubscriptionRef } from 'effect';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { CancelledError, UncertainError } from '@moonbase/contracts/errors';
+import { WorkspaceConflictError } from '@moonbase/contracts/workspace-host-errors';
 import {
   ChatComposers,
   findMentionClash,
@@ -232,18 +233,19 @@ test('a worktree send whose outcome is unknown is retried under its request; any
   chat.setDraft('Fix it');
   composer.sync(composer.composer.choose(agents, { cwd: '/repo', newWorktree: true }));
   const requests: string[] = [];
-  const send = async (code?: ApplicationError['code']) => {
+  const send = async (failure?: Error) => {
     composer.send(agents, async (_root, _branch, requestId) => {
       requests.push(requestId);
-      if (code) throw new ApplicationError({ code, message: code });
+      if (failure) throw failure;
       return '/repo-worktrees/chat-fix-it';
     });
     await until(() => !composer.snapshot.creatingWorktree);
   };
-  await send('Uncertain');
-  await send('Cancelled');
-  await send('Conflict');
-  await send('Uncertain');
+  const uncertain = new UncertainError({ operation: 'Create worktree' });
+  await send(uncertain);
+  await send(new CancelledError({ operation: 'Create worktree' }));
+  await send(new WorkspaceConflictError({ conflict: 'location-exists' }));
+  await send(uncertain);
   chat.setDraft('Fix another');
   await send();
   assert.equal(requests.length, 5);

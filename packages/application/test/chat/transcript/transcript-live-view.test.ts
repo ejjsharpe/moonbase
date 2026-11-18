@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { ChatAccessError } from '@moonbase/contracts/chat-errors';
+import { HostUnavailableError } from '@moonbase/contracts/host-errors';
 import type { TranscriptView } from '@moonbase/application/chat';
 import type { ChatSnapshot, ChatTranscriptSource } from '@moonbase/contracts/chat';
 import { TranscriptReadError } from '@moonbase/application/chat';
@@ -154,18 +155,18 @@ test('failed navigation and observation remain visible independently of view mem
   const f = await transcriptHarness(t, 64);
   const view = captureView(await publishLive(f));
   await f.transcript.setView(view);
+  const unavailable = new HostUnavailableError({ reason: 'failed' });
   f.handlers.set('getChatHistoryAround', async () => {
-    throw new ApplicationError({ code: 'Unavailable', message: 'history unavailable' });
+    throw unavailable;
   });
   await f.transcript.showEarlier();
-  assert.match(f.state.error!, /history unavailable/);
+  assert.equal(f.state.error, unavailable.message);
   await f.transcript.setView({ ...view, anchor: { ...view.anchor, offset: -2 } });
-  assert.match(f.state.error!, /history unavailable/);
-  await f.transcript.fail(
-    new ApplicationError({ code: 'Unauthorized', message: 'authority lost' }),
-  );
+  assert.equal(f.state.error, unavailable.message);
+  const revoked = new ChatAccessError({ refusal: 'other-owner' });
+  await f.transcript.fail(revoked);
   assert.equal(f.state.observation, 'failed');
-  assert.match(f.state.error!, /authority lost/);
+  assert.equal(f.state.error, revoked.message);
 });
 
 test('view input rejects anchor fields beyond the row key and offset', async (t) => {

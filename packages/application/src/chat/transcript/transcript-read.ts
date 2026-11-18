@@ -1,7 +1,5 @@
-import { ApplicationError } from '@moonbase/contracts/errors';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import type {
-  ChatClient,
   ChatInput,
   ChatOutput,
   ChatTranscriptSource,
@@ -9,7 +7,7 @@ import type {
 } from '@moonbase/contracts/chat';
 import { TranscriptReadError } from './transcript-errors.ts';
 
-/** A ChatClient read; its boundary has already decoded and bounded the reply. */
+/** A transcript content read; its boundary has already decoded and bounded the reply. */
 export type TranscriptRead = (
   input: ChatInput<'getChatTranscriptContent'>,
   options: { signal?: AbortSignal },
@@ -81,7 +79,7 @@ async function readTranscript(
   checkTranscriptRead(signal, isCurrent);
   return checkTranscriptReply(input, reply);
 }
-/** Checks that a reply echoes the input it answers; the ChatClient boundary checked its shape. */
+/** Checks that a reply echoes the input it answers; the port's boundary checked its shape. */
 export function checkTranscriptReply(
   input: ChatInput<'getChatTranscriptContent'>,
   reply: ChatOutput<'getChatTranscriptContent'>,
@@ -125,22 +123,7 @@ export function iterateTranscriptSource(
       ? { source: options.source, selection: options.selection }
       : { source: options.source },
   );
-  return toLegacyFailures(iterateSource({ ...options, ...captured }));
-}
-/**
- * Legacy (until CL-24): Electron main, this reader's one consumer, still reads `ApplicationError`
- * codes, so a read failure reaches it as the `ApplicationError` its code and message always were.
- */
-async function* toLegacyFailures(
-  chunks: AsyncGenerator<TranscriptChunk>,
-): AsyncGenerator<TranscriptChunk> {
-  try {
-    yield* chunks;
-  } catch (error) {
-    if (error instanceof TranscriptReadError)
-      throw new ApplicationError({ code: error.code, message: error.message });
-    throw error;
-  }
+  return iterateSource({ ...options, ...captured });
 }
 async function* iterateSource(
   options: TranscriptIterationOptions,
@@ -217,8 +200,4 @@ async function* iterateSource(
   checkTranscriptRead(signal, isCurrent);
   onProgress?.({ parts, bytes });
   checkTranscriptRead(signal, isCurrent);
-}
-
-export function makeTranscriptReader(client: ChatClient): TranscriptRead {
-  return (input, options) => client.command('getChatTranscriptContent', input, options);
 }

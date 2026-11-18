@@ -6,9 +6,22 @@ import {
   type WorkspaceServiceShape,
 } from '@moonbase/contracts/workspace-service';
 import { fauxRecovery } from './faux-recovery.ts';
+import { UncertainError } from '@moonbase/contracts/errors';
+import { isWorkspaceError, type WorkspaceError } from '@moonbase/contracts/workspace-errors';
+import {
+  BranchTakenError,
+  InvalidBaseError,
+  InvalidPathError,
+  InvalidPatternError,
+  InvalidRequestError,
+  RecordedRefusalError,
+  WorkspaceConflictError,
+  WorkspaceStoreError,
+  WorkspaceUnavailableError,
+  WorkspaceUnsupportedError,
+} from '@moonbase/contracts/workspace-host-errors';
 import { lookupFauxFiles, searchFauxFiles } from './faux-search.ts';
 import {
-  ApplicationError,
   maximumFileBytes,
   type CheckoutTarget,
   type FileDocument,
@@ -41,9 +54,12 @@ const holdSeed = ({ head, index, ...seed }: Seed): HeldSeed => ({
   ...(index && { index: new Map(Object.entries(index)) }),
 });
 type Entry = FileDocument & { directory: boolean };
-const fail = (message: string, code: ApplicationError['code'] = 'InvalidInput'): never => {
-  throw new ApplicationError({ code, message });
+// It fails as the file host does, with the host's tagged errors.
+const fail = (error: WorkspaceError): never => {
+  throw error;
 };
+const invalid = () => new InvalidRequestError({ problem: 'invalid-input' });
+const unavailable = () => new WorkspaceUnavailableError({ cause: 'failed' });
 const pathCheck = (path: string, directory = false) => {
   if (directory && path === '') return;
   if (
@@ -54,7 +70,7 @@ const pathCheck = (path: string, directory = false) => {
       .split('/')
       .some((part) => !part || part === '.' || part === '..' || part.toLowerCase() === '.git')
   )
-    fail('Invalid relative path.');
+    fail(new InvalidPathError({ problem: 'not-relative' }));
 };
 
 /** Concrete volatile adapter for demos/tests. It makes no filesystem or durability claim. */
@@ -68,7 +84,7 @@ export function fauxWorkspace(given: Seed[]) {
     { payload: string; result: OperationResult; owners: Set<string>; acks: Set<string> }
   >();
   const watchers = new Set<{ checkout: CheckoutTarget; notify: (event: WorkspaceEvent) => void }>();
-  const faults = new Map<WorkspaceCommand, { error: ApplicationError; after: boolean }>();
+  const faults = new Map<WorkspaceCommand, { error: WorkspaceError; after: boolean }>();
   const stats = {
     subscriptions: 0,
     released: 0,
@@ -82,12 +98,12 @@ export function fauxWorkspace(given: Seed[]) {
   };
   const document = (text: string): FileDocument => {
     if (new TextEncoder().encode(text).length > maximumFileBytes || text.includes('\0'))
-      fail('Only UTF-8 text up to 2 MiB is editable.');
+      fail(new InvalidRequestError({ problem: 'text-too-large' }));
     return { text, version: String(++version) };
   };
   const exact = (checkout: CheckoutTarget) => {
     const seed = seeds.find((seed) => checkoutKey(seed.checkout) === checkoutKey(checkout));
-    if (!seed) fail('Exact checkout unavailable.', 'Unavailable');
+    if (!seed) fail(unavailable());
     return seed!;
   };
   const entries = (checkout: CheckoutTarget) => {
@@ -97,7 +113,7 @@ export function fauxWorkspace(given: Seed[]) {
   const read = (target: FileTarget) => {
     pathCheck(target.path);
     const entry = entries(target.checkout).get(target.path);
-    if (!entry || entry.directory) return fail('File unavailable.', 'Unavailable');
+    if (!entry || entry.directory) return fail(unavailable());
     return { text: entry.text, version: entry.version };
   };
   const notify = (checkout: CheckoutTarget, paths: string[]) => {
@@ -126,9 +142,7 @@ export function fauxWorkspace(given: Seed[]) {
   const projectSeeds = (checkout: CheckoutTarget) =>
     seeds.filter((seed) => seed.checkout.projectId === exact(checkout).checkout.projectId);
   const requireGit = (checkout: CheckoutTarget): GitCheckoutTarget =>
-    checkout.vcs === 'git'
-      ? checkout
-      : fail('This project is not a Git repository. Initialize Git first.');
+    checkout.vcs === 'git' ? checkout : fail(new InvalidRequestError({ problem: 'not-git' }));
   const call = <A>(name: WorkspaceCommand, action: () => A) =>
     Effect.try({
       try: () => {
@@ -139,31 +153,25 @@ export function fauxWorkspace(given: Seed[]) {
         if (fault) throw fault.error;
         return structuredClone(value);
       },
-      catch: (error) =>
-        error instanceof ApplicationError
-          ? error
-          : new ApplicationError({ code: 'Unavailable', message: String(error) }),
+      catch: (error) => (isWorkspaceError(error) ? error : unavailable()),
     });
   const service: WorkspaceServiceShape = {
     openCheckout: ({ root }) =>
       call(
         'openCheckout',
-        () =>
-          seeds.find((seed) => seed.checkout.root === root)?.checkout ??
-          fail('Checkout unavailable.', 'Unavailable'),
+        () => seeds.find((seed) => seed.checkout.root === root)?.checkout ?? fail(unavailable()),
       ),
     readFile: (target) => call('readFile', () => read(target)),
     saveFile: (input) =>
       call('saveFile', () => {
-        if (!input.clientId || !input.requestId)
-          fail('Save requires immutable request and client IDs.');
+        if (!input.clientId || !input.requestId) fail(invalid());
         const key = JSON.stringify([input.clientId, input.requestId]),
           payload = JSON.stringify(input),
           previous = saves.get(key);
         if (previous)
           return previous.payload === payload
             ? previous.result
-            : fail('Save ID reused with changed payload.', 'Conflict');
+            : fail(new WorkspaceConflictError({ conflict: 'save-payload' }));
         const disk = read(input.target);
         const result: SaveResult =
           disk.version !== input.expectedVersion
@@ -185,11 +193,10 @@ export function fauxWorkspace(given: Seed[]) {
       call('listDirectory', () => {
         pathCheck(path, true);
         if (includeIgnoredStatus === false && hideIgnored)
-          fail('Ignore filtering requires ignore classification.');
+          fail(new InvalidRequestError({ problem: 'ignore-filtering' }));
         const seed = exact(checkout),
           prefix = path ? path + '/' : '';
-        if (path && !entries(checkout).get(path)?.directory)
-          fail('Directory unavailable.', 'Unavailable');
+        if (path && !entries(checkout).get(path)?.directory) fail(unavailable());
         const values = [...entries(checkout)]
           .filter(([name]) => name.startsWith(prefix) && !name.slice(prefix.length).includes('/'))
           .map(([name, entry]) => ({
@@ -212,11 +219,11 @@ export function fauxWorkspace(given: Seed[]) {
       call('getIgnoredPaths', () => {
         pathCheck(path, true);
         const seed = exact(checkout);
-        if (paths.length > 20000) fail('Ignore paths exceed their limit.');
+        if (paths.length > 20000) fail(invalid());
         for (const item of paths) {
           pathCheck(item);
           if (getParentPath(item) !== path)
-            fail('Ignore paths must be immediate directory children.');
+            fail(new InvalidPathError({ problem: 'ignore-not-child' }));
         }
         return {
           paths: paths.filter((name) => seed.ignored?.some((item) => isPathAtOrInside(name, item))),
@@ -277,11 +284,11 @@ export function fauxWorkspace(given: Seed[]) {
         const project = projectSeeds(checkout).filter((seed) => seed.checkout.vcs === 'git');
         const branchOf = (seed: HeldSeed) => seed.checkout.vcs === 'git' && seed.checkout.branch;
         const source = project.find((seed) => branchOf(seed) === base);
-        if (!source) fail(`Base ${base} is not a commit.`);
+        if (!source) fail(new InvalidBaseError({ base }));
         if (project.some((seed) => branchOf(seed) === branch))
-          fail(`Branch ${branch} already exists.`, 'Conflict');
+          fail(new BranchTakenError({ branch, inside: false }));
         if (seeds.some((seed) => seed.checkout.root === location))
-          fail('The worktree location already exists.', 'Conflict');
+          fail(new WorkspaceConflictError({ conflict: 'location-exists' }));
         const head = new Map(source!.head ?? Object.entries(source!.files));
         const seed: HeldSeed = {
           checkout: {
@@ -302,7 +309,7 @@ export function fauxWorkspace(given: Seed[]) {
     initializeRepository: ({ checkout }) =>
       call('initializeRepository', () => {
         const seed = exact(checkout);
-        if (checkout.vcs !== 'none') fail('This project is already a Git repository.');
+        if (checkout.vcs !== 'none') fail(new InvalidRequestError({ problem: 'already-git' }));
         const { vcs: _, ...identity } = checkout;
         const initialized: GitCheckoutTarget = {
           ...identity,
@@ -336,7 +343,7 @@ export function fauxWorkspace(given: Seed[]) {
             original = seed.index?.get(target.path) ?? seed.head?.get(target.path);
           }
         }
-        if (original === undefined) fail('Git baseline unavailable.', 'Unavailable');
+        if (original === undefined) fail(unavailable());
         const working = entries(target.checkout).get(target.path);
         return {
           original: original!,
@@ -351,15 +358,14 @@ export function fauxWorkspace(given: Seed[]) {
         'searchText',
         () =>
           searchFauxFiles(entries(checkout), exact(checkout).ignored, query) ??
-          fail('Invalid regular expression.', 'InvalidInput'),
+          fail(new InvalidPatternError({})),
       ),
     inspectEntries: ({ checkout, paths }) =>
       call('inspectEntries', () => {
-        if (!Array.isArray(paths) || paths.length < 1 || paths.length > 256)
-          fail('Inspect between 1 and 256 entries.');
+        if (!Array.isArray(paths) || paths.length < 1 || paths.length > 256) fail(invalid());
         return paths.map((path) => {
           pathCheck(path);
-          const entry = entries(checkout).get(path) ?? fail('Entry unavailable.', 'Unavailable');
+          const entry = entries(checkout).get(path) ?? fail(unavailable());
           return {
             target: { checkout, path },
             identity: entry.version,
@@ -375,8 +381,8 @@ export function fauxWorkspace(given: Seed[]) {
         if (previous)
           return previous.payload === payload
             ? previous.result
-            : fail('Operation ID reused with changed payload.', 'Conflict');
-        if (!operation.id || !operation.clientId) fail('Operation requires immutable IDs.');
+            : fail(new WorkspaceConflictError({ conflict: 'operation-payload' }));
+        if (!operation.id || !operation.clientId) fail(invalid());
         const map = new Map(entries(operation.checkout));
         const result: OperationResult = {
           id: operation.id,
@@ -392,24 +398,24 @@ export function fauxWorkspace(given: Seed[]) {
             checkoutKey(ref.target.checkout) !== checkoutKey(operation.checkout) ||
             map.get(ref.target.path)?.version !== ref.identity
           )
-            fail('Entry identity changed.', 'Conflict');
+            fail(new WorkspaceConflictError({ conflict: 'source-changed' }));
         }
         if (operation.kind === 'import')
-          fail('Memory adapter has no native file authority.', 'Unavailable');
+          fail(new WorkspaceUnsupportedError({ feature: 'native-imports' }));
         // Like the workspace, several sources move or copy into an existing folder ('' is the
         // root), keeping their names; one source goes to its exact destination path.
         const batch =
           (operation.kind === 'move' || operation.kind === 'copy') && operation.sources.length > 1;
         if (operation.destination) pathCheck(operation.destination);
         if (batch) {
-          const folder = operation.destination ?? fail('Destination required.');
+          const folder = operation.destination ?? fail(invalid());
           if (folder && !map.get(folder)?.directory)
-            fail('Batch destination must be an existing folder.');
+            fail(new InvalidRequestError({ problem: 'batch-destination' }));
           const names = operation.sources.map((source) =>
             getPathName(source.target.path).normalize('NFC').toLowerCase(),
           );
           if (new Set(names).size !== names.length)
-            fail('Selection has colliding destination names.');
+            fail(new InvalidRequestError({ problem: 'colliding-destinations' }));
           if (
             operation.sources.some((source) =>
               operation.sources.some(
@@ -418,7 +424,7 @@ export function fauxWorkspace(given: Seed[]) {
               ),
             )
           )
-            fail('Overlapping sources are not one selection.');
+            fail(new InvalidRequestError({ problem: 'overlapping-sources' }));
         }
         const destinationOf = (source: string) =>
           batch
@@ -432,15 +438,14 @@ export function fauxWorkspace(given: Seed[]) {
               !(operation.kind === 'move' && path === source),
           );
           if (collision && !operation.replacements?.some((ref) => ref.target.path === collision))
-            fail('Destination exists. Explicit replacement consent required.', 'Conflict');
+            fail(new WorkspaceConflictError({ conflict: 'replacement-changed' }));
           if (collision)
             for (const path of map.keys()) if (isPathAtOrInside(path, collision)) map.delete(path);
           const parent = getParentPath(destination);
-          if (parent && !map.get(parent)?.directory)
-            fail('Destination parent unavailable.', 'Unavailable');
+          if (parent && !map.get(parent)?.directory) fail(unavailable());
         };
         if (operation.kind === 'create-file' || operation.kind === 'create-directory') {
-          const destination = operation.destination ?? fail('Destination required.');
+          const destination = operation.destination ?? fail(invalid());
           replace(destination);
           map.set(destination, {
             ...document(operation.text ?? ''),
@@ -450,9 +455,9 @@ export function fauxWorkspace(given: Seed[]) {
         } else
           for (const source of operation.sources) {
             const destination = destinationOf(source.target.path);
-            if (operation.kind !== 'trash' && !destination) fail('Destination required.');
+            if (operation.kind !== 'trash' && !destination) fail(invalid());
             if (destination && isPathAtOrInside(destination, source.target.path))
-              fail('Cannot transfer an entry into itself.');
+              fail(new InvalidRequestError({ problem: 'destination-inside-source' }));
             if (destination) replace(destination, source.target.path);
             const selected = [...map].filter(([path]) =>
               isPathAtOrInside(path, source.target.path),
@@ -495,7 +500,7 @@ export function fauxWorkspace(given: Seed[]) {
     acknowledgeOperation: ({ clientId, operationClientId, id }) =>
       call('acknowledgeOperation', () => {
         const entry = operations.get(JSON.stringify([operationClientId, id]));
-        if (!entry) return fail('Unknown operation.');
+        if (!entry) return fail(invalid());
         entry.acks.add(clientId);
       }),
     loadRecovery: ({ clientId }) =>
@@ -549,15 +554,26 @@ export function fauxWorkspace(given: Seed[]) {
       entries(target.checkout).set(target.path, { ...document(text), directory: false });
       notify(target.checkout, [target.path]);
     },
+    /**
+     * Fails `name`'s next call with `failure`, before it runs or, when `after`, once it has run. A
+     * string is the failure's text: a store failure, or when `after` an uncertain outcome naming it.
+     */
     failNext(
       name: WorkspaceCommand,
-      message = 'Injected IO failure',
+      failure: string | WorkspaceError = 'Injected IO failure',
       after = false,
-      code: ApplicationError['code'] = after ? 'Uncertain' : 'Persistence',
     ) {
+      let error: WorkspaceError;
+      if (typeof failure !== 'string') error = failure;
+      else if (after) error = new UncertainError({ operation: failure });
+      else error = new WorkspaceStoreError({ failure: 'publication', detail: failure });
+      faults.set(name, { error, after });
+    },
+    /** Refuses `name`'s next call as given, before it runs, as a host replays a refusal with its text. */
+    refuseNext(name: WorkspaceCommand, text: string) {
       faults.set(name, {
-        error: new ApplicationError({ code, message }),
-        after,
+        error: new RecordedRefusalError({ refusal: 'invalid', text }),
+        after: false,
       });
     },
   };
