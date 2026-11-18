@@ -69,15 +69,10 @@ export {
   collectResultsByCall,
   getCallKey,
   getTranscriptParts,
-  isSameResultsByCall,
-  listShownTranscripts,
   type ResultsByCall,
 } from './transcript/results-by-call.ts';
 export {
   getTranscriptSourceKey,
-  indexTranscriptSources,
-  isSameTranscriptRowState,
-  selectTranscriptRowState,
   type TranscriptRowState,
 } from './transcript/transcript-row-state.ts';
 export { makeTranscriptAtoms, type TranscriptAtoms } from './transcript/transcript-atoms.ts';
