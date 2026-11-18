@@ -13,7 +13,7 @@ import { workbench } from '@moonbase/ui/workbench';
 import { colors, space, type } from '@moonbase/ui/tokens.stylex';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { useAtomValue } from '@effect/atom-react';
-import { checkoutKey, fileKey, readOwn } from '@moonbase/application/editor';
+import { checkoutKey, fileKey } from '@moonbase/application/editor';
 import { useEditorActions } from './editor-actions.ts';
 import type { WorkbenchEditor } from './workbench-editor.ts';
 import { ClosePrompt } from './close-prompt.tsx';
@@ -117,11 +117,11 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   );
   const checkout =
     project && openCheckouts.find((target) => checkoutKey(target) === checkoutKey(project));
-  const view = checkout && readOwn(state.recovery.views, checkout.checkoutId),
+  const view = checkout && state.recovery.views.get(checkout.checkoutId),
     target = checkout && view?.active ? { checkout, path: view.active } : undefined;
   const buffer =
     target && state.buffers.find((buffer) => fileKey(buffer.target) === fileKey(target));
-  const mode = (target && readOwn(view?.fileViews, target.path)) || 'file';
+  const mode = (target && view?.fileViews?.get(target.path)) || 'file';
   // The checkout this workbench shows, for a close that settles after its prompt; null once
   // unmounted. It must not open a file of a checkout the app has since switched away from, and
   // the checkout shown need not be the editor's selected one.
@@ -199,7 +199,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     if (!checkout) return false;
     const closed = await actions.close(paths.map((path) => ({ checkout, path })));
     const next = actions.getSnapshot().recovery;
-    const path = readOwn(next.views, checkout.checkoutId)?.active;
+    const path = next.views.get(checkout.checkoutId)?.active;
     const current = () => shownCheckout.current === checkoutKey(checkout);
     if (closed && path && next.openCheckoutIds.includes(checkout.checkoutId) && current())
       await actions.open({ checkout, path }, { current });

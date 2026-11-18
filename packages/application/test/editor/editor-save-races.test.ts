@@ -238,7 +238,9 @@ for (const kind of ['close', 'reload'] as const)
       assert.equal(f.editor.getSnapshot().holdingUnsaved, false);
       assert.equal(f.editor.buffer(target('a.ts'))!.text, 'captured a.ts');
       assert.equal(f.editor.buffer(target('a.ts'))!.disk.text, 'A');
-      assert(f.editor.getSnapshot().recovery.views[checkout.checkoutId].openFiles.includes('a.ts'));
+      assert(
+        f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.openFiles.includes('a.ts'),
+      );
       // The failed discard is withdrawn, not delivered by the next flush behind the editor's back.
       await f.editor.flush();
       assert.equal(f.editor.buffer(target('a.ts'))!.text, 'captured a.ts');

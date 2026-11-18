@@ -1,6 +1,5 @@
 import { Context, Deferred, Effect, Layer, SubscriptionRef } from 'effect';
 import type { CheckoutTarget, FileTarget } from '@moonbase/contracts/workspace';
-import { readOwn, writeOwn } from '../record.ts';
 import { EditorError, type EditorFailure } from '../editor-errors.ts';
 import { EditorSession } from '../session/session-service.ts';
 import { EditorAlerts } from '../alerts/alerts-service.ts';
@@ -249,7 +248,7 @@ export class UnsavedChangesGuard extends Context.Service<
               if (!found) return false;
               const { action, index } = found;
               const reopened = yield* views.modify(({ recovery }) => {
-                const selected = readOwn(recovery.views, checkout.checkoutId)!;
+                const selected = recovery.views.get(checkout.checkoutId)!;
                 const added: string[] = [];
                 for (const file of action.files)
                   if (!selected.openFiles.includes(file.path)) {
@@ -258,9 +257,9 @@ export class UnsavedChangesGuard extends Context.Service<
                       0,
                       file.path,
                     );
-                    writeOwn(selected.fileViews, file.path, file.view);
+                    selected.fileViews.set(file.path, file.view);
                     if (file.positions)
-                      writeOwn(selected.positions, file.path, structuredClone(file.positions));
+                      selected.positions.set(file.path, structuredClone(file.positions));
                     added.push(file.path);
                   }
                 selected.active = action.active;

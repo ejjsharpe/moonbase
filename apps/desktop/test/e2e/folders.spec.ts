@@ -40,7 +40,7 @@ test('a plain-folder project offers Initialize Git, which makes it a Git project
       const notes = recovery.checkouts.find((checkout) => checkout.root === '/demo/notes')!;
       return {
         vcs: notes.vcs,
-        openFiles: recovery.views[notes.checkoutId].openFiles,
+        openFiles: recovery.views.get(notes.checkoutId)!.openFiles,
         draft: buffers.find((buffer) => buffer.target.checkout.root === notes.root)?.text,
       };
     }),

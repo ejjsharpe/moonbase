@@ -1,5 +1,5 @@
 import { getParentPath, getPathName, isPathAtOrInside, joinPath } from '@moonbase/contracts/paths';
-import { checkoutKey, readOwn } from '../editor/index.ts';
+import { checkoutKey } from '../editor/index.ts';
 import { Effect, Layer, Queue, Stream } from 'effect';
 import {
   WorkspaceService,
@@ -30,6 +30,16 @@ type Seed = {
   /** Unmerged paths, each reported as one conflicted change; one absent from `files` is `missing`. */
   conflicted?: string[];
 };
+/** A seed as the faux workspace holds it: its Git baselines by path. */
+type HeldSeed = Omit<Seed, 'head' | 'index'> & {
+  head?: ReadonlyMap<string, string>;
+  index?: ReadonlyMap<string, string>;
+};
+const holdSeed = ({ head, index, ...seed }: Seed): HeldSeed => ({
+  ...seed,
+  ...(head && { head: new Map(Object.entries(head)) }),
+  ...(index && { index: new Map(Object.entries(index)) }),
+});
 type Entry = FileDocument & { directory: boolean };
 const fail = (message: string, code: ApplicationError['code'] = 'InvalidInput'): never => {
   throw new ApplicationError({ code, message });
@@ -47,8 +57,8 @@ const pathCheck = (path: string, directory = false) => {
     fail('Invalid relative path.');
 };
 
-/** Concrete volatile adapter for demos/tests. It makes no filesystem or durability claim. */
-export function fauxWorkspace(seeds: Seed[]) {
+/** An in-memory workspace for demos and tests. It makes no filesystem or durability claim. */
+export function fauxWorkspace(given: Seed[]) {
   let version = 0;
   const files = new Map<string, Map<string, Entry>>();
   const saves = new Map<string, { payload: string; result: SaveResult }>();
@@ -96,7 +106,7 @@ export function fauxWorkspace(seeds: Seed[]) {
         watcher.notify({ checkout, paths });
   };
   const recovery = fauxRecovery({ exact, fail });
-  const addSeed = (seed: Seed) => {
+  const addSeed = (seed: HeldSeed) => {
     const map = new Map<string, Entry>();
     files.set(checkoutKey(seed.checkout), map);
     for (const [path, text] of Object.entries(seed.files)) {
@@ -111,7 +121,7 @@ export function fauxWorkspace(seeds: Seed[]) {
         });
     }
   };
-  seeds = [...seeds];
+  const seeds = given.map(holdSeed);
   for (const seed of seeds) addSeed(seed);
   const projectSeeds = (checkout: CheckoutTarget) =>
     seeds.filter((seed) => seed.checkout.projectId === exact(checkout).checkout.projectId);
@@ -219,8 +229,8 @@ export function fauxWorkspace(seeds: Seed[]) {
           changes: GitChange[] = [],
           paths = new Set([
             ...working.keys(),
-            ...Object.keys(seed.head ?? {}),
-            ...Object.keys(seed.index ?? {}),
+            ...(seed.head?.keys() ?? []),
+            ...(seed.index?.keys() ?? []),
           ]);
         if (checkout.vcs === 'none') return { branch: '', changes: [] };
         for (const path of paths) {
@@ -234,8 +244,8 @@ export function fauxWorkspace(seeds: Seed[]) {
             );
             continue;
           }
-          const head = readOwn(seed.head, path),
-            staged = readOwn(seed.index, path),
+          const head = seed.head?.get(path),
+            staged = seed.index?.get(path),
             index = staged ?? head;
           if (index === undefined) {
             if (!seed.ignored?.some((item) => isPathAtOrInside(path, item)))
@@ -265,15 +275,15 @@ export function fauxWorkspace(seeds: Seed[]) {
       call('createWorktree', () => {
         const from = requireGit(checkout);
         const project = projectSeeds(checkout).filter((seed) => seed.checkout.vcs === 'git');
-        const branchOf = (seed: Seed) => seed.checkout.vcs === 'git' && seed.checkout.branch;
+        const branchOf = (seed: HeldSeed) => seed.checkout.vcs === 'git' && seed.checkout.branch;
         const source = project.find((seed) => branchOf(seed) === base);
         if (!source) fail(`Base ${base} is not a commit.`);
         if (project.some((seed) => branchOf(seed) === branch))
           fail(`Branch ${branch} already exists.`, 'Conflict');
         if (seeds.some((seed) => seed.checkout.root === location))
           fail('The worktree location already exists.', 'Conflict');
-        const head = { ...(source!.head ?? source!.files) };
-        const seed: Seed = {
+        const head = new Map(source!.head ?? Object.entries(source!.files));
+        const seed: HeldSeed = {
           checkout: {
             ...from,
             checkoutId: `${checkout.projectId}:${location}`,
@@ -281,7 +291,7 @@ export function fauxWorkspace(seeds: Seed[]) {
             branch,
             worktree: 'linked',
           },
-          files: head,
+          files: Object.fromEntries(head),
           head,
         };
         seeds.push(seed);
@@ -301,7 +311,12 @@ export function fauxWorkspace(seeds: Seed[]) {
           branch: 'main',
           worktree: 'main',
         };
-        seeds[seeds.indexOf(seed)] = { ...seed, checkout: initialized, head: {}, index: {} };
+        seeds[seeds.indexOf(seed)] = {
+          ...seed,
+          checkout: initialized,
+          head: new Map(),
+          index: new Map(),
+        };
         files.set(checkoutKey(initialized), files.get(checkoutKey(checkout))!);
         files.delete(checkoutKey(checkout));
         return initialized;
@@ -316,9 +331,9 @@ export function fauxWorkspace(seeds: Seed[]) {
           original = '';
         } else {
           if (area === 'staged') {
-            original = readOwn(seed.head, target.path);
+            original = seed.head?.get(target.path);
           } else {
-            original = readOwn(seed.index, target.path) ?? readOwn(seed.head, target.path);
+            original = seed.index?.get(target.path) ?? seed.head?.get(target.path);
           }
         }
         if (original === undefined) fail('Git baseline unavailable.', 'Unavailable');

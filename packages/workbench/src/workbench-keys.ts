@@ -1,6 +1,6 @@
 import { useState, type KeyboardEvent } from 'react';
 import type { CheckoutTarget, FileTarget } from '@moonbase/contracts/workspace';
-import { checkoutKey, type EditorSnapshot } from '@moonbase/application/editor';
+import { checkoutKey, type EditorSnapshot, type CheckoutView } from '@moonbase/application/editor';
 import { cycleRecentTabs, type RecentTabs } from './editor-tabs/recent-tabs.tsx';
 import type { ExplorerPanel } from './explorer/explorer.tsx';
 import type { FocusOrigin, FocusReturn } from './focus-return.ts';
@@ -29,7 +29,7 @@ export function useWorkbenchKeys({
   actions: EditorActions;
   state: EditorSnapshot;
   checkout: CheckoutTarget | undefined;
-  view: EditorSnapshot['recovery']['views'][string] | undefined;
+  view: CheckoutView | undefined;
   target: FileTarget | undefined;
   focus: FocusReturn;
   findOrigin: (element: HTMLElement) => FocusOrigin;

@@ -171,8 +171,8 @@ test('initializeRepository keeps the folder’s tabs and drafts on the Git check
     assert.deepEqual(recovery.checkouts, [initialized, repository]);
     assert.deepEqual(recovery.openCheckoutIds, [folder.checkoutId, repository.checkoutId]);
     assert.equal(recovery.selectedCheckoutId, initialized.checkoutId);
-    assert.deepEqual(recovery.views[initialized.checkoutId].openFiles, ['b.ts', 'a.ts']);
-    assert.equal(recovery.views[initialized.checkoutId].active, 'a.ts');
+    assert.deepEqual(recovery.views.get(initialized.checkoutId)!.openFiles, ['b.ts', 'a.ts']);
+    assert.equal(recovery.views.get(initialized.checkoutId)!.active, 'a.ts');
     assert(buffers.every((buffer) => buffer.target.checkout.vcs === 'git'));
     assert.equal(f.editor.buffer({ checkout: initialized, path: 'a.ts' })?.text, 'unsaved');
     assert.equal(f.editor.buffer({ checkout: folder, path: 'a.ts' }), undefined);
@@ -254,7 +254,7 @@ test('opening a file during initializeRepository waits, then opens it in the rep
     assert.equal(opened, true);
     const state = f.editor.getSnapshot();
     assert.deepEqual(state.errors, []);
-    assert(state.recovery.views[initialized.checkoutId]!.openFiles.includes('b.ts'));
+    assert(state.recovery.views.get(initialized.checkoutId)!.openFiles.includes('b.ts'));
   } finally {
     await f.dispose();
   }

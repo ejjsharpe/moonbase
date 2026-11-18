@@ -10,12 +10,10 @@ import { workbench } from '@moonbase/ui/workbench';
 import { Icon } from '@moonbase/ui/icons';
 import { FileIcon } from '@moonbase/ui/file-icons';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { fileKey, readOwn, type EditorSnapshot } from '@moonbase/application/editor';
+import { fileKey, type EditorSnapshot, type CheckoutView } from '@moonbase/application/editor';
 import type { FocusReturn } from '../focus-return.ts';
 import { EditorTabMenu } from './editor-tab-menu.tsx';
 import type { EditorActions } from '../editor-actions.ts';
-
-type CheckoutView = EditorSnapshot['recovery']['views'][string];
 
 /** A tab dragged along the strip: started on one tab and dropped onto another's place. */
 export type TabDrag = {
@@ -80,7 +78,7 @@ export function EditorTab({
   const file = { checkout, path },
     current = state.buffers.find((buffer) => fileKey(buffer.target) === fileKey(file)),
     dirty = current && current.text !== current.disk.text;
-  const fileView = readOwn(view.fileViews, path) || 'file';
+  const fileView = view.fileViews.get(path) || 'file';
   const label = path.split('/').at(-1)!,
     hint = findTabHint(path, view.openFiles);
   const mark = fileTypeMark(path);

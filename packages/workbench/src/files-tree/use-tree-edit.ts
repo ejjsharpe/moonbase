@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { getParentPath, getPathName } from '@moonbase/contracts/paths';
 import type { CheckoutTarget, DirectoryListing } from '@moonbase/contracts/workspace';
-import { checkoutKey, readOwn } from '@moonbase/application/editor';
+import { checkoutKey } from '@moonbase/application/editor';
 import { editMutations, type TreeEditKind } from './file-commands.ts';
 import { copyName } from './paste-plan.ts';
 import type { NameCommit } from './files-tree-name.tsx';
@@ -110,7 +110,7 @@ export function useTreeEdit({
   }, [sourceGone]);
   /** Starts typing a name: expands a folder created in, and selects an entry renamed. */
   function startEdit(kind: TreeEditKind, path: string) {
-    const current = readOwn(actions.getSnapshot().recovery.views, checkout.checkoutId)?.tree;
+    const current = actions.getSnapshot().recovery.views.get(checkout.checkoutId)?.tree;
     if (!current) return;
     if (kind === 'create-file' || kind === 'create-directory') {
       const opening = listFoldersToExpand(path).filter(
@@ -122,7 +122,7 @@ export function useTreeEdit({
       setAnchor(path);
       actions.tree(checkout, { focus: path, selected: [path] });
     }
-    const started = readOwn(actions.getSnapshot().recovery.views, checkout.checkoutId)!.tree;
+    const started = actions.getSnapshot().recovery.views.get(checkout.checkoutId)!.tree;
     setEdit({
       kind,
       path,
@@ -139,7 +139,7 @@ export function useTreeEdit({
   function endEdit(ended: TreeEdit, focusPath: string | undefined, focusTree: boolean) {
     setEdit((current) => (current?.id === ended.id ? null : current));
     if (!mounted.current) return;
-    const now = readOwn(actions.getSnapshot().recovery.views, checkout.checkoutId)?.tree;
+    const now = actions.getSnapshot().recovery.views.get(checkout.checkoutId)?.tree;
     const untouched =
       !!now &&
       now.focus === ended.focus &&

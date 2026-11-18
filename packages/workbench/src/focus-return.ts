@@ -7,7 +7,7 @@ import {
   type RefObject,
 } from 'react';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { checkoutKey, readOwn } from '@moonbase/application/editor';
+import { checkoutKey } from '@moonbase/application/editor';
 import type { EditorActions } from './editor-actions.ts';
 
 /** Where a keyboard command started, and so where focus returns once the file it opens shows. */
@@ -108,7 +108,7 @@ export function useFocusReturn({
       if (checkout && next.openCheckoutIds.includes(checkout.checkoutId))
         setRequest({
           checkout,
-          path: readOwn(next.views, checkout.checkoutId)!.active,
+          path: next.views.get(checkout.checkoutId)!.active,
           origin,
           from,
           interaction: started,

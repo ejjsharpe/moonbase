@@ -26,7 +26,8 @@ test('retained snapshots stay stable across edits, positions, disk/conflict upda
     retain();
     f.editor.position(target('a.ts'), 'file', { line: 2, column: 3, top: 4, left: 5 });
     assert.equal(
-      f.editor.getSnapshot().recovery.views[checkout.checkoutId].positions['a.ts'].file!.line,
+      f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.positions.get('a.ts')!.file!
+        .line,
       2,
     );
     retain();

@@ -1,6 +1,5 @@
 import { useRef, useState, type RefObject } from 'react';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { readOwn } from '@moonbase/application/editor';
 import { rowHeight, type VisibleRow } from './files-tree-rows.ts';
 import type { EditorActions } from '../editor-actions.ts';
 
@@ -26,7 +25,7 @@ export function useDropTarget({
   /** Expands a folder that a drag has hovered over for a moment. */
   function expandForDrag(path: string) {
     try {
-      const current = readOwn(actions.getSnapshot().recovery.views, checkout.checkoutId)?.tree;
+      const current = actions.getSnapshot().recovery.views.get(checkout.checkoutId)?.tree;
       if (!current || current.expanded.includes(path)) return;
       actions.tree(checkout, { expanded: [...current.expanded, path] });
       void actions.list(checkout, path).catch(actions.report);

@@ -263,7 +263,7 @@ test('a failed preview close leaves no stale buffer: reopening its file ends in 
     assert(f.sent.length - before < 12, 'the open was sent again and again');
     assert.equal(f.editor.getSnapshot().recoveryReady, true);
     const stored = await f.stored();
-    const shown = f.editor.getSnapshot().recovery.views[checkout.checkoutId]!.openFiles;
+    const shown = f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.openFiles;
     assert.deepEqual(stored.tabs(checkout.checkoutId), shown);
     assert.deepEqual([...shown].sort(), ['a.ts', 'b.ts', 'c.ts']);
     assert.equal(stored.state.buffers.filter((b) => b.target.path === 'b.ts').length, 1);

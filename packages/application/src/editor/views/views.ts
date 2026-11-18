@@ -1,7 +1,11 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
-import type { CheckoutTarget, FileTarget, FileView } from '@moonbase/contracts/workspace';
-import { readOwn } from '../record.ts';
-import type { CheckoutView, EditorRecovery } from '../recovery/recovery-layout.ts';
+import type {
+  CheckoutTarget,
+  FilePositions,
+  FileTarget,
+  FileView,
+} from '@moonbase/contracts/workspace';
+import type { EditorRecovery } from '../recovery/recovery-layout.ts';
 import { checkoutKey, fileKey, sameCheckout } from '../keys.ts';
 
 /** The editor's tabs and views: its recovery layout, and the closes Reopen can undo. */
@@ -82,13 +86,13 @@ export function movePathsInRecovery(
 ) {
   const affected = (path: string) => isPathAtOrInside(path, source);
   const move = (path: string) => (affected(path) ? destination + path.slice(source.length) : path);
-  const selected = readOwn(state.views, checkout.checkoutId);
+  const selected = state.views.get(checkout.checkoutId);
   if (selected) {
     const closed = (path: string) => affected(path) && !selected.openFiles.includes(path);
-    const remap = <A>(memory: Record<string, A>) =>
+    const remap = <A>(memory: ReadonlyMap<string, A>) =>
       // Stationary destination metadata wins collisions, matching existing recovery behavior.
-      Object.fromEntries(
-        Object.entries(memory)
+      new Map(
+        [...memory]
           .sort(([a], [b]) => Number(closed(b)) - Number(closed(a)))
           .map(([path, value]) => [closed(path) ? move(path) : path, value]),
       );
@@ -112,7 +116,7 @@ export type ClosedAction = {
     path: string;
     index: number;
     view: FileView;
-    positions?: CheckoutView['positions'][string];
+    positions?: FilePositions;
   }[];
   active: string;
 };
@@ -129,7 +133,7 @@ export function closeFilesInRecovery(
   const history: ClosedAction[] = [];
   if (kind === 'files')
     for (const target of state.checkouts) {
-      const selected = readOwn(state.views, target.checkoutId);
+      const selected = state.views.get(target.checkoutId);
       if (!selected) continue;
       const closing = selected.openFiles.filter((path) =>
         keys.has(fileKey({ checkout: target, path })),
@@ -142,8 +146,8 @@ export function closeFilesInRecovery(
           files: closing.map((path) => ({
             path,
             index: selected.openFiles.indexOf(path),
-            view: readOwn(selected.fileViews, path) ?? 'file',
-            positions: structuredClone(readOwn(selected.positions, path)),
+            view: selected.fileViews.get(path) ?? 'file',
+            positions: structuredClone(selected.positions.get(path)),
           })),
         });
       selected.openFiles = selected.openFiles.filter((path) => !closing.includes(path));

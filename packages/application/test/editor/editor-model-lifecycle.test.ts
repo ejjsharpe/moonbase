@@ -234,7 +234,7 @@ test('a refresh neither cancels an open from a lookup nor keeps restarting its q
     await refreshed;
     read.release();
     assert.equal(await opening, true, 'The refresh must not cancel the open');
-    assert.equal(editor.getSnapshot().recovery.views[checkout.checkoutId].active, 'a.ts');
+    assert.equal(editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.active, 'a.ts');
 
     // A query the reader types still cancels an open in flight.
     read = gate();

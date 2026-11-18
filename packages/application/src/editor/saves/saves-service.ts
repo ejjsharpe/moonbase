@@ -1,7 +1,6 @@
 import { Context, Effect, Layer } from 'effect';
 import { WorkspaceService } from '@moonbase/contracts/workspace-service';
-import type { FileTarget, FileView } from '@moonbase/contracts/workspace';
-import { readOwn, writeOwn } from '../record.ts';
+import type { FileTarget } from '@moonbase/contracts/workspace';
 import { EditorError, isRefusal, type EditorFailure } from '../editor-errors.ts';
 import { EditorSession } from '../session/session-service.ts';
 import { EditorAlerts } from '../alerts/alerts-service.ts';
@@ -221,7 +220,7 @@ export class EditorSaves extends Context.Service<EditorSaves, EditorSavesShape>(
                     b.conflict = undefined;
                   });
                   const view = yield* views.view(captured.checkout);
-                  if (readOwn(view.fileViews, captured.path) === 'conflict')
+                  if (view.fileViews.get(captured.path) === 'conflict')
                     yield* discovery.update((s) => ({
                       ...s,
                       comparisons: { ...s.comparisons, [key]: conflictComparison(disk) },
@@ -242,13 +241,9 @@ export class EditorSaves extends Context.Service<EditorSaves, EditorSavesShape>(
                 b.conflict = undefined;
               });
             const view = yield* views.view(target.checkout);
-            if (readOwn(view.fileViews, target.path) === 'conflict')
+            if (view.fileViews.get(target.path) === 'conflict')
               yield* views.modify(({ recovery }) => {
-                writeOwn<FileView>(
-                  readOwn(recovery.views, target.checkout.checkoutId)!.fileViews,
-                  target.path,
-                  'file',
-                );
+                recovery.views.get(target.checkout.checkoutId)!.fileViews.set(target.path, 'file');
               });
             yield* outbox.changed;
           }),

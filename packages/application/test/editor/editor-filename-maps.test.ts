@@ -57,10 +57,9 @@ test('filename caret state never mutates inherited prototypes', async () => {
     await editor.open(target('__proto__'), { view: 'file' });
     editor.position(target('__proto__'), 'file', cursor);
     prototypes.assertUnchanged();
-    const view = editor.getSnapshot().recovery.views[checkout.checkoutId];
-    assert(Object.hasOwn(view.fileViews, '__proto__'));
-    assert(Object.hasOwn(view.positions, '__proto__'));
-    assert.deepEqual(view.positions.__proto__.file, cursor);
+    const view = editor.getSnapshot().recovery.views.get(checkout.checkoutId)!;
+    assert(view.fileViews.has('__proto__'));
+    assert.deepEqual(view.positions.get('__proto__')?.file, cursor);
   } finally {
     prototypes.restore();
     await editor.dispose();
@@ -107,7 +106,7 @@ test('prototype-shaped filenames keep own JSON view keys through Save, reopen, r
       assert.equal(editor.buffer(target(path))?.text, 'newer dirty ' + path);
       assert.equal(editor.buffer(target(path))?.disk.text, 'saved ' + path);
       assert.deepEqual(
-        editor.getSnapshot().recovery.views[checkout.checkoutId].positions[path].staged,
+        editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.positions.get(path)?.staged,
         cursor,
       );
       assert.equal(
@@ -120,7 +119,7 @@ test('prototype-shaped filenames keep own JSON view keys through Save, reopen, r
       );
       assert.equal(await editor.reopen(checkout), true);
       assert.equal(
-        editor.getSnapshot().recovery.views[checkout.checkoutId].fileViews[path],
+        editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.fileViews.get(path),
         'staged',
       );
     }
@@ -145,7 +144,8 @@ test('prototype-shaped filenames keep own JSON view keys through Save, reopen, r
     await editor.load();
     assert.equal(editor.buffer(source)?.text, 'dirty moved text');
     assert.deepEqual(
-      editor.getSnapshot().recovery.views[checkout.checkoutId].positions.__proto__.staged,
+      editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.positions.get('__proto__')
+        ?.staged,
       cursor,
     );
     for (const [from, destination] of [
@@ -166,10 +166,7 @@ test('prototype-shaped filenames keep own JSON view keys through Save, reopen, r
     assert.equal(editor.buffer(source)?.text, 'dirty moved text');
     assert.equal(memory.stats.mutations, 4);
     assert(
-      Object.hasOwn(
-        editor.getSnapshot().recovery.views[checkout.checkoutId].positions,
-        '__proto__',
-      ),
+      editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.positions.has('__proto__'),
     );
     prototypes.assertUnchanged();
   } finally {

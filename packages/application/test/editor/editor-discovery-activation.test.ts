@@ -110,7 +110,7 @@ describe('checkout discovery and activation', () => {
       await editor.selectCheckout(checkout);
       assert.equal(editor.buffer(target('a.ts'))?.text, 'current source after close');
       assert.equal(
-        editor.getSnapshot().recovery.views[checkout.checkoutId].fileViews['a.ts'],
+        editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.fileViews.get('a.ts'),
         'staged',
       );
       assert.equal(
@@ -184,7 +184,7 @@ describe('checkout discovery and activation', () => {
         assert.equal(f.editor.getSnapshot().recovery.selectedCheckoutId, checkout.checkoutId);
         assert.equal(f.editor.buffer(target('a.ts'))?.text, 'latest selected source');
         assert.equal(
-          f.editor.getSnapshot().recovery.views[checkout.checkoutId].fileViews['a.ts'],
+          f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.fileViews.get('a.ts'),
           'staged',
         );
       } finally {

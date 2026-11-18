@@ -6,7 +6,7 @@ import { fileKey } from '@moonbase/application/editor';
 import type { EditorDriver } from './editor-model-fixture.ts';
 
 const treeOf = (editor: EditorDriver) =>
-  editor.getSnapshot().recovery.views[checkout.checkoutId].tree;
+  editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.tree;
 
 test('reveal shows an ignored file by turning Hide Ignored Files off, unless told to skip it', async () => {
   const f = await fixture('reveal-ignored');

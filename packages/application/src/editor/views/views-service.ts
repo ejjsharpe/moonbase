@@ -1,6 +1,5 @@
 import { Context, Effect, Layer, SubscriptionRef } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { readOwn, writeOwn } from '../record.ts';
 import { EditorError } from '../editor-errors.ts';
 import { EditorSession } from '../session/session-service.ts';
 import {
@@ -56,11 +55,13 @@ export class EditorViews extends Context.Service<EditorViews, EditorViewsShape>(
               (requireOpen && !recovery.openCheckoutIds.includes(checkout.checkoutId))
             )
               return yield* new EditorError({ reason: 'checkout-not-open' });
-            const view = readOwn(recovery.views, checkout.checkoutId);
+            const view = recovery.views.get(checkout.checkoutId);
             if (view) return view;
-            return yield* modify((draft) =>
-              writeOwn(draft.recovery.views, checkout.checkoutId, emptyCheckoutView()),
-            );
+            return yield* modify((draft) => {
+              const created = emptyCheckoutView();
+              draft.recovery.views.set(checkout.checkoutId, created);
+              return created;
+            });
           }),
       } satisfies EditorViewsShape;
     }),

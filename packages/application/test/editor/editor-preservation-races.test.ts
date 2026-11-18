@@ -54,8 +54,9 @@ describe('Close and Quit races', () => {
         for (const state of [live, durable.state]) {
           assert.equal(state.selectedCheckoutId, second.checkoutId);
           assert.equal(state.sidebarWidth, 321);
-          assert.deepEqual(state.views[second.checkoutId].tree.expanded, ['folder']);
         }
+        assert.deepEqual(live.views.get(second.checkoutId)!.tree.expanded, ['folder']);
+        assert.deepEqual(durable.state.views[second.checkoutId].tree.expanded, ['folder']);
         assert.deepEqual(durable.drafts, []);
         assert.equal(editor.buffer(target('a.ts')), undefined);
         if (kind === 'files') {
@@ -234,7 +235,10 @@ describe('Close and Quit races', () => {
         editor.getSnapshot().buffers.some((buffer) => buffer.text === 'consented captured draft');
       assert.equal(hasDraft(f.editor), false);
       assert.equal(
-        f.editor.getSnapshot().recovery.views[checkout.checkoutId].openFiles.includes('renamed.ts'),
+        f.editor
+          .getSnapshot()
+          .recovery.views.get(checkout.checkoutId)!
+          .openFiles.includes('renamed.ts'),
         false,
       );
       const durable = await storedRecovery(f.raw, f.editor.clientId);

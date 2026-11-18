@@ -14,8 +14,9 @@ const selection = (input: Locator) =>
   input.evaluate((element: HTMLInputElement) => [element.selectionStart, element.selectionEnd]);
 const treeState = (page: Page) =>
   page.evaluate(() => {
-    const { tree } =
-      window.demo.first.getSnapshot().recovery.views[window.demo.checkout.checkoutId];
+    const { tree } = window.demo.first
+      .getSnapshot()
+      .recovery.views.get(window.demo.checkout.checkoutId)!;
     return { focus: tree.focus, selected: tree.selected };
   });
 const mutations = (page: Page) => page.evaluate(() => window.demo.memory.stats.mutations);

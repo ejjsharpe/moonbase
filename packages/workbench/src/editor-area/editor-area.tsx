@@ -3,7 +3,7 @@ import * as stylex from '@stylexjs/stylex';
 import { Tabs } from '@base-ui/react/tabs';
 import { workbench } from '@moonbase/ui/workbench';
 import type { CheckoutTarget, FileTarget, FileView } from '@moonbase/contracts/workspace';
-import type { EditorSnapshot } from '@moonbase/application/editor';
+import type { EditorSnapshot, CheckoutView } from '@moonbase/application/editor';
 import { CheatSheet, editorShortcuts } from '../cheat-sheet.tsx';
 import { EditorTabs, type EditorTabsHandle } from '../editor-tabs/editor-tabs.tsx';
 import type { FocusReturn } from '../focus-return.ts';
@@ -40,7 +40,7 @@ export function EditorArea({
   actions: EditorActions;
   state: EditorSnapshot;
   checkout: CheckoutTarget;
-  view: EditorSnapshot['recovery']['views'][string];
+  view: CheckoutView;
   target: FileTarget | undefined;
   buffer: EditorSnapshot['buffers'][number] | undefined;
   mode: FileView;

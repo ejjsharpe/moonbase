@@ -16,8 +16,9 @@ const row = (page: Page, path: string) =>
   });
 const treeState = (page: Page) =>
   page.evaluate(() => {
-    const { tree } =
-      window.demo.first.getSnapshot().recovery.views[window.demo.checkout.checkoutId];
+    const { tree } = window.demo.first
+      .getSnapshot()
+      .recovery.views.get(window.demo.checkout.checkoutId)!;
     return {
       focus: tree.focus,
       selected: tree.selected,
@@ -196,7 +197,8 @@ test('following waits while a dialog is open and catches up once it closes', asy
     .poll(() =>
       page.evaluate(
         () =>
-          window.demo.first.getSnapshot().recovery.views[window.demo.checkout.checkoutId].active,
+          window.demo.first.getSnapshot().recovery.views.get(window.demo.checkout.checkoutId)!
+            .active,
       ),
     )
     .toBe('src/example.ts');

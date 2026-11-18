@@ -205,7 +205,10 @@ test('captured close defers Discards; earlier Save stays saved after a later Can
       ),
       false,
     );
-    assert.equal(f.editor.getSnapshot().recovery.views[checkout.checkoutId].openFiles.length, 3);
+    assert.equal(
+      f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.openFiles.length,
+      3,
+    );
     assert.equal(f.editor.buffer(target('a.ts'))!.disk.text, 'edit a.ts');
     assert.equal(f.editor.buffer(target('b.ts'))!.text, 'edit b.ts');
     assert.equal(f.editor.buffer(target('c.ts'))!.text, 'edit c.ts');
@@ -247,20 +250,20 @@ test('preview replacement follows successful activation; dirty, Keep Open and re
     await f.editor.open(target('a.ts'), { intent: 'preview' });
     f.memory.failNext('readFile');
     assert.equal(await f.editor.open(target('b.ts'), { intent: 'preview' }), false);
-    assert.equal(f.editor.getSnapshot().recovery.views[checkout.checkoutId].active, 'a.ts');
+    assert.equal(f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.active, 'a.ts');
     await f.editor.open(target('b.ts'), { intent: 'preview' });
     assert.equal(f.editor.buffer(target('a.ts')), undefined);
     f.editor.edit(target('b.ts'), 'dirty');
     await f.editor.open(target('c.ts'), { intent: 'preview' });
     f.editor.reorder(checkout, 'c.ts', 0);
     await f.editor.open(target('a.ts'), { intent: 'preview' });
-    assert.deepEqual(f.editor.getSnapshot().recovery.views[checkout.checkoutId].openFiles, [
+    assert.deepEqual(f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.openFiles, [
       'c.ts',
       'a.ts',
       'b.ts',
     ]);
     f.editor.keepOpen(target('a.ts'));
-    assert.equal(f.editor.getSnapshot().recovery.views[checkout.checkoutId].preview, null);
+    assert.equal(f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.preview, null);
   } finally {
     await f.dispose();
   }
@@ -279,13 +282,13 @@ test('reopen restores batch order/view/position and reads current source rather 
     );
     f.memory.externalWrite(target('b.ts'), 'latest source');
     await f.editor.reopen(checkout);
-    const selected = f.editor.getSnapshot().recovery.views[checkout.checkoutId];
+    const selected = f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!;
     assert.deepEqual(selected.openFiles, ['a.ts', 'b.ts']);
-    assert.equal(selected.fileViews['a.ts'], 'staged');
-    assert.equal(selected.positions['a.ts'].staged?.column, 4);
+    assert.equal(selected.fileViews.get('a.ts'), 'staged');
+    assert.equal(selected.positions.get('a.ts')!.staged?.column, 4);
     assert.equal(f.editor.buffer(target('b.ts'))!.text, 'latest source');
     await f.editor.navigate(checkout, -1);
-    assert.equal(f.editor.getSnapshot().recovery.views[checkout.checkoutId].active, 'a.ts');
+    assert.equal(f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.active, 'a.ts');
   } finally {
     await f.dispose();
   }
@@ -306,9 +309,9 @@ test('two editor instances isolate buffers, positions, selection and recovery; r
     await f.editor.flush();
     await other.flush();
     assert.notEqual(f.editor.instanceId, other.instanceId);
-    assert.equal(other.getSnapshot().recovery.views[checkout.checkoutId].active, 'b.ts');
+    assert.equal(other.getSnapshot().recovery.views.get(checkout.checkoutId)!.active, 'b.ts');
     assert.equal(
-      other.getSnapshot().recovery.views[checkout.checkoutId].positions['a.ts'],
+      other.getSnapshot().recovery.views.get(checkout.checkoutId)!.positions.get('a.ts'),
       undefined,
     );
     for (const [clientId, text] of [
@@ -344,9 +347,10 @@ test('tree keeps ignored files visible and revealable while lookup retains its f
     );
     await f.editor.reveal(target('c.ts'));
     await f.editor.reveal(target('folder/nested.ts'));
-    assert.deepEqual(f.editor.getSnapshot().recovery.views[checkout.checkoutId].tree.selected, [
-      'folder/nested.ts',
-    ]);
+    assert.deepEqual(
+      f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.tree.selected,
+      ['folder/nested.ts'],
+    );
     assert.deepEqual(
       (await f.editor.lookup(checkout, 'nested')).matches.map((row) => row.path),
       ['folder/nested.ts'],
@@ -708,7 +712,7 @@ test('stale file activation cannot replace a later successful comparison', async
     await editor.open(target('a.ts'), { view: 'staged' });
     release();
     assert.equal(await slow, false);
-    assert.equal(editor.getSnapshot().recovery.views[checkout.checkoutId].active, 'a.ts');
+    assert.equal(editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.active, 'a.ts');
     assert.equal(editor.buffer(target('b.ts')), undefined);
   } finally {
     release();
@@ -1071,7 +1075,7 @@ test('missing retained dirty tab stays accessible after Trash and new missing op
     assert.equal(await f.editor.open(target('a.ts')), true);
     assert.equal(f.editor.buffer(target('a.ts'))!.text, 'recover these edits');
     assert.equal(await f.editor.open(target('missing.ts')), false);
-    assert.equal(f.editor.getSnapshot().recovery.views[checkout.checkoutId].active, 'a.ts');
+    assert.equal(f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.active, 'a.ts');
     assert.match(f.editor.getSnapshot().errors.join(' '), /unavailable|retained/i);
   } finally {
     await f.dispose();
@@ -1154,7 +1158,7 @@ test('checkout close retains exact metadata and reopens its order, comparison, p
     await f.editor.open(target('b.ts'));
     f.editor.position(target('a.ts'), 'staged', { line: 1, column: 5, top: 12, left: 2 });
     f.editor.reorder(checkout, 'b.ts', 0);
-    const before = f.editor.getSnapshot().recovery.views[checkout.checkoutId];
+    const before = f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!;
     assert(before);
     assert.deepEqual(f.editor.getSnapshot().recovery.openCheckoutIds, [checkout.checkoutId]);
     await answering(
@@ -1165,10 +1169,10 @@ test('checkout close retains exact metadata and reopens its order, comparison, p
     const closed = f.editor.getSnapshot().recovery;
     assert.deepEqual(closed.checkouts, [checkout]);
     assert.deepEqual(closed.openCheckoutIds, []);
-    assert.deepEqual(closed.views[checkout.checkoutId], before);
+    assert.deepEqual(closed.views.get(checkout.checkoutId), before);
     assert(closed.recentFiles.length);
     await f.editor.openCheckout(checkout.root);
-    assert.deepEqual(f.editor.getSnapshot().recovery.views[checkout.checkoutId], before);
+    assert.deepEqual(f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!, before);
     assert.equal(f.editor.buffer(target('b.ts'))!.text, 'second');
     assert.equal(await f.editor.reopen(checkout), false);
   } finally {
@@ -1252,9 +1256,9 @@ test('closed checkout metadata receives operation results without discovery or r
     try {
       await restored.load();
       const state = restored.getSnapshot();
-      const closed = state.recovery.views[checkout.checkoutId];
-      assert.equal(closed.fileViews['moved.ts'], 'staged');
-      assert.equal(closed.fileViews['a.ts'], undefined);
+      const closed = state.recovery.views.get(checkout.checkoutId)!;
+      assert.equal(closed.fileViews.get('moved.ts'), 'staged');
+      assert.equal(closed.fileViews.get('a.ts'), undefined);
       assert.deepEqual(state.recovery.openCheckoutIds, [second.checkoutId]);
       assert(observed.length);
       assert.equal(
@@ -1284,7 +1288,7 @@ test('an unavailable retained comparison activates its buffer while a new compar
     assert.equal(f.editor.buffer(target('a.ts'))!.text, 'retain in any view');
     f.memory.failNext('readComparison');
     assert.equal(await f.editor.open(target('new.ts'), { view: 'staged' }), false);
-    assert.equal(f.editor.getSnapshot().recovery.views[checkout.checkoutId].active, 'a.ts');
+    assert.equal(f.editor.getSnapshot().recovery.views.get(checkout.checkoutId)!.active, 'a.ts');
   } finally {
     await f.dispose();
   }
@@ -1402,7 +1406,7 @@ test("closing a restored active clean file loads its survivor's remembered compa
         ),
         true,
       );
-      assert.equal(restored.getSnapshot().recovery.views[checkout.checkoutId].active, 'a.ts');
+      assert.equal(restored.getSnapshot().recovery.views.get(checkout.checkoutId)!.active, 'a.ts');
       assert.equal(restored.buffer(target('a.ts'))!.text, 'const a = 1;');
       assert.equal(
         restored.getSnapshot().comparisons[fileKey(target('a.ts'))].original,

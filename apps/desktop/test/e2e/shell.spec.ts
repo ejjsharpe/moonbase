@@ -53,7 +53,10 @@ test('browser shell keeps dirty comparisons, cursor, scroll, Monaco undo and sco
   await input(page).press('X');
   const before = await page.evaluate(() => ({
     text: window.demo.first.buffer({ checkout: window.demo.checkout, path: 'welcome.ts' })!.text,
-    position: window.demo.first.getSnapshot().recovery.views.sample.positions['welcome.ts'].staged!,
+    position: window.demo.first
+      .getSnapshot()
+      .recovery.views.get('sample')!
+      .positions.get('welcome.ts')!.staged!,
     models: window.demo.modelCount(),
   }));
   expect(before.position.line).toBe(200);
@@ -81,7 +84,9 @@ test('browser shell keeps dirty comparisons, cursor, scroll, Monaco undo and sco
   expect(await page.evaluate(() => window.demo.modelCount())).toBe(before.models);
   expect(
     await page.evaluate(
-      () => window.demo.first.getSnapshot().recovery.views.sample.positions['welcome.ts'].staged!,
+      () =>
+        window.demo.first.getSnapshot().recovery.views.get('sample')!.positions.get('welcome.ts')!
+          .staged!,
     ),
   ).toEqual(before.position);
   await expect(shell(page).getByRole('textbox', { name: /^staged · .* original$/ })).toBeVisible();
@@ -205,7 +210,7 @@ test('switching checkouts dismisses a file menu even when the relative paths mat
   expect(
     await page.evaluate(() => {
       const { views } = window.demo.first.getSnapshot().recovery;
-      return { sample: views.sample.openFiles, other: views.other.openFiles };
+      return { sample: views.get('sample')!.openFiles, other: views.get('other')!.openFiles };
     }),
   ).toEqual({ sample: ['welcome.ts'], other: ['welcome.ts'] });
 });

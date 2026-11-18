@@ -1,6 +1,5 @@
 import { getParentPath } from '@moonbase/contracts/paths';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { readOwn } from '@moonbase/application/editor';
 import { listFoldersToExpand } from './files-tree-drop.ts';
 import type { EditorActions } from '../editor-actions.ts';
 
@@ -13,7 +12,7 @@ export function selectEntries(
   checkout: CheckoutTarget,
   paths: readonly string[],
 ) {
-  const tree = readOwn(actions.getSnapshot().recovery.views, checkout.checkoutId)?.tree;
+  const tree = actions.getSnapshot().recovery.views.get(checkout.checkoutId)?.tree;
   if (!tree || !paths.length) return;
   const opening = [
     ...new Set(paths.flatMap((path) => listFoldersToExpand(getParentPath(path)))),

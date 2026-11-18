@@ -8,7 +8,6 @@ import type {
   DirectoryListing,
   FileTarget,
 } from '@moonbase/contracts/workspace';
-import { readOwn } from '../record.ts';
 import { EditorError, type EditorFailure } from '../editor-errors.ts';
 import { isRelativePath } from '../relative-path.ts';
 import { EditorSession } from '../session/session-service.ts';
@@ -95,7 +94,7 @@ export class EditorTree extends Context.Service<EditorTree, EditorTreeShape>()(
         Effect.gen(function* () {
           yield* views.view(checkout);
           yield* views.modify(({ recovery }) => {
-            const view = readOwn(recovery.views, checkout.checkoutId)!;
+            const view = recovery.views.get(checkout.checkoutId)!;
             view.tree = { ...view.tree, ...patch };
           });
           yield* outbox.changed;
@@ -117,7 +116,7 @@ export class EditorTree extends Context.Service<EditorTree, EditorTreeShape>()(
             }).pipe(Effect.ignore),
             refreshComparison: Effect.gen(function* () {
               const selected = yield* views.view(checkout),
-                mode = readOwn(selected.fileViews, selected.active);
+                mode = selected.fileViews.get(selected.active);
               if (
                 !selected.active ||
                 !mode ||
@@ -131,13 +130,13 @@ export class EditorTree extends Context.Service<EditorTree, EditorTreeShape>()(
               const stillShown = Effect.map(
                 Effect.all([session.get, views.get]),
                 ([{ closing, holdingUnsaved }, { recovery }]) => {
-                  const view = readOwn(recovery.views, checkout.checkoutId);
+                  const view = recovery.views.get(checkout.checkoutId);
                   return (
                     !closing &&
                     !holdingUnsaved &&
                     recovery.openCheckoutIds.includes(checkout.checkoutId) &&
                     view?.active === target.path &&
-                    readOwn(view.fileViews, target.path) === mode
+                    view.fileViews.get(target.path) === mode
                   );
                 },
               );

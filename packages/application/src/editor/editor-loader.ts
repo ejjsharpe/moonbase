@@ -1,6 +1,5 @@
 import { Context, Effect, Layer } from 'effect';
 import { WorkspaceService } from '@moonbase/contracts/workspace-service';
-import { readOwn } from './record.ts';
 import { EditorError, type EditorFailure } from './editor-errors.ts';
 import { EditorSession } from './session/session-service.ts';
 import { EditorAlerts } from './alerts/alerts-service.ts';
@@ -54,7 +53,7 @@ export class EditorLoader extends Context.Service<EditorLoader, EditorLoaderShap
           return yield* new EditorError({ reason: 'foreign-recovery' });
         const { recovery: shown, tabs: held } = readRecoveryState(loaded.state);
         // A since-removed Hide button saved choices it never applied; they are dropped.
-        for (const view of Object.values(shown.views)) delete view.tree.hideIgnored;
+        for (const view of shown.views.values()) delete view.tree.hideIgnored;
         yield* views.modify((draft) => {
           draft.recovery = shown;
         });
@@ -77,11 +76,11 @@ export class EditorLoader extends Context.Service<EditorLoader, EditorLoaderShap
         )) {
           if (yield* closing) break;
           yield* tree.observe(checkout);
-          const selected = readOwn((yield* views.get).recovery.views, checkout.checkoutId);
+          const selected = (yield* views.get).recovery.views.get(checkout.checkoutId);
           if (selected?.active)
             yield* tabs.openFile(
               { checkout, path: selected.active },
-              { view: readOwn(selected.fileViews, selected.active) ?? 'file' },
+              { view: selected.fileViews.get(selected.active) ?? 'file' },
             );
           yield* tree.refreshCheckout(checkout);
         }

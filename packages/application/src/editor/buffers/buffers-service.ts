@@ -1,6 +1,5 @@
 import { Context, Effect, Layer, SubscriptionRef } from 'effect';
 import type { FileDocument, FileTarget } from '@moonbase/contracts/workspace';
-import { readOwn, writeOwn } from '../record.ts';
 import { EditorAlerts } from '../alerts/alerts-service.ts';
 import { EditorDiscovery } from '../discovery/discovery-service.ts';
 import { RecoveryOutbox } from '../recovery/recovery-outbox-service.ts';
@@ -87,9 +86,8 @@ export class EditorBuffers extends Context.Service<EditorBuffers, EditorBuffersS
           });
           const checkoutId = tab.target.checkout.checkoutId;
           yield* views.modify(({ recovery }) => {
-            const view =
-              readOwn(recovery.views, checkoutId) ??
-              writeOwn(recovery.views, checkoutId, emptyCheckoutView());
+            const view = recovery.views.get(checkoutId) ?? emptyCheckoutView();
+            recovery.views.set(checkoutId, view);
             if (!view.openFiles.includes(tab.target.path)) view.openFiles.push(tab.target.path);
             if (view.preview === tab.target.path) view.preview = null;
           });
@@ -207,16 +205,16 @@ export class EditorBuffers extends Context.Service<EditorBuffers, EditorBuffersS
               return { ...s, comparisons, comparisonAttempts };
             });
             yield* views.modify(({ recovery }) => {
-              const view = readOwn(recovery.views, target.checkout.checkoutId);
+              const view = recovery.views.get(target.checkout.checkoutId);
               if (!view) return;
               const rename = (path: string) => (path === source ? target.path : path);
               view.openFiles = [...new Set(view.openFiles.map(rename))];
               view.active = rename(view.active);
               if (view.preview !== null) view.preview = rename(view.preview);
-              for (const memory of [view.fileViews, view.positions] as Record<string, unknown>[])
-                if (Object.hasOwn(memory, source)) {
-                  writeOwn(memory, target.path, memory[source]);
-                  delete memory[source];
+              for (const memory of [view.fileViews, view.positions] as Map<string, unknown>[])
+                if (memory.has(source)) {
+                  memory.set(target.path, memory.get(source));
+                  memory.delete(source);
                 }
             });
           }),
