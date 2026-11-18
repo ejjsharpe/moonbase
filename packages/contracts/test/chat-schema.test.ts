@@ -297,10 +297,7 @@ test("a running response's text parts may carry their whole text within the live
 test('schema failures are safe errors without rejected values', () => {
   const secret = 'synthetic-private-value-not-for-errors';
   for (const [tag, decode] of [
-    [
-      'ApplicationError',
-      () => decodeChatInput('sendChat', { ...inputs.sendChat, text: { secret } }),
-    ],
+    ['SchemaError', () => decodeChatInput('sendChat', { ...inputs.sendChat, text: { secret } })],
     [
       'IncompatibleHostError',
       () => decodeChatOutput('getChatHost', { ...outputs.getChatHost, mode: { secret } }),

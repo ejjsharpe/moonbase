@@ -31,7 +31,7 @@ Write code as if Moonbase had been Effect-native from the start (epic #273, D14 
 - A module is a `Context.Service` with a `Layer`, and its methods return Effects. Resources are `Effect.acquireRelease` in a `Scope`, not closed flags, AbortController sets or collected-failure arrays.
 - Each process runs one runtime at its root. Library code never calls `Effect.runPromise`, `runFork` or `runSync`.
 - Use the primitives: `FiberSet`/`FiberMap`/`FiberHandle`, `Semaphore`, `RcMap`/`Cache`, `Deferred`, `Latch`, `SubscriptionRef`/`PubSub` and Streams, `Clock` and `Schedule` (tests use `TestClock`), and `effect/process` `ChildProcess`.
-- Errors are per-module `Schema.TaggedError` classes with fields and a `message` built from them. RPC procedures declare an `error` union. Shared outcomes are `UncertainError` (never resend), `CancelledError` and `UnauthorizedError`. Don't add new `ApplicationError` or `fail()` calls.
+- Errors are per-module `Schema.TaggedError` classes with fields and a `message` built from them. RPC procedures declare an `error` union. Shared outcomes are `UncertainError` (never resend), `CancelledError` and `UnauthorizedError`. A decision that depends on what a failure means (refused, unavailable, uncertain) asks `@moonbase/contracts/error-groups`, never a code.
 - Wrap a Promise or callback API once, where it enters (`Effect.tryPromise({ try: (signal) => … })`, `Effect.callback`, `Stream.callback`).
 
 Client state is per-concept, in three layers, never a controller object with its own listener store and lifecycle:

@@ -3,8 +3,6 @@ export const maximumFileBytes = 2 * 1024 * 1024;
 import type * as Contracts from './workspace-schema.ts';
 import type { RecoveryCommands } from './recovery.ts';
 export type { RecoveryLoad } from './recovery.ts';
-export { ApplicationError, type ApplicationErrorCode } from './errors.ts';
-export type { CommandOptions, ObservationClose } from './common.ts';
 export type CheckoutTarget = typeof Contracts.CheckoutTargetSchema.Type;
 export type GitCheckoutTarget = typeof Contracts.GitCheckoutTargetSchema.Type;
 export type FileTarget = typeof Contracts.FileTargetSchema.Type;

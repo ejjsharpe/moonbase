@@ -56,7 +56,7 @@ for (const entry of [
   'host-schema',
   'daemon-schema',
   'providers-schema',
-  'error-schema',
+  'error-groups',
   'schema',
   'services',
 ]) {
@@ -154,9 +154,7 @@ for (const [entry, owner] of [
     );
     const module = input.match(/(?:^|\/)packages\/([^/]+)\//)?.[1];
     assert(
-      module === undefined ||
-        module === owner ||
-        ['application', 'contracts', 'effect'].includes(module),
+      module === undefined || module === owner || ['application', 'contracts'].includes(module),
       `Foreign package reached ${entry}: ${input}`,
     );
     assert(

@@ -1,18 +1,12 @@
 import * as Schema from 'effect/Schema';
-import {
-  ApplicationError,
-  type ApplicationErrorCode,
-  type CancelledError,
-  type UncertainError,
-} from './errors.ts';
-import { getDaemonErrorCode, isDaemonServiceError } from './chat-legacy-errors.ts';
+import type { CancelledError, UncertainError } from './errors.ts';
+import { isDaemonServiceError } from './error-groups.ts';
 import type { LocalHostServiceError } from './services.ts';
 
 // What the workspace file host fails with (epic #273 D14). Each error names what happened with a
 // `kind` (and the names it concerns), and builds its message from them. A field that holds text
 // the host wrote (Git's output, a path, a pattern's reason) is optional: a client drops it from an
-// error a daemon sent (D11). Until the editor reads tags (CL-14), `toWireError` gives each as the
-// `ApplicationError` code its clients have always read.
+// error a daemon sent (D11).
 
 const pathProblems = {
   'not-relative': 'Use an exact checkout-relative path without traversal, links or metadata.',
@@ -315,11 +309,14 @@ export class IncompleteCleanupError extends Schema.TaggedError<IncompleteCleanup
       : `Worktree creation failed and cleanup is incomplete${remains}. Inspect ${inspect}. ${this.failure}`;
   }
 }
-/** A recorded refusal of a request, replayed with its code and text for the same request ID. */
+/**
+ * A recorded refusal of a request, replayed with its text for the same request ID: `refusal` says
+ * which kind the original was (see `error-groups`).
+ */
 export class RecordedRefusalError extends Schema.TaggedError<RecordedRefusalError>()(
   'RecordedRefusalError',
   {
-    code: Schema.Literals(['InvalidInput', 'Unauthorized', 'Conflict', 'Incompatible']),
+    refusal: Schema.Literals(['invalid', 'unauthorized', 'conflict', 'incompatible']),
     text: Schema.String,
   },
 ) {
@@ -372,48 +369,15 @@ export const fileHostErrors = [
 /**
  * Every way a file host operation fails: the host's own errors and the shared outcomes; the
  * chat and folder errors of the daemon's chats, which Turn into project passes on; and, for a
- * host reached over a daemon link, the link's errors. `ApplicationError` stays only for desktop
- * main's local daemon composition, until it moves off it (CL-25).
+ * host reached over a daemon link, the link's errors.
  */
-export type WorkspaceHostError = FileHostError | LocalHostServiceError | ApplicationError;
+export type WorkspaceHostError = FileHostError | LocalHostServiceError;
 
-const codes: Record<Exclude<FileHostError, RecordedRefusalError>['_tag'], ApplicationErrorCode> = {
-  InvalidPathError: 'InvalidInput',
-  CheckoutAccessError: 'Unauthorized',
-  CheckoutChangedError: 'InvalidInput',
-  InvalidRequestError: 'InvalidInput',
-  InvalidBaseError: 'InvalidInput',
-  InvalidPatternError: 'InvalidInput',
-  WorkspaceConflictError: 'Conflict',
-  BranchTakenError: 'Conflict',
-  WorkspaceUnavailableError: 'Unavailable',
-  WorktreeGitError: 'Unavailable',
-  GitStatusFormatError: 'Unavailable',
-  WorkspaceUnsupportedError: 'Incompatible',
-  WorkspaceStoreError: 'Persistence',
-  UnresolvedWorkError: 'Uncertain',
-  InterruptedRequestError: 'Uncertain',
-  IncompleteCleanupError: 'Uncertain',
-  UncertainError: 'Uncertain',
-  CancelledError: 'Cancelled',
-};
-
+const fileHostTags: ReadonlySet<string> = new Set(fileHostErrors.map((error) => error.identifier));
 const isFileHostError = (value: unknown): value is FileHostError => {
   const tag = value instanceof Error ? (value as { _tag?: unknown })._tag : undefined;
-  return typeof tag === 'string' && (tag === 'RecordedRefusalError' || Object.hasOwn(codes, tag));
+  return typeof tag === 'string' && fileHostTags.has(tag);
 };
 /** Whether `value` is one of the file host's errors. */
 export const isWorkspaceHostError = (value: unknown): value is WorkspaceHostError =>
-  ApplicationError.is(value) || isFileHostError(value) || isDaemonServiceError(value);
-
-/** The legacy code a file host error has always had. */
-export const getWireCode = (error: WorkspaceHostError): ApplicationErrorCode => {
-  if (ApplicationError.is(error) || error._tag === 'RecordedRefusalError') return error.code;
-  return isFileHostError(error) ? codes[error._tag] : getDaemonErrorCode(error);
-};
-
-/** The legacy error for a file host error: the code clients have always read, and its message. */
-export function toWireError(error: WorkspaceHostError): ApplicationError {
-  if (ApplicationError.is(error)) return error;
-  return new ApplicationError({ code: getWireCode(error), message: error.message });
-}
+  isFileHostError(value) || isDaemonServiceError(value);

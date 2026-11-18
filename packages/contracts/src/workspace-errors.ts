@@ -1,15 +1,9 @@
 import * as Schema from 'effect/Schema';
-import { ApplicationError, type ApplicationErrorCode } from './errors.ts';
-import {
-  getWireCode,
-  isWorkspaceHostError,
-  type WorkspaceHostError,
-} from './workspace-host-errors.ts';
+import { isWorkspaceHostError, type WorkspaceHostError } from './workspace-host-errors.ts';
 
 // What the client-facing `WorkspaceService` fails with (epic #273 D14): the file host's errors,
 // which it passes on, and the client recovery store's own. Each names what happened and builds
-// its message from its fields. Until the editor reads tags (CL-14), `toWireError` gives each as
-// the `ApplicationError` code and text clients have always read.
+// its message from its fields.
 
 const recoveryConflicts = {
   'operation-identity': 'Operation identity changed before recovery publication.',
@@ -128,30 +122,22 @@ export type RecoveryError =
 /** Every way a `WorkspaceService` command fails: the host's errors and the recovery store's. */
 export type WorkspaceError = WorkspaceHostError | RecoveryError;
 
-const codes: Record<RecoveryError['_tag'], ApplicationErrorCode> = {
-  RecoveryConflictError: 'Conflict',
-  RecoveryPublicationError: 'Persistence',
-  InvalidRecoveryRequestError: 'InvalidInput',
-  UnreadableRecoveryError: 'InvalidInput',
-  ObserverAccessError: 'Unauthorized',
-  SaveNotSentError: 'Unavailable',
-  UnexpectedHostReplyError: 'Incompatible',
-};
+/** The recovery store's own error classes. */
+export const recoveryErrors = [
+  RecoveryConflictError,
+  RecoveryPublicationError,
+  InvalidRecoveryRequestError,
+  UnreadableRecoveryError,
+  ObserverAccessError,
+  SaveNotSentError,
+  UnexpectedHostReplyError,
+] as const;
+const recoveryTags: ReadonlySet<string> = new Set(recoveryErrors.map((error) => error.identifier));
 const isRecoveryError = (value: unknown): value is RecoveryError => {
   const tag = value instanceof Error ? (value as { _tag?: unknown })._tag : undefined;
-  return typeof tag === 'string' && Object.hasOwn(codes, tag);
+  return typeof tag === 'string' && recoveryTags.has(tag);
 };
 
 /** Whether `value` is one of the workspace's errors, the host's or the recovery store's. */
 export const isWorkspaceError = (value: unknown): value is WorkspaceError =>
   isWorkspaceHostError(value) || isRecoveryError(value);
-
-/** The wire code a workspace error is sent with. */
-export const getErrorCode = (error: WorkspaceError): ApplicationErrorCode =>
-  isRecoveryError(error) ? codes[error._tag] : getWireCode(error);
-
-/** The wire error a workspace error is sent as: the code and text clients have always seen. */
-export function toWireError(error: WorkspaceError): ApplicationError {
-  if (ApplicationError.is(error)) return error;
-  return new ApplicationError({ code: getErrorCode(error), message: error.message });
-}

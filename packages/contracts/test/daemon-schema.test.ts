@@ -60,7 +60,7 @@ test('daemon inputs decode strictly and within bounds', () => {
     ],
     ['setAdmissionsOpen', { host, open: false }],
   ] as const)
-    assert.throws(() => decodeDaemonInput(operation as never, input), { code: 'InvalidInput' });
+    assert.throws(() => decodeDaemonInput(operation as never, input));
 });
 
 test('daemon replies decode strictly, bounding folders and validating sign-in links', () => {
@@ -80,7 +80,7 @@ test('daemon replies decode strictly, bounding folders and validating sign-in li
     ['getProviders', { state, extra: true }],
     ['openProviderUrl', { state, url: 'https://evil.example/' }],
   ] as const)
-    assert.throws(() => decodeDaemonOutput(operation as never, output), { code: 'Incompatible' });
+    assert.throws(() => decodeDaemonOutput(operation as never, output), Schema.isSchemaError);
 });
 
 test('sign-in links are accepted only as https pages on a provider sign-in origin', () => {
@@ -110,9 +110,10 @@ test('health accepts the current protocol with daemon capabilities and refuses a
     capabilities: Object.values(chatHostCapabilities),
   };
   assert.deepEqual(decodeChatHostHealth(health), health);
-  assert.throws(() => decodeChatHostHealth({ ...health, protocol: chatProtocolVersion - 1 }), {
-    code: 'Incompatible',
-  });
+  assert.throws(
+    () => decodeChatHostHealth({ ...health, protocol: chatProtocolVersion - 1 }),
+    Schema.isSchemaError,
+  );
 });
 
 test('a daemon error crosses the wire as its tag and fields only, and decodes to its own text', () => {

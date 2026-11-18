@@ -1,4 +1,3 @@
-import type { ApplicationError, CommandOptions, ObservationClose } from './workspace.ts';
 import type * as Contracts from './chat-schema.ts';
 
 export const maximumChatInputBytes = 32 * 1024;
@@ -93,22 +92,3 @@ export type ChatListState = {
  * changed unseen.
  */
 export type ChatListUpdate = ChatListState & { reset: boolean };
-/** An implementation that receives untrusted data decodes and bounds every reply and snapshot. */
-export interface ChatClient {
-  command<K extends ChatCommand>(
-    operation: K,
-    input: ChatInput<K>,
-    options?: CommandOptions,
-  ): Promise<ChatOutput<K>>;
-  watch(
-    input: { target: ChatTarget },
-    receive: (snapshot: ChatSnapshot) => void,
-    onError: (error: ApplicationError) => void,
-  ): ObservationClose;
-  /** The chat list's first page and changed chats past it, again after each change. */
-  watchChatList(
-    input: { session: ChatSession },
-    receive: (update: ChatListUpdate) => void,
-    onError: (error: ApplicationError) => void,
-  ): ObservationClose;
-}
