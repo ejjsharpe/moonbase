@@ -28,7 +28,7 @@ Remote hosts run the [daemon](../../apps/daemon/README.md#remote-host) in host m
 - **Loopback.** `LoopbackConnectionLive` reads `identity.json`, `endpoint.json` and `token` on each connect as private files in a private directory, never following links (`O_NOFOLLOW`, so Node `fs` rather than the Effect `FileSystem`). A restarted daemon starts a new generation; requests bound to the old one fail. Its endpoint holds the token, so it never reaches a renderer.
 - **Clocks.** Deadlines, idle close and watch reconnect backoff (250, 500, 1000 ms) run on the Effect `Clock`.
 - **Bun.** `serveChat` runs only under Bun (`Bun.serve`, so the upgrade can be checked before it is accepted); the client side also runs on Node and in Electron.
-- **Known limit, accepted:** `Bun.serve` has no TCP connection cap or header deadline and restarts its idle timer on every byte, so a local process can hold many slow connections. The request and socket caps still hold, and the listener binds only 127.0.0.1.
+- **Known limit, accepted:** `Bun.serve` has no TCP connection cap or header deadline and restarts its idle timer on every byte, so a local process can hold many slow connections. Bun also applies one message bound to the whole listener, the workspace socket's, so it buffers an authenticated `/v3/rpc` message up to 16 MiB + 64 KiB before that socket's 256 KiB check closes it (1009). The request and socket caps still hold, and the listener binds only 127.0.0.1.
 
 ### Limits
 

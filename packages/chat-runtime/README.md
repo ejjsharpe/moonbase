@@ -25,7 +25,7 @@ Inside, `commands/` holds the `Host` (the open store and the gates every command
 - **Stop** targets only the captured submission or task. Cancelling or disconnecting a client never stops remote work.
 - **Provider sign-in** runs one flow per provider; starting one cancels another owner's. An owner unheard from for 30 minutes loses its flow, at most 64 owners hold one, and the 256 most recently released stay refused.
 - **Sign-in URLs** are checked against the providers' sign-in origins (`https://auth.openai.com`) by the daemon and again by the client, which opens them. The daemon never opens a browser.
-- **Credentials.** One file per provider, AES-256-GCM with a random nonce and the provider id authenticated, under a 256-bit key from one source: a macOS Keychain item written and read by `/usr/bin/security -i` with every command on stdin, never in arguments, or an explicit private key file (0600, owned by the user, not a symlink). An unusable source is `CredentialKeyError` and no other source is tried.
+- **Credentials.** One file per provider, AES-256-GCM with a random nonce and the provider id authenticated, under a 256-bit key from one source: a macOS Keychain item written and read by `/usr/bin/security -i` with every command on stdin, never in arguments, or an explicit private key file (0600, owned by the user, not a symlink). Like such a key file, the Keychain item is readable by any process running as the same user, through `/usr/bin/security`. An unusable source is `CredentialKeyError` and no other source is tried.
 - **Claude Code** runs the local `claude` CLI, which owns sign-in; Moonbase stores no Claude credentials, and Pi still executes every tool. Hosts close its warm workers with `closeClaudeCodeProcesses()`.
 
 ## Checks

@@ -2,7 +2,7 @@
 
 The macOS Electron app. It composes the workbench, the headless application, this profile's workspace recovery store and the chat clients. Files, Git, search, watching and local chat run in the [daemon](../daemon/README.md) over loopback; remote chat runs in the same daemon on an SSH host. Main (`src/main/main.ts`) is the privileged composition root and owns native capabilities; the sandboxed renderer receives browser-safe clients only.
 
-The renderer opens only roots chosen in the native picker, already known, listed by `listWorktrees` for an approved checkout, or adopted by main (`EditorApprovals.adoptCheckout`) for a checkout the daemon made for a chat. A path the renderer names grants nothing: Copy Path, Reveal in Finder and imports send main a checkout and relative paths, and every import passes the daemon's reserved-path check.
+The renderer opens only roots chosen in the native picker, already known, listed by `listWorktrees` for an approved checkout, or adopted by main (`EditorApprovals.adoptCheckout`) for a checkout the daemon made for a chat. Copy Path and Reveal in Finder send main a checkout and relative paths. Main gets the native picker's and the clipboard's paths itself, but a drop's absolute paths come from the renderer (`webUtils` in the preload, sent with `dropImports`), so main passes every import through the daemon's reserved-path check and the daemon refuses what it may not read.
 
 ## Main
 
@@ -59,7 +59,7 @@ The app bundles Electron and the [daemon](../daemon/README.md#build-and-package)
 - The token and endpoint stay in main. Chat travels over one RPC WebSocket and files over a separate workspace socket, so a large file never delays chat. Main's recovery store (`<user data>/workspace-v1`) keeps drafts and editor state.
 - A local chat may use only a folder the daemon approved: one chosen in the native picker, the root of a checkout the editor opened, or a worktree the daemon made for it. The daemon re-checks each folder's identity on use. **The working folder is context, not a sandbox**: tools run with your OS permissions.
 - Provider credentials stay in the daemon, encrypted under a key in the Keychain; they never reach main or the renderer.
-- Quit does not stop local agents: they keep running in the daemon. A new chat's worktree and Turn into project are made under request ids kept until the outcome is known, so a repeat after a lost reply never makes a second one.
+- Quit does not stop local agents: they keep running in the daemon. Unsaved editor work still asks first, and the document's answer to `quit` can decline it (`src/main/window-state.ts`). A new chat's worktree and Turn into project are made under request ids kept until the outcome is known, so a repeat after a lost reply never makes a second one.
 
 ## Remote chat
 
@@ -121,8 +121,8 @@ bun run --cwd apps/desktop check:package
 bun run --cwd apps/desktop test:package
 ```
 
-- Build before native tests and package before package tests. `test:native` runs the Electron specs from source (pass a spec file or `--grep`); `test:package` runs the packaged daemon smoke test and the `@packaged` specs against the package.
+- Build before native tests and package before package tests. `test:native` runs the Electron specs from source (pass a spec file or `--grep`); `test:package` runs the packaged daemon smoke test, the Playwright `packaged` project and the `native` specs tagged `@packaged` against the package.
 - `test:linux` leaves out `test/macos/`, which `test:macos` runs.
 - Native tests start the daemon's faux entry (`apps/daemon/test/faux-daemon.ts`) with the Bun `MOONBASE_TEST_BUN` names or the one on PATH, in temporary user data and repositories, and stop every daemon they left.
 - `test:browser` runs the browser demo in Chromium without Electron; set `MOONBASE_BROWSER_PORT` to isolate concurrent runs (default 4177).
-- `check:package` checks the shipped daemon files, the Bun executable and its notices against their pinned hashes. Tests inject clipboard and file-opening capabilities.
+- `check:package` compares the shipped daemon files byte for byte with the built `dist`, checks the Bun executable against its pinned SHA-256 and checks the notices carry every pinned Bun notice. Tests inject clipboard and file-opening capabilities.

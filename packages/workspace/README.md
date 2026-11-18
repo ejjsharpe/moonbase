@@ -20,19 +20,19 @@ Compose each layer once in a process root's runtime; closing it stops every oper
 
 - Only native, user-approved checkout identities grant filesystem access; path strings from clients grant nothing.
 - Root policy is re-checked on every use of an approved checkout, not only when it is opened. No root, worktree location or import source may hold or sit inside a `reserved` path (such as a daemon's token and credentials) or the host's `dataDirectory`, compared by real path. `allowRoot(real, requested)` is an optional Effect predicate; a refusal, failure or defect denies with `CheckoutAccessError` (`outside-policy`).
-- The host journals each save and operation by `(installationId, clientId, requestId)` and replays the recorded outcome for a repeated ID. An interrupted one is settled from the disk, never repeated: a save is `saved` if the disk holds its text, else `conflict`; an operation item is `completed` if the disk shows its effect, else `failed`.
+- The host journals each save and operation by `(installationId, clientId, requestId)` and replays the recorded outcome for a repeated ID. An interrupted one is settled from the disk, never repeated: a save is `saved` if the disk holds its text, else `conflict`, and stays `uncertain` if the file can't be read; an operation item is `completed` if the disk shows its effect, else `failed`.
 - Journal entries stay until their client acknowledges them (`acknowledgeSave`, `acknowledgeOperation`), then for `journalRetentionMs` (7 days by default). A status asked for an unseen request ID retires that ID, so a delayed copy is refused.
 - The client records a save or operation intent before sending it and applies the reply in one local transaction. A lost reply is never resent as new work: the client asks the host for the outcome, and a request the host never saw is repeated under a new ID.
 - The client recovery store is the only writer of recovery. Edits (`openTab`, `closeTab`, `updateDraft`, `updateLayout`) name buffers, apply one at a time in arrival order, and return once committed; drafts are never discarded by a save or operation outcome.
 - Completed moves, copies and Trash enter the host's operation feed (`listOperations`, paged per checkout), which `loadRecovery` reads so another client's move re-paths a draft.
 - A folder in no Git repository opens as a plain-folder checkout (`vcs: 'none'`); a folder inside a repository but not at its top is refused.
 - `createChatWorktree` derives the worktree's location (`<main worktree>-worktrees/<branch>`), so a client never names where directories are made.
-- `createWorktree`, `initializeRepository`, `createChatWorktree` and `turnChatIntoProject` are journalled by request ID like saves; a refusal replays as `RecordedRefusalError`.
+- `createWorktree`, `initializeRepository`, `createChatWorktree` and `turnChatIntoProject` are journalled by request ID like saves. A success or a deterministic refusal (refused as given, an access refusal, a conflict or incompatible) replays for the ID, the refusal as `RecordedRefusalError`; a cancelled, unavailable or unknown failure releases the ID, so a retry under it runs again.
 - Trash never falls back to permanent deletion. Replacing an existing file requires naming it in `replacements`, and the old one goes to Trash.
 - Saves are version-checked against the file's content version.
 - Helper processes run in their own process group. Stopping one sends SIGTERM, then SIGKILL after 2 seconds, and waits for the group to exit.
 - Files must be UTF-8 text up to 2 MiB. Filesystem changes and SQLite commits are not one atomic transaction.
-- `captureImports` accepts only paths from a native picker or drop, never a renderer's. Its sources are held to `reserved` only, so a host-mode daemon sets `nativeImports: false`.
+- `captureImports` can't tell where a path came from, so its caller must pass only paths from a native picker or drop. Its sources are held to `reserved` only, so a host-mode daemon sets `nativeImports: false`.
 - The file host opens only on macOS under exactly Bun 1.4.4 and is otherwise refused with `WorkspaceUnsupportedError` (`runtime`). Without the Xcode command-line tools Git fails with `WorkspaceUnavailableError` (`git-tools`), and the installer prompt is never triggered.
 
 ## Checks

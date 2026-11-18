@@ -6,7 +6,7 @@
 
 | Export | Gives |
 | --- | --- |
-| `.` | `MoonbaseApplication`, `ChatHost`, `makeApplicationAtoms`, the application snapshot and `ApplicationLifecycleError`, and `PlaceNavigation` (back and forward through chats and project files) |
+| `.` | `MoonbaseApplication`, `ChatHost`, `makeApplicationAtoms`, the application snapshot, `ApplicationLifecycleError` and `describeApplicationFailure`, and `PlaceNavigation` (back and forward through chats and project files) |
 | `./editor` | The editor's services, `editorLayer`, `EditorLoader`, `makeEditorAtoms`, `EditorSnapshot`, `EditorError` and `describeEditorFailure` |
 | `./chat` | The chat's services, `chatLayer`, its ports, `getChatAtoms`, `readChatState`, the transcript and its atoms, the composer, native actions, `ChatRefusedError`, `DraftStorageError` and `describeChatFailure` |
 | `./testing/faux-workspace` | `fauxWorkspace`: an in-memory `WorkspaceService` for tests and demos |
@@ -56,7 +56,7 @@ Authority and liveness:
 Errors (D14) and host text (D11):
 
 - The editor fails with `EditorError` (a `reason`) or the workspace's tagged errors; the chat with `ChatRefusedError`, `DraftStorageError`, `TranscriptReadError`, a host's contract errors or IPC's.
-- `describeEditorFailure` and `describeChatFailure` are the only places a failure becomes shown text, built from fixed text and fields. A host's own words never reach the screen; anything unknown shows fixed text.
+- `describeEditorFailure`, `describeChatFailure` and `describeApplicationFailure` are the only places a failure becomes shown text, built from fixed text and fields. A host's own words never reach the screen; anything unknown shows fixed text.
 - `EditorAlerts.report` shows a string as it is, so pass a string only for copy Moonbase wrote.
 - Decide on what a failure means through `@moonbase/contracts/error-groups` (the chat's `isChatUnavailable` and `isChatConflict` add its own reasons), never by matching a code or message.
 
