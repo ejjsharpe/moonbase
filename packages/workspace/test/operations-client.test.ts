@@ -253,12 +253,12 @@ for (const kind of ['move', 'trash'] as const)
     const binary = fileURLToPath(new URL('../dist/filesystem', import.meta.url));
     const helper = join(f.base, 'lose-response'),
       countFile = join(f.base, 'count'),
-      receipt = join(f.base, 'trash-receipt');
+      trashLog = join(f.base, 'trash-log');
     // Only this controlled helper drops a response after calling the actual production native binary.
     const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
     writeFileSync(
       helper,
-      `#!/bin/sh\nif [ "$1" = ${quote(kind)} ]; then\n  printf 'called\\n' >> ${quote(countFile)}\n  ${quote(binary)} "$@" > ${quote(receipt)}\n  status=$?\n  if [ "$status" -ne 0 ]; then exit "$status"; fi\n  kill -KILL $$\nfi\nexec ${quote(binary)} "$@"\n`,
+      `#!/bin/sh\nif [ "$1" = ${quote(kind)} ]; then\n  printf 'called\\n' >> ${quote(countFile)}\n  ${quote(binary)} "$@" > ${quote(trashLog)}\n  status=$?\n  if [ "$status" -ne 0 ]; then exit "$status"; fi\n  kill -KILL $$\nfi\nexec ${quote(binary)} "$@"\n`,
     );
     chmodSync(helper, 0o700);
     const runtime = ManagedRuntime.make(
@@ -307,8 +307,8 @@ for (const kind of ['move', 'trash'] as const)
       }
     } finally {
       await runtime.dispose();
-      if (kind === 'trash' && existsSync(receipt)) {
-        const trashed = readFileSync(receipt, 'utf8');
+      if (kind === 'trash' && existsSync(trashLog)) {
+        const trashed = readFileSync(trashLog, 'utf8');
         if (trashed.includes('/.Trash/') && existsSync(trashed)) {
           assert.equal(readFileSync(trashed, 'utf8'), 'disk bytes');
           rmSync(trashed);

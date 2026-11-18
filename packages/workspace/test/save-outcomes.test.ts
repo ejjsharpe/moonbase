@@ -88,11 +88,11 @@ test('concurrent lost-move reconciliation writes the recovery once and acknowled
         current.client.command('loadRecovery', { clientId: 'alice' }),
       ]),
     );
-    const receipt = await current.client.command('operationStatus', {
+    const status = await current.client.command('operationStatus', {
       clientId: 'alice',
       id: 'lost',
     });
-    assert.equal(receipt?.outcome, 'completed');
+    assert.equal(status?.outcome, 'completed');
     await current.client.command('acknowledgeOperation', {
       clientId: 'alice',
       operationClientId: 'alice',
@@ -100,7 +100,7 @@ test('concurrent lost-move reconciliation writes the recovery once and acknowled
     });
     assert.deepEqual(
       await current.client.command('operationStatus', { clientId: 'alice', id: 'lost' }),
-      receipt,
+      status,
     );
     assert.equal(readFileSync(count, 'utf8'), 'effect\n');
   } finally {
