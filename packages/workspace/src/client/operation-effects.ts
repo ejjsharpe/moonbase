@@ -14,7 +14,7 @@ import type { OperationRecord } from './client-schema.ts';
  * stays where it was. Returns the drafts left behind, per checkout, and the IDs of the clean
  * buffers that gave way.
  */
-export function reconcile(
+export function applyOperationEffects(
   state: RecoveryState,
   records: OperationRecord[],
   mintId: () => string = randomUUID,

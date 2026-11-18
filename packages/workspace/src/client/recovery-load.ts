@@ -11,7 +11,7 @@ import {
   markOperationAcknowledged,
   recordOperationOutcome,
   resolveOperation,
-} from './operation-recovery.ts';
+} from './operation-outcomes.ts';
 import {
   operationKey,
   saveKey,
@@ -19,7 +19,7 @@ import {
   type HostPorts,
   type RecoveryContext,
 } from './recovery-context.ts';
-import { acknowledgeSaves, applySaveStatus, recordSaveOutcomes } from './save-recovery.ts';
+import { acknowledgeSaves, applySaveStatus, recordSaveOutcomes } from './save-outcomes.ts';
 
 /** Ports whose every call ends by `deadline`: one made after it fails at once. */
 function boundedHost(host: HostPorts, deadline: number): HostPorts {

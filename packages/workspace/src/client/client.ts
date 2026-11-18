@@ -40,14 +40,14 @@ import {
   markOperationAcknowledged,
   recordOperationOutcome,
   replayOperation,
-} from './operation-recovery.ts';
+} from './operation-outcomes.ts';
 import { RecoveryContext, type HostPorts, type Recoveries } from './recovery-context.ts';
 import { makeRecoveryEdits } from './recovery-edits.ts';
 import { makeKeyedLock } from '../keyed-lock.ts';
 import { makeSharedCalls } from '../shared-calls.ts';
 import { loadRecovery } from './recovery-load.ts';
 import { makeRecoveryOutlines } from './recovery-outlines.ts';
-import { acknowledgeSaves, getBaseline, recordSaveOutcomes, replaySave } from './save-recovery.ts';
+import { acknowledgeSaves, getBaseline, recordSaveOutcomes, replaySave } from './save-outcomes.ts';
 
 /**
  * The host as the recovery asks it. `cancellable` calls stop when their caller cancels; the

@@ -6,7 +6,7 @@ import { attempt } from '../attempt.ts';
 import { canonical, errorText, key } from '../validation.ts';
 import type { FeedCursor, FeedGap, OperationRecord, SaveRecord } from './client-schema.ts';
 import type { StoredRecovery } from './client-store.ts';
-import { applyOperations, keepFailedOutcome } from './operation-recovery.ts';
+import { applyOperations, keepFailedOutcome } from './operation-outcomes.ts';
 import { feedKey, type RecoveryContext } from './recovery-context.ts';
 
 /**

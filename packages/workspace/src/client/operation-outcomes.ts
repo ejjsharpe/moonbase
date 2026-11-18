@@ -17,7 +17,7 @@ import {
 import { attempt, type WorkspaceFailure } from '../attempt.ts';
 import { canonical, errorText, isOriginalResult, key, same } from '../validation.ts';
 import type { OperationRecord } from './client-schema.ts';
-import { reconcile } from './reconcile.ts';
+import { applyOperationEffects } from './operation-effects.ts';
 import type { RecoveryContext } from './recovery-context.ts';
 
 type MergedOperation = {
@@ -215,7 +215,7 @@ export function applyOperations(
     let revision = current;
     const fresh = relevant.filter((m) => m.fresh.length);
     if (fresh.length) {
-      const { collisions, replaced } = reconcile(
+      const { collisions, replaced } = applyOperationEffects(
         state,
         fresh.map((m) => ({ ...m.updated, result: { ...m.updated.result, items: m.fresh } })),
       );
