@@ -1,29 +1,30 @@
-import { findSelectedChat, type ChatState } from '@moonbase/application/chat';
-import type { DesktopChat } from './desktop-chat.ts';
+import type { ChatSnapshot, ChatTarget } from '@moonbase/contracts/chat';
 
-/** Whether the controller is running the action named `id` (`send`, `stop`, `settle`…). */
-export const isBusy = (state: Pick<ChatState, 'active'>, id: string) => state.active.includes(id);
+/** Whether the chat is running the action named `id` (`send`, `stop`, `settle`…). */
+export const isBusy = (active: readonly string[], id: string) => active.includes(id);
 
 /** Whether the open chat is settled, or null while it can't be settled or unsettled. */
-export function readOpenSettled(state: ChatState) {
-  const chat = findSelectedChat(state);
-  return state.selected && chat && state.ready && !isBusy(state, 'settle')
-    ? chat.settledAt !== undefined
+export function readOpenSettled(open: {
+  selected: ChatTarget | null;
+  chat: { settledAt?: string } | undefined;
+  ready: boolean;
+  active: readonly string[];
+}) {
+  return open.selected && open.chat && open.ready && !isBusy(open.active, 'settle')
+    ? open.chat.settledAt !== undefined
     : null;
 }
 
-/** Settles or unsettles the open chat. */
-export function settleOpenChat(controller: DesktopChat, state: ChatState, settled: boolean) {
-  if (state.selected) void controller.settle(state.selected, settled);
-}
-
 /** The open chat's title, and its folder and model for the title's hover text. */
-export function describeOpenChat(state: ChatState) {
+export function describeOpenChat(open: {
+  selected: ChatTarget | null;
+  snapshot: ChatSnapshot | null;
+}) {
   let title = 'New chat';
-  if (state.selected) title = 'Saved chat selected';
-  if (state.snapshot) title = state.snapshot.conversation.title;
-  const context = state.snapshot
-    ? `${state.snapshot.conversation.cwd} · ${state.snapshot.conversation.model}`
+  if (open.selected) title = 'Saved chat selected';
+  if (open.snapshot) title = open.snapshot.conversation.title;
+  const context = open.snapshot
+    ? `${open.snapshot.conversation.cwd} · ${open.snapshot.conversation.model}`
     : 'Each conversation retains its working folder and model.';
   return { title, context };
 }

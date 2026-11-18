@@ -1,12 +1,14 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect } from 'react';
+import * as Atom from 'effect/reactivity/Atom';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { useAtomValue } from '@effect/atom-react';
-import { Effect } from 'effect';
+import { type Context, Effect } from 'effect';
 import { findStep, type Place } from '@moonbase/application';
+import { getChatAtoms, type ChatServices } from '@moonbase/application/chat';
+import type { ChatTarget } from '@moonbase/contracts/chat';
 import type { DesktopApplication } from './desktop-application.ts';
-import type { DesktopChat } from '../chat/desktop-chat.ts';
 
-const noSubscription = () => () => {};
+const noChat = Atom.make<ChatTarget | null>(null);
 
 /**
  * Back and forward through the places the window has shown: a chat in Agents, or a project and
@@ -23,7 +25,8 @@ export function usePlaceHistory({
   report,
 }: {
   application: DesktopApplication;
-  chat: DesktopChat | null;
+  /** The open chat's services, or null while no chat is open. */
+  chat: Context.Context<ChatServices> | null;
   /** The project showing, absent while Agents shows. */
   project: CheckoutTarget | undefined;
   activePath: string | null | undefined;
@@ -31,10 +34,7 @@ export function usePlaceHistory({
   show(place: Place): Promise<void>;
   report(error: unknown): void;
 }) {
-  const chatSelected = useSyncExternalStore(
-    chat?.subscribe ?? noSubscription,
-    () => chat?.getSnapshot().selected ?? null,
-  );
+  const chatSelected = useAtomValue(chat ? getChatAtoms(chat).selected : noChat);
   let place: Place | null = null;
   if (!project) place = chat ? { kind: 'chat', chat: chatSelected } : null;
   else place = { kind: 'project', checkoutId: project.checkoutId, path: activePath || null };

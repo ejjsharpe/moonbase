@@ -153,6 +153,28 @@ test('cloned live-only DTOs preserve summary/part/cache identity and unrelated r
   assert(f.publications > publications);
 });
 
+test("Load more parts reads a source's first manifest page and then its next, but not past a failed one", async (t) => {
+  const f = await transcriptHarness(t, 2);
+  const [first, second] = [f.entries[0], f.entries[1]].map((entry) => entry.transcript!.source);
+  f.sources.set(JSON.stringify(first), {
+    source: first,
+    data: Array.from({ length: 70 }, (_, i) => 'part-' + i),
+  });
+  await f.transcript.loadMoreParts(first);
+  assert.equal(f.state.manifest!.parts.length, 64, 'its first page, then the next');
+  await f.transcript.loadMoreParts(first);
+  assert.equal(f.state.manifest!.parts.length, 70);
+  // Another row's source replaces the manifest; its failed first page is not read again at once.
+  let reads = 0;
+  f.handlers.set('getChatTranscriptContent', async () => {
+    reads++;
+    throw new ApplicationError({ code: 'Unavailable', message: 'held network failed' });
+  });
+  await f.transcript.loadMoreParts(second);
+  assert.equal(reads, 1);
+  assert.equal(f.state.manifest!.status, 'error');
+});
+
 test('selected manifest hydration advances and retries errors; content validates exact echoes and offsets', async (t) => {
   const f = await transcriptHarness(t, 1);
   const source = f.entries[0].transcript!.source;

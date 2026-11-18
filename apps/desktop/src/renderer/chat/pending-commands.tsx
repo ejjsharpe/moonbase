@@ -1,29 +1,31 @@
+import { Context } from 'effect';
+import { useAtomValue } from '@effect/atom-react';
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { colors, space, type } from '@moonbase/ui/tokens.stylex';
-import type { ChatState } from '@moonbase/application/chat';
+import { ChatSends } from '@moonbase/application/chat';
 import { effortLabels } from './model-choice.ts';
 import { isBusy } from './open-chat.ts';
-import type { DesktopChat } from './desktop-chat.ts';
+import { useChat } from './chat-context.ts';
 
 /**
  * Commands whose outcome the host never confirmed, kept with their identities: each can be
  * queried, or retried under the same identity, so it never runs twice.
  */
-export function PendingCommands({
-  controller,
-  state,
-}: {
-  controller: DesktopChat;
-  state: ChatState;
-}) {
-  if (!state.pending.length) return null;
-  const connected = state.ready;
+export function PendingCommands() {
+  const { atoms, services, act } = useChat();
+  const sends = Context.get(services, ChatSends);
+  const pending = useAtomValue(atoms.pending);
+  const connected = useAtomValue(atoms.ready);
+  const active = useAtomValue(atoms.active);
+  const dispatching = useAtomValue(atoms.dispatching);
+  const storageError = useAtomValue(atoms.storageError);
+  if (!pending.length) return null;
   return (
     <section aria-label="Retained commands" {...stylex.props(styles.pending)}>
       <h3 {...stylex.props(styles.label)}>Retained command identities</h3>
-      {state.pending.map((p) => {
+      {pending.map((p) => {
         let identity = '';
         if (p.operation === 'sendChat') identity = ` · chat ${p.input.target.conversationId}`;
         else if (p.operation === 'stopChat')
@@ -60,8 +62,8 @@ export function PendingCommands({
             <div {...stylex.props(controls.row)}>
               <Button
                 {...stylex.props(controls.button)}
-                disabled={!connected || isBusy(state, 'query:' + p.input.requestId)}
-                onClick={() => void controller.query(p.input.requestId)}>
+                disabled={!connected || isBusy(active, 'query:' + p.input.requestId)}
+                onClick={() => void act(sends.query(p.input.requestId))}>
                 Query outcome
               </Button>
               <Button
@@ -69,11 +71,11 @@ export function PendingCommands({
                 // A request still in flight is never sent alongside itself, so Retry waits for it.
                 disabled={
                   !connected ||
-                  isBusy(state, p.input.requestId) ||
-                  state.dispatching.includes(p.input.requestId) ||
-                  !!state.storageError
+                  isBusy(active, p.input.requestId) ||
+                  dispatching.includes(p.input.requestId) ||
+                  !!storageError
                 }
-                onClick={() => void controller.retry(p.input.requestId)}>
+                onClick={() => void act(sends.retry(p.input.requestId))}>
                 Retry original{' '}
                 {{ stopChat: 'Stop', sendChat: 'Send', createChat: 'Create' }[p.operation]}
               </Button>

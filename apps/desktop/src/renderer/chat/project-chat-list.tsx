@@ -1,36 +1,37 @@
+import { Context } from 'effect';
+import { useAtomValue } from '@effect/atom-react';
 import { Button } from '@base-ui/react/button';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { Icon } from '@moonbase/ui/icons';
 import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
-import type { ChatState } from '@moonbase/application/chat';
+import { ChatSelection } from '@moonbase/application/chat';
 import type { ChatSummary } from '@moonbase/contracts/chat';
 import { getChatPlace } from './folder.ts';
 import { DockButtons, dockHeaderStyles } from './chat-header.tsx';
 import { isBusy } from './open-chat.ts';
 import type { ChatDock } from './chat-view.tsx';
-import type { DesktopChat } from './desktop-chat.ts';
+import { useChat } from './chat-context.ts';
 
 /** The project dock's list of the project's chats, with New chat and the dock's own buttons. */
 export function ProjectChatList({
-  controller,
-  state,
   dock,
   chats,
   onChoose,
   onNewChat,
 }: {
-  controller: DesktopChat;
-  state: ChatState;
   dock: ChatDock;
   /** The chats in the project's folders. */
   chats: readonly ChatSummary[];
   onChoose(chat: ChatSummary): void;
   onNewChat(): void;
 }) {
-  const connected = state.ready,
-    busy = (id: string) => isBusy(state, id);
+  const { atoms, services, act } = useChat();
+  const connected = useAtomValue(atoms.ready);
+  const active = useAtomValue(atoms.active);
+  const selected = useAtomValue(atoms.selected);
+  const busy = (id: string) => isBusy(active, id);
   return (
     <section aria-label={`${dock.project} chats`} {...stylex.props(styles.list)}>
       <header {...stylex.props(workbench.paneHeader, dockHeaderStyles.header)}>
@@ -57,17 +58,17 @@ export function ProjectChatList({
             chats.map((c) => (
               <Button
                 key={c.target.conversationId}
-                aria-pressed={state.selected?.conversationId === c.target.conversationId}
+                aria-pressed={selected?.conversationId === c.target.conversationId}
                 {...stylex.props(
                   controls.button,
                   controls.listButton,
                   styles.chat,
-                  state.selected?.conversationId === c.target.conversationId && styles.selected,
+                  selected?.conversationId === c.target.conversationId && styles.selected,
                 )}
                 disabled={!connected || busy('open')}
                 onClick={() => {
                   onChoose(c);
-                  void controller.select(c.target);
+                  void act(Context.get(services, ChatSelection).select(c.target));
                 }}>
                 <span aria-hidden="true" {...stylex.props(styles.chatDot)} />
                 <span {...stylex.props(styles.chatSummary)}>

@@ -16,6 +16,7 @@ import type {
   ChatSnapshot,
   ChatSummary,
   ChatTarget,
+  ChatTranscriptMatch,
   ChatTranscriptSelection,
   ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
@@ -89,6 +90,16 @@ export type ChatSelectionShape = {
     source: ChatTranscriptSource,
     restart?: boolean,
   ) => Effect.Effect<void>;
+  /** A row's Load more parts (`Transcript.loadMoreParts`). */
+  readonly loadMoreTranscriptParts: (source: ChatTranscriptSource) => Effect.Effect<void>;
+  /**
+   * Reads `source`'s manifest again from its start (`Transcript.replayManifest`); true if `match`
+   * is still Find's active match once it has read, false if no transcript read it.
+   */
+  readonly replayTranscriptManifest: (
+    source: ChatTranscriptSource,
+    match: ChatTranscriptMatch | null,
+  ) => Effect.Effect<boolean>;
   readonly loadTranscriptPart: (
     source: ChatTranscriptSource,
     selection: ChatTranscriptSelection,
@@ -229,12 +240,17 @@ export class ChatSelection extends Context.Service<ChatSelection, ChatSelectionS
           );
         });
 
-      const withTranscript = <E>(work: (transcript: Transcript) => Effect.Effect<void, E>) =>
+      /** Runs `work` on the open chat's transcript while the chat accepts actions. */
+      const onTranscript = <A, E>(
+        work: (transcript: Transcript) => Effect.Effect<A, E>,
+      ): Effect.Effect<A | undefined, E> =>
         Effect.gen(function* () {
-          if (!(yield* actions.accepting)) return;
+          if (!(yield* actions.accepting)) return undefined;
           const current = (yield* SubscriptionRef.get(state)).open;
-          if (current) yield* work(current.transcript);
+          return current ? yield* work(current.transcript) : undefined;
         });
+      const withTranscript = <E>(work: (transcript: Transcript) => Effect.Effect<void, E>) =>
+        Effect.asVoid(onTranscript(work));
 
       return {
         state,
@@ -296,6 +312,12 @@ export class ChatSelection extends Context.Service<ChatSelection, ChatSelectionS
           }),
         loadTranscriptManifest: (source, restart) =>
           withTranscript((t) => t.loadManifest(source, restart)),
+        loadMoreTranscriptParts: (source) => withTranscript((t) => t.loadMoreParts(source)),
+        replayTranscriptManifest: (source, match) =>
+          Effect.map(
+            onTranscript((t) => t.replayManifest(source, match)),
+            (still) => !!still,
+          ),
         loadTranscriptPart: (source, selection, restart) =>
           withTranscript((t) => t.loadPart(source, selection, restart)),
       } satisfies ChatSelectionShape;

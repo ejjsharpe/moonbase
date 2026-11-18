@@ -10,8 +10,8 @@ export type ActionsState = {
   closing: boolean;
 };
 
-/** The named actions running, in the order they started. */
-export const listActive = (state: ActionsState) => Object.keys(state.counts);
+/** The named actions running, in the order they started; none while the chat closes. */
+export const listActive = (state: ActionsState) => (state.closing ? [] : Object.keys(state.counts));
 
 /** `counts` with one more (or one fewer) `name` running. */
 export function countAction(

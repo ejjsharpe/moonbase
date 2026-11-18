@@ -17,7 +17,7 @@ import type { CommandInput, CommandOutput, WorkspaceCommand } from '@moonbase/co
 import { makeEditorActions, makeWorkbenchEditor } from '@moonbase/workbench';
 import { DesktopShell, type DesktopShellHandle } from '../src/renderer/shell/desktop-shell.tsx';
 import type { DesktopApplication } from '../src/renderer/shell/desktop-application.ts';
-import { getDesktopChat } from '../src/renderer/chat/desktop-chat.ts';
+import { driveChat } from '@moonbase/application/testing/chat-fixture';
 import { configureMonacoWorkers } from '@moonbase/workbench/workers';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
@@ -376,10 +376,10 @@ if (transcriptDemo && longTranscript !== null)
   await transcriptDemo.long(Number(longTranscript) || undefined);
 if (transcriptDemo && new URLSearchParams(location.search).has('reading')) {
   const services = (await firstWindow.application.run(firstApplication.chat.open))!;
-  const opened = getDesktopChat(services, firstWindow.application, registry);
+  const opened = driveChat(firstWindow.runtime, services);
   await opened.start();
   await opened.select(chat.target);
-  opened.setTranscriptView({
+  await opened.setTranscriptView({
     anchor: { key: 'entry:reading-179', offset: 0 },
     expanded: [],
   });
@@ -398,10 +398,10 @@ createRoot(document.getElementById('root')!).render(
 /** The first window's application, as the browser tests read and drive it. */
 const application = {
   service: firstApplication,
-  /** The chat it shows now, as its views use it. */
+  /** The chat it shows now, as a test reads and drives it. */
   get chat() {
     const services = registry.get(firstWindow.application.atoms.chat);
-    return services && getDesktopChat(services, firstWindow.application, registry);
+    return services && driveChat(firstWindow.runtime, services);
   },
   getSnapshot: () => registry.get(firstWindow.application.atoms.snapshot),
   canUnload: () => firstWindow.runtime.runSync(firstApplication.canUnload),

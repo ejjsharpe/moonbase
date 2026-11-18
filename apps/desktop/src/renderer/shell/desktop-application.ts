@@ -1,12 +1,13 @@
 import { useContext, useMemo } from 'react';
 import type { Effect } from 'effect';
+import type * as Atom from 'effect/reactivity/Atom';
 import { RegistryContext, useAtomValue } from '@effect/atom-react';
 import {
   describeApplicationFailure,
   type ApplicationAtoms,
   type MoonbaseApplicationShape,
 } from '@moonbase/application';
-import { getDesktopChat } from '../chat/desktop-chat.ts';
+import { getChatAtoms, type ChatAtoms } from '@moonbase/application/chat';
 
 /** The application as the shell uses it: its service, atoms over it, and the root's runners. */
 export type DesktopApplication = {
@@ -27,20 +28,18 @@ export type DesktopRunner = Pick<DesktopApplication, 'run' | 'runSync'>;
 export function useDesktopApplication(application: DesktopApplication) {
   const registry = useContext(RegistryContext);
   const lifecycle = useAtomValue(application.atoms.snapshot);
-  const services = useAtomValue(application.atoms.chat);
-  const chat = useMemo(
-    () => services && getDesktopChat(services, application, registry),
-    [services, application, registry],
-  );
+  /** The open chat's services, or null while no chat is open. */
+  const chat = useAtomValue(application.atoms.chat);
   const composer = useAtomValue(application.atoms.composer);
   const actions = useMemo(() => {
     const { service, run, runSync } = application;
     return {
       /** The lifecycle now, for a callback. */
       getSnapshot: () => registry.get(application.atoms.snapshot),
-      getChat: () => {
-        const current = registry.get(application.atoms.chat);
-        return current && getDesktopChat(current, application, registry);
+      /** One of the open chat's atoms now, for a callback; undefined while no chat is open. */
+      readChat: <A>(select: (atoms: ChatAtoms) => Atom.Atom<A>): A | undefined => {
+        const services = registry.get(application.atoms.chat);
+        return services ? registry.get(select(getChatAtoms(services))) : undefined;
       },
       openChat: () => run(service.chat.open),
       /** Closes the chat if its drafts are kept; false when it can't close now. */
