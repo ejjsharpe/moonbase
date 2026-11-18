@@ -39,7 +39,8 @@ const effectNativeEdges: { files: string[]; allow: string[]; reason: string }[] 
       'apps/desktop/src/renderer/chat/transcript/transcript-actions.ts',
     ],
     allow: ['runner.runSync'],
-    reason: "DOM event handlers make synchronous service updates on the renderer root's runner.",
+    reason:
+      "DOM event handlers, and an effect cancelling a transcript's actions, make synchronous service updates on the renderer root's runner.",
   },
   {
     files: ['packages/workbench/src/files-tree/use-drop-target.ts'],

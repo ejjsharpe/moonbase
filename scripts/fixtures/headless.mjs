@@ -1,10 +1,11 @@
-// Public-entry smoke fixture: retain executable factories in the emitted browser graph.
+// Public-entry smoke fixture: retain executable factories in the emitted browser graph. It is
+// JavaScript so esbuild fails on a re-export that no longer exists; from TypeScript it would
+// assume a type and drop it silently.
 export {
   chatLayer,
-  makeChatAtoms,
+  getChatAtoms,
   readChatState,
-  iterateTranscriptSource,
-  makeTranscriptReader,
+  streamTranscriptSource,
 } from '@moonbase/application/chat';
 export { editorLayer, makeEditorAtoms } from '@moonbase/application/editor';
 export { makeChatClient } from '@moonbase/application/chat/clients';
