@@ -65,20 +65,29 @@ export class ChatActions extends Context.Service<ChatActions, ChatActionsShape>(
         state,
         accepting,
         run: (name, work, options) =>
-          Effect.gen(function* () {
-            // Admission and counting are one step, so two calls can't both pass the check.
-            const admitted = yield* SubscriptionRef.modify(state, (s) =>
-              !s.admissionsOpen || s.closing || ((options?.duplicate ?? true) && s.counts[name])
-                ? [false, s]
-                : [true, { ...s, counts: countAction(s.counts, name, 1), error: null }],
-            );
-            if (!admitted) return;
-            const fiber = yield* FiberSet.run(fibers, work, { startImmediately: true });
-            const exit = yield* Fiber.await(fiber);
-            yield* settle(name);
-            if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause))
-              yield* report(Cause.squash(exit.cause));
-          }).pipe(Effect.uninterruptible),
+          // Admission, counting and starting the work are one protected step; the work settles its
+          // own bookkeeping, so a caller that stops waiting (a closing view) leaves it to the chat.
+          Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              // Admission and counting are one step, so two calls can't both pass the check.
+              const admitted = yield* SubscriptionRef.modify(state, (s) =>
+                !s.admissionsOpen || s.closing || ((options?.duplicate ?? true) && s.counts[name])
+                  ? [false, s]
+                  : [true, { ...s, counts: countAction(s.counts, name, 1), error: null }],
+              );
+              if (!admitted) return;
+              const settled = Effect.onExit(work, (exit) =>
+                Effect.andThen(
+                  settle(name),
+                  Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
+                    ? report(Cause.squash(exit.cause))
+                    : Effect.void,
+                ),
+              );
+              const fiber = yield* FiberSet.run(fibers, settled, { startImmediately: true });
+              yield* restore(Fiber.await(fiber));
+            }),
+          ),
         fork: (work) =>
           FiberSet.run(fibers, work.pipe(Effect.ignore), { startImmediately: true }).pipe(
             Effect.asVoid,

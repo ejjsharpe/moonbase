@@ -330,7 +330,11 @@ for (const operation of ['createChat', 'sendChat'] as const)
         ? { requestId: input.requestId, conversation: summary }
         : admitted(input);
     });
-    const call = begin(f, operation);
+    // A Send the composer started is the chat's own work: closing never waits for its reply.
+    const call =
+      operation === 'sendChat'
+        ? f.runtime.runPromise(f.composer().send({ key: 'chat', initialCwd: '' }, {}))
+        : begin(f, operation);
     await waitFor(() => f.count(operation) === 1);
     const pending = await pendingOf(f);
     const kept = f.storage.value,

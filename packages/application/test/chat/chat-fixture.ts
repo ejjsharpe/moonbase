@@ -14,12 +14,14 @@ import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import type { ProviderState } from '@moonbase/contracts/providers';
 import {
   ChatActions,
+  ChatComposers,
   ChatConnection,
   ChatDrafts,
   ChatList,
   ChatSelection,
   ChatSends,
   chatLayer,
+  makeComposerChat,
   readChatState,
   type ChatDependencies,
   type ChatPort,
@@ -261,7 +263,14 @@ export async function chatFixture(
     const services = await runtime.runPromise(
       Layer.buildWithScope(chatLayer(dependencies(overrides)), scope),
     );
-    return { scope, services };
+    // Made after the chat in its scope, as `ChatHost` does, so it closes first.
+    const composer = await runtime.runPromise(
+      Effect.flatMap(ChatComposers, (composers) => composers.make(makeComposerChat(services))).pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provide(ChatComposers.layer),
+      ),
+    );
+    return { scope, services, composer };
   };
   let current = await open();
   const closed = new Set<Scope.Closeable>();
@@ -279,6 +288,8 @@ export async function chatFixture(
   const run = <A, E = never>(effect: Effect.Effect<A, E, ChatServices>): Promise<A> =>
     runtime.runPromise(Effect.provideContext(effect, current.services));
   const service = <I, S>(tag: Context.Key<I, S>) => Context.get(current.services as never, tag);
+  /** The chat's composer, made in its scope beside it. */
+  const composer = () => current.composer;
 
   /** The chat's actions, as a view calls them; each resolves when the action settles. */
   const actions = {
@@ -314,6 +325,7 @@ export async function chatFixture(
     ...actions,
     run,
     service,
+    composer,
     runtime,
     storage,
     calls,
