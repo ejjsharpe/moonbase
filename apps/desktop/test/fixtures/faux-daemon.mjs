@@ -132,20 +132,32 @@ export async function readFauxCalls(directory) {
 
 /**
  * The faux daemon `command`, held back until the folder `gate` holds `start`; it exits at once,
- * failing to start, while `gate` holds `fail`.
+ * failing to start, while `gate` holds `fail`. Each start adds its process ID to `gate/starts`,
+ * and while `gate` holds `group` it first starts a member of its process group, whose ID it adds
+ * to `gate/members`, that outlives it unless the group is stopped.
  */
-function gateDaemonCommand(command, gate) {
+export function gateDaemonCommand(command, gate) {
   const quote = (value) => `'${value.replaceAll("'", `'\\''`)}'`;
+  const file = (name) => quote(join(gate, name));
   return {
     ...command,
     command: '/bin/sh',
     args: [
       '-c',
-      `while [ ! -e ${quote(join(gate, 'start'))} ]; do [ -e ${quote(join(gate, 'fail'))} ] && exit 1; sleep 0.05; done; exec "$0" "$@"`,
+      `echo $$ >> ${file('starts')}; if [ -e ${file('group')} ]; then sleep 60 & echo $! >> ${file('members')}; fi; while [ ! -e ${file('start')} ]; do [ -e ${file('fail')} ] && exit 1; sleep 0.05; done; exec "$0" "$@"`,
       command.command,
       ...command.args,
     ],
   };
+}
+
+/** The process IDs in a gate's `starts` or `members` file, in order. */
+export async function readGateIds(gate, name) {
+  try {
+    return (await readFile(join(gate, name), 'utf8')).split('\n').filter(Boolean).map(Number);
+  } catch {
+    return [];
+  }
 }
 
 /**

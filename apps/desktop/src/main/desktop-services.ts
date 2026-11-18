@@ -9,7 +9,7 @@ import {
   protocol,
   shell,
 } from 'electron';
-import { Context, Effect, Layer } from 'effect';
+import { Context, Effect, Layer, Option } from 'effect';
 import { toWireError } from '@moonbase/contracts/workspace-host-errors';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import { WorkspaceService } from '@moonbase/contracts/services';
@@ -19,14 +19,10 @@ import { serveAppProtocol } from './app-protocol.ts';
 import { makeChatBackends } from './chat/chat-backends.ts';
 import { makeChatDocuments } from './chat/chat-document.ts';
 import type { ChatConfiguration } from './chat/config.ts';
-import { acquireRemoteChat } from './chat/remote.ts';
+import { RemoteHost, RemoteHostLive } from './chat/remote.ts';
 import { findDaemonCommand } from './daemon/daemon-command.ts';
-import { acquireDaemonChat, makeLocalDaemonClient } from './daemon/local-daemon-client.ts';
-import {
-  createLocalDaemon,
-  findDaemonDirectory,
-  readDaemonSession,
-} from './daemon/local-daemon.ts';
+import { findDaemonDirectory } from './daemon/daemon-files.ts';
+import { LocalDaemon, LocalDaemonLive } from './daemon/local-daemon.ts';
 import { restartDaemon } from './daemon/restart-daemon.ts';
 import { createDaemonWorkspaceHost } from './daemon/workspace-host.ts';
 import { makeDocumentHandlers } from './ipc/document-handlers.ts';
@@ -52,41 +48,40 @@ export type DesktopServicesOptions = {
 
 /**
  * What the window's document reaches through main, in the order Quit releases it backwards: the
- * profile's local daemon clients and recovery store, the remote host, the chat targets, the IPC
- * server and its documents, then the `moonbase:` protocol, the connect handler and the menu.
+ * profile's local daemon, the remote host, the recovery store, the chat targets, the IPC server and
+ * its documents, then the `moonbase:` protocol, the connect handler and the menu.
  */
-export const DesktopServicesLive = (options: DesktopServicesOptions) =>
-  Layer.effect(
+export const DesktopServicesLive = (options: DesktopServicesOptions) => {
+  const { userData, hooks } = options;
+  const openUrl = (url: string) => shell.openExternal(url);
+  // Files, Git, search and local chat are served by the profile's daemon, which outlives the app;
+  // main finds or starts it on demand. This process keeps only this installation's recovery store
+  // (drafts and editor state), so the window opens and drafts are kept without the daemon.
+  const daemonDirectory = findDaemonDirectory(userData);
+  const localDaemon = LocalDaemonLive({
+    directory: daemonDirectory,
+    // Tests of an unpackaged app start the daemon's faux entry instead; a packaged app never does.
+    command:
+      hooks.daemonCommand?.(daemonDirectory) ??
+      findDaemonCommand(
+        {
+          packaged: options.packaged,
+          resourcesPath: process.resourcesPath,
+          bundleDirectory: options.bundleDirectory,
+          build: options.daemonBuild,
+        },
+        daemonDirectory,
+        process.env,
+      ),
+    openUrl,
+  });
+  return Layer.effect(
     IpcServer,
     Effect.gen(function* () {
       const window = yield* MainWindow;
       const lifecycle = yield* WindowLifecycle;
-      const { userData, hooks } = options;
-      const openUrl = (url: string) => shell.openExternal(url);
-      // Files, Git, search and local chat are served by the profile's daemon, which outlives the
-      // app; main finds or starts it on demand. This process keeps only this installation's
-      // recovery store (drafts and editor state), so the window opens and drafts are kept without
-      // the daemon.
-      const daemonDirectory = findDaemonDirectory(userData);
-      const daemon = createLocalDaemon({
-        directory: daemonDirectory,
-        // Tests of an unpackaged app start the daemon's faux entry instead; a packaged app never does.
-        command:
-          hooks.daemonCommand?.(daemonDirectory) ??
-          findDaemonCommand(
-            {
-              packaged: options.packaged,
-              resourcesPath: process.resourcesPath,
-              bundleDirectory: options.bundleDirectory,
-              build: options.daemonBuild,
-            },
-            daemonDirectory,
-            process.env,
-          ),
-      });
-      // Built first, so its clients, however late they are acquired, are released last: the
-      // recovery store and the documents' imports still reach the daemon as Quit releases them.
-      const local = yield* makeLocalDaemonClient(acquireDaemonChat({ daemon, openUrl }));
+      const local = yield* LocalDaemon;
+      const remote = Option.getOrNull(yield* RemoteHost);
       // The recovery store keeps this installation's identity to the daemon's file host.
       const workspaceData = join(userData, 'workspace-v1');
       const installationId = yield* Effect.try({
@@ -103,9 +98,6 @@ export const DesktopServicesLive = (options: DesktopServicesOptions) =>
         ),
         WorkspaceService,
       );
-      const remote = options.chatConfiguration
-        ? yield* acquireRemoteChat(options.chatConfiguration, openUrl)
-        : null;
       const native = yield* makeNativeActions({
         window,
         dialog,
@@ -120,8 +112,8 @@ export const DesktopServicesLive = (options: DesktopServicesOptions) =>
           ),
         // Releasing never starts a daemon: references of one that is not running expire on their own.
         release: (input) =>
-          Effect.flatMap(local.peek, (backend) =>
-            backend && daemon.isRunning()
+          Effect.flatMap(Effect.zip(local.peek, local.isRunning), ([backend, running]) =>
+            backend && running
               ? backend.workspace.releaseImports(input).pipe(Effect.mapError(toWireError))
               : Effect.void,
           ),
@@ -151,7 +143,7 @@ export const DesktopServicesLive = (options: DesktopServicesOptions) =>
             native,
             approvals,
             // Reveal in Finder applies only to files on this Mac, which are the local daemon's.
-            localHostId: Effect.tryPromise(() => readDaemonSession(daemonDirectory)).pipe(
+            localHostId: local.session.pipe(
               Effect.map((session) => session.host.hostId),
               Effect.orElseSucceed(() => undefined),
             ),
@@ -186,10 +178,16 @@ export const DesktopServicesLive = (options: DesktopServicesOptions) =>
       yield* installAppMenu({
         Menu,
         window,
-        restart: restartDaemon({ daemon, start: local.connect, dialog, window }),
+        restart: restartDaemon({ daemon: local, dialog, window }),
       });
       // The editor loads at once; local chat joins this first acquisition, or retries it on failure.
       yield* Effect.forkScoped(Effect.ignore(backends.getContext('local')));
       return ipc;
     }),
+  ).pipe(
+    Layer.provide(RemoteHostLive(options.chatConfiguration, openUrl)),
+    // Built first, so the daemon's clients, however late they are bound, are released last: the
+    // recovery store and the documents' imports still reach the daemon as Quit releases them.
+    Layer.provide(localDaemon),
   );
+};

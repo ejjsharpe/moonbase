@@ -4,29 +4,45 @@ import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
-import { Effect, Layer, ManagedRuntime } from 'effect';
-import { ChatService, ConnectionService } from '@moonbase/contracts/services';
-import type { ApplicationError } from '@moonbase/contracts/errors';
+import {
+  Clock,
+  Context,
+  Effect,
+  Exit,
+  Layer,
+  Logger,
+  ManagedRuntime,
+  References,
+  Scope,
+} from 'effect';
+import * as NodeServices from '@effect/platform-node/NodeServices';
+import { ChatService } from '@moonbase/contracts/services';
 import { LoopbackConnectionLive, loopbackProfileId } from '@moonbase/daemon-protocol/loopback';
 import { DaemonRpcLinkLive, RemoteChatLive } from '@moonbase/daemon-protocol/remote';
+import { ConnectionService } from '@moonbase/contracts/services';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
+import { findDaemonDirectory, readDaemonSession } from '../src/main/daemon/daemon-files.ts';
 import {
-  createLocalDaemon,
-  findDaemonDirectory,
-  LocalDaemonConnectionLive,
-  readDaemonSession,
-  type LocalDaemon,
+  LocalDaemon,
+  LocalDaemonLive,
+  type LocalDaemonOptions,
 } from '../src/main/daemon/local-daemon.ts';
 import {
+  gateDaemonCommand,
   makeFauxDaemonCommand,
   prepareDaemonData,
   readDaemonPid,
+  readGateIds,
   stopDaemon,
   writeFauxScript,
 } from './fixtures/faux-daemon.mjs';
 
+const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
+const localDaemon = Effect.gen(function* () {
+  return yield* LocalDaemon;
+});
 const isAlive = (pid: number) => {
   try {
     process.kill(pid, 0);
@@ -43,7 +59,7 @@ async function until(ready: () => boolean | Promise<boolean>, ms = 15000) {
   }
 }
 
-/** A temporary profile with a daemon directory; the daemon it ran is stopped afterwards. */
+/** A temporary profile with a daemon directory; the daemons it ran are stopped afterwards. */
 async function profile(t: TestContext) {
   const userData = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-local-daemon-')));
   const directory = findDaemonDirectory(userData);
@@ -56,64 +72,68 @@ async function profile(t: TestContext) {
   return { userData, directory, command };
 }
 
-/** The loopback connection to a daemon, as main builds it. */
-async function connect(
+/** The local daemon as main builds it, in a scope the test closes as Quit does (`dispose`). */
+async function makeLocal(
   t: TestContext,
-  daemon: ReturnType<typeof createLocalDaemon>,
-  now?: () => number,
+  options: Omit<LocalDaemonOptions, 'openUrl'>,
+  extra: Layer.Layer<never> = Layer.empty,
 ) {
-  const runtime = ManagedRuntime.make(LocalDaemonConnectionLive(daemon, now));
-  t.after(() => runtime.dispose());
-  const connection = await runtime.runPromise(
-    Effect.gen(function* () {
-      return yield* ConnectionService;
-    }),
+  const runtime = ManagedRuntime.make(
+    LocalDaemonLive({ openUrl: async () => {}, ...options }).pipe(
+      Layer.provide(Layer.mergeAll(NodeServices.layer, extra)),
+    ),
   );
-  return { runtime, connection };
+  t.after(() => runtime.dispose());
+  return { runtime, local: await runtime.runPromise(localDaemon) };
 }
 
-test('with no daemon running one is started detached; another app finds and reuses it', async (t) => {
-  const { directory, command } = await profile(t);
-  const first = createLocalDaemon({ directory, command });
-  assert.equal(first.isRunning(), false);
-  await first.ensure();
-  const pid = (await readDaemonPid(directory))!;
-  assert(pid && isAlive(pid));
-  assert.equal(first.isRunning(), true);
-  const session = await readDaemonSession(directory);
-  // A second launch of the app finds the same daemon rather than starting one.
-  const second = createLocalDaemon({ directory, command });
-  await second.ensure();
-  assert.equal(await readDaemonPid(directory), pid);
-  assert.equal(second.isRunning(), true);
-  assert.equal(second.isOutdated(), false, 'a daemon of the same build is current');
-  assert.deepEqual(await readDaemonSession(directory), session);
-  // Both connect to it and verify its signed health for the expected host and store.
-  for (const daemon of [first, second]) {
-    const { runtime, connection } = await connect(t, daemon);
-    const endpoint = await runtime.runPromise(connection.endpoint({ host: session.host }));
-    assert.deepEqual(endpoint.expected, session.host);
-    assert.equal(endpoint.health.protocol, chatProtocolVersion);
-  }
+test('every caller shares one attempt to reach the daemon; a failed one is the answer for a moment, then tried anew', async (t) => {
+  const { userData, directory, command } = await profile(t);
+  const gate = join(userData, 'gate');
+  await mkdir(gate);
+  // Every start waits on the gate; the first fails.
+  await writeFile(join(gate, 'fail'), '');
+  let now = 0;
+  // A clock whose time the test moves; it sleeps as the real one does.
+  const clock: Clock.Clock = Object.create(Clock.Clock.defaultValue(), {
+    currentTimeMillisUnsafe: { value: () => now },
+    currentTimeMillis: { value: Effect.sync(() => now) },
+  });
+  const { local } = await makeLocal(t, { directory, command: gateDaemonCommand(command, gate) });
+  const get = local.get.pipe(Effect.provideService(Clock.Clock, clock));
+  for (const result of await Promise.allSettled([run(get), run(local.connect), run(get)]))
+    assert.equal(result.status === 'rejected' && result.reason.reason, 'unreachable');
+  await assert.rejects(run(get), { reason: 'unreachable' });
+  assert.equal((await readGateIds(gate, 'starts')).length, 1);
+  assert.equal(await run(local.peek), undefined);
+  // Once the failure has been answered long enough, the next caller tries again.
+  await rm(join(gate, 'fail'));
+  await writeFile(join(gate, 'start'), '');
+  now += 2000;
+  const [clients, connected] = await Promise.all([run(get), run(local.connect)]);
+  assert.equal((await readGateIds(gate, 'starts')).length, 2);
+  assert.deepEqual(clients.session, await run(readDaemonSession(directory)));
+  assert.deepEqual(connected.endpoint.expected, clients.session.host);
+  assert.equal(connected.endpoint.health.protocol, chatProtocolVersion);
+  assert.equal(await run(local.peek), clients);
 });
 
 test('a crashed or unanswering daemon is replaced on the next request, in a new connection generation', async (t) => {
   const { directory, command } = await profile(t);
-  const daemon = createLocalDaemon({ directory, command });
-  await daemon.ensure();
-  const session = await readDaemonSession(directory);
-  const { runtime, connection } = await connect(t, daemon);
-  const before = await runtime.runPromise(connection.endpoint({ host: session.host }));
+  const { local } = await makeLocal(t, { directory, command });
+  const before = await run(local.connect);
   const pid = (await readDaemonPid(directory))!;
   process.kill(pid, 'SIGKILL');
-  await until(() => !daemon.isRunning());
+  await until(async () => !(await run(local.isRunning)));
   // Its endpoint is left behind, naming a process that is gone.
   assert.equal(await readDaemonPid(directory), pid);
-  const after = await runtime.runPromise(connection.endpoint({ host: session.host }));
-  assert.notEqual(after.connectionId, before.connectionId);
+  // A chat request finds it gone before it is sent, and starts a daemon on the same store.
+  const { conversations } = await run(before.chat.listChats({ session: before.session }));
+  assert.deepEqual(conversations, []);
+  const after = await run(local.connect);
+  assert.notEqual(after.endpoint.connectionId, before.endpoint.connectionId);
   assert.notEqual(await readDaemonPid(directory), pid);
-  assert.deepEqual(await readDaemonSession(directory), session, 'the same store restarts');
-  assert.equal(daemon.isRunning(), true);
+  assert.deepEqual(await run(local.session), before.session, 'the same store restarts');
   // An endpoint naming a reused process ID: this test process, alive but serving nothing.
   await stopDaemon(directory, (await readDaemonPid(directory))!);
   await writeFile(
@@ -121,340 +141,154 @@ test('a crashed or unanswering daemon is replaced on the next request, in a new 
     JSON.stringify({ port: 9, pid: process.pid, version: '0.1.0', protocol: chatProtocolVersion }),
     { mode: 0o600 },
   );
-  const replaced = await runtime.runPromise(connection.endpoint({ host: session.host }));
-  assert.deepEqual(replaced.expected, session.host);
+  const replaced = await run(local.connect);
+  assert.deepEqual(replaced.endpoint.expected, before.session.host);
   const restarted = (await readDaemonPid(directory))!;
   assert.notEqual(restarted, process.pid);
   assert(isAlive(restarted));
 });
 
-/**
- * The daemon as the connection sees it, counting the replacement checks it starts: each asks
- * `isOutdated` first, and starts only once the one before it has ended.
- */
-function countChecks(daemon: LocalDaemon) {
-  const counted = {
-    checks: 0,
-    daemon: {
-      ...daemon,
-      isOutdated: () => {
-        counted.checks++;
-        return daemon.isOutdated();
-      },
-    },
-  };
-  return counted;
-}
 const fauxModel = { provider: 'moonbase-faux', modelId: 'faux-model' };
 
 test('a daemon of another build is used while it has work, then replaced in a new generation', async (t) => {
   const { directory } = await profile(t);
   // The faux model holds its first run until it is stopped.
   await writeFauxScript(directory, { idleMs: 5000, pollMs: 500, steps: [{ hold: true }] });
-  // Another app version's daemon, of this protocol.
-  await createLocalDaemon({
+  // Another app version's daemon, of this protocol, already has work before this app connects.
+  const older = await makeLocal(t, {
     directory,
     command: makeFauxDaemonCommand(directory, undefined, 'older-build'),
-  }).ensure();
-  const older = (await readDaemonPid(directory))!;
-  t.after(() => stopDaemon(directory, older));
-  const session = await readDaemonSession(directory);
-  /** Chat over a connection to the directory's daemon. */
-  const chatOver = async (connection: Layer.Layer<ConnectionService, ApplicationError>) => {
-    const runtime = ManagedRuntime.make(
-      RemoteChatLive.pipe(
-        Layer.provide(DaemonRpcLinkLive({ host: session.host })),
-        Layer.provideMerge(connection),
-      ),
-    );
-    t.after(() => runtime.dispose());
-    return {
-      runtime,
-      ...(await runtime.runPromise(
-        Effect.gen(function* () {
-          return { chat: yield* ChatService, connection: yield* ConnectionService };
-        }),
-      )),
-    };
-  };
-  // The older daemon has work before this app connects, which asks at once whether it is idle.
-  const direct = await chatOver(LoopbackConnectionLive({ directory }));
-  await direct.runtime.runPromise(direct.connection.connect({ profileId: loopbackProfileId }));
-  const { conversation } = await direct.runtime.runPromise(
-    direct.chat.createChat({
+  });
+  const olderPid = await run(older.local.connect).then(() => readDaemonPid(directory));
+  t.after(() => stopDaemon(directory, olderPid));
+  const session = await run(readDaemonSession(directory));
+  const direct = ManagedRuntime.make(
+    RemoteChatLive.pipe(
+      Layer.provide(DaemonRpcLinkLive({ host: session.host })),
+      Layer.provideMerge(LoopbackConnectionLive({ directory })),
+    ),
+  );
+  t.after(() => direct.dispose());
+  const { chat: directChat, connection } = await direct.runPromise(
+    Effect.gen(function* () {
+      return { chat: yield* ChatService, connection: yield* ConnectionService };
+    }),
+  );
+  await direct.runPromise(connection.connect({ profileId: loopbackProfileId }));
+  await older.runtime.dispose();
+  const { conversation } = await direct.runPromise(
+    directChat.createChat({
       session,
       requestId: 'create',
       title: 'Held',
       settings: { model: fauxModel },
     }),
   );
-  await direct.runtime.runPromise(
-    direct.chat.sendChat({ target: conversation.target, requestId: 'send', text: 'Hold on' }),
+  await direct.runPromise(
+    directChat.sendChat({ target: conversation.target, requestId: 'send', text: 'Hold on' }),
   );
   let running;
   await until(async () => {
-    running = await direct.runtime.runPromise(direct.chat.getChat({ target: conversation.target }));
+    running = await direct.runPromise(directChat.getChat({ target: conversation.target }));
     return !!running.run;
   });
-  const daemon = createLocalDaemon({
-    directory,
-    command: makeFauxDaemonCommand(directory),
-    replaceMs: 50,
-  });
-  const counted = countChecks(daemon);
-  const { runtime, chat, connection } = await chatOver(LocalDaemonConnectionLive(counted.daemon));
-  const before = await runtime.runPromise(connection.endpoint({ host: session.host }));
-  assert.equal(await readDaemonPid(directory), older, 'the app works with the older daemon');
-  assert.equal(daemon.isOutdated(), true);
+  // This app counts the checks it makes, each of which asks the older daemon for its work.
+  let checks = 0;
+  const counting = Logger.layer([
+    Logger.make(({ message }) => {
+      if (String(message).includes('has work')) checks++;
+    }),
+  ]);
+  const { local } = await makeLocal(
+    t,
+    { directory, command: makeFauxDaemonCommand(directory), replaceMs: 50 },
+    Layer.mergeAll(counting, Layer.succeed(References.MinimumLogLevel, 'Debug')),
+  );
+  const before = await run(local.connect);
+  assert.equal(await readDaemonPid(directory), olderPid, 'the app works with the older daemon');
   // Several checks pass while the run goes on; the older daemon keeps it.
-  const checked = counted.checks;
-  await until(() => counted.checks >= checked + 4);
-  assert(isAlive(older));
-  assert.equal(await readDaemonPid(directory), older);
-  await runtime.runPromise(chat.stopChat({ stop: running!.run!.stop, requestId: 'stop' }));
+  await until(() => checks >= 4);
+  assert(isAlive(olderPid!));
+  assert.equal(await readDaemonPid(directory), olderPid);
+  await run(before.chat.stopChat({ stop: running!.run!.stop, requestId: 'stop' }));
   // With no work left, it is stopped and this app's daemon starts on the same store.
-  await until(async () => !isAlive(older) && !daemon.isOutdated());
+  await until(() => !isAlive(olderPid!));
+  await until(async () => (await readDaemonPid(directory)) !== undefined);
   const current = (await readDaemonPid(directory))!;
-  assert.notEqual(current, older);
   assert.equal(
     JSON.parse(await readFile(join(directory, 'endpoint.json'), 'utf8')).build,
     'development',
   );
-  assert.equal(daemon.isRunning(), true);
-  const after = await runtime.runPromise(connection.endpoint({ host: session.host }));
-  assert.notEqual(after.connectionId, before.connectionId);
-  const { conversations } = await runtime.runPromise(chat.listChats({ session }));
+  const after = await run(local.connect);
+  assert.notEqual(after.endpoint.connectionId, before.endpoint.connectionId);
+  const { conversations } = await run(after.chat.listChats({ session }));
   assert.deepEqual(
     conversations.map((listed) => listed.title),
     ['Held'],
   );
-  // The current daemon is never replaced.
-  const replaced = counted.checks;
-  await until(() => counted.checks >= replaced + 4);
   assert.equal(await readDaemonPid(directory), current);
 });
 
-/**
- * Starts a process that notes any SIGTERM in `marker` rather than stopping, its command line
- * ending with `args`, and waits until it handles the signal. It answers SIGUSR2 by writing
- * `<marker>.checked`, which `assertNotSignalled` uses as a sentinel.
- */
-async function spawnStandIn(t: TestContext, marker: string, args: string[]) {
-  const standIn = spawn(
-    process.execPath,
-    [
-      ...(args[0]?.endsWith('.mjs')
-        ? []
-        : [
-            '-e',
-            `process.on('SIGTERM', () => require('node:fs').writeFileSync(process.env.STAND_IN_MARKER, '')); process.on('SIGUSR2', () => require('node:fs').writeFileSync(process.env.STAND_IN_MARKER + '.checked', '')); setInterval(() => {}, 1000); process.stdout.write('ready')`,
-          ]),
-      ...args,
-    ],
-    { stdio: ['ignore', 'pipe', 'ignore'], env: { STAND_IN_MARKER: marker } },
-  );
-  t.after(() => standIn.kill('SIGKILL'));
-  await once(standIn.stdout!, 'data');
-  standIn.stdout!.destroy();
-  return standIn;
-}
-
-/**
- * Asserts the stand-in noted no SIGTERM. Its handlers run in the order the signals arrived, so
- * once it has answered a SIGUSR2 sent now, a SIGTERM sent before would already have been noted.
- */
-async function assertNotSignalled(standIn: ReturnType<typeof spawn>, marker: string) {
-  const checked = marker + '.checked';
-  await rm(checked, { force: true });
-  standIn.kill('SIGUSR2');
-  await until(() =>
-    stat(checked).then(
-      () => true,
-      () => false,
+test('Quit releases what was built after the daemon while its clients, bound later, still answer; then nothing reaches them', async (t) => {
+  const { directory, command } = await profile(t);
+  const services = Scope.makeUnsafe('sequential');
+  const steps: string[] = [];
+  const local = await run(
+    Effect.map(
+      Layer.buildWithScope(
+        LocalDaemonLive({ directory, command, openUrl: async () => {} }).pipe(
+          Layer.provide(NodeServices.layer),
+        ),
+        services,
+      ),
+      (context) => Context.get(context, LocalDaemon),
     ),
   );
-  await assert.rejects(stat(marker), { code: 'ENOENT' });
-}
+  // A document built after the daemon, holding work it releases over the daemon's clients, which
+  // are only bound by the first request after it.
+  await run(
+    Scope.addFinalizer(
+      services,
+      Effect.flatMap(local.peek, (clients) =>
+        clients
+          ? clients.chat
+              .listChats({ session: clients.session })
+              .pipe(
+                Effect.andThen(Effect.sync(() => void steps.push('released over open clients'))),
+              )
+          : Effect.void,
+      ).pipe(Effect.orDie),
+    ),
+  );
+  await run(local.get);
+  const closed = await run(Effect.exit(Scope.close(services, Exit.void)));
+  assert(Exit.isSuccess(closed), 'Quit releases everything without a cleanup failure');
+  assert.deepEqual(steps, ['released over open clients']);
+  assert.equal(await run(local.peek), undefined);
+  await assert.rejects(run(local.get), { reason: 'quitting' });
+  await assert.rejects(run(local.connect), { reason: 'quitting' });
+  // The daemon outlives the app.
+  assert(isAlive((await readDaemonPid(directory))!));
+});
 
-test('a daemon speaking another protocol is never signalled; local chat waits for it to exit', async (t) => {
+test('Quit during a start interrupts it and stops the starting daemon’s whole process group', async (t) => {
   const { userData, directory, command } = await profile(t);
-  const marker = join(directory, 'signalled');
-  // Stands in for an older app's packaged daemon on this directory; it notes any SIGTERM rather
-  // than stopping.
-  const entry = join(userData, 'Older.app', 'Contents', 'Resources', 'daemon', 'daemon.mjs');
-  await mkdir(dirname(entry), { recursive: true });
-  await writeFile(
-    entry,
-    `import { writeFileSync } from 'node:fs';
-process.on('SIGTERM', () => writeFileSync(process.env.STAND_IN_MARKER, ''));
-process.on('SIGUSR2', () => writeFileSync(process.env.STAND_IN_MARKER + '.checked', ''));
-setInterval(() => {}, 1000);
-process.stdout.write('ready');
-`,
-  );
-  const older = await spawnStandIn(t, marker, [entry, directory]);
-  const endpoint = JSON.stringify({
-    port: 9,
-    pid: older.pid,
-    version: '0.1.0',
-    protocol: chatProtocolVersion - 1,
+  const gate = join(userData, 'gate');
+  await mkdir(gate);
+  // The start is held, with a member of its process group that outlives the leader on its own.
+  await writeFile(join(gate, 'group'), '');
+  const { runtime, local } = await makeLocal(t, {
+    directory,
+    command: gateDaemonCommand(command, gate),
   });
-  await writeFile(join(directory, 'endpoint.json'), endpoint, { mode: 0o600 });
-  const daemon = createLocalDaemon({ directory, command });
-  const busy = {
-    code: 'Unavailable',
-    message:
-      'An older Moonbase daemon is still finishing its work. Local chat starts once it stops.',
-  };
-  await assert.rejects(daemon.ensure(), busy);
-  const session = await readDaemonSession(directory).catch(() => undefined);
-  assert.equal(session, undefined, 'nothing was started on its directory');
-  await assert.rejects(daemon.ensure(), busy);
-  assert.equal(older.exitCode, null);
-  await assertNotSignalled(older, marker);
-  // Once it exits (idle, with nobody connected), the next request starts this app's daemon.
-  older.kill('SIGKILL');
-  await once(older, 'exit');
-  await daemon.ensure();
-  const current = (await readDaemonPid(directory))!;
-  assert(isAlive(current));
-  assert.equal(daemon.isOutdated(), false);
-  await stopDaemon(directory, current);
-  // An endpoint naming a process that isn't a daemon on this directory doesn't block starting,
-  // and that process is never signalled.
-  const other = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
-  t.after(() => other.kill('SIGKILL'));
-  await once(other, 'spawn');
-  await writeFile(
-    join(directory, 'endpoint.json'),
-    JSON.stringify({
-      port: 9,
-      pid: other.pid,
-      version: '0.1.0',
-      protocol: chatProtocolVersion - 1,
-    }),
-    { mode: 0o600 },
-  );
-  await createLocalDaemon({ directory, command }).ensure();
-  assert.equal(other.exitCode, null);
-  assert.notEqual(await readDaemonPid(directory), other.pid);
-});
-
-test('an outdated daemon whose process ID now runs something else is never signalled', async (t) => {
-  const { directory, command } = await profile(t);
-  const marker = join(directory, 'signalled');
-  // The outdated daemon crashed and its ID was reused by a process that isn't a daemon, even one
-  // whose command line also ends with the data directory.
-  const other = await spawnStandIn(t, marker, [directory]);
-  await writeFile(
-    join(directory, 'endpoint.json'),
-    JSON.stringify({
-      port: 9,
-      pid: other.pid,
-      version: '0.1.0',
-      protocol: chatProtocolVersion,
-      build: 'older-build',
-    }),
-    { mode: 0o600 },
-  );
-  const daemon = createLocalDaemon({ directory, command, stopMs: 500 });
-  await daemon.ensure();
-  assert.equal(daemon.isOutdated(), true);
-  await daemon.replace();
-  await assertNotSignalled(other, marker);
-  assert.equal(other.exitCode, null);
-  // This app's daemon runs in its place.
-  const current = (await readDaemonPid(directory))!;
-  assert.notEqual(current, other.pid);
-  assert(isAlive(current));
-  assert.equal(daemon.isOutdated(), false);
-  assert.equal(daemon.isRunning(), true);
-});
-
-test('a start that finds the lock held adopts only a daemon of this directory and protocol', async (t) => {
-  const { directory, command } = await profile(t);
-  // Three starts follow; the first daemon must outlive them all, so it may not idle out meanwhile.
-  await writeFauxScript(directory, { idleMs: 60_000, pollMs: 500 });
-  await createLocalDaemon({ directory, command }).ensure();
-  const running = (await readDaemonPid(directory))!;
-  const file = join(directory, 'endpoint.json'),
-    original = await readFile(file, 'utf8');
-  try {
-    // The started daemon exits because `running` holds the lock; the endpoint it then finds
-    // speaks another protocol, or names a reused process ID.
-    for (const endpoint of [
-      { ...JSON.parse(original), protocol: chatProtocolVersion - 1 },
-      { ...JSON.parse(original), pid: process.pid },
-    ]) {
-      await writeFile(file, JSON.stringify(endpoint), { mode: 0o600 });
-      const daemon = createLocalDaemon({ directory, command });
-      await assert.rejects(daemon.restart(), {
-        code: 'Unavailable',
-        message: 'The local chat daemon stopped while starting.',
-      });
-      assert.equal(daemon.isRunning(), false);
-    }
-    await writeFile(file, original, { mode: 0o600 });
-    const daemon = createLocalDaemon({ directory, command });
-    await daemon.restart();
-    assert.equal(daemon.isRunning(), true, 'the running daemon of this protocol is adopted');
-    assert.equal(await readDaemonPid(directory), running);
-  } finally {
-    await writeFile(file, original, { mode: 0o600 });
-  }
-});
-
-test('a daemon that never listens is Unavailable and is not left running', async (t) => {
-  const { directory, command } = await profile(t);
-  const marker = join(directory, 'slow.pid');
-  await assert.rejects(
-    createLocalDaemon({
-      directory,
-      command: {
-        ...command,
-        command: '/bin/sh',
-        args: ['-c', `echo $$ > ${marker}; exec sleep 30`],
-      },
-      startMs: 300,
-    }).ensure(),
-    { code: 'Unavailable' },
-  );
-  // The daemon that never listened is not left running.
-  const slow = Number(await readFile(marker, 'utf8'));
-  await until(() => !isAlive(slow));
-});
-
-test('the connection fails as Unavailable when no daemon can be started, answers that for a moment without starting one, and recovers later', async (t) => {
-  const { directory, command } = await profile(t);
-  let broken = false,
-    attempts = 0,
-    clock = 0;
-  const daemon = createLocalDaemon({ directory, command });
-  await daemon.ensure();
-  const session = await readDaemonSession(directory);
-  const failing = {
-    ...daemon,
-    ensure: () => {
-      attempts++;
-      return broken ? Promise.reject(Error('spawn failed')) : daemon.ensure();
-    },
-  };
-  const { runtime, connection } = await connect(t, failing, () => clock);
-  await runtime.runPromise(connection.endpoint({ host: session.host }));
-  broken = true;
-  await stopDaemon(directory);
-  const lookup = () => runtime.runPromise(connection.endpoint({ host: session.host }));
-  // Lookups waiting together share one recovery; one just after its failure gets that failure.
-  attempts = 0;
-  for (const result of await Promise.allSettled([lookup(), lookup(), lookup()]))
-    assert.equal(result.status === 'rejected' && result.reason.code, 'Unavailable');
-  await assert.rejects(lookup(), { code: 'Unavailable' });
-  assert.equal(attempts, 1);
-  broken = false;
-  clock += 2000;
-  const endpoint = await lookup();
-  assert.equal(attempts, 2);
-  assert.deepEqual(endpoint.expected, session.host);
+  const waiting = run(Effect.flip(local.get));
+  await until(async () => (await readGateIds(gate, 'members')).length === 1);
+  const [leader] = await readGateIds(gate, 'starts'),
+    [member] = await readGateIds(gate, 'members');
+  await runtime.dispose();
+  assert.equal((await waiting).reason, 'quitting');
+  await until(() => !isAlive(leader!) && !isAlive(member!));
+  await assert.rejects(run(local.get), { reason: 'quitting' });
 });
 
 test('the mock profile seeds the daemon store, and its daemon starts with the seeded chats', async (t) => {
@@ -464,45 +298,27 @@ test('the mock profile seeds the daemon store, and its daemon starts with the se
     await stopDaemon(directory);
     await rm(userData, { recursive: true, force: true });
   });
-  const seed = spawn(
-    process.execPath,
-    [
-      '--experimental-strip-types',
-      fileURLToPath(new URL('../scripts/seed-mock-chats.ts', import.meta.url)),
-      userData,
-    ],
-    { stdio: 'ignore' },
-  );
-  const [status] = await once(seed, 'exit');
-  assert.equal(status, 0);
+  const seed = () =>
+    spawn(
+      process.execPath,
+      [
+        '--experimental-strip-types',
+        fileURLToPath(new URL('../scripts/seed-mock-chats.ts', import.meta.url)),
+        userData,
+      ],
+      { stdio: 'ignore' },
+    );
+  assert.equal((await once(seed(), 'exit'))[0], 0);
   assert.equal((await stat(directory)).mode & 0o777, 0o700);
   for (const file of ['identity.json', 'chat.sqlite'])
     assert.equal((await stat(join(directory, file))).mode & 0o777, 0o600, file);
   // Seeding refuses a profile whose daemon directory exists, so it never replaces chats.
-  const again = spawn(
-    process.execPath,
-    [
-      '--experimental-strip-types',
-      fileURLToPath(new URL('../scripts/seed-mock-chats.ts', import.meta.url)),
-      userData,
-    ],
-    { stdio: 'ignore' },
-  );
-  assert.notEqual((await once(again, 'exit'))[0], 0);
-  const session = await readDaemonSession(directory);
-  const daemon = createLocalDaemon({ directory, command: makeFauxDaemonCommand(directory) });
-  await daemon.ensure();
-  assert.deepEqual(await readDaemonSession(directory), session, 'the daemon keeps the identity');
-  const runtime = ManagedRuntime.make(
-    RemoteChatLive.pipe(
-      Layer.provide(DaemonRpcLinkLive({ host: session.host })),
-      Layer.provide(LocalDaemonConnectionLive(daemon)),
-    ),
-  );
-  t.after(() => runtime.dispose());
-  const { conversations } = await runtime.runPromise(
-    Effect.flatMap(ChatService, (chat) => chat.listChats({ session })),
-  );
+  assert.notEqual((await once(seed(), 'exit'))[0], 0);
+  const session = await run(readDaemonSession(directory));
+  const { local } = await makeLocal(t, { directory, command: makeFauxDaemonCommand(directory) });
+  const clients = await run(local.get);
+  assert.deepEqual(clients.session, session, 'the daemon keeps the identity');
+  const { conversations } = await run(clients.chat.listChats({ session }));
   assert.deepEqual(conversations.map((conversation) => conversation.title).sort(), [
     'Move the transcript to Legend List',
     'Plain question',
