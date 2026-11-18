@@ -4,16 +4,16 @@ import { Harness } from '@earendil-works/pi-durable';
 import { mkdtemp, mkdir, readFile, readdir, rm, realpath } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { Effect, ManagedRuntime } from 'effect';
+import { Effect, Exit, ManagedRuntime } from 'effect';
+import { ChatService } from '@moonbase/contracts/services';
 import { createModels } from '@earendil-works/pi-ai/models';
 import {
   fauxProvider,
   fauxAssistantMessage,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux';
-import { makeChatClient } from '@moonbase/application/chat/clients';
 import { LocalPiControl } from '../src/index.ts';
-import { localPiRuntime } from './runtime-fixture.ts';
+import { localPiRuntime, runChat } from './runtime-fixture.ts';
 
 const session = { host: { hostId: 'local-test', storeId: 'local-store' }, actorId: 'local-owner' };
 async function until<A>(read: () => Promise<A>, ready: (value: A) => boolean) {
@@ -49,8 +49,7 @@ test('local conversations retain distinct folders/models, coding tools, immutabl
     await runtime.dispose();
     await rm(root, { recursive: true, force: true });
   });
-  let client = makeChatClient(runtime);
-  assert.deepEqual(await client.command('getChatHost', { host: session.host }), {
+  assert.deepEqual(await runChat(runtime, (chat) => chat.getChatHost({ host: session.host })), {
     ...session,
     mode: 'local',
   });
@@ -64,18 +63,22 @@ test('local conversations retain distinct folders/models, coding tools, immutabl
       reasoningEffort: index ? ('xhigh' as const) : ('high' as const),
     },
   }));
-  const chats = await Promise.all(inputs.map((input) => client.command('createChat', input)));
+  const chats = await Promise.all(
+    inputs.map((input) => runChat(runtime, (chat) => chat.createChat(input))),
+  );
   assert.deepEqual(
     chats.map((chat) => chat.conversation.reasoningEffort),
     ['high', 'xhigh'],
   );
   await assert.rejects(
-    client.command('createChat', {
-      ...inputs[0],
-      requestId: 'unsupported-effort',
-      settings: { ...inputs[0].settings, reasoningEffort: 'max' },
-    }),
-    { code: 'InvalidInput' },
+    runChat(runtime, (chat) =>
+      chat.createChat({
+        ...inputs[0],
+        requestId: 'unsupported-effort',
+        settings: { ...inputs[0].settings, reasoningEffort: 'max' },
+      }),
+    ),
+    { _tag: 'InvalidChatRequestError', problem: 'reasoning-effort' },
   );
   assert.deepEqual(
     chats.map((chat) => chat.conversation.cwd),
@@ -86,8 +89,8 @@ test('local conversations retain distinct folders/models, coding tools, immutabl
     ['faux/first-model', 'faux/second-model'],
   );
   await assert.rejects(
-    client.command('createChat', { ...inputs[0], settings: inputs[1].settings }),
-    { code: 'InvalidInput' },
+    runChat(runtime, (chat) => chat.createChat({ ...inputs[0], settings: inputs[1].settings })),
+    { _tag: 'RequestReusedError' },
   );
   for (let i = 0; i < 2; i++) {
     faux.setResponses([
@@ -102,13 +105,15 @@ test('local conversations retain distinct folders/models, coding tools, immutabl
       fauxAssistantMessage('Saved locally'),
     ]);
     const target = chats[i].conversation.target;
-    await client.command('sendChat', {
-      target,
-      requestId: 'send-' + i,
-      text: 'Write in this folder',
-    });
+    await runChat(runtime, (chat) =>
+      chat.sendChat({
+        target,
+        requestId: 'send-' + i,
+        text: 'Write in this folder',
+      }),
+    );
     await until(
-      () => client.command('getChat', { target }),
+      () => runChat(runtime, (chat) => chat.getChat({ target })),
       (snapshot) =>
         !snapshot.run && snapshot.entries.some((entry) => entry.text === 'Saved locally'),
     );
@@ -116,11 +121,10 @@ test('local conversations retain distinct folders/models, coding tools, immutabl
   }
   await runtime.dispose();
   runtime = ManagedRuntime.make(localPiRuntime(config));
-  client = makeChatClient(runtime);
-  assert.deepEqual(await client.command('createChat', inputs[0]), chats[0]);
+  assert.deepEqual(await runChat(runtime, (chat) => chat.createChat(inputs[0])), chats[0]);
   assert.equal(
-    (await client.command('getChat', { target: chats[1].conversation.target })).conversation
-      .reasoningEffort,
+    (await runChat(runtime, (chat) => chat.getChat({ target: chats[1].conversation.target })))
+      .conversation.reasoningEffort,
     'xhigh',
   );
   faux.setResponses([
@@ -129,36 +133,47 @@ test('local conversations retain distinct folders/models, coding tools, immutabl
       return fauxAssistantMessage('Resumed with the captured effort');
     },
   ]);
-  await client.command('sendChat', {
-    target: chats[1].conversation.target,
-    requestId: 'after-restart',
-    text: 'Continue',
-  });
+  await runChat(runtime, (chat) =>
+    chat.sendChat({
+      target: chats[1].conversation.target,
+      requestId: 'after-restart',
+      text: 'Continue',
+    }),
+  );
   await until(
-    () => client.command('getChat', { target: chats[1].conversation.target }),
+    () => runChat(runtime, (chat) => chat.getChat({ target: chats[1].conversation.target })),
     (snapshot) =>
       !snapshot.run &&
       snapshot.entries.some((entry) => entry.text === 'Resumed with the captured effort'),
   );
-  assert.equal((await client.command('listChats', { session })).conversations.length, 2);
+  assert.equal(
+    (await runChat(runtime, (chat) => chat.listChats({ session }))).conversations.length,
+    2,
+  );
   await assert.rejects(
-    client.command('listChats', {
-      session: { ...session, host: { ...session.host, storeId: 'remote' } },
-    }),
-    { code: 'Incompatible' },
+    runChat(runtime, (chat) =>
+      chat.listChats({
+        session: { ...session, host: { ...session.host, storeId: 'remote' } },
+      }),
+    ),
+    { _tag: 'ChatStoreMismatchError', mismatch: 'other-host' },
   );
   const control = await runtime.runPromise(LocalPiControl);
   await runtime.runPromise(control.setAdmissionsOpen(false));
-  await assert.rejects(client.command('createChat', inputs[0]), { code: 'Unavailable' });
+  await assert.rejects(
+    runChat(runtime, (chat) => chat.createChat(inputs[0])),
+    { _tag: 'ChatUnavailableError', reason: 'quitting' },
+  );
   assert.equal(await runtime.runPromise(control.hasActiveWork()), false);
   await runtime.runPromise(control.setAdmissionsOpen(true));
-  assert.deepEqual(await client.command('createChat', inputs[0]), chats[0]);
+  assert.deepEqual(await runChat(runtime, (chat) => chat.createChat(inputs[0])), chats[0]);
   await rm(first, { recursive: true });
   assert.match(
-    (await client.command('getChat', { target: chats[0].conversation.target })).message!,
+    (await runChat(runtime, (chat) => chat.getChat({ target: chats[0].conversation.target })))
+      .message!,
     /working folder is unavailable/,
   );
-  assert.deepEqual(await client.command('createChat', inputs[0]), chats[0]);
+  assert.deepEqual(await runChat(runtime, (chat) => chat.createChat(inputs[0])), chats[0]);
 });
 
 test('a local chat without a project runs in a new, empty folder of its own', async (t) => {
@@ -184,23 +199,24 @@ test('a local chat without a project runs in a new, empty folder of its own', as
     await runtime.dispose();
     await rm(root, { recursive: true, force: true });
   });
-  let client = makeChatClient(runtime);
   const settings = { model: { provider: faux.provider.id, modelId: 'model' } };
   const input = (requestId: string, title = requestId) => ({ session, requestId, title, settings });
   // A host with nowhere to make chat folders still requires one.
-  await assert.rejects(client.command('createChat', input('nowhere')), { code: 'InvalidInput' });
+  await assert.rejects(
+    runChat(runtime, (chat) => chat.createChat(input('nowhere'))),
+    { _tag: 'InvalidChatRequestError', problem: 'folder-required' },
+  );
   await runtime.dispose();
   runtime = ManagedRuntime.make(localPiRuntime({ ...config, chatFolders }));
-  client = makeChatClient(runtime);
   refuse = true;
-  await assert.rejects(client.command('createChat', input('refused')));
+  await assert.rejects(runChat(runtime, (chat) => chat.createChat(input('refused'))));
   assert.deepEqual(approvals.at(-1), settings);
   // A refused chat leaves no folder behind.
   await assert.rejects(readdir(chatFolders), { code: 'ENOENT' });
   refuse = false;
   const title = 'Convert these PNGs to WebP, please!';
-  const first = await client.command('createChat', input('first', title));
-  const second = await client.command('createChat', input('second', '☕'));
+  const first = await runChat(runtime, (chat) => chat.createChat(input('first', title)));
+  const second = await runChat(runtime, (chat) => chat.createChat(input('second', '☕')));
   const folders = [first, second].map((chat) => chat.conversation.cwd);
   assert.equal(new Set(folders).size, 2);
   for (const folder of folders) {
@@ -216,7 +232,7 @@ test('a local chat without a project runs in a new, empty folder of its own', as
   assert.match(basename(folders[1]!), RegExp(`^${day}-[a-f0-9]{8}$`));
   assert.equal(first.conversation.ownFolder, true);
   // Retrying the same request returns the same chat and makes no other folder.
-  assert.deepEqual(await client.command('createChat', input('first', title)), first);
+  assert.deepEqual(await runChat(runtime, (chat) => chat.createChat(input('first', title))), first);
   assert.equal((await readdir(chatFolders)).length, 2);
   faux.setResponses([
     fauxAssistantMessage(fauxToolCall('write', { path: 'notes.txt', content: 'own folder' }), {
@@ -225,30 +241,34 @@ test('a local chat without a project runs in a new, empty folder of its own', as
     fauxAssistantMessage('Written'),
   ]);
   const target = first.conversation.target;
-  await client.command('sendChat', { target, requestId: 'send', text: 'Take notes' });
+  await runChat(runtime, (chat) =>
+    chat.sendChat({ target, requestId: 'send', text: 'Take notes' }),
+  );
   await until(
-    () => client.command('getChat', { target }),
+    () => runChat(runtime, (chat) => chat.getChat({ target })),
     (snapshot) => !snapshot.run && snapshot.entries.some((entry) => entry.text === 'Written'),
   );
   assert.equal(await readFile(join(folders[0]!, 'notes.txt'), 'utf8'), 'own folder');
   await runtime.dispose();
   runtime = ManagedRuntime.make(localPiRuntime({ ...config, chatFolders }));
-  client = makeChatClient(runtime);
-  const listed = (await client.command('listChats', { session })).conversations;
+  const listed = (await runChat(runtime, (chat) => chat.listChats({ session }))).conversations;
   assert.deepEqual(
     listed.map((chat) => [chat.cwd, chat.ownFolder]).sort(),
     folders.map((folder) => [folder, true]).sort(),
   );
-  assert.equal((await client.command('getChat', { target })).conversation.ownFolder, true);
+  assert.equal(
+    (await runChat(runtime, (chat) => chat.getChat({ target }))).conversation.ownFolder,
+    true,
+  );
   // Once its folder becomes a project, the chat lists under it, in the same folder with its files.
   const control = await runtime.runPromise(LocalPiControl);
   await runtime.runPromise(control.markFolderAsProject(target));
   await runtime.runPromise(control.markFolderAsProject(target));
-  const adopted = (await client.command('getChat', { target })).conversation;
+  const adopted = (await runChat(runtime, (chat) => chat.getChat({ target }))).conversation;
   assert.equal(adopted.ownFolder, undefined);
   assert.equal(adopted.cwd, folders[0]);
   assert.equal(await readFile(join(folders[0]!, 'notes.txt'), 'utf8'), 'own folder');
-  const relisted = (await client.command('listChats', { session })).conversations;
+  const relisted = (await runChat(runtime, (chat) => chat.listChats({ session }))).conversations;
   assert.deepEqual(
     relisted.map((chat) => [chat.cwd, chat.ownFolder ?? false]).sort(),
     [
@@ -258,7 +278,7 @@ test('a local chat without a project runs in a new, empty folder of its own', as
   );
   // An original and its retry racing make one chat, and leave no unused folder behind.
   const raced = await Promise.all(
-    [0, 1].map(() => client.command('createChat', input('raced', 'Raced'))),
+    [0, 1].map(() => runChat(runtime, (chat) => chat.createChat(input('raced', 'Raced')))),
   );
   assert.equal(raced[0].conversation.cwd, raced[1].conversation.cwd);
   assert.deepEqual(
@@ -296,13 +316,15 @@ test('a chat without a project is refused while its folders would sit inside a G
   });
   const settings = { model: { provider: faux.provider.id, modelId: 'model' } };
   await assert.rejects(
-    makeChatClient(runtime).command('createChat', {
-      session,
-      requestId: 'git',
-      title: 'Git',
-      settings,
-    }),
-    { code: 'Unavailable' },
+    runChat(runtime, (chat) =>
+      chat.createChat({
+        session,
+        requestId: 'git',
+        title: 'Git',
+        settings,
+      }),
+    ),
+    { _tag: 'ChatUnavailableError', reason: 'own-folder-in-checkout' },
   );
   // Nothing was made for it.
   await assert.rejects(readdir(join(root, 'profile')), { code: 'ENOENT' });
@@ -322,22 +344,25 @@ test('Quit control sees hidden work and gates unfinished local mutations without
     await runtime.dispose();
     await rm(directory, { recursive: true, force: true });
   });
-  const client = makeChatClient(runtime),
-    control = await runtime.runPromise(LocalPiControl);
-  const { conversation } = await client.command('createChat', {
-    session,
-    requestId: 'create',
-    title: 'Hidden',
-    settings: {
-      cwd: directory,
-      model: { provider: faux.provider.id, modelId: faux.getModel().id },
-    },
-  });
-  await client.command('sendChat', { target: conversation.target, requestId: 'send', text: 'Run' });
+  const control = await runtime.runPromise(LocalPiControl);
+  const { conversation } = await runChat(runtime, (chat) =>
+    chat.createChat({
+      session,
+      requestId: 'create',
+      title: 'Hidden',
+      settings: {
+        cwd: directory,
+        model: { provider: faux.provider.id, modelId: faux.getModel().id },
+      },
+    }),
+  );
+  await runChat(runtime, (chat) =>
+    chat.sendChat({ target: conversation.target, requestId: 'send', text: 'Run' }),
+  );
   await runtime.runPromise(control.setAdmissionsOpen(false));
   assert.equal(await runtime.runPromise(control.hasActiveWork()), true);
   await runtime.runPromise(control.setAdmissionsOpen(true));
-  const snapshot = await client.command('getChat', { target: conversation.target });
+  const snapshot = await runChat(runtime, (chat) => chat.getChat({ target: conversation.target }));
   assert.equal(snapshot.state, 'running');
   assert.equal(Effect.isEffect(control.hasActiveWork()), true);
 });
@@ -359,8 +384,7 @@ test('Quit still sees a root-owned Create admission after its caller cancels the
     'open',
     async (...args: Parameters<typeof originalOpen>) => (harness = await originalOpen(...args)),
   );
-  const client = makeChatClient(runtime),
-    control = await runtime.runPromise(LocalPiControl);
+  const control = await runtime.runPromise(LocalPiControl);
   opening.mock.restore();
   let intercept = true;
   const commit = harness.commit.bind(harness);
@@ -379,27 +403,28 @@ test('Quit still sees a root-owned Create admission after its caller cancels the
     await rm(directory, { recursive: true, force: true });
   });
   const abort = new AbortController();
-  const create = client.command(
-    'createChat',
-    {
-      session,
-      requestId: 'held-create',
-      title: 'Held',
-      settings: {
-        cwd: directory,
-        model: { provider: faux.provider.id, modelId: faux.getModel().id },
-      },
-    },
+  const create = runtime.runPromiseExit(
+    Effect.flatMap(ChatService, (chat) =>
+      chat.createChat({
+        session,
+        requestId: 'held-create',
+        title: 'Held',
+        settings: {
+          cwd: directory,
+          model: { provider: faux.provider.id, modelId: faux.getModel().id },
+        },
+      }),
+    ),
     { signal: abort.signal },
   );
   await started.promise;
   abort.abort();
-  await assert.rejects(create, { code: 'Cancelled' });
+  assert(Exit.hasInterrupts(await create));
   await runtime.runPromise(control.setAdmissionsOpen(false));
   assert.equal(await runtime.runPromise(control.hasActiveWork()), true);
   released.resolve();
   await until(
-    () => client.command('listChats', { session }),
+    () => runChat(runtime, (chat) => chat.listChats({ session })),
     (page) => page.conversations.length === 1,
   );
   await until(
@@ -423,18 +448,19 @@ test('Quit counts Send metadata validation as unfinished root-owned admission', 
   const runtime = ManagedRuntime.make(
     localPiRuntime({ ...session, models, databasePath: join(directory, 'chat.sqlite') }),
   );
-  const client = makeChatClient(runtime),
-    control = await runtime.runPromise(LocalPiControl);
+  const control = await runtime.runPromise(LocalPiControl);
   opening.mock.restore();
-  const { conversation } = await client.command('createChat', {
-    session,
-    requestId: 'create',
-    title: 'Preflight',
-    settings: {
-      cwd: directory,
-      model: { provider: faux.provider.id, modelId: faux.getModel().id },
-    },
-  });
+  const { conversation } = await runChat(runtime, (chat) =>
+    chat.createChat({
+      session,
+      requestId: 'create',
+      title: 'Preflight',
+      settings: {
+        cwd: directory,
+        model: { provider: faux.provider.id, modelId: faux.getModel().id },
+      },
+    }),
+  );
   const started = Promise.withResolvers<void>(),
     released = Promise.withResolvers<void>();
   const snapshot = harness.snapshot.bind(harness);
@@ -458,11 +484,13 @@ test('Quit counts Send metadata validation as unfinished root-owned admission', 
     await rm(directory, { recursive: true, force: true });
   });
   faux.setResponses([fauxAssistantMessage('Done')]);
-  const send = client.command('sendChat', {
-    target: conversation.target,
-    requestId: 'send',
-    text: 'Question',
-  });
+  const send = runChat(runtime, (chat) =>
+    chat.sendChat({
+      target: conversation.target,
+      requestId: 'send',
+      text: 'Question',
+    }),
+  );
   await started.promise;
   await runtime.runPromise(control.setAdmissionsOpen(false));
   assert.equal(await runtime.runPromise(control.hasActiveWork()), true);

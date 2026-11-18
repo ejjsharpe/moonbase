@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import type { makeChatCalls } from '@moonbase/application/testing/service-calls';
+import { type ErrorGroup, getErrorGroup, isKnownError } from '@moonbase/contracts/error-groups';
 import { test, type TestContext } from 'node:test';
 import {
   Harness,
@@ -23,16 +25,17 @@ import {
   ChatStoreError,
   TranscriptChangedError,
 } from '@moonbase/contracts/chat-errors';
-import { ApplicationError } from '@moonbase/contracts/errors';
 import type {
   ChatSnapshot,
-  ChatClient,
   ChatTranscriptSource,
   ChatTranscriptPart,
 } from '@moonbase/contracts/chat';
 import { fixture, until } from '../runtime-fixture.ts';
+type ChatCalls = ReturnType<typeof makeChatCalls>;
+/** Whether a failure means `group` for its request. */
+const inGroup = (group: ErrorGroup) => (error: unknown) => getErrorGroup(error) === group;
 
-async function manifest(client: ChatClient, source: ChatTranscriptSource) {
+async function manifest(client: ChatCalls, source: ChatTranscriptSource) {
   const parts: ChatTranscriptPart[] = [];
   let cursor: string | undefined;
   do {
@@ -52,7 +55,7 @@ async function manifest(client: ChatClient, source: ChatTranscriptSource) {
   } while (cursor);
   return parts;
 }
-async function content(client: ChatClient, source: ChatTranscriptSource, part: ChatTranscriptPart) {
+async function content(client: ChatCalls, source: ChatTranscriptSource, part: ChatTranscriptPart) {
   const selection = { partId: part.partId, bytes: part.bytes, revision: part.revision };
   const chunks: Buffer[] = [];
   let cursor: string | undefined,
@@ -377,7 +380,7 @@ test('live Copy fixes a prefix and rejects replacement/finalization, while held 
   await setPartial('fixed prefix 😀 appended later');
   assert.equal((await content(f.client, source, part)).toString(), 'fixed prefix 😀');
   await setPartial('replaced prefix');
-  await assert.rejects(content(f.client, source, part), { code: 'Conflict' });
+  await assert.rejects(content(f.client, source, part), inGroup('conflict'));
   await setPartial('fixed prefix 😀');
   let held = 0,
     releaseRead!: () => void;
@@ -398,7 +401,7 @@ test('live Copy fixes a prefix and rejects replacement/finalization, while held 
     async () => held,
     (value) => value === 1,
   );
-  const contentFailure = assert.rejects(content(f.client, source, part), { code: 'Conflict' });
+  const contentFailure = assert.rejects(content(f.client, source, part), inGroup('conflict'));
   await until(
     async () => held,
     (value) => value === 2,
@@ -414,7 +417,7 @@ test('live Copy fixes a prefix and rejects replacement/finalization, while held 
   assert(old.run);
   assert(!old.entries.some((row) => row.text === 'Final'));
   assert.equal(old.transcriptBoundary, view.transcriptBoundary);
-  await assert.rejects(manifest(f.client, source), { code: 'Conflict' });
+  await assert.rejects(manifest(f.client, source), inGroup('conflict'));
 });
 
 test("a running response's snapshot carries its reply text whole within the live budget", async (t) => {
@@ -505,7 +508,7 @@ test('same-attempt restart commits the old partial without treating it as the su
   assert.equal(successor.taskId, source.taskId);
   assert.equal(successor.attempt, source.attempt);
   assert.notEqual(successor.incarnation, source.incarnation);
-  await assert.rejects(manifest(f.client, source), { code: 'Conflict' });
+  await assert.rejects(manifest(f.client, source), inGroup('conflict'));
   const partial = next.entries.find((entry) =>
     entry.transcript?.parts.some((part) => part.state === 'interrupted'),
   )!;
@@ -598,7 +601,7 @@ test('scheduler-finalized partial without attribution cannot mix with a held liv
   const raw = await original((tx) => tx.entry(Number(partial.id) as EntryId), context);
   assert.equal(raw?.byTaskId, undefined);
   assert(!JSON.stringify(final).includes('private-scheduler-canary'));
-  await assert.rejects(manifest(f.client, source), { code: 'Conflict' });
+  await assert.rejects(manifest(f.client, source), inGroup('conflict'));
 });
 
 test('cancelled read releases its caller, keeps the SDK owned through settlement and leaves Stop/other conversations responsive', async (t) => {
@@ -666,7 +669,7 @@ test('cancelled read releases its caller, keeps the SDK owned through settlement
     { source },
     { signal: abort.signal },
   );
-  const rejected = assert.rejects(pending, { code: 'Cancelled' });
+  const rejected = assert.rejects(pending, inGroup('cancelled'));
   await until(async () => held, Boolean);
   abort.abort();
   await rejected;
@@ -940,14 +943,14 @@ test('completed nested results read their exact retained output, patch and diagn
       },
     );
     try {
-      await assert.rejects(manifest(f.client, source), { code: 'Persistence' });
+      await assert.rejects(manifest(f.client, source), inGroup('storage'));
     } finally {
       mocked.mock.restore();
     }
   }
   release();
   await getHarness().waitForTask(Number(result.parentTaskId) as TaskId, context);
-  await assert.rejects(content(f.client, source, result), { code: 'Conflict' });
+  await assert.rejects(content(f.client, source, result), inGroup('conflict'));
 });
 
 for (const mode of ['modified', 'blocked'] as const)
@@ -1121,7 +1124,7 @@ for (const mode of ['modified', 'blocked'] as const)
         ),
       );
     }
-    await assert.rejects(manifest(f.client, pendingSource), { code: 'Conflict' });
+    await assert.rejects(manifest(f.client, pendingSource), inGroup('conflict'));
     releaseParent();
     await getHarness().waitForTask(Number(requested.parentTaskId) as TaskId, context);
   });
@@ -1218,7 +1221,7 @@ test('watch recaptures a held nested retirement while explicit content selection
     async () => held,
     (count) => count === 1,
   );
-  const changed = assert.rejects(content(f.client, f.source, f.part), { code: 'Conflict' });
+  const changed = assert.rejects(content(f.client, f.source, f.part), inGroup('conflict'));
   await until(
     async () => held,
     (count) => count === 2,
@@ -1294,13 +1297,14 @@ test('snapshot retirement recovery preserves ordinary errors and stops after thr
     );
     try {
       await assert.rejects(f.client.command('getChat', { target: f.target }), (error) => {
-        assert(ApplicationError.is(error));
+        assert(isKnownError(error));
         const code = failure === 'missing-active' ? 'Conflict' : failure;
+        const groups = { Conflict: 'conflict', Persistence: 'storage', Unauthorized: 'access' };
         assert.equal(
-          error.code,
-          code === 'wrong-index' || code === 'unknown' ? 'Persistence' : code,
+          getErrorGroup(error),
+          code === 'wrong-index' || code === 'unknown' ? 'storage' : groups[code],
         );
-        assert(!error.message.includes('private-retirement-read-canary'));
+        assert(!(error as Error).message.includes('private-retirement-read-canary'));
         return true;
       });
       assert.equal(reads, 1);
@@ -1329,7 +1333,7 @@ test('snapshot retirement recovery preserves ordinary errors and stops after thr
     };
   });
   try {
-    await assert.rejects(f.client.command('getChat', { target: f.target }), { code: 'Conflict' });
+    await assert.rejects(f.client.command('getChat', { target: f.target }), inGroup('conflict'));
     assert.equal(reads, 3);
   } finally {
     missing.mock.restore();
@@ -1427,7 +1431,7 @@ test('an unsafe queued refresh does not suppress an ordinary nested read Conflic
     throw new TranscriptChangedError({ change: 'view' });
   });
   const views: ChatSnapshot[] = [],
-    errors: ApplicationError[] = [];
+    errors: unknown[] = [];
   const close = f.client.watch(
     { target: f.target },
     (view) => views.push(view),
@@ -1441,10 +1445,13 @@ test('an unsafe queued refresh does not suppress an ordinary nested read Conflic
     (count) => count > 0,
   );
   assert.equal(reads, 1);
-  assert.equal(errors[0].code, 'Conflict');
-  assert.equal(errors[0].message, new TranscriptChangedError({ change: 'view' }).message);
+  assert.equal(getErrorGroup(errors[0]), 'conflict');
+  assert.equal(
+    (errors[0] as Error).message,
+    new TranscriptChangedError({ change: 'view' }).message,
+  );
   assert.deepEqual(views, []);
-  await assert.rejects(close(), { code: 'Conflict' });
+  await assert.rejects(close(), inGroup('conflict'));
 });
 
 test('closing observation and disposing the root retain a held nested SDK read through settlement', async (t) => {

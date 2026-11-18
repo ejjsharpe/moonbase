@@ -4,7 +4,7 @@ import { Harness, type ConversationId, type EntryRecord } from '@earendil-works/
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import type { ChatOutput } from '@moonbase/contracts/chat';
-import { fixture } from '../runtime-fixture.ts';
+import { fixture, runChat } from '../runtime-fixture.ts';
 
 test('a continuation does not enumerate more than the declared 32-part work bound', async (t) => {
   let harness!: Harness;
@@ -69,11 +69,13 @@ test('a continuation does not enumerate more than the declared 32-part work boun
   do {
     visits = 0;
     indexedVisits = 0;
-    const page: ChatOutput<'findChatTranscript'> = await f.client.command('findChatTranscript', {
-      target,
-      query: 'absent',
-      ...(cursor ? { cursor } : {}),
-    });
+    const page: ChatOutput<'findChatTranscript'> = await runChat(f.runtime, (chat) =>
+      chat.findChatTranscript({
+        target,
+        query: 'absent',
+        ...(cursor ? { cursor } : {}),
+      }),
+    );
     counts.push(visits);
     indexedCounts.push(indexedVisits);
     cursor = page.nextCursor;
@@ -171,11 +173,13 @@ test('direct message and auxiliary positions bound empty-message work and preser
     const pages: ChatOutput<'findChatTranscript'>[] = [];
     do {
       visits = 0;
-      const page = await f.client.command('findChatTranscript', {
-        target,
-        query: 'needle',
-        ...(cursor ? { cursor } : {}),
-      });
+      const page = await runChat(f.runtime, (chat) =>
+        chat.findChatTranscript({
+          target,
+          query: 'needle',
+          ...(cursor ? { cursor } : {}),
+        }),
+      );
       assert(visits <= 33, `message reads: ${visits}`);
       pages.push(page);
       cursor = page.nextCursor ?? undefined;

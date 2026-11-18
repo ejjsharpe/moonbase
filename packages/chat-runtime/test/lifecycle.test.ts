@@ -1,12 +1,11 @@
 import type { TaskId, ConversationId } from '@earendil-works/pi-durable';
+import { type ErrorGroup, getErrorGroup, isKnownError } from '@moonbase/contracts/error-groups';
 import assert from 'node:assert/strict';
 import { test, mock } from 'node:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ManagedRuntime } from 'effect';
-import { toChatApplicationError } from '@moonbase/contracts/chat-legacy-errors';
-import { ApplicationError } from '@moonbase/contracts/workspace';
 import { createModels } from '@earendil-works/pi-ai/models';
 import {
   fauxAssistantMessage,
@@ -18,11 +17,12 @@ import { Type } from 'typebox';
 import { NodeSqliteDatabase } from '@earendil-works/chord/sqlite/node';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
-import { Effect, Layer } from 'effect';
-import { runApplicationEffect } from '@moonbase/application/chat/promises';
+import { Cause, Effect, Exit, Layer } from 'effect';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
 import { ChatService } from '@moonbase/contracts/services';
 import { session, delay, until, fixture, localPiRuntime } from './runtime-fixture.ts';
+/** Whether a failure means `group` for its request. */
+const inGroup = (group: ErrorGroup) => (error: unknown) => getErrorGroup(error) === group;
 
 test('busy reservation stays visible; view unsubscribe and caller cancellation never Stop admitted work', async (t) => {
   const f = await fixture(t),
@@ -51,9 +51,10 @@ test('busy reservation stays visible; view unsubscribe and caller cancellation n
   );
   await off();
   const count = events.length;
-  await assert.rejects(f.client.command('sendChat', { target, requestId: 'two', text: 'Busy' }), {
-    code: 'Conflict',
-  });
+  await assert.rejects(
+    f.client.command('sendChat', { target, requestId: 'two', text: 'Busy' }),
+    inGroup('conflict'),
+  );
   assert.equal(
     (await f.client.command('getChatSend', { target, requestId: 'two' }))?.admission,
     'reserved',
@@ -66,7 +67,7 @@ test('busy reservation stays visible; view unsubscribe and caller cancellation n
       { target, requestId: 'never', text: 'Never' },
       { signal: abort.signal },
     ),
-    { code: 'Cancelled' },
+    inGroup('cancelled'),
   );
   assert.equal(await f.client.command('getChatSend', { target, requestId: 'never' }), null);
   release();
@@ -104,7 +105,7 @@ test('exact task Stop settles and cannot abort a later task', async (t) => {
   );
   await assert.rejects(
     f.client.command('stopChat', { stop: { ...stop, taskId: null }, requestId: 'stop' }),
-    { code: 'InvalidInput' },
+    inGroup('refusal'),
   );
 });
 
@@ -143,7 +144,7 @@ test('caller cancellation after persisted admission closes only its wait', async
     call = f.client.command('sendChat', input, { signal: abort.signal });
   await pending;
   abort.abort();
-  await assert.rejects(call, { code: 'Cancelled' });
+  await assert.rejects(call, inGroup('cancelled'));
   release();
   await until(
     () => f.client.command('getChat', { target }),
@@ -266,7 +267,7 @@ test('watch limits, pending unsubscribe/root disposal and arbitrary failing rele
     () => Promise.resolve(errors.length),
     (n) => n === 1,
   );
-  assert.equal((errors[0] as { code: string }).code, 'Unavailable');
+  assert.equal(getErrorGroup(errors[0]), 'unavailable');
   const closed = await Promise.allSettled(stops.map((off) => off()));
   assert.equal(closed.filter((result) => result.status === 'rejected').length, 1);
   await f.restart();
@@ -300,8 +301,8 @@ test('watch limits, pending unsubscribe/root disposal and arbitrary failing rele
     );
   await until(() => Promise.resolve(observed), Boolean);
   await assert.rejects(off(), (error: unknown) => {
-    assert(ApplicationError.is(error));
-    assert(!error.message.includes(canary));
+    assert.equal((error as { _tag?: unknown })._tag, 'ResourceReleaseError');
+    assert(!JSON.stringify(error).includes(canary) && !String(error).includes(canary));
     return true;
   });
   assert.equal(failures.length, 0);
@@ -321,14 +322,14 @@ test('a watch Pi cannot subscribe is unavailable, so its client watches again, a
   t.after(() => mock.restoreAll());
   const f = await fixture(t),
     target = await f.create();
-  const failures: ApplicationError[] = [];
+  const failures: Error[] = [];
   const off = f.client.watch(
     { target },
     () => {},
-    (error) => failures.push(error),
+    (error) => failures.push(error as Error),
   );
   await until(async () => failures.length, Boolean);
-  assert.equal(failures[0]!.code, 'Unavailable');
+  assert.equal(getErrorGroup(failures[0]), 'unavailable');
   assert(!failures[0]!.message.includes(canary));
   await off().catch(() => {});
 });
@@ -446,9 +447,9 @@ test('queued admission cancellation releases its lease without overtaking held S
     );
   await delay(10);
   queuedAbort.abort();
-  await assert.rejects(queued, { code: 'Cancelled' });
+  await assert.rejects(queued, inGroup('cancelled'));
   abort.abort();
-  await assert.rejects(first, { code: 'Cancelled' });
+  await assert.rejects(first, inGroup('cancelled'));
   const successor = f.client.command('sendChat', input);
   f.faux.setResponses([
     async (_messages, options) => {
@@ -807,10 +808,7 @@ test('partial acquisition attempts each transferred resource release once and pr
     async function (this: SqliteStorage, context: Parameters<typeof closeStorage>[0]) {
       counts.storage++;
       await closeStorage.call(this, context);
-      throw new ApplicationError({
-        code: 'Persistence',
-        message: 'Controlled storage cleanup failure',
-      });
+      throw Error('Controlled storage cleanup failure');
     },
   );
   t.after(async () => {
@@ -818,24 +816,27 @@ test('partial acquisition attempts each transferred resource release once and pr
     await root.dispose();
     await rm(directory, { recursive: true, force: true });
   });
-  await assert.rejects(
-    runApplicationEffect(
-      root,
-      Effect.scoped(
-        Layer.build(
-          localPiRuntime({ ...session, databasePath: join(directory, 'chat.sqlite'), models }),
-        ),
-      ).pipe(Effect.mapError(toChatApplicationError)),
+  const exit = await root.runPromiseExit(
+    Effect.scoped(
+      Layer.build(
+        localPiRuntime({ ...session, databasePath: join(directory, 'chat.sqlite'), models }),
+      ),
     ),
-    (error: unknown) => {
-      assert(ApplicationError.is(error));
-      assert.equal(error.code, 'Persistence');
-      assert(error.message.includes('Controlled storage cleanup failure'));
-      assert(!error.message.includes(canary));
-      assert(!error.message.includes(directory));
-      return true;
-    },
   );
+  // The open's own failure, safe to show, and the failed release, naming nothing.
+  assert(Exit.isFailure(exit));
+  const failures = exit.cause.reasons.flatMap((reason) => {
+    if (Cause.isFailReason(reason)) return [reason.error];
+    if (Cause.isDieReason(reason)) return [reason.defect];
+    return [];
+  });
+  assert(failures.some((failure) => getErrorGroup(failure) === 'storage'));
+  assert(
+    failures.some((failure) => (failure as { _tag?: unknown })._tag === 'ResourceReleaseError'),
+  );
+  const shown = JSON.stringify(failures) + failures.map(String).join();
+  assert(!shown.includes(canary) && !shown.includes(directory));
+  assert(!shown.includes('Controlled storage cleanup failure'));
   assert.deepEqual(counts, { database: 1, storage: 1 });
 });
 
@@ -921,8 +922,8 @@ test('root disposal retains every terminal waiter cleanup failure raised during 
   assert.equal(failures.length, count);
   assert(errors.length > 0 && errors.every((error) => error._tag === 'ChatStoreError'));
   for (const result of await Promise.all(stops)) {
-    assert(ApplicationError.is(result));
-    assert.equal(result.code, 'Cancelled');
+    assert(isKnownError(result));
+    assert.equal(getErrorGroup(result), 'cancelled');
   }
   assert.equal(cancelled, count);
   assert.equal(waiters, 0);

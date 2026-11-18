@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
+import { type ErrorGroup, getErrorGroup } from '@moonbase/contracts/error-groups';
 import { test } from 'node:test';
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import { createRegistry, defineExtension, defineTool } from '@earendil-works/pi-durable';
 import { Type } from 'typebox';
+import { Effect, Fiber, Stream } from 'effect';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
-import { until, fixture } from '../runtime-fixture.ts';
+import { ChatService } from '@moonbase/contracts/services';
+import { until, fixture, runChat } from '../runtime-fixture.ts';
+/** Whether a failure means `group` for its request. */
+const inGroup = (group: ErrorGroup) => (error: unknown) => getErrorGroup(error) === group;
 
 test('counted tools publish bounded progress; old task Stop cannot follow generation handover', async (t) => {
   let tools = 0,
@@ -50,9 +55,11 @@ test('counted tools publish bounded progress; old task Stop cannot follow genera
       return fauxAssistantMessage('Final');
     },
   ]);
-  await f.client.command('sendChat', { target, requestId: 'tools', text: 'Run counted tool' });
+  await runChat(f.runtime, (chat) =>
+    chat.sendChat({ target, requestId: 'tools', text: 'Run counted tool' }),
+  );
   const active = await until(
-    () => f.client.command('getChat', { target }),
+    () => runChat(f.runtime, (chat) => chat.getChat({ target })),
     (s) =>
       !!s.run?.transcript?.parts.some(
         (p) => p.kind === 'result' && p.toolName === 'counted' && p.text.length,
@@ -68,20 +75,23 @@ test('counted tools publish bounded progress; old task Stop cannot follow genera
   assert(Buffer.byteLength(JSON.stringify(active)) <= 256 * 1024);
   release();
   await entered;
-  const successor = await f.client.command('getChat', { target });
+  const successor = await runChat(f.runtime, (chat) => chat.getChat({ target }));
   assert.notEqual(successor.run!.stop.taskId, old.taskId);
   assert.equal(successor.run!.stop.submissionId, old.submissionId);
-  const outcome = await f.client.command('stopChat', { stop: old, requestId: 'old-task' });
+  const outcome = await runChat(f.runtime, (chat) =>
+    chat.stopChat({ stop: old, requestId: 'old-task' }),
+  );
   assert.ok(['terminal', 'superseded'].includes(outcome.outcome));
   finish();
   await until(
-    () => f.client.command('getChat', { target }),
+    () => runChat(f.runtime, (chat) => chat.getChat({ target })),
     (s) => s.run === null && s.entries.some((e) => e.text === 'Final'),
   );
   assert.equal(tools, 1);
   await f.restart();
   assert.equal(
-    (await f.client.command('getChatSend', { target, requestId: 'tools' }))?.admission,
+    (await runChat(f.runtime, (chat) => chat.getChatSend({ target, requestId: 'tools' })))
+      ?.admission,
     'admitted',
   );
   assert.equal(tools, 1);
@@ -94,17 +104,19 @@ test('bounded escaped Unicode history pages retain every durable entry ID withou
     text = '😀\\"\n\u0001\u0000'.repeat(2000);
   f.faux.setResponses(Array.from({ length: 40 }, () => fauxAssistantMessage(text)));
   for (let i = 0; i < 40; i++) {
-    await f.client.command('sendChat', {
-      target,
-      requestId: 'message-' + i,
-      text: 'Question ' + i,
-    });
+    await runChat(f.runtime, (chat) =>
+      chat.sendChat({
+        target,
+        requestId: 'message-' + i,
+        text: 'Question ' + i,
+      }),
+    );
     await until(
-      () => f.client.command('getChat', { target }),
+      () => runChat(f.runtime, (chat) => chat.getChat({ target })),
       (s) => !s.run && s.state === 'idle',
     );
   }
-  let page = await f.client.command('getChat', { target });
+  let page = await runChat(f.runtime, (chat) => chat.getChat({ target }));
   const seen = new Set<string>();
   let count = 0;
   while (true) {
@@ -120,17 +132,19 @@ test('bounded escaped Unicode history pages retain every durable entry ID withou
         count++;
       }
     }
-    if (!page.olderCursor) break;
-    const older = await f.client.command('getChatHistory', { target, cursor: page.olderCursor });
+    const cursor = page.olderCursor;
+    if (!cursor) break;
+    const older = await runChat(f.runtime, (chat) => chat.getChatHistory({ target, cursor }));
     page = { ...page, ...older };
   }
   assert.equal(count, 40);
   const other = await f.create('other');
-  const initial = await f.client.command('getChat', { target });
-  assert(initial.olderCursor);
+  const initial = await runChat(f.runtime, (chat) => chat.getChat({ target }));
+  const cursor = initial.olderCursor;
+  assert(cursor);
   await assert.rejects(
-    f.client.command('getChatHistory', { target: other, cursor: initial.olderCursor }),
-    { code: 'InvalidInput' },
+    runChat(f.runtime, (chat) => chat.getChatHistory({ target: other, cursor })),
+    inGroup('refusal'),
   );
 });
 
@@ -175,31 +189,31 @@ test('ten actual tools keep the live snapshot bounded and view disposal never st
       fauxAssistantMessage('All complete'),
     ]);
     const snapshots: ChatSnapshot[] = [],
-      off = f.client.watch(
-        { target },
-        (s) => snapshots.push(s),
-        (e) => {
-          throw e;
-        },
+      watching = f.runtime.runFork(
+        Effect.flatMap(ChatService, (chat) =>
+          Stream.runForEach(chat.watch({ target }), (s) => Effect.sync(() => snapshots.push(s))),
+        ),
       );
-    await f.client.command('sendChat', { target, requestId: 'many', text: 'Ten tools' });
+    await runChat(f.runtime, (chat) =>
+      chat.sendChat({ target, requestId: 'many', text: 'Ten tools' }),
+    );
     await until(
       () => Promise.resolve(calls),
       (n) => n === 10,
     );
     const view = await until(
-      () => f.client.command('getChat', { target }),
+      () => runChat(f.runtime, (chat) => chat.getChat({ target })),
       (s) =>
         !!s.run?.transcript?.parts.some(
           (p) => p.kind === 'result' && p.toolName === 'many' && p.text.length > 0,
         ),
     );
     assert(Buffer.byteLength(JSON.stringify(view)) <= 256 * 1024);
-    await off();
+    await Effect.runPromise(Fiber.interrupt(watching));
     const before = snapshots.length;
     release();
     await until(
-      () => f.client.command('getChat', { target }),
+      () => runChat(f.runtime, (chat) => chat.getChat({ target })),
       (s) => !s.run && s.entries.some((e) => e.text === 'All complete'),
     );
     assert.equal(snapshots.length, before);
@@ -214,14 +228,16 @@ test('model failure remains failed across restart and never exposes raw provider
     target = await f.create(),
     secret = 'private-provider-diagnostic-canary';
   f.faux.setResponses([fauxAssistantMessage('', { stopReason: 'error', errorMessage: secret })]);
-  await f.client.command('sendChat', { target, requestId: 'failure', text: 'Fail safely' });
+  await runChat(f.runtime, (chat) =>
+    chat.sendChat({ target, requestId: 'failure', text: 'Fail safely' }),
+  );
   const failed = await until(
-    () => f.client.command('getChat', { target }),
+    () => runChat(f.runtime, (chat) => chat.getChat({ target })),
     (s) => !s.run && s.state === 'failed',
   );
   assert(!JSON.stringify(failed).includes(secret));
   await f.restart();
-  const recovered = await f.client.command('getChat', { target });
+  const recovered = await runChat(f.runtime, (chat) => chat.getChat({ target }));
   assert.equal(recovered.state, 'failed');
   assert(!JSON.stringify(recovered).includes(secret));
   assert.equal(f.faux.state.callCount, 1);
@@ -273,9 +289,11 @@ test('completed failing tool activity is projected as failed while another tool 
       }),
       fauxAssistantMessage('Finished'),
     ]);
-    await f.client.command('sendChat', { target, requestId: 'status', text: 'Show tool states' });
+    await runChat(f.runtime, (chat) =>
+      chat.sendChat({ target, requestId: 'status', text: 'Show tool states' }),
+    );
     const view = await until(
-      () => f.client.command('getChat', { target }),
+      () => runChat(f.runtime, (chat) => chat.getChat({ target })),
       (s) =>
         !!s.run?.transcript?.parts.some(
           (p) => p.kind === 'result' && p.toolName === 'fails' && p.state !== 'running',

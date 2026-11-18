@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
-import { session, until, fixture } from '../runtime-fixture.ts';
+import { session, until, fixture, runChat } from '../runtime-fixture.ts';
 
 test('a listing reports each chat activity as its snapshot does, with when it last ran', async (t) => {
   const f = await fixture(t);
@@ -11,43 +11,48 @@ test('a listing reports each chat activity as its snapshot does, with when it la
     stopped = await f.create('stopped');
   const listed = async () =>
     new Map(
-      (await f.client.command('listChats', { session })).conversations.map((chat) => [
-        chat.target.conversationId,
-        chat,
-      ]),
+      (await runChat(f.runtime, (chat) => chat.listChats({ session }))).conversations.map(
+        (chat) => [chat.target.conversationId, chat],
+      ),
     );
   const before = (await listed()).get(fresh.conversationId)!;
   assert.deepEqual(before.activity, { state: 'idle', at: before.createdAt });
 
   f.faux.setResponses([fauxAssistantMessage('Done')]);
-  await f.client.command('sendChat', { target: finished, requestId: 'send-finished', text: 'Go' });
+  await runChat(f.runtime, (chat) =>
+    chat.sendChat({ target: finished, requestId: 'send-finished', text: 'Go' }),
+  );
   await until(
-    () => f.client.command('getChat', { target: finished }),
+    () => runChat(f.runtime, (chat) => chat.getChat({ target: finished })),
     (s) => !s.run && s.state === 'idle' && s.entries.some((e) => e.text === 'Done'),
   );
   f.faux.setResponses([fauxAssistantMessage('', { stopReason: 'error', errorMessage: 'x' })]);
-  await f.client.command('sendChat', { target: failed, requestId: 'send-failed', text: 'Fail' });
+  await runChat(f.runtime, (chat) =>
+    chat.sendChat({ target: failed, requestId: 'send-failed', text: 'Fail' }),
+  );
   await until(
-    () => f.client.command('getChat', { target: failed }),
+    () => runChat(f.runtime, (chat) => chat.getChat({ target: failed })),
     (s) => !s.run && s.state === 'failed',
   );
   f.faux.setResponses([fauxAssistantMessage('a'.repeat(10000))]);
-  await f.client.command('sendChat', { target: stopped, requestId: 'send-stopped', text: 'Long' });
+  await runChat(f.runtime, (chat) =>
+    chat.sendChat({ target: stopped, requestId: 'send-stopped', text: 'Long' }),
+  );
   const running = await until(
-    () => f.client.command('getChat', { target: stopped }),
+    () => runChat(f.runtime, (chat) => chat.getChat({ target: stopped })),
     (s) => !!s.run,
   );
   assert.equal((await listed()).get(stopped.conversationId)!.activity!.state, 'running');
-  await f.client.command('stopChat', { stop: running.run!.stop, requestId: 'stop' });
+  await runChat(f.runtime, (chat) => chat.stopChat({ stop: running.run!.stop, requestId: 'stop' }));
   await until(
-    () => f.client.command('getChat', { target: stopped }),
+    () => runChat(f.runtime, (chat) => chat.getChat({ target: stopped })),
     (s) => s.run === null,
   );
 
   const after = await listed();
   for (const target of [finished, failed, stopped]) {
     const chat = after.get(target.conversationId)!;
-    const snapshot = await f.client.command('getChat', { target });
+    const snapshot = await runChat(f.runtime, (chat) => chat.getChat({ target }));
     assert.equal(chat.activity!.state, snapshot.state, target.conversationId);
     assert(Date.parse(chat.activity!.at) >= Date.parse(chat.createdAt));
   }

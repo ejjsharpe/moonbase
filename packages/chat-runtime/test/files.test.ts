@@ -4,22 +4,21 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Effect, Layer, ManagedRuntime, type Duration, type Scope } from 'effect';
+import { Effect, Exit, Layer, ManagedRuntime, type Duration, type Scope } from 'effect';
 import { TestClock } from 'effect/testing';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import type { ChildProcessSpawner } from 'effect/process';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
-import { makeChatClient } from '@moonbase/application/chat/clients';
-import { ApplicationError } from '@moonbase/contracts/workspace';
 import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
+import { ChatService } from '@moonbase/contracts/services';
 import {
   ListingError,
   makeChatFileIndex,
   type ChatFileIndexOptions,
   type ChatFileListingRun,
 } from '../src/files.ts';
-import { fixture, isRunning, localPiRuntime, session } from './runtime-fixture.ts';
+import { fixture, isRunning, localPiRuntime, session, runChat } from './runtime-fixture.ts';
 
 const which = (name: string) => {
   try {
@@ -229,37 +228,47 @@ test('a local chat searches its own folder; a new chat only an approved one', as
     await runtime.dispose();
     await rm(join(approved, '..', `${approved.split('/').at(-1)}.sqlite`), { force: true });
   });
-  const client = makeChatClient(runtime);
   assert.deepEqual(
-    paths(await client.command('findChatFiles', { session, cwd: approved, query: '' })),
+    paths(
+      await runChat(runtime, (chat) => chat.findChatFiles({ session, cwd: approved, query: '' })),
+    ),
     expected,
   );
   await assert.rejects(
-    client.command('findChatFiles', { session, cwd: other, query: '' }),
-    (error) => ApplicationError.is(error) && error.code === 'Unauthorized',
+    runChat(runtime, (chat) => chat.findChatFiles({ session, cwd: other, query: '' })),
+    FolderRefusedError,
   );
-  const { conversation } = await client.command('createChat', {
-    session,
-    requestId: 'create',
-    title: 'Saved chat',
-    settings: { cwd: approved, model: { provider: faux.provider.id, modelId: faux.getModel().id } },
-  });
-  const result = await client.command('findChatFiles', {
-    target: conversation.target,
-    query: 'notes',
-  });
+  const { conversation } = await runChat(runtime, (chat) =>
+    chat.createChat({
+      session,
+      requestId: 'create',
+      title: 'Saved chat',
+      settings: {
+        cwd: approved,
+        model: { provider: faux.provider.id, modelId: faux.getModel().id },
+      },
+    }),
+  );
+  const result = await runChat(runtime, (chat) =>
+    chat.findChatFiles({
+      target: conversation.target,
+      query: 'notes',
+    }),
+  );
   assert.equal(result.matches[0]?.path, 'src/app/My notes.md');
 });
 
 test('a Send carries the mentions its text spells', async (t) => {
   const f = await fixture(t);
   const target = await f.create();
-  const receipt = await f.client.command('sendChat', {
-    target,
-    requestId: 'send',
-    text: 'Read @README.md and @"docs/My notes.md"',
-    mentions: [{ path: 'README.md' }, { path: 'docs/My notes.md' }],
-  });
+  const receipt = await runChat(f.runtime, (chat) =>
+    chat.sendChat({
+      target,
+      requestId: 'send',
+      text: 'Read @README.md and @"docs/My notes.md"',
+      mentions: [{ path: 'README.md' }, { path: 'docs/My notes.md' }],
+    }),
+  );
   assert.equal(receipt.admission, 'admitted');
 });
 
@@ -342,17 +351,19 @@ test('a cancelled search returns at once, and its stalled listing is stopped at 
       await rm(bin, { recursive: true, force: true });
     }
   });
-  const client = makeChatClient(runtime),
-    input = { session, cwd: root, query: '' };
+  const input = { session, cwd: root, query: '' };
   const abort = new AbortController(),
-    cancelled = client.command('findChatFiles', input, { signal: abort.signal });
+    cancelled = runtime.runPromiseExit(
+      Effect.flatMap(ChatService, (chat) => chat.findChatFiles(input)),
+      { signal: abort.signal },
+    );
   const pid = await waitForPid(pids);
   abort.abort();
-  // The listing stays stalled until its budget, so a rejection means cancelling did not wait for it.
-  await assert.rejects(cancelled, { code: 'Cancelled' });
+  // The listing stays stalled until its budget, so an exit means cancelling did not wait for it.
+  assert(Exit.hasInterrupts(await cancelled));
   // The listing is shared, so cancelling one search leaves it to finish for the next.
   assert(isRunning(pid));
-  const searched = client.command('findChatFiles', input);
+  const searched = runChat(runtime, (chat) => chat.findChatFiles(input));
   await expireBudget(bin, (duration) => runtime.runPromise(TestClock.adjust(duration)));
   const result = await searched;
   assert.deepEqual(paths(result), ['README.md', 'src/app/main.ts']);
@@ -424,8 +435,7 @@ test('disposing the runtime stops its running listings and waits for them to exi
       await rm(bin, { recursive: true, force: true });
     }
   });
-  const client = makeChatClient(runtime);
-  const search = client.command('findChatFiles', { session, cwd: root, query: '' });
+  const search = runChat(runtime, (chat) => chat.findChatFiles({ session, cwd: root, query: '' }));
   search.catch(() => {});
   let pid: number | undefined, child: number | undefined;
   for (let i = 0; i < 500 && !(pid && child); i++) {

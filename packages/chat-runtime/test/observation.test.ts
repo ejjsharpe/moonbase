@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import type { makeChatCalls } from '@moonbase/application/testing/service-calls';
+import { type ErrorGroup, getErrorGroup } from '@moonbase/contracts/error-groups';
 import { test, type TestContext } from 'node:test';
 import { Effect, Fiber, Stream } from 'effect';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
@@ -19,15 +21,12 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { ChatService } from '@moonbase/contracts/services';
-import type {
-  ChatClient,
-  ChatSnapshot,
-  ChatTarget,
-  ChatHistoryPage,
-} from '@moonbase/contracts/chat';
-import type { ApplicationError } from '@moonbase/contracts/errors';
+import type { ChatSnapshot, ChatTarget, ChatHistoryPage } from '@moonbase/contracts/chat';
 import { Type } from 'typebox';
 import { fixture, until, delay } from './runtime-fixture.ts';
+type ChatCalls = ReturnType<typeof makeChatCalls>;
+/** Whether a failure means `group` for its request. */
+const inGroup = (group: ErrorGroup) => (error: unknown) => getErrorGroup(error) === group;
 
 function gate() {
   let release!: () => void;
@@ -36,17 +35,17 @@ function gate() {
   });
   return { promise, release };
 }
-function observe(t: TestContext, client: ChatClient, target: ChatTarget) {
+function observe(t: TestContext, client: ChatCalls, target: ChatTarget) {
   const views: ChatSnapshot[] = [],
-    errors: ApplicationError[] = [];
+    errors: Error[] = [];
   const off = client.watch(
     { target },
     (value) => views.push(value),
-    (error) => errors.push(error),
+    (error) => errors.push(error as Error),
   );
   t.after(async () => {
     await off().catch((error) => {
-      assert.equal(error.code, errors[0]?.code);
+      assert.equal(getErrorGroup(error), getErrorGroup(errors[0]));
     });
   });
   return {
@@ -460,9 +459,9 @@ for (const change of ['history', 'metadata', 'store', 'replacement'] as const)
     read.release();
     if (change === 'metadata' || change === 'store') {
       await until(async () => watch.errors.length, Boolean);
-      assert.equal(watch.errors[0].code, 'Unauthorized');
+      assert.equal(getErrorGroup(watch.errors[0]), 'access');
       assert.deepEqual(watch.views, []);
-      await assert.rejects(watch.off(), { code: 'Unauthorized' });
+      await assert.rejects(watch.off(), inGroup('access'));
     } else {
       const next = await watch.wait(() => true);
       assert.equal(watch.views.length, 1);
@@ -609,9 +608,9 @@ test('metadata authority changes fail visibly without publishing foreign state',
     (await tx.doc(metadata, conversationId(target), 'metadata', null)).identity = 'foreign';
   }, context);
   await until(async () => watch.errors.length, Boolean);
-  assert.equal(watch.errors[0].code, 'Unauthorized');
+  assert.equal(getErrorGroup(watch.errors[0]), 'access');
   assert.equal(watch.views.length, 1);
-  await assert.rejects(watch.off(), { code: 'Unauthorized' });
+  await assert.rejects(watch.off(), inGroup('access'));
 });
 
 test('retiring LiveDoc reports a source failure, releases subscriptions and never recreates the document', async (t) => {
@@ -622,14 +621,14 @@ test('retiring LiveDoc reports a source failure, releases subscriptions and neve
   await watch.wait((view) => view.state === 'idle');
   await measured.harness().commit((tx) => tx.retireDoc(LiveDoc, conversationId(target)), context);
   await until(async () => watch.errors.length, Boolean);
-  assert.equal(watch.errors[0].code, 'Persistence');
+  assert.equal(getErrorGroup(watch.errors[0]), 'storage');
   assert.equal(watch.views.length, 1);
   assert.equal(
     await measured.harness().snapshot(LiveDoc, conversationId(target), context),
     undefined,
   );
   assert.equal(measured.counts.subscriptions, 0);
-  await assert.rejects(watch.off(), { code: 'Persistence' });
+  await assert.rejects(watch.off(), inGroup('storage'));
 });
 
 for (const policy of [
@@ -704,9 +703,10 @@ for (const policy of [
     assert.notEqual(source.incarnation, old.incarnation);
     assert.notEqual(next.transcriptBoundary, first.transcriptBoundary);
     assert(!next.message?.includes('parked'));
-    await assert.rejects(f.client.command('getChatTranscriptContent', { source: old }), {
-      code: 'Conflict',
-    });
+    await assert.rejects(
+      f.client.command('getChatTranscriptContent', { source: old }),
+      inGroup('conflict'),
+    );
     hold.release();
     await watch.wait(
       (view) =>
@@ -959,11 +959,11 @@ for (const failure of [false, true])
       commit.mock.restore();
     } else await measured.harness().close(context);
     await until(async () => watch.errors.length, Boolean);
-    assert.equal(watch.errors[0].code, 'Persistence');
+    assert.equal(getErrorGroup(watch.errors[0]), 'storage');
     assert(!JSON.stringify(watch.errors).includes('private-storage-canary'));
     assert.equal(watch.views.length, 1);
     assert.equal(measured.counts.subscriptions, 0);
-    await assert.rejects(watch.off(), { code: 'Persistence' });
+    await assert.rejects(watch.off(), inGroup('storage'));
   });
 
 test('a committed reset marker refreshes the selected retained window without hiding prior entries', async (t) => {

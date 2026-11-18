@@ -1,20 +1,25 @@
 import assert from 'node:assert/strict';
+import { type ErrorGroup, getErrorGroup } from '@moonbase/contracts/error-groups';
 import { test } from 'node:test';
 import { Harness, type ConversationId } from '@earendil-works/pi-durable';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
-import type { ChatClient, ChatTarget, ChatOutput } from '@moonbase/contracts/chat';
-import { fixture } from '../runtime-fixture.ts';
+import type { ChatTarget, ChatOutput } from '@moonbase/contracts/chat';
+import { fixture, runChat, type ChatRuntime } from '../runtime-fixture.ts';
+/** Whether a failure means `group` for its request. */
+const inGroup = (group: ErrorGroup) => (error: unknown) => getErrorGroup(error) === group;
 
-async function collect(client: ChatClient, target: ChatTarget, query: string, cursor?: string) {
+async function collect(runtime: ChatRuntime, target: ChatTarget, query: string, cursor?: string) {
   const matches: ChatOutput<'findChatTranscript'>['matches'] = [];
   const pages: ChatOutput<'findChatTranscript'>[] = [];
   do {
-    const page = await client.command('findChatTranscript', {
-      target,
-      query,
-      ...(cursor ? { cursor } : {}),
-    });
+    const page = await runChat(runtime, (chat) =>
+      chat.findChatTranscript({
+        target,
+        query,
+        ...(cursor ? { cursor } : {}),
+      }),
+    );
     assert.equal(page.query, query);
     assert.deepEqual(page.target, target);
     assert.equal(page.cursor, cursor ?? null);
@@ -85,7 +90,7 @@ test('Find scans 1,100 mixed saved records and lazy long JSON with exact Unicode
     ['\r\n', ['\r\n']],
     ['[.*]', ['[.*]']],
   ]) {
-    const result = await collect(f.client, target, query as string);
+    const result = await collect(f.runtime, target, query as string);
     const found = result.matches.filter((match) => match.partId === 'm0.b2');
     assert.deepEqual(
       found.map((match) => text.slice(match.start, match.end)),
@@ -93,7 +98,7 @@ test('Find scans 1,100 mixed saved records and lazy long JSON with exact Unicode
     );
     assert(result.pages.some((page) => page.matches.length === 0 && page.nextCursor !== null));
   }
-  const needle = await collect(f.client, target, 'needle');
+  const needle = await collect(f.runtime, target, 'needle');
   assert(needle.matches.some((match) => match.partId === 'm0.b0'));
   const args = JSON.stringify(json);
   assert(
@@ -112,21 +117,23 @@ test('Find scans 1,100 mixed saved records and lazy long JSON with exact Unicode
     context,
   );
   assert.deepEqual(
-    (await collect(f.client, target, 'needle', needle.pages[0].startCursor)).matches,
+    (await collect(f.runtime, target, 'needle', needle.pages[0].startCursor)).matches,
     needle.matches,
   );
   assert.equal(
-    (await collect(f.client, target, 'needle')).matches.length,
+    (await collect(f.runtime, target, 'needle')).matches.length,
     needle.matches.length + 1,
   );
   for (const query of ['PRIVATE', 'REDACTED', 'IMAGESECRET'])
-    assert.deepEqual((await collect(f.client, target, query)).matches, []);
+    assert.deepEqual((await collect(f.runtime, target, query)).matches, []);
   await assert.rejects(
-    f.client.command('findChatTranscript', {
-      target: { ...target, actorId: 'foreign' },
-      query: 'needle',
-      cursor: needle.pages[0].startCursor,
-    }),
+    runChat(f.runtime, (chat) =>
+      chat.findChatTranscript({
+        target: { ...target, actorId: 'foreign' },
+        query: 'needle',
+        cursor: needle.pages[0].startCursor,
+      }),
+    ),
   );
 });
 
@@ -140,7 +147,7 @@ test('Find dense pages advance within a part and empty saved conversations compl
   );
   const f = await fixture(t),
     target = await f.create();
-  assert.equal((await collect(f.client, target, ' ')).pages[0].nextCursor, null);
+  assert.equal((await collect(f.runtime, target, ' ')).pages[0].nextCursor, null);
   await harness.commit(
     (tx) =>
       tx.appendEntry(Number(target.conversationId) as ConversationId, {
@@ -149,7 +156,7 @@ test('Find dense pages advance within a part and empty saved conversations compl
       }),
     context,
   );
-  const found = await collect(f.client, target, 'a');
+  const found = await collect(f.runtime, target, 'a');
   assert.equal(found.matches.length, 2000);
   assert.deepEqual(
     found.matches.map((match) => match.start),
@@ -177,10 +184,10 @@ test('Find cancellation leaves exact Stop and unrelated reads responsive while s
       return fauxAssistantMessage('Completed');
     },
   ]);
-  await f.client.command('sendChat', { target, requestId: 'run', text: 'Running' });
+  await runChat(f.runtime, (chat) => chat.sendChat({ target, requestId: 'run', text: 'Running' }));
   const { until } = await import('../runtime-fixture.ts');
   const view = await until(
-    () => f.client.command('getChat', { target }),
+    () => runChat(f.runtime, (chat) => chat.getChat({ target })),
     (view) => !!view.run,
   );
   let release!: () => void,
@@ -221,14 +228,18 @@ test('Find cancellation leaves exact Stop and unrelated reads responsive while s
     { target, query: 'Running' },
     { signal: abort.signal },
   );
-  const rejected = assert.rejects(pending, { code: 'Cancelled' });
+  const rejected = assert.rejects(pending, inGroup('cancelled'));
   await until(async () => held, Boolean);
   abort.abort();
   await rejected;
-  assert.equal((await f.client.command('getChat', { target: other })).state, 'idle');
+  assert.equal((await runChat(f.runtime, (chat) => chat.getChat({ target: other }))).state, 'idle');
   assert(
     ['pending', 'terminal', 'stopped'].includes(
-      (await f.client.command('stopChat', { stop: view.run!.stop, requestId: 'stop' })).outcome,
+      (
+        await runChat(f.runtime, (chat) =>
+          chat.stopChat({ stop: view.run!.stop, requestId: 'stop' }),
+        )
+      ).outcome,
     ),
   );
   let disposed = false;
@@ -275,7 +286,7 @@ test('Find JSON token continuations preserve string escaping, long keys, nesting
       match.index,
       match.index + match[0].length,
     ]);
-    const result = await collect(f.client, target, query);
+    const result = await collect(f.runtime, target, query);
     assert.deepEqual(
       result.matches.map((match) => [match.start, match.end]),
       expected,
@@ -291,7 +302,6 @@ test('Find JSON token continuations preserve string escaping, long keys, nesting
 test('Find adapts dense escaped matches to actual JSON envelopes with maximum-size authorities', async (t) => {
   const { ManagedRuntime } = await import('effect');
   const { localPiRuntime } = await import('../runtime-fixture.ts');
-  const { makeChatClient } = await import('@moonbase/application/chat/clients');
   let harness!: Harness;
   const open = Harness.open;
   t.mock.method(
@@ -312,14 +322,15 @@ test('Find adapts dense escaped matches to actual JSON envelopes with maximum-si
     }),
   );
   try {
-    const client = makeChatClient(runtime);
     const target = (
-      await client.command('createChat', {
-        session,
-        requestId: 'dense',
-        title: 'Dense escaped source',
-        settings: f.settings,
-      })
+      await runChat(runtime, (chat) =>
+        chat.createChat({
+          session,
+          requestId: 'dense',
+          title: 'Dense escaped source',
+          settings: f.settings,
+        }),
+      )
     ).conversation.target;
     const query = '\u0001'.repeat(1024),
       text = query.repeat(40);
@@ -331,7 +342,7 @@ test('Find adapts dense escaped matches to actual JSON envelopes with maximum-si
         }),
       context,
     );
-    const result = await collect(client, target, query);
+    const result = await collect(runtime, target, query);
     assert.equal(result.matches.length, 40);
     assert(result.pages[0].matches.length < 32);
     let bytes = 0,
@@ -376,7 +387,7 @@ test('Find continuations inside deeply nested JSON with wide indexes always fit 
       }),
     context,
   );
-  const result = await collect(f.client, target, 'deepneedle');
+  const result = await collect(f.runtime, target, 'deepneedle');
   assert(result.pages.length > 2);
   for (const page of result.pages) assert((page.nextCursor ?? '').length <= 1024);
   assert.deepEqual(
@@ -439,11 +450,13 @@ test('lazy JSON matches JSON.stringify across escaped controls and lone/pair sur
     let cursor: string | null | undefined;
     const found: ChatOutput<'findChatTranscript'>['matches'] = [];
     do {
-      const page: ChatOutput<'findChatTranscript'> = await f.client.command('findChatTranscript', {
-        target,
-        query,
-        ...(cursor ? { cursor } : {}),
-      });
+      const page: ChatOutput<'findChatTranscript'> = await runChat(f.runtime, (chat) =>
+        chat.findChatTranscript({
+          target,
+          query,
+          ...(cursor ? { cursor } : {}),
+        }),
+      );
       found.push(...page.matches.filter((m) => m.partId === 'm0.details'));
       cursor = page.nextCursor;
     } while (cursor);

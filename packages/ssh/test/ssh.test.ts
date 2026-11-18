@@ -4,10 +4,10 @@ import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Effect } from 'effect';
-import { ApplicationError, type ObservationClose } from '@moonbase/contracts/workspace';
+import { getErrorGroup } from '@moonbase/contracts/error-groups';
 import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { ConnectionService } from '@moonbase/contracts/services';
-import { makeConnectionClient } from '@moonbase/application/chat/clients';
+import { makeConnectionCalls } from '@moonbase/application/testing/service-calls';
 import {
   alive,
   checkSystemPolicy,
@@ -28,9 +28,9 @@ test('independent public client connects once, verifies health, protects privile
     const initial = await f.client.command('getConnection', {});
     assert.equal(initial.state, 'disconnected');
     assert.equal(f.spawned().length, 0);
-    await assert.rejects(f.endpoint(), failure('Unavailable'));
+    await assert.rejects(f.endpoint(), failure('unavailable'));
     assert.equal(f.spawned().length, 0);
-    const second = makeConnectionClient(f.runtime);
+    const second = makeConnectionCalls(f.runtime);
     const [one, two] = await Promise.all([
       f.client.command('connect', { profileId: 'configured' }),
       second.command('connect', { profileId: 'configured' }),
@@ -89,16 +89,16 @@ test('slow startup leaves status usable; cancellation releases a shared attempt 
       { profileId: 'configured' },
       { signal: abort.signal },
     ),
-    rejected = assert.rejects(pending, failure('Cancelled'));
+    rejected = assert.rejects(pending, failure('cancelled'));
   try {
     await until(() => f.forwards().length === 1);
     const snapshot = await f.client.command('getConnection', {});
     assert.equal(snapshot.state, 'connecting');
     const second = f.client.command('connect', { profileId: 'configured' }),
-      secondRejected = assert.rejects(second, failure('Cancelled'));
+      secondRejected = assert.rejects(second, failure('cancelled'));
     await assert.rejects(
       f.client.command('disconnect', { connectionId: 'stale' }),
-      failure('Conflict'),
+      failure('conflict'),
     );
     abort.abort();
     await rejected;
@@ -111,7 +111,7 @@ test('slow startup leaves status usable; cancellation releases a shared attempt 
     assert.notEqual(connected.connectionId, snapshot.connectionId);
     await assert.rejects(
       f.client.command('disconnect', { connectionId: snapshot.connectionId! }),
-      failure('Conflict'),
+      failure('conflict'),
     );
     assert.equal(
       (await f.client.command('getConnection', {})).connectionId,
@@ -126,7 +126,7 @@ test('slow startup leaves status usable; cancellation releases a shared attempt 
 test('observation unsubscribe is not disconnect; generation exit fails visibly and reconnect never sends', async () => {
   const f = await fixture();
   const events: ConnectionSnapshot[] = [],
-    errors: ApplicationError[] = [];
+    errors: unknown[] = [];
   let stop = f.client.watch(
     (event) => events.push(event),
     (e) => errors.push(e),
@@ -141,7 +141,7 @@ test('observation unsubscribe is not disconnect; generation exit fails visibly a
     assert.equal((await f.client.command('getConnection', {})).state, 'connected');
     process.kill(f.forwards()[0].pid, 'SIGTERM');
     await until(async () => (await f.client.command('getConnection', {})).state === 'failed');
-    await assert.rejects(f.endpoint(), failure('Unavailable'));
+    await assert.rejects(f.endpoint(), failure('unavailable'));
     assert.equal(events.length, observed);
     assert.equal(errors.length, 0);
     stop = f.client.watch(
@@ -152,7 +152,7 @@ test('observation unsubscribe is not disconnect; generation exit fails visibly a
     assert.notEqual(second.connectionId, first.connectionId);
     await assert.rejects(
       f.client.command('disconnect', { connectionId: first.connectionId! }),
-      failure('Conflict'),
+      failure('conflict'),
     );
     assert.equal((await f.client.command('getConnection', {})).state, 'connected');
     assert(f.requests.every((r) => r.url === '/v1/health'));
@@ -163,8 +163,8 @@ test('observation unsubscribe is not disconnect; generation exit fails visibly a
 });
 
 for (const [mode, code] of [
-  ['auth', 'Unauthorized'],
-  ['identity', 'Incompatible'],
+  ['auth', 'access'],
+  ['identity', 'incompatible'],
 ] as const)
   test('forwarded health rejects ' + mode + ' without publishing a private endpoint', async () => {
     const f = await fixture('normal', mode);
@@ -176,21 +176,21 @@ for (const [mode, code] of [
       const state = await f.client.command('getConnection', {});
       assert.equal(state.state, 'failed');
       assert(!JSON.stringify(state).includes(f.key));
-      await assert.rejects(f.endpoint(), failure('Unavailable'));
+      await assert.rejects(f.endpoint(), failure('unavailable'));
     } finally {
       await f.close();
     }
   });
 
 for (const [mode, diagnostic, code] of [
-  ['early', 'REMOTE HOST IDENTIFICATION HAS CHANGED', 'Unavailable'],
-  ['early', 'Permission denied', 'Unauthorized'],
-  ['collision', '', 'Unavailable'],
-  ['extra-forward', '', 'InvalidInput'],
-  ['key-policy', '', 'InvalidInput'],
-  ['clear-forward', '', 'InvalidInput'],
-  ['device-tunnel', '', 'InvalidInput'],
-  ['overflow', '', 'Unavailable'],
+  ['early', 'REMOTE HOST IDENTIFICATION HAS CHANGED', 'unavailable'],
+  ['early', 'Permission denied', 'access'],
+  ['collision', '', 'unavailable'],
+  ['extra-forward', '', 'refusal'],
+  ['key-policy', '', 'refusal'],
+  ['clear-forward', '', 'refusal'],
+  ['device-tunnel', '', 'refusal'],
+  ['overflow', '', 'unavailable'],
 ] as const)
   test(
     'owned SSH failure ' +
@@ -225,24 +225,21 @@ for (const [mode, diagnostic, code] of [
 test('a command for another profile or host cannot spawn or select a target', async () => {
   const f = await fixture();
   try {
-    await assert.rejects(
-      f.client.command('connect', { profileId: 'other' }),
-      failure('InvalidInput'),
-    );
+    await assert.rejects(f.client.command('connect', { profileId: 'other' }), failure('refusal'));
     await assert.rejects(
       f.runtime.runPromise(
         Effect.flatMap(ConnectionService, (s) =>
           s.endpoint({ host: { ...f.profile.expected, storeId: 'other' } }),
         ),
       ),
-      failure('Conflict'),
+      failure('conflict'),
     );
     assert.equal(f.spawned().length, 0);
     const abort = new AbortController();
     abort.abort();
     await assert.rejects(
       f.client.command('connect', { profileId: 'configured' }, { signal: abort.signal }),
-      failure('Cancelled'),
+      failure('cancelled'),
     );
     assert.equal(f.spawned().length, 0);
   } finally {
@@ -257,7 +254,7 @@ test('executable spawn failure is typed and does not disclose paths or private v
     await assert.rejects(
       other.client.command('connect', { profileId: 'configured' }),
       (e) =>
-        failure('Unavailable')(e) &&
+        failure('unavailable')(e) &&
         !JSON.stringify(e).includes(f.base) &&
         !JSON.stringify(e).includes(f.key),
     );
@@ -305,12 +302,12 @@ test('public disconnect reports an unknown throwing process release; later root 
     });
     await assert.rejects(
       f.client.command('disconnect', { connectionId: connected.connectionId! }),
-      (e) =>
-        ApplicationError.is(e) &&
+      (e: Error) =>
+        getErrorGroup(e) !== undefined &&
         /teardown|cleanup/i.test(e.message) &&
         !JSON.stringify(e).includes(f.key),
     );
-    await assert.rejects(f.endpoint(), failure('Unavailable'));
+    await assert.rejects(f.endpoint(), failure('unavailable'));
   } finally {
     mock.restoreAll();
     await f.close();
@@ -319,9 +316,9 @@ test('public disconnect reports an unknown throwing process release; later root 
 
 test('watch subscriptions are bounded and unsubscribe plus concurrent root disposal has no connection side effect', async () => {
   const f = await fixture(),
-    stops: ObservationClose[] = [],
+    stops: (() => Promise<void>)[] = [],
     events: ConnectionSnapshot[] = [];
-  let reported: ApplicationError | undefined;
+  let reported: unknown;
   try {
     for (let i = 0; i < 64; i++)
       stops.push(
@@ -340,8 +337,8 @@ test('watch subscriptions are bounded and unsubscribe plus concurrent root dispo
       },
     );
     await until(() => !!reported);
-    assert.equal(reported?.code, 'Unavailable');
-    await assert.rejects(overflow(), failure('Unavailable'));
+    assert.equal(getErrorGroup(reported), 'unavailable');
+    await assert.rejects(overflow(), failure('unavailable'));
     await Promise.all(stops.map((stop) => stop()));
     // A closed watch gives its place back.
     let observed = false;
@@ -373,7 +370,7 @@ test('watch subscriptions are bounded and unsubscribe plus concurrent root dispo
     assert.equal(root.status, 'fulfilled');
     if (observation.status === 'rejected')
       assert(
-        failure('Unavailable')(observation.reason) || failure('Cancelled')(observation.reason),
+        failure('unavailable')(observation.reason) || failure('cancelled')(observation.reason),
       );
     assert.equal(raced.spawned().length, 0);
   } finally {
@@ -425,9 +422,8 @@ test('disconnect and root disposal during startup release the pending generation
   for (const action of ['disconnect', 'dispose']) {
     const f = await fixture('slow'),
       pending = f.client.command('connect', { profileId: 'configured' });
-    const rejected = assert.rejects(
-      pending,
-      (e) => ApplicationError.is(e) && ['Cancelled', 'Unavailable'].includes(e.code),
+    const rejected = assert.rejects(pending, (e) =>
+      ['cancelled', 'unavailable'].includes(getErrorGroup(e)!),
     );
     try {
       await until(() => f.forwards().length === 1);
@@ -457,7 +453,7 @@ test('a stalled forwarded health response is read again until the startup deadli
   try {
     const connecting = assert.rejects(
       f.client.command('connect', { profileId: 'configured' }),
-      (e) => failure('Unavailable')(e) && /startup deadline/.test((e as ApplicationError).message),
+      (e) => failure('unavailable')(e) && /startup deadline/.test((e as Error).message),
     );
     // Each read that timed out (`read-failed`) is tried again after the retry pause.
     await until(async () => {
@@ -467,7 +463,7 @@ test('a stalled forwarded health response is read again until the startup deadli
     await f.advance('20 seconds');
     await connecting;
     assert.equal((await f.client.command('getConnection', {})).state, 'failed');
-    await assert.rejects(f.endpoint(), failure('Unavailable'));
+    await assert.rejects(f.endpoint(), failure('unavailable'));
     await until(() => f.spawned().every((child) => !alive(child.pid)));
     for (const port of f.ports()) await free(port);
   } finally {
@@ -532,8 +528,8 @@ for (const action of ['disconnect', 'dispose'])
           600,
         );
         const cancelled = (value: unknown) =>
-          ApplicationError.is(value) &&
-          (value.code === 'Cancelled' || (action === 'dispose' && value.code === 'Unavailable'));
+          getErrorGroup(value) === 'cancelled' ||
+          (action === 'dispose' && getErrorGroup(value) === 'unavailable');
         assert(cancelled(outcome));
         if (deduplicated) assert(cancelled(secondOutcome));
         if (action === 'disconnect')
@@ -587,7 +583,7 @@ for (const [mode, action] of [
           'process exit stayed connected behind inherited pipes',
           800,
         );
-        await assert.rejects(f.endpoint(), failure('Unavailable'));
+        await assert.rejects(f.endpoint(), failure('unavailable'));
         await f.client.command('disconnect', { connectionId: first.connectionId! });
         // A helper that outlives SIGTERM keeps the failed attempt cleaning up, so this Disconnect
         // arrived during it and ends the connection disconnected.
@@ -595,7 +591,7 @@ for (const [mode, action] of [
           assert.equal((await f.client.command('getConnection', {})).state, 'disconnected');
       } else if (action === 'disconnect') {
         await f.client.command('disconnect', { connectionId: first.connectionId! });
-        await assert.rejects(f.endpoint(), failure('Unavailable'));
+        await assert.rejects(f.endpoint(), failure('unavailable'));
       } else {
         await f.runtime.dispose();
         await assert.rejects(f.endpoint());
@@ -665,7 +661,7 @@ for (const action of ['exit', 'cancel'])
         () => outcome !== undefined,
         'actual SSH exit/cancel stayed pending behind its proxy pipe',
       );
-      assert(failure(action === 'exit' ? 'Unavailable' : 'Cancelled')(outcome));
+      assert(failure(action === 'exit' ? 'unavailable' : 'cancelled')(outcome));
       await until(
         () => !alive(helper.pid),
         'owned ProxyCommand helper survived connection release',
@@ -675,7 +671,7 @@ for (const action of ['exit', 'cancel'])
         (await f.client.command('getConnection', {})).state,
         action === 'exit' ? 'failed' : 'disconnected',
       );
-      await assert.rejects(f.endpoint(), failure('Unavailable'));
+      await assert.rejects(f.endpoint(), failure('unavailable'));
     } finally {
       abort.abort();
       for (const row of f.helpers()) if (alive(row.pid)) process.kill(row.pid, 'SIGKILL');
@@ -704,7 +700,7 @@ test('cancellation during admitted teardown cannot strand the owned helper group
     );
     abort.abort();
     const outcome = await releasing;
-    assert(outcome === undefined || failure('Cancelled')(outcome));
+    assert(outcome === undefined || failure('cancelled')(outcome));
     assert.equal((await f.client.command('getConnection', {})).state, 'disconnected');
     assert(!alive(forward.pid));
     assert(!alive(helper.pid));
@@ -760,7 +756,7 @@ for (const persistent of [false, true])
       const started = performance.now(),
         releasing = f.client.command('disconnect', { connectionId: connected.connectionId! });
       if (persistent) {
-        await assert.rejects(releasing, failure('Unavailable'));
+        await assert.rejects(releasing, failure('unavailable'));
         assert(
           performance.now() - started >= quickStop.deadlineMs - 100,
           'persistent ambiguity failed before the cleanup deadline',
@@ -772,9 +768,9 @@ for (const persistent of [false, true])
         assert.equal((await f.client.command('getConnection', {})).state, 'disconnecting');
         await assert.rejects(
           f.client.command('connect', { profileId: 'configured' }),
-          failure('Conflict'),
+          failure('conflict'),
         );
-        await assert.rejects(f.endpoint(), failure('Unavailable'));
+        await assert.rejects(f.endpoint(), failure('unavailable'));
         mock.restoreAll();
         await f.client.command('disconnect', { connectionId: connected.connectionId! });
       } else {
