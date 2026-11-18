@@ -97,7 +97,7 @@ export function getFailureCode(error: unknown): ApplicationErrorCode | undefined
   return undefined;
 }
 
-/** The store or host refused the request as given: it was never admitted. */
+/** The store or host refused the request as given: it never ran. */
 export const isRefusal = (error: unknown) => getFailureCode(error) === 'InvalidInput';
 /** The host could not be reached (a restarted daemon, say): watching again may succeed. */
 export const isUnavailable = (error: unknown) => getFailureCode(error) === 'Unavailable';

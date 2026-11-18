@@ -29,7 +29,7 @@ export type RunMutation = (
 ) => Promise<MutationRunResult>;
 
 /**
- * One workbench's direct mutations, run by the editor's mutations, whose gate admits one at a
+ * One workbench's direct mutations, run by the editor's mutations, whose gate runs one at a
  * time. The workbench adds its own part of the gate: none run while `dialogOpen`, one of its own
  * dialogs being open. `confirmation` renders the editor's replace prompt. Unmounting declines a
  * pending prompt.
@@ -61,9 +61,9 @@ export function useMutationRunner(
       fail(mutationUnavailable);
       return { completed: false, error: mutationUnavailable, items: [] };
     }
-    // The editor applies the rest of the gate, refusing with `mutationUnavailable`. Only an
-    // admitted run takes the prompt's focus, so a refused one never redirects a running one's.
-    if (actions.admitsMutation(action)) setPromptFocus({ finalFocus });
+    // The editor applies the rest of the gate, refusing with `mutationUnavailable`. Only a
+    // run it lets through takes the prompt's focus, so a refused one never redirects a running one's.
+    if (actions.allowsMutation(action)) setPromptFocus({ finalFocus });
     const result = await actions.mutate(action, { destination });
     if (result.error) fail(result.error);
     return result;

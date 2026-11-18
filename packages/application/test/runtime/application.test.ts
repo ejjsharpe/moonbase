@@ -19,8 +19,8 @@ test('an editor application unloads once every edit is in recovery', async () =>
     await f.editor.flush();
     assert.equal(f.canUnload(), true);
     assert.deepEqual(await f.editor.drafts(), ['kept']);
-    // The unload check reopens admissions once it has looked.
-    assert.equal(await f.editor.admissionsOpen(), true);
+    // The unload check accepts actions again once it has looked.
+    assert.equal(await f.editor.acceptingActions(), true);
   } finally {
     await f.dispose();
   }
@@ -61,7 +61,7 @@ test('a chat that fails to open stays visible and keeps the editor usable but bl
     assert.equal(f.canUnload(), false);
     assert.equal(await f.prepareQuit(), false);
     assert.equal((await f.snapshot()).phase, 'live');
-    assert.equal(await f.editor.admissionsOpen(), true);
+    assert.equal(await f.editor.acceptingActions(), true);
   } finally {
     await f.dispose();
   }
@@ -85,7 +85,7 @@ test('unreadable saved chat drafts block close, unload and Quit and are never ov
   }
 });
 
-test('a vetoed Quit restores admissions; a consented one fences the editor and the chat', async () => {
+test('a vetoed Quit accepts actions again; a consented one stops new actions in the editor and the chat', async () => {
   const chat = fauxChat();
   const f = makeApplication({ editor: true, chat: Effect.succeed(chat.dependencies) });
   try {
@@ -132,7 +132,7 @@ test('a vetoed Quit restores admissions; a consented one fences the editor and t
   }
 });
 
-test('a failed final chat write restores admissions without reversing a completed editor Discard', async () => {
+test('a failed final chat write accepts actions again without reversing a completed editor Discard', async () => {
   const chat = fauxChat();
   const f = makeApplication({ editor: true, chat: Effect.succeed(chat.dependencies) });
   try {
@@ -149,7 +149,7 @@ test('a failed final chat write restores admissions without reversing a complete
     await f.editor.answer((await f.editor.closePrompt())!.id, 'discard');
     assert.equal(await quit, false);
     assert.equal((await f.snapshot()).phase, 'live');
-    assert.equal(await f.editor.admissionsOpen(), true);
+    assert.equal(await f.editor.acceptingActions(), true);
     assert.equal(await f.editor.text(), 'original', 'the Discard stands');
     await f.editor.edit('new edit');
     assert.equal(await f.editor.text(), 'new edit');
@@ -262,7 +262,7 @@ test('named targets keep separate drafts and switch only once the old chat is re
   }
 });
 
-test('release ends the chat first and leaves the editor fenced until it closes', async () => {
+test('release ends the chat first and leaves the editor accepting nothing until it closes', async () => {
   const chat = fauxChat();
   const f = makeApplication({ editor: true, chat: Effect.succeed(chat.dependencies) });
   try {
@@ -272,7 +272,7 @@ test('release ends the chat first and leaves the editor fenced until it closes',
     const snapshot = await f.snapshot();
     assert.equal(snapshot.phase, 'disposed');
     assert.equal(await f.chat(), null, 'the chat was released');
-    assert.equal(await f.editor.admissionsOpen(), false);
+    assert.equal(await f.editor.acceptingActions(), false);
     assert.equal(f.canUnload(), false);
   } finally {
     await f.dispose();

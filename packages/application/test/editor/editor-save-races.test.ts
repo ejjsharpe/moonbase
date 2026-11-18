@@ -136,7 +136,7 @@ test('a lost Save reply keeps its request for the retry, and drafts typed since 
 });
 
 test('Save replies arriving in reverse order keep every newer draft without repeating writes', async () => {
-  const admitted = [held(), held()],
+  const reached = [held(), held()],
     reply = [held(), held()];
   const f = await fixture((raw) => ({
     ...raw,
@@ -145,7 +145,7 @@ test('Save replies arriving in reverse order keep every newer draft without repe
       if (name === 'saveFile') {
         const index = ['a.ts', 'b.ts'].indexOf((input as CommandInput<'saveFile'>).target.path);
         if (index >= 0) {
-          admitted[index].release();
+          reached[index].release();
           await reply[index].promise;
         }
       }
@@ -154,9 +154,9 @@ test('Save replies arriving in reverse order keep every newer draft without repe
   }));
   try {
     const a = f.editor.save(target('a.ts'));
-    await admitted[0].promise;
+    await reached[0].promise;
     const b = f.editor.save(target('b.ts'));
-    await admitted[1].promise;
+    await reached[1].promise;
     assert.equal(await f.editor.save(target('c.ts')), true);
     for (const path of ['a.ts', 'b.ts', 'c.ts']) f.editor.edit(target(path), 'newer ' + path);
     reply[1].release();
@@ -315,14 +315,14 @@ test('text typed while a Save settles is drafted over the text the Save wrote', 
 });
 
 test('disposal during a held Save cancels it, releases observations and sends no edits', async () => {
-  const admitted = held(),
+  const reached = held(),
     reply = held();
   const f = await fixture((raw) => ({
     ...raw,
     async command(name, input, options) {
       const result = await raw.command(name, input, options);
       if (name === 'saveFile' && (input as CommandInput<'saveFile'>).target.path === 'a.ts') {
-        admitted.release();
+        reached.release();
         await reply.promise;
       }
       return result;
@@ -330,7 +330,7 @@ test('disposal during a held Save cancels it, releases observations and sends no
   }));
   try {
     const cancelled = assert.rejects(f.editor.save(target('a.ts')), /Editor disposed/);
-    await admitted.promise;
+    await reached.promise;
     const edits = f.memory.stats.edits;
     await f.editor.dispose();
     reply.release();

@@ -28,7 +28,7 @@ export { EditorTree } from './tree/tree-service.ts';
 export type { RevealOptions } from './tree/tree.ts';
 export { EditorMutations, type OperationInput } from './mutation/mutation-service.ts';
 export {
-  admitsMutation,
+  allowsMutation,
   maxMutationEntries,
   mutationUnavailable,
   getMutationDestinations,

@@ -60,7 +60,7 @@ export const mutationUnavailable =
   'File action unavailable. Check the selection and finish the current editor dialog or Close prompt.';
 
 /** The mutation gate: the editor is ready and idle, the checkout is open and the action fits. */
-export function admitsMutation(
+export function allowsMutation(
   editor: {
     ready: boolean;
     closing: boolean;

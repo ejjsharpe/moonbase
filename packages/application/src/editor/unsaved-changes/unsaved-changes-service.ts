@@ -37,7 +37,7 @@ export type UnsavedChangesGuardShape = {
   readonly closeCheckout: (checkout: CheckoutTarget) => Effect.Effect<boolean, EditorFailure>;
   /** Asks about every buffer with unsaved changes, as Quit does; its tabs stay. */
   readonly prepareQuit: Effect.Effect<boolean, EditorFailure>;
-  /** Confirms recovery is complete once composition has fenced admissions. */
+  /** Confirms recovery is complete once composition has stopped new actions. */
   readonly finishQuitPreparation: Effect.Effect<boolean>;
   readonly answerClose: (promptId: string, choice: CloseChoice) => Effect.Effect<void>;
   /** Opens the files of the checkout's last close again. */
@@ -67,8 +67,8 @@ export class UnsavedChangesGuard extends Context.Service<
       const saves = yield* EditorSaves;
       const closePrompt = yield* SubscriptionRef.make<ClosePrompt | null>(null);
       let answer: Deferred.Deferred<CloseChoice> | undefined;
-      const admitted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        session.run(Effect.andThen(session.admit, effect));
+      const runAction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        session.run(Effect.andThen(session.assertAccepting, effect));
       const closing = Effect.map(session.get, (s) => s.closing);
       const recoveryReady = Effect.map(
         Effect.all([session.get, outbox.get, buffers.get, operations.get]),
@@ -187,9 +187,9 @@ export class UnsavedChangesGuard extends Context.Service<
 
       return {
         closePrompt,
-        close: (targets) => admitted(closeAsking(targets, 'files')),
+        close: (targets) => runAction(closeAsking(targets, 'files')),
         closeCheckout: (checkout) =>
-          admitted(
+          runAction(
             Effect.gen(function* () {
               const selected = yield* views.view(checkout);
               return yield* closeAsking(
@@ -199,7 +199,7 @@ export class UnsavedChangesGuard extends Context.Service<
               );
             }),
           ),
-        prepareQuit: admitted(
+        prepareQuit: runAction(
           Effect.flatMap(buffers.get, (held) =>
             closeAsking(
               [...held.buffers.values()].map((buffer) => buffer.target),
@@ -211,7 +211,7 @@ export class UnsavedChangesGuard extends Context.Service<
           Effect.gen(function* () {
             const modes = yield* session.get;
             if (
-              modes.admissionsOpen ||
+              modes.acceptingActions ||
               !modes.ready ||
               modes.loading ||
               modes.closing ||
@@ -235,13 +235,13 @@ export class UnsavedChangesGuard extends Context.Service<
         ),
         answerClose: (promptId, choice) =>
           Effect.gen(function* () {
-            if (!(yield* session.get).admissionsOpen) return;
+            if (!(yield* session.get).acceptingActions) return;
             const shown = yield* SubscriptionRef.get(closePrompt);
             if (!answer || shown?.id !== promptId || !isCloseChoice(choice)) return;
             yield* Deferred.succeed(answer, choice);
           }),
         reopen: (checkout) =>
-          admitted(
+          runAction(
             Effect.gen(function* () {
               yield* views.view(checkout);
               if ((yield* session.get).holdingUnsaved) return false;

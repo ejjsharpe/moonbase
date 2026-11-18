@@ -18,7 +18,7 @@ const gate = () => {
   return { promise, release };
 };
 
-test('two editors share one workspace, and a disposed editor admits and sends nothing', async () => {
+test('two editors share one workspace, and a disposed editor accepts and sends nothing', async () => {
   const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
   const runtime = ManagedRuntime.make(memory.layer);
   const raw = makeEditorClient(runtime);

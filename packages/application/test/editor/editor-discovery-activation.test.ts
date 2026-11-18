@@ -26,10 +26,10 @@ describe('checkout discovery and activation', () => {
   test('selecting a background-closed checkout loads its absent survivor in its remembered view', async () => {
     const f = await fixture('r4-background', false);
     let hold = false,
-      admit!: () => void,
+      reach!: () => void,
       release!: () => void;
-    const admitted = new Promise<void>((resolve) => {
-        admit = resolve;
+    const reached = new Promise<void>((resolve) => {
+        reach = resolve;
       }),
       wait = new Promise<void>((resolve) => {
         release = resolve;
@@ -50,7 +50,7 @@ describe('checkout discovery and activation', () => {
         watch: () => async () => {},
         async command(name, input, options) {
           if (hold && isRecoveryEdit(name)) {
-            admit();
+            reach();
             await wait;
           }
           return f.client.command(name, input, options);
@@ -74,7 +74,7 @@ describe('checkout discovery and activation', () => {
           watch: () => async () => {},
           async command(name, input, options) {
             if (hold && isRecoveryEdit(name)) {
-              admit();
+              reach();
               await wait;
             }
             if (delayRead && name === 'readComparison') {
@@ -93,7 +93,7 @@ describe('checkout discovery and activation', () => {
         () => editor.close([target('b.ts')]),
         async () => 'discard',
       );
-      await admitted;
+      await reached;
       editor.selectCheckout(second);
       release();
       assert.equal(await closing, true);

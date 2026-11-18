@@ -384,9 +384,9 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
       watchRefs(refs as unknown as SubscriptionRef.SubscriptionRef<unknown>[], listener),
     report: (error: unknown) => now(alerts.report(error)),
     clearErrors: () => now(alerts.clear),
-    /** Composition fences admissions while it prepares Quit. */
-    setAdmissionsOpen: (open: boolean) =>
-      now(session.update((s) => (s.closing ? s : { ...s, admissionsOpen: open }))),
+    /** Composition stops new actions while it prepares Quit. */
+    setAcceptingActions: (open: boolean) =>
+      now(session.update((s) => (s.closing ? s : { ...s, acceptingActions: open }))),
     load: () => run(get(EditorLoader).load),
     openCheckout: (root: string) => run(checkouts.openCheckout(root)),
     listWorktrees: (checkout: CheckoutTarget) => run(checkouts.listWorktrees(checkout)),
@@ -394,7 +394,7 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
     initializeRepository: (checkout: CheckoutTarget) =>
       run(checkouts.initializeRepository(checkout)),
     selectCheckout: (target: CheckoutTarget) => run(checkouts.selectCheckout(target)),
-    flush: () => run(Effect.andThen(session.admit, recovery.flush)),
+    flush: () => run(Effect.andThen(session.assertAccepting, recovery.flush)),
     buffer: (target: FileTarget): Readonly<EditorBuffer> | undefined =>
       getSnapshot().buffers.find((buffer) => fileKey(buffer.target) === fileKey(target)),
     edit: (target: FileTarget, text: string) => now(tabs.edit(target, text)),
@@ -430,7 +430,7 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
     lookup: (checkout: CheckoutTarget, query: string) =>
       run(
         Effect.gen(function* () {
-          yield* session.admit;
+          yield* session.assertAccepting;
           yield* views.view(checkout);
           const { recovery: shown } = yield* views.get;
           return yield* Context.get(
@@ -463,7 +463,7 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
       });
     },
     mutations: {
-      admits: (action: MutationAction) => now(mutations.admits(action)),
+      allows: (action: MutationAction) => now(mutations.allows(action)),
       /** Runs a file operation as the tree does, asking before it replaces anything. */
       run: (action: MutationAction, destination: string | MutationOptions) =>
         run(

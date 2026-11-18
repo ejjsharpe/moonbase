@@ -516,7 +516,7 @@ test('typed lookup filters history separately, deduplicates, ranks and highlight
 test('pending commands retain newer live text and close cannot cross an unresolved Save', async () => {
   const f = await fixture();
   let received!: () => void, release!: () => void;
-  const admitted = new Promise<void>((resolve) => {
+  const reached = new Promise<void>((resolve) => {
       received = resolve;
     }),
     delayed = new Promise<void>((resolve) => {
@@ -541,7 +541,7 @@ test('pending commands retain newer live text and close cannot cross an unresolv
     editor.edit(target('a.ts'), 'captured save');
     await editor.flush();
     const save = editor.save(target('a.ts'));
-    await admitted;
+    await reached;
     editor.edit(target('a.ts'), 'newer live edit');
     assert.equal(
       await answering(
@@ -861,7 +861,7 @@ for (const kind of ['move', 'copy'] as const)
     const f = await fixture('unused', false);
     await f.editor.dispose();
     let ready!: () => void, release!: () => void;
-    const admitted = new Promise<void>((resolve) => {
+    const reached = new Promise<void>((resolve) => {
         ready = resolve;
       }),
       wait = new Promise<void>((resolve) => {
@@ -888,7 +888,7 @@ for (const kind of ['move', 'copy'] as const)
       const sources = await editor.inspect(checkout, ['a.ts']),
         baseline = editor.buffer(target('a.ts'))!.disk;
       const operation = editor.mutate({ checkout, sources, kind, destination: 'destination.ts' });
-      await admitted;
+      await reached;
       editor.edit(target('a.ts'), 'newer live text');
       release();
       await operation;
@@ -950,9 +950,9 @@ for (const origin of ['own', 'foreign'] as const)
   test(`a draft opened at a move's destination is kept beside the arriving draft (${origin} move)`, async () => {
     const f = await fixture('collision', false);
     await f.editor.dispose();
-    let admit!: () => void, release!: () => void;
-    const admitted = new Promise<void>((resolve) => {
-        admit = resolve;
+    let reach!: () => void, release!: () => void;
+    const reached = new Promise<void>((resolve) => {
+        reach = resolve;
       }),
       wait = new Promise<void>((resolve) => {
         release = resolve;
@@ -963,7 +963,7 @@ for (const origin of ['own', 'foreign'] as const)
       async command(name, input, options) {
         const result = await f.client.command(name, input, options);
         if (origin === 'own' && name === 'mutate') {
-          admit();
+          reach();
           await wait;
         }
         return result;
@@ -986,7 +986,7 @@ for (const origin of ['own', 'foreign'] as const)
           kind: 'move',
           destination: 'destination.ts',
         });
-        await admitted;
+        await reached;
       } else {
         await f.client.command('mutate', {
           id: 'collision',
@@ -1108,9 +1108,9 @@ test('restored open roots populate initial tree and Git including expanded folde
 test('a newer explicit checkout selection defeats a delayed file activation in another checkout', async () => {
   const f = await fixture('unused', false);
   await f.editor.dispose();
-  let admit!: () => void, release!: () => void;
-  const admitted = new Promise<void>((resolve) => {
-      admit = resolve;
+  let reach!: () => void, release!: () => void;
+  const reached = new Promise<void>((resolve) => {
+      reach = resolve;
     }),
     wait = new Promise<void>((resolve) => {
       release = resolve;
@@ -1122,7 +1122,7 @@ test('a newer explicit checkout selection defeats a delayed file activation in a
       watch: () => async () => {},
       async command(name, input, options) {
         if (name === 'readFile') {
-          admit();
+          reach();
           await wait;
         }
         return f.client.command(name, input, options);
@@ -1135,7 +1135,7 @@ test('a newer explicit checkout selection defeats a delayed file activation in a
     await editor.openCheckout(second.root);
     editor.selectCheckout(checkout);
     const opening = editor.open(target('a.ts'));
-    await admitted;
+    await reached;
     editor.selectCheckout(second);
     release();
     assert.equal(await opening, false);

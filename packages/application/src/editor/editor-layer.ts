@@ -48,7 +48,7 @@ export type EditorServices =
 
 /**
  * One editor over the `WorkspaceService` its root supplies. Closing the layer's scope stops it
- * first (nothing is admitted, reported or sent), then releases each service in reverse.
+ * first (nothing is accepted, reported or sent), then releases each service in reverse.
  */
 export const editorLayer = (options: EditorOptions = {}) => {
   const base = Layer.provideMerge(EditorAlerts.layer, EditorSession.layer(options));

@@ -25,7 +25,7 @@ export type EditorSavesShape = {
    * reported; edits are kept either way.
    */
   readonly save: (target: FileTarget, overwrite?: boolean) => Effect.Effect<boolean, EditorFailure>;
-  /** `save` for an action already admitted, such as a Close's own Save. */
+  /** `save` for an action already running, such as a Close's own Save. */
   readonly saveFile: (target: FileTarget) => Effect.Effect<boolean, EditorFailure>;
   /** Discards a buffer's edits and shows the file as it is on disk. */
   readonly reload: (target: FileTarget) => Effect.Effect<boolean, EditorFailure>;
@@ -51,8 +51,8 @@ export class EditorSaves extends Context.Service<EditorSaves, EditorSavesShape>(
       const recovery = yield* RecoverySync;
       const tabs = yield* EditorTabs;
       const mutations = yield* EditorMutations;
-      const admitted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        session.run(Effect.andThen(session.admit, effect));
+      const runAction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        session.run(Effect.andThen(session.assertAccepting, effect));
       const closing = Effect.map(session.get, (s) => s.closing);
       /** Clears `saving` once the save ends, unless the editor closed meanwhile. */
       const settle = (buffer: EditorBuffer) =>
@@ -180,10 +180,10 @@ export class EditorSaves extends Context.Service<EditorSaves, EditorSavesShape>(
         });
 
       return {
-        save: (target, overwrite = false) => admitted(saveFile(target, overwrite)),
+        save: (target, overwrite = false) => runAction(saveFile(target, overwrite)),
         saveFile: (target) => session.run(saveFile(target)),
         reload: (target) =>
-          admitted(
+          runAction(
             Effect.gen(function* () {
               const captured = structuredClone(target),
                 key = fileKey(captured);
@@ -235,7 +235,7 @@ export class EditorSaves extends Context.Service<EditorSaves, EditorSavesShape>(
           ),
         cancelConflict: (target) =>
           Effect.gen(function* () {
-            if (!(yield* session.get).admissionsOpen) return;
+            if (!(yield* session.get).acceptingActions) return;
             const buffer = yield* buffers.find(target);
             if (buffer)
               yield* buffers.updateBuffer(buffer.id, (b) => {

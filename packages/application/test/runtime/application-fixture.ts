@@ -100,8 +100,8 @@ export function makeApplication(options: Options) {
       flush: () => through(RecoverySync, (r) => r.flush),
       text: (file: FileTarget = target) =>
         through(EditorBuffers, (b) => Effect.map(b.find(file), (buffer) => buffer?.text)),
-      admissionsOpen: () =>
-        through(EditorSession, (s) => Effect.map(s.get, (state) => state.admissionsOpen)),
+      acceptingActions: () =>
+        through(EditorSession, (s) => Effect.map(s.get, (state) => state.acceptingActions)),
       /** The next close prompt, waiting for one if none is shown. */
       closePrompt: () =>
         through(UnsavedChangesGuard, (p) =>

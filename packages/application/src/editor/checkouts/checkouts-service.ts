@@ -60,8 +60,8 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
       const recovery = yield* RecoverySync;
       const tabs = yield* EditorTabs;
       const tree = yield* EditorTree;
-      const admitted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        session.run(Effect.andThen(session.admit, effect));
+      const runAction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        session.run(Effect.andThen(session.assertAccepting, effect));
       const closing = Effect.map(session.get, (s) => s.closing);
       const isOpen = (checkout: CheckoutTarget) =>
         Effect.map(views.get, ({ recovery }) =>
@@ -244,7 +244,7 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
 
       return {
         openCheckout: (root) =>
-          admitted(
+          runAction(
             Effect.gen(function* () {
               yield* session.assertReady;
               const target = yield* reported(workspace.openCheckout({ root }));
@@ -253,20 +253,20 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
               return yield* addCheckout(target);
             }),
           ),
-        selectCheckout: (target) => admitted(selectOpenCheckout(target)),
+        selectCheckout: (target) => runAction(selectOpenCheckout(target)),
         listWorktrees: (checkout) =>
-          admitted(
+          runAction(
             Effect.andThen(views.view(checkout), reported(workspace.listWorktrees({ checkout }))),
           ),
         createWorktree: (input) =>
-          admitted(
+          runAction(
             Effect.gen(function* () {
               yield* session.assertReady;
               yield* views.view(input.checkout);
               return yield* addCheckout(yield* reported(workspace.createWorktree(input)));
             }),
           ),
-        initializeRepository: (checkout) => admitted(initializeRepository(checkout)),
+        initializeRepository: (checkout) => runAction(initializeRepository(checkout)),
       } satisfies EditorCheckoutsShape;
     }),
   );

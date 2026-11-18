@@ -1,15 +1,15 @@
 import { Context, Deferred, Effect, Fiber, FiberSet, Layer, Ref, SubscriptionRef } from 'effect';
 import { EditorError } from '../editor-errors.ts';
 
-/** The editor's modes, which gate what every concept admits. */
+/** The editor's modes, which gate what every concept accepts. */
 export type SessionState = {
   /** Recovery has loaded. */
   ready: boolean;
   /** The first load is still restoring checkouts and files. */
   loading: boolean;
-  /** Composition fences admissions while it prepares Quit, without interrupting admitted work. */
-  admissionsOpen: boolean;
-  /** The editor is closing: it admits nothing and reports nothing. */
+  /** Composition stops new actions while it prepares Quit, without interrupting running ones. */
+  acceptingActions: boolean;
+  /** The editor is closing: it accepts nothing and reports nothing. */
   closing: boolean;
   /** The editor has released everything it owned. */
   disposed: boolean;
@@ -22,7 +22,7 @@ export type SessionState = {
 const initialState: SessionState = {
   ready: false,
   loading: false,
-  admissionsOpen: true,
+  acceptingActions: true,
   closing: false,
   disposed: false,
   holdingUnsaved: false,
@@ -37,8 +37,8 @@ export type EditorSessionShape = {
   readonly update: (f: (state: SessionState) => SessionState) => Effect.Effect<void>;
   /** Runs work the editor owns: closing the editor interrupts it. */
   readonly run: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  /** Fails unless the editor admits new actions. */
-  readonly admit: Effect.Effect<void, EditorError>;
+  /** Fails unless the editor accepts new actions. */
+  readonly assertAccepting: Effect.Effect<void, EditorError>;
   /** Fails unless recovery has loaded and the editor isn't closing. */
   readonly assertReady: Effect.Effect<void, EditorError>;
   /**
@@ -49,7 +49,7 @@ export type EditorSessionShape = {
   readonly endInitialization: Effect.Effect<void>;
   /** Waits until no `initializeRepository` runs. */
   readonly awaitInitialization: Effect.Effect<void>;
-  /** Stops admitting and reporting, and interrupts the work the editor owns. */
+  /** Stops accepting and reporting, and interrupts the work the editor owns. */
   readonly close: Effect.Effect<void>;
 };
 
@@ -91,8 +91,8 @@ export class EditorSession extends Context.Service<EditorSession, EditorSessionS
                     Fiber.join,
                   ),
             ),
-          admit: Effect.flatMap(get, (current) =>
-            current.admissionsOpen && !current.closing
+          assertAccepting: Effect.flatMap(get, (current) =>
+            current.acceptingActions && !current.closing
               ? Effect.void
               : Effect.fail(new EditorError({ reason: 'closing' })),
           ),
@@ -113,7 +113,7 @@ export class EditorSession extends Context.Service<EditorSession, EditorSessionS
           }),
           awaitInitialization,
           close: Effect.gen(function* () {
-            yield* update((s) => ({ ...s, closing: true, admissionsOpen: false }));
+            yield* update((s) => ({ ...s, closing: true, acceptingActions: false }));
             yield* FiberSet.clear(fibers);
           }),
         } satisfies EditorSessionShape;

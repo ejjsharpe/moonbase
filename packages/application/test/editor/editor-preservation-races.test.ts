@@ -308,7 +308,7 @@ describe('Close and Quit races', () => {
     }
   });
 
-  test('an admitted observer acknowledgement stays completed when its response crosses a Reload lock', async () => {
+  test('an reached observer acknowledgement stays completed when its response crosses a Reload lock', async () => {
     const f = await observedFixture('ack-boundary'),
       acked = held(),
       releaseAck = held(),
@@ -367,7 +367,7 @@ describe('Close and Quit races', () => {
 
   test('a copied draft discarded before the copy replies stays discarded, and newer edits there are kept', async () => {
     const f = await observedFixture('copy-close'),
-      admitted = held(),
+      reached = held(),
       reply = held();
     try {
       await f.editor.open(target('a.ts'), { view: 'file' });
@@ -377,13 +377,13 @@ describe('Close and Quit races', () => {
       f.transport.command = async (name, input, options) => {
         const result = await f.clientCommand(name, input, options);
         if (name === 'mutate') {
-          admitted.release();
+          reached.release();
           await reply.promise;
         }
         return result;
       };
       const copying = f.editor.mutate({ checkout, kind: 'copy', sources, destination: 'copy.ts' });
-      await admitted.promise;
+      await reached.promise;
       await f.editor.reconcileRecovery();
       assert.equal(f.editor.buffer(target('copy.ts'))?.text, 'source draft');
       assert.equal(

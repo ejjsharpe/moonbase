@@ -20,7 +20,7 @@ import {
   EditorTree,
   RecoverySync,
   EditorSession,
-  admitsMutation,
+  allowsMutation,
   fileKey,
   type CloseChoice,
   type EditorSnapshot,
@@ -123,9 +123,9 @@ export function makeEditorActions(editor: WorkbenchEditor, registry: AtomRegistr
     flush: () => call(recovery.flush),
     resolveOperation: (id: string, operationClientId?: string) =>
       call(mutations.resolve(id, operationClientId)),
-    /** The mutation gate, read now: whether `mutate` would admit `action`. */
-    admitsMutation: (action: MutationAction) =>
-      admitsMutation(
+    /** The mutation gate, read now: whether `mutate` would run `action`. */
+    allowsMutation: (action: MutationAction) =>
+      allowsMutation(
         {
           ...registry.get(atoms.session),
           prompting: false,

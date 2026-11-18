@@ -47,7 +47,7 @@ export function useWorkbenchMutations({
   const isDialogOpen = () => !!registry.get(dialogAtom) || pickerOpen;
   /** The mutation gate. */
   const canRequestMutation = (action: MutationAction) =>
-    !isDialogOpen() && actions.admitsMutation(action);
+    !isDialogOpen() && actions.allowsMutation(action);
   // Applies the workbench's part of the gate and leaves the rest to the editor's gate.
   const runner = useMutationRunner(actions, state, isDialogOpen);
   // Moves and renames made from the tree, one per checkout, for Undo; any other file operation
@@ -61,7 +61,7 @@ export function useWorkbenchMutations({
     canRequestMutation,
     copyPaths,
   });
-  /** Opens a file operation's dialog, Move to Trash, if the gate admits it. */
+  /** Opens a file operation's dialog, Move to Trash, if the gate allows it. */
   function requestMutation(action: MutationAction, finalFocus?: MutationDialog['finalFocus']) {
     if (!canRequestMutation(action)) {
       actions.report(mutationUnavailable);

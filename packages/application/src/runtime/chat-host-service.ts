@@ -73,8 +73,8 @@ export type ChatHostShape = {
   readonly settle: Effect.Effect<void>;
   /** Whether the chat is opening, switching or closing. */
   readonly busy: Effect.Effect<boolean>;
-  /** Fences or reopens the chat's admissions. */
-  readonly fence: (open: boolean) => Effect.Effect<void>;
+  /** Stops or resumes the chat's new actions. */
+  readonly setAccepting: (open: boolean) => Effect.Effect<void>;
   /** Keeps the chat's drafts; false when they couldn't be kept. */
   readonly preserve: Effect.Effect<boolean>;
   /** Releases the chat and waits for every release, failing with what they failed with. */
@@ -82,8 +82,8 @@ export type ChatHostShape = {
   readonly reportCleanup: (error: unknown) => Effect.Effect<void>;
 };
 
-/** Fences or reopens an instance's admissions. */
-const fenceInstance = (instance: ChatInstance, open: boolean) =>
+/** Stops or resumes an instance's new actions. */
+const setInstanceAccepting = (instance: ChatInstance, open: boolean) =>
   Context.get(instance.chat, ChatActions).setAdmissionsOpen(open);
 
 const failureOf = (exit: Exit.Failure<unknown, unknown>) => {
@@ -238,7 +238,7 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
               : [s.current, { ...s, closing: true }],
           );
           if (!taken) return false;
-          yield* fenceInstance(taken, false);
+          yield* setInstanceAccepting(taken, false);
           return yield* Effect.gen(function* () {
             const kept = yield* Context.get(taken.chat, ChatDrafts).preserve;
             const now = yield* Ref.get(steps);
@@ -251,7 +251,8 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
             Effect.ensuring(
               Effect.gen(function* () {
                 const now = yield* Ref.get(steps);
-                if (!now.releasing && now.current === taken) yield* fenceInstance(taken, true);
+                if (!now.releasing && now.current === taken)
+                  yield* setInstanceAccepting(taken, true);
                 yield* step((s) => ({ ...s, closing: false }));
               }),
             ),
@@ -303,9 +304,9 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
             if (opening) yield* Effect.exit(Deferred.await(opening));
           }),
           busy: Effect.map(Ref.get(steps), (s) => !!s.opening || !!s.switching || s.closing),
-          fence: (open) =>
+          setAccepting: (open) =>
             Effect.flatMap(Ref.get(steps), (s) =>
-              s.current ? fenceInstance(s.current, open) : Effect.void,
+              s.current ? setInstanceAccepting(s.current, open) : Effect.void,
             ),
           preserve: Effect.flatMap(Ref.get(steps), (s) =>
             s.current ? Context.get(s.current.chat, ChatDrafts).preserve : Effect.succeed(true),
@@ -313,7 +314,7 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
           release: Effect.gen(function* () {
             yield* stopAll;
             const taken = yield* Ref.modify(steps, (s) => [s, { ...s, current: null }]);
-            if (taken.current) yield* fenceInstance(taken.current, false);
+            if (taken.current) yield* setInstanceAccepting(taken.current, false);
             yield* update((s) => ({ ...s, chat: null, composer: null }));
             if (taken.opening) yield* Effect.exit(Deferred.await(taken.opening));
             if (taken.switching) yield* Effect.exit(Deferred.await(taken.switching));

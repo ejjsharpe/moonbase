@@ -43,7 +43,7 @@ export class EditorTextSearch extends Context.Service<EditorTextSearch, EditorTe
       const session = yield* EditorSession;
       const views = yield* EditorViews;
       const discovery = yield* EditorDiscovery;
-      const admits = Effect.map(session.get, (s) => s.admissionsOpen && !s.closing);
+      const accepting = Effect.map(session.get, (s) => s.acceptingActions && !s.closing);
       return {
         make: Effect.gen(function* () {
           const runner = yield* makeEditorQuery(emptyTextSearch);
@@ -55,7 +55,7 @@ export class EditorTextSearch extends Context.Service<EditorTextSearch, EditorTe
             state: runner.state,
             query: (query, options, checkout) =>
               Effect.gen(function* () {
-                if (!(yield* admits)) return;
+                if (!(yield* accepting)) return;
                 const { matchCase, wholeWord, regex } = options;
                 const key = JSON.stringify([
                   query,
@@ -109,13 +109,9 @@ export class EditorTextSearch extends Context.Service<EditorTextSearch, EditorTe
                 );
               }),
             open: (open) =>
-              Effect.flatMap(admits, (admitted) =>
-                admitted ? runner.open(open) : Effect.succeed(false),
-              ),
+              Effect.flatMap(accepting, (ok) => (ok ? runner.open(open) : Effect.succeed(false))),
             message: (message) =>
-              Effect.flatMap(admits, (admitted) =>
-                admitted ? runner.update({ message }) : Effect.void,
-              ),
+              Effect.flatMap(accepting, (ok) => (ok ? runner.update({ message }) : Effect.void)),
           } satisfies TextSearch;
         }),
       } satisfies EditorTextSearchShape;

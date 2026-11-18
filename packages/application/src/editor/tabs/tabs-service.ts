@@ -36,7 +36,7 @@ export type EditorTabsShape = {
     target: FileTarget,
     options?: OpenOptions,
   ) => Effect.Effect<boolean, EditorFailure>;
-  /** `open` for an action already admitted. */
+  /** `open` for an action already running. */
   readonly openFile: (
     target: FileTarget,
     options?: OpenOptions,
@@ -86,8 +86,8 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
       const discovery = yield* EditorDiscovery;
       const outbox = yield* RecoveryOutbox;
       const activation = yield* FiberHandle.make<boolean, never>();
-      const admitted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        session.run(Effect.andThen(session.admit, effect));
+      const runAction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        session.run(Effect.andThen(session.assertAccepting, effect));
 
       /** Whether the file's folder lists in full without it: a failed read found nothing there. */
       const isMissing = (target: FileTarget) =>
@@ -302,7 +302,7 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
 
       return {
         open: (target, options = {}) =>
-          admitted(
+          runAction(
             Effect.gen(function* () {
               // The folder's reads end during `git init`: open the file once it is the repository.
               if ((yield* session.get).initializing === target.checkout.checkoutId) {
@@ -327,7 +327,7 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
             yield* Fiber.await(fiber);
           }),
         navigate: (checkout, direction) =>
-          admitted(
+          runAction(
             Effect.gen(function* () {
               const selected = yield* views.view(checkout),
                 paths = selected.openFiles;
@@ -338,7 +338,7 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
             }),
           ),
         edit: (target, text) =>
-          admitted(
+          runAction(
             Effect.gen(function* () {
               yield* views.view(target.checkout);
               if (!isRelativePath(target.path))
@@ -357,9 +357,9 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
               yield* outbox.changed;
             }),
           ),
-        keepOpen: (target) => admitted(keepOpen(target)),
+        keepOpen: (target) => runAction(keepOpen(target)),
         reorder: (checkout, from, to) =>
-          admitted(
+          runAction(
             Effect.gen(function* () {
               const selected = yield* views.view(checkout);
               if ((yield* session.get).holdingUnsaved || !selected.openFiles.includes(from)) return;
@@ -374,8 +374,8 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
           ),
         position: (target, mode, position) =>
           Effect.gen(function* () {
-            const { admissionsOpen, closing, holdingUnsaved } = yield* session.get;
-            if (!admissionsOpen || closing || holdingUnsaved) return;
+            const { acceptingActions, closing, holdingUnsaved } = yield* session.get;
+            if (!acceptingActions || closing || holdingUnsaved) return;
             const changed = yield* views.modify(({ recovery }) => {
               if (!isCheckoutOpen(recovery, target.checkout)) return false;
               const selected = readOwn(recovery.views, target.checkout.checkoutId);

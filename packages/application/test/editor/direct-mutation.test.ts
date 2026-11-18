@@ -151,13 +151,13 @@ test('one direct mutation runs at a time; another is refused until it ends', asy
     const copy = { checkout, kind: 'copy' as const, paths: ['a.ts'] };
     const running = f.editor.mutations.run(copy, 'b.ts');
     assert.equal(f.editor.getSnapshot().mutating, true);
-    assert.equal(f.editor.mutations.admits(copy), false);
+    assert.equal(f.editor.mutations.allows(copy), false);
     const prompt = await nextPrompt(f.editor);
     assert.deepEqual(prompt.paths, ['b.ts']);
     assert.deepEqual(await f.editor.mutations.run(copy, 'other.ts'), unavailable);
     f.editor.mutations.answer(prompt.id, false);
     assert.deepEqual(await running, declined);
-    assert.equal(f.editor.mutations.admits(copy), true);
+    assert.equal(f.editor.mutations.allows(copy), true);
   } finally {
     await f.dispose();
   }
