@@ -18,14 +18,22 @@ import {
   connectionOutputSchemas,
 } from '@moonbase/contracts/connection-schema';
 import { IpcAdmission } from './ipc-admission.ts';
-import { IpcBusyError, NativeActionError } from '@moonbase/contracts/ipc-errors';
+import {
+  IpcAuthorityError,
+  IpcBusyError,
+  IpcInputError,
+  IpcUnavailableError,
+  NativeActionError,
+} from '@moonbase/contracts/ipc-errors';
+import { LocalDaemonError } from '@moonbase/contracts/connection-errors';
 import { TranscriptReadError } from '@moonbase/application/chat';
 import {
-  chatTargetErrors,
-  connectionErrors,
-  ipcErrors,
+  chatServiceErrors,
+  connectionFailures,
+  localHostServiceErrors,
+  providerSetupServiceErrors,
   TranscriptNativeError,
-  workspaceErrors,
+  workspaceHostErrors,
 } from './ipc-errors.ts';
 import { exact, IpcRequestIdSchema, IpcTextSchema } from './ipc-limits.ts';
 
@@ -79,9 +87,18 @@ export const isTranscriptLink = (value: string) => {
   }
 };
 
-const error = Schema.Union(chatTargetErrors);
-const connectionError = Schema.Union(connectionErrors);
-const workspaceError = Schema.Union(workspaceErrors);
+// Each procedure's errors: what its handler refuses, and what the one service it calls fails with.
+const union = <const E extends readonly Schema.Top[]>(errors: E) =>
+  Schema.Union([...new Set(errors)] as unknown as E);
+/** A target's procedure refuses one main never installed or can't reach, or another host's. */
+const target = [IpcAuthorityError, IpcUnavailableError] as const;
+const chatError = union([...target, ...chatServiceErrors]);
+const providersError = union([...target, ...providerSetupServiceErrors]);
+/** The remote connection: a target without one is refused as an invalid chat request. */
+const connectionError = union([...target, IpcInputError, ...connectionFailures]);
+/** A local chat's native action, refused while quitting, over this Mac's daemon. */
+const localFolderError = union([IpcUnavailableError, ...localHostServiceErrors]);
+const localWorkspaceError = union([IpcUnavailableError, ...workspaceHostErrors]);
 const backendField = { backendId: ChatTargetIdSchema };
 const backend = exact(Schema.Struct(backendField));
 /** A payload of exactly `fields`. */
@@ -92,13 +109,13 @@ const chat = <const K extends keyof typeof chatInputSchemas>(operation: K) =>
   Rpc.make(operation, {
     payload: fields({ ...backendField, input: chatInputSchemas[operation] }),
     success: wire(chatOutputSchemas[operation]),
-    error,
+    error: chatError,
   });
 const providers = <const K extends keyof typeof providerInputSchemas>(operation: K) =>
   Rpc.make(operation, {
     payload: fields({ ...backendField, input: providerInputSchemas[operation] }),
     success: ProviderStateSchema,
-    error,
+    error: providersError,
   });
 const connection = <const K extends keyof typeof connectionInputSchemas>(operation: K) =>
   Rpc.make(operation, {
@@ -112,26 +129,34 @@ const connection = <const K extends keyof typeof connectionInputSchemas>(operati
  * native actions a transcript and a new chat need.
  */
 export class DesktopChatRpcs extends RpcGroup.make(
-  Rpc.make('getChatTargets', {
-    success: array(DesktopChatTargetSchema),
-    error: Schema.Union(ipcErrors),
+  Rpc.make('getChatTargets', { success: array(DesktopChatTargetSchema) }),
+  Rpc.make('getChatContext', {
+    payload: backend,
+    success: ChatSessionSchema,
+    error: union([IpcAuthorityError, LocalDaemonError]),
   }),
-  Rpc.make('getChatContext', { payload: backend, success: ChatSessionSchema, error }),
   /** The native picker; the daemon approves the chosen folder for local chat. */
-  Rpc.make('chooseChatFolder', { success: Schema.NullOr(Schema.String), error }),
+  Rpc.make('chooseChatFolder', {
+    success: Schema.NullOr(Schema.String),
+    error: localFolderError,
+  }),
   /** Local chat's recent folders, newest first, or a remote host's approved roots and folders. */
-  Rpc.make('listChatFolders', { payload: backend, success: array(Schema.String), error }),
+  Rpc.make('listChatFolders', {
+    payload: backend,
+    success: array(Schema.String),
+    error: union([IpcAuthorityError, ...localHostServiceErrors]),
+  }),
   /** A new local chat's linked worktree; a repeat with the same `requestId` gets the first. */
   Rpc.make('createChatWorktree', {
     payload: fields({ root: IpcTextSchema, branch: IpcTextSchema, requestId: IpcRequestIdSchema }),
     success: Schema.String,
-    error: workspaceError,
+    error: localWorkspaceError,
   }),
   /** Opens a local chat without a project's folder as a project where it is; its root. */
   Rpc.make('turnChatIntoProject', {
     payload: fields({ conversationId: Schema.String.check(Schema.isBetweenLength(1, 512)) }),
     success: Schema.String,
-    error: workspaceError,
+    error: localWorkspaceError,
   }),
   chat('getChatHost'),
   chat('listChats'),
@@ -149,13 +174,13 @@ export class DesktopChatRpcs extends RpcGroup.make(
   Rpc.make('watchChat', {
     payload: fields({ ...backendField, target: ChatTargetSchema }),
     success: ChatSnapshotSchema,
-    error,
+    error: chatError,
     stream: true,
   }),
   Rpc.make('watchChatList', {
     payload: fields({ ...backendField, session: ChatSessionSchema }),
     success: struct({ ...ChatListStateSchema.fields, reset: Schema.Boolean }),
-    error,
+    error: chatError,
     stream: true,
   }),
   providers('getProviders'),
@@ -167,7 +192,7 @@ export class DesktopChatRpcs extends RpcGroup.make(
   Rpc.make('watchProviders', {
     payload: backend,
     success: ProviderStateSchema,
-    error,
+    error: providersError,
     stream: true,
   }),
   connection('getConnection'),
@@ -180,9 +205,11 @@ export class DesktopChatRpcs extends RpcGroup.make(
   }),
   Rpc.make('copyTranscript', {
     payload: fields({ ...backendField, copy: TranscriptCopySchema }),
-    error: Schema.Union([
-      ...chatTargetErrors,
+    error: union([
+      ...target,
+      IpcInputError,
       IpcBusyError,
+      ...chatServiceErrors,
       TranscriptReadError,
       TranscriptNativeError,
     ]),
@@ -192,11 +219,11 @@ export class DesktopChatRpcs extends RpcGroup.make(
       ...backendField,
       url: Schema.String.check(Schema.makeFilter(isTranscriptLink)),
     }),
-    error: Schema.Union([...ipcErrors, NativeActionError]),
+    error: union([...target, IpcInputError, NativeActionError]),
   }),
   Rpc.make('getTranscriptImageUrl', {
     payload: fields({ ...backendField, image: TranscriptImageSchema }),
     success: Schema.String,
-    error,
+    error: union(target),
   }),
 ).middleware(IpcAdmission) {}

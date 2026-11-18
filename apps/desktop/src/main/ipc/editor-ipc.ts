@@ -56,14 +56,6 @@ export function makeEditorIpcHandlers(options: EditorIpcOptions, document: Scope
     <K extends WorkspaceCommand>(operation: K) =>
     (input: CommandInput<K>) =>
       Effect.gen(function* () {
-        const v = input as Record<string, unknown>;
-        if (
-          (operation === 'operationStatus' || operation === 'acknowledgeOperation') &&
-          ![v.clientId, v.operationClientId, v.id].every(
-            (id) => id === undefined || isRequestId(id),
-          )
-        )
-          return yield* new IpcInputError({ problem: 'request-id' });
         const refusal = yield* Effect.sync(() => approvals.findRefusal(operation, input, grants));
         if (refusal) return yield* new IpcAuthorityError({ refusal });
         const run = workspace[operation] as (
@@ -73,6 +65,17 @@ export function makeEditorIpcHandlers(options: EditorIpcOptions, document: Scope
         yield* Effect.sync(() => approvals.record(operation, output, grants));
         return output;
       });
+  /** An operation's status or acknowledgement, whose request identities must be well formed. */
+  const statusCommand =
+    <K extends 'operationStatus' | 'acknowledgeOperation'>(operation: K) =>
+    (input: CommandInput<K>) => {
+      const v = input as Record<string, unknown>;
+      return [v.clientId, v.operationClientId, v.id].every(
+        (id) => id === undefined || isRequestId(id),
+      )
+        ? command(operation)(input)
+        : Effect.fail(new IpcInputError({ problem: 'request-id' }));
+    };
   /** The absolute path of `path` (relative; empty for the root) inside an approved checkout. */
   const resolvePath = (checkout: CheckoutTarget, path: string) => {
     const absolute = join(checkout.root, path);
@@ -129,8 +132,8 @@ export function makeEditorIpcHandlers(options: EditorIpcOptions, document: Scope
     searchText: command('searchText'),
     inspectEntries: command('inspectEntries'),
     mutate: command('mutate'),
-    operationStatus: command('operationStatus'),
-    acknowledgeOperation: command('acknowledgeOperation'),
+    operationStatus: statusCommand('operationStatus'),
+    acknowledgeOperation: statusCommand('acknowledgeOperation'),
     loadRecovery: command('loadRecovery'),
     openTab: command('openTab'),
     closeTab: command('closeTab'),

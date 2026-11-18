@@ -1,5 +1,4 @@
 import * as Schema from 'effect/Schema';
-import { chatProjectErrors } from '@moonbase/contracts/workspace-rpc';
 import { chatErrors } from '@moonbase/contracts/chat-errors';
 import { folderErrors } from '@moonbase/contracts/folder-errors';
 import { providerSetupErrors } from '@moonbase/contracts/provider-errors';
@@ -8,63 +7,70 @@ import {
   ConnectionError,
   HostVerificationError,
   LocalDaemonError,
+  type ConnectionFailure,
 } from '@moonbase/contracts/connection-errors';
 import { CancelledError, UncertainError } from '@moonbase/contracts/errors';
-import { recoveryErrors } from '@moonbase/contracts/workspace-errors';
-import {
-  IpcAuthorityError,
-  IpcFailedError,
-  IpcInputError,
-  IpcUnavailableError,
-} from '@moonbase/contracts/ipc-errors';
+import { recoveryErrors, type WorkspaceError } from '@moonbase/contracts/workspace-errors';
+import { fileHostErrors, type WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
+import type { DaemonLinkError } from '@moonbase/contracts/host-errors';
+import type {
+  ChatServiceError,
+  LocalHostServiceError,
+  ProviderSetupServiceError,
+} from '@moonbase/contracts/services';
 import { ipcLimits } from './ipc-limits.ts';
 
-// What desktop IPC procedures fail with (D14): main's refusals (contracts' `ipc-errors`, which the
-// application reads too) and the errors of the services main passes requests on to, which cross as
-// their tags and fields. Each procedure declares the unions below that it can fail with.
+// What desktop IPC procedures fail with (D14). Each procedure declares exactly what its handler
+// can fail with: main's own refusals (contracts' `ipc-errors`, which the application reads too)
+// and the errors of the one service it passes the request on to, which cross as their tags and
+// fields. The blocks below are those services' error types as classes; each is checked against
+// its type, so a block lists no error its service can't fail with and misses none it can.
 
-const unique = <A>(errors: readonly A[]) => [...new Set(errors)];
-/** What main refuses any request with, and a handler that failed. */
-export const ipcErrors = [
-  IpcInputError,
-  IpcAuthorityError,
-  IpcUnavailableError,
-  IpcFailedError,
-  CancelledError,
-] as const;
-/** A service reached over a daemon link, besides its own errors: the link's and the host's. */
-const linkErrors = [
-  ...hostErrors,
+/** What a `ConnectionService` fails with (`ConnectionFailure`). */
+export const connectionFailures = [
   ConnectionError,
   HostVerificationError,
   LocalDaemonError,
+  CancelledError,
+] as const;
+/** What a service reached over a daemon link fails with besides its own (`DaemonLinkError`). */
+const daemonLinkErrors = [
+  ...hostErrors,
+  UncertainError,
   RequestReusedError,
+  ...connectionFailures,
+] as const;
+/** What a `ChatService` fails with (`ChatServiceError`). */
+export const chatServiceErrors = [...chatErrors, ...daemonLinkErrors] as const;
+/** What a daemon's folder approvals fail with (`LocalHostServiceError`). */
+export const localHostServiceErrors = [...folderErrors, ...chatServiceErrors] as const;
+/** What provider setup fails with (`ProviderSetupServiceError`). */
+export const providerSetupServiceErrors = [...providerSetupErrors, ...daemonLinkErrors] as const;
+/** What the daemon's file host fails with (`WorkspaceHostError`). */
+export const workspaceHostErrors = [
+  ...fileHostErrors,
   UncertainError,
   CancelledError,
+  ...localHostServiceErrors,
 ] as const;
-/** Chat, provider setup and folder requests to a chat target's daemon. */
-export const chatTargetErrors = unique([
-  ...ipcErrors,
-  ...linkErrors,
-  ...chatErrors,
-  ...folderErrors,
-  ...providerSetupErrors,
-]);
-/** The remote host's connection. */
-export const connectionErrors = unique([
-  ...ipcErrors,
-  ConnectionError,
-  HostVerificationError,
-  LocalDaemonError,
-]);
-/** The editor's workspace: the file host's and the recovery store's, and a new chat's worktree. */
-export const workspaceErrors = unique([
-  ...ipcErrors,
-  ...linkErrors,
-  ...chatProjectErrors,
-  ...chatErrors,
-  ...recoveryErrors,
-]);
+/** What the editor's `WorkspaceService` fails with (`WorkspaceError`). */
+export const workspaceServiceErrors = [...workspaceHostErrors, ...recoveryErrors] as const;
+
+type Instances<T extends readonly (abstract new (...args: never) => unknown)[]> = InstanceType<
+  T[number]
+>;
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+// Each block is exactly its service's error type.
+const blocksMatchTheirTypes: [
+  Same<Instances<typeof connectionFailures>, ConnectionFailure>,
+  Same<Instances<typeof daemonLinkErrors>, DaemonLinkError>,
+  Same<Instances<typeof chatServiceErrors>, ChatServiceError>,
+  Same<Instances<typeof localHostServiceErrors>, LocalHostServiceError>,
+  Same<Instances<typeof providerSetupServiceErrors>, ProviderSetupServiceError>,
+  Same<Instances<typeof workspaceHostErrors>, WorkspaceHostError>,
+  Same<Instances<typeof workspaceServiceErrors>, WorkspaceError>,
+] = [true, true, true, true, true, true, true];
+void blocksMatchTheirTypes;
 
 const transcriptProblems = {
   'source-changed': 'Transcript source changed. Reload the content and try Copy again.',
