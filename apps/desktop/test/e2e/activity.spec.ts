@@ -55,10 +55,16 @@ test('a failed result keeps its call evidence through a held and failed first ma
     ]);
     const controller = window.demo.application.chat!;
     // The watch delivers the recorded snapshot on its own fiber.
-    for (let turn = 0; turn < 200; turn++) {
-      if (controller.getSnapshot().snapshot?.entries.some((entry) => entry.id === 'result')) break;
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await new Promise<void>((resolve) => {
+      const landed = () =>
+        !!controller.getSnapshot().snapshot?.entries.some((entry) => entry.id === 'result');
+      if (landed()) return resolve();
+      const stop = controller.subscribe(() => {
+        if (!landed()) return;
+        stop();
+        resolve();
+      });
+    });
     await controller.jumpToLatest();
     const resultSource = controller
       .getSnapshot()
@@ -628,10 +634,15 @@ test('reading a durable row in the latest window retains current live activity b
     ]);
     const chat = window.demo.application.chat!;
     // The watch delivers each published snapshot on its own fiber.
-    const landed = async (check: () => boolean) => {
-      for (let turn = 0; turn < 200 && !check(); turn++)
-        await new Promise((resolve) => setTimeout(resolve, 10));
-    };
+    const landed = (check: () => boolean) =>
+      new Promise<void>((resolve) => {
+        if (check()) return resolve();
+        const stop = chat.subscribe(() => {
+          if (!check()) return;
+          stop();
+          resolve();
+        });
+      });
     await landed(
       () => !!chat.getSnapshot().snapshot?.entries.some((entry) => entry.id === 'recent'),
     );

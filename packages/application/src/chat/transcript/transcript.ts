@@ -61,6 +61,13 @@ export type Transcript = {
   readonly jumpToLatest: Effect.Effect<void>;
   /** Fails on an invalid view (view memory decodes it). */
   readonly setView: (view: TranscriptView) => Effect.Effect<void, TranscriptReadError>;
+  /**
+   * Saves the view `update` makes of the current one, read and saved in one step; one that returns
+   * the current view unchanged saves nothing.
+   */
+  readonly updateView: (
+    update: (view: TranscriptView) => TranscriptView,
+  ) => Effect.Effect<void, TranscriptReadError>;
   readonly loadManifest: (source: ChatTranscriptSource, restart?: boolean) => Effect.Effect<void>;
   readonly loadPart: (
     source: ChatTranscriptSource,
@@ -213,6 +220,7 @@ export const makeTranscript = (
       jumpToEntry: navigation.jumpToEntry,
       jumpToLatest: navigation.jumpToLatest,
       setView: navigation.setView,
+      updateView: navigation.updateView,
       loadManifest: loads.loadManifest,
       loadPart: loads.loadPart,
     } satisfies Transcript;

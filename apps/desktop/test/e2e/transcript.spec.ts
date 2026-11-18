@@ -177,7 +177,17 @@ test.describe('the virtualized transcript', () => {
       for (let step = 0; step < 12; step++) {
         text += 'more streaming words arrive here. ';
         await window.demo.transcript!.live(text);
-        await new Promise(requestAnimationFrame);
+        // Until the live row shows this update.
+        await new Promise<void>((resolve) => {
+          const check = () =>
+            (document.querySelector('[data-transcript-live]')?.textContent ?? '').split(
+              'more streaming words arrive here.',
+            ).length >
+            step + 1
+              ? resolve()
+              : requestAnimationFrame(check);
+          check();
+        });
       }
     });
     await waitForListRest(page);
@@ -203,7 +213,17 @@ test.describe('the virtualized transcript', () => {
       for (let step = 0; step < 12; step++) {
         text += 'more streaming words arrive here. ';
         await window.demo.transcript!.live(text);
-        await new Promise(requestAnimationFrame);
+        // Until the live row shows this update.
+        await new Promise<void>((resolve) => {
+          const check = () =>
+            (document.querySelector('[data-transcript-live]')?.textContent ?? '').split(
+              'more streaming words arrive here.',
+            ).length >
+            step + 1
+              ? resolve()
+              : requestAnimationFrame(check);
+          check();
+        });
       }
       Object.assign(window, {
         liveReads: () => ((commands.getChatTranscriptContent = original), reads),
@@ -237,7 +257,17 @@ test.describe('the virtualized transcript', () => {
       for (let step = 0; step < 40; step++) {
         text += 'more streaming words arrive here. ';
         await window.demo.transcript!.live(text);
-        await new Promise(requestAnimationFrame);
+        // Until the live row shows this update (the reply began with four sentences).
+        await new Promise<void>((resolve) => {
+          const check = () =>
+            (list.querySelector('[data-transcript-live]')?.textContent ?? '').split(
+              'more streaming words arrive here.',
+            ).length >
+            step + 5
+              ? resolve()
+              : requestAnimationFrame(check);
+          check();
+        });
       }
       Object.assign(window, {
         readMoves: () => {
@@ -641,7 +671,7 @@ test.describe('the virtualized transcript', () => {
       const container = document.activeElement!.closest('[data-transcript-row]')!.parentElement!;
       container.parentElement!.moveBefore(container, container.parentElement!.firstElementChild);
     });
-    await page.evaluate(() => new Promise(requestAnimationFrame));
+    await waitForListRest(page);
     const after = await readList(page);
     expect(Math.abs(after.top - before.top)).toBeLessThan(1);
     await expect(button).toBeFocused();
@@ -1064,14 +1094,13 @@ test('latest snapshot recovery diagnostics survive running metadata and pinned o
     const range = document.createRange();
     range.selectNodeContents(element);
     window.getSelection()!.removeAllRanges();
+    // The transcript holds the selected response once the selection change reaches it.
+    const changed = new Promise((resolve) =>
+      document.addEventListener('selectionchange', resolve, { once: true }),
+    );
     window.getSelection()!.addRange(range);
+    return changed;
   });
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-      ),
-  );
   await page.evaluate(() => {
     window.demo.chat.snapshot.run = null;
     window.demo.chat.snapshot.state = 'uncertain';
@@ -1174,7 +1203,7 @@ test('disconnect cancels a held native action visibly and a late settlement cann
   await page.evaluate(() => {
     window.demo.transcript!.native.copy = (_input, signal) =>
       new Promise<void>((resolve) => {
-        signal!.addEventListener('abort', () => setTimeout(resolve, 50), { once: true });
+        signal!.addEventListener('abort', () => resolve(), { once: true });
       });
   });
   await answer(page).getByRole('button', { name: 'Copy message', exact: true }).click();
@@ -1256,10 +1285,12 @@ test('incomplete/unknown/oversized code remains readable and copyable; late refe
   await expect(live.getByRole('button', { name: /Show all 18000 lines/ })).toBeVisible();
   const unchanged = await page.evaluate(async () => {
     const before = window.demo.transcript!.metrics.lex;
+    // The same reply in a snapshot whose landing shows: only its status message differs.
+    window.demo.chat.snapshot.message = 'Same reply again';
     window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot));
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-    );
+    const chat = window.demo.application.chat!;
+    while (chat.getSnapshot().snapshot?.message !== 'Same reply again')
+      await new Promise(requestAnimationFrame);
     return { before, after: window.demo.transcript!.metrics.lex };
   });
   expect(unchanged.after).toBe(unchanged.before);
@@ -1350,7 +1381,6 @@ test('retired live DOM stays pinned for focus and selection until Jump to latest
     await new Promise((resolve) =>
       document.addEventListener('selectionchange', resolve, { once: true }),
     );
-    await new Promise(requestAnimationFrame);
     return selection.toString();
   });
   await page.evaluate(() => {
@@ -2295,10 +2325,13 @@ for (const activation of ['Control+f', 'Meta+f', 'Find button'])
     await page.evaluate(async () => {
       window.demo.chat.snapshot.message = 'Background update while reading';
       window.demo.chat.controls.receiveChat(structuredClone(window.demo.chat.snapshot));
-      await new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-      );
     });
+    await expect
+      .poll(() =>
+        page.evaluate(() => window.demo.application.chat!.getSnapshot().snapshot?.message),
+      )
+      .toBe('Background update while reading');
+    await waitForListRest(page);
     await expect(region).toBeFocused();
     const before = await region.evaluate((element) => {
       const state = window.demo.application.chat!.getSnapshot().transcript.find;
@@ -2359,6 +2392,7 @@ async function countRowRenders(page: Page) {
     type Fiber = {
       type: unknown;
       memoizedProps: { entry?: { id: string } } | null;
+      memoizedState: object | null;
       child: Fiber | null;
       sibling: Fiber | null;
     };
@@ -2378,15 +2412,18 @@ async function countRowRenders(page: Page) {
           const stack: Fiber[] = [root.current];
           while (stack.length) {
             const fiber = stack.pop()!;
-            const props = fiber.memoizedProps;
-            // A memoized row that skips rendering keeps its previous props object.
+            const props = fiber.memoizedProps,
+              hooks = fiber.memoizedState;
+            // A row that renders, for new props or its own state, makes new hook state; one that
+            // skips rendering keeps it.
             if (
               typeof fiber.type === 'function' &&
               fiber.type.name === 'Entry' &&
               props?.entry &&
-              !seen.has(props)
+              hooks &&
+              !seen.has(hooks)
             ) {
-              seen.add(props);
+              seen.add(hooks);
               renders.push(props.entry.id);
             }
             if (fiber.sibling) stack.push(fiber.sibling);
@@ -2409,10 +2446,7 @@ test('scrolling and live progress re-render only the rows they change', async ({
   expect((await rows.take()).length).toBeGreaterThan(0);
   await expect.poll(() => page.locator('[data-transcript-entry]').count()).toBeGreaterThan(3);
   await transcript(page).hover();
-  for (let i = 0; i < 12; i++) {
-    await page.mouse.wheel(0, -120);
-    await page.evaluate(() => new Promise(requestAnimationFrame));
-  }
+  for (let i = 0; i < 12; i++) await page.mouse.wheel(0, -120);
   await settle(page);
   const anchor = () =>
     page.evaluate(() => window.demo.application.chat!.getSnapshot().transcript.view.anchor);
@@ -2422,11 +2456,22 @@ test('scrolling and live progress re-render only the rows they change', async ({
   // Twenty scroll events save one settled anchor, re-rendering at most the two rows it moves between.
   for (let i = 0; i < 20; i++)
     await transcript(page).evaluate(async (element) => {
+      // Each step scrolls on its own: the next starts once its scroll event fired.
+      const scrolled = new Promise((resolve) =>
+        element.addEventListener('scroll', resolve, { once: true }),
+      );
       element.scrollTop -= 1;
-      await new Promise(requestAnimationFrame);
+      await scrolled;
     });
   await settle(page);
   expect((await rows.take()).length).toBeLessThanOrEqual(2);
+  // Typing in the composer commits the draft, a new copy of the selection; no row re-renders.
+  await page.getByRole('textbox', { name: 'Message', exact: true }).pressSequentially('draft');
+  await expect
+    .poll(() => page.evaluate(() => window.demo.application.chat!.getSnapshot().draft))
+    .toBe('draft');
+  await settle(page);
+  expect(await rows.take()).toEqual([]);
   // The wheel may have scrolled output inside a row and left the list following.
   const jump = page.getByRole('button', { name: 'Jump to latest', exact: true });
   if (await jump.isVisible()) await jump.click();

@@ -76,6 +76,15 @@ export type ChatSelectionShape = {
   readonly jumpToEntry: (entryId: string) => Effect.Effect<void>;
   readonly jumpToLatest: Effect.Effect<void>;
   readonly setTranscriptView: (view: TranscriptView) => Effect.Effect<void>;
+  /**
+   * Saves the view `update` makes of the transcript's current one while `target` is open, read and
+   * saved in one step (returning it unchanged saves nothing); a view of a chat no longer open is
+   * dropped.
+   */
+  readonly updateTranscriptView: (
+    target: ChatTarget,
+    update: (view: TranscriptView) => TranscriptView,
+  ) => Effect.Effect<void>;
   readonly loadTranscriptManifest: (
     source: ChatTranscriptSource,
     restart?: boolean,
@@ -278,6 +287,13 @@ export class ChatSelection extends Context.Service<ChatSelection, ChatSelectionS
         jumpToLatest: withTranscript((t) => t.jumpToLatest),
         setTranscriptView: (view) =>
           withTranscript((t) => t.setView(view).pipe(Effect.catch(actions.report))),
+        updateTranscriptView: (target, update) =>
+          Effect.gen(function* () {
+            if (!(yield* actions.accepting)) return;
+            const { open } = yield* SubscriptionRef.get(state);
+            if (open && isSameTarget(open.target, target))
+              yield* open.transcript.updateView(update).pipe(Effect.catch(actions.report));
+          }),
         loadTranscriptManifest: (source, restart) =>
           withTranscript((t) => t.loadManifest(source, restart)),
         loadTranscriptPart: (source, selection, restart) =>

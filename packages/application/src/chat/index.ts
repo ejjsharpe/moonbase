@@ -65,6 +65,17 @@ export type { TranscriptView, TranscriptViewAnchor } from './transcript/transcri
 export { findRowEntryId, getEntryRowKey, isLiveRowKey } from './transcript/transcript-rows.ts';
 export type { LiveEntry, TranscriptRow } from './transcript/transcript-rows.ts';
 export { defaultTranscriptLimits } from './transcript/transcript-state.ts';
+export {
+  collectResultsByCall,
+  getCallKey,
+  getTranscriptParts,
+  type ResultsByCall,
+} from './transcript/results-by-call.ts';
+export {
+  getTranscriptSourceKey,
+  type TranscriptRowState,
+} from './transcript/transcript-row-state.ts';
+export { makeTranscriptAtoms, type TranscriptAtoms } from './transcript/transcript-atoms.ts';
 export type {
   TranscriptLimits,
   TranscriptState,

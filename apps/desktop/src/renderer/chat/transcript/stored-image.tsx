@@ -11,6 +11,10 @@ import {
 } from 'react';
 import { Button } from '@base-ui/react/button';
 import { Dialog } from '@base-ui/react/dialog';
+import { Effect } from 'effect';
+import * as Atom from 'effect/reactivity/Atom';
+import * as AsyncResult from 'effect/reactivity/AsyncResult';
+import { useAtomRefresh, useAtomValue } from '@effect/atom-react';
 import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { overlays } from '@moonbase/ui/overlays';
@@ -25,6 +29,8 @@ type Viewer = ImageRequest & { trigger: HTMLElement };
 type ImageContext = {
   native?: TranscriptNative;
   enabled: boolean;
+  /** Each image's URL from main, read while a picture of it shows; keyed by `ImageRequest.key`. */
+  urls: ((key: string) => Atom.Atom<AsyncResult.AsyncResult<string, unknown>>) | null;
   open(viewer: Viewer): void;
   close(key: string): void;
 };
@@ -41,6 +47,19 @@ function getImageIssue(part: ChatTranscriptPart, native?: TranscriptNative) {
     return 'Stored image exceeds the 4 MiB preview limit.';
   if (!native) return 'Image preview is unavailable here.';
 }
+
+const noUrl = Atom.make(AsyncResult.initial<string, unknown>());
+/** Reads each image's URL once per showing; leaving the page interrupts the read. */
+const makeImageUrls = (native: TranscriptNative) =>
+  Atom.family((key: string) => {
+    const { source, part } = JSON.parse(key) as Pick<ImageRequest, 'source' | 'part'>;
+    const image: TranscriptImage = {
+      source,
+      selection: { partId: part.partId, bytes: part.bytes, revision: part.revision },
+      mimeType: part.mimeType as TranscriptImage['mimeType'],
+    };
+    return Atom.make(Effect.tryPromise((signal) => native.imageUrl(image, signal)));
+  });
 
 export function StoredImages({
   native,
@@ -86,7 +105,11 @@ export function StoredImages({
   useEffect(() => {
     if (!enabled) onReadingSourceChange(null);
   }, [enabled, onReadingSourceChange]);
-  const context = useMemo(() => ({ native, enabled, open, close }), [native, enabled, open, close]);
+  const urls = useMemo(() => native && makeImageUrls(native), [native]);
+  const context = useMemo(
+    () => ({ native, enabled, urls: urls ?? null, open, close }),
+    [native, enabled, urls, open, close],
+  );
   return (
     <Images value={context}>
       {children}
@@ -129,7 +152,7 @@ export function StoredImage({
   part: ChatTranscriptPart;
 }) {
   const { close } = useContext(Images)!;
-  const key = JSON.stringify([source, part]);
+  const key = JSON.stringify({ source, part });
   const request = useMemo(() => ({ source, part, key }), [source, part, key]);
   useEffect(() => () => close(key), [close, key]);
   return (
@@ -144,41 +167,22 @@ export function StoredImage({
 
 /** Main serves the bytes from an opaque, document-scoped URL; Chromium decodes them. */
 function Picture({ request, thumbnail }: { request: ImageRequest; thumbnail: boolean }) {
-  const { native, enabled, open } = useContext(Images)!;
-  const { source, part } = request;
-  const [attempt, setAttempt] = useState(0);
-  const [loaded, setLoaded] = useState<{
-    attempt: number;
-    url?: string;
-    size?: string;
-    failed?: boolean;
-  }>({ attempt });
+  const { native, enabled, urls, open } = useContext(Images)!;
+  const { part } = request;
   const issue = getImageIssue(part, native);
-  useEffect(() => {
-    if (!enabled || issue || !native) return;
-    const job = new AbortController();
-    const image: TranscriptImage = {
-      source,
-      selection: { partId: part.partId, bytes: part.bytes, revision: part.revision },
-      mimeType: part.mimeType as TranscriptImage['mimeType'],
-    };
-    native.imageUrl(image, job.signal).then(
-      // An unchanged element keeps its loaded size; React does not fire onLoad again.
-      (url) =>
-        setLoaded((previous) =>
-          previous.attempt === attempt && previous.url === url ? previous : { attempt, url },
-        ),
-      () => {
-        if (!job.signal.aborted) setLoaded({ attempt, failed: true });
-      },
-    );
-    return () => job.abort();
-  }, [native, enabled, issue, source, part, attempt]);
-  const current = loaded.attempt === attempt ? loaded : { attempt };
+  const atom = enabled && !issue && urls ? urls(request.key) : noUrl;
+  const result = useAtomValue(atom);
+  const retry = useAtomRefresh(atom);
+  /** The loaded image's size, and a URL Chromium could not decode. */
+  const [shown, setShown] = useState<{ url: string; size?: string; broken?: boolean } | null>(null);
+  const read = AsyncResult.isSuccess(result) ? result.value : undefined;
+  const current = shown?.url === read ? shown : null;
+  const failed = (AsyncResult.isFailure(result) && !result.waiting) || !!current?.broken;
   const error =
-    issue ?? (current.failed ? 'Could not load this stored image. Retry the preview.' : undefined);
-  const url = enabled && !error ? current.url : undefined;
-  const ready = !!url && !!current.size;
+    issue ?? (failed ? 'Could not load this stored image. Retry the preview.' : undefined);
+  const url = enabled && !error ? read : undefined;
+  const size = current?.size;
+  const ready = !!url && !!size;
   let placeholder = 'Image preview paused';
   if (enabled) placeholder = 'Loading image…';
   if (error) placeholder = 'Preview unavailable';
@@ -189,12 +193,12 @@ function Picture({ request, thumbnail }: { request: ImageRequest; thumbnail: boo
       loading="lazy"
       decoding="async"
       onLoad={({ currentTarget: image }) =>
-        setLoaded({
-          ...current,
+        setShown({
+          url,
           size: `${image.naturalWidth.toLocaleString()} × ${image.naturalHeight.toLocaleString()} pixels`,
         })
       }
-      onError={() => setLoaded({ attempt, failed: true })}
+      onError={() => setShown({ url, broken: true })}
       {...stylex.props(thumbnail ? styles.thumbnail : styles.fullImage)}
     />
   );
@@ -216,7 +220,7 @@ function Picture({ request, thumbnail }: { request: ImageRequest; thumbnail: boo
       )}
       {(ready || thumbnail) && (
         <p aria-hidden={!ready} {...stylex.props(styles.meta, styles.caption)}>
-          {ready && current.size}
+          {ready && size}
           {thumbnail && ready ? ' · Open to inspect' : ''}
         </p>
       )}
@@ -225,8 +229,13 @@ function Picture({ request, thumbnail }: { request: ImageRequest; thumbnail: boo
           {error}
         </p>
       )}
-      {current.failed && enabled && (
-        <Button {...stylex.props(controls.button)} onClick={() => setAttempt(attempt + 1)}>
+      {failed && !issue && enabled && (
+        <Button
+          {...stylex.props(controls.button)}
+          onClick={() => {
+            setShown(null);
+            retry();
+          }}>
           Retry image
         </Button>
       )}

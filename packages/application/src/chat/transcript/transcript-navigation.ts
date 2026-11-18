@@ -19,6 +19,13 @@ export type TranscriptNavigation = {
   readonly jumpToEntry: (entryId: string) => Effect.Effect<void>;
   readonly jumpToLatest: Effect.Effect<void>;
   readonly setView: (view: TranscriptView) => Effect.Effect<void, TranscriptReadError>;
+  /**
+   * Saves the view `update` makes of the current one, read and saved in one step; one that returns
+   * the current view unchanged saves nothing.
+   */
+  readonly updateView: (
+    update: (view: TranscriptView) => TranscriptView,
+  ) => Effect.Effect<void, TranscriptReadError>;
   /** Shows a Find match's entry at the top, reading around it unless retained. */
   readonly revealEntry: (entryId: string) => Effect.Effect<void, TranscriptFailure>;
 };
@@ -92,9 +99,15 @@ export function makeTranscriptNavigation(
       return jobs.run(historyJob, readPage(direction), { replace: true });
     });
 
-  const setView = (view: TranscriptView) =>
+  const updateView = (update: (view: TranscriptView) => TranscriptView) =>
     Effect.gen(function* () {
-      const captured = yield* checkTranscript(() => store.rememberView(view));
+      // Read, updated and remembered in one step; an update that keeps the view saves nothing.
+      const captured = yield* checkTranscript(() => {
+        const current = store.state.view,
+          view = update(current);
+        return view === current ? null : store.rememberView(view);
+      });
+      if (!captured) return;
       const restoring = leaveRestore();
       restorePending = false;
       // No anchor, or a live-edge row, follows once history reaches the newest entry.
@@ -103,6 +116,7 @@ export function makeTranscriptNavigation(
       if (restoring) yield* interruptHistory;
       yield* store.publish();
     });
+  const setView = (view: TranscriptView) => updateView(() => view);
   /**
    * Shows `entryId`, reading history around it unless it is retained. The list places it afresh,
    * at its top; a jump to the saved anchor's entry while it isn't retained (Retry after a restore
@@ -172,6 +186,7 @@ export function makeTranscriptNavigation(
       yield* jobs.run(historyJob, work, { replace: true });
     }),
     setView,
+    updateView,
     revealEntry: (entryId) =>
       Effect.gen(function* () {
         restoringView = false;

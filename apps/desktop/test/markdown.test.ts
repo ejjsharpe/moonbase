@@ -11,7 +11,7 @@ import {
   canHighlight,
   getExternalLink,
   getSyntaxTone,
-} from '../src/renderer/chat/transcript/markdown-model.ts';
+} from '../src/renderer/chat/transcript/markdown/markdown-model.ts';
 test('parser block selection excludes indented literals and preserves meaningful code indentation', () => {
   for (const literal of ['same\n      ```\n', 'unclosed\n']) {
     const source = `- item\n\n      \`\`\`js\n      ${literal}\n  \`\`\`js\r\n  same\r\n  \`\`\`\r\n`;
@@ -231,7 +231,7 @@ test('least recently read messages leave first at the entry and byte bounds', ()
   assert.equal(cache.stats.messages, 1);
 });
 
-test('streamed text keeps unchanged block signatures and estimates retention from source length', () => {
+test('streamed text keeps unchanged blocks and estimates retention from source length', () => {
   const cache = new MarkdownCache();
   const first = cache.parse(
     'stream',
@@ -243,10 +243,8 @@ test('streamed text keeps unchanged block signatures and estimates retention fro
     '',
     '# Title\n\nFirst paragraph\n\n```ts\nconst a = 1;\n```\n\nTail grows',
   );
-  assert.deepEqual(
-    first.slice(0, 3).map((block) => block.signature),
-    next.slice(0, 3).map((block) => block.signature),
-  );
+  // Unchanged blocks keep their identity, so only the changed one re-renders.
+  assert(first.slice(0, 3).every((block, index) => block === next[index]));
   assert.notEqual(first[3]!.signature, next[3]!.signature);
   // One identity holds one parse, whatever the streamed revision.
   assert.equal(cache.stats.messages, 1);

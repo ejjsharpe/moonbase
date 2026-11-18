@@ -1,5 +1,5 @@
 import { parsePatch } from 'diff';
-import { fitsStructuredSource } from './source-limits.ts';
+import { fitsStructuredSource } from '../source-limits.ts';
 
 export type PatchLine = {
   old?: number;
