@@ -66,7 +66,13 @@ export function PendingCommands({
               </Button>
               <Button
                 {...stylex.props(controls.button)}
-                disabled={!connected || isBusy(state, p.input.requestId) || !!state.storageError}
+                // A request still in flight is never sent alongside itself, so Retry waits for it.
+                disabled={
+                  !connected ||
+                  isBusy(state, p.input.requestId) ||
+                  state.dispatching.includes(p.input.requestId) ||
+                  !!state.storageError
+                }
                 onClick={() => void controller.retry(p.input.requestId)}>
                 Retry original{' '}
                 {{ stopChat: 'Stop', sendChat: 'Send', createChat: 'Create' }[p.operation]}

@@ -770,9 +770,13 @@ test('first-message recovery shows the captured text, Send identity and effort a
     });
     const { commands } = window.demo.chat;
     const original = commands.createChat;
+    const lost = Promise.withResolvers<void>();
+    // The Create is held in flight, then its reply is lost.
     commands.createChat = async () => {
+      await lost.promise;
       throw Error('Controlled lost Create response');
     };
+    Object.assign(window, { loseCreate: () => lost.resolve() });
     window.demo.retryChat = () => {
       commands.createChat = original;
     };
@@ -786,6 +790,11 @@ test('first-message recovery shows the captured text, Send identity and effort a
   await expect(retained).toBeVisible();
   await message.fill('Newer unsent edit');
   await retained.locator('summary').click();
+  // A Create still in flight can't be retried alongside itself.
+  const retry = retained.getByRole('button', { name: 'Retry original Create', exact: true });
+  await expect(retry).toBeDisabled();
+  await page.evaluate(() => (window as typeof window & { loseCreate(): void }).loseCreate());
+  await expect(retry).toBeEnabled();
   await expect(retained.locator('pre')).toHaveText(original);
   const id = await page.evaluate(() => {
     const pending = window.demo.application.chat!.getSnapshot().pending[0]!;
