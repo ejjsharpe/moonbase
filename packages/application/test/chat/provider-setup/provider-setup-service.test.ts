@@ -42,9 +42,11 @@ async function setupFixture(
 }
 
 test('a sign-in’s reply replaces a held status read, and answers never enter state or storage', async (t) => {
-  const held = Promise.withResolvers<ProviderState>();
+  const held = Promise.withResolvers<ProviderState>(),
+    logout = Promise.withResolvers<ProviderState>();
   const { f, setup, providers, shown } = await setupFixture(t, (operation) => {
     if (operation === 'getProviders') return held.promise;
+    if (operation === 'logoutProvider') return logout.promise;
     return operation === 'startProviderLogin' ? signingIn : completed;
   });
   const refreshing = f.run(setup.refresh);
@@ -58,6 +60,14 @@ test('a sign-in’s reply replaces a held status read, and answers never enter s
   assert(!JSON.stringify(shown()).includes('private-transient-answer'));
   assert(!JSON.stringify(await f.state()).includes('private-transient-answer'));
   assert(!f.storage.value?.includes('private-transient-answer'));
+  // An older command's late failure never replaces a newer command's reply.
+  const loggingOut = f.run(setup.logout('openai'));
+  await waitFor(() => providers.calls.some((call) => call.operation === 'logoutProvider'));
+  await f.run(setup.login('openai'));
+  logout.reject(unavailable());
+  await loggingOut;
+  assert.equal(shown().error, null);
+  assert.equal(shown().status?.flow?.state, 'running');
 });
 
 test('sign-in progress comes from the watch, never from polling, and a dropped watch reopens', async (t) => {

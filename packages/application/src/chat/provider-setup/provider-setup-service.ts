@@ -28,6 +28,8 @@ export type ProviderSetupState = ProviderSetupSnapshot & {
   /** Commands running, and how many of them change setup state. */
   running: number;
   mutations: number;
+  /** Counts the commands that changed setup state; only the newest one's reply or error shows. */
+  latest: number;
   /** The open watch has delivered: it is the state's source and command replies stop replacing it. */
   watched: boolean;
 };
@@ -66,6 +68,7 @@ export class ChatProviderSetup extends Context.Service<ChatProviderSetup, ChatPr
         error: null,
         running: 0,
         mutations: 0,
+        latest: 0,
         watched: false,
       });
       const watching = yield* FiberHandle.make<void, never>();
@@ -93,21 +96,23 @@ export class ChatProviderSetup extends Context.Service<ChatProviderSetup, ChatPr
           const setup = port;
           if (!setup || !(yield* actions.accepting)) return;
           const read = operation === 'getProviders';
-          const started = yield* SubscriptionRef.modify(state, (s) =>
-            read && s.mutations
-              ? [false, s]
-              : [
-                  true,
-                  {
-                    ...s,
-                    busy: true,
-                    error: null,
-                    running: s.running + 1,
-                    mutations: s.mutations + (read ? 0 : 1),
-                  },
-                ],
-          );
-          if (!started) return;
+          // Starting is one step: a read waits for no mutation, and a mutation takes the next token.
+          const token = yield* SubscriptionRef.modify(state, (s) => {
+            if (read && s.mutations) return [undefined, s];
+            const latest = read ? s.latest : s.latest + 1;
+            return [
+              latest,
+              {
+                ...s,
+                busy: true,
+                error: null,
+                running: s.running + 1,
+                mutations: s.mutations + (read ? 0 : 1),
+                latest,
+              },
+            ];
+          });
+          if (token === undefined) return;
           if (!read) yield* FiberHandle.clear(reading);
           const call = (
             setup[operation] as (
@@ -124,6 +129,8 @@ export class ChatProviderSetup extends Context.Service<ChatProviderSetup, ChatPr
                   busy: running > 0,
                   mutations: s.mutations - (read ? 0 : 1),
                 };
+                // A newer command's reply (or the watch, once it delivers) supersedes this one.
+                if (s.latest !== token) return settled;
                 if (Exit.isSuccess(exit))
                   return s.watched ? settled : { ...settled, status: exit.value };
                 return Cause.hasInterruptsOnly(exit.cause)
