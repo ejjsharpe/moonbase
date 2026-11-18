@@ -12,6 +12,7 @@ import { homePath } from '../components/folder-menu.tsx';
  */
 export function makePickerEntries({
   chats,
+  now,
   checkouts,
   showChat,
   showCheckout,
@@ -21,6 +22,8 @@ export function makePickerEntries({
   openProject,
 }: {
   chats: readonly ChatSummary[];
+  /** The time the chats' ages are from. */
+  now: number;
   checkouts: readonly CheckoutTarget[];
   showChat?: (chat: ChatSummary) => void;
   showCheckout(checkout: CheckoutTarget): void;
@@ -36,7 +39,7 @@ export function makePickerEntries({
           id: summary.target.conversationId,
           kind: 'chat' as const,
           label: summary.title,
-          detail: `${getChatPlace(summary)} · ${formatChatAge(summary.activity?.at ?? summary.createdAt)}`,
+          detail: `${getChatPlace(summary)} · ${formatChatAge(summary.activity?.at ?? summary.createdAt, now)}`,
           recent: index < 3,
           run: () => showChat(summary),
         }))

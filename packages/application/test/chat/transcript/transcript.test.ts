@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { Effect, Fiber, Stream } from 'effect';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import {
-  iterateTranscriptSource,
-  makeTranscriptReader,
+  streamTranscriptSource,
   defaultTranscriptLimits,
+  type TranscriptRead,
 } from '@moonbase/application/chat';
+import type { ChatClient } from '@moonbase/contracts/chat';
 import { maximumChatReplyBytes } from '@moonbase/contracts/chat';
 import type { ChatSnapshot, ChatTranscriptSource } from '@moonbase/contracts/chat';
 import type { TranscriptLimits, TranscriptState } from '@moonbase/application/chat';
@@ -22,11 +24,22 @@ import {
   type TranscriptHarness,
 } from './transcript-fixture.ts';
 
-async function collect(iterator: AsyncIterable<{ data: string }>) {
-  let text = '';
-  for await (const chunk of iterator) text += chunk.data;
-  return text;
-}
+const collect = <E>(stream: Stream.Stream<{ data: string }, E>) =>
+  Effect.runPromise(
+    Stream.runFold(
+      stream,
+      () => '',
+      (text, chunk) => text + chunk.data,
+    ),
+  );
+/** Reads through the fixture's chat client, interrupting a read by its signal. */
+const readFrom =
+  (chat: ChatClient): TranscriptRead<unknown> =>
+  (input) =>
+    Effect.tryPromise({
+      try: (signal) => chat.command('getChatTranscriptContent', input, { signal }),
+      catch: (error) => error,
+    });
 const serialized = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 /** Published summaries and content stay within their budgets. */
 function assertBounds(state: TranscriptState, limits: TranscriptLimits = defaultTranscriptLimits) {
@@ -237,8 +250,8 @@ test('one oversized part stays incrementally readable within the LRU; complete-s
   assert.equal(view.content[0].loadedBytes, data.length);
   assert.equal(
     await collect(
-      iterateTranscriptSource({
-        read: makeTranscriptReader(f.chat),
+      streamTranscriptSource({
+        read: readFrom(f.chat),
         source,
         selection: chosen,
       }),
@@ -257,7 +270,7 @@ test('summary byte and record budgets include hydrated descriptors and envelopes
   assertBounds(state, f.limits);
   assert(state.manifest!.omittedParts > 0);
   assert.equal(
-    await collect(iterateTranscriptSource({ read: makeTranscriptReader(f.chat), source })),
+    await collect(streamTranscriptSource({ read: readFrom(f.chat), source })),
     data.join(''),
   );
 });
@@ -309,7 +322,7 @@ test('stale/replaced/recovered/finalized live sources cannot authorize hydration
   assert.equal(f.calls.length, calls);
 });
 
-test('complete-source iterator works with injected reads, reports progress, validates cycles, and rejects cancellation/missing chunks', async () => {
+test('complete-source stream works with injected reads, reports progress, stops reading when interrupted, and rejects missing chunks', async () => {
   const f = transcriptFixture(1),
     source = f.entries[0].transcript!.source;
   const data = 'z'.repeat(100000),
@@ -318,8 +331,8 @@ test('complete-source iterator works with injected reads, reports progress, vali
   const progress: number[] = [];
   assert.equal(
     await collect(
-      iterateTranscriptSource({
-        read: makeTranscriptReader(f.chat),
+      streamTranscriptSource({
+        read: readFrom(f.chat),
         source,
         onProgress: (value) => progress.push(value.bytes),
       }),
@@ -327,28 +340,26 @@ test('complete-source iterator works with injected reads, reports progress, vali
     data + 'second',
   );
   assert(progress.length > 3);
-  const abort = new AbortController();
-  await assert.rejects(
-    collect(
-      iterateTranscriptSource({
-        read: makeTranscriptReader(f.chat),
-        source,
-        selection: chosen,
-        signal: abort.signal,
-        onProgress: () => abort.abort(),
-      }),
-    ),
-    // Electron main, its one consumer, reads the legacy code (until CL-24).
-    { code: 'Cancelled' },
+  // Stopping the stream interrupts the read under way.
+  const entered = Promise.withResolvers<void>();
+  f.handlers.set('getChatTranscriptContent', () => {
+    entered.resolve();
+    return Promise.withResolvers<never>().promise;
+  });
+  const reading = Effect.runFork(
+    Stream.runDrain(streamTranscriptSource({ read: readFrom(f.chat), source, selection: chosen })),
   );
+  await entered.promise;
+  await Effect.runPromise(Fiber.interrupt(reading));
+  assert(f.calls.at(-1)!.signal!.aborted);
   f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) => ({
     ...(fallback() as object),
     offset: 5,
   }));
   await assert.rejects(
     collect(
-      iterateTranscriptSource({
-        read: makeTranscriptReader(f.chat),
+      streamTranscriptSource({
+        read: readFrom(f.chat),
         source,
         selection: chosen,
       }),
@@ -364,8 +375,8 @@ test('complete-source iterator works with injected reads, reports progress, vali
   };
   await assert.rejects(
     collect(
-      iterateTranscriptSource({
-        read: makeTranscriptReader(f.chat),
+      streamTranscriptSource({
+        read: readFrom(f.chat),
         source: liveSource,
         selection: chosen,
       }),
@@ -386,7 +397,7 @@ test('trusted ChatClient replies and snapshots are not decoded or size-bounded a
     padding,
   }));
   assert.equal(
-    await collect(iterateTranscriptSource({ read: makeTranscriptReader(f.chat), source })),
+    await collect(streamTranscriptSource({ read: readFrom(f.chat), source })),
     'same text',
   );
   await f.transcript.loadManifest(source, true);
@@ -401,8 +412,8 @@ test('trusted ChatClient replies and snapshots are not decoded or size-bounded a
   }));
   await assert.rejects(
     collect(
-      iterateTranscriptSource({
-        read: makeTranscriptReader(f.chat),
+      streamTranscriptSource({
+        read: readFrom(f.chat),
         source,
         selection: chosen,
       }),
@@ -509,7 +520,7 @@ test('complete iteration rejects a manifest continuation cycle', async (t) => {
     };
   });
   await assert.rejects(
-    collect(iterateTranscriptSource({ read: makeTranscriptReader(f.chat), source })),
+    collect(streamTranscriptSource({ read: readFrom(f.chat), source })),
     /advance/,
   );
 });
@@ -533,12 +544,12 @@ test('changed entry descriptors invalidate relevant hydration', async (t) => {
   assert.equal(f.state.content.at(-1)!.chunks[0].data, 'replacement');
 });
 
-test('injected iteration captures its source before the first pull', async (t) => {
+test('a source stream captures its source before the first pull', async (t) => {
   const f = await transcriptHarness(t, 1);
   const injectedSource = structuredClone(f.entries[0].transcript!.source);
-  const injected = iterateTranscriptSource({
+  const injected = streamTranscriptSource({
     source: injectedSource,
-    read: makeTranscriptReader(f.chat),
+    read: readFrom(f.chat),
   });
   if (injectedSource.kind === 'entry') injectedSource.entryId = 'mutated';
   assert.equal(await collect(injected), 'same text');

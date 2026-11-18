@@ -32,7 +32,8 @@ export function useDesktopApplication(application: DesktopApplication) {
   const chat = useAtomValue(application.atoms.chat);
   const composer = useAtomValue(application.atoms.composer);
   const actions = useMemo(() => {
-    const { service, run, runSync } = application;
+    const { service } = application,
+      runner: DesktopRunner = application;
     return {
       /** The lifecycle now, for a callback. */
       getSnapshot: () => registry.get(application.atoms.snapshot),
@@ -41,12 +42,12 @@ export function useDesktopApplication(application: DesktopApplication) {
         const services = registry.get(application.atoms.chat);
         return services ? registry.get(select(getChatAtoms(services))) : undefined;
       },
-      openChat: () => run(service.chat.open),
+      openChat: () => runner.run(service.chat.open),
       /** Closes the chat if its drafts are kept; false when it can't close now. */
-      closeChat: () => runSync(service.chat.close),
-      selectChatTarget: (id: string) => run(service.chat.select(id)),
-      prepareQuit: () => run(service.prepareQuit),
-      reportCleanup: (error: unknown) => void run(service.reportCleanup(error)),
+      closeChat: () => runner.runSync(service.chat.close),
+      selectChatTarget: (id: string) => runner.run(service.chat.select(id)),
+      prepareQuit: () => runner.run(service.prepareQuit),
+      reportCleanup: (error: unknown) => void runner.run(service.reportCleanup(error)),
       describe: describeApplicationFailure,
     };
   }, [application, registry]);

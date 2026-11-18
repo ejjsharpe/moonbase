@@ -18,6 +18,7 @@ import {
   type ChatActivityReason,
 } from '@moonbase/application/chat';
 import { useStoredToggle } from '../hooks/use-stored-toggle.ts';
+import { useNow } from '../hooks/use-now.ts';
 import { formatChatAge } from './age.ts';
 import { getChatPlace } from './folder.ts';
 import { focusMessage, isBusy } from './open-chat.ts';
@@ -72,6 +73,8 @@ export function ChatList({
   const selected = useAtomValue(atoms.selected);
   const active = useAtomValue(atoms.active);
   const busy = (id: string) => isBusy(active, id);
+  // Ages are in minutes, so the list reads the time each minute.
+  const now = useNow(60_000);
   const groups = groupChatsByActivity({ chats, seen, pending, dispatching, open: snapshot });
   const reducedMotion = useReducedMotion();
   const settledMotion = { duration: reducedMotion ? 0 : 0.22, ease: [0.2, 0.8, 0.2, 1] as const };
@@ -104,7 +107,7 @@ export function ChatList({
         </span>
       </span>
       <time dateTime={at} {...stylex.props(styles.chatDate)}>
-        {formatChatAge(at)}
+        {now !== undefined && formatChatAge(at, now)}
       </time>
     </Button>
   );

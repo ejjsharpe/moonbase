@@ -43,6 +43,15 @@ test('project rules reject violations and preserve documented exceptions', () =>
       'apps/desktop/src/renderer/attribute.jsx': 'export const view = <div class="panel" />;',
       'scripts/builtin.mjs': 'import path from "path"; export const joined = path.join("a", "b");',
       'dist/invalid.js': 'const = broken;',
+      'packages/shared/src/time.ts':
+        'import { Effect } from "effect";\nsetTimeout(() => {}, 1); window.setInterval(() => {}, 1);\nexport const at = Date.now(); export const tick = performance.now();\nexport const abort = new AbortController(); export const wait = new Promise(() => {});\nexport const value = Effect.runSync(Effect.void);',
+      'packages/shared/test/time.test.ts':
+        'setTimeout(() => {}, 1); export const wait = new Promise(() => {});',
+      // An edge lifts only what it names: Electron main's root may make its runner, nothing else.
+      'apps/desktop/src/main/main.ts':
+        'import { Runtime } from "effect";\nexport const run = Runtime.makeRunMain(() => {}); setTimeout(() => {}, 1);',
+      'apps/desktop/src/renderer/chat/chat-header.tsx':
+        'export const close = (runner, runtime, effect) => [runner.runSync(effect), runtime.runSync(effect)];',
     };
     for (const [name, source] of Object.entries(fixtures)) {
       const file = path.join(directory, name);
@@ -81,6 +90,19 @@ test('project rules reject violations and preserve documented exceptions', () =>
       JSON.stringify(diagnostics),
     );
     assert.deepEqual(codes('invalid.js'), []);
+    // Production code is Effect-native: no timers, clock reads, AbortControllers, `new Promise` or runs.
+    const restricted = (file) =>
+      codes(file)
+        .filter((code) => /no-restricted|avoid-new/.test(code))
+        .sort();
+    assert.deepEqual(restricted('src/time.ts'), [
+      ...Array(2).fill('eslint(no-restricted-globals)'),
+      ...Array(4).fill('eslint(no-restricted-properties)'),
+      'promise(avoid-new)',
+    ]);
+    assert.deepEqual(restricted('time.test.ts'), []);
+    assert.deepEqual(restricted('main/main.ts'), ['eslint(no-restricted-globals)']);
+    assert.deepEqual(restricted('chat/chat-header.tsx'), ['eslint(no-restricted-properties)']);
 
     const format = spawnSync(process.execPath, [tools('oxfmt'), '--stdin-filepath=example.tsx'], {
       cwd: directory,
