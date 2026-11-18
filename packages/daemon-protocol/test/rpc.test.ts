@@ -122,7 +122,7 @@ async function openSocket(port: number, socket: Socket, protocols: string[]) {
 
 test('each socket admits an upgrade only with a fresh proof of this host’s key for its own protocol, before Bun accepts it', async (t) => {
   const source = controlledChat();
-  const { token, port, nonce } = await serve(t, source.client);
+  const { token, port, nonce, advance } = await serve(t, source.client);
   const dispatched = source.calls.length;
   for (const socket of sockets) {
     const other = sockets.find((each) => each !== socket)!;
@@ -182,6 +182,14 @@ test('each socket admits an upgrade only with a fresh proof of this host’s key
         new RegExp(`^HTTP/1\\.1 ${status}`),
         `${socket.name}: ${name}`,
       );
+    // A nonce is good only briefly: by the server's clock, one past its time is refused.
+    const stale = await proofFor();
+    await advance(rpcLimits.upgradeNonceMs);
+    assert.match(
+      await upgradeStatus(port, socket, { headers: offered(stale) }),
+      /^HTTP\/1\.1 401/,
+      `${socket.name}: an expired nonce`,
+    );
     // Past the socket's connection cap an upgrade with a good proof is still refused, while the
     // other socket has places of its own.
     const open: Awaited<ReturnType<typeof openSocket>>[] = [];

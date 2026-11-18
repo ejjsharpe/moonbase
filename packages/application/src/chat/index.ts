@@ -58,7 +58,7 @@ export {
 export {
   checkTranscriptReply,
   countDecodedTranscriptBytes,
-  iterateTranscriptSource,
+  streamTranscriptSource,
   trackTranscriptCursor,
 } from './transcript/transcript-read.ts';
 export type { TranscriptRead, TranscriptChunk } from './transcript/transcript-read.ts';

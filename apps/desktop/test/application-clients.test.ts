@@ -27,7 +27,10 @@ test('a reply the renderer cannot decode is Incompatible, and a request its sche
   const runtime = ManagedRuntime.make(
     makeDesktopIpcLayer(Effect.succeed(toMessagePortLike(port1))),
   );
-  const shell = makeShellClients(runtime, { connect: async () => {}, pathForFile: () => '' });
+  const shell = makeShellClients((effect, options) => runtime.runPromiseExit(effect, options), {
+    connect: async () => {},
+    pathForFile: () => '',
+  });
   try {
     await assert.rejects(shell.chatTargets(), inGroup('incompatible'));
     await assert.rejects(

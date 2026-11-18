@@ -7,7 +7,6 @@ import type { ErrorGroup } from '@moonbase/contracts/error-groups';
 
 const problems = {
   'source-changed': ['conflict', 'Transcript source changed or is stale.'],
-  cancelled: ['cancelled', 'Transcript read cancelled.'],
   'live-authority': ['conflict', 'Live transcript reads require current observation authority.'],
   'cursor-stalled': ['incompatible', 'Transcript cursor did not advance.'],
   'reply-mismatch': ['incompatible', 'Transcript reply does not match the captured selection.'],

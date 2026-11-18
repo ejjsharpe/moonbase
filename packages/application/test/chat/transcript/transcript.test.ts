@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { Effect, Fiber, Stream } from 'effect';
 import { ChatAccessError } from '@moonbase/contracts/chat-errors';
 import { HostUnavailableError } from '@moonbase/contracts/host-errors';
-import { iterateTranscriptSource, defaultTranscriptLimits } from '@moonbase/application/chat';
+import { streamTranscriptSource, defaultTranscriptLimits } from '@moonbase/application/chat';
 import { maximumChatReplyBytes } from '@moonbase/contracts/chat';
 import type { ChatSnapshot, ChatTranscriptSource } from '@moonbase/contracts/chat';
 import type { TranscriptLimits, TranscriptState } from '@moonbase/application/chat';
@@ -19,11 +20,14 @@ import {
   type TranscriptHarness,
 } from './transcript-fixture.ts';
 
-async function collect(iterator: AsyncIterable<{ data: string }>) {
-  let text = '';
-  for await (const chunk of iterator) text += chunk.data;
-  return text;
-}
+const collect = <E>(stream: Stream.Stream<{ data: string }, E>) =>
+  Effect.runPromise(
+    Stream.runFold(
+      stream,
+      () => '',
+      (text, chunk) => text + chunk.data,
+    ),
+  );
 const serialized = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 /** Published summaries and content stay within their budgets. */
 function assertBounds(state: TranscriptState, limits: TranscriptLimits = defaultTranscriptLimits) {
@@ -227,7 +231,7 @@ test('one oversized part stays incrementally readable within the LRU; complete-s
   assert.equal(view.content[0].loadedBytes, data.length);
   assert.equal(
     await collect(
-      iterateTranscriptSource({
+      streamTranscriptSource({
         read: f.read,
         source,
         selection: chosen,
@@ -246,7 +250,10 @@ test('summary byte and record budgets include hydrated descriptors and envelopes
   const state = f.state;
   assertBounds(state, f.limits);
   assert(state.manifest!.omittedParts > 0);
-  assert.equal(await collect(iterateTranscriptSource({ read: f.read, source })), data.join(''));
+  assert.equal(
+    await collect(streamTranscriptSource({ read: f.read, source })),
+    data.join(''),
+  );
 });
 
 test('closing the transcript aborts a held read at once, and its late reply never lands', async (t) => {
@@ -296,7 +303,7 @@ test('stale/replaced/recovered/finalized live sources cannot authorize hydration
   assert.equal(f.calls.length, calls);
 });
 
-test('complete-source iterator works with injected reads, reports progress, validates cycles, and rejects cancellation/missing chunks', async () => {
+test('complete-source stream works with injected reads, reports progress, stops reading when interrupted, and rejects missing chunks', async () => {
   const f = transcriptFixture(1),
     source = f.entries[0].transcript!.source;
   const data = 'z'.repeat(100000),
@@ -305,7 +312,7 @@ test('complete-source iterator works with injected reads, reports progress, vali
   const progress: number[] = [];
   assert.equal(
     await collect(
-      iterateTranscriptSource({
+      streamTranscriptSource({
         read: f.read,
         source,
         onProgress: (value) => progress.push(value.bytes),
@@ -314,26 +321,25 @@ test('complete-source iterator works with injected reads, reports progress, vali
     data + 'second',
   );
   assert(progress.length > 3);
-  const abort = new AbortController();
-  await assert.rejects(
-    collect(
-      iterateTranscriptSource({
-        read: f.read,
-        source,
-        selection: chosen,
-        signal: abort.signal,
-        onProgress: () => abort.abort(),
-      }),
-    ),
-    { _tag: 'TranscriptReadError', problem: 'cancelled' },
+  // Stopping the stream interrupts the read under way.
+  const entered = Promise.withResolvers<void>();
+  f.handlers.set('getChatTranscriptContent', () => {
+    entered.resolve();
+    return Promise.withResolvers<never>().promise;
+  });
+  const reading = Effect.runFork(
+    Stream.runDrain(streamTranscriptSource({ read: f.read, source, selection: chosen })),
   );
+  await entered.promise;
+  await Effect.runPromise(Fiber.interrupt(reading));
+  assert(f.calls.at(-1)!.signal!.aborted);
   f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) => ({
     ...(fallback() as object),
     offset: 5,
   }));
   await assert.rejects(
     collect(
-      iterateTranscriptSource({
+      streamTranscriptSource({
         read: f.read,
         source,
         selection: chosen,
@@ -350,7 +356,7 @@ test('complete-source iterator works with injected reads, reports progress, vali
   };
   await assert.rejects(
     collect(
-      iterateTranscriptSource({
+      streamTranscriptSource({
         read: f.read,
         source: liveSource,
         selection: chosen,
@@ -360,9 +366,9 @@ test('complete-source iterator works with injected reads, reports progress, vali
   );
 });
 
-// The fixture's reads are trusted: the chat runtime's ports own decoding and size bounds and test
-// them. Shared code checks only meaning.
-test('trusted chat replies and snapshots are not decoded or size-bounded again', async (t) => {
+// The fixture client is trusted: the chat runtime's services own decoding and size bounds
+// and test them. Shared code checks only meaning.
+test('trusted port replies and snapshots are not decoded or size-bounded again', async (t) => {
   const f = await transcriptHarness(t, 1);
   const source = f.entries[0].transcript!.source,
     chosen = selection(f.entries[0].transcript!.parts[0]),
@@ -371,7 +377,10 @@ test('trusted chat replies and snapshots are not decoded or size-bounded again',
     ...(fallback() as object),
     padding,
   }));
-  assert.equal(await collect(iterateTranscriptSource({ read: f.read, source })), 'same text');
+  assert.equal(
+    await collect(streamTranscriptSource({ read: f.read, source })),
+    'same text',
+  );
   await f.transcript.loadManifest(source, true);
   assert.equal(f.state.manifest!.status, 'complete');
   await f.transcript.loadPart(source, chosen, true);
@@ -384,7 +393,7 @@ test('trusted chat replies and snapshots are not decoded or size-bounded again',
   }));
   await assert.rejects(
     collect(
-      iterateTranscriptSource({
+      streamTranscriptSource({
         read: f.read,
         source,
         selection: chosen,
@@ -488,7 +497,10 @@ test('complete iteration rejects a manifest continuation cycle', async (t) => {
       thinking: 'none',
     };
   });
-  await assert.rejects(collect(iterateTranscriptSource({ read: f.read, source })), /advance/);
+  await assert.rejects(
+    collect(streamTranscriptSource({ read: f.read, source })),
+    /advance/,
+  );
 });
 
 test('changed entry descriptors invalidate relevant hydration', async (t) => {
@@ -510,10 +522,10 @@ test('changed entry descriptors invalidate relevant hydration', async (t) => {
   assert.equal(f.state.content.at(-1)!.chunks[0].data, 'replacement');
 });
 
-test('injected iteration captures its source before the first pull', async (t) => {
+test('a source stream captures its source before the first pull', async (t) => {
   const f = await transcriptHarness(t, 1);
   const injectedSource = structuredClone(f.entries[0].transcript!.source);
-  const injected = iterateTranscriptSource({
+  const injected = streamTranscriptSource({
     source: injectedSource,
     read: f.read,
   });
@@ -773,7 +785,8 @@ for (const replacement of ['around', 'latest'] as const)
         if ((raw as { entryId: string }).entryId === 'e32') {
           oldEntered.resolve();
           await oldHeld.promise;
-          if (oldOutcome === 'error') throw new HostUnavailableError({ reason: 'failed' });
+          if (oldOutcome === 'error')
+            throw new HostUnavailableError({ reason: 'failed' });
         } else {
           newEntered.resolve();
           await newHeld.promise;
@@ -958,7 +971,8 @@ for (const outcome of ['success', 'error'] as const)
       const reply = fallback();
       entered.resolve();
       await held.promise;
-      if (outcome === 'error') throw new HostUnavailableError({ reason: 'failed' });
+      if (outcome === 'error')
+        throw new HostUnavailableError({ reason: 'failed' });
       return reply;
     });
     try {

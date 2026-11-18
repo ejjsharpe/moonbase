@@ -223,9 +223,6 @@ export function transcriptFixture(count = 640) {
         fallback(operation, input)),
     ) as never;
   };
-  // The content read the desktop's whole-source iteration reads through.
-  const read: TranscriptRead = (input, options) =>
-    command('getChatTranscriptContent', input, options.signal);
   // Interrupting a port read aborts its signal without waiting for the handler.
   const port = new Proxy({} as ChatPort, {
     get: (_port, operation: string) => (input: unknown) =>
@@ -234,6 +231,8 @@ export function transcriptFixture(count = 640) {
         catch: (error) => error as never,
       }),
   });
+  // The content read a whole-source stream reads through.
+  const read: TranscriptRead<unknown> = (input) => port.getChatTranscriptContent(input);
   return {
     target,
     read,

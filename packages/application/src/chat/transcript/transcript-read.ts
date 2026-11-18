@@ -1,3 +1,4 @@
+import { Effect, Queue, Stream } from 'effect';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import type {
   ChatInput,
@@ -5,13 +6,12 @@ import type {
   ChatTranscriptSource,
   ChatTranscriptSelection,
 } from '@moonbase/contracts/chat';
-import { TranscriptReadError } from './transcript-errors.ts';
+import { checkTranscript, TranscriptReadError } from './transcript-errors.ts';
 
-/** A transcript content read; its boundary has already decoded and bounded the reply. */
-export type TranscriptRead = (
-  input: ChatInput<'getChatTranscriptContent'>,
-  options: { signal?: AbortSignal },
-) => Promise<ChatOutput<'getChatTranscriptContent'>>;
+type ContentInput = ChatInput<'getChatTranscriptContent'>;
+type ContentReply = ChatOutput<'getChatTranscriptContent'>;
+/** A read of one page of a source; its boundary has already decoded and bounded the reply. */
+export type TranscriptRead<E> = (input: ContentInput) => Effect.Effect<ContentReply, E>;
 export type TranscriptChunk = {
   source: ChatTranscriptSource;
   selection: ChatTranscriptSelection;
@@ -41,44 +41,6 @@ export function trackTranscriptCursor() {
     }
   };
 }
-function checkTranscriptRead(signal?: AbortSignal, isCurrent?: () => boolean) {
-  if (signal?.aborted) throw new TranscriptReadError({ problem: 'cancelled' });
-  if (isCurrent && !isCurrent()) throw new TranscriptReadError({ problem: 'source-changed' });
-}
-/** Cancel the caller's wait even when the reader ignores the signal. */
-function awaitTranscriptRead<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return pending;
-  return new Promise((resolve, reject) => {
-    const cancel = () => {
-      signal.removeEventListener('abort', cancel);
-      reject(new TranscriptReadError({ problem: 'cancelled' }));
-    };
-    pending.then(
-      (value) => {
-        signal.removeEventListener('abort', cancel);
-        resolve(value);
-      },
-      (error) => {
-        signal.removeEventListener('abort', cancel);
-        reject(error);
-      },
-    );
-    if (signal.aborted) cancel();
-    else signal.addEventListener('abort', cancel, { once: true });
-  });
-}
-/** Reads one page for an input the caller has already decoded and owns. */
-async function readTranscript(
-  read: TranscriptRead,
-  input: ChatInput<'getChatTranscriptContent'>,
-  signal?: AbortSignal,
-  isCurrent?: () => boolean,
-) {
-  checkTranscriptRead(signal, isCurrent);
-  const reply = await awaitTranscriptRead(read(input, { signal }), signal);
-  checkTranscriptRead(signal, isCurrent);
-  return checkTranscriptReply(input, reply);
-}
 /** Checks that a reply echoes the input it answers; the port's boundary checked its shape. */
 export function checkTranscriptReply(
   input: ChatInput<'getChatTranscriptContent'>,
@@ -105,99 +67,110 @@ export function countDecodedTranscriptBytes(chunk: Pick<TranscriptChunk, 'encodi
     : atob(chunk.data).length;
 }
 
-/** Streams a fixed source, independent of presentation/cache retention. Failures reject iteration. */
-export type TranscriptIterationOptions = {
-  read: TranscriptRead;
+/** A fixed source to stream, independent of presentation/cache retention. */
+export type TranscriptIterationOptions<E> = {
+  read: TranscriptRead<E>;
   source: ChatTranscriptSource;
   selection?: ChatTranscriptSelection;
-  signal?: AbortSignal;
   /** Required for live evidence; the caller owns observation/final native-write authority. */
   isCurrent?: () => boolean;
   onProgress?: (progress: TranscriptReadProgress) => void;
 };
-export function iterateTranscriptSource(
-  options: TranscriptIterationOptions,
-): AsyncGenerator<TranscriptChunk> {
-  const captured = structuredClone(
+
+/**
+ * Streams a source's selected part, or every part its manifest lists, in order, validating each
+ * echo, chunk and continuation. It reads at most one chunk ahead of its consumer; stopping the
+ * stream interrupts the read under way.
+ */
+export function streamTranscriptSource<E>(
+  options: TranscriptIterationOptions<E>,
+): Stream.Stream<TranscriptChunk, TranscriptReadError | E> {
+  const { read, isCurrent, onProgress } = options;
+  // Captured now, so a caller changing its source later reads what it asked for.
+  const { source, selection } = structuredClone(
     options.selection
       ? { source: options.source, selection: options.selection }
       : { source: options.source },
   );
-  return iterateSource({ ...options, ...captured });
-}
-async function* iterateSource(
-  options: TranscriptIterationOptions,
-): AsyncGenerator<TranscriptChunk> {
-  const { read, signal, isCurrent, onProgress } = options;
-  const { source, selection } = options;
-  if (source.kind === 'live' && !isCurrent)
-    throw new TranscriptReadError({ problem: 'live-authority' });
-  const advance = trackTranscriptCursor();
-  let manifestCursor: string | null = null,
-    parts = 0,
-    bytes = 0;
-  do {
-    const manifest: Extract<ChatOutput<'getChatTranscriptContent'>, { kind: 'manifest' }> | null =
-      selection
-        ? null
-        : await readTranscript(
-            read,
-            { source, ...(manifestCursor ? { cursor: manifestCursor } : {}) },
-            signal,
-            isCurrent,
-          ).then((reply) => {
-            if (reply.kind !== 'manifest')
-              throw new TranscriptReadError({ problem: 'expected-manifest' });
-            return reply;
-          });
-    const selections = selection
-      ? [selection]
-      : manifest!.parts.map((part) => {
-          if (part.availability !== 'available')
-            throw new TranscriptReadError({ problem: 'content-unavailable' });
-          return { partId: part.partId, bytes: part.bytes, revision: part.revision };
+  return Stream.callback<TranscriptChunk, TranscriptReadError | E>(
+    (queue) =>
+      Effect.gen(function* () {
+        if (source.kind === 'live' && !isCurrent)
+          return yield* new TranscriptReadError({ problem: 'live-authority' });
+        const check = checkTranscript(() => {
+          if (isCurrent && !isCurrent())
+            throw new TranscriptReadError({ problem: 'source-changed' });
         });
-    for (const selected of selections) {
-      let cursor: string | null = null,
-        offset = 0;
-      let encoding: TranscriptChunk['encoding'] | undefined;
-      do {
-        const chunk = await readTranscript(
-          read,
-          { source, selection: selected, ...(cursor ? { cursor } : {}) },
-          signal,
-          isCurrent,
-        );
-        if (chunk.kind !== 'content' || chunk.offset !== offset)
-          throw new TranscriptReadError({ problem: 'chunk-gap' });
-        if (encoding && encoding !== chunk.encoding)
-          throw new TranscriptReadError({ problem: 'encoding-changed' });
-        encoding = chunk.encoding;
-        const size = countDecodedTranscriptBytes(chunk);
-        offset += size;
-        bytes += size;
-        cursor = chunk.nextCursor;
-        checkTranscriptRead(signal, isCurrent);
+        const readChecked = (input: ContentInput) =>
+          check.pipe(
+            Effect.andThen(read(input)),
+            Effect.tap(check),
+            Effect.flatMap((reply) => checkTranscript(() => checkTranscriptReply(input, reply))),
+          );
+        const advance = trackTranscriptCursor();
+        let manifestCursor: string | null = null,
+          parts = 0,
+          bytes = 0;
+        do {
+          let selections = selection ? [selection] : [];
+          let next: string | null = null;
+          if (!selection) {
+            const manifest: ContentReply = yield* readChecked({
+              source,
+              ...(manifestCursor ? { cursor: manifestCursor } : {}),
+            });
+            if (manifest.kind !== 'manifest')
+              return yield* new TranscriptReadError({ problem: 'expected-manifest' });
+            next = manifest.nextCursor;
+            selections = [];
+            for (const part of manifest.parts) {
+              if (part.availability !== 'available')
+                return yield* new TranscriptReadError({ problem: 'content-unavailable' });
+              selections.push({ partId: part.partId, bytes: part.bytes, revision: part.revision });
+            }
+          }
+          for (const selected of selections) {
+            let cursor: string | null = null,
+              offset = 0;
+            let encoding: TranscriptChunk['encoding'] | undefined;
+            do {
+              const chunk: ContentReply = yield* readChecked({
+                source,
+                selection: selected,
+                ...(cursor ? { cursor } : {}),
+              });
+              if (chunk.kind !== 'content' || chunk.offset !== offset)
+                return yield* new TranscriptReadError({ problem: 'chunk-gap' });
+              if (encoding && encoding !== chunk.encoding)
+                return yield* new TranscriptReadError({ problem: 'encoding-changed' });
+              encoding = chunk.encoding;
+              const size = countDecodedTranscriptBytes(chunk);
+              offset += size;
+              bytes += size;
+              cursor = chunk.nextCursor;
+              yield* check;
+              onProgress?.({ parts, bytes });
+              yield* check;
+              yield* Queue.offer(queue, {
+                source: structuredClone(source),
+                selection: { ...selected },
+                offset: chunk.offset,
+                encoding: chunk.encoding,
+                data: chunk.data,
+              });
+            } while (cursor !== null);
+            if (offset !== selected.bytes)
+              return yield* new TranscriptReadError({ problem: 'content-incomplete' });
+            parts++;
+          }
+          yield* checkTranscript(() => advance(manifestCursor, next));
+          manifestCursor = next;
+        } while (manifestCursor !== null);
+        yield* check;
         onProgress?.({ parts, bytes });
-        checkTranscriptRead(signal, isCurrent);
-        yield {
-          source: structuredClone(source),
-          selection: { ...selected },
-          offset: chunk.offset,
-          encoding: chunk.encoding,
-          data: chunk.data,
-        };
-        checkTranscriptRead(signal, isCurrent);
-      } while (cursor !== null);
-      if (offset !== selected.bytes)
-        throw new TranscriptReadError({ problem: 'content-incomplete' });
-      parts++;
-    }
-    const next: string | null = manifest?.nextCursor ?? null;
-    advance(manifestCursor, next);
-    manifestCursor = next;
-  } while (manifestCursor !== null);
-  checkTranscriptRead(signal, isCurrent);
-  onProgress?.({ parts, bytes });
-  checkTranscriptRead(signal, isCurrent);
+        yield* check;
+        yield* Queue.end(queue);
+      }),
+    { bufferSize: 1 },
+  );
 }

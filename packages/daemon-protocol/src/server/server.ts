@@ -1,4 +1,4 @@
-import { Effect, Exit, Fiber, FiberSet, Scope } from 'effect';
+import { Clock, Effect, Exit, Fiber, FiberSet, Scope } from 'effect';
 import type {
   LocalHostHandlers,
   ChatServiceShape,
@@ -127,7 +127,8 @@ export const serveChat = (
       return yield* Effect.fail(new HostKeyExposedError());
     const admit = options.admit ?? Effect.void;
     const run = yield* FiberSet.makeRuntimePromise<never>();
-    const nonces = createUpgradeNonces();
+    const clock = yield* Clock.Clock;
+    const nonces = createUpgradeNonces(() => clock.currentTimeMillisUnsafe());
     // The RPC servers live in a scope of their own. Closing it waits for the mutations they run,
     // which a stuck helper could hold for ever, so the wait is bounded; anything unfinished was
     // journalled where it runs.

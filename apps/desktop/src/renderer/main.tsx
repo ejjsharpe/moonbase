@@ -17,7 +17,11 @@ import type { DesktopApplication } from './shell/desktop-application.ts';
 import { WorkbenchStartupFailure } from './shell/startup-failure.tsx';
 import type { DesktopBridge } from '../ipc/desktop-bridge.ts';
 import { makeWindowFailure, type WindowFailure } from '../ipc/ipc-errors.ts';
-import { makeChatTargetClients, makeShellClients } from './ipc/application-clients.ts';
+import {
+  makeChatTargetClients,
+  makeShellClients,
+  type DesktopIpcRunner,
+} from './ipc/application-clients.ts';
 import { makeDocumentLayer, makeIpcLayer } from './renderer-layer.ts';
 import * as stylex from '@stylexjs/stylex';
 import { workbench } from '@moonbase/ui/workbench';
@@ -35,17 +39,19 @@ const targetClients = new Map<string, ReturnType<typeof makeChatTargetClients>>(
 /** Captured per target once, so a selected target change cannot reroute a pending action. */
 function getTargetClients(target: 'local' | 'remote'): ReturnType<typeof makeChatTargetClients> {
   let clients = targetClients.get(target);
-  if (!clients) targetClients.set(target, (clients = makeChatTargetClients(runtime, target)));
+  if (!clients) targetClients.set(target, (clients = makeChatTargetClients(runIpc, target)));
   return clients;
 }
 // The renderer's one runtime: every request to main runs here, over this document's IPC port,
 // and it holds the workspace, the editor and the application.
 const runtime = ManagedRuntime.make(makeIpcLayer(window.moonbase));
+/** The root's runner for the shell's and transcripts' Promise clients over IPC. */
+const runIpc: DesktopIpcRunner = (effect, options) => runtime.runPromiseExit(effect, options);
 /** Where the editor and application live, closed as the document goes, before main is told. */
 const documentScope = Scope.makeUnsafe();
 /** A failure as the window's lifecycle reports it to main: Moonbase's text of it. */
 const toWindowError = (error: unknown) => makeWindowFailure(describeApplicationFailure(error));
-const shell = makeShellClients(runtime, window.moonbase);
+const shell = makeShellClients(runIpc, window.moonbase);
 /** Runs main's window actions through `on` for as long as the document lives, each once. */
 function useWindowActions(
   on: (action: 'quit' | 'dispose' | 'cleanup-error', id: string, error?: WindowFailure) => void,

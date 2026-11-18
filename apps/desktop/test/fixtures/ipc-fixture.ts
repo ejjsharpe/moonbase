@@ -390,12 +390,13 @@ export async function makeIpcFixture(
     forkWorkspace: <A, E>(use: (workspace: WorkspaceServiceShape) => Effect.Effect<A, E>) =>
       forkWorkspace(renderer, use),
     get shell() {
-      return makeShellClients(renderer, {
+      return makeShellClients((effect, options) => renderer.runPromiseExit(effect, options), {
         connect: async () => {},
         pathForFile: (file) => file.name,
       });
     },
-    target: (id: 'local' | 'remote') => makeChatTargetClients(renderer, id),
+    target: (id: 'local' | 'remote') =>
+      makeChatTargetClients((effect, options) => renderer.runPromiseExit(effect, options), id),
     /** The chat, provider setup and connection ports the renderer's chat runs on, for `id`. */
     ports: (id: 'local' | 'remote') => renderer.runPromise(makeChatTargetPorts(id)),
     connectRaw,

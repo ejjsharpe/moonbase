@@ -16,7 +16,7 @@ Data may be lost between versions while Moonbase is prerelease: a change can sta
 
 ## Files and folders
 
-- One concept per file, named for what it holds. A file whose summary needs "and" is two files. Source files stay under about 600 lines (lint enforces this from #296). The files still over that are being split by the #273 tickets: don't grow them; put a new concept in its own file.
+- One concept per file, named for what it holds. A file whose summary needs "and" is two files. Source files stay under about 600 lines: a guideline review applies, not a lint rule. Don't grow a file past it; put a new concept in its own file.
 - Start flat. When a few files belong to one thing and are used together, group them in a folder named for it (`renderer/chat/transcript/`, `workbench/src/files-tree/`). Code shared by several features sits in kind folders at the root (`renderer/components/`, `renderer/hooks/`); code one feature uses lives in that feature. Don't add generic folders like `utils/` or `logic/`.
 - Code that runs in different processes gets a folder per process: desktop `main/`, `preload/` and `renderer/`, with the IPC contract they share in `ipc/`; workspace `host/` and `client/`, with what they share at `src/`.
 - Client state in `packages/application` is one folder per concept, with `x.ts`, `x-service.ts` and `x-atoms.ts` for its three layers (see its README).
@@ -30,6 +30,7 @@ Write code as if Moonbase had been Effect-native from the start (epic #273, D14 
 
 - A module is a `Context.Service` with a `Layer`, and its methods return Effects. Resources are `Effect.acquireRelease` in a `Scope`, not closed flags, AbortController sets or collected-failure arrays.
 - Each process runs one runtime at its root. Library code never calls `Effect.runPromise`, `runFork` or `runSync`.
+- Lint forbids `setTimeout`, `setInterval`, `Date.now`, `performance.now`, `AbortController`, `new Promise` and runtime `run*` calls in production code. Only the edge files `oxlint.config.mts` names may use what each lists, for its reason; fix the code rather than adding one.
 - Use the primitives: `FiberSet`/`FiberMap`/`FiberHandle`, `Semaphore`, `RcMap`/`Cache`, `Deferred`, `Latch`, `SubscriptionRef`/`PubSub` and Streams, `Clock` and `Schedule` (tests use `TestClock`), and `effect/process` `ChildProcess`.
 - Errors are per-module `Schema.TaggedError` classes with fields and a `message` built from them. RPC procedures declare an `error` union. Shared outcomes are `UncertainError` (never resend), `CancelledError` and `UnauthorizedError`. A decision that depends on what a failure means (refused, unavailable, uncertain) asks `@moonbase/contracts/error-groups`, never a code.
 - Wrap a Promise or callback API once, where it enters (`Effect.tryPromise({ try: (signal) => … })`, `Effect.callback`, `Stream.callback`).

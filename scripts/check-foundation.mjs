@@ -30,7 +30,7 @@ for (const entry of [
     write: false,
     metafile: true,
   });
-  // `ApplicationError` is an Effect Schema class, so DTO entries carry portable Effect too.
+  // Errors are Effect Schema classes, so DTO entries carry portable Effect too.
   for (const input of Object.keys(result.metafile.inputs))
     assert(
       portableInput.test(input),
@@ -101,7 +101,7 @@ console.log('Verified schema entries bundle only contracts and portable Effect.'
 
 const smoke = await build({
   absWorkingDir: root,
-  entryPoints: ['scripts/fixtures/headless.ts'],
+  entryPoints: ['scripts/fixtures/headless.mjs'],
   bundle: true,
   platform: 'browser',
   format: 'esm',

@@ -1,13 +1,4 @@
-import {
-  Cause,
-  Duration,
-  Effect,
-  Exit,
-  Fiber,
-  Schedule,
-  Stream,
-  type ManagedRuntime,
-} from 'effect';
+import { Cause, Deferred, Duration, Effect, Exit, Schedule, Stream } from 'effect';
 import { CancelledError } from '@moonbase/contracts/errors';
 import { IpcFailedError } from '@moonbase/contracts/ipc-errors';
 import { isUnavailable } from '@moonbase/contracts/error-groups';
@@ -27,22 +18,25 @@ import { callEffect, watchStream, type Payload, type Refusal, type Tag } from '.
 // The chat runs on Effect ports over main's procedures. The shell and a transcript's native
 // actions are Promise code for React views, bound to the renderer's root runtime once, here.
 
-/** The root runtime, which provides `DesktopIpc`, as these clients run on it. */
-export type DesktopRuntime = Pick<
-  ManagedRuntime.ManagedRuntime<DesktopIpc, never>,
-  'runPromiseExit' | 'runFork' | 'runPromise'
->;
+/**
+ * The renderer root's runner, which provides `DesktopIpc`: an Effect's exit as a Promise, the
+ * Effect interrupted once `signal` aborts. The root binds it to its one runtime.
+ */
+export type DesktopIpcRunner = <A, E>(
+  effect: Effect.Effect<A, E, DesktopIpc>,
+  options?: { signal?: AbortSignal },
+) => Promise<Exit.Exit<A, E>>;
 /**
  * Runs `effect` for a Promise caller: its value, or a rejection with its failure as the
  * application reads failures; once interrupted, a `CancelledError` for `operation`.
  */
 async function runForCaller<A, E>(
-  runtime: DesktopRuntime,
+  run: DesktopIpcRunner,
   effect: Effect.Effect<A, E, DesktopIpc>,
   operation: string,
   options?: { signal?: AbortSignal },
 ): Promise<A> {
-  const exit = await runtime.runPromiseExit(effect, options);
+  const exit = await run(effect, options);
   if (Exit.isSuccess(exit)) return exit.value;
   const failure = Cause.findErrorOption(exit.cause);
   if (failure._tag === 'Some') throw failure.value;
@@ -50,11 +44,11 @@ async function runForCaller<A, E>(
     ? new CancelledError({ operation })
     : new IpcFailedError();
 }
-/** Binds procedures to `runtime`: one call each, failing as the application reads failures. */
-function makeCaller(runtime: DesktopRuntime, refused: Refusal) {
+/** Binds procedures to `run`: one call each, failing as the application reads failures. */
+function makeCaller(run: DesktopIpcRunner, refused: Refusal) {
   return {
     call: <T extends Tag>(tag: T, payload: Payload<T>, options?: { signal?: AbortSignal }) =>
-      runForCaller(runtime, callEffect(tag, payload, refused), tag, options),
+      runForCaller(run, callEffect(tag, payload, refused), tag, options),
   };
 }
 
@@ -97,8 +91,8 @@ export const makeChatTargetPorts = (backendId: ChatTargetId) =>
   });
 
 /** One chat target's transcript native actions. */
-export function makeChatTargetClients(runtime: DesktopRuntime, backendId: ChatTargetId) {
-  const { call } = makeCaller(runtime, refusedChat);
+export function makeChatTargetClients(run: DesktopIpcRunner, backendId: ChatTargetId) {
+  const { call } = makeCaller(run, refusedChat);
   const transcript: TranscriptNative = {
     copy: (copy, signal) => call('copyTranscript', { backendId, copy }, { signal }),
     openLink: (url, signal) => call('openTranscriptLink', { backendId, url }, { signal }),
@@ -117,9 +111,9 @@ const windowActionsRetry = Schedule.exponential('50 millis').pipe(
 type QuitAnswer = { consent: boolean; cleanupError?: WindowFailure };
 
 /** The shell's native actions and chat folders, and the window's own procedures. */
-export function makeShellClients(runtime: DesktopRuntime, bridge: DesktopBridge) {
+export function makeShellClients(run: DesktopIpcRunner, bridge: DesktopBridge) {
   const refused: Refusal = 'desktop-request';
-  const { call } = makeCaller(runtime, refused);
+  const { call } = makeCaller(run, refused);
   /** Each Quit or disposal request this document took, with its answer once it has one. */
   const quitAnswers = new Map<string, QuitAnswer | undefined>();
   /** The cleanup failures this document heard of: main tells each watch of them all. */
@@ -127,7 +121,7 @@ export function makeShellClients(runtime: DesktopRuntime, bridge: DesktopBridge)
   /** Sends an answer, again while main can't be reached: the document may already be gone. */
   const sendQuitAnswer = (id: string, answer: QuitAnswer) =>
     runForCaller(
-      runtime,
+      run,
       callEffect('answerQuit', { id, ...answer }, refused).pipe(
         Effect.retry({ schedule: windowActionsRetry, times: 8, while: isUnavailable }),
       ),
@@ -172,17 +166,20 @@ export function makeShellClients(runtime: DesktopRuntime, bridge: DesktopBridge)
         const answer = quitAnswers.get(action.id);
         if (answer) void sendQuitAnswer(action.id, answer).catch(() => {});
       };
-      const fiber = runtime.runFork(
+      const stop = Deferred.makeUnsafe<void>();
+      const watching = run(
         watchStream('watchWindowActions', undefined, refused).pipe(
           Stream.retry(windowActionsRetry),
           Stream.runForEach((action) => Effect.sync(() => take(action))),
           Effect.ignore,
+          Effect.raceFirst(Deferred.await(stop)),
         ),
       );
       // Closing stops delivery at once, then ends the watch.
       return () => {
         closing = true;
-        return runtime.runPromise(Fiber.interrupt(fiber)).then(() => undefined);
+        Deferred.doneUnsafe(stop, Effect.void);
+        return watching.then(() => undefined);
       };
     },
     /** Answers a `quit` or `dispose` request; main ignores an answer to any other. */
