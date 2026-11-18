@@ -45,6 +45,10 @@ export type TranscriptJobs = {
   readonly running: (key: string) => Fiber.Fiber<void> | undefined;
   /** The keys of the running jobs `select` picks. */
   readonly keys: (select: (read: TranscriptJobRead, key: string) => boolean) => string[];
+  /** The fibers of the running jobs `select` picks. */
+  readonly fibers: (
+    select: (read: TranscriptJobRead, key: string) => boolean,
+  ) => Fiber.Fiber<void>[];
   /** Interrupts the running jobs `select` picks and waits for them to end. */
   readonly interrupt: (
     select: (read: TranscriptJobRead, key: string) => boolean,
@@ -115,6 +119,8 @@ export const makeTranscriptJobs = (
     return {
       run,
       running: (key) => jobs.get(key)?.fiber,
+      fibers: (select) =>
+        [...jobs].filter(([key, job]) => select(job, key)).map(([, job]) => job.fiber!),
       keys,
       interrupt: (select) =>
         Effect.suspend(() =>

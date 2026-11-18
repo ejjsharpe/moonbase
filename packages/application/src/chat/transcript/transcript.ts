@@ -1,4 +1,4 @@
-import { Effect, type Scope } from 'effect';
+import { Effect, Fiber, type Scope } from 'effect';
 import type {
   ChatSnapshot,
   ChatSummary,
@@ -87,61 +87,68 @@ export const makeTranscript = (
     const acceptSnapshot = (input: ChatSnapshot) =>
       Effect.gen(function* () {
         yield* checkTranscript(() => checkSnapshotSources(input, dependencies.target));
-        const old = store.snapshot;
-        const next = reuseSnapshot(input, old, store.history);
-        store.snapshot = old && areJsonValuesEqual(old, next) ? old : next;
-        const reconnecting = input.observationStatus === 'reconnecting';
-        const upper = store.findBoundary.upper;
-        let observation: TranscriptState['observation'] = dependencies.local
-          ? 'local'
-          : 'streaming';
-        if (reconnecting) observation = 'reconnecting';
-        store.state = {
-          ...store.state,
-          observation,
-          find: {
-            ...store.state.find,
-            refreshAvailable: upper !== undefined && upper !== input.transcriptBoundary,
-          },
-        };
-        const stopFind = reconnecting && !!store.state.find.query;
-        if (stopFind) {
-          search.forgetFind();
+        // Marking reads stale and interrupting them are one synchronous step, so a reply can't
+        // land between them and overwrite the mark.
+        const { stopFind, stopped } = yield* Effect.withFiber((parent) => {
+          const old = store.snapshot;
+          const next = reuseSnapshot(input, old, store.history);
+          store.snapshot = old && areJsonValuesEqual(old, next) ? old : next;
+          const reconnecting = input.observationStatus === 'reconnecting';
+          const upper = store.findBoundary.upper;
+          let observation: TranscriptState['observation'] = dependencies.local
+            ? 'local'
+            : 'streaming';
+          if (reconnecting) observation = 'reconnecting';
           store.state = {
             ...store.state,
+            observation,
             find: {
               ...store.state.find,
-              status: 'error',
-              error: 'Connection changed. Refresh results after reconnecting.',
+              refreshAvailable: upper !== undefined && upper !== input.transcriptBoundary,
             },
           };
-        }
-        store.history.acceptSnapshot(next.entries, old, input);
-        // Reads of a live source the snapshot made stale, and of parts or a manifest it changed.
-        const stale = new Set(
-          jobs.keys(({ source }) => source?.kind === 'live' && !store.isCurrent(source)),
-        );
-        const changed = store.contents.markStale(
-          (content) => !store.isCurrent(content.source) || isContentChanged(content, next),
-        );
-        for (const key of changed) stale.add(key);
-        const manifest = store.state.manifest;
-        if (
-          manifest &&
-          (!store.isCurrent(manifest.source) || isManifestChanged(manifest, old, next))
-        ) {
-          store.state = {
-            ...store.state,
-            manifest: {
-              ...manifest,
-              status: 'source-changed',
-              error: 'Transcript source changed or is stale. Reload the manifest.',
-            },
-          };
-          stale.add(manifestJob);
-        }
+          const stopFind = reconnecting && !!store.state.find.query;
+          if (stopFind) {
+            search.forgetFind();
+            store.state = {
+              ...store.state,
+              find: {
+                ...store.state.find,
+                status: 'error',
+                error: 'Connection changed. Refresh results after reconnecting.',
+              },
+            };
+          }
+          store.history.acceptSnapshot(next.entries, old, input);
+          // Reads of a live source the snapshot made stale, and of parts or a manifest it changed.
+          const stale = new Set(
+            jobs.keys(({ source }) => source?.kind === 'live' && !store.isCurrent(source)),
+          );
+          const changed = store.contents.markStale(
+            (content) => !store.isCurrent(content.source) || isContentChanged(content, next),
+          );
+          for (const key of changed) stale.add(key);
+          const manifest = store.state.manifest;
+          if (
+            manifest &&
+            (!store.isCurrent(manifest.source) || isManifestChanged(manifest, old, next))
+          ) {
+            store.state = {
+              ...store.state,
+              manifest: {
+                ...manifest,
+                status: 'source-changed',
+                error: 'Transcript source changed or is stale. Reload the manifest.',
+              },
+            };
+            stale.add(manifestJob);
+          }
+          const stopped = jobs.fibers((_read, key) => stale.has(key));
+          for (const fiber of stopped) fiber.interruptUnsafe(parent.id);
+          return Effect.succeed({ stopFind, stopped });
+        });
         if (stopFind) yield* search.stopFind;
-        yield* jobs.interrupt((_read, key) => stale.has(key));
+        yield* Fiber.awaitAll(stopped);
         yield* store.publish();
       });
 
