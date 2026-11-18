@@ -235,7 +235,7 @@ for (const kind of ['close', 'reload'] as const)
           false,
         );
       else await assert.rejects(f.editor.reload(target('a.ts')), /Discard not delivered/);
-      assert.equal(f.editor.getSnapshot().preserving, false);
+      assert.equal(f.editor.getSnapshot().holdingUnsaved, false);
       assert.equal(f.editor.buffer(target('a.ts'))!.text, 'captured a.ts');
       assert.equal(f.editor.buffer(target('a.ts'))!.disk.text, 'A');
       assert(f.editor.getSnapshot().recovery.views[checkout.checkoutId].openFiles.includes('a.ts'));
@@ -361,7 +361,7 @@ test('a Save refused as invalid frees its request, and a corrected Save goes thr
     await assert.rejects(f.editor.save(target('a.ts')));
     assert.equal(f.editor.buffer(target('a.ts'))!.pendingSave, undefined);
     assert.equal(await quit(f.editor, 'discard'), false, 'recovery cannot keep the invalid text');
-    f.editor.edit(target('a.ts'), 'corrected before preservation');
+    f.editor.edit(target('a.ts'), 'corrected before closing');
     assert.equal(await quit(f.editor, 'discard'), true);
   } finally {
     await f.dispose();

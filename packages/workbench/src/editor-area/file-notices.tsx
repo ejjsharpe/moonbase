@@ -31,7 +31,7 @@ export function FileNotices({
           Save result unconfirmed. Your edits are retained.{' '}
           <Button
             {...stylex.props(controls.button)}
-            disabled={state.preserving}
+            disabled={state.holdingUnsaved}
             onClick={() => run(actions.save(target))}>
             Retry Save
           </Button>

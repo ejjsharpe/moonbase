@@ -14,7 +14,7 @@ export function ShellNotices({
   closing,
   agents,
   recoveryFailed,
-  preserving,
+  holdingUnsaved,
   editorError,
   clearEditorErrors,
 }: {
@@ -23,7 +23,7 @@ export function ShellNotices({
   /** Whether Agents shows, rather than a project. */
   agents: boolean;
   recoveryFailed: boolean;
-  preserving: boolean;
+  holdingUnsaved: boolean;
   /** The editor's latest error, shown here while Agents shows and no project is open. */
   editorError?: string;
   clearEditorErrors(): void;
@@ -41,9 +41,9 @@ export function ShellNotices({
           {lifecycle.cleanup.pending.length ? 'Finishing panel cleanup…' : status}
         </div>
       )}
-      {preserving && (
+      {holdingUnsaved && (
         <div role="status" {...stylex.props(controls.hidden)}>
-          Preserving edits…
+          Keeping edits…
         </div>
       )}
       {editorError && (

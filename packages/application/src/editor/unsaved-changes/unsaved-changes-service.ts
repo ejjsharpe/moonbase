@@ -23,11 +23,11 @@ import {
   isRecoveryReady,
   type CloseChoice,
   type ClosePrompt,
-} from './preservation.ts';
+} from './unsaved-changes.ts';
 
 type CloseKind = 'files' | 'checkout' | 'quit';
 
-export type EditorPreservationShape = {
+export type UnsavedChangesGuardShape = {
   readonly closePrompt: SubscriptionRef.SubscriptionRef<ClosePrompt | null>;
   /**
    * Closes files: asks Save, Discard or Cancel for each with unsaved changes, then closes them.
@@ -47,12 +47,12 @@ export type EditorPreservationShape = {
 };
 
 /** Closing files, checkouts and the editor without losing unsaved work, and reopening them. */
-export class EditorPreservation extends Context.Service<
-  EditorPreservation,
-  EditorPreservationShape
->()('moonbase/editor/EditorPreservation') {
+export class UnsavedChangesGuard extends Context.Service<
+  UnsavedChangesGuard,
+  UnsavedChangesGuardShape
+>()('moonbase/editor/UnsavedChangesGuard') {
   static readonly layer = Layer.effect(
-    EditorPreservation,
+    UnsavedChangesGuard,
     Effect.gen(function* () {
       const session = yield* EditorSession;
       const alerts = yield* EditorAlerts;
@@ -143,7 +143,7 @@ export class EditorPreservation extends Context.Service<
           return closed;
         });
 
-      const preserve = (targets: FileTarget[], kind: CloseKind, checkout?: CheckoutTarget) =>
+      const closeAsking = (targets: FileTarget[], kind: CloseKind, checkout?: CheckoutTarget) =>
         Effect.gen(function* () {
           yield* session.assertReady;
           const modes = yield* session.get;
@@ -151,7 +151,7 @@ export class EditorPreservation extends Context.Service<
             yield* alerts.report(new EditorError({ reason: 'initializing-close' }));
             return false;
           }
-          if (modes.preserving || [...(yield* buffers.get).buffers.values()].some(isSaving))
+          if (modes.holdingUnsaved || [...(yield* buffers.get).buffers.values()].some(isSaving))
             return false;
           const captured = captureTargets(targets);
           for (const target of captured)
@@ -159,7 +159,7 @@ export class EditorPreservation extends Context.Service<
               yield* alerts.report(new EditorError({ reason: 'close-uncertain' }));
               return false;
             }
-          return yield* tabs.whilePreserving(
+          return yield* tabs.whileHoldingUnsaved(
             Effect.gen(function* () {
               const discarded = new Set<string>();
               for (const target of captured) {
@@ -187,12 +187,12 @@ export class EditorPreservation extends Context.Service<
 
       return {
         closePrompt,
-        close: (targets) => admitted(preserve(targets, 'files')),
+        close: (targets) => admitted(closeAsking(targets, 'files')),
         closeCheckout: (checkout) =>
           admitted(
             Effect.gen(function* () {
               const selected = yield* views.view(checkout);
-              return yield* preserve(
+              return yield* closeAsking(
                 selected.openFiles.map((path) => ({ checkout, path })),
                 'checkout',
                 checkout,
@@ -201,7 +201,7 @@ export class EditorPreservation extends Context.Service<
           ),
         prepareQuit: admitted(
           Effect.flatMap(buffers.get, (held) =>
-            preserve(
+            closeAsking(
               [...held.buffers.values()].map((buffer) => buffer.target),
               'quit',
             ),
@@ -215,7 +215,7 @@ export class EditorPreservation extends Context.Service<
               !modes.ready ||
               modes.loading ||
               modes.closing ||
-              modes.preserving ||
+              modes.holdingUnsaved ||
               modes.initializing ||
               [...(yield* buffers.get).buffers.values()].some(
                 (buffer) => isDirty(buffer) || isSaving(buffer),
@@ -244,7 +244,7 @@ export class EditorPreservation extends Context.Service<
           admitted(
             Effect.gen(function* () {
               yield* views.view(checkout);
-              if ((yield* session.get).preserving) return false;
+              if ((yield* session.get).holdingUnsaved) return false;
               const found = findClosedAction((yield* views.get).closed, checkout);
               if (!found) return false;
               const { action, index } = found;
@@ -278,7 +278,7 @@ export class EditorPreservation extends Context.Service<
             }),
           ),
         recoveryReady,
-      } satisfies EditorPreservationShape;
+      } satisfies UnsavedChangesGuardShape;
     }),
   );
 }

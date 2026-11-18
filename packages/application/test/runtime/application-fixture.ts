@@ -11,7 +11,7 @@ import {
   editorLayer,
   EditorBuffers,
   EditorCheckouts,
-  EditorPreservation,
+  UnsavedChangesGuard,
   EditorSession,
   EditorTabs,
   RecoverySync,
@@ -104,7 +104,7 @@ export function makeApplication(options: Options) {
         through(EditorSession, (s) => Effect.map(s.get, (state) => state.admissionsOpen)),
       /** The next close prompt, waiting for one if none is shown. */
       closePrompt: () =>
-        through(EditorPreservation, (p) =>
+        through(UnsavedChangesGuard, (p) =>
           SubscriptionRef.changes(p.closePrompt).pipe(
             Stream.filter((prompt): prompt is ClosePrompt => prompt !== null),
             Stream.runHead,
@@ -112,7 +112,7 @@ export function makeApplication(options: Options) {
           ),
         ),
       answer: (id: string, choice: 'save' | 'discard' | 'cancel') =>
-        through(EditorPreservation, (p) => p.answerClose(id, choice)),
+        through(UnsavedChangesGuard, (p) => p.answerClose(id, choice)),
       drafts: () =>
         through(WorkspaceService, (w) =>
           Effect.map(w.loadRecovery({ clientId: 'one' }), ({ state }) =>

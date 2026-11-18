@@ -1,5 +1,5 @@
 import { Context, Deferred, Effect, Exit, Layer, Option, Ref, SubscriptionRef } from 'effect';
-import { EditorPreservation } from '../editor/preservation/preservation-service.ts';
+import { UnsavedChangesGuard } from '../editor/unsaved-changes/unsaved-changes-service.ts';
 import { EditorSession } from '../editor/session/session-service.ts';
 import { EditorLoader } from '../editor/editor-loader.ts';
 import type { EditorFailure } from '../editor/editor-errors.ts';
@@ -87,12 +87,12 @@ export class MoonbaseApplication extends Context.Service<
         const chat = yield* ChatHost;
         const navigation = yield* PlaceNavigation;
         const session = yield* Effect.serviceOption(EditorSession);
-        const preservation = yield* Effect.serviceOption(EditorPreservation);
+        const unsavedChanges = yield* Effect.serviceOption(UnsavedChangesGuard);
         const loader = yield* Effect.serviceOption(EditorLoader);
         const phase = yield* SubscriptionRef.make<ApplicationPhase>('live');
         const quit = yield* Ref.make<QuitState>({ consented: false, checkingUnload: false });
         const getPhase = SubscriptionRef.get(phase);
-        const recoveryReady = Option.match(preservation, {
+        const recoveryReady = Option.match(unsavedChanges, {
           onNone: () => Effect.succeed(true),
           onSome: (editor) => editor.recoveryReady,
         });
@@ -121,11 +121,11 @@ export class MoonbaseApplication extends Context.Service<
           if ((yield* getPhase) === 'preparing') yield* chat.fence(true);
           const { status } = yield* SubscriptionRef.get(chat.state);
           if (status === 'initialization-failed' || !preserved) return yield* vetoed;
-          if (Option.isSome(preservation)) {
-            if ((yield* getPhase) !== 'preparing' || !(yield* preservation.value.prepareQuit))
+          if (Option.isSome(unsavedChanges)) {
+            if ((yield* getPhase) !== 'preparing' || !(yield* unsavedChanges.value.prepareQuit))
               return yield* vetoed;
             yield* fenceEditor(false);
-            if (!(yield* preservation.value.finishQuitPreparation)) return yield* vetoed;
+            if (!(yield* unsavedChanges.value.finishQuitPreparation)) return yield* vetoed;
           }
           if ((yield* getPhase) !== 'preparing') return false;
           yield* fence(false);

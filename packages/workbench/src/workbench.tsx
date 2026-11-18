@@ -177,7 +177,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     root,
     checkout,
     active: view?.active,
-    blocked: !!choice || dialogOpen || state.preserving,
+    blocked: !!choice || dialogOpen || state.holdingUnsaved,
     findTarget: (origin) => {
       if (origin === 'tree') return treeElement.current;
       if (!target) return undefined;
@@ -206,7 +206,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     return closed;
   };
   function openPicker(mode: PickerMode) {
-    if (state.preserving || dialog) return;
+    if (state.holdingUnsaved || dialog) return;
     setPicker({ mode, text: mode === 'find' ? readSelection(root.current) : '' });
   }
   const openPickedFile: PickerOpenFile = async (target, at, current) => {
@@ -315,7 +315,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         menu={{
           actions,
           checkout,
-          preserving: state.preserving,
+          holdingUnsaved: state.holdingUnsaved,
           hasActiveFile: !!target,
           hideIgnoredFiles: !!view.tree.hideIgnoredFiles,
           following,

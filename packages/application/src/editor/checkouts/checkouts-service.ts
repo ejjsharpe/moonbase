@@ -84,7 +84,7 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
       const assertRebindable = (checkout: CheckoutTarget) =>
         Effect.gen(function* () {
           const busy =
-            (yield* session.get).preserving ||
+            (yield* session.get).holdingUnsaved ||
             [...(yield* buffers.get).buffers.values()].some(
               (buffer) => sameCheckout(buffer.target.checkout, checkout) && isSaving(buffer),
             ) ||
@@ -233,7 +233,7 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
           }).pipe(Effect.ensuring(session.endInitialization));
           // Edits made meanwhile are sent now, under the Git target.
           const modes = yield* session.get;
-          if (!modes.closing && !modes.preserving) {
+          if (!modes.closing && !modes.holdingUnsaved) {
             if (outcome.failure) yield* Effect.catch(recovery.flush, alerts.report);
             else yield* recovery.flush;
           }

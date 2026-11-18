@@ -12,7 +12,7 @@ import type { BuffersState, EditorBuffer } from './buffers/buffers.ts';
 import type { DiscoveryState } from './discovery/discovery.ts';
 import { listUnsettled, type OperationsState } from './operations/operations.ts';
 import type { MutationState, ReplacePrompt } from './mutation/mutation.ts';
-import { isRecoveryReady, type ClosePrompt } from './preservation/preservation.ts';
+import { isRecoveryReady, type ClosePrompt } from './unsaved-changes/unsaved-changes.ts';
 
 /** The editor as a view shows it, read from each concept's state. */
 export type EditorSnapshot = {
@@ -20,7 +20,7 @@ export type EditorSnapshot = {
   recoveryReady: boolean;
   disposed: boolean;
   closePrompt: ClosePrompt | null;
-  preserving: boolean;
+  holdingUnsaved: boolean;
   /** The checkout whose `initializeRepository` is running; it refuses saves and file operations. */
   initializing: string | null;
   recovery: EditorRecovery;
@@ -55,7 +55,7 @@ export const toEditorSnapshot = (parts: EditorParts): EditorSnapshot => ({
   recoveryReady: isRecoveryReady(parts.session, parts.outbox, parts.buffers, parts.operations),
   disposed: parts.session.disposed,
   closePrompt: parts.closePrompt,
-  preserving: parts.session.preserving,
+  holdingUnsaved: parts.session.holdingUnsaved,
   initializing: parts.session.initializing,
   recovery: parts.views.recovery,
   buffers: [...parts.buffers.buffers.values()],

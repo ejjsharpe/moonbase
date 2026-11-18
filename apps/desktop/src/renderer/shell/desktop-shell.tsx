@@ -357,7 +357,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         chatVisible={chatTab}
         chatOpen={!!chat}
         disabled={lifecycle.phase !== 'live'}
-        preserving={!!state?.preserving}
+        holdingUnsaved={!!state?.holdingUnsaved}
         openCheckout={selectCheckout && controller ? () => run(openCheckout()) : undefined}
         recentCheckouts={recentCheckouts}
         reopenCheckout={
@@ -398,7 +398,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         closing={closing}
         agents={view === 'chat'}
         recoveryFailed={!!state?.recoveryFailed}
-        preserving={!!state?.preserving}
+        holdingUnsaved={!!state?.holdingUnsaved}
         editorError={view === 'chat' && !selected ? state?.errors.at(-1) : undefined}
         clearEditorErrors={() => controller?.clearErrors()}
       />

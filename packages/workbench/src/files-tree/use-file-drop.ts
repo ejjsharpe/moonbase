@@ -65,7 +65,7 @@ export function useFileDrop({
     if (importingDrop.current) return 'Wait for the dropped files to import before dropping more.';
     if (editing) return 'Finish naming the entry before importing files.';
     if (dialogOpen)
-      return 'Finish the current editor dialog or preservation before importing files.';
+      return 'Finish the current editor dialog or Close prompt before importing files.';
     if (!canRequestMutation({ checkout, kind: 'import', paths: [] }))
       return 'Open the exact import checkout before importing files.';
     return '';
@@ -113,7 +113,7 @@ export function useFileDrop({
       return;
     }
     if (latest.current.dialogOpen) {
-      actions.report('Finish the current editor dialog or preservation before importing files.');
+      actions.report('Finish the current editor dialog or Close prompt before importing files.');
       return;
     }
     // Each reference stands for its file, so the files' names are where they land.

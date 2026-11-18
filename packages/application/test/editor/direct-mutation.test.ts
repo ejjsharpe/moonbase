@@ -63,7 +63,7 @@ const declined = { completed: false, error: '', items: [] };
 const unavailable = {
   completed: false,
   error:
-    'File action unavailable. Check the selection and finish the current editor dialog or preservation.',
+    'File action unavailable. Check the selection and finish the current editor dialog or Close prompt.',
   items: [],
 };
 

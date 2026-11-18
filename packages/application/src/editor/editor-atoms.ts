@@ -8,7 +8,7 @@ import { RecoveryOutbox } from './recovery/recovery-outbox-service.ts';
 import { EditorDiscovery } from './discovery/discovery-service.ts';
 import { EditorBuffers } from './buffers/buffers-service.ts';
 import { EditorMutations } from './mutation/mutation-service.ts';
-import { EditorPreservation } from './preservation/preservation-service.ts';
+import { UnsavedChangesGuard } from './unsaved-changes/unsaved-changes-service.ts';
 import { EditorLookup } from './lookup/lookup-service.ts';
 import { EditorTextSearch } from './text-search/text-search-service.ts';
 import { EditorWorktrees } from './worktrees/worktrees-service.ts';
@@ -33,7 +33,7 @@ export function makeEditorAtoms(context: Context.Context<EditorServices>) {
   const discovery = follow(Context.get(context, EditorDiscovery).state);
   const buffers = follow(Context.get(context, EditorBuffers).state);
   const mutation = follow(Context.get(context, EditorMutations).state);
-  const closePrompt = follow(Context.get(context, EditorPreservation).closePrompt);
+  const closePrompt = follow(Context.get(context, UnsavedChangesGuard).closePrompt);
   const worktrees = follow(Context.get(context, EditorWorktrees).state);
   return {
     session,

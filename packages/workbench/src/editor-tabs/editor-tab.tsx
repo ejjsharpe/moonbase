@@ -86,7 +86,7 @@ export function EditorTab({
   const mark = fileTypeMark(path);
   return (
     <Menu.Root
-      disabled={state.preserving}
+      disabled={state.holdingUnsaved}
       onOpenChange={(open) => {
         if (open) captured.current = [...view.openFiles];
         else keyboard.current = false;
@@ -139,7 +139,7 @@ export function EditorTab({
             [view.preview === path && 'Preview', dirty && 'Unsaved'].filter(Boolean).join(', ') ||
             undefined
           }
-          draggable={!state.preserving}
+          draggable={!state.holdingUnsaved}
           onDragStart={(event) => {
             drag.start(path);
             event.dataTransfer.setData('text/plain', path);
@@ -178,7 +178,7 @@ export function EditorTab({
             (view.active === path || dirty) && workbench.visibleTabClose,
           )}
           aria-label={`Close ${path}`}
-          disabled={state.preserving}
+          disabled={state.holdingUnsaved}
           onClick={() => run(closeFiles([path]))}>
           {dirty ? (
             <>
@@ -194,7 +194,7 @@ export function EditorTab({
       </Menu.Trigger>
       <EditorTabMenu
         actions={actions}
-        preserving={state.preserving}
+        holdingUnsaved={state.holdingUnsaved}
         file={file}
         buffer={current}
         openFiles={view.openFiles}

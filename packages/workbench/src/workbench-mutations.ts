@@ -76,8 +76,8 @@ export function useWorkbenchMutations({
   function importFiles(checkout: CheckoutTarget, references: string[]) {
     if (!references.length) return;
     const snapshot = actions.getSnapshot();
-    if (snapshot.preserving || isDialogOpen() || snapshot.closePrompt) {
-      actions.report('Finish the current editor dialog or preservation before importing files.');
+    if (snapshot.holdingUnsaved || isDialogOpen() || snapshot.closePrompt) {
+      actions.report('Finish the current editor dialog or Close prompt before importing files.');
       return;
     }
     if (

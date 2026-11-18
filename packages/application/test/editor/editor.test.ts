@@ -118,7 +118,7 @@ test('a Reload whose discard fails keeps the edits; Cancel keeps them too', asyn
   }
 });
 
-test('lost Save response retries its immutable payload once, preserving newer edits', async () => {
+test('lost Save response retries its immutable payload once, holdingUnsaved newer edits', async () => {
   const f = await fixture();
   try {
     await f.editor.open(target('a.ts'));
@@ -738,7 +738,7 @@ test('disposal releases view subscriptions without discarding a kept draft or en
   }
 });
 
-test('Quit uses the same deferred preservation gate and a failed discard keeps all edits', async () => {
+test('Quit uses the same deferred unsaved-changes gate and a failed discard keeps all edits', async () => {
   const f = await fixture();
   try {
     await f.editor.open(target('a.ts'));

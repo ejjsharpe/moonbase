@@ -1038,7 +1038,7 @@ test('a checkout clicked while a close edit is held remains selected live and du
   await page.getByRole('tab', { name: 'beta · main', exact: true }).click();
   await page.evaluate(() => window.recoveryRace.release());
   await expect
-    .poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().preserving))
+    .poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().holdingUnsaved))
     .toBe(false);
   expect(
     await page.evaluate(() => window.recoveryRace.editor.getSnapshot().recovery.selectedCheckoutId),
@@ -1108,7 +1108,7 @@ test('keyboard close cancellation and a failed close edit preserve typing focus 
   ).toContain('after failed close');
 });
 
-test('Tab traversal within the preservation prompt keeps its survivor focus', async ({ page }) => {
+test('Tab traversal within the Close prompt keeps its survivor focus', async ({ page }) => {
   await page.goto('/');
   await first(page).getByRole('treeitem', { name: 'README.md', exact: true }).dblclick();
   const input = first(page).getByRole('textbox', { name: 'README.md editor', exact: true });
@@ -1179,7 +1179,7 @@ test('returning to a background-closed checkout loads the survivor', async ({ pa
   await page.getByRole('tab', { name: 'beta · main', exact: true }).click();
   await page.evaluate(() => window.recoveryRace.release());
   await expect
-    .poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().preserving))
+    .poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().holdingUnsaved))
     .toBe(false);
   await page.getByRole('tab', { name: 'alpha · main', exact: true }).click();
   await expect(page.getByRole('textbox', { name: 'a.ts editor', exact: true })).toBeVisible();
@@ -1273,7 +1273,7 @@ test('a close whose reply is lost stands once the store shows it committed', asy
     .toContain('after the close finished');
 });
 
-test('selecting an absent survivor during another close loads it after preservation releases', async ({
+test('selecting an absent survivor during another close loads it after the Close releases', async ({
   page,
 }) => {
   await page.goto('/recovery-race.html?both');
@@ -1285,7 +1285,7 @@ test('selecting an absent survivor during another close loads it after preservat
     await page.getByRole('tab', { name: next + ' · main', exact: true }).click();
     await page.evaluate(() => window.recoveryRace.release());
     await expect
-      .poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().preserving))
+      .poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().holdingUnsaved))
       .toBe(false);
   }
   const input = page.getByRole('textbox', { name: 'a.ts editor', exact: true });

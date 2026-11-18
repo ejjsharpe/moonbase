@@ -190,13 +190,13 @@ export class EditorSaves extends Context.Service<EditorSaves, EditorSavesShape>(
               yield* views.view(captured.checkout);
               const buffer = yield* buffers.find(captured);
               const modes = yield* session.get;
-              if (!buffer || buffer.pendingSave || modes.preserving || modes.initializing)
+              if (!buffer || buffer.pendingSave || modes.holdingUnsaved || modes.initializing)
                 return false;
               const sameBuffer = Effect.map(
                 buffers.get,
                 (s) => s.buffers.get(key)?.id === buffer.id,
               );
-              return yield* tabs.whilePreserving(
+              return yield* tabs.whileHoldingUnsaved(
                 Effect.gen(function* () {
                   const disk = yield* workspace
                     .readFile(captured)

@@ -8,7 +8,7 @@ import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 import {
   EditorCheckouts,
   EditorLoader,
-  EditorPreservation,
+  UnsavedChangesGuard,
   EditorSession,
   EditorTabs,
   RecoveryOutbox,
@@ -52,24 +52,24 @@ test('a failed final layout edit vetoes Quit until a later flush keeps it', asyn
         yield* tabs.open(file);
         yield* (yield* RecoverySync).flush;
         const session = yield* EditorSession;
-        const preservation = yield* EditorPreservation;
+        const guard = yield* UnsavedChangesGuard;
         const fence = (open: boolean) => session.update((s) => ({ ...s, admissionsOpen: open }));
         // The last change before Quit is a layout edit the store loses.
         loseLayout = true;
         yield* tabs.position(file, 'file', { line: 1, column: 7, top: 20, left: 0 });
         yield* fence(false);
-        assert.equal(yield* preservation.finishQuitPreparation, false);
+        assert.equal(yield* guard.finishQuitPreparation, false);
         assert.notEqual(
           (yield* SubscriptionRef.get((yield* RecoveryOutbox).state)).failure,
           undefined,
         );
-        assert.equal(yield* preservation.recoveryReady, false);
+        assert.equal(yield* guard.recoveryReady, false);
         // Quit may go once a later flush keeps it.
         yield* fence(true);
         loseLayout = false;
         yield* (yield* RecoverySync).flush;
         yield* fence(false);
-        assert.equal(yield* preservation.finishQuitPreparation, true);
+        assert.equal(yield* guard.finishQuitPreparation, true);
         const { state } = yield* store.loadRecovery({ clientId: 'quit' });
         const id = state.buffers.find((buffer) => buffer.target.path === 'a.ts')!.id;
         assert.deepEqual(state.views[opened.checkoutId].positions[id].file, {

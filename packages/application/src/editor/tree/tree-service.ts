@@ -123,18 +123,18 @@ export class EditorTree extends Context.Service<EditorTree, EditorTreeShape>()(
                 !mode ||
                 mode === 'file' ||
                 mode === 'conflict' ||
-                (yield* session.get).preserving
+                (yield* session.get).holdingUnsaved
               )
                 return;
               const target = { checkout, path: selected.active },
                 key = fileKey(target);
               const stillShown = Effect.map(
                 Effect.all([session.get, views.get]),
-                ([{ closing, preserving }, { recovery }]) => {
+                ([{ closing, holdingUnsaved }, { recovery }]) => {
                   const view = readOwn(recovery.views, checkout.checkoutId);
                   return (
                     !closing &&
-                    !preserving &&
+                    !holdingUnsaved &&
                     recovery.openCheckoutIds.includes(checkout.checkoutId) &&
                     view?.active === target.path &&
                     readOwn(view.fileViews, target.path) === mode

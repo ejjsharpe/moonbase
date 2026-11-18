@@ -11,7 +11,7 @@ import { EditorTabs } from './tabs/tabs-service.ts';
 import { EditorTree } from './tree/tree-service.ts';
 import { EditorMutations } from './mutation/mutation-service.ts';
 import { EditorSaves } from './saves/saves-service.ts';
-import { EditorPreservation } from './preservation/preservation-service.ts';
+import { UnsavedChangesGuard } from './unsaved-changes/unsaved-changes-service.ts';
 import { EditorCheckouts } from './checkouts/checkouts-service.ts';
 import { EditorLookup } from './lookup/lookup-service.ts';
 import { EditorTextSearch } from './text-search/text-search-service.ts';
@@ -39,7 +39,7 @@ export type EditorServices =
   | EditorTree
   | EditorMutations
   | EditorSaves
-  | EditorPreservation
+  | UnsavedChangesGuard
   | EditorCheckouts
   | EditorLookup
   | EditorTextSearch
@@ -66,7 +66,7 @@ export const editorLayer = (options: EditorOptions = {}) => {
   );
   const actions = Layer.provideMerge(
     Layer.mergeAll(
-      EditorPreservation.layer,
+      UnsavedChangesGuard.layer,
       EditorCheckouts.layer,
       EditorLookup.layer,
       EditorTextSearch.layer,

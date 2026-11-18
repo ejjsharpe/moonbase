@@ -215,7 +215,7 @@ for (const mode of ['reload', 'veto', 'fresh-veto', 'crash'])
             value.reply.value.operations.length === 0 &&
             value.alerts.length === 0 &&
             !value.statuses.some((status: string) =>
-              /not yet kept for recovery|Preserving edits/.test(status),
+              /not yet kept for recovery|Keeping edits/.test(status),
             ),
         );
         const stats = await f.stats();

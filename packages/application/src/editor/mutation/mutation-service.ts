@@ -53,7 +53,7 @@ export type EditorMutationsShape = {
   readonly answer: (promptId: string, replace: boolean) => Effect.Effect<void>;
   /**
    * Dispatches an operation as given. `saving` is a Save of a buffer whose file isn't on disk,
-   * which creates it with the buffer's text; it may run inside a Close's preservation, and so
+   * which creates it with the buffer's text; it may run inside a Close's prompt, and so
    * while admissions are closed.
    */
   readonly dispatch: (
@@ -119,7 +119,7 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
           yield* views.view(input.checkout);
           const modes = yield* session.get;
           if (modes.initializing === input.checkout.checkoutId) return yield* fail('initializing');
-          if (modes.preserving && !saving) return yield* fail('preserving');
+          if (modes.holdingUnsaved && !saving) return yield* fail('holding-unsaved');
           const operation: WorkspaceOperation = {
             ...structuredClone(input),
             clientId,

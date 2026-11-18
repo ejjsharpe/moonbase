@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
 import type { EditorDriver } from './editor-model-fixture.ts';
 
-describe('captured preservation races', () => {
+describe('Close and Quit races', () => {
   const { checkout, second, target, fixture, held, holding, observedFixture, storedRecovery } =
     controllerFixture;
   const closeAs = (editor: EditorDriver, kind: 'files' | 'checkout' | 'quit', path: string) =>
@@ -19,7 +19,7 @@ describe('captured preservation races', () => {
     );
 
   for (const kind of ['files', 'checkout', 'quit'] as const)
-    test(`${kind} preservation keeps the selection and layout changed while its edit is held`, async () => {
+    test(`${kind} with unsaved changes keeps the selection and layout changed while its edit is held`, async () => {
       const f = await fixture('selection-' + kind, false);
       const h = holding({ ...f.client, watch: () => async () => {} });
       await f.editor.dispose();
@@ -69,7 +69,7 @@ describe('captured preservation races', () => {
     });
 
   for (const kind of ['files', 'checkout', 'quit'] as const)
-    test(`${kind} preservation whose discard reply is lost shows on restart what the editor shows`, async () => {
+    test(`${kind} with unsaved changes whose discard reply is lost shows on restart what the editor shows`, async () => {
       const f = await fixture('lost-discard-' + kind, false);
       try {
         await f.editor.open(target('b.ts'));

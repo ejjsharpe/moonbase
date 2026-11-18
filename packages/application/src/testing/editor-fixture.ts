@@ -46,7 +46,7 @@ import {
   EditorLookup,
   EditorMutations,
   EditorOperations,
-  EditorPreservation,
+  UnsavedChangesGuard,
   EditorSaves,
   EditorSession,
   EditorTabs,
@@ -251,7 +251,7 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
     tabs = get(EditorTabs),
     tree = get(EditorTree),
     saves = get(EditorSaves),
-    preservation = get(EditorPreservation),
+    unsavedChanges = get(UnsavedChangesGuard),
     checkouts = get(EditorCheckouts),
     mutations = get(EditorMutations),
     recovery = get(RecoverySync),
@@ -266,7 +266,7 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
     get(EditorOperations).state,
     get(RecoveryOutbox).state,
     mutations.state,
-    preservation.closePrompt,
+    unsavedChanges.closePrompt,
   ] as const;
   let parts: unknown[] | undefined, snapshot: EditorSnapshot | undefined;
   const getSnapshot = (): EditorSnapshot => {
@@ -413,12 +413,12 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
     reload: (target: FileTarget) => run(saves.reload(target)),
     cancelConflict: (target: FileTarget) => now(saves.cancelConflict(target)),
     answerClose: (promptId: string, choice: CloseChoice) =>
-      now(preservation.answerClose(promptId, choice)),
-    close: (targets: FileTarget[]) => run(preservation.close(targets)),
-    closeCheckout: (checkout: CheckoutTarget) => run(preservation.closeCheckout(checkout)),
-    prepareQuit: () => run(preservation.prepareQuit),
-    finishQuitPreparation: () => run(preservation.finishQuitPreparation),
-    reopen: (checkout: CheckoutTarget) => run(preservation.reopen(checkout)),
+      now(unsavedChanges.answerClose(promptId, choice)),
+    close: (targets: FileTarget[]) => run(unsavedChanges.close(targets)),
+    closeCheckout: (checkout: CheckoutTarget) => run(unsavedChanges.closeCheckout(checkout)),
+    prepareQuit: () => run(unsavedChanges.prepareQuit),
+    finishQuitPreparation: () => run(unsavedChanges.finishQuitPreparation),
+    reopen: (checkout: CheckoutTarget) => run(unsavedChanges.reopen(checkout)),
     tree: (checkout: CheckoutTarget, patch: Partial<CheckoutTree>) =>
       now(tree.tree(checkout, patch)),
     resizeSidebar: (width: number) => now(tree.resizeSidebar(width)),

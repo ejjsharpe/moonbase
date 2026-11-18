@@ -39,8 +39,8 @@ export {
   type ReplacePrompt,
 } from './mutation/mutation.ts';
 export { EditorSaves } from './saves/saves-service.ts';
-export { EditorPreservation } from './preservation/preservation-service.ts';
-export type { CloseChoice, ClosePrompt } from './preservation/preservation.ts';
+export { UnsavedChangesGuard } from './unsaved-changes/unsaved-changes-service.ts';
+export type { CloseChoice, ClosePrompt } from './unsaved-changes/unsaved-changes.ts';
 export { EditorCheckouts } from './checkouts/checkouts-service.ts';
 export { EditorLookup, type Lookup } from './lookup/lookup-service.ts';
 export type { LookupRow, LookupSnapshot } from './lookup/lookup.ts';

@@ -126,7 +126,7 @@ describe('checkout discovery and activation', () => {
   });
 
   for (const outcome of ['success', 'cancel', 'failure'] as const)
-    test(`a selected absent survivor activates after another preservation releases (${outcome})`, async () => {
+    test(`a selected absent survivor activates after another Close releases (${outcome})`, async () => {
       const f = await observedFixture('r5-selected-' + outcome);
       let entered = held(),
         release = held(),

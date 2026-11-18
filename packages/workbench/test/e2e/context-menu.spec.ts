@@ -411,7 +411,7 @@ test('portal typing and paste do not import files or navigate the explorer', asy
   expect(errors).toEqual([]);
 });
 
-test('eligibility updates during preservation and disabled actions cannot execute', async ({
+test('eligibility updates during a Close prompt and disabled actions cannot execute', async ({
   page,
 }) => {
   await page.goto('/recovery-race.html');
@@ -430,7 +430,7 @@ test('eligibility updates during preservation and disabled actions cannot execut
   await page.keyboard.press('Escape');
   await page.evaluate(() => window.recoveryRace.release());
   await expect
-    .poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().preserving))
+    .poll(() => page.evaluate(() => window.recoveryRace.editor.getSnapshot().holdingUnsaved))
     .toBe(false);
   await page.getByRole('tree', { name: 'Files', exact: true }).press('ContextMenu');
   await expect(item(page, 'Duplicate…')).toBeEnabled();
@@ -462,7 +462,7 @@ test('another file saving does not disable an unrelated row mutation', async ({ 
   ).toBeFocused();
 });
 
-test('a competing preservation dialog dismisses the menu and owns focus and the first click', async ({
+test('a competing Close dialog dismisses the menu and owns focus and the first click', async ({
   page,
 }) => {
   await page.goto('/');
@@ -506,7 +506,7 @@ test('an externally opened mutation dialog dismisses an unchosen menu without re
   await expect(dialog).toHaveCount(0);
 });
 
-test('another workbench preservation dialog dismisses a menu still taking focus and owns the first click', async ({
+test('a Close dialog in another workbench dismisses a menu still taking focus and owns the first click', async ({
   page,
 }) => {
   await holdMenuFocus(page);

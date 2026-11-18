@@ -19,7 +19,7 @@ import { closeFilesInRecovery } from '../views/views.ts';
 export type RecoverySyncShape = {
   /**
    * Sends the recovery edits made so far; succeeds once each has committed. Fails while a close
-   * or reload is preserving, and waits for a running `initializeRepository`.
+   * or reload is holdingUnsaved, and waits for a running `initializeRepository`.
    */
   readonly flush: Effect.Effect<void, EditorFailure>;
   /** Sends the edits made so far, for an action already holding the editor (a close's own). */
@@ -277,8 +277,8 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
           // An edit now would name the folder target that `git init` retires.
           yield* session.awaitInitialization;
           yield* session.assertReady;
-          if ((yield* session.get).preserving)
-            return yield* new EditorError({ reason: 'preserving-flush' });
+          if ((yield* session.get).holdingUnsaved)
+            return yield* new EditorError({ reason: 'holding-unsaved-flush' });
           yield* send;
         }),
         send,

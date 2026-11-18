@@ -25,7 +25,7 @@ export const isRecoveryReady = (
   session.ready &&
   !session.loading &&
   !session.closing &&
-  !session.preserving &&
+  !session.holdingUnsaved &&
   !session.initializing &&
   isOutboxIdle(outbox) &&
   ![...buffers.buffers.values()].some(isSaving) &&

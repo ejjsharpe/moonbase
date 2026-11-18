@@ -14,7 +14,7 @@ export type SessionState = {
   /** The editor has released everything it owned. */
   disposed: boolean;
   /** A close or reload holds the editor until its prompt is answered and its edits commit. */
-  preserving: boolean;
+  holdingUnsaved: boolean;
   /** The checkout whose `initializeRepository` is running; it refuses saves and file operations. */
   initializing: string | null;
 };
@@ -25,7 +25,7 @@ const initialState: SessionState = {
   admissionsOpen: true,
   closing: false,
   disposed: false,
-  preserving: false,
+  holdingUnsaved: false,
   initializing: null,
 };
 

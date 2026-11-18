@@ -240,7 +240,7 @@ export function MonacoView({
       minimap: { enabled: false },
       padding: { top: 16, bottom: 16 },
       editContext: false,
-      readOnly: !working || actions.getSnapshot().preserving,
+      readOnly: !working || actions.getSnapshot().holdingUnsaved,
       ariaLabel: target.path + ' editor',
     };
     let release: () => void;
@@ -331,7 +331,7 @@ export function MonacoView({
   useLayoutEffect(() => {
     const editor = mounted.current;
     if (editor) {
-      const readOnly = state.preserving || !hasBuffer;
+      const readOnly = state.holdingUnsaved || !hasBuffer;
       if ('getModifiedEditor' in editor) {
         const diffOptions: monaco.editor.IDiffEditorConstructionOptions = {
           readOnly,
@@ -341,7 +341,7 @@ export function MonacoView({
         editor.updateOptions(diffOptions);
       } else editor.updateOptions({ readOnly });
     }
-  }, [visible, state.preserving, hasBuffer, comparison?.title, target?.path]);
+  }, [visible, state.holdingUnsaved, hasBuffer, comparison?.title, target?.path]);
   // After the visibility restore above, so a reveal made while hidden wins over the saved scroll.
   useLayoutEffect(() => {
     const editor = mounted.current;
