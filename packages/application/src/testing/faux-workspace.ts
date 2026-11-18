@@ -1,5 +1,4 @@
 import { getParentPath, getPathName, isPathAtOrInside, joinPath } from '@moonbase/contracts/paths';
-import { compareMatches, matchPath } from '@moonbase/contracts/lookup';
 import { checkoutKey, readOwn } from '../editor/index.ts';
 import { Effect, Layer, Queue, Stream } from 'effect';
 import {
@@ -7,6 +6,7 @@ import {
   type WorkspaceServiceShape,
 } from '@moonbase/contracts/workspace-service';
 import { fauxRecovery } from './faux-recovery.ts';
+import { lookupFauxFiles, searchFauxFiles } from './faux-search.ts';
 import {
   ApplicationError,
   maximumFileBytes,
@@ -19,11 +19,7 @@ import {
   type OperationResult,
   type SaveResult,
   type WorkspaceEvent,
-  type LookupMatch,
 } from '@moonbase/contracts/workspace';
-
-// The workspace host's own matcher, so lookups rank here as they do on disk.
-const match = (path: string, query: string) => matchPath(path, query) ?? undefined;
 
 type Seed = {
   checkout: CheckoutTarget;
@@ -333,75 +329,15 @@ export function fauxWorkspace(seeds: Seed[]) {
           title: `${area} · ${target.path}`,
         };
       }),
-    lookupFiles: ({ checkout, query, limit = 100, history = [] }) =>
-      call('lookupFiles', () => {
-        const seed = exact(checkout);
-        const eligible = (path: string) =>
-          entries(checkout).has(path) &&
-          !entries(checkout).get(path)!.directory &&
-          !seed.ignored?.some((item) => isPathAtOrInside(path, item));
-        const recent = [...new Set(history)]
-          .filter((path) => entries(checkout).has(path) && !entries(checkout).get(path)!.directory)
-          .map((path) => match(path, query))
-          .filter((row): row is LookupMatch => !!row);
-        const matches = query.trim()
-          ? [...entries(checkout).keys()]
-              .filter((path) => eligible(path) && !history.includes(path))
-              .map((path) => match(path, query))
-              .filter((row): row is LookupMatch => !!row)
-              .sort(compareMatches)
-          : [];
-        return {
-          matches: matches.slice(0, Math.max(1, Math.min(limit, 100))),
-          history: recent.slice(0, 100),
-          partial: matches.length > limit || recent.length > 100,
-        };
-      }),
-    searchText: ({ checkout, query, matchCase, wholeWord, regex }) =>
-      call('searchText', () => {
-        const seed = exact(checkout);
-        let pattern: RegExp;
-        try {
-          const source = regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          pattern = new RegExp(wholeWord ? `\\b(?:${source})\\b` : source, matchCase ? 'g' : 'gi');
-        } catch {
-          return fail('Invalid regular expression.', 'InvalidInput');
-        }
-        let capped = false;
-        const files = [...entries(checkout)]
-          .filter(
-            ([path, entry]) =>
-              !entry.directory && !seed.ignored?.some((item) => isPathAtOrInside(path, item)),
-          )
-          .map(([path]) => {
-            // The same limits as the workspace: 512-character lines, 64 ranges, 50 matches a file.
-            const lines = read({ checkout, path })
-              .text.split('\n')
-              .map((line) => line.slice(0, 512));
-            const matches = lines.flatMap((text, index) => {
-              const ranges = [...text.matchAll(pattern)]
-                .map((found) => ({ start: found.index, end: found.index + found[0].length }))
-                .filter((range) => range.end > range.start)
-                .slice(0, 64);
-              return ranges.length
-                ? [
-                    {
-                      line: index + 1,
-                      text,
-                      ranges,
-                      before: lines.slice(Math.max(0, index - 3), index),
-                      after: lines.slice(index + 1, index + 4),
-                    },
-                  ]
-                : [];
-            });
-            if (matches.length > 50) capped = true;
-            return { path, matches: matches.slice(0, 50) };
-          })
-          .filter((file) => file.matches.length)
-          .sort((a, b) => a.path.localeCompare(b.path));
-        return { files: files.slice(0, 200), partial: capped || files.length > 200 };
-      }),
+    lookupFiles: ({ checkout, ...query }) =>
+      call('lookupFiles', () => lookupFauxFiles(entries(checkout), exact(checkout).ignored, query)),
+    searchText: ({ checkout, ...query }) =>
+      call(
+        'searchText',
+        () =>
+          searchFauxFiles(entries(checkout), exact(checkout).ignored, query) ??
+          fail('Invalid regular expression.', 'InvalidInput'),
+      ),
     inspectEntries: ({ checkout, paths }) =>
       call('inspectEntries', () => {
         if (!Array.isArray(paths) || paths.length < 1 || paths.length > 256)
