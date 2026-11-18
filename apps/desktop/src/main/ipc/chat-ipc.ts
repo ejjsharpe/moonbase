@@ -2,6 +2,9 @@ import { Effect, Option, Stream } from 'effect';
 import type { ChatCommand, ChatInput } from '@moonbase/contracts/chat';
 import type { ConnectionCommand, ConnectionInput } from '@moonbase/contracts/connection';
 import type { ProviderCommand, ProviderInput } from '@moonbase/contracts/providers';
+import type { ChatHandlers, ConnectionHandlers } from '@moonbase/contracts/services';
+import { toChatApplicationError } from '@moonbase/contracts/chat-legacy-errors';
+import { toConnectionApplicationError } from '@moonbase/contracts/connection-errors';
 import { DesktopChatRpcs, type ChatTargetId } from '../../ipc/chat-rpcs.ts';
 import {
   IpcAuthorityError,
@@ -10,116 +13,122 @@ import {
   IpcUnavailableError,
   NativeActionError,
 } from '../../ipc/ipc-errors.ts';
-import type { DesktopChatBackends } from '../chat/chat-backends.ts';
-import type { ChatIpcSession } from '../chat/session.ts';
-import { copyTranscript } from '../chat/transcript-native.ts';
-import { streamObservation } from './observation-stream.ts';
-import { settledPromise } from './settled-promise.ts';
+import type { ChatBackends, ChatTargetClients } from '../chat/chat-backends.ts';
+import type { ChatDocument } from '../chat/chat-document.ts';
+import { copyTranscript, type NativeTranscriptActions } from '../chat/transcript-native.ts';
 
 export type ChatIpcOptions = {
   backends: Pick<
-    DesktopChatBackends,
-    | 'getTargets'
+    ChatBackends,
+    | 'targets'
+    | 'findTarget'
     | 'getContext'
     | 'chooseFolder'
     | 'recentFolders'
     | 'createWorktree'
     | 'turnIntoProject'
-    | 'getSession'
   >;
   /** Whether Moonbase is quitting, when no new native work starts. */
-  isQuitting(): boolean;
-  /** Reports a cleanup failure no request is left to answer with. */
-  reportCleanup(error: unknown): void;
+  readonly isQuitting: Effect.Effect<boolean>;
+  transcript?: NativeTranscriptActions;
 };
-/** A request's work in main: cancelled, it is aborted and waited for, as its document is. */
-const promise = settledPromise;
 /** The chat request refusal the renderer has always had for a target that lacks a capability. */
 const unsupported = () => new IpcInputError({ problem: 'chat-request' });
 
+/** Why `value` may not name what it names: another host and store, or another actor. */
+function checkHostAndActor(
+  context: ChatTargetClients['context'],
+  value: unknown,
+): 'host' | 'actor' | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const v = value as Record<string, unknown>;
+  const host = v.host as { hostId?: unknown; storeId?: unknown } | undefined;
+  if (
+    host !== undefined &&
+    (host.hostId !== context.host.hostId || host.storeId !== context.host.storeId)
+  )
+    return 'host';
+  if (v.actorId !== undefined && v.actorId !== context.actorId) return 'actor';
+  for (const name of ['target', 'session', 'stop', 'source']) {
+    const refusal = checkHostAndActor(context, v[name]);
+    if (refusal) return refusal;
+  }
+  return undefined;
+}
+
 /**
- * The chat procedures. Each names an installed target; its session is that target's for the
- * window's current document, and checks that the request names the configured host and actor.
+ * The chat procedures for one document. Each names an installed target, and is checked against
+ * that target's configured host and actor; what the document holds of a target (provider
+ * sign-ins, image URLs, Copies) is `document`'s.
  */
-export function makeChatIpcHandlers({ backends, isQuitting, reportCleanup }: ChatIpcOptions) {
+export function makeChatIpcHandlers(
+  { backends, isQuitting, transcript }: ChatIpcOptions,
+  document: ChatDocument,
+) {
   const checkTarget = (backendId: ChatTargetId) =>
-    backends.getTargets().some((target) => target.id === backendId)
+    backends.targets.some((target) => target.id === backendId)
       ? Effect.void
       : Effect.fail(new IpcAuthorityError({ refusal: 'chat-target' }));
-  const findSession = (backendId: ChatTargetId, authorized?: unknown) =>
+  const findTarget = (backendId: ChatTargetId, authorized?: unknown) =>
     Effect.gen(function* () {
       yield* checkTarget(backendId);
-      const session = backends.getSession(backendId);
-      if (!session) return yield* new IpcUnavailableError({ feature: 'chat-target' });
-      const refusal = session.checkHostAndActor(authorized);
+      const clients = yield* backends.findTarget(backendId);
+      if (!clients) return yield* new IpcUnavailableError({ feature: 'chat-target' });
+      const refusal = checkHostAndActor(clients.context, authorized);
       if (refusal) return yield* new IpcAuthorityError({ refusal });
-      return session;
+      return clients;
     });
   /** A local chat's native action, refused while quitting. */
   const local = (feature: IpcUnavailableError['feature']) =>
-    Effect.suspend(() =>
-      isQuitting() ? Effect.fail(new IpcUnavailableError({ feature })) : Effect.void,
+    Effect.flatMap(isQuitting, (quitting) =>
+      quitting ? Effect.fail(new IpcUnavailableError({ feature })) : Effect.void,
     );
-  const providersOf = (session: ChatIpcSession) =>
-    session.capabilities.providers
-      ? Effect.succeed(session.capabilities.providers)
-      : Effect.fail(unsupported());
-  const remoteConnection = Effect.flatMap(findSession('remote'), (session) =>
-    session.connection
-      ? Effect.succeed({ session, connection: session.connection })
-      : Effect.fail(unsupported()),
+  const providersOf = (backendId: ChatTargetId) =>
+    Effect.map(findTarget(backendId), ({ providers }) => providers);
+  const remoteConnection = Effect.flatMap(findTarget('remote'), ({ connection }) =>
+    connection ? Effect.succeed(connection) : Effect.fail(unsupported()),
   );
+  // The services' errors reach the renderer as the legacy error with its code (CL-22).
   const chat =
     <K extends ChatCommand>(operation: K) =>
     ({ backendId, input }: { backendId: ChatTargetId; input: ChatInput<K> }) =>
-      Effect.flatMap(findSession(backendId, input), (session) =>
-        promise((signal) => session.chat.command(operation, input, { signal })),
-      );
+      Effect.flatMap(findTarget(backendId, input), (clients) => {
+        const handlers: ChatHandlers = clients.chat;
+        return handlers[operation](input).pipe(Effect.mapError(toChatApplicationError));
+      });
   const providers =
     <K extends ProviderCommand>(operation: K) =>
     ({ backendId, input }: { backendId: ChatTargetId; input: ProviderInput<K> }) =>
-      Effect.flatMap(findSession(backendId), providersOf).pipe(
-        Effect.flatMap((client) =>
-          promise((signal) => client.command(operation, input, { signal })),
-        ),
+      Effect.flatMap(providersOf(backendId), (service) =>
+        service
+          .forOwner(document.id)
+          [operation](input)
+          .pipe(Effect.mapError(toChatApplicationError)),
       );
   const connection =
     <K extends ConnectionCommand>(operation: K) =>
     ({ input }: { input: ConnectionInput<K> }) =>
-      Effect.flatMap(remoteConnection, ({ session, connection }) => {
-        const command = promise((signal) => connection.command(operation, input, { signal }));
+      Effect.flatMap(remoteConnection, (service) => {
+        const handlers: ConnectionHandlers = service;
+        const command = handlers[operation](input).pipe(
+          Effect.mapError(toConnectionApplicationError),
+        );
         if (operation === 'getConnection') return command;
         // Image URLs belong to the connection that issued them, including ones issued mid-change.
-        const revoke = session.revokeImages;
+        const revoke = document.targets.remote.images.revoke;
         return Effect.andThen(revoke, command).pipe(Effect.ensuring(revoke));
       });
   return DesktopChatRpcs.of({
-    getChatTargets: () => Effect.sync(() => backends.getTargets()),
+    getChatTargets: () => Effect.succeed(backends.targets),
     getChatContext: ({ backendId }) =>
-      Effect.andThen(
-        checkTarget(backendId),
-        promise(() => backends.getContext(backendId)),
-      ),
-    chooseChatFolder: () =>
-      Effect.andThen(
-        local('folder-picker'),
-        promise(() => backends.chooseFolder()),
-      ),
+      Effect.andThen(checkTarget(backendId), backends.getContext(backendId)),
+    chooseChatFolder: () => Effect.andThen(local('folder-picker'), backends.chooseFolder),
     listChatFolders: ({ backendId }) =>
-      Effect.andThen(
-        checkTarget(backendId),
-        promise(() => backends.recentFolders(backendId)),
-      ),
+      Effect.andThen(checkTarget(backendId), backends.recentFolders(backendId)),
     createChatWorktree: ({ root, branch, requestId }) =>
-      Effect.andThen(
-        local('new-worktree'),
-        promise(() => backends.createWorktree(root, branch, requestId)),
-      ),
+      Effect.andThen(local('new-worktree'), backends.createWorktree(root, branch, requestId)),
     turnChatIntoProject: ({ conversationId }) =>
-      Effect.andThen(
-        local('turn-into-project'),
-        promise(() => backends.turnIntoProject(conversationId)),
-      ),
+      Effect.andThen(local('turn-into-project'), backends.turnIntoProject(conversationId)),
     getChatHost: chat('getChatHost'),
     listChats: chat('listChats'),
     createChat: chat('createChat'),
@@ -135,20 +144,14 @@ export function makeChatIpcHandlers({ backends, isQuitting, reportCleanup }: Cha
     findChatFiles: chat('findChatFiles'),
     watchChat: ({ backendId, target }) =>
       Stream.unwrap(
-        Effect.map(findSession(backendId, { target }), (session) =>
-          streamObservation(
-            (receive, fail) => session.chat.watch({ target }, receive, fail),
-            reportCleanup,
-          ),
+        Effect.map(findTarget(backendId, { target }), (clients) =>
+          clients.chat.watch({ target }).pipe(Stream.mapError(toChatApplicationError)),
         ),
       ),
-    watchChatList: ({ backendId, session: chatSession }) =>
+    watchChatList: ({ backendId, session }) =>
       Stream.unwrap(
-        Effect.map(findSession(backendId, { session: chatSession }), (session) =>
-          streamObservation(
-            (receive, fail) => session.chat.watchChatList({ session: chatSession }, receive, fail),
-            reportCleanup,
-          ),
+        Effect.map(findTarget(backendId, { session }), (clients) =>
+          clients.chat.watchChatList({ session }).pipe(Stream.mapError(toChatApplicationError)),
         ),
       ),
     getProviders: providers('getProviders'),
@@ -159,8 +162,8 @@ export function makeChatIpcHandlers({ backends, isQuitting, reportCleanup }: Cha
     logoutProvider: providers('logoutProvider'),
     watchProviders: ({ backendId }) =>
       Stream.unwrap(
-        Effect.map(Effect.flatMap(findSession(backendId), providersOf), (client) =>
-          streamObservation((receive, fail) => client.watch(receive, fail), reportCleanup),
+        Effect.map(providersOf(backendId), (service) =>
+          service.watch(document.id).pipe(Stream.mapError(toChatApplicationError)),
         ),
       ),
     getConnection: connection('getConnection'),
@@ -168,38 +171,32 @@ export function makeChatIpcHandlers({ backends, isQuitting, reportCleanup }: Cha
     disconnect: connection('disconnect'),
     watchConnection: () =>
       Stream.unwrap(
-        Effect.map(remoteConnection, ({ connection }) =>
-          streamObservation((receive, fail) => connection.watch(receive, fail), reportCleanup),
+        Effect.map(remoteConnection, (service) =>
+          service.watch().pipe(Stream.mapError(toConnectionApplicationError)),
         ),
       ),
     copyTranscript: ({ backendId, copy }) =>
       Effect.gen(function* () {
-        const session = yield* findSession(backendId, copy);
-        const transcript = session.capabilities.transcript;
+        const clients = yield* findTarget(backendId, copy);
         if (!transcript) return yield* unsupported();
-        // Cancelled, a Copy is told so and waited for, since it may be writing the clipboard.
-        const copied = yield* session.copyPermits.withPermitsIfAvailable(1)(
-          settledPromise((signal) =>
-            copyTranscript(session.chat, copy, { signal, reportCleanup }, transcript),
-          ),
+        const copied = yield* document.targets[backendId].copies.withPermitsIfAvailable(1)(
+          copyTranscript(clients.chat, copy, transcript),
         );
         if (Option.isNone(copied)) return yield* new IpcBusyError({ limit: 'copies' });
       }),
     openTranscriptLink: ({ backendId, url }) =>
       Effect.gen(function* () {
-        const session = yield* findSession(backendId);
-        const transcript = session.capabilities.transcript;
+        yield* findTarget(backendId);
         if (!transcript) return yield* unsupported();
-        yield* settledPromise(() => transcript.openExternal(new URL(url).href)).pipe(
-          Effect.mapError(() => new NativeActionError({ failure: 'link-failed' })),
+        // Cancelled, a link being opened is waited for.
+        yield* Effect.uninterruptible(
+          Effect.tryPromise({
+            try: () => transcript.openExternal(new URL(url).href),
+            catch: () => new NativeActionError({ failure: 'link-failed' }),
+          }),
         );
       }),
     getTranscriptImageUrl: ({ backendId, image }) =>
-      Effect.flatMap(findSession(backendId, image), (session) => {
-        const url = session.issueImage(image);
-        return url
-          ? Effect.succeed(url)
-          : Effect.fail(new IpcUnavailableError({ feature: 'chat-target' }));
-      }),
+      Effect.andThen(findTarget(backendId, image), document.targets[backendId].images.issue(image)),
   });
 }

@@ -1,17 +1,15 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { after, test } from 'node:test';
-import { Layer, ManagedRuntime } from 'effect';
+import { test } from 'node:test';
+import { Effect } from 'effect';
 import type { ChatClient, ChatTranscriptSource } from '@moonbase/contracts/chat';
 import type { ConnectionClient } from '@moonbase/contracts/connection';
-import { ChatIpcSession, transcriptImageTokenLifetime } from '../src/main/chat/session.ts';
+import { transcriptImageTokenLifetime } from '../src/main/chat/transcript-images.ts';
 import { respondTranscriptImage } from '../src/main/chat/transcript-native.ts';
 import type { TranscriptImage } from '../src/ipc/chat-rpcs.ts';
-import { makeIpcFixture, noChat, toImageReader } from './fixtures/ipc-fixture.ts';
+import { fakeChatTargets, makeIpcFixture } from './fixtures/ipc-fixture.ts';
 
-const runtime = ManagedRuntime.make(Layer.empty);
-after(() => runtime.dispose());
 const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' };
 const source: ChatTranscriptSource = {
   kind: 'entry',
@@ -26,8 +24,16 @@ const snapshot = {
   state: 'disconnected',
   connectionId: null,
 };
+const idleConnection: ConnectionClient = {
+  command: async () => undefined as never,
+  watch: () => async () => {},
+};
 
-function fixture(
+/**
+ * A remote target storing `bytes` as an image, over desktop IPC: the document issues its URLs as
+ * the renderer asks, and `serve` answers them as main's `moonbase:` protocol does.
+ */
+async function fixture(
   bytes: Buffer,
   options: {
     perf?: { now(): number };
@@ -65,38 +71,40 @@ function fixture(
     },
     watch: () => () => Promise.resolve(),
   };
-  const session = new ChatIpcSession(
-    chat,
-    options.connection ? { mode: 'remote', connection: options.connection } : { mode: 'local' },
-    context,
-    { perf: options.perf },
-  );
-  const issue = async (mimeType: string, value = selection) =>
-    session.issueImage({
-      source,
-      selection: value,
-      mimeType: mimeType as TranscriptImage['mimeType'],
-    }) as string;
-  /** The session as the remote target of desktop IPC, for what reaches it as a request. */
-  const ipc = () =>
-    makeIpcFixture({
-      chat: {
-        backends: {
-          ...noChat,
-          getTargets: () => [{ id: 'remote', label: 'Host', mode: 'remote' }],
-          getSession: () => session,
-        },
-      },
+  const ipc = await makeIpcFixture({
+    chat: {
+      backends: fakeChatTargets({
+        remote: { chat, context, connection: options.connection ?? idleConnection },
+      }),
+      ...(options.perf ? { perf: options.perf } : {}),
+    },
+  });
+  // One request at a time: the raw connection reads one reply at a time.
+  let issuing: Promise<unknown> = Promise.resolve();
+  const issue = (mimeType: string, value = selection) => {
+    const issued = issuing.then(() => issueNow(mimeType, value));
+    issuing = issued.catch(() => {});
+    return issued;
+  };
+  const issueNow = async (mimeType: string, value: typeof selection) => {
+    const reply = await ipc.call('getTranscriptImageUrl', {
+      backendId: 'remote',
+      image: { source, selection: value, mimeType: mimeType as TranscriptImage['mimeType'] },
     });
-  const serve = (url: string, signal?: AbortSignal, method = 'GET') =>
-    respondTranscriptImage(new Request(url, { signal, method }), csp, (token) =>
-      toImageReader(runtime, session.findImage(token)),
+    if (!reply.ok) throw Error(`The URL was refused: ${JSON.stringify(reply.error)}`);
+    return reply.value as string;
+  };
+  const serve = async (url: string, signal?: AbortSignal, method = 'GET') =>
+    Effect.runPromise(
+      respondTranscriptImage(new Request(url, { signal, method }), csp, await ipc.findImages()),
+      signal ? { signal } : {},
     );
   return {
-    session,
-    dispose: () => runtime.runPromise(session.dispose),
-    issue,
     ipc,
+    /** Releases the document, as a reload does. */
+    release: () => ipc.releaseDocument(),
+    dispose: () => ipc.dispose(),
+    issue,
     serve,
     selection,
     signals,
@@ -114,7 +122,7 @@ test('an issued token serves validated PNG and JPEG bytes with fixed security he
     [png, 'image/png'],
     [jpeg, 'image/jpeg'],
   ] as const) {
-    const f = fixture(bytes);
+    const f = await fixture(bytes);
     const url = await f.issue(mimeType);
     assert.match(url, /^moonbase:\/\/editor\/transcript-image\/[A-Za-z0-9_-]{43}$/);
     assert.equal(await f.issue(mimeType), url, 'equal bindings reuse one token');
@@ -131,7 +139,7 @@ test('an issued token serves validated PNG and JPEG bytes with fixed security he
 });
 
 test('unknown, revoked and wrong-host image URLs grant nothing', async () => {
-  const f = fixture(png);
+  const f = await fixture(png);
   const url = await f.issue('image/png');
   const token = url.slice(url.lastIndexOf('/') + 1);
   assert.equal((await f.serve('moonbase://editor/transcript-image/unknown')).status, 404);
@@ -139,15 +147,16 @@ test('unknown, revoked and wrong-host image URLs grant nothing', async () => {
   assert.equal((await f.serve(`${url}?retry`)).status, 403);
   for (const method of ['HEAD', 'POST'])
     assert.equal((await f.serve(url, undefined, method)).status, 405);
-  await f.dispose();
+  // A released document's URLs are revoked.
+  await f.release();
   assert.equal((await f.serve(url)).status, 404);
-  assert.equal(await f.issue('image/png'), undefined, 'a disposed session issues nothing');
   assert.equal(f.reads, 0);
+  await f.dispose();
 });
 
 test('an unrequested token expires while each request extends its lifetime', async () => {
   let now = 1000;
-  const f = fixture(png, { perf: { now: () => now } });
+  const f = await fixture(png, { perf: { now: () => now } });
   const url = await f.issue('image/png');
   now += transcriptImageTokenLifetime - 1;
   assert.equal((await f.serve(url)).status, 200, 'a request refreshes the binding');
@@ -170,8 +179,8 @@ test('connecting or disconnecting revokes issued tokens', async () => {
     },
     watch: () => async () => {},
   };
-  const f = fixture(png, { connection });
-  const ipc = await f.ipc();
+  const f = await fixture(png, { connection });
+  const { ipc } = f;
   const url = await f.issue('image/png');
   assert((await ipc.call('getConnection', { input: {} })).ok);
   assert.equal((await f.serve(url)).status, 200, 'reading status keeps tokens');
@@ -184,7 +193,6 @@ test('connecting or disconnecting revokes issued tokens', async () => {
     assert.equal((await f.serve(issued)).status, 404);
   }
   assert.deepEqual(operations, ['getConnection', 'disconnect', 'connect']);
-  await ipc.dispose();
   await f.dispose();
 });
 
@@ -199,16 +207,16 @@ test('a token issued while connect is held is revoked once connect settles', asy
     },
     watch: () => async () => {},
   };
-  const f = fixture(png, { connection });
-  const ipc = await f.ipc();
-  const connecting = ipc.call('connect', { input: { profileId: 'profile' } });
+  const f = await fixture(png, { connection });
+  const { ipc } = f;
+  const { connection: remote } = await ipc.ports('remote');
+  const connecting = Effect.runPromise(remote.connect({ profileId: 'profile' }));
   await entered.promise;
   const issued = await f.issue('image/png');
   gate.resolve();
   await connecting;
   assert.equal((await f.serve(issued)).status, 404);
   assert.equal(f.reads, 0);
-  await ipc.dispose();
   await f.dispose();
 });
 
@@ -217,8 +225,8 @@ test('revocation fails queued reads and cancels in-flight ones', async () => {
     command: async () => undefined as never,
     watch: () => async () => {},
   };
-  const f = fixture(png, { connection });
-  const ipc = await f.ipc();
+  const f = await fixture(png, { connection });
+  const { ipc } = f;
   const urls = await Promise.all(
     Array.from({ length: 7 }, (_, index) =>
       f.issue('image/png', { ...f.selection, partId: `image-${index}` }),
@@ -236,12 +244,11 @@ test('revocation fails queued reads and cancels in-flight ones', async () => {
   gate.resolve();
   for (const response of await Promise.all(running)) assert.equal(response.status, 502);
   assert.equal(f.reads, 6);
-  await ipc.dispose();
   await f.dispose();
 });
 
 test('six image reads run at once and 64 more queue; one past the queue is refused as busy', async () => {
-  const f = fixture(png);
+  const f = await fixture(png);
   const urls = await Promise.all(
     Array.from({ length: 6 + 64 + 1 }, (_, index) =>
       f.issue('image/png', { ...f.selection, partId: `image-${index}` }),
@@ -262,7 +269,7 @@ test('six image reads run at once and 64 more queue; one past the queue is refus
 });
 
 test('an aborted queued read leaves without reading and frees no extra slot', async () => {
-  const f = fixture(png);
+  const f = await fixture(png);
   const urls = await Promise.all(
     Array.from({ length: 8 }, (_, index) =>
       f.issue('image/png', { ...f.selection, partId: `image-${index}` }),
@@ -276,7 +283,7 @@ test('an aborted queued read leaves without reading and frees no extra slot', as
   const queued = f.serve(urls[6]!, abort.signal),
     later = f.serve(urls[7]!);
   abort.abort();
-  assert.equal((await queued).status, 502);
+  await assert.rejects(queued);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(f.reads, 6, 'neither queued read started');
   gate.resolve();
@@ -284,8 +291,8 @@ test('an aborted queued read leaves without reading and frees no extra slot', as
   await f.dispose();
 });
 
-test('disposal fails queued reads, cancels in-flight ones and revokes their tokens', async () => {
-  const f = fixture(png);
+test('releasing the document fails queued reads, cancels in-flight ones and revokes their tokens', async () => {
+  const f = await fixture(png);
   const urls = await Promise.all(
     Array.from({ length: 7 }, (_, index) =>
       f.issue('image/png', { ...f.selection, partId: `image-${index}` }),
@@ -297,18 +304,19 @@ test('disposal fails queued reads, cancels in-flight ones and revokes their toke
   while (f.reads < 6) await new Promise((resolve) => setImmediate(resolve));
   const queued = f.serve(urls[6]!);
   await new Promise((resolve) => setImmediate(resolve));
-  const disposing = f.dispose();
+  const releasing = f.release();
   assert.equal((await queued).status, 502);
   gate.resolve();
   for (const response of await Promise.all(running)) assert.equal(response.status, 502);
-  await disposing;
+  await releasing;
   assert.equal(f.reads, 6);
   assert(f.signals.every((signal) => signal.aborted));
   assert.equal((await f.serve(urls[0]!)).status, 404);
+  await f.dispose();
 });
 
 test('the 256-token cap evicts the least recently requested binding', async () => {
-  const f = fixture(png);
+  const f = await fixture(png);
   const first = await f.issue('image/png');
   const second = await f.issue('image/png', { ...f.selection, partId: 'image-0' });
   for (let index = 1; index < 255; index++)
@@ -321,8 +329,8 @@ test('the 256-token cap evicts the least recently requested binding', async () =
 });
 
 test('issuance rejects SVG/HTML types and foreign authority before any read', async () => {
-  const f = fixture(png);
-  const ipc = await f.ipc();
+  const f = await fixture(png);
+  const { ipc } = f;
   const request = (image: unknown) =>
     ipc.call('getTranscriptImageUrl', { backendId: 'remote', image });
   for (const mimeType of ['image/svg+xml', 'text/html', 'image/gif'])
@@ -340,7 +348,6 @@ test('issuance rejects SVG/HTML types and foreign authority before any read', as
     /^moonbase:/,
   );
   assert.equal(f.reads, 0);
-  await ipc.dispose();
   await f.dispose();
 });
 
@@ -351,7 +358,7 @@ test('bytes must match the declared raster type; SVG labelled PNG is refused', a
     [Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>'), 'image/png'],
     [Buffer.from('<html><script>alert(1)</script></html>'), 'image/jpeg'],
   ] as const) {
-    const f = fixture(bytes);
+    const f = await fixture(bytes);
     const response = await f.serve(await f.issue(mimeType));
     assert.equal(response.status, 415);
     assert.equal(response.headers.get('Content-Type'), 'text/plain; charset=utf-8');
@@ -361,7 +368,7 @@ test('bytes must match the declared raster type; SVG labelled PNG is refused', a
 });
 
 test('sources over 4 MiB are refused without reading', async () => {
-  const f = fixture(png);
+  const f = await fixture(png);
   const url = await f.issue('image/png', { ...f.selection, bytes: 4 * 1024 * 1024 + 1 });
   const response = await f.serve(url);
   assert.equal(response.status, 413);
@@ -371,7 +378,7 @@ test('sources over 4 MiB are refused without reading', async () => {
 });
 
 test('a cancelled request aborts its read, and its token stays valid', async () => {
-  const f = fixture(png);
+  const f = await fixture(png);
   const url = await f.issue('image/png');
   const gate = Promise.withResolvers<void>();
   f.hold(gate.promise);
@@ -379,10 +386,9 @@ test('a cancelled request aborts its read, and its token stays valid', async () 
   const pending = f.serve(url, abort.signal);
   while (!f.reads) await new Promise((resolve) => setImmediate(resolve));
   abort.abort();
+  await assert.rejects(pending);
   assert.equal(f.signals[0]!.aborted, true);
-  // The response still joins the actual held IO before the request is released.
   gate.resolve();
-  assert.equal((await pending).status, 502);
   f.hold(Promise.resolve());
   assert.equal((await f.serve(url)).status, 200, 'the token remains valid for a later request');
   await f.dispose();

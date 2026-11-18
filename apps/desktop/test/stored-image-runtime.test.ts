@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { after, test } from 'node:test';
+import { test } from 'node:test';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Layer, ManagedRuntime } from 'effect';
+import { Effect } from 'effect';
 import type {
   ChatClient,
   ChatTranscriptPart,
@@ -11,12 +11,8 @@ import type {
 } from '@moonbase/contracts/chat';
 import { controlledHostFixture, until } from '../../../test/chat/controlled-host-fixture.ts';
 import { createImageRuntime, retainedImage } from './fixtures/stored-image-fixture.ts';
-import { ChatIpcSession } from '../src/main/chat/session.ts';
 import { respondTranscriptImage } from '../src/main/chat/transcript-native.ts';
-import { makeIpcFixture, noChat, toImageReader } from './fixtures/ipc-fixture.ts';
-
-const ipcRuntime = ManagedRuntime.make(Layer.empty);
-after(() => ipcRuntime.dispose());
+import { fakeChatTargets, makeIpcFixture } from './fixtures/ipc-fixture.ts';
 
 for (const mode of ['local', 'remote'] as const)
   test(`${mode} retained real images are served by main from exact record ownership and independently padded authenticated chunks`, async () => {
@@ -82,15 +78,8 @@ for (const mode of ['local', 'remote'] as const)
           return reply;
         },
       };
-      const ipc = new ChatIpcSession(reader, { mode: 'local' }, session);
       const desktop = await makeIpcFixture({
-        chat: {
-          backends: {
-            ...noChat,
-            getTargets: () => [{ id: 'local', label: 'Local', mode: 'local' }],
-            getSession: () => ipc,
-          },
-        },
+        chat: { backends: fakeChatTargets({ local: { chat: reader, context: session } }) },
       });
       const serve = async (source: ChatTranscriptSource, part: ChatTranscriptPart) => {
         const url = await desktop
@@ -102,8 +91,8 @@ for (const mode of ['local', 'remote'] as const)
           })
           .catch((error: { code: string }) => error.code);
         if (!url.startsWith('moonbase:')) return url;
-        const response = await respondTranscriptImage(new Request(url), 'csp', (token) =>
-          toImageReader(ipcRuntime, ipc.findImage(token)),
+        const response = await Effect.runPromise(
+          respondTranscriptImage(new Request(url), 'csp', await desktop.findImages()),
         );
         return response.ok ? Buffer.from(await response.arrayBuffer()) : response.status;
       };
@@ -132,7 +121,6 @@ for (const mode of ['local', 'remote'] as const)
       assert.deepEqual(await serve(transcript.source, images[1]!), retainedImage.subarray(0, -1));
       assert.equal(await serve(transcript.source, images[2]!), 415);
       await desktop.dispose();
-      await ipcRuntime.runPromise(ipc.dispose);
     } finally {
       if (root && connectionId)
         await root.connection.command('disconnect', { connectionId }).catch(() => {});

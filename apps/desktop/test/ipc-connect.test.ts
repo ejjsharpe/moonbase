@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { IpcMain, IpcMainInvokeEvent } from 'electron';
+import { Effect, Exit, Scope } from 'effect';
 import { ipcChannels } from '../src/ipc/desktop-bridge.ts';
 import type { MessagePortLike } from '../src/ipc/port-socket.ts';
 import { installIpcConnect } from '../src/main/ipc/ipc-connect.ts';
 import { createTestWindow } from './fixtures/main-window.ts';
 
-function fixture(accept = () => true) {
+async function fixture(accept = () => true) {
   const window = createTestWindow();
   const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
   const closed: string[] = [];
@@ -20,41 +21,45 @@ function fixture(accept = () => true) {
     start() {},
     postMessage() {},
   });
-  const uninstall = installIpcConnect({
+  const scope = Scope.makeUnsafe();
+  const install = installIpcConnect({
     ipcMain: {
       handle: (channel, handler) => void handlers.set(channel, handler as never),
       removeHandler: (channel) => void handlers.delete(channel),
     } as Pick<IpcMain, 'handle' | 'removeHandler'>,
     isTrusted: window.isTrusted,
-    connect: (served_) => {
-      if (!accept()) return false;
-      served.push(served_);
-      return true;
-    },
+    connect: (served_) =>
+      Effect.sync(() => {
+        if (!accept()) return false;
+        served.push(served_);
+        return true;
+      }),
     openChannel: () => ({ port1: port('main'), port2: port('renderer') }) as never,
   });
-  const connect = (event = window.event, ...args: unknown[]) =>
+  await Effect.runPromise(Scope.provide(install, scope));
+  const uninstall = () => Effect.runPromise(Scope.close(scope, Exit.void));
+  const connect = async (event = window.event, ...args: unknown[]) =>
     handlers.get(ipcChannels.connect)!(event, ...args);
   return { window, handlers, closed, served, connect, uninstall };
 }
 
-test('only the window’s own document gets a port, and only by asking with nothing else', () => {
-  const f = fixture();
-  for (const event of f.window.badEvents()) assert.throws(() => f.connect(event));
+test('only the window’s own document gets a port, and only by asking with nothing else', async () => {
+  const f = await fixture();
+  for (const event of f.window.badEvents()) await assert.rejects(f.connect(event));
   f.window.contents.mainFrame.url += '?asset=1';
-  assert.throws(() => f.connect());
+  await assert.rejects(f.connect());
   f.window.contents.mainFrame.url = 'moonbase://editor/index.html';
-  assert.throws(() => f.connect(f.window.event, { root: '/' }));
+  await assert.rejects(f.connect(f.window.event, { root: '/' }));
   f.window.window.destroy();
-  assert.throws(() => f.connect());
+  await assert.rejects(f.connect());
   assert.deepEqual(f.window.posted, []);
   assert.deepEqual(f.served, []);
 });
 
-test('the trusted document gets one port whose other end main serves; a refused one is closed', () => {
+test('the trusted document gets one port whose other end main serves; a refused one is closed', async () => {
   let accept = true;
-  const f = fixture(() => accept);
-  f.connect();
+  const f = await fixture(() => accept);
+  await f.connect();
   assert.equal(f.served.length, 1);
   assert.deepEqual(
     f.window.posted.map(({ channel, transfer }) => [
@@ -64,9 +69,10 @@ test('the trusted document gets one port whose other end main serves; a refused 
     [[ipcChannels.port, ['renderer']]],
   );
   accept = false;
-  assert.throws(() => f.connect());
+  await assert.rejects(f.connect());
   assert.deepEqual(f.closed, ['main', 'renderer']);
   assert.equal(f.window.posted.length, 1);
-  f.uninstall();
+  // Closing its scope (Quit) removes the handler.
+  await f.uninstall();
   assert.equal(f.handlers.size, 0);
 });

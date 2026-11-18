@@ -1,241 +1,249 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
-import { Effect, PubSub } from 'effect';
+import { Cause, Deferred, Effect, Exit, Fiber, ManagedRuntime, Layer, Scope } from 'effect';
 import type { App, Dialog } from 'electron';
 import { ApplicationError } from '@moonbase/contracts/errors';
 import type { WindowAction } from '../src/ipc/window-rpcs.ts';
-import { installWindowLifecycle, type WindowLifecycle } from '../src/main/window-lifecycle.ts';
+import { installWindowEvents } from '../src/main/window-events.ts';
+import {
+  collectQuitFailures,
+  makeWindowLifecycle,
+  WindowLifecycle,
+  type QuitAnswer,
+} from '../src/main/window-lifecycle.ts';
 import { makeIpcFixture, waitFor } from './fixtures/ipc-fixture.ts';
 import { createTestWindow } from './fixtures/main-window.ts';
 
-function fixture(deliver: (action: WindowAction) => void = () => {}) {
+/** The window's lifecycle and events over a test window, with the answers the user gives. */
+async function fixture(
+  options: {
+    deliver?: (action: WindowAction) => void;
+    release?: Effect.Effect<void, unknown>;
+  } = {},
+) {
   const f = createTestWindow(),
-    appEvents = new EventEmitter(),
+    app = new EventEmitter(),
     actions: WindowAction[] = [];
-  const released: string[] = [],
-    prompts: string[] = [];
-  let failChat = false;
-  let releaseGate: Promise<void> = Promise.resolve();
-  const app = Object.assign(appEvents, {
-    quit() {
-      released.push('quit');
-    },
-    exit(code: number) {
-      released.push(`exit:${code}`);
-    },
-  }) as unknown as App;
-  const lifecycle = installWindowLifecycle({
-    app,
-    window: f.window,
-    sendAction: (action) => {
-      actions.push(action);
-      deliver(action);
-    },
-    dialog: {
-      showMessageBox: async (_window: unknown, options: { message: string }) => {
-        prompts.push(options.message);
-        return { response: 1, checkboxChecked: false };
-      },
-    } as Pick<Dialog, 'showMessageBox'>,
-    ipc: {
-      releaseDocument: async () => {
-        released.push('ipc-document');
-      },
-      dispose: async () => {
-        released.push('ipc');
-      },
-    },
-    chatBackends: {
-      getSessions: () => [
-        {
-          dispose: async () => {
-            released.push('chat');
-            await releaseGate;
-            if (failChat) throw Error('release failed');
-          },
+  const prompts: string[] = [];
+  let released = 0;
+  /** The crash prompt's answer: 0 recovers the workbench, 1 quits. */
+  let crashAnswer = 1;
+  const runtime = ManagedRuntime.make(Layer.empty);
+  const scope = Scope.makeUnsafe();
+  const lifecycle = await runtime.runPromise(
+    Scope.provide(
+      makeWindowLifecycle({
+        window: f.window,
+        deliver: (action, publish) => {
+          actions.push(action);
+          options.deliver?.(action);
+          publish(action);
         },
-      ],
-      releaseDocument: async () => {
-        released.push('chat-document');
-      },
-    },
-    releaseRoot: async () => {
-      released.push('root');
-    },
-    releaseTransport: () => {
-      released.push('transport');
-    },
-  });
-  const ready = () => lifecycle.markReady();
-  const ack = (answer: { id: string; consent: boolean; cleanupError?: ApplicationError }) =>
-    lifecycle.answerQuit(answer);
-  const last = () => actions.at(-1) as Extract<WindowAction, { id: string }>;
-  const replace = () => f.contents.emit('did-frame-navigate', {}, '', 200, 'OK', true);
+      }),
+      scope,
+    ),
+  );
+  await runtime.runPromise(
+    installWindowEvents({
+      app: app as unknown as App,
+      window: f.window,
+      dialog: {
+        showMessageBox: async (_window: unknown, { message }: { message: string }) => {
+          prompts.push(message);
+          return { response: crashAnswer, checkboxChecked: false };
+        },
+      } as Pick<Dialog, 'showMessageBox'>,
+      releaseDocument: options.release ?? Effect.sync(() => void released++),
+    }).pipe(Scope.provide(scope), Effect.provideService(WindowLifecycle, lifecycle)),
+  );
+  const quit = runtime.runFork(lifecycle.awaitQuit);
+  const run = <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect);
   return {
     ...f,
+    app,
     actions,
-    appEvents,
-    lifecycle,
-    released,
     prompts,
-    ready,
-    ack,
-    last,
-    replace,
-    failChat: () => {
-      failChat = true;
+    lifecycle,
+    run,
+    get released() {
+      return released;
     },
-    holdRelease: (gate: Promise<void>) => {
-      releaseGate = gate;
+    answerCrash: (response: number) => {
+      crashAnswer = response;
+    },
+    ready: () => run(lifecycle.markReady),
+    requestQuit: () => run(lifecycle.requestQuit),
+    answer: (answer: QuitAnswer) => run(lifecycle.answerQuit(answer)),
+    last: () => actions.at(-1) as Extract<WindowAction, { id: string }>,
+    replace: () => f.contents.emit('did-frame-navigate', {}, '', 200, 'OK', true),
+    /** Whether Quit may now release everything. */
+    finished: async () => {
+      await new Promise((resolve) => setImmediate(resolve));
+      return quit.pollUnsafe() !== undefined;
+    },
+    isQuitting: () => run(lifecycle.isQuitting),
+    async dispose() {
+      await run(Fiber.interrupt(quit));
+      await run(Scope.close(scope, Exit.void));
+      await runtime.dispose();
     },
   };
 }
 
 for (const stage of ['preserve', 'dispose'])
   test(`replacement during ${stage} requires fresh ready, preservation and disposal IDs`, async () => {
-    const f = fixture();
-    f.lifecycle.requestQuit();
-    // Quit waits for a document ready to answer it.
-    assert.equal(f.actions.length, 0);
-    f.ready();
-    const preserve = f.last().id;
-    assert.equal(f.lifecycle.isQuitting(), true);
-    f.lifecycle.requestQuit();
-    assert.equal(f.actions.length, 1);
-    if (stage === 'dispose') await f.ack({ id: preserve, consent: true });
-    const obsolete = f.last().id;
-    f.replace();
-    assert.deepEqual(f.released, ['ipc-document', 'chat-document']);
-    await f.ack({ id: obsolete, consent: true });
-    assert.equal(f.released.includes('root'), false);
-    f.ready();
-    const fresh = f.last().id;
-    assert.equal(f.last().action, 'quit');
-    assert.notEqual(fresh, preserve);
-    await f.ack({ id: obsolete, consent: false });
-    assert.equal(f.last().id, fresh);
-    await f.ack({ id: fresh, consent: true });
-    const dispose = f.last().id;
+    const f = await fixture();
+    try {
+      await f.requestQuit();
+      // Quit waits for a document ready to answer it.
+      assert.equal(f.actions.length, 0);
+      await f.ready();
+      const preserve = f.last().id;
+      assert.equal(await f.isQuitting(), true);
+      await f.requestQuit();
+      assert.equal(f.actions.length, 1);
+      if (stage === 'dispose') await f.answer({ id: preserve, consent: true });
+      const obsolete = f.last().id;
+      f.replace();
+      await waitFor(() => f.released === 1);
+      await f.answer({ id: obsolete, consent: true });
+      assert.equal(await f.finished(), false);
+      await f.ready();
+      const fresh = f.last().id;
+      assert.equal(f.last().action, 'quit');
+      assert.notEqual(fresh, preserve);
+      await f.answer({ id: obsolete, consent: false });
+      assert.equal(f.last().id, fresh);
+      await f.answer({ id: fresh, consent: true });
+      const dispose = f.last().id;
+      assert.equal(f.last().action, 'dispose');
+      // Disposal cannot return to the live workbench.
+      await f.answer({ id: dispose, consent: false });
+      assert.equal(await f.finished(), false);
+      await f.answer({ id: dispose, consent: true });
+      assert.equal(await f.finished(), true);
+    } finally {
+      await f.dispose();
+    }
+  });
+
+test('close hides; activation shows; a Quit veto returns to the workbench; consent asks nothing about local agents', async () => {
+  const f = await fixture();
+  try {
+    let prevented = false;
+    f.window.emit('close', {
+      preventDefault() {
+        prevented = true;
+      },
+    });
+    assert(prevented);
+    assert(f.calls.includes('hide'));
+    f.app.emit('activate');
+    f.app.emit('second-instance');
+    await waitFor(() => f.calls.filter((call) => call === 'show').length === 2);
+    await f.ready();
+    // Quit from the OS is asked of the document first.
+    let quitPrevented = false;
+    f.app.emit('before-quit', {
+      preventDefault() {
+        quitPrevented = true;
+      },
+    });
+    assert(quitPrevented);
+    await waitFor(() => f.actions.length === 1);
+    await f.answer({ id: f.last().id, consent: false });
+    assert.equal(await f.isQuitting(), false);
+    await f.requestQuit();
+    await f.answer({ id: f.last().id, consent: true });
+    // Preservation consent moves straight to disposal: no local work prompt, nothing stopped.
     assert.equal(f.last().action, 'dispose');
-    // Disposal cannot return to the live workbench.
-    await f.ack({ id: dispose, consent: false });
-    assert.equal(f.released.includes('root'), false);
-    await f.ack({ id: dispose, consent: true });
-    assert.deepEqual(f.released.slice(-5), ['chat', 'ipc', 'root', 'transport', 'quit']);
-  });
-
-test('Quit veto returns to the workbench; actual cleanup is awaited and a failing release cannot skip later owners', async () => {
-  const f = fixture();
-  f.ready();
-  f.lifecycle.requestQuit();
-  await f.ack({ id: f.last().id, consent: false });
-  assert.equal(f.lifecycle.isQuitting(), false);
-  f.lifecycle.requestQuit();
-  await f.ack({ id: f.last().id, consent: true });
-  let release!: () => void;
-  f.holdRelease(
-    new Promise<void>((resolve) => {
-      release = resolve;
-    }),
-  );
-  f.failChat();
-  const finishing = f.ack({ id: f.last().id, consent: true });
-  await Promise.resolve();
-  assert.deepEqual(f.released, ['chat']);
-  f.lifecycle.requestQuit();
-  assert.equal(f.actions.length, 3);
-  release();
-  await finishing;
-  assert.deepEqual(f.released, ['chat', 'ipc', 'root', 'transport', 'exit:1']);
-  assert(f.prompts.includes('Moonbase could not finish cleanup.'));
+    await f.answer({ id: f.last().id, consent: true });
+    assert.equal(await f.finished(), true);
+    assert.deepEqual(f.prompts, []);
+  } finally {
+    await f.dispose();
+  }
 });
 
-test('close hides; activation shows; Quit asks nothing about local agents and releases only clients', async () => {
-  const f = fixture();
-  let prevented = false;
-  f.window.emit('close', {
-    preventDefault() {
-      prevented = true;
-    },
-  });
-  assert(prevented);
-  assert(f.calls.includes('hide'));
-  f.appEvents.emit('activate');
-  f.appEvents.emit('second-instance');
-  assert.equal(f.calls.filter((call) => call === 'show').length, 2);
-  f.ready();
-  f.lifecycle.requestQuit();
-  await f.ack({ id: f.last().id, consent: true });
-  // Preservation consent moves straight to disposal: no local work prompt, nothing stopped.
-  assert.equal(f.last().action, 'dispose');
-  await f.ack({ id: f.last().id, consent: true });
-  assert.deepEqual(f.prompts, []);
-  assert.deepEqual(f.released, ['chat', 'ipc', 'root', 'transport', 'quit']);
+test('a crashed renderer releases its document, then recovers it or quits as the user answers', async () => {
+  const f = await fixture();
+  try {
+    await f.ready();
+    f.answerCrash(0);
+    f.contents.emit('render-process-gone', {}, { reason: 'crashed' });
+    await waitFor(() => f.calls.includes('reload'));
+    assert.equal(f.released, 1);
+    assert.deepEqual(f.prompts, ['The workbench stopped unexpectedly.']);
+    f.answerCrash(1);
+    f.contents.emit('render-process-gone', {}, { reason: 'crashed' });
+    await waitFor(() => f.prompts.length === 2);
+    assert.equal(await f.finished(), true);
+    assert.equal(f.calls.filter((call) => call === 'reload').length, 1);
+  } finally {
+    await f.dispose();
+  }
 });
 
-test('a crashed renderer quits on request without asking about local agents', async () => {
-  const f = fixture();
-  f.ready();
-  f.contents.emit('render-process-gone', {}, { reason: 'crashed' });
-  await new Promise((resolve) => setImmediate(resolve));
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(f.prompts, ['The workbench stopped unexpectedly.']);
-  assert.deepEqual(f.released.slice(-5), ['chat', 'ipc', 'root', 'transport', 'quit']);
-});
-
-test('Quit retains a held document cleanup failure before releasing the root', async () => {
-  const f = fixture();
-  let reject!: (error: Error) => void;
-  f.lifecycle.reportCleanup(
-    new Promise<void>((_resolve, fail) => {
-      reject = fail;
-    }),
-  );
-  f.ready();
-  f.lifecycle.requestQuit();
-  await f.ack({ id: f.last().id, consent: true });
-  const closing = f.ack({ id: f.last().id, consent: true });
-  await Promise.resolve();
-  assert.deepEqual(f.released, []);
-  reject(Error('old document failed'));
-  await closing;
-  assert.deepEqual(f.released, ['chat', 'ipc', 'root', 'transport', 'exit:1']);
-});
-
-test('a ready document hears of earlier cleanup failures, and a disposal’s own failure quits with code 1', async () => {
-  const f = fixture();
-  f.lifecycle.reportCleanup(
-    Promise.reject(new ApplicationError({ code: 'Persistence', message: 'Old' })),
-  );
-  await new Promise((resolve) => setImmediate(resolve));
-  f.ready();
-  assert.deepEqual(f.actions[0], {
-    action: 'cleanup-error',
-    id: (f.actions[0] as { id: string }).id,
-    error: new ApplicationError({ code: 'Persistence', message: 'Old' }),
+test('Quit waits for a document release under way, and reports its failure, earlier ones and the disposal’s own', async () => {
+  const held = Effect.runSync(Deferred.make<void>());
+  const f = await fixture({
+    release: Effect.andThen(
+      Deferred.await(held),
+      Effect.fail(new ApplicationError({ code: 'Persistence', message: 'Old document failed' })),
+    ),
   });
-  f.lifecycle.requestQuit();
-  await f.ack({ id: f.last().id, consent: true });
-  await f.ack({
-    id: f.last().id,
-    consent: true,
-    cleanupError: new ApplicationError({ code: 'Persistence', message: 'Disposal failed' }),
-  });
-  assert.equal(f.released.at(-1), 'exit:1');
+  try {
+    await f.run(
+      f.lifecycle.reportCleanup(
+        Cause.fail(new ApplicationError({ code: 'Persistence', message: 'Earlier' })),
+      ),
+    );
+    await f.ready();
+    // A ready document hears of earlier cleanup failures.
+    assert.deepEqual(
+      f.actions.map((action) => action.action),
+      ['cleanup-error'],
+    );
+    f.replace();
+    await f.ready();
+    await f.requestQuit();
+    await f.answer({ id: f.last().id, consent: true });
+    await f.answer({
+      id: f.last().id,
+      consent: true,
+      cleanupError: new ApplicationError({ code: 'Persistence', message: 'Disposal failed' }),
+    });
+    assert.equal(await f.finished(), false);
+    await f.run(Deferred.succeed(held, undefined));
+    await waitFor(() => f.finished());
+    const failures = await f.run(
+      collectQuitFailures(f.lifecycle, Exit.die(new Error('Releasing failed'))),
+    );
+    assert.deepEqual(failures, [
+      'Earlier',
+      'Disposal failed',
+      'Old document failed',
+      'Releasing failed',
+    ]);
+  } finally {
+    await f.dispose();
+  }
 });
 
 test('Quit, its answer and a cleanup failure survive the actions watch’s connection ending', async () => {
-  const owner: { lifecycle?: WindowLifecycle; loseAnswer?: boolean } = {};
+  const f = await fixture();
+  const owner: { loseAnswer?: boolean } = {};
   let readies = 0;
   const ipc = await makeIpcFixture({
-    lifecycle: () => ({
-      markReady: () => {
+    lifecycle: {
+      actions: f.lifecycle.actions,
+      markReady: Effect.suspend(() => {
         readies++;
-        owner.lifecycle!.markReady();
-      },
-      answerQuit: (answer) => owner.lifecycle!.answerQuit(answer),
-    }),
+        return f.lifecycle.markReady;
+      }),
+      answerQuit: f.lifecycle.answerQuit,
+    },
     // Loses the first answer: its connection ends before main reads it.
     intercept: (request, handler) => {
       if (request.tag !== 'answerQuit' || !owner.loseAnswer) return handler;
@@ -246,8 +254,6 @@ test('Quit, its answer and a cleanup failure survive the actions watch’s conne
       );
     },
   });
-  const f = fixture((action) => void PubSub.publishUnsafe(ipc.actions, action));
-  owner.lifecycle = f.lifecycle;
   const shell = ipc.shell;
   const received: WindowAction[] = [];
   const close = shell.watchWindowActions((action) => void received.push(action));
@@ -257,11 +263,12 @@ test('Quit, its answer and a cleanup failure survive the actions watch’s conne
     ipc.closeConnections();
     // More failures than main holds for its exit code.
     for (let index = 0; index < 9; index++)
-      f.lifecycle.reportCleanup(
-        Promise.reject(new ApplicationError({ code: 'Persistence', message: `Gap ${index}` })),
+      await f.run(
+        f.lifecycle.reportCleanup(
+          Cause.fail(new ApplicationError({ code: 'Persistence', message: `Gap ${index}` })),
+        ),
       );
-    await new Promise((resolve) => setImmediate(resolve));
-    f.lifecycle.requestQuit();
+    await f.requestQuit();
     await waitFor(() => received.length > 9);
     assert.equal(readies, 2);
     const quit = f.last().id;
@@ -284,5 +291,6 @@ test('Quit, its answer and a cleanup failure survive the actions watch’s conne
   } finally {
     await close().catch(() => {});
     await ipc.dispose();
+    await f.dispose();
   }
 });
