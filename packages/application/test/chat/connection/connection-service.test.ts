@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { ApplicationError } from '@moonbase/contracts/errors';
+import { ConnectionError } from '@moonbase/contracts/connection-errors';
 import {
   chatFixture,
   connected,
@@ -167,7 +169,7 @@ test('a connection state the watch delivers replaces an older status reply', asy
   assert.equal(f.count('connect'), 0);
 });
 
-test('a held Connect reply cannot bring back a generation its watch already lost', async (t) => {
+test('a held Connect reply cannot bring back a generation its watch already lost, but its failure shows', async (t) => {
   const f = await chatFixture(t);
   await f.start();
   const held = Promise.withResolvers<void>();
@@ -183,10 +185,26 @@ test('a held Connect reply cannot bring back a generation its watch already lost
   held.resolve();
   await connecting;
   await turn();
-  const state = await f.state();
+  let state = await f.state();
   assert.equal(state.connection!.state, 'disconnected');
   assert.equal(state.host, null);
   assert.equal(state.ready, false);
+  assert.equal(state.error, null);
+
+  // A refused Connect the watch overtook (it already showed `connecting`) still shows why.
+  const refused = Promise.withResolvers<void>();
+  f.answers.set('connect', async () => {
+    await refused.promise;
+    throw new ApplicationError({ code: 'Unauthorized', message: 'SSH authentication failed.' });
+  });
+  const retrying = f.connect();
+  await waitFor(() => f.count('connect') === 2);
+  f.publishConnection({ ...disconnected, state: 'connecting', connectionId: 'refused' });
+  await until(f, (s) => s.connection?.state === 'connecting');
+  refused.resolve();
+  await retrying;
+  state = await f.state();
+  assert.ok(state.error);
 });
 
 test('Disconnect closes the chat’s watches before it disconnects, refusing a Send meanwhile', async (t) => {
@@ -255,9 +273,26 @@ test('a repeated Disconnect sends one disconnect, and its failure is shown', asy
   held.resolve();
   await first;
   assert.equal(f.count('disconnect'), 1);
-  const state = await f.state();
+  let state = await f.state();
   assert.ok(state.error);
   assert.equal(state.ready, false);
+
+  // A held Disconnect a newer connection overtook is refused as stale, and shows nothing.
+  await f.connect();
+  await until(f, (s) => s.ready);
+  const stale = Promise.withResolvers<void>();
+  f.answers.set('disconnect', async () => {
+    await stale.promise;
+    throw new ConnectionError({ reason: 'stale-generation' });
+  });
+  const overtaken = f.disconnect();
+  await waitFor(() => f.count('disconnect') === 2);
+  f.publishConnection(connected('newer-generation'));
+  await until(f, (s) => s.connection?.connectionId === 'newer-generation');
+  stale.resolve();
+  await overtaken;
+  state = await until(f, (s) => s.ready);
+  assert.equal(state.error, null);
 });
 
 test('closing the chat during its first status read cancels the read and starts nothing', async (t) => {

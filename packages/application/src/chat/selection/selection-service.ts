@@ -239,7 +239,11 @@ export class ChatSelection extends Context.Service<ChatSelection, ChatSelectionS
               yield* drafts.commit((saved) => ({ ...structuredClone(saved), selected: captured }));
               yield* link.current;
               yield* close;
-              yield* open(captured);
+              if ((yield* link.get).host) return yield* open(captured);
+              // An unverified host: a running Refresh opens the recorded selection; with none
+              // running (its last one failed), the Select verifies the host again to open it.
+              const verifier = yield* Deferred.await(link.verifier);
+              if (!(yield* verifier.refreshing)) yield* verifier.refresh;
             }),
             { duplicate: false },
           ),

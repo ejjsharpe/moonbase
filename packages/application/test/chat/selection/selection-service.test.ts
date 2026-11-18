@@ -5,12 +5,14 @@ import type { ChatCommands, ChatInput, ChatSnapshot } from '@moonbase/contracts/
 import { ChatSelection } from '@moonbase/application/chat';
 import {
   chatFixture,
+  connected,
   context,
   makeEntry,
   openChat,
   snapshot,
   summary,
   target,
+  unavailable,
   until,
   waitFor,
 } from '../chat-fixture.ts';
@@ -20,7 +22,7 @@ const titled = (title: string, conversationId = target.conversationId): ChatSnap
   conversation: { ...summary, target: { ...target, conversationId }, title },
 });
 
-test('Select while the host is being verified only records it, and the running Refresh opens it', async (t) => {
+test('Select while the host is being verified only records it, and the running Refresh opens it; after a failed Refresh it verifies again', async (t) => {
   const f = await chatFixture(t);
   await f.start();
   const held = Promise.withResolvers<void>();
@@ -43,6 +45,22 @@ test('Select while the host is being verified only records it, and the running R
   state = await until(f, (s) => !!s.snapshot);
   assert.deepEqual(state.snapshot!.conversation.target, target);
   assert.equal(f.subscriptions, 1);
+
+  // A new generation whose Refresh fails leaves nothing verifying: a Select of a listed chat
+  // verifies the host again and opens it, never just clearing the error.
+  f.answers.set('getChatHost', () => {
+    throw unavailable();
+  });
+  f.publishConnection(connected('next-generation'));
+  await until(f, (s) => s.connection?.connectionId === 'next-generation' && !!s.error);
+  f.answers.delete('getChatHost');
+  const hosts = f.count('getChatHost');
+  const other = { ...target, conversationId: 'listed' };
+  await f.select(other);
+  state = await until(f, (s) => !!s.snapshot);
+  assert.equal(f.count('getChatHost'), hosts + 1);
+  assert.equal(state.snapshot!.conversation.target.conversationId, 'listed');
+  assert.equal(state.error, null);
 });
 
 test('closing the view during the first Refresh leaves it to verify and list, opening nothing', async (t) => {

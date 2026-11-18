@@ -92,6 +92,10 @@ export class ChatConnection extends Context.Service<ChatConnection, ChatConnecti
         }),
         { duplicate: false },
       );
+      yield* Deferred.succeed(link.verifier, {
+        refresh,
+        refreshing: Effect.map(FiberHandle.get(refreshing), Option.isSome),
+      });
 
       /** Takes a connection state: a new connection (or none) ends everything over the last. */
       const onConnection = (next: ConnectionSnapshot) =>
@@ -110,18 +114,22 @@ export class ChatConnection extends Context.Service<ChatConnection, ChatConnecti
           yield* link.open;
           yield* actions.fork(refresh);
         });
-      /** A connection read, whose reply is dropped if the watch delivers a state first. */
+      /**
+       * A connection read. Its reply is dropped if the watch delivers a state first, but its
+       * failure never is: a refused Connect always shows why.
+       */
       const readLatest = <E>(read: Effect.Effect<ConnectionSnapshot, E>) =>
         Effect.gen(function* () {
           const event = yield* Ref.get(nextEvent);
           // The read runs to its end (or the chat's) even when its reply is dropped: it may be a
           // mutation.
           const fiber = yield* Effect.forkIn(read, scope, { startImmediately: true });
-          const reply = yield* Effect.raceFirst(
-            Effect.map(Fiber.join(fiber), Option.some),
-            Effect.as(Deferred.await(event), Option.none()),
+          const overtaken = yield* Effect.raceFirst(
+            Effect.as(Fiber.await(fiber), false),
+            Effect.as(Deferred.await(event), true),
           );
-          if (Option.isSome(reply)) yield* onConnection(reply.value);
+          const reply = yield* Fiber.join(fiber);
+          if (!overtaken) yield* onConnection(reply);
         });
 
       const watchConnection = port
@@ -165,7 +173,15 @@ export class ChatConnection extends Context.Service<ChatConnection, ChatConnecti
             if (!port || !id || !(yield* link.isOpen)) return;
             // Closing the link waits for its watches to close before the connection ends.
             yield* link.close;
-            yield* port.disconnect({ connectionId: id });
+            // A newer connection replaced this one meanwhile: its Disconnect is dropped unsent,
+            // and one the host refuses as stale once it did is dropped silently.
+            const replaced = Effect.map(link.get, (s) => s.connection?.connectionId !== id);
+            if ((yield* replaced) || (yield* link.isOpen)) return;
+            const sent = yield* Effect.exit(port.disconnect({ connectionId: id }));
+            if (Exit.isFailure(sent)) {
+              if ((yield* replaced) || (yield* link.isOpen)) return;
+              return yield* sent;
+            }
             yield* readLatest(port.getConnection({}));
           }),
         ),

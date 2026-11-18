@@ -1,4 +1,14 @@
-import { Context, Effect, Exit, Fiber, FiberSet, Layer, Scope, SubscriptionRef } from 'effect';
+import {
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  FiberSet,
+  Layer,
+  Scope,
+  SubscriptionRef,
+} from 'effect';
 import type { ChatHostConfiguration } from '@moonbase/contracts/chat';
 import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { ChatConfig } from '../chat-config.ts';
@@ -13,6 +23,12 @@ export type LinkState = {
   ready: boolean;
 };
 
+/** How the host gets verified: Refresh, and whether one is running. */
+export type Verifier = {
+  readonly refresh: Effect.Effect<void>;
+  readonly refreshing: Effect.Effect<boolean>;
+};
+
 /** One connected host's lifetime: closing it interrupts everything that ran over it. */
 export type Link = {
   readonly scope: Scope.Scope;
@@ -23,6 +39,11 @@ export type ChatLinkShape = {
   readonly state: SubscriptionRef.SubscriptionRef<LinkState>;
   readonly get: Effect.Effect<LinkState>;
   readonly update: (f: (state: LinkState) => LinkState) => Effect.Effect<void>;
+  /**
+   * The connection's Refresh, which it provides once built: the selection asks it to verify the
+   * host when nothing is verifying it.
+   */
+  readonly verifier: Deferred.Deferred<Verifier>;
   /** The open link; fails `not-connected` without one. */
   readonly current: Effect.Effect<Link, ChatRefusedError>;
   /** Whether a link is open. */
@@ -70,6 +91,7 @@ export class ChatLink extends Context.Service<ChatLink, ChatLinkShape>()('moonba
         state,
         get: SubscriptionRef.get(state),
         update: (f) => SubscriptionRef.update(state, f),
+        verifier: yield* Deferred.make<Verifier>(),
         current,
         isOpen: Effect.map(SubscriptionRef.get(link), (open) => !!open),
         open: Effect.gen(function* () {
