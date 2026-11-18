@@ -59,16 +59,18 @@ type ContractsError =
   | LocalDaemonError
   | IpcError;
 type ReasonedError = ConnectionError | HostVerificationError | RecordedRefusalError | IpcError;
-const ipcTags: ReadonlySet<string> = new Set<IpcError['_tag']>([
-  'IpcInputError',
-  'IpcAuthorityError',
-  'IpcBusyError',
-  'IpcUnavailableError',
-  'NativeActionError',
-  'IpcFailedError',
-  'IpcClosedError',
-  'IpcReplyError',
-]);
+/** Every IPC tag, listed in a record so the compiler requires each one. */
+const ipcTagRecord: Record<IpcError['_tag'], true> = {
+  IpcInputError: true,
+  IpcAuthorityError: true,
+  IpcBusyError: true,
+  IpcUnavailableError: true,
+  NativeActionError: true,
+  IpcFailedError: true,
+  IpcClosedError: true,
+  IpcReplyError: true,
+};
+const ipcTags: ReadonlySet<string> = new Set(Object.keys(ipcTagRecord));
 
 const groups: Record<Exclude<ContractsError, ReasonedError>['_tag'], ErrorGroup> = {
   InvalidChatRequestError: 'refusal',
@@ -169,31 +171,33 @@ export type DaemonServiceError =
   | ChatServiceError
   | LocalHostServiceError
   | ProviderSetupServiceError;
-const daemonServiceTags: ReadonlySet<string> = new Set<DaemonServiceError['_tag']>([
-  'InvalidChatRequestError',
-  'ChatBusyError',
-  'TranscriptChangedError',
-  'ChatAccessError',
-  'ChatStoreError',
-  'ChatStoreMismatchError',
-  'ChatUnavailableError',
-  'FolderRefusedError',
-  'FolderMissingError',
-  'FoldersUnavailableError',
-  'ProviderSetupRefusedError',
-  'ProviderSetupUnavailableError',
-  'CredentialKeyError',
-  'CredentialStoreError',
-  'HostUnavailableError',
-  'IncompatibleHostError',
-  'RequestReusedError',
-  'UnauthorizedError',
-  'UncertainError',
-  'CancelledError',
-  'ConnectionError',
-  'HostVerificationError',
-  'LocalDaemonError',
-]);
+/** Every daemon service tag, listed in a record so the compiler requires each one. */
+const daemonServiceTagRecord: Record<DaemonServiceError['_tag'], true> = {
+  InvalidChatRequestError: true,
+  ChatBusyError: true,
+  TranscriptChangedError: true,
+  ChatAccessError: true,
+  ChatStoreError: true,
+  ChatStoreMismatchError: true,
+  ChatUnavailableError: true,
+  FolderRefusedError: true,
+  FolderMissingError: true,
+  FoldersUnavailableError: true,
+  ProviderSetupRefusedError: true,
+  ProviderSetupUnavailableError: true,
+  CredentialKeyError: true,
+  CredentialStoreError: true,
+  HostUnavailableError: true,
+  IncompatibleHostError: true,
+  RequestReusedError: true,
+  UnauthorizedError: true,
+  UncertainError: true,
+  CancelledError: true,
+  ConnectionError: true,
+  HostVerificationError: true,
+  LocalDaemonError: true,
+};
+const daemonServiceTags: ReadonlySet<string> = new Set(Object.keys(daemonServiceTagRecord));
 /** Whether `value` is a chat, folder, provider setup or daemon link error. */
 export const isDaemonServiceError = (value: unknown): value is DaemonServiceError => {
   const tag = tagOf(value);
