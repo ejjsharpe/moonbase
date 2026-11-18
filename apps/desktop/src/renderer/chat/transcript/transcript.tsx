@@ -35,7 +35,7 @@ export function Transcript({
   services,
   atoms,
   backendId,
-  target,
+  target: shown,
   native,
   runner,
 }: {
@@ -51,6 +51,9 @@ export function Transcript({
 }) {
   const registry = useContext(RegistryContext);
   const selection = Context.get(services, ChatSelection);
+  // The chat this view was made for: its key changes with the chat, but each draft commit makes a
+  // new copy of the same selection, which must not reach the rows.
+  const [target] = useState(shown);
   const [view] = useState(() => makeTranscriptView(atoms, selection));
   useAtomMount(view.openCalls.state);
   const list = useRef<LegendListRef | null>(null);

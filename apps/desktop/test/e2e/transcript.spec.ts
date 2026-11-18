@@ -2465,6 +2465,13 @@ test('scrolling and live progress re-render only the rows they change', async ({
     });
   await settle(page);
   expect((await rows.take()).length).toBeLessThanOrEqual(2);
+  // Typing in the composer commits the draft, a new copy of the selection; no row re-renders.
+  await page.getByRole('textbox', { name: 'Message', exact: true }).pressSequentially('draft');
+  await expect
+    .poll(() => page.evaluate(() => window.demo.application.chat!.getSnapshot().draft))
+    .toBe('draft');
+  await settle(page);
+  expect(await rows.take()).toEqual([]);
   // The wheel may have scrolled output inside a row and left the list following.
   const jump = page.getByRole('button', { name: 'Jump to latest', exact: true });
   if (await jump.isVisible()) await jump.click();
