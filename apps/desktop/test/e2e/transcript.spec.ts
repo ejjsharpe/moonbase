@@ -192,18 +192,12 @@ test.describe('the virtualized transcript', () => {
   test('a streaming reply renders from its snapshot without reading its text', async ({ page }) => {
     await openLong(page, 40);
     await page.evaluate(async () => {
-      const client = window.demo.chat.dependencies.chat,
-        original = client.command;
+      const { commands } = window.demo.chat,
+        original = commands.getChatTranscriptContent;
       let reads = 0;
-      client.command = async (operation, input, options) => {
-        const request = input as { source?: { kind?: string }; selection?: unknown };
-        if (
-          operation === 'getChatTranscriptContent' &&
-          request.source?.kind === 'live' &&
-          request.selection
-        )
-          reads++;
-        return original(operation, input, options) as never;
+      commands.getChatTranscriptContent = async (input, options) => {
+        if (input.source.kind === 'live' && input.selection) reads++;
+        return original(input, options);
       };
       let text = 'Streaming reply\n\n';
       for (let step = 0; step < 12; step++) {
@@ -211,7 +205,9 @@ test.describe('the virtualized transcript', () => {
         await window.demo.transcript!.live(text);
         await new Promise(requestAnimationFrame);
       }
-      Object.assign(window, { liveReads: () => ((client.command = original), reads) });
+      Object.assign(window, {
+        liveReads: () => ((commands.getChatTranscriptContent = original), reads),
+      });
     });
     await waitForListRest(page);
     const result = await page.evaluate(() => ({
@@ -854,15 +850,15 @@ test.describe('the virtualized transcript', () => {
     await page.getByRole('button', { name: 'Close Chat panel', exact: true }).locator('..').hover();
     await page.getByRole('button', { name: 'Close Chat panel', exact: true }).click();
     await page.evaluate(() => {
-      const client = window.demo.chat.dependencies.chat,
-        original = client.command;
+      const { commands } = window.demo.chat,
+        original = commands.getChatHistoryAround;
       let failed = false;
-      client.command = async (operation, input, options) => {
-        if (operation === 'getChatHistoryAround' && !failed) {
+      commands.getChatHistoryAround = async (input, options) => {
+        if (!failed) {
           failed = true;
           throw Error('Controlled restore failure');
         }
-        return original(operation, input, options) as never;
+        return original(input, options);
       };
     });
     await page.getByRole('button', { name: 'Open Chat panel', exact: true }).click();
@@ -1301,18 +1297,16 @@ test('incomplete/unknown/oversized code remains readable and copyable; late refe
 test('Retry repeats a failed earlier read', async ({ page }) => {
   await open(page);
   await page.evaluate(() => {
-    const client = window.demo.chat.dependencies.chat,
-      original = client.command;
+    const { commands } = window.demo.chat,
+      original = commands.getChatHistoryAround;
     let failed = false;
-    client.command = async (operation, input, options) => {
-      if (operation === 'getChatHistoryAround') {
-        window.demo.chat.calls.push('navigation:' + JSON.stringify(input));
-        if (!failed) {
-          failed = true;
-          throw Error('Controlled history read failure');
-        }
+    commands.getChatHistoryAround = async (input, options) => {
+      window.demo.chat.calls.push('navigation:' + JSON.stringify(input));
+      if (!failed) {
+        failed = true;
+        throw Error('Controlled history read failure');
       }
-      return original(operation, input, options) as never;
+      return original(input, options);
     };
   });
   const alert = page.getByRole('alert').filter({ hasText: 'Retry history' }),
@@ -1831,8 +1825,8 @@ test('Find reading navigation cancels held reveal and editor shortcuts retain th
 }) => {
   await open(page);
   await page.evaluate(() => {
-    const client = window.demo.chat.dependencies.chat,
-      original = client.command;
+    const { commands } = window.demo.chat,
+      original = commands.getChatHistoryAround;
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
     const controlled = window as typeof window & {
@@ -1840,12 +1834,10 @@ test('Find reading navigation cancels held reveal and editor shortcuts retain th
       findRevealHeld: boolean;
     };
     controlled.releaseFind = release;
-    client.command = async (operation, input, options) => {
-      if (operation === 'getChatHistoryAround') {
-        controlled.findRevealHeld = true;
-        await gate;
-      }
-      return original(operation, input, options);
+    commands.getChatHistoryAround = async (input, options) => {
+      controlled.findRevealHeld = true;
+      await gate;
+      return original(input, options);
     };
   });
   await transcript(page).focus();
@@ -2056,7 +2048,8 @@ for (const late of ['reply', 'error'] as const)
     const expected = await page.evaluate(async (late) => {
       const text = 'α😀'.repeat(6000) + 'first NEEDLE and second NEEDLE\r\n';
       await window.demo.transcript!.setEntry(0, [text], ['thinking']);
-      const command = window.demo.chat.dependencies.chat.command;
+      const { commands } = window.demo.chat,
+        { getChatTranscriptContent: read, getChatHistoryAround: around } = commands;
       const old = Promise.withResolvers<void>(),
         manual = Promise.withResolvers<void>();
       const controlled = window as typeof window & { findResume: FindResumeProbe };
@@ -2068,30 +2061,27 @@ for (const late of ['reply', 'error'] as const)
         releaseOld: () => old.resolve(),
         releaseManual: () => manual.resolve(),
       });
-      window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
+      commands.getChatTranscriptContent = async (input, options) => {
         const selected =
-          operation === 'getChatTranscriptContent' &&
-          'selection' in input &&
           input.selection?.partId === 'm0.b0' &&
-          'source' in input &&
           input.source.kind === 'entry' &&
           input.source.entryId === 'reading-0';
         const count = selected ? ++probe.reads : 0;
-        if (selected) probe.cursors.push('cursor' in input ? (input.cursor ?? null) : null);
-        const reply = await command(operation, input, options);
+        if (selected) probe.cursors.push(input.cursor ?? null);
+        const reply = await read(input, options);
         if (count === 1) {
-          probe.signal = options?.signal;
+          probe.signal = options.signal;
           probe.held = true;
           await old.promise;
           probe.settled = true;
           if (late === 'error') throw Error('obsolete first Find content error');
         }
-        if (
-          operation === 'getChatHistoryAround' &&
-          'entryId' in input &&
-          input.entryId === 'reading-50'
-        ) {
-          probe.manualSignal = options?.signal;
+        return reply;
+      };
+      commands.getChatHistoryAround = async (input, options) => {
+        const reply = await around(input, options);
+        if (input.entryId === 'reading-50') {
+          probe.manualSignal = options.signal;
           await manual.promise;
         }
         return reply;

@@ -6,6 +6,7 @@ import {
   type ApplicationAtoms,
   type MoonbaseApplicationShape,
 } from '@moonbase/application';
+import { getDesktopChat } from '../chat/desktop-chat.ts';
 
 /** The application as the shell uses it: its service, atoms over it, and the root's runners. */
 export type DesktopApplication = {
@@ -26,14 +27,21 @@ export type DesktopRunner = Pick<DesktopApplication, 'run' | 'runSync'>;
 export function useDesktopApplication(application: DesktopApplication) {
   const registry = useContext(RegistryContext);
   const lifecycle = useAtomValue(application.atoms.snapshot);
-  const chat = useAtomValue(application.atoms.chat);
+  const services = useAtomValue(application.atoms.chat);
+  const chat = useMemo(
+    () => services && getDesktopChat(services, application, registry),
+    [services, application, registry],
+  );
   const composer = useAtomValue(application.atoms.composer);
   const actions = useMemo(() => {
     const { service, run, runSync } = application;
     return {
       /** The lifecycle now, for a callback. */
       getSnapshot: () => registry.get(application.atoms.snapshot),
-      getChat: () => registry.get(application.atoms.chat),
+      getChat: () => {
+        const current = registry.get(application.atoms.chat);
+        return current && getDesktopChat(current, application, registry);
+      },
       openChat: () => run(service.chat.open),
       /** Closes the chat if its drafts are kept; false when it can't close now. */
       closeChat: () => runSync(service.chat.close),

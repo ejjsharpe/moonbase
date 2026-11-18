@@ -10,8 +10,9 @@ import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/provid
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { openChatApplication } from './chat-application-fixture.ts';
-import { makeChatClient } from '@moonbase/application/chat/clients';
-import type { ChatState } from '@moonbase/application/chat';
+import { Effect } from 'effect';
+import type { ChatPort, ChatState } from '@moonbase/application/chat';
+import { ChatService } from '@moonbase/contracts/services';
 import { controlledHostFixture, until } from './controlled-host-fixture.ts';
 
 function storage() {
@@ -47,24 +48,24 @@ test('public local controller receives successive Pi text before held completion
       Layer.provide(NodeServices.layer),
     ),
   );
-  const client = makeChatClient(runtime);
+  const client = (await runtime.runPromise(ChatService)) as ChatPort;
   const gate = Promise.withResolvers<void>(),
     entered = Promise.withResolvers<void>();
   let hold = false;
   const app = await openChatApplication(() => ({
-    mode: 'local',
     context: session,
     storage: storage(),
     chat: {
-      watch: client.watch,
-      watchChatList: client.watchChatList,
-      async command(operation, input, options) {
-        if (hold && operation === 'getChatTranscriptContent') {
-          entered.resolve();
-          await gate.promise;
-        }
-        return client.command(operation, input, options);
-      },
+      ...client,
+      getChatTranscriptContent: (input) =>
+        Effect.andThen(
+          Effect.promise(async () => {
+            if (!hold) return;
+            entered.resolve();
+            await gate.promise;
+          }),
+          client.getChatTranscriptContent(input),
+        ),
     },
   }));
   const controller = app.chat;
@@ -143,10 +144,9 @@ test('public remote controller consumes authenticated successive replacements be
   const fixture = await controlledHostFixture(new URL('./faux-stream.mjs', import.meta.url), true);
   const root = fixture.root();
   const app = await openChatApplication(() => ({
-    chat: root.chat,
     // The remote host is the daemon in host mode: local-mode chats over a connection.
-    mode: 'local',
-    connection: root.connection,
+    chat: root.ports.chat,
+    connection: root.ports.connection,
     context: fixture.session,
     storage: storage(),
   }));
@@ -211,18 +211,21 @@ test('two clients of one daemon see the same chat list changes and streamed text
       calls = { listings: 0 };
     const app = await openChatApplication(() => ({
       // Counts this client's own listings.
-      chat: {
-        ...root.chat,
-        command: (operation, input, options) => {
-          if (operation === 'listChats') calls.listings++;
-          return root.chat.command(operation, input, options);
-        },
-      },
-      mode: 'local',
-      connection: root.connection,
+      chat: new Proxy(root.ports.chat, {
+        get: (port, operation: keyof ChatPort) =>
+          operation === 'listChats'
+            ? (input: Parameters<ChatPort['listChats']>[0]) =>
+                Effect.andThen(
+                  Effect.sync(() => calls.listings++),
+                  port.listChats(input),
+                )
+            : port[operation],
+      }),
+      connection: root.ports.connection,
       context: fixture.session,
       storage: storage(),
     }));
+    opened.push(app);
     const controller = app.chat;
     await controller.start();
     await controller.connect();
@@ -232,13 +235,15 @@ test('two clients of one daemon see the same chat list changes and streamed text
     );
     return { app, controller, calls };
   };
-  const a = await open(),
-    b = await open();
+  const opened: { dispose: () => Promise<void> }[] = [];
+  // Registered before either client opens, so a failed open still releases the daemon.
   t.after(async () => {
     fixture.release();
-    await Promise.all([a.app.dispose(), b.app.dispose()]);
+    await Promise.allSettled(opened.map((app) => app.dispose()));
     await fixture.close();
   });
+  const a = await open(),
+    b = await open();
   const listed = a.calls.listings;
   const row = (state: ChatState) => state.chats.find((chat) => chat.title === 'Shared chat');
   // A creates and sends; B's list shows the chat appear and start running.

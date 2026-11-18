@@ -13,8 +13,9 @@ import type { ChatServiceShape } from '@moonbase/contracts/services';
 import {
   checkTranscriptReply,
   countDecodedTranscriptBytes,
-  makeTranscriptFailure,
+  TranscriptReadError,
   trackTranscriptCursor,
+  type TranscriptReadProblem,
 } from '@moonbase/application/chat';
 import { parseTranscriptMarkdown } from '../../ipc/transcript-markdown.ts';
 import {
@@ -36,6 +37,17 @@ export const maximumTranscriptCodeCopyBytes = 1024 * 1024;
 const transcriptPartSeparator = '\n\n';
 const failure = (code: ApplicationError['code'], message: string) =>
   new ApplicationError({ code, message });
+/** A read's problem as the legacy error main's procedures still fail with (until the UI reads tags). */
+const toLegacyFailure = (error: TranscriptReadError) => failure(error.code, error.message);
+const readFailure = (problem: TranscriptReadProblem) =>
+  toLegacyFailure(new TranscriptReadError({ problem }));
+/** A synchronous transcript check, failing with the legacy error its problem had. */
+const checkRead = <A>(check: () => A) =>
+  Effect.try({
+    try: check,
+    catch: (error) =>
+      error instanceof TranscriptReadError ? toLegacyFailure(error) : (error as ApplicationError),
+  });
 const sourceChanged = () =>
   failure('Conflict', 'Transcript source changed. Reload the content and try Copy again.');
 export const transcriptImagePath = '/transcript-image/';
@@ -149,10 +161,7 @@ const readSource = (
         yield* check;
         const reply = yield* read(request);
         yield* check;
-        return yield* Effect.try({
-          try: () => checkTranscriptReply(request, reply),
-          catch: (error) => error as ApplicationError,
-        });
+        return yield* checkRead(() => checkTranscriptReply(request, reply));
       });
     const advance = trackTranscriptCursor();
     let manifestCursor: string | null = null;
@@ -165,14 +174,12 @@ const readSource = (
           ...(manifestCursor ? { cursor: manifestCursor } : {}),
         });
         if (manifest.kind !== 'manifest')
-          return yield* Effect.fail(makeTranscriptFailure('Expected a transcript manifest.'));
+          return yield* Effect.fail(readFailure('expected-manifest'));
         next = manifest.nextCursor;
         selections = [];
         for (const part of manifest.parts) {
           if (part.availability !== 'available')
-            return yield* Effect.fail(
-              makeTranscriptFailure('Selected transcript content is unavailable.', 'Unavailable'),
-            );
+            return yield* Effect.fail(readFailure('content-unavailable'));
           selections.push({ partId: part.partId, bytes: part.bytes, revision: part.revision });
         }
       }
@@ -187,13 +194,9 @@ const readSource = (
             ...(cursor ? { cursor } : {}),
           });
           if (chunk.kind !== 'content' || chunk.offset !== offset)
-            return yield* Effect.fail(
-              makeTranscriptFailure('Transcript content has a missing or overlapping chunk.'),
-            );
+            return yield* Effect.fail(readFailure('chunk-gap'));
           if (encoding && encoding !== chunk.encoding)
-            return yield* Effect.fail(
-              makeTranscriptFailure('Transcript encoding changed within a selected part.'),
-            );
+            return yield* Effect.fail(readFailure('encoding-changed'));
           encoding = chunk.encoding;
           offset += countDecodedTranscriptBytes(chunk);
           cursor = chunk.nextCursor;
@@ -202,13 +205,9 @@ const readSource = (
           // Each chunk lets other IPC run before the next.
           yield* Effect.yieldNow;
         } while (cursor !== null);
-        if (offset !== selected.bytes)
-          return yield* Effect.fail(makeTranscriptFailure('Transcript content is incomplete.'));
+        if (offset !== selected.bytes) return yield* Effect.fail(readFailure('content-incomplete'));
       }
-      yield* Effect.try({
-        try: () => advance(manifestCursor, next),
-        catch: (error) => error as ApplicationError,
-      });
+      yield* checkRead(() => advance(manifestCursor, next));
       manifestCursor = next;
     } while (manifestCursor !== null);
     yield* check;

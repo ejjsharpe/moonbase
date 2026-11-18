@@ -1,4 +1,5 @@
-import { findSelectedChat, type ChatController, type ChatState } from '@moonbase/application/chat';
+import { findSelectedChat, type ChatState } from '@moonbase/application/chat';
+import type { DesktopChat } from './desktop-chat.ts';
 
 /** Whether the controller is running the action named `id` (`send`, `stop`, `settle`…). */
 export const isBusy = (state: Pick<ChatState, 'active'>, id: string) => state.active.includes(id);
@@ -12,7 +13,7 @@ export function readOpenSettled(state: ChatState) {
 }
 
 /** Settles or unsettles the open chat. */
-export function settleOpenChat(controller: ChatController, state: ChatState, settled: boolean) {
+export function settleOpenChat(controller: DesktopChat, state: ChatState, settled: boolean) {
   if (state.selected) void controller.settle(state.selected, settled);
 }
 

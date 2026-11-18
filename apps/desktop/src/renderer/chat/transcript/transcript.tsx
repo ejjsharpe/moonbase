@@ -23,7 +23,6 @@ import { controls } from '@moonbase/ui/controls';
 import {
   findRowEntryId,
   getEntryRowKey,
-  type ChatController,
   type ChatState,
   type LiveEntry,
   type TranscriptRow,
@@ -66,6 +65,7 @@ import { createViewSaver, type ViewSaver } from './transcript-view-saving.ts';
 import { holdTranscriptSelection } from './transcript-selection.ts';
 import { holdPlaceWhileFocusMoves } from './transcript-focus.ts';
 import { transcriptStyles as styles } from './transcript-styles.ts';
+import type { DesktopChat } from '../desktop-chat.ts';
 
 /**
  * A first-render hint from the demo's measured items (answers about 200–250px, questions about
@@ -93,7 +93,7 @@ export function Transcript({
   native,
   runner,
 }: {
-  controller: ChatController;
+  controller: DesktopChat;
   state: ChatState;
   native?: TranscriptNative;
   /** The renderer root's runners, which the native actions run on. */

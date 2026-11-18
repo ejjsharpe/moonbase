@@ -9,8 +9,6 @@ import {
   findMentionRanges,
   insertMention,
   removeMentionBefore,
-  type ChatController,
-  type ChatFileSearch,
   type ChatFileSearchSnapshot,
   type MentionQuery,
 } from '@moonbase/application/chat';
@@ -23,6 +21,7 @@ import {
   type ChatCommandOption,
 } from './commands.ts';
 import { Icon } from '@moonbase/ui/icons';
+import type { DesktopChat, DesktopFileSearch } from '../desktop-chat.ts';
 
 /**
  * The message textarea. Typing `@` searches the chat's working folder on its host; a picked file is
@@ -42,7 +41,7 @@ export function MessageInput({
   onMention,
   refuseMention,
 }: {
-  controller: ChatController;
+  controller: DesktopChat;
   draft: string;
   mentions: ChatMention[];
   /** Whether `@` can search: the host supports it and the chat has a working folder. */
@@ -66,7 +65,7 @@ export function MessageInput({
   const [selection, setSelection] = useState({ text: draft, caret: 0 }),
     [active, setActive] = useState(0),
     [dismissed, setDismissed] = useState<string | null>(null),
-    [search, setSearch] = useState<ChatFileSearch | null>(null),
+    [search, setSearch] = useState<DesktopFileSearch | null>(null),
     // The query (`queryKey`) the search last started; its answer belongs to no other.
     [searched, setSearched] = useState<string | null>(null),
     // Why the query (`queryKey`) couldn't pick a file, shown while it is typed.

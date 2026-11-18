@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { ChatController, TranscriptView } from '@moonbase/application/chat';
+import type { TranscriptView } from '@moonbase/application/chat';
+import type { DesktopChat } from '../src/renderer/chat/desktop-chat.ts';
 import { createViewSaver } from '../src/renderer/chat/transcript/transcript-view-saving.ts';
 
 function fakeController() {
@@ -15,7 +16,7 @@ function fakeController() {
       state.writes.push(view);
       state.view = structuredClone(view);
     },
-  } as unknown as Pick<ChatController, 'getSnapshot' | 'setTranscriptView'>;
+  } as unknown as Pick<DesktopChat, 'getSnapshot' | 'setTranscriptView'>;
   return { state, controller };
 }
 const at = (entryId: string, offset = 0) => ({ key: 'entry:' + entryId, offset });

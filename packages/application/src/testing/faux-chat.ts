@@ -1,10 +1,11 @@
-import { ApplicationError } from '@moonbase/contracts/errors';
+import { Effect, Queue, Stream } from 'effect';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
-import type { ChatDependencies } from '../chat/index.ts';
-import type { ChatClient, ChatSnapshot } from '@moonbase/contracts/chat';
-import type { ConnectionClient, ConnectionSnapshot } from '@moonbase/contracts/connection';
+import type { ChatSnapshot } from '@moonbase/contracts/chat';
+import type { ConnectionSnapshot } from '@moonbase/contracts/connection';
+import { HostUnavailableError } from '@moonbase/contracts/host-errors';
+import type { ChatDependencies, ChatPort, ConnectionPort } from '../chat/chat-ports.ts';
 
-/** Pure controlled capabilities, shared by lifecycle tests and portable consumers. */
+/** Controlled chat and connection ports, shared by lifecycle tests and portable consumers. */
 export function fauxChat() {
   const context = { host: { hostId: 'host', storeId: 'store' }, actorId: 'actor' };
   const target = { ...context, conversationId: 'conversation' };
@@ -32,68 +33,90 @@ export function fauxChat() {
   };
   let connectionGeneration = 0;
   let connectionState: ConnectionSnapshot = { state: 'disconnected', connectionId: null, profile };
-  let receiveConnection: (state: ConnectionSnapshot) => void = () => {};
+  const connectionWatches = new Set<(state: ConnectionSnapshot) => void>();
   const calls: string[] = [];
   const storage = { value: null as string | null, writes: 0, write: (_value: string) => {} };
   const controls = {
+    /** Holds each watch's close until it settles. */
     release: async () => {},
+    /** Delivers a snapshot to the open chat's watch. */
     receiveChat: (_snapshot: ChatSnapshot) => {},
+    /** Watches opened, and watches that have since closed. */
     observations: 0,
     closed: 0,
   };
-  const close = () => {
-    let completion: Promise<void> | undefined;
-    return () =>
-      (completion ??= controls.release().then(() => {
-        controls.closed++;
-      }));
-  };
-  // Trusted ChatClient: it stands in for a boundary that already decoded and bounded replies.
-  const chat: ChatClient = {
-    async command(operation, input) {
+  /** A watch that counts its opening and closing. */
+  const observed = <A>(stream: Stream.Stream<A>) =>
+    Stream.unwrap(
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          controls.observations++;
+          return stream;
+        }),
+        () =>
+          Effect.promise(() =>
+            controls.release().then(
+              () => {
+                controls.closed++;
+              },
+              () => {
+                controls.closed++;
+              },
+            ),
+          ),
+      ),
+    ).pipe(Stream.scoped);
+  const record = <A>(operation: string, value: () => A) =>
+    Effect.sync(() => {
       calls.push(operation);
-      switch (operation) {
-        case 'getChatHost':
-          return { ...context, mode: 'local' } as never;
-        case 'listChats':
-          return { conversations: [conversation], nextCursor: null } as never;
-        case 'getChat':
-          return structuredClone(snapshot) as never;
-        case 'createChat':
-          return { requestId: (input as { requestId: string }).requestId, conversation } as never;
-        case 'sendChat':
-          return {
-            target,
-            requestId: (input as { requestId: string }).requestId,
-            admission: 'admitted',
-            submissionId: 'submission',
-          } as never;
-        case 'getChatTranscriptContent':
-        case 'findChatTranscript':
-        case 'getChatHistoryAround':
-          throw new ApplicationError({
-            code: 'Incompatible',
-            message: 'This fixture serves no transcript reads.',
-          });
-        case 'getChatSend':
-          return null as never;
-        case 'stopChat':
-          return { ...input, outcome: 'terminal' } as never;
-        default:
-          throw Error(`Unexpected fake operation: ${operation}`);
-      }
-    },
-    watch(_input, receive) {
-      controls.receiveChat = receive;
-      controls.observations++;
-      return close();
-    },
-    watchChatList: () => async () => {},
+      return value();
+    });
+  const noTranscript = () => Effect.fail(new HostUnavailableError({ reason: 'failed' }));
+  // A trusted port: it stands in for a boundary that already decoded and bounded replies.
+  const chat: ChatPort = {
+    getChatHost: () => record('getChatHost', () => ({ ...context, mode: 'local' as const })),
+    listChats: () =>
+      record('listChats', () => ({ conversations: [conversation], nextCursor: null })),
+    getChat: () => record('getChat', () => structuredClone(snapshot)),
+    createChat: (input) =>
+      record('createChat', () => ({ requestId: input.requestId, conversation })),
+    sendChat: (input) =>
+      record('sendChat', () => ({
+        target,
+        requestId: input.requestId,
+        admission: 'admitted' as const,
+        submissionId: 'submission',
+      })),
+    getChatSend: () => record('getChatSend', () => null),
+    stopChat: (input) => record('stopChat', () => ({ ...input, outcome: 'terminal' as const })),
+    settleChat: (input) =>
+      record('settleChat', () => ({
+        ...conversation,
+        ...(input.settled ? { settledAt: '2026-01-02T00:00:00Z' } : {}),
+      })),
+    getChatHistory: noTranscript,
+    getChatTranscriptContent: noTranscript,
+    findChatTranscript: noTranscript,
+    getChatHistoryAround: noTranscript,
+    findChatFiles: (input) =>
+      record('findChatFiles', () => ({ query: input.query, matches: [], partial: false })),
+    watch: () =>
+      observed(
+        Stream.callback<ChatSnapshot>((queue) =>
+          Effect.sync(() => {
+            controls.receiveChat = (value) => Queue.offerUnsafe(queue, value);
+          }),
+        ),
+      ),
+    watchChatList: () => observed(Stream.never),
+  } as ChatPort;
+  const deliver = () => {
+    for (const offer of connectionWatches) offer(connectionState);
   };
-  const connection: ConnectionClient = {
-    async command(operation) {
-      calls.push(operation);
-      if (operation === 'connect')
+  const connection: ConnectionPort = {
+    getConnection: () => record('getConnection', () => connectionState),
+    connect: () =>
+      record('connect', () => {
         connectionState = {
           state: 'connected',
           connectionId: 'connection-' + ++connectionGeneration,
@@ -105,17 +128,28 @@ export function fauxChat() {
             capabilities: ['chat-v0'],
           },
         };
-      if (operation === 'disconnect')
+        deliver();
+        return connectionState;
+      }),
+    disconnect: () =>
+      record('disconnect', () => {
         connectionState = { state: 'disconnected', connectionId: null, profile };
-      receiveConnection(connectionState);
-      return connectionState as never;
-    },
-    watch(receive) {
-      receiveConnection = receive;
-      controls.observations++;
-      return close();
-    },
-  };
+        deliver();
+      }),
+    watch: () =>
+      observed(
+        Stream.callback<ConnectionSnapshot>((queue) =>
+          Effect.acquireRelease(
+            Effect.sync(() => {
+              const offer = (state: ConnectionSnapshot) => Queue.offerUnsafe(queue, state);
+              connectionWatches.add(offer);
+              return offer;
+            }),
+            (offer) => Effect.sync(() => connectionWatches.delete(offer)),
+          ),
+        ),
+      ),
+  } as ConnectionPort;
   const dependencies: ChatDependencies = {
     chat,
     connection,

@@ -60,7 +60,12 @@ async function installCopy(page: Page) {
     command: (operation, input) =>
       page.evaluate(
         async ({ operation, input }) =>
-          window.demo.chat.dependencies.chat.command(operation, input),
+          (
+            window.demo.chat.commands[operation] as (
+              input: unknown,
+              options: object,
+            ) => Promise<unknown>
+          )(input, {}),
         { operation, input },
       ) as never,
     watch: (_input, callback) => {
@@ -127,28 +132,27 @@ test('selected loaded output and fixed Copy remain coherent through a failed rep
     );
     await selectPrefix(page, pre);
     await page.evaluate((bytes) => {
-      const command = window.demo.chat.dependencies.chat.command;
+      const read = window.demo.chat.commands.getChatTranscriptContent;
       const gate = Promise.withResolvers<void>();
       let held = false;
       Object.assign(window, {
         releaseReplacement: () => gate.resolve(),
         replacementHeld: false,
       });
-      window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
+      window.demo.chat.commands.getChatTranscriptContent = async (input, options) => {
         if (
           !held &&
-          operation === 'getChatTranscriptContent' &&
           'selection' in input &&
           input.selection?.partId === 'm0.b1' &&
           input.selection.bytes !== bytes
         ) {
           held = true;
-          await command(operation, input, options);
+          await read(input, options);
           Object.assign(window, { replacementHeld: true });
           await gate.promise;
           throw Error('Controlled replacement read failure');
         }
-        return command(operation, input, options) as never;
+        return read(input, options);
       };
     }, descriptor.bytes);
     release = () =>
@@ -355,24 +359,19 @@ test('released output retention yields to the existing 128-selection content bou
     () => window.demo.application.chat!.getSnapshot().snapshot!.run!.transcript!.parts[0]!.revision,
   );
   await page.evaluate(() => {
-    const command = window.demo.chat.dependencies.chat.command;
+    const read = window.demo.chat.commands.getChatTranscriptContent;
     const gate = Promise.withResolvers<void>();
     let held = false;
     Object.assign(window, { releaseBoundedRead: () => gate.resolve(), boundedReadHeld: false });
-    window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
-      if (
-        !held &&
-        operation === 'getChatTranscriptContent' &&
-        'selection' in input &&
-        input.selection?.partId === 'm0.b0'
-      ) {
+    window.demo.chat.commands.getChatTranscriptContent = async (input, options) => {
+      if (!held && 'selection' in input && input.selection?.partId === 'm0.b0') {
         held = true;
-        const reply = await command(operation, input, options);
+        const reply = await read(input, options);
         Object.assign(window, { boundedReadHeld: true });
         await gate.promise;
-        return reply as never;
+        return reply;
       }
-      return command(operation, input, options) as never;
+      return read(input, options);
     };
   });
   try {
@@ -463,21 +462,17 @@ test('a pointer selection in a loaded live body survives an append while its rer
   expect(before).toBe('SELECT THIS');
   await expect(pre).toBeFocused();
   await page.evaluate(() => {
-    const command = window.demo.chat.dependencies.chat.command;
+    const read = window.demo.chat.commands.getChatTranscriptContent;
     const gate = Promise.withResolvers<void>();
     Object.assign(window, { releaseReread: () => gate.resolve(), rereadHeld: false });
-    window.demo.chat.dependencies.chat.command = async (operation, input, options) => {
-      if (
-        operation === 'getChatTranscriptContent' &&
-        'selection' in input &&
-        input.selection?.partId === 'm0.b1'
-      ) {
-        const reply = await command(operation, input, options);
+    window.demo.chat.commands.getChatTranscriptContent = async (input, options) => {
+      if ('selection' in input && input.selection?.partId === 'm0.b1') {
+        const reply = await read(input, options);
         Object.assign(window, { rereadHeld: true });
         await gate.promise;
-        return reply as never;
+        return reply;
       }
-      return command(operation, input, options) as never;
+      return read(input, options);
     };
   });
   try {

@@ -2,22 +2,28 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { TranscriptViewMemory } from '@moonbase/application/chat';
 import type { ChatInput, ChatTranscriptSource } from '@moonbase/contracts/chat';
-import { part, scaledTranscriptLimits, tick, transcriptController } from './transcript-fixture.ts';
+import {
+  part,
+  scaledTranscriptLimits,
+  tick,
+  transcriptHarness,
+  type TranscriptHarness,
+} from './transcript-fixture.ts';
 
 const chunkBytes = 32 * 1024;
 const serialized = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 
 /**
- * Serves ASCII parts sized in 32 KiB chunks, optionally holding one exact cursor, to a controller
+ * Serves ASCII parts sized in 32 KiB chunks, optionally holding one exact cursor, to a transcript
  * with the scaled limits (a 1 MiB content budget).
  */
-async function largeParts(t: Parameters<typeof transcriptController>[0], sizes: number[]) {
-  const f = await transcriptController(t, 1, true, { transcriptLimits: scaledTranscriptLimits });
+async function largeParts(t: Parameters<typeof transcriptHarness>[0], sizes: number[]) {
+  const f = await transcriptHarness(t, 1, { limits: scaledTranscriptLimits });
   const source = f.entries[0].transcript!.source as ChatTranscriptSource;
   const data = sizes.map((chunks, index) =>
     String.fromCharCode(97 + index).repeat(Math.ceil(chunks * chunkBytes)),
   );
-  f.fixture.sources.set(JSON.stringify(source), { source, data });
+  f.sources.set(JSON.stringify(source), { source, data });
   const held = new Map<string, Promise<void>>();
   f.handlers.set('getChatTranscriptContent', async (raw) => {
     const request = raw as ChatInput<'getChatTranscriptContent'>;
@@ -40,20 +46,18 @@ async function largeParts(t: Parameters<typeof transcriptController>[0], sizes: 
     const value = part('m0.b' + index, data[index]);
     return { partId: value.partId, bytes: value.bytes, revision: value.revision };
   };
-  const load = (index: number) => f.controller.loadTranscriptPart(source, selection(index));
+  const load = (index: number) => f.transcript.loadPart(source, selection(index));
   const loadAll = async (index: number) => {
     for (let chunk = 0; chunk < Math.ceil(sizes[index]); chunk++) await load(index);
   };
   const content = (index: number) =>
-    f.controller
-      .getSnapshot()
-      .transcript.content.find((value) => value.selection.partId === 'm0.b' + index)!;
+    f.state.content.find((value) => value.selection.partId === 'm0.b' + index)!;
   return { f, held, load, loadAll, content };
 }
 
 /** Each retained selection counts its own serialized bytes against the content budget. */
-function assertContentBudget(f: Awaited<ReturnType<typeof transcriptController>>) {
-  const { content } = f.controller.getSnapshot().transcript;
+function assertContentBudget(f: TranscriptHarness) {
+  const { content } = f.state;
   const bytes = content.reduce((total, value) => total + serialized(value), 0);
   assert(bytes <= f.limits.contentBytes, `${bytes} retained content bytes`);
 }
@@ -61,7 +65,7 @@ function assertContentBudget(f: Awaited<ReturnType<typeof transcriptController>>
 test('content eviction drops whole least-recently written selections and trims only the written one', async (t) => {
   // a, b and c fill most of the budget; d adds over half of it, so the two least recent leave whole.
   const { f, held, load, loadAll, content } = await largeParts(t, [8, 8, 8, 18]);
-  assert.deepEqual(f.controller.getSnapshot().transcript.content, []);
+  assert.equal(f.state.content.length, 0);
   await loadAll(0);
   await loadAll(1);
   for (let chunk = 0; chunk < 7; chunk++) await load(2);
@@ -76,7 +80,7 @@ test('content eviction drops whole least-recently written selections and trims o
   await finishing;
   assert.equal(content(2).status, 'complete');
   assert.deepEqual(
-    f.controller.getSnapshot().transcript.content.map((value) => value.selection.partId),
+    f.state.content.map((value) => value.selection.partId),
     ['m0.b1', 'm0.b0', 'm0.b2'],
   );
   for (let chunk = 0; chunk < 18; chunk++) {
@@ -84,7 +88,7 @@ test('content eviction drops whole least-recently written selections and trims o
     assertContentBudget(f);
   }
   assert.deepEqual(
-    f.controller.getSnapshot().transcript.content.map((value) => value.selection.partId),
+    f.state.content.map((value) => value.selection.partId),
     ['m0.b2', 'm0.b3'],
   );
   assert.equal(content(2).retainedFrom, 0);
@@ -93,17 +97,15 @@ test('content eviction drops whole least-recently written selections and trims o
   assert.equal(content(3).status, 'complete');
 });
 
-test('one oversized part trims only its own oldest chunks and is released on disposal', async (t) => {
+test('one oversized part trims only its own oldest chunks', async (t) => {
   const { f, loadAll, content } = await largeParts(t, [36]);
   await loadAll(0);
   assertContentBudget(f);
   assert.equal(content(0).retainedFrom, 5 * chunkBytes);
   assert.equal(content(0).loadedBytes, 36 * chunkBytes);
-  await f.controller.loadTranscriptPart(content(0).source, content(0).selection, true);
+  await f.transcript.loadPart(content(0).source, content(0).selection, true);
   assertContentBudget(f);
   assert.equal(content(0).chunks.length, 1);
-  await f.controller.detach();
-  assert.deepEqual(f.controller.getSnapshot().transcript.content, []);
 });
 
 test('one publication measures only the selection it changed', async (t) => {

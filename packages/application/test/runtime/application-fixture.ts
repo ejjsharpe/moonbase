@@ -1,4 +1,6 @@
-import { Effect, Layer, ManagedRuntime, Stream, SubscriptionRef } from 'effect';
+import { type Context, Effect, Layer, ManagedRuntime, Stream, SubscriptionRef } from 'effect';
+import type { ChatServices } from '@moonbase/application/chat';
+import { driveChat } from '@moonbase/application/testing/chat-fixture';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 import {
   MoonbaseApplication,
@@ -37,14 +39,7 @@ type Options = Omit<ChatHostOptions, 'runner'> & { editor?: boolean };
  */
 export function makeApplication(options: Options) {
   const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'original', 'b.ts': 'second' } }]);
-  const runner = {
-    runPromiseExit: <A, E>(effect: Effect.Effect<A, E>, opts?: { signal?: AbortSignal }) =>
-      runtime.runPromiseExit(effect, opts).then((exit) => {
-        if (process.env.DEBUG_RUNNER && exit._tag === 'Failure') console.log(String(exit.cause));
-        return exit;
-      }),
-  };
-  const composition = MoonbaseApplication.layer({ ...options, runner });
+  const composition = MoonbaseApplication.layer(options);
   const layer = options.editor
     ? Layer.provideMerge(
         composition,
@@ -74,7 +69,13 @@ export function makeApplication(options: Options) {
           ([phase, chat]) => toApplicationSnapshot(phase, chat, a.chat.targets),
         ),
       ),
-    chat: () => app((a) => Effect.map(SubscriptionRef.get(a.chat.state), (s) => s.controller)),
+    /** A chat's services, driven as a test does. */
+    drive: (chat: Context.Context<ChatServices>) => driveChat(runtime, chat),
+    /** The open chat, driven through its services. */
+    chat: () =>
+      app((a) =>
+        Effect.map(SubscriptionRef.get(a.chat.state), (s) => s.chat && driveChat(runtime, s.chat)),
+      ),
     canUnload: () =>
       runtime.runSync(
         Effect.flatMap(

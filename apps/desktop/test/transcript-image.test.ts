@@ -209,7 +209,8 @@ test('a token issued while connect is held is revoked once connect settles', asy
   };
   const f = await fixture(png, { connection });
   const { ipc } = f;
-  const connecting = ipc.target('remote').connection.command('connect', { profileId: 'profile' });
+  const { connection: remote } = await ipc.ports('remote');
+  const connecting = Effect.runPromise(remote.connect({ profileId: 'profile' }));
   await entered.promise;
   const issued = await f.issue('image/png');
   gate.resolve();

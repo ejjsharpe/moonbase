@@ -28,6 +28,7 @@ import { makeIpcServer } from '../../src/main/ipc/ipc-server.ts';
 import type { NativeActions } from '../../src/main/native-actions.ts';
 import {
   makeChatTargetClients,
+  makeChatTargetPorts,
   makeShellClients,
 } from '../../src/renderer/ipc/application-clients.ts';
 import { makeDesktopIpcLayer, toMessagePortLike } from '../../src/renderer/ipc/desktop-ipc.ts';
@@ -216,7 +217,7 @@ export type RawConnection = {
 
 /**
  * Main's IPC server for one window, with test doubles, and the renderer's clients of it over Node
- * message ports: the same procedures, schemas, admission and Promise clients the app uses.
+ * message ports: the same procedures, schemas, admission, ports and clients the app uses.
  */
 export async function makeIpcFixture(
   options: {
@@ -376,6 +377,8 @@ export async function makeIpcFixture(
       });
     },
     target: (id: 'local' | 'remote') => makeChatTargetClients(renderer, id),
+    /** The chat, provider setup and connection ports the renderer's chat runs on, for `id`. */
+    ports: (id: 'local' | 'remote') => renderer.runPromise(makeChatTargetPorts(id)),
     connectRaw,
     /** Closes every connection from main's end, as a refused message does; the document stays. */
     closeConnections() {

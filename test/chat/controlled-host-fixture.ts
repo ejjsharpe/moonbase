@@ -4,18 +4,45 @@ import { mkdtemp, mkdir, realpath, readFile, writeFile, chmod, rm } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
-import { ManagedRuntime, Layer } from 'effect';
+import { Effect, ManagedRuntime, Layer, Stream } from 'effect';
 import {
   makeChatClient,
   makeConnectionClient,
   makeProviderSetupClient,
 } from '@moonbase/application/chat/clients';
 import { RemoteDaemonLive } from '@moonbase/daemon-protocol/remote';
-import { LocalHostService } from '@moonbase/contracts/services';
+import { ChatService, ConnectionService, LocalHostService } from '@moonbase/contracts/services';
+import type { ChatPort, ConnectionPort } from '@moonbase/application/chat';
 import { SshLive } from '@moonbase/ssh';
 import { checkHostHealth } from '@moonbase/daemon-protocol/health';
 import type { ChatTarget } from '@moonbase/contracts/chat';
 import { fauxModel } from './faux-model.ts';
+
+/** A service the runtime builds, as a port whose calls run on that runtime. */
+function portOf<I, S extends object>(
+  runtime: ManagedRuntime.ManagedRuntime<I, unknown>,
+  tag: Effect.Effect<S, never, I>,
+): S {
+  const service = Effect.promise(() => runtime.runPromise(tag));
+  return new Proxy({} as S, {
+    get: (_target, operation: string) =>
+      operation === 'watch' || operation === 'watchChatList'
+        ? (...input: unknown[]) =>
+            Stream.unwrap(
+              Effect.map(service, (s) =>
+                (s as Record<string, (...args: unknown[]) => Stream.Stream<unknown>>)[operation]!(
+                  ...input,
+                ),
+              ),
+            )
+        : (...input: unknown[]) =>
+            Effect.flatMap(service, (s) =>
+              (s as Record<string, (...args: unknown[]) => Effect.Effect<unknown>>)[operation]!(
+                ...input,
+              ),
+            ),
+  });
+}
 
 export async function until<T>(get: () => Promise<T>, ready: (v: T) => boolean) {
   const end = Date.now() + 15000;
@@ -218,6 +245,11 @@ export async function controlledHostFixture(behaviour: URL, hold = false) {
     return {
       runtime,
       profile: configuredProfile,
+      /** The client's own services, as the chat application's ports. */
+      ports: {
+        chat: portOf(runtime, ChatService) as ChatPort,
+        connection: portOf(runtime, ConnectionService) as ConnectionPort,
+      },
       chat: makeChatClient(runtime),
       connection: makeConnectionClient(runtime),
       providers: (ownerId: string) => makeProviderSetupClient(runtime, ownerId),

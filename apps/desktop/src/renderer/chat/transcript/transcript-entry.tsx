@@ -18,7 +18,6 @@ import * as stylex from '@stylexjs/stylex';
 import { controls } from '@moonbase/ui/controls';
 import { spinner } from '@moonbase/ui/spinner';
 import type {
-  ChatController,
   LiveEntry,
   TranscriptContentState,
   TranscriptManifestState,
@@ -65,6 +64,7 @@ import type { TranscriptActions, TranscriptNative } from './transcript-actions.t
 import { compareProps } from './stable-props.ts';
 import { transcriptStyles as styles } from './transcript-styles.ts';
 import { Icon } from '@moonbase/ui/icons';
+import type { DesktopChat } from '../desktop-chat.ts';
 
 /**
  * A row's slice of transcript state. The transcript passes each row only what concerns it, in
@@ -80,7 +80,7 @@ export type EntryProps = {
   /** An activity row continues the run of activity rows above or below it. */
   joinPrevious?: boolean;
   joinNext?: boolean;
-  controller: ChatController;
+  controller: DesktopChat;
   cache: MarkdownCache;
   native?: TranscriptNative;
   actions: TranscriptActions;
@@ -402,7 +402,7 @@ function Activity({
 type StepContext = {
   source: ChatTranscriptSource;
   entryId: string;
-  controller: ChatController;
+  controller: DesktopChat;
   evidence: ActivityEvidence;
   expandedIds: readonly string[];
   match: ChatTranscriptMatch | null;

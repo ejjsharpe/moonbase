@@ -3,7 +3,6 @@ import {
   makeApplicationAtoms,
   type ChatHostOptions,
 } from '@moonbase/application';
-import type { ChatRunner } from '@moonbase/application/chat';
 import { editorLayer } from '@moonbase/application/editor';
 import { installTranscriptDemo } from './transcript.ts';
 import { chatCapabilities } from './chat.ts';
@@ -18,6 +17,7 @@ import type { CommandInput, CommandOutput, WorkspaceCommand } from '@moonbase/co
 import { makeEditorActions, makeWorkbenchEditor } from '@moonbase/workbench';
 import { DesktopShell, type DesktopShellHandle } from '../src/renderer/shell/desktop-shell.tsx';
 import type { DesktopApplication } from '../src/renderer/shell/desktop-application.ts';
+import { getDesktopChat } from '../src/renderer/chat/desktop-chat.ts';
 import { configureMonacoWorkers } from '@moonbase/workbench/workers';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
@@ -109,13 +109,10 @@ const memory = fauxWorkspace([
 // The demo's views share one atom registry; each editor and its application is a window's.
 const registry = AtomRegistry.make();
 /** One window's composition root: the editor over the shared memory workspace, and its chat. */
-async function makeDemoWindow(clientId: string, chat: Omit<ChatHostOptions, 'runner'> = {}) {
-  const runner: ChatRunner = {
-    runPromiseExit: (effect, options) => runtime.runPromiseExit(effect, options),
-  };
+async function makeDemoWindow(clientId: string, chat: ChatHostOptions = {}) {
   const runtime = ManagedRuntime.make(
     Layer.provideMerge(
-      MoonbaseApplication.layer({ ...chat, runner }),
+      MoonbaseApplication.layer(chat),
       Layer.provideMerge(editorLayer({ clientId }), demoWorkspace),
     ),
   );
@@ -378,10 +375,11 @@ const longTranscript = new URLSearchParams(location.search).get('long');
 if (transcriptDemo && longTranscript !== null)
   await transcriptDemo.long(Number(longTranscript) || undefined);
 if (transcriptDemo && new URLSearchParams(location.search).has('reading')) {
-  const controller = (await firstWindow.application.run(firstApplication.chat.open))!;
-  await controller.start();
-  await controller.select(chat.target);
-  controller.setTranscriptView({
+  const services = (await firstWindow.application.run(firstApplication.chat.open))!;
+  const opened = getDesktopChat(services, firstWindow.application, registry);
+  await opened.start();
+  await opened.select(chat.target);
+  opened.setTranscriptView({
     anchor: { key: 'entry:reading-179', offset: 0 },
     expanded: [],
   });
@@ -400,9 +398,10 @@ createRoot(document.getElementById('root')!).render(
 /** The first window's application, as the browser tests read and drive it. */
 const application = {
   service: firstApplication,
-  /** The chat it shows now. */
+  /** The chat it shows now, as its views use it. */
   get chat() {
-    return registry.get(firstWindow.application.atoms.chat);
+    const services = registry.get(firstWindow.application.atoms.chat);
+    return services && getDesktopChat(services, firstWindow.application, registry);
   },
   getSnapshot: () => registry.get(firstWindow.application.atoms.snapshot),
   canUnload: () => firstWindow.runtime.runSync(firstApplication.canUnload),

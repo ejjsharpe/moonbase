@@ -11,13 +11,13 @@ import {
   groupChatsByActivity,
   type ActiveChat,
   type ChatActivityReason,
-  type ChatController,
   type ChatState,
 } from '@moonbase/application/chat';
 import { useStoredToggle } from '../hooks/use-stored-toggle.ts';
 import { formatChatAge } from './age.ts';
 import { getChatPlace } from './folder.ts';
 import { focusMessage, isBusy } from './open-chat.ts';
+import type { DesktopChat } from './desktop-chat.ts';
 
 const glyphs: Record<ChatActivityReason, string> = {
   unconfirmed: '?',
@@ -50,7 +50,7 @@ export function ChatList({
   onChosen,
   startNewChat,
 }: {
-  controller: ChatController;
+  controller: DesktopChat;
   state: ChatState;
   /** Whether the list is the compact layout's drawer. */
   compact: boolean;

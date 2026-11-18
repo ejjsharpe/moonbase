@@ -3,10 +3,11 @@ import { test } from 'node:test';
 import { Harness } from '@earendil-works/pi-durable';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
-import { Layer, ManagedRuntime } from 'effect';
+import { Effect, Layer, ManagedRuntime } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { openChatApplication } from './chat-application-fixture.ts';
-import { makeChatClient } from '@moonbase/application/chat/clients';
+import type { ChatPort } from '@moonbase/application/chat';
+import { ChatService } from '@moonbase/contracts/services';
 import { LocalPiRuntimeLive } from '@moonbase/chat-runtime';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -59,15 +60,17 @@ for (const mode of ['local', 'remote'] as const)
           }).pipe(Layer.provide(NodeServices.layer)),
         );
     const root = remote?.root(),
-      chat = root?.chat ?? makeChatClient(local!);
+      chat = root?.ports.chat ?? ((await local!.runPromise(ChatService)) as ChatPort);
+    /** One command of the chat's port, as a Promise. */
+    const command = <I, A, E>(call: (input: I) => Effect.Effect<A, E>, input: I) =>
+      Effect.runPromise(call(input));
     let saved: string | null = null;
     const app = await openChatApplication(() => ({
       chat,
       context: session,
       // The remote host is the daemon in host mode: local-mode chats over a connection.
-      mode: 'local',
       transcriptLimits: limits,
-      ...(root ? { connection: root.connection } : {}),
+      ...(root ? { connection: root.ports.connection } : {}),
       storage: {
         read: () => saved,
         write: (value: string) => {
@@ -154,14 +157,14 @@ for (const mode of ['local', 'remote'] as const)
     }
     controller.closeFind();
     const input = { target, entryId: ids[70] };
-    const first = await chat.command('getChatHistoryAround', input);
+    const first = await command(chat.getChatHistoryAround, input);
     assert(first.olderCursor && first.newerCursor);
     const seen = new Set(first.entries.map((entry) => entry.id));
     assert.equal(seen.size, first.entries.length);
     for (const direction of ['olderCursor', 'newerCursor'] as const) {
       let cursor = first[direction];
       while (cursor) {
-        const page = await chat.command('getChatHistoryAround', { ...input, cursor });
+        const page = await command(chat.getChatHistoryAround, { ...input, cursor });
         assert.equal(page.upperEntryId, first.upperEntryId);
         assert.equal(page.cursor, cursor);
         assert(page.entries.length <= 32);
@@ -181,13 +184,13 @@ for (const mode of ['local', 'remote'] as const)
       /Entry does not belong to this conversation/,
     );
     await assert.rejects(
-      chat.command('getChatHistoryAround', {
+      command(chat.getChatHistoryAround, {
         target: { ...target, actorId: 'different' },
         entryId: ids[70],
       }),
     );
     await assert.rejects(
-      chat.command('getChatHistoryAround', {
+      command(chat.getChatHistoryAround, {
         target: { ...target, conversationId: '999999998' },
         entryId: ids[70],
       }),

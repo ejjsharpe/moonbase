@@ -4,10 +4,11 @@ import {
   runApplicationEffect,
 } from '@moonbase/application/chat/promises';
 import type { ApplicationError } from '@moonbase/contracts/errors';
-import type { ChatClient } from '@moonbase/contracts/chat';
-import type { ConnectionClient } from '@moonbase/contracts/connection';
-import type { ProviderSetupClient } from '@moonbase/contracts/providers';
+import { chatInputSchemas } from '@moonbase/contracts/chat-schema';
+import { connectionInputSchemas } from '@moonbase/contracts/connection-schema';
+import { providerInputSchemas } from '@moonbase/contracts/providers-schema';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
+import type { ChatPort, ConnectionPort, ProviderSetupPort } from '@moonbase/application/chat';
 import type { DesktopBridge } from '../../ipc/desktop-bridge.ts';
 import type { ChatTargetId } from '../../ipc/chat-rpcs.ts';
 import type { WindowAction } from '../../ipc/window-rpcs.ts';
@@ -15,8 +16,8 @@ import type { TranscriptNative } from '../chat/transcript/transcript-actions.ts'
 import type { DesktopIpc } from './desktop-ipc.ts';
 import { callEffect, watchStream, type Payload, type Reply, type Tag } from './ipc-failures.ts';
 
-// The chat and shell still take Promise clients (CL-22 moves chat to services and atoms). These
-// bind `DesktopIpc` to the renderer's root runtime once, here.
+// The chat runs on Effect ports over main's procedures. The shell and a transcript's native
+// actions still take Promise clients, bound to the renderer's root runtime once, here.
 
 /** The root runtime, which provides `DesktopIpc`, as these clients run on it. */
 export type DesktopRuntime = Pick<
@@ -37,38 +38,53 @@ function makeCaller(runtime: DesktopRuntime, refused: string) {
   };
 }
 
-/** One chat target's chat, provider setup and (for the remote host) connection. */
+const refusedChat = 'Invalid chat request.';
+/**
+ * One chat target's chat, provider setup and (for the remote host) connection ports: each command
+ * and watch is main's procedure over this document's IPC port, failing with the legacy
+ * `ApplicationError` main sends (until CL-24).
+ */
+export const makeChatTargetPorts = (backendId: ChatTargetId) =>
+  Effect.map(Effect.context<DesktopIpc>(), (ipc) => {
+    const call = (tag: string, payload: unknown) =>
+      callEffect(tag as Tag, payload as Payload<Tag>, refusedChat).pipe(Effect.provideContext(ipc));
+    const watch = (tag: string, payload: unknown) =>
+      watchStream(tag as Tag, payload as Payload<Tag>, refusedChat).pipe(
+        Stream.provideContext(ipc),
+      );
+    const commands = (operations: readonly string[], payload: (input: unknown) => unknown) =>
+      Object.fromEntries(
+        operations.map((operation) => [
+          operation,
+          (input: unknown) => call(operation, payload(input)),
+        ]),
+      );
+    const chat = {
+      ...commands(Object.keys(chatInputSchemas), (input) => ({ backendId, input })),
+      watch: ({ target }: { target: unknown }) => watch('watchChat', { backendId, target }),
+      watchChatList: ({ session }: { session: unknown }) =>
+        watch('watchChatList', { backendId, session }),
+    } as unknown as ChatPort;
+    const providers = {
+      ...commands(Object.keys(providerInputSchemas), (input) => ({ backendId, input })),
+      watch: () => watch('watchProviders', { backendId }),
+    } as unknown as ProviderSetupPort;
+    const connection = {
+      ...commands(Object.keys(connectionInputSchemas), (input) => ({ input })),
+      watch: () => watch('watchConnection', undefined),
+    } as unknown as ConnectionPort;
+    return { chat, providers, connection };
+  });
+
+/** One chat target's transcript native actions. */
 export function makeChatTargetClients(runtime: DesktopRuntime, backendId: ChatTargetId) {
-  const { call, watch } = makeCaller(runtime, 'Invalid chat request.');
-  const chat: ChatClient = {
-    command: (operation, input, options) =>
-      call(operation, { backendId, input } as never, options) as never,
-    watch: ({ target }, receive, onError) =>
-      watch('watchChat', { backendId, target }, receive, onError),
-    watchChatList: ({ session }, receive, onError) =>
-      watch('watchChatList', { backendId, session }, receive, onError),
-  };
-  const providers: ProviderSetupClient = {
-    command: (operation, input, options) =>
-      call(operation, { backendId, input } as never, options) as never,
-    watch: (receive, onError) => watch('watchProviders', { backendId }, receive, onError),
-  };
-  const connection: ConnectionClient = {
-    command: (operation, input, options) => call(operation, { input } as never, options) as never,
-    watch: (receive, onError) => watch('watchConnection', undefined, receive, onError),
-  };
+  const { call } = makeCaller(runtime, refusedChat);
   const transcript: TranscriptNative = {
     copy: (copy, signal) => call('copyTranscript', { backendId, copy }, { signal }),
     openLink: (url, signal) => call('openTranscriptLink', { backendId, url }, { signal }),
     imageUrl: (image, signal) => call('getTranscriptImageUrl', { backendId, image }, { signal }),
   };
-  return {
-    chat,
-    providers,
-    connection,
-    transcript,
-    context: () => call('getChatContext', { backendId }),
-  };
+  return { transcript };
 }
 
 /** Each re-watch of the window's actions waits longer, up to a few seconds. */

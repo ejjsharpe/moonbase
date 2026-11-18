@@ -62,7 +62,7 @@ test('desktop recovers an exact committed Create before renewed folder approval,
     title: 'Committed',
     settings: { cwd, model: { provider: faux.provider.id, modelId: faux.getModel().id } },
   };
-  const committed = await ipc.target('local').chat.command('createChat', input);
+  const committed = await Effect.runPromise((await ipc.ports('local')).chat.createChat(input));
   assert.equal(validations, 1);
   await ipc.dispose();
   await runtime.dispose();
@@ -73,12 +73,12 @@ test('desktop recovers an exact committed Create before renewed folder approval,
   );
   await makeChatClient(runtime).command('getChatHost', { host: context.host });
   ipc = await overIpc(runtime as never, context);
-  assert.deepEqual(await ipc.target('local').chat.command('createChat', input), committed);
+  const { chat } = await ipc.ports('local');
+  assert.deepEqual(await Effect.runPromise(chat.createChat(input)), committed);
   assert.equal(validations, 1);
   await mkdir(cwd);
-  await assert.rejects(
-    ipc.target('local').chat.command('createChat', { ...input, requestId: 'new' }),
-    { code: 'Unauthorized' },
-  );
+  await assert.rejects(Effect.runPromise(chat.createChat({ ...input, requestId: 'new' })), {
+    code: 'Unauthorized',
+  });
   assert.equal(validations, 2);
 });
