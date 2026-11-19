@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { type ErrorGroup, getErrorGroup } from '@moonbase/contracts/error-groups';
 import { test } from 'node:test';
-import { Layer, ManagedRuntime } from 'effect';
+import { Effect, Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
@@ -38,9 +38,7 @@ test('maintained defaults and reasoning options match the pinned provider catalo
     ProviderSetupLive({
       models,
       deviceId: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',
-      openUrl: async () => {
-        throw Error('No network or login expected');
-      },
+      openUrl: () => Effect.fail(Error('No network or login expected')),
     }),
   );
   t.after(() => runtime.dispose());
@@ -94,7 +92,7 @@ test('an unconfigured provider reports why its check failed, bounded for the sta
     ProviderSetupLive({
       models,
       deviceId: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',
-      openUrl: async () => {},
+      openUrl: () => Effect.void,
       // Only the check that made it, and found nothing, reports one.
       getCheckProblem: (_id, signal) => problems.get(signal) ?? problem.slice(0, 5),
     }),
@@ -173,9 +171,10 @@ test('provider-owned setup binds prompts and URLs to the live document, supports
     ProviderSetupLive({
       deviceId: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',
       models,
-      openUrl: async (url) => {
-        opened.push(url);
-      },
+      openUrl: (url) =>
+        Effect.sync(() => {
+          opened.push(url);
+        }),
     }),
   );
   t.after(() => runtime.dispose());
@@ -301,7 +300,7 @@ test('a status failure unwinds a newly started login before returning an error w
   const runtime = ManagedRuntime.make(
     ProviderSetupLive({
       models,
-      openUrl: async () => {},
+      openUrl: () => Effect.void,
       deviceId: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',
     }),
   );

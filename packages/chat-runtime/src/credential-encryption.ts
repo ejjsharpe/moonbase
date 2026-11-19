@@ -1,13 +1,29 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import { Cache, Data, Duration, Effect, Exit } from 'effect';
+import { Cache, Duration, Effect, Exit, Schema } from 'effect';
 import { CredentialKeyError, type CredentialStoreError } from '@moonbase/contracts/provider-errors';
 import type { CredentialKeySource } from './credential-key-source.ts';
 
+const unreadable = {
+  'no-key': 'there is no key to open it',
+  'not-sealed': 'it is not a sealed credential',
+  'not-authentic': 'it does not open under this key and provider',
+  'not-credential': 'it does not hold a credential',
+} as const;
 /**
  * A stored credential that will never open under this encryption, such as one sealed under another
  * key or with no key at all, so signing in again may replace it.
  */
-export class UnreadableCredentialError extends Data.TaggedError('UnreadableCredentialError') {}
+export class UnreadableCredentialError extends Schema.TaggedError<UnreadableCredentialError>()(
+  'UnreadableCredentialError',
+  {
+    providerId: Schema.String,
+    reason: Schema.Literals(Object.keys(unreadable) as (keyof typeof unreadable)[]),
+  },
+) {
+  override get message() {
+    return `The ${this.providerId} credential is unreadable: ${unreadable[this.reason]}`;
+  }
+}
 /** Why encrypting or decrypting failed; the store hides anything but a key problem. */
 export type CredentialEncryptionError =
   | CredentialKeyError
@@ -77,8 +93,10 @@ export const makeKeyEncryption = (
       decrypt: (value, providerId) =>
         Effect.flatMap(getKey(false), (secret) => {
           const data = Buffer.from(value);
-          if (!secret || data.byteLength < 1 + nonceBytes + tagBytes || data[0] !== sealVersion)
-            return Effect.fail(new UnreadableCredentialError());
+          if (!secret)
+            return Effect.fail(new UnreadableCredentialError({ providerId, reason: 'no-key' }));
+          if (data.byteLength < 1 + nonceBytes + tagBytes || data[0] !== sealVersion)
+            return Effect.fail(new UnreadableCredentialError({ providerId, reason: 'not-sealed' }));
           return Effect.try({
             try: () => {
               const decipher = createDecipheriv(
@@ -93,7 +111,7 @@ export const makeKeyEncryption = (
                 decipher.final(),
               ]).toString('utf8');
             },
-            catch: () => new UnreadableCredentialError(),
+            catch: () => new UnreadableCredentialError({ providerId, reason: 'not-authentic' }),
           });
         }),
     };

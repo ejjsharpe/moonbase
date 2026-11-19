@@ -1,4 +1,4 @@
-import { Console, Effect } from 'effect';
+import { Console } from 'effect';
 import { makeKeyFileSource, makeKeychainKeySource } from '@moonbase/chat-runtime/credentials';
 import {
   closeClaudeCodeProcesses,
@@ -18,7 +18,7 @@ declare const MOONBASE_DAEMON_BUILD: string | undefined;
  */
 const daemon = runDaemon({
   ready: (line) => Console.log(line),
-  closeClaudeCode: Effect.promise(() => closeClaudeCodeProcesses().catch(() => {})),
+  closeClaudeCode: closeClaudeCodeProcesses,
   // The app's ripgrep beside the packaged bundle, else the one on PATH, for chats and workspace.
   ...withPath('ripgrepExecutable', findRipgrep(import.meta.url)),
   // The app's native helper beside the packaged bundle; from source, the workspace package's.

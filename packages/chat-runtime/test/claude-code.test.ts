@@ -16,7 +16,7 @@ const qualification = `
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { ManagedRuntime, Layer } from 'effect';
+import { Effect, ManagedRuntime, Layer } from 'effect';
 import { makeChatCalls, makeProviderSetupCalls } from '@moonbase/application/testing/service-calls';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { LocalPiRuntimeLive } from './src/index.ts';
@@ -35,7 +35,7 @@ async function main() {
   const session = {host:{hostId:'claude-code',storeId:'claude-code-store'},actorId:'owner'};
   const runtime = ManagedRuntime.make(Layer.merge(
     LocalPiRuntimeLive({...session,models,databasePath:join(directory,'chat.sqlite')}).pipe(Layer.provide(NodeServices.layer)),
-    ProviderSetupLive({models,openUrl:async()=>{},deviceId:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',getCheckProblem:(id,signal)=>id===subscription.id?subscription.getCheckProblem(signal):undefined}),
+    ProviderSetupLive({models,openUrl:()=>Effect.void,deviceId:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',getCheckProblem:(id,signal)=>id===subscription.id?subscription.getCheckProblem(signal):undefined}),
   ));
   try {
     const providers = makeProviderSetupCalls(runtime, 'document');
@@ -73,7 +73,7 @@ async function main() {
     assert(workers.length > 0);
     for (const worker of workers) assert(worker.system.includes('<working-directory>\\nThe working directory is ' + directory + ','), worker.system);
     console.log(JSON.stringify({claudeCode:true}));
-  } finally { await runtime.dispose(); await closeClaudeCodeProcesses(); }
+  } finally { await runtime.dispose(); await Effect.runPromise(closeClaudeCodeProcesses); }
 }
 main().catch((error)=>{console.error(error);process.exitCode=1;});`;
 

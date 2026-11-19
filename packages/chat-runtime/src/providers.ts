@@ -21,6 +21,7 @@ import {
   ProviderSetupRefusedError,
   ProviderSetupUnavailableError,
 } from '@moonbase/contracts/provider-errors';
+import { callAbortable } from './abortable-call.ts';
 import { isClaudeCodeSignIn, isLocalProvider, listProviders } from './provider-catalog.ts';
 
 export { localProviderIds } from './provider-catalog.ts';
@@ -56,10 +57,11 @@ type Setup = {
 export type ProviderSetupConfiguration = {
   models: Models;
   /**
-   * Opens a validated sign-in URL in the user's browser. Without it, `openProviderUrl` is refused
-   * and clients read the URL with `getProviderUrl` to open it themselves.
+   * Opens a validated sign-in URL in the user's browser; a failure is reported as unavailable.
+   * Without it, `openProviderUrl` is refused and clients read the URL with `getProviderUrl` to open
+   * it themselves.
    */
-  openUrl?(url: string): Promise<void>;
+  openUrl?(url: string): Effect.Effect<void, unknown>;
   deviceId: string;
   /** Why the auth check made with `signal` couldn't tell whether a provider is configured, if it says. */
   getCheckProblem?(providerId: string, signal: AbortSignal): string | undefined;
@@ -75,41 +77,6 @@ const validateProviderUrl = (value: string) => {
   if (url === undefined) throw refusal('unsupported-sign-in-url');
   return url;
 };
-/** Fails once `signal` aborts; never, without one. */
-const whenAborted = (signal: AbortSignal | undefined) =>
-  signal
-    ? Effect.callback<never, Error>((resume) => {
-        const abort = () => resume(Effect.fail(cancelled()));
-        if (signal.aborted) return abort();
-        signal.addEventListener('abort', abort, { once: true });
-        return Effect.sync(() => signal.removeEventListener('abort', abort));
-      })
-    : Effect.never;
-/**
- * Pi's sign-in, aborted by interruption, which then waits for it to settle: a provider's loopback
- * callback (ChatGPT's 127.0.0.1:1455) serves the next flow only once the last one has let go.
- */
-const runSignIn = (start: (signal: AbortSignal) => Promise<unknown>) =>
-  Effect.callback<void, unknown>((resume, signal) => {
-    const settled = Deferred.makeUnsafe<void>();
-    let login: Promise<unknown>;
-    try {
-      login = start(signal);
-    } catch (error) {
-      login = Promise.reject(error);
-    }
-    login.then(
-      () => {
-        Deferred.doneUnsafe(settled, Exit.void);
-        resume(Effect.void);
-      },
-      (error: unknown) => {
-        Deferred.doneUnsafe(settled, Exit.void);
-        resume(Effect.fail(error));
-      },
-    );
-    return Deferred.await(settled);
-  });
 
 const withFlow = (setup: Setup, owner: string, flow: Flow): Setup => ({
   ...setup,
@@ -249,10 +216,7 @@ export const ProviderSetupLive = (
             ];
           });
           if (!shown) return yield* Effect.fail(cancelled());
-          return yield* Effect.raceFirst(
-            Deferred.await(answer),
-            Effect.raceFirst(whenAborted(signal), whenAborted(prompt.signal)),
-          ).pipe(
+          return yield* Deferred.await(answer).pipe(
             Effect.ensuring(
               updateFlow(owner, id, (flow) =>
                 flow.prompt?.id === promptId
@@ -290,13 +254,19 @@ export const ProviderSetupLive = (
           // Cancelled before it started.
           if (!isRunning(SubscriptionRef.getUnsafe(setup).owners.get(owner), id))
             return yield* Effect.interrupt;
-          yield* runSignIn((signal) =>
+          // Interrupting aborts Pi's sign-in and waits for it to settle: a provider's loopback
+          // callback (ChatGPT's 127.0.0.1:1455) serves the next flow only once the last one has let go.
+          yield* callAbortable((signal) =>
             config.models.login(
               providerId,
               providerId === 'openai' ? 'oauth' : 'api_key',
               {
                 signal,
-                prompt: (prompt) => runForPi(askPrompt(owner, id, prompt, signal)),
+                // The prompt waits until the sign-in, or Pi, stops waiting for it.
+                prompt: (prompt) =>
+                  runForPi(askPrompt(owner, id, prompt, signal), {
+                    signal: prompt.signal ? AbortSignal.any([signal, prompt.signal]) : signal,
+                  }),
                 notify: (event) => notify(owner, id, event, signal),
               },
               { agentName: 'Moonbase', getDeviceId: () => config.deviceId },
@@ -423,12 +393,11 @@ export const ProviderSetupLive = (
               owner,
               (value as ProviderInput<'openProviderUrl'>).flowId,
             );
-            const { openUrl } = config;
-            if (!openUrl)
+            if (!config.openUrl)
               return yield* Effect.fail(
                 new ProviderSetupUnavailableError({ reason: 'client-opens-links' }),
               );
-            yield* Effect.tryPromise({ try: () => openUrl(url), catch: (error) => error });
+            yield* config.openUrl(url);
           } else if (operation === 'logoutProvider') {
             const { providerId } = value as ProviderInput<'logoutProvider'>;
             if (!isLocalProvider(providerId)) return yield* refuse('unknown-provider');

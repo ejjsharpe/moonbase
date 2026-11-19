@@ -120,7 +120,9 @@ export const makeCredentialStore = (
             const plain = yield* encryption.decrypt(yield* readWholeFile(file), providerId);
             return yield* Effect.try(() => JSON.parse(plain) as unknown).pipe(
               Effect.flatMap(decodeCredential),
-              Effect.mapError(() => new UnreadableCredentialError()),
+              Effect.mapError(
+                () => new UnreadableCredentialError({ providerId, reason: 'not-credential' }),
+              ),
             );
           }),
         ),
