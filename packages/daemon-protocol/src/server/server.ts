@@ -343,7 +343,10 @@ export const serveChat = (
         catch: () => new HostUnavailableError({ reason: 'listener' }),
       }),
       // Releasing the listener starts three closes at once, none waiting on another to begin:
-      // Bun's stop, first, so it cuts the connections before the RPC servers close them;
+      // Bun's stop, first, so it cuts the connections before the RPC servers close them (otherwise
+      // they send each running watch an interrupt exit, which the client reads as its own and
+      // stops following, #404; this relies on `stop(true)` closing sockets synchronously and on
+      // `startImmediately`);
       // `listening`, which refuses later requests and interrupts the answers still running; and
       // the RPC servers', which waits for the mutations they run. The release then waits
       // for the answers' cleanup (each probe's admission) and the mutations, so neither outlives

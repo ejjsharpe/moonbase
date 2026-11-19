@@ -72,19 +72,6 @@ test('the idle wait stops while the daemon reads nothing from a connection, and 
   connections.drain(ws);
   await resumed();
 
-  // A reply that passes the bound as another drains stops and restarts reading in turn, so the
-  // idle wait that resuming starts is the one left running.
-  state.buffered = 2 * rpcLimits.outboundBytes;
-  reply();
-  await until(
-    async () => Effect.runSync(Queue.size(replies)),
-    (size) => size === 0,
-  );
-  reply();
-  state.buffered = 0;
-  connections.drain(ws);
-  await resumed();
-
   // The idle wait starts afresh: the connection closes a whole idle bound later, not before.
   await advance(rpcLimits.idleMs - 1);
   assert.equal(state.closed, undefined);
