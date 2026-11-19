@@ -10,9 +10,12 @@ import { LocalPiControl } from '../../src/index.ts';
 import { Metadata, Request, cid } from '../../src/documents.ts';
 import { fixture, runChat, session, until } from '../runtime-fixture.ts';
 
-/** A lost commit acknowledgement, or a failed read of one stored record after `skip` matches. */
+/**
+ * A lost commit acknowledgement, rejected with `rejection` or a store failure, or a failed read of
+ * one stored record after `skip` matches.
+ */
 type Fault =
-  | { lost: 'ack' }
+  | { lost: 'ack'; rejection?: unknown }
   | { lost: 'read'; record: typeof Metadata | typeof Request; skip: number };
 type Scene = {
   f: Awaited<ReturnType<typeof fixture>>;
@@ -96,7 +99,19 @@ const mutations: Record<string, (scene: Scene) => Promise<void>> = {
       meta.settings!.ownFolder = true;
     }, BACKGROUND_CONTEXT);
     const { local, control: pi } = await control(scene);
-    await scene.lose({ lost: 'ack' }, () => local.runPromise(pi.markFolderAsProject(target)));
+    // Pi rejects with a value whose prototype can't be read, so even asking whether it is a
+    // refusal throws.
+    const unreadable = new Proxy(
+      {},
+      {
+        getPrototypeOf: () => {
+          throw new Error('unreadable');
+        },
+      },
+    );
+    await scene.lose({ lost: 'ack', rejection: unreadable }, () =>
+      local.runPromise(pi.markFolderAsProject(target)),
+    );
     const chat = await runChat(f.runtime, (chat) => chat.getChat({ target }));
     assert.equal(chat.conversation.ownFolder, undefined);
   },
@@ -165,8 +180,9 @@ for (const [name, mutation] of Object.entries(mutations))
       opened.commit = (async (...values: Parameters<typeof commit>) => {
         const result = await commit(...values);
         if (fault?.lost === 'ack') {
+          const { rejection = new ChatStoreError({ problem: 'failed' }) } = fault;
           fault = undefined;
-          throw new ChatStoreError({ problem: 'failed' });
+          throw rejection;
         }
         return result;
       }) as typeof commit;

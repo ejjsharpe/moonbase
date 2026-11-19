@@ -3,11 +3,14 @@ import {
   LiveDoc,
   type ConversationId,
   type SubmissionId,
+  type SubmissionRecord,
   type TaskId,
+  type Tx,
 } from '@earendil-works/pi-durable';
 import { Effect, Fiber, Option } from 'effect';
 import type { ChatInput, ChatOutput } from '@moonbase/contracts/chat';
 import { InvalidChatRequestError, type ChatError } from '@moonbase/contracts/chat-errors';
+import { isAccessRefusal, isIncompatible } from '@moonbase/contracts/error-groups';
 import { RequestReusedError } from '@moonbase/contracts/host-errors';
 import { callAbortable } from '../abortable-call.ts';
 import { Request, cid, key, sid, tid } from '../documents.ts';
@@ -30,21 +33,27 @@ const refusal = (problem: StopRefusal) =>
   Effect.fail(new Refusal(new InvalidChatRequestError({ problem })));
 
 /**
- * Stops what the Stop's request captured, or says why it is past stopping. A target another chat
- * owns is refused outright, since Pi never moves it; a missing one may be allocated later, so
- * `refuseMissing` records that refusal for every replay.
+ * Pi's transaction with its submission reader, which `Tx` leaves out; Pi's own
+ * `abortSubmission` reads through it in the same way.
  */
-const captureStop = (
-  host: Host,
-  ids: StopIds,
-  refuseMissing: (problem: StopRefusal) => Effect.Effect<never, ChatError | Refusal>,
-) =>
+type SubmissionTx = Tx & { submission(id: SubmissionId): Promise<SubmissionRecord | undefined> };
+
+/**
+ * Why `tx` shows the Stop's target past its reach: Pi has not allocated it, or another chat owns
+ * it. Read on Pi's mutation line, where Pi allocates too, so it holds for the whole transaction.
+ */
+async function findStopRefusal(tx: Tx, ids: StopIds): Promise<StopRefusal | null> {
+  const submission = await (tx as SubmissionTx).submission(ids.submissionId);
+  if (submission?.conversationId !== ids.conversationId) return 'stop-submission';
+  if (ids.taskId === null) return null;
+  const task = await tx.task(ids.taskId);
+  return task?.conversationId === ids.conversationId ? null : 'stop-task';
+}
+
+/** Stops what the Stop's request captured, which its binding found; or says why it is past stopping. */
+const captureStop = (host: Host, ids: StopIds) =>
   Effect.gen(function* () {
     const { conversationId, submissionId, taskId } = ids;
-    const submission = yield* callHarness(() => host.harness.submission(submissionId, context));
-    const record = submission ? yield* callHarness(() => submission.status(context)) : undefined;
-    if (!record) return yield* refuseMissing('stop-submission');
-    if (record.conversationId !== conversationId) return yield* refusal('stop-submission');
     if (taskId === null) {
       // Pi may have withdrawn the submission whatever it reports, so every failure is uncertain.
       const result = yield* callAbortable(() =>
@@ -55,8 +64,8 @@ const captureStop = (
     }
     const live = yield* callHarness(() => host.harness.snapshot(LiveDoc, conversationId, context));
     const task = yield* callHarness(() => host.harness.getTask(taskId, context));
-    if (!task) return yield* refuseMissing('stop-task');
-    if (task.conversationId !== conversationId) return yield* refusal('stop-task');
+    // The binding found the task, and Pi keeps it; one gone now is a store Pi no longer agrees with.
+    if (!task) return yield* Effect.fail(uncertainError());
     if (task.state.status === 'terminal') return 'terminal' as const;
     if (live?.run?.taskId !== taskId || !live.run.inputs.includes(submissionId))
       return 'superseded' as const;
@@ -64,9 +73,11 @@ const captureStop = (
   });
 
 /**
- * Records the Stop's request, then stops what it names. From that commit on, only a conflicting
- * binding, a target another chat owns and a refusal the request recorded stay definite; any other
- * failure is uncertain. A replay of a recorded refusal returns it without looking again.
+ * Records the Stop's request, then stops what it names. The transaction that binds the request
+ * also checks its target and records any refusal, so matching Stops all see the same one. From
+ * that commit on, only a conflicting binding and a recorded refusal stay definite; any other
+ * failure is uncertain. Before it, only the chat's own authority refusals are definite: an earlier
+ * attempt of this Stop may have committed whatever a failed metadata lookup says.
  */
 export function stopChat(
   host: Host,
@@ -74,7 +85,13 @@ export function stopChat(
 ): Effect.Effect<ChatOutput<'stopChat'>, ChatError> {
   return Effect.gen(function* () {
     const { stop } = d;
-    yield* host.metadata(stop.target);
+    yield* host
+      .metadata(stop.target)
+      .pipe(
+        Effect.mapError((error) =>
+          isAccessRefusal(error) || isIncompatible(error) ? error : uncertainError(),
+        ),
+      );
     const ids = yield* runCheck((): StopIds => ({
       conversationId: cid(stop.target.conversationId),
       submissionId: sid(stop.submissionId),
@@ -84,20 +101,15 @@ export function stopChat(
       requestKey = key(stop.target.actorId, d.requestId);
     return yield* mayHaveCommitted(
       Effect.gen(function* () {
-        /** Binds the request, recording `refused` if it has no refusal yet; returns the recorded one. */
-        const bind = (refused: StopRefusal | null) =>
-          commitChange(host.harness, async (tx) => {
-            const request = await tx.doc(Request, requestKey, binding);
-            decodeStoredRequest(request, stop.target.actorId, d.requestId);
-            if (request.binding !== binding) throw new Refusal(new RequestReusedError());
-            request.refused ??= refused;
-            return request.refused;
-          });
-        const recorded = yield* bind(null);
-        if (recorded) return yield* refusal(recorded);
-        const captured = yield* captureStop(host, ids, (problem) =>
-          Effect.flatMap(bind(problem), (refused) => refusal(refused ?? problem)),
-        );
+        const refused = yield* commitChange(host.harness, async (tx) => {
+          const request = await tx.doc(Request, requestKey, binding);
+          decodeStoredRequest(request, stop.target.actorId, d.requestId);
+          if (request.binding !== binding) throw new Refusal(new RequestReusedError());
+          request.refused ??= await findStopRefusal(tx, ids);
+          return request.refused;
+        });
+        if (refused) return yield* refusal(refused);
+        const captured = yield* captureStop(host, ids);
         let outcome: ChatOutput<'stopChat'>['outcome'] = captured ?? 'pending';
         if (captured === null) {
           const taskId = ids.taskId!;

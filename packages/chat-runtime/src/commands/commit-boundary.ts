@@ -18,16 +18,28 @@ export class Refusal {
   }
 }
 
+/** `error` if it is a `Refusal`; a value whose prototype can't even be read is not one. */
+const findRefusal = (error: unknown): Refusal | undefined => {
+  try {
+    return error instanceof Refusal ? error : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 /**
  * Runs a mutation from its first commit attempt, or its first lookup of what an earlier attempt
  * committed, to its reply. Every failure but a `Refusal` may follow a commit, a lost
- * acknowledgement, a post-commit read, a journal that fails to decode or a typed error included,
- * so it fails as `UncertainError`.
+ * acknowledgement, a post-commit read, a journal that fails to decode, a typed error or a defect
+ * included, so it fails as `UncertainError`.
  */
 export const mayHaveCommitted = <A>(
   effect: Effect.Effect<A, ChatError | Refusal>,
 ): Effect.Effect<A, ChatError> =>
-  Effect.mapError(effect, (error) => (error instanceof Refusal ? error.error : uncertainError()));
+  effect.pipe(
+    Effect.mapError((error) => findRefusal(error)?.error ?? uncertainError()),
+    Effect.catchDefect(() => Effect.fail(uncertainError())),
+  );
 
 /**
  * Commits `change` in one Pi transaction. A `Refusal` `change` throws stays one. Pi rolls back
@@ -39,7 +51,7 @@ export const commitChange = <A>(
   change: (tx: Tx) => Promise<A>,
 ): Effect.Effect<A, ChatError | Refusal> =>
   callAbortable(() => harness.commit(change, context)).pipe(
-    Effect.mapError((error) => (error instanceof Refusal ? error : uncertainError())),
+    Effect.mapError((error) => findRefusal(error) ?? uncertainError()),
   );
 /**
  * A failure of Pi's submit: a `Refusal` only for Pi's raw busy refusal, which proves nothing was

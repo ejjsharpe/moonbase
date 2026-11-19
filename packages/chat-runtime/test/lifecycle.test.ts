@@ -335,20 +335,35 @@ test('a watch Pi cannot subscribe is unavailable, so its client watches again, a
   await off().catch(() => {});
 });
 
-test('null-task Stop withdraws an actual Pi-queued submission, is uncertain when its acknowledgement is lost, keeps a missing-target refusal on replay, and preserves the unrelated active input', async (t) => {
+test('null-task Stop withdraws an actual Pi-queued submission, is uncertain when its acknowledgement is lost, keeps a missing-target refusal across overlapping replays, and preserves the unrelated active input', async (t) => {
   const original = Harness.open;
   let harness: Harness | undefined,
     lose = true,
-    unallocated: string | undefined;
+    unallocated: string | undefined,
+    onCommit: (() => void) | undefined;
+  let found!: () => void, allocate!: () => void;
+  const lookedUp = new Promise<void>((r) => (found = r)),
+    allocated = new Promise<void>((r) => (allocate = r));
   mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
     harness = await original(...args);
-    // The first lookup of `unallocated` sees it as Pi saw it before allocating that ID.
-    const submission = harness.submission.bind(harness);
-    harness.submission = async (...values: Parameters<typeof submission>) => {
-      if (String(values[0]) !== unallocated) return submission(...values);
-      unallocated = undefined;
-      return undefined;
-    };
+    // The first transaction to look up `unallocated` sees it as Pi saw it before allocating that
+    // ID, and holds Pi's mutation line until the test allocates it.
+    const commit = harness.commit.bind(harness);
+    harness.commit = ((change, context) => {
+      onCommit?.();
+      return commit(async (tx) => {
+        const lookup = tx as typeof tx & { submission(id: unknown): Promise<unknown> },
+          read = lookup.submission.bind(tx);
+        lookup.submission = async (id) => {
+          if (String(id) !== unallocated) return read(id);
+          unallocated = undefined;
+          found();
+          await allocated;
+          return undefined;
+        };
+        return change(tx);
+      }, context);
+    }) as typeof commit;
     const abort = harness.abortSubmission.bind(harness);
     harness.abortSubmission = async (...values: Parameters<typeof abort>) => {
       const result = await abort(...values);
@@ -409,14 +424,22 @@ test('null-task Stop withdraws an actual Pi-queued submission, is uncertain when
       inGroup('uncertain'),
     );
     assert.equal((await lost!.status(BACKGROUND_CONTEXT)).status, 'unanswered');
-    // A Stop that found no such submission keeps that refusal when replayed after Pi allocates it.
+    // A Stop that found no such submission keeps that refusal for a matching Stop that overlaps
+    // it once Pi has allocated it, and for any replay after.
     const early = {
       stop: { target, submissionId: (unallocated = String(queued!.id)), taskId: null },
       requestId: 'early-stop',
     };
     const missing = { _tag: 'InvalidChatRequestError', problem: 'stop-submission' };
-    await assert.rejects(f.client.command('stopChat', early), missing);
-    assert.equal(unallocated, undefined);
+    const first = f.client.command('stopChat', early);
+    await lookedUp;
+    const overlapping = new Promise<void>((r) => (onCommit = r)),
+      second = f.client.command('stopChat', early);
+    await overlapping;
+    onCommit = undefined;
+    allocate();
+    await assert.rejects(first, missing);
+    await assert.rejects(second, missing);
     await assert.rejects(f.client.command('stopChat', early), missing);
     assert.equal((await queued!.status(BACKGROUND_CONTEXT)).status, 'queued');
     const withdrawn = await f.client.command('stopChat', {
@@ -434,6 +457,7 @@ test('null-task Stop withdraws an actual Pi-queued submission, is uncertain when
     assert.equal(f.faux.state.callCount, 1);
   } finally {
     release();
+    allocate();
     mock.restoreAll();
   }
 });
