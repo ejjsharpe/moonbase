@@ -1,17 +1,22 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { Deferred, Effect, Exit, Fiber, Scope } from 'effect';
-import { UncertainError, UnauthorizedError } from '@moonbase/contracts/errors';
+import * as NodeServices from '@effect/platform-node/NodeServices';
+import { UncertainError } from '@moonbase/contracts/errors';
+import {
+  InvalidRequestError,
+  RecordedRefusalError,
+} from '@moonbase/contracts/workspace-host-errors';
 import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
 import { HostUnavailableError } from '@moonbase/contracts/host-errors';
 import { getErrorGroup } from '@moonbase/contracts/error-groups';
 import { makeChatBackends, type ChatBackendsOptions } from '../src/main/chat/chat-backends.ts';
 import { makeChatDocument } from '../src/main/chat/chat-document.ts';
 import type { DaemonClients } from '../src/main/daemon/local-daemon.ts';
-import { createFileRequestIds } from '../src/main/request-ids.ts';
+import { makeFileRequestIds } from '../src/main/request-ids.ts';
 
 type Backend = DaemonClients;
 /** A new resolved temporary directory, removed after the test. */
@@ -20,9 +25,20 @@ async function makeDirectory(t: TestContext) {
   t.after(() => rm(base, { recursive: true, force: true }));
   return base;
 }
-/** Request IDs in a temporary profile file, as main keeps them. */
+/**
+ * Request IDs in `file`, as main keeps them, open until the test ends; a new handle on the same
+ * file is a restart.
+ */
+const openRequestIds = (t: TestContext, file: string) => {
+  const scope = Scope.makeUnsafe();
+  t.after(() => run(Scope.close(scope, Exit.void)));
+  return run(
+    makeFileRequestIds(file).pipe(Scope.provide(scope), Effect.provide(NodeServices.layer)),
+  );
+};
+/** Request IDs in a temporary profile file. */
 const makeRequestIds = async (t: TestContext) =>
-  createFileRequestIds(join(await makeDirectory(t), 'chat-requests.json'));
+  openRequestIds(t, join(await makeDirectory(t), 'chat-requests.json'));
 /** A local daemon client already holding `backend`, or one that is never reached. */
 const reached = (backend: Backend | null): ChatBackendsOptions['local'] =>
   backend
@@ -77,7 +93,7 @@ test('a cancelled folder choice approves nothing', async (t) => {
   assert.deepEqual(approved, ['/current']);
 });
 
-test('a document releases its provider sign-ins as it goes, on the remote host too, but not on Quit', async () => {
+test('a document releases its provider sign-ins as it goes, on the remote host too, but not on Quit', async (t) => {
   const released: string[] = [];
   let closing = false;
   const releaseOwner =
@@ -94,7 +110,7 @@ test('a document releases its provider sign-ins as it goes, on the remote host t
   );
   const backends = makeChatBackends({
     installationId: 'installation',
-    requestIds: createFileRequestIds('/nonexistent/never-written.json'),
+    requestIds: await makeRequestIds(t),
     local: reached(backend),
     // A remote host that can't be reached is released on a best effort.
     remote: {
@@ -210,25 +226,28 @@ test('turning a chat into a project is one daemon operation, asked again only wh
       },
     },
   );
-  // The request IDs outlive a backend, as they do across a reload or restart.
-  const requestIds = await makeRequestIds(t);
-  const make = () =>
+  // The request IDs outlive a backend: each backend reads them anew, as after a restart.
+  const file = join(await makeDirectory(t), 'chat-requests.json');
+  const make = async () =>
     makeChatBackends({
       installationId: 'installation',
-      requestIds,
+      requestIds: await openRequestIds(t, file),
       local: reached(backend),
       pickFolder: Effect.succeed(null),
       adoptCheckout: (target) => adopted.push(target.root),
     });
-  const owner = make();
-  refusal = new UnauthorizedError({ operation: 'turnChatIntoProject' });
+  const owner = await make();
+  refusal = new RecordedRefusalError({ refusal: 'unauthorized', text: 'Not yours.' });
   assert.equal(getErrorGroup(await fail(owner.turnIntoProject('planted'))), 'access');
   assert.deepEqual(adopted, []);
-  // An unknown outcome is asked for again under its request, after a restart too; an answer,
-  // a refusal included, is final.
+  // An unknown outcome is asked for again under its request, after a restart too, and so is one
+  // after any failure but the daemon's recorded answer, a refusal raised before sending included;
+  // that recorded answer is final.
   refusal = new UncertainError({ operation: 'turnChatIntoProject' });
   assert.equal(getErrorGroup(await fail(owner.turnIntoProject('own'))), 'uncertain');
-  assert.equal(getErrorGroup(await fail(make().turnIntoProject('own'))), 'uncertain');
+  assert.equal(getErrorGroup(await fail((await make()).turnIntoProject('own'))), 'uncertain');
+  refusal = new InvalidRequestError({ problem: 'invalid-input' });
+  assert.equal(getErrorGroup(await fail(owner.turnIntoProject('own'))), 'refusal');
   refusal = undefined;
   assert.equal(await run(owner.turnIntoProject('own')), '/profile/chats/own');
   assert.deepEqual(adopted, ['/profile/chats/own']);
@@ -238,8 +257,8 @@ test('turning a chat into a project is one daemon operation, asked again only wh
     requests.filter((r) => r.target.conversationId === conversationId).map((r) => r.requestId);
   const own = ids('own'),
     planted = ids('planted');
-  assert.deepEqual(new Set(own.slice(0, 3)).size, 1);
-  assert.notEqual(own[2], own[3]);
+  assert.deepEqual(new Set(own.slice(0, 4)).size, 1);
+  assert.notEqual(own[3], own[4]);
   assert.notEqual(planted[0], planted[1]);
   assert(requests.every((request) => request.installationId === 'installation'));
 });
@@ -278,17 +297,4 @@ test('a remote daemon host offers its approved roots for folders, and local chat
   // Local chat is not available, so its recent folders are empty and it has no clients yet.
   assert.deepEqual(await run(backends.recentFolders('local')), []);
   assert.equal(await run(backends.findTarget('local')), undefined);
-});
-
-test('request ids last until deleted, across a new handle, and tolerate a corrupt file', async (t) => {
-  const file = join(await makeDirectory(t), 'request-ids.json');
-  const ids = createFileRequestIds(file);
-  ids.put('k', 'a');
-  ids.put('other', 'b');
-  assert.equal(createFileRequestIds(file).get('k'), 'a');
-  ids.delete('k');
-  assert.equal(createFileRequestIds(file).get('k'), undefined);
-  assert.equal(createFileRequestIds(file).get('other'), 'b');
-  await writeFile(file, '{not json');
-  assert.equal(createFileRequestIds(file).get('other'), undefined);
 });

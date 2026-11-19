@@ -28,6 +28,7 @@ import {
   IpcInputError,
   IpcUnavailableError,
   NativeActionError,
+  RequestStoreError,
 } from '@moonbase/contracts/ipc-errors';
 import { LocalDaemonError } from '@moonbase/contracts/connection-errors';
 import { TranscriptReadError } from '@moonbase/application/chat';
@@ -162,7 +163,7 @@ export class DesktopChatRpcs extends RpcGroup.make(
   Rpc.make('turnChatIntoProject', {
     payload: fields({ conversationId: Schema.String.check(Schema.isBetweenLength(1, 512)) }),
     success: Schema.String,
-    error: localWorkspaceError,
+    error: union([RequestStoreError, IpcUnavailableError, ...workspaceHostErrors]),
   }).annotate(Mutation, isHostMutation('turnChatIntoProject')),
   chat('getChatHost'),
   chat('listChats'),

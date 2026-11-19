@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { Cause, Effect, Exit } from 'effect';
+import { Cause, Effect, Exit, Option, Predicate } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { isCancelled, isUncertain } from '@moonbase/contracts/error-groups';
 import type {
   ChatServiceShape,
   ConnectionServiceShape,
@@ -29,6 +28,10 @@ export type ChatTargetClients = {
   connection: ConnectionServiceShape | null;
 };
 
+/** Whether a failure is the daemon's recorded answer for the request ID it was sent under. */
+const isRecordedAnswer = (error: Option.Option<unknown>) =>
+  Option.isSome(error) && Predicate.isTagged(error.value, 'RecordedRefusalError');
+
 export type ChatBackendsOptions = {
   /** The local daemon, found or started on demand. */
   local: Pick<LocalDaemon['Service'], 'get' | 'peek'>;
@@ -39,7 +42,7 @@ export type ChatBackendsOptions = {
   /** Lets the editor open a checkout the daemon made for a chat. */
   adoptCheckout?(checkout: CheckoutTarget): void;
   /** Request IDs of chat operations left unknown, kept across reloads and restarts. */
-  requestIds: RequestIds;
+  requestIds: RequestIds['Service'];
 };
 
 /**
@@ -70,27 +73,25 @@ export function makeChatBackends({
   ];
   /**
    * Sends under a request ID kept durably before it is sent, so a repeat after a lost reply, a
-   * reload or a restart asks for the first outcome. The ID is kept only while the outcome is
-   * unknown (`Uncertain`, or cancelled); an answer, a refusal included, is final.
+   * reload or a restart asks for the first outcome. The ID is forgotten only once the daemon has
+   * answered for it: a success, or the refusal its journal recorded for that ID. Any other failure
+   * keeps it, since it can't say whether an earlier attempt under the ID ran: one raised before
+   * sending, a link's or the daemon's own (busy, unauthorized) before it reached the journal, an
+   * unknown outcome, a cancellation, an interruption. Keeping one too long only replays the
+   * recorded answer; forgetting one too soon could make the change twice. Forgetting compares the
+   * ID, so a late answer never forgets a later attempt's ID, and the store does it on its own, so
+   * the answer doesn't wait for it.
    */
   const withRequestId = <A, E>(key: string, send: (requestId: string) => Effect.Effect<A, E>) =>
-    Effect.suspend(() => {
-      const requestId = requestIds.get(key) ?? randomUUID();
-      requestIds.put(key, requestId);
-      return send(requestId).pipe(
+    Effect.flatMap(requestIds.issue(key), (requestId) =>
+      send(requestId).pipe(
         Effect.onExit((exit) =>
-          Effect.sync(() => {
-            if (Exit.isSuccess(exit)) return requestIds.delete(key);
-            const error = Cause.findErrorOption(exit.cause);
-            const unknown =
-              error._tag === 'None'
-                ? Cause.hasInterrupts(exit.cause)
-                : isUncertain(error.value) || isCancelled(error.value);
-            if (!unknown) requestIds.delete(key);
-          }),
+          Exit.isSuccess(exit) || isRecordedAnswer(Cause.findErrorOption(exit.cause))
+            ? requestIds.forget(key, requestId)
+            : Effect.void,
         ),
-      );
-    });
+      ),
+    );
 
   return {
     targets,
