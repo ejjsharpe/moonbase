@@ -11,6 +11,7 @@ import {
   readdirSync,
   renameSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { userInfo } from 'node:os';
@@ -459,31 +460,60 @@ test('a native import onto a path holding a draft is refused', async () => {
   }
 });
 
-test('a native import whose source moved away after capture is refused with its reason', async () => {
+test('a native import whose source or ancestor was replaced after capture is refused with its reason', async () => {
   const f = fixture(),
     { runtime, client } = f.start();
   try {
     const checkout = await client.command('openCheckout', { root: f.root });
-    const external = join(f.base, 'external.txt');
-    writeFileSync(external, 'native bytes');
-    const nativeReferences = await runtime.runPromise(
-      captureNative({ checkout, clientId: 'alice', paths: [external] }),
-    );
-    renameSync(external, external + '-old');
-    await assert.rejects(
-      client.command('mutate', {
-        clientId: 'alice',
-        id: 'import-changed-source',
-        checkout,
-        kind: 'import',
-        sources: [],
-        nativeReferences,
-        destination: 'imported.txt',
-      }),
-      (error) =>
-        isRefusal(error) && error instanceof NativeSourceError && error.problem === 'changed',
-    );
-    assert(!existsSync(join(f.root, 'imported.txt')));
+    const folder = join(f.base, 'external');
+    mkdirSync(folder);
+    const cases = [
+      // Moved away: the reopen finds nothing.
+      {
+        name: 'moved.txt',
+        replace: (path: string) => renameSync(path, path + '-old'),
+        problem: 'changed',
+      },
+      // Swapped for a symlink, at the source or an ancestor: the no-follow reopen fails with ELOOP.
+      {
+        name: 'linked.txt',
+        replace: (path: string) => {
+          renameSync(path, path + '-old');
+          symlinkSync(path + '-old', path);
+        },
+        problem: 'changed',
+      },
+      {
+        name: 'nested.txt',
+        replace: () => {
+          renameSync(folder, folder + '-old');
+          symlinkSync(folder + '-old', folder);
+        },
+        problem: 'parent-changed',
+      },
+    ] as const;
+    for (const { name, replace, problem } of cases) {
+      const external = join(folder, name);
+      writeFileSync(external, 'native bytes');
+      const nativeReferences = await runtime.runPromise(
+        captureNative({ checkout, clientId: 'alice', paths: [external] }),
+      );
+      replace(external);
+      await assert.rejects(
+        client.command('mutate', {
+          clientId: 'alice',
+          id: `import-replaced-${name}`,
+          checkout,
+          kind: 'import',
+          sources: [],
+          nativeReferences,
+          destination: name,
+        }),
+        (error) =>
+          isRefusal(error) && error instanceof NativeSourceError && error.problem === problem,
+      );
+      assert(!existsSync(join(f.root, name)));
+    }
   } finally {
     await runtime.dispose();
     f.cleanup();

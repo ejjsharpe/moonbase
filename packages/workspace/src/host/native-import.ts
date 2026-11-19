@@ -5,16 +5,17 @@ import { basename, dirname, isAbsolute } from 'node:path';
 
 const flags = constants.O_RDONLY | constants.O_NONBLOCK | O_NOFOLLOW_ANY;
 const identity = (s: { dev: number; ino: number }) => `${s.dev}:${s.ino}`;
-const isMissing = (error: unknown) => {
+// Gone (ENOENT/ENOTDIR) or replaced by a symlink, which the no-follow open refuses with ELOOP.
+const isReplaced = (error: unknown) => {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  return code === 'ENOENT' || code === 'ENOTDIR';
+  return code === 'ENOENT' || code === 'ENOTDIR' || code === 'ELOOP';
 };
-/** Runs a reopen of a captured path, refusing with `problem` when the path is gone. */
+/** Runs a reopen of a captured path, refusing with `problem` when the path is gone or replaced. */
 const reopen = <T>(open: () => T, problem: 'parent-changed' | 'changed') => {
   try {
     return open();
   } catch (error) {
-    if (isMissing(error)) throw new NativeSourceError({ problem });
+    if (isReplaced(error)) throw new NativeSourceError({ problem });
     throw error;
   }
 };
@@ -76,7 +77,7 @@ export class NativeImport {
     return this.directory && this.parentIdentities(directory).split(',').includes(this.identity);
   }
   validate() {
-    // A captured path moved away since capture is a change, not a system failure.
+    // A captured path moved away or replaced since capture is a change, not a system failure.
     if (reopen(() => this.parentIdentities(), 'parent-changed') !== this.parents)
       throw new NativeSourceError({ problem: 'parent-changed' });
     const fd = reopen(() => openSync(this.path, flags), 'changed');
