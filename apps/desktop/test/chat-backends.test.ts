@@ -6,7 +6,10 @@ import { test, type TestContext } from 'node:test';
 import { Deferred, Effect, Exit, Fiber, Scope } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { UncertainError } from '@moonbase/contracts/errors';
-import { RecordedRefusalError } from '@moonbase/contracts/workspace-host-errors';
+import {
+  InvalidRequestError,
+  RecordedRefusalError,
+} from '@moonbase/contracts/workspace-host-errors';
 import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
 import { HostUnavailableError } from '@moonbase/contracts/host-errors';
 import { getErrorGroup } from '@moonbase/contracts/error-groups';
@@ -22,12 +25,20 @@ async function makeDirectory(t: TestContext) {
   t.after(() => rm(base, { recursive: true, force: true }));
   return base;
 }
-/** Request IDs in `file`, as main keeps them; a new handle on the same file is a restart. */
-const openRequestIds = (file: string) =>
-  Effect.runPromise(makeFileRequestIds(file).pipe(Effect.provide(NodeServices.layer)));
+/**
+ * Request IDs in `file`, as main keeps them, open until the test ends; a new handle on the same
+ * file is a restart.
+ */
+const openRequestIds = (t: TestContext, file: string) => {
+  const scope = Scope.makeUnsafe();
+  t.after(() => run(Scope.close(scope, Exit.void)));
+  return run(
+    makeFileRequestIds(file).pipe(Scope.provide(scope), Effect.provide(NodeServices.layer)),
+  );
+};
 /** Request IDs in a temporary profile file. */
 const makeRequestIds = async (t: TestContext) =>
-  openRequestIds(join(await makeDirectory(t), 'chat-requests.json'));
+  openRequestIds(t, join(await makeDirectory(t), 'chat-requests.json'));
 /** A local daemon client already holding `backend`, or one that is never reached. */
 const reached = (backend: Backend | null): ChatBackendsOptions['local'] =>
   backend
@@ -220,7 +231,7 @@ test('turning a chat into a project is one daemon operation, asked again only wh
   const make = async () =>
     makeChatBackends({
       installationId: 'installation',
-      requestIds: await openRequestIds(file),
+      requestIds: await openRequestIds(t, file),
       local: reached(backend),
       pickFolder: Effect.succeed(null),
       adoptCheckout: (target) => adopted.push(target.root),
@@ -229,13 +240,14 @@ test('turning a chat into a project is one daemon operation, asked again only wh
   refusal = new RecordedRefusalError({ refusal: 'unauthorized', text: 'Not yours.' });
   assert.equal(getErrorGroup(await fail(owner.turnIntoProject('planted'))), 'access');
   assert.deepEqual(adopted, []);
-  // An unknown outcome is asked for again under its request, after a restart too, and so after
-  // an attempt that never reached the host; an answer, a refusal included, is final.
+  // An unknown outcome is asked for again under its request, after a restart too, and so is one
+  // after any failure but the daemon's recorded answer, a refusal raised before sending included;
+  // that recorded answer is final.
   refusal = new UncertainError({ operation: 'turnChatIntoProject' });
   assert.equal(getErrorGroup(await fail(owner.turnIntoProject('own'))), 'uncertain');
   assert.equal(getErrorGroup(await fail((await make()).turnIntoProject('own'))), 'uncertain');
-  refusal = new HostUnavailableError({ reason: 'busy' });
-  assert.equal(getErrorGroup(await fail(owner.turnIntoProject('own'))), 'unavailable');
+  refusal = new InvalidRequestError({ problem: 'invalid-input' });
+  assert.equal(getErrorGroup(await fail(owner.turnIntoProject('own'))), 'refusal');
   refusal = undefined;
   assert.equal(await run(owner.turnIntoProject('own')), '/profile/chats/own');
   assert.deepEqual(adopted, ['/profile/chats/own']);

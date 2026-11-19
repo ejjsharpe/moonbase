@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { Cause, Effect, Exit } from 'effect';
+import { Cause, Effect, Exit, Option, Predicate } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { isFinalAnswer } from '@moonbase/contracts/error-groups';
 import type {
   ChatServiceShape,
   ConnectionServiceShape,
@@ -28,6 +27,10 @@ export type ChatTargetClients = {
   providers: ProviderSetupService['Service'];
   connection: ConnectionServiceShape | null;
 };
+
+/** Whether a failure is the daemon's recorded answer for the request ID it was sent under. */
+const isRecordedAnswer = (error: Option.Option<unknown>) =>
+  Option.isSome(error) && Predicate.isTagged(error.value, 'RecordedRefusalError');
 
 export type ChatBackendsOptions = {
   /** The local daemon, found or started on demand. */
@@ -70,23 +73,23 @@ export function makeChatBackends({
   ];
   /**
    * Sends under a request ID kept durably before it is sent, so a repeat after a lost reply, a
-   * reload or a restart asks for the first outcome. The ID is forgotten only once the host has
-   * answered it: a success, or a final refusal. A failure of one attempt (busy, unreachable,
-   * cancelled, interrupted) or an unknown outcome keeps it, since an earlier attempt under it may
-   * have run. Forgetting compares the ID, so a late answer never forgets a later attempt's ID.
+   * reload or a restart asks for the first outcome. The ID is forgotten only once the daemon has
+   * answered for it: a success, or the refusal its journal recorded for that ID. Any other failure
+   * keeps it, since it can't say whether an earlier attempt under the ID ran: one raised before
+   * sending, a link's or the daemon's own (busy, unauthorized) before it reached the journal, an
+   * unknown outcome, a cancellation, an interruption. Keeping one too long only replays the
+   * recorded answer; forgetting one too soon could make the change twice. Forgetting compares the
+   * ID, so a late answer never forgets a later attempt's ID, and the store does it on its own, so
+   * the answer doesn't wait for it.
    */
   const withRequestId = <A, E>(key: string, send: (requestId: string) => Effect.Effect<A, E>) =>
     Effect.flatMap(requestIds.issue(key), (requestId) =>
       send(requestId).pipe(
-        Effect.onExit((exit) => {
-          if (Exit.isFailure(exit)) {
-            const error = Cause.findErrorOption(exit.cause);
-            if (error._tag === 'None' || !isFinalAnswer(error.value)) return Effect.void;
-          }
-          // A kept ID only asks again for an outcome already known, so failing to forget it is
-          // no reason to fail the request.
-          return Effect.ignore(requestIds.forget(key, requestId), { log: 'Warn' });
-        }),
+        Effect.onExit((exit) =>
+          Exit.isSuccess(exit) || isRecordedAnswer(Cause.findErrorOption(exit.cause))
+            ? requestIds.forget(key, requestId)
+            : Effect.void,
+        ),
       ),
     );
 
