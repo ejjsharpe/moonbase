@@ -10,8 +10,8 @@ test('a watch for another host fails with the error its union declares, not as t
   const handlers = makeChatHandlers({
     host,
     health: { ...host, protocol: chatProtocolVersion, version: '0.1.0', capabilities: [] },
-    // A watch the host serves, so only its refusal of the host can fail it.
-    chat: { watch: () => Stream.never, watchChatList: () => Stream.never } as never,
+    // A watch the host serves, which ends at once, so only its refusal of the host can fail it.
+    chat: { watch: () => Stream.empty, watchChatList: () => Stream.empty } as never,
   }) as Record<string, (payload: unknown) => Stream.Stream<unknown, { _tag: string }>>;
   const other = { ...host, hostId: 'other-host' };
   for (const [watch, payload] of [

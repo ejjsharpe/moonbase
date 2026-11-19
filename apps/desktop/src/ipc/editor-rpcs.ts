@@ -14,8 +14,8 @@ import {
   recoveryInputSchemas,
   recoveryOutputSchemas,
 } from '@moonbase/contracts/recovery-schema';
-import { Mutation } from '@moonbase/contracts/rpc-annotations';
-import { isHostMutation } from '@moonbase/contracts/workspace-rpc';
+import { Mutation, StatusCall } from '@moonbase/contracts/rpc-annotations';
+import { isHostMutation, isHostStatusCall } from '@moonbase/contracts/workspace-rpc';
 import { IpcAdmission } from './ipc-admission.ts';
 import {
   IpcAuthorityError,
@@ -51,7 +51,9 @@ const statusCommand = <const K extends 'operationStatus' | 'acknowledgeOperation
     payload: exact(workspaceInputSchemas[operation]),
     success: wire(workspaceOutputSchemas[operation]),
     error: statusError,
-  }).annotate(Mutation, isHostMutation(operation));
+  })
+    .annotate(Mutation, isHostMutation(operation))
+    .annotate(StatusCall, isHostStatusCall(operation));
 const recovery = <const K extends keyof typeof recoveryInputSchemas>(operation: K) =>
   Rpc.make(operation, {
     payload: exact(recoveryInputSchemas[operation]),
