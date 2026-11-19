@@ -17,9 +17,10 @@ import {
   connectionInputSchemas,
   connectionOutputSchemas,
 } from '@moonbase/contracts/connection-schema';
-import { isChatMutation } from '@moonbase/contracts/chat-rpc';
+import { ChatRpcs, isChatMutation } from '@moonbase/contracts/chat-rpc';
 import { isDaemonMutation } from '@moonbase/contracts/daemon-rpc';
-import { Mutation } from '@moonbase/contracts/rpc-annotations';
+import { isHostMutation } from '@moonbase/contracts/workspace-rpc';
+import { isStatusRpc, Mutation, StatusCall } from '@moonbase/contracts/rpc-annotations';
 import { IpcAdmission } from './ipc-admission.ts';
 import {
   IpcAuthorityError,
@@ -113,7 +114,9 @@ const chat = <const K extends keyof typeof chatInputSchemas>(operation: K) =>
     payload: fields({ ...backendField, input: chatInputSchemas[operation] }),
     success: wire(chatOutputSchemas[operation]),
     error: chatError,
-  }).annotate(Mutation, isChatMutation(operation));
+  })
+    .annotate(Mutation, isChatMutation(operation))
+    .annotate(StatusCall, isStatusRpc(ChatRpcs.requests.get(operation)!));
 const providers = <const K extends keyof typeof providerInputSchemas>(operation: K) =>
   Rpc.make(operation, {
     payload: fields({ ...backendField, input: providerInputSchemas[operation] }),
@@ -154,13 +157,13 @@ export class DesktopChatRpcs extends RpcGroup.make(
     payload: fields({ root: IpcTextSchema, branch: IpcTextSchema, requestId: IpcRequestIdSchema }),
     success: Schema.String,
     error: localWorkspaceError,
-  }).annotate(Mutation, true),
+  }).annotate(Mutation, isHostMutation('createChatWorktree')),
   /** Opens a local chat without a project's folder as a project where it is; its root. */
   Rpc.make('turnChatIntoProject', {
     payload: fields({ conversationId: Schema.String.check(Schema.isBetweenLength(1, 512)) }),
     success: Schema.String,
     error: localWorkspaceError,
-  }).annotate(Mutation, true),
+  }).annotate(Mutation, isHostMutation('turnChatIntoProject')),
   chat('getChatHost'),
   chat('listChats'),
   chat('createChat'),

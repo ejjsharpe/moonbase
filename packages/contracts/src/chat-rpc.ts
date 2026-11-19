@@ -1,6 +1,6 @@
 import * as Schema from 'effect/Schema';
 import { voidResult } from './schema.ts';
-import { Rpc, RpcGroup } from 'effect/rpc';
+import { Rpc, RpcGroup, RpcSchema } from 'effect/rpc';
 import {
   ChatAccessError,
   ChatBusyError,
@@ -112,10 +112,17 @@ export class ChatRpcs extends RpcGroup.make(
 const chatMutations = findMarkedProcedures(ChatRpcs, isMutationRpc);
 /** Commands that change chat state: a lost reply is `Uncertain`, and Quit waits for them. */
 export const isChatMutation = (operation: ChatCommand) => chatMutations.has(operation);
-/** The error union a chat operation or watch declares; its `members` are the error classes. */
-export const chatErrorSchemaOf = (operation: ChatCommand | 'watchChat' | 'watchChatList') =>
-  ChatRpcs.requests.get(operation)!.errorSchema as
+/**
+ * The error union a chat operation or watch declares; its `members` are the error classes. A
+ * watch declares its union on the stream it succeeds with, so its own `errorSchema` is `Never`.
+ */
+export const chatErrorSchemaOf = (operation: ChatCommand | 'watchChat' | 'watchChatList') => {
+  const rpc = ChatRpcs.requests.get(operation)!;
+  return (
+    RpcSchema.isStreamSchema(rpc.successSchema) ? rpc.successSchema.error : rpc.errorSchema
+  ) as
     | typeof ChatReadErrorSchema
     | typeof ChatFileSearchErrorSchema
     | typeof ChatSendLookupErrorSchema
     | typeof ChatMutationErrorSchema;
+};

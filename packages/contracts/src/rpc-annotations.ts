@@ -1,4 +1,5 @@
 import { Context } from 'effect';
+import type * as SchemaAST from 'effect/SchemaAST';
 
 // What a procedure is, declared once on its `Rpc` with `.annotate(...)` and read wherever a
 // client or server needs it, so no list of procedure names is kept anywhere else.
@@ -17,6 +18,7 @@ export const StatusCall = Context.Reference<boolean>(
 );
 
 type Annotated = { readonly annotations: Context.Context<never> };
+type WithPayload = { readonly payloadSchema: { readonly ast: SchemaAST.AST } };
 type Group = { readonly requests: ReadonlyMap<string, Annotated> };
 
 export const isMutationRpc = (rpc: Annotated) => Context.get(rpc.annotations, Mutation);
@@ -27,3 +29,15 @@ export const findMarkedProcedures = (
   marked: (rpc: Annotated) => boolean,
 ): ReadonlySet<string> =>
   new Set([...group.requests].filter(([, rpc]) => marked(rpc)).map(([tag]) => tag));
+
+/** Whether an AST is an object with a `requestId`, at its top level or in a field like `input`. */
+const carriesRequestId = (ast: SchemaAST.AST, depth: number): boolean => {
+  if (depth > 2) return false;
+  if (ast._tag === 'Union') return ast.types.some((type) => carriesRequestId(type, depth));
+  if (ast._tag !== 'Objects') return false;
+  return ast.propertySignatures.some(
+    (property) => property.name === 'requestId' || carriesRequestId(property.type, depth + 1),
+  );
+};
+/** Whether a procedure's payload carries a request ID, at its top level or in its `input`. */
+export const takesRequestId = (rpc: WithPayload) => carriesRequestId(rpc.payloadSchema.ast, 0);
