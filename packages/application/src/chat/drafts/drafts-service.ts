@@ -1,5 +1,10 @@
 import { Context, Effect, Layer, SubscriptionRef } from 'effect';
-import type { ChatMention, ChatModelPreference, ChatSummary } from '@moonbase/contracts/chat';
+import type {
+  ChatMention,
+  ChatModelPreference,
+  ChatSummary,
+  ChatTarget,
+} from '@moonbase/contracts/chat';
 import { ChatConfig } from '../chat-config.ts';
 import { ChatRefusedError, DraftStorageError, NewChatDraftError } from '../chat-errors.ts';
 import { ChatActions } from '../actions/actions-service.ts';
@@ -9,6 +14,7 @@ import {
   emptySaved,
   keepMentions,
   maximumSavedBytes,
+  isSameTarget,
   readDraft,
   recordSeen,
   seeListed,
@@ -30,6 +36,8 @@ export type DraftsState = {
 
 /** A draft's text and the files it mentions. */
 export type DraftText = { readonly text: string; readonly mentions: readonly ChatMention[] };
+/** The chat a command was typed in (null for the new chat) and its draft as typed. */
+export type DraftOrigin = { readonly selected: ChatTarget | null; readonly text: string };
 
 export type ChatDraftsShape = {
   readonly state: SubscriptionRef.SubscriptionRef<DraftsState>;
@@ -48,10 +56,12 @@ export type ChatDraftsShape = {
   readonly setDraft: (value: string, mentions?: readonly ChatMention[]) => Effect.Effect<void>;
   /**
    * In one write, deselects the open chat, empties its draft and makes the new chat's draft what
-   * `join` makes of it, as `/new` carries the rest of a message; every draft stays as it was if
-   * `join` refuses (its error) or the write can't be kept (shown, and false).
+   * `join` makes of it, as `/new` carries the rest of a message. Every draft stays as it was if
+   * the selected chat or its draft is no longer `from` (a `stale` error, as for a repeated
+   * command), `join` refuses (its error) or the write can't be kept (shown, and false).
    */
   readonly moveToNewChat: (
+    from: DraftOrigin,
     join: (draft: DraftText) => DraftText | NewChatDraftError,
   ) => Effect.Effect<boolean, NewChatDraftError>;
   readonly setModelPreference: (value: ChatModelPreference) => Effect.Effect<void>;
@@ -155,10 +165,15 @@ export class ChatDrafts extends Context.Service<ChatDrafts, ChatDraftsShape>()(
               );
             }),
           ),
-        moveToNewChat: (join) =>
+        moveToNewChat: (from, join) =>
           Effect.gen(function* () {
             if (!(yield* actions.accepting)) return false;
             return yield* commit((saved) => {
+              if (
+                !isSameTarget(saved.selected, from.selected) ||
+                readDraft(saved).text !== from.text
+              )
+                return new NewChatDraftError({ reason: 'stale' });
               const joined = join(readDraft({ ...saved, selected: null }));
               if (joined instanceof NewChatDraftError) return joined;
               const kept = keepMentions(joined.text, joined.mentions);

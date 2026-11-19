@@ -158,11 +158,17 @@ export function Composer({
           current: !effortUnavailable && value === effort,
         }))
       : [],
-    // The lines after `/new` start the new chat's draft; the open chat's is left empty.
+    // The lines after `/new` start the new chat's draft; the open chat's is left empty. The chat
+    // and draft it was typed in let a repeated `/new` see that it already ran.
     newChat: () =>
       run(
         Effect.tap(
-          composer.startNewChat(removeCommandLine(draft), mentions, openChatSummary?.cwd),
+          composer.startNewChat(
+            { selected, text: draft },
+            removeCommandLine(draft),
+            mentions,
+            openChatSummary?.cwd,
+          ),
           (started) => Effect.sync(() => started && focusMessage()),
         ),
       ),

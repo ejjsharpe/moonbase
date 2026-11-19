@@ -56,6 +56,11 @@ export type ChatSelectionShape = {
   /** Closes the open chat and keeps no selection. */
   readonly closeView: Effect.Effect<void>;
   /**
+   * Closes `target`'s chat after a write that deselected it, without writing again: only while no
+   * chat is selected and `target` was the last one opened, so a newer selection stays open.
+   */
+  readonly closeDeselected: (target: ChatTarget) => Effect.Effect<void>;
+  /**
    * Opens `target`'s chat unless it is open: watches it for as long as the link lives, re-watching
    * a watch that fails `Unavailable` on the shared backoff. Succeeds once the first snapshot is
    * read and the saved reading position restored.
@@ -280,6 +285,11 @@ export class ChatSelection extends Context.Service<ChatSelection, ChatSelectionS
           if (Exit.isFailure(kept)) return yield* actions.report(Cause.squash(kept.cause));
           yield* close;
         }),
+        closeDeselected: (target) =>
+          Effect.gen(function* () {
+            if ((yield* drafts.get).saved.selected) return;
+            if (isSameTarget(yield* Ref.get(opening), target)) yield* close;
+          }),
         open,
         close,
         isOpen: Effect.map(SubscriptionRef.get(state), (s) => !!s.open),

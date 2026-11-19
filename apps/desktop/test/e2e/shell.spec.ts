@@ -1630,7 +1630,8 @@ test('a new chat sends without a project and lists as No project', async ({ page
     .toBe(true);
   const saved = page.getByRole('complementary', { name: 'Saved chats', exact: true });
   await expect(saved.getByRole('button', { name: /^Plan a trip/ })).toContainText('No project');
-  // A failure is shown in the open chat, which stays as it was.
+  // A failure is shown in the open chat, which stays as it was. One that isn't Moonbase's own shows
+  // only the fixed text, not what it says.
   const turn = page.getByRole('button', { name: 'Turn into project', exact: true });
   await page.evaluate(() => {
     const chat = window.demo.chat,
@@ -1644,7 +1645,8 @@ test('a new chat sends without a project and lists as No project', async ({ page
     .getByRole('alert')
     .filter({ hasText: 'The chat could not become a project.' });
   await turn.click();
-  await expect(turnError).toHaveText('The chat could not become a project. The folder changed.');
+  await expect(turnError).toBeVisible();
+  await expect(turnError).not.toContainText('The folder changed.');
   await expect(saved.getByRole('button', { name: /^Plan a trip/ })).toContainText('No project');
   // Its folder becomes a project where it is, and the chat lists under that project. Settings
   // opening and closing over the shell meanwhile leaves the turn running.

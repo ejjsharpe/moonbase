@@ -40,7 +40,7 @@ function makeChat(selected: ChatTarget | null = null) {
   const chat = {
     sent,
     drafts,
-    /** Closes that finished. */
+    /** Transcript closes that finished. */
     closes: 0,
     /** The next move of a draft to the new chat can't be written. */
     failNextMove: () => (failMove = true),
@@ -90,9 +90,20 @@ function makeChat(selected: ChatTarget | null = null) {
       }
       notify();
     },
-    /** Deselects the open chat, empties its draft and joins the new chat's, in one step. */
-    moveToNewChat(join: (draft: { text: string; mentions: readonly ChatMention[] }) => unknown) {
+    /**
+     * Deselects the open chat, empties its draft and joins the new chat's, in one step, if the
+     * chat and its draft are still `from`.
+     */
+    moveToNewChat(
+      from: { selected: ChatTarget | null; text: string },
+      join: (draft: { text: string; mentions: readonly ChatMention[] }) => unknown,
+    ) {
       if (failMove) return (failMove = false);
+      if (
+        from.selected?.conversationId !== selected?.conversationId ||
+        from.text !== (drafts.get(key())?.text ?? '')
+      )
+        return new NewChatDraftError({ reason: 'stale' });
       const joined = join(drafts.get('') ?? { text: '', mentions: [] });
       if (joined instanceof Error) return joined;
       drafts.delete(key());
@@ -102,12 +113,15 @@ function makeChat(selected: ChatTarget | null = null) {
       return true;
     },
     closeView: async () => {
+      selected = null;
+      notify();
+    },
+    /** Closes `closed`'s transcript while no chat is selected. */
+    closeDeselected: async (_closed: ChatTarget) => {
       const held = holdClose;
       holdClose = undefined;
       await held;
-      selected = null;
-      chat.closes++;
-      notify();
+      if (!selected) chat.closes++;
     },
     select: async (next: ChatTarget) => {
       selected = next;
@@ -128,14 +142,19 @@ const toComposerChat = (chat: ReturnType<typeof makeChat>): ComposerChat => ({
     ),
   ),
   setDraft: (text, mentions) => Effect.sync(() => chat.setDraft(text, mentions)),
-  moveToNewChat: (join) =>
+  moveToNewChat: (from, join) =>
     Effect.suspend(() => {
-      const moved = chat.moveToNewChat(join);
+      const moved = chat.moveToNewChat(from, join);
       return moved instanceof NewChatDraftError ? Effect.fail(moved) : Effect.succeed(!!moved);
     }),
   send: (creation) => Effect.promise(() => chat.send(creation)),
-  closeView: Effect.promise(() => chat.closeView()),
+  closeDeselected: (closed) => Effect.promise(() => chat.closeDeselected(closed)),
   select: (next) => Effect.promise(() => chat.select(next)),
+});
+/** The chat shown now and its draft, as a view that typed a command sees them. */
+const originOf = (chat: ReturnType<typeof makeChat>) => ({
+  selected: chat.getSnapshot().selected,
+  text: chat.getSnapshot().draft,
 });
 /** A composer for `chat`, in a scope the test leaves open. */
 function composerOf(chat: ReturnType<typeof makeChat>) {
@@ -161,8 +180,9 @@ function composerOf(chat: ReturnType<typeof makeChat>) {
     place: (place: ComposerPlace) => readChoices(SubscriptionRef.getUnsafe(composer.state), place),
     checkMentions: (folder: string) => sync(composer.checkMentions(folder)),
     noteMentions: (paths: string[], folder: string) => sync(composer.noteMentions(paths, folder)),
+    /** `/new` typed in the chat shown now, with its draft as it is. */
     startNewChat: (text: string, mentions: ChatMention[], folder: string | undefined) =>
-      Effect.runPromise(composer.startNewChat(text, mentions, folder)),
+      Effect.runPromise(composer.startNewChat(originOf(chat), text, mentions, folder)),
     /** Sends the new chat in `place`, making a worktree with `create` if the place chose one. */
     send: (
       place: ComposerPlace,
@@ -498,7 +518,9 @@ test('/new moves the rest before the chat closes, so a view gone meanwhile loses
   const released = Promise.withResolvers<void>();
   chat.holdNextClose(released.promise);
   // The view that typed `/new` unmounts while the transcript closes.
-  const view = Effect.runFork(composer.composer.startNewChat('Keep this', [], '/repo'));
+  const view = Effect.runFork(
+    composer.composer.startNewChat(originOf(chat), 'Keep this', [], '/repo'),
+  );
   await until(() => chat.getSnapshot().draft === 'Keep this' && !chat.getSnapshot().selected);
   await Effect.runPromise(Fiber.interrupt(view));
   assert.equal(chat.drafts.has('open'), false);
@@ -523,6 +545,13 @@ test('a chat turning into a project outlives the view that asked, once at a time
   held.resolve();
   await until(() => composer.snapshot.turning.length === 0);
   assert.equal(turns, 1);
+  // A failure that isn't one of Moonbase's shows only the fixed text, not what it says.
+  composer.sync(
+    composer.composer.turnIntoProject('open', Effect.fail(new Error('host wrote this'))),
+  );
+  await until(() => composer.snapshot.turning.length === 0);
+  assert.equal(composer.snapshot.message?.chat, 'open');
+  assert.doesNotMatch(composer.message!, /host wrote this/);
 });
 
 test('/new keeps the rest in the open chat when the new chat cannot take it', async () => {

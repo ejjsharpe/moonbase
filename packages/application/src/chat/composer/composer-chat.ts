@@ -17,7 +17,7 @@ export function makeComposerChat(context: Context.Context<ChatServices>): Compos
     setDraft: drafts.setDraft,
     moveToNewChat: drafts.moveToNewChat,
     send: sends.send,
-    closeView: selection.closeView,
+    closeDeselected: selection.closeDeselected,
     select: selection.select,
   };
 }
