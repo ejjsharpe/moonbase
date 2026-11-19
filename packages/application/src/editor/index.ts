@@ -39,7 +39,6 @@ export {
 export { EditorSaves } from './saves/saves-service.ts';
 export { EditorPreservation } from './preservation/preservation-service.ts';
 export type { CloseChoice, ClosePrompt } from './preservation/preservation.ts';
-export type { PendingPrompt } from './editor-prompt.ts';
 export { EditorCheckouts } from './checkouts/checkouts-service.ts';
 export { EditorLookup, type Lookup } from './lookup/lookup-service.ts';
 export type { LookupRow, LookupSnapshot } from './lookup/lookup.ts';

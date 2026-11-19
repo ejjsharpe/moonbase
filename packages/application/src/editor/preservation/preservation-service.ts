@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, type SubscriptionRef } from 'effect';
 import type { CheckoutTarget, FileTarget } from '@moonbase/contracts/workspace';
 import { EditorError, type EditorFailure } from '../editor-errors.ts';
-import { makeEditorPrompt, type PendingPrompt } from '../editor-prompt.ts';
+import { makeEditorPrompt } from '../editor-prompt.ts';
 import { EditorSession } from '../session/session-service.ts';
 import { EditorAlerts } from '../alerts/alerts-service.ts';
 import { EditorViews } from '../views/views-service.ts';
@@ -28,10 +28,7 @@ type CloseKind = 'files' | 'checkout' | 'quit';
 
 export type EditorPreservationShape = {
   /** The Save, Discard or Cancel prompt shown; closing the editor answers it Cancel. */
-  readonly closePrompt: SubscriptionRef.SubscriptionRef<PendingPrompt<
-    ClosePrompt,
-    CloseChoice
-  > | null>;
+  readonly closePrompt: SubscriptionRef.SubscriptionRef<ClosePrompt | null>;
   /**
    * Closes files: asks Save, Discard or Cancel for each with unsaved changes, then closes them.
    * Their drafts are kept until the store has committed each close, so a failure loses nothing.
@@ -43,6 +40,8 @@ export type EditorPreservationShape = {
   /** Confirms recovery is complete once composition has fenced admissions. */
   readonly finishQuitPreparation: Effect.Effect<boolean>;
   readonly answerClose: (promptId: string, choice: CloseChoice) => Effect.Effect<void>;
+  /** Answers the shown prompt Cancel, as the editor closes. */
+  readonly cancelPrompt: Effect.Effect<void>;
   /** Opens the files of the checkout's last close again. */
   readonly reopen: (checkout: CheckoutTarget) => Effect.Effect<boolean, EditorFailure>;
   /** Whether everything the editor holds is in recovery. */
@@ -167,7 +166,7 @@ export class EditorPreservation extends Context.Service<
         });
 
       return {
-        closePrompt: closePrompt.pending,
+        closePrompt: closePrompt.shown,
         close: (targets) => admitted(preserve(targets, 'files')),
         closeCheckout: (checkout) =>
           admitted(
@@ -219,6 +218,7 @@ export class EditorPreservation extends Context.Service<
             if (!(yield* session.get).admissionsOpen) return;
             if (isCloseChoice(choice)) yield* closePrompt.answer(promptId, choice);
           }),
+        cancelPrompt: closePrompt.cancel,
         reopen: (checkout) =>
           admitted(
             Effect.gen(function* () {

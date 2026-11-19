@@ -9,7 +9,7 @@ import type {
 } from '@moonbase/contracts/workspace';
 import { EditorError, isRefusal, type EditorFailure } from '../editor-errors.ts';
 import { describeEditorFailure } from '../alerts/alerts.ts';
-import { makeEditorPrompt, type PendingPrompt } from '../editor-prompt.ts';
+import { makeEditorPrompt } from '../editor-prompt.ts';
 import { isRelativePath } from '../relative-path.ts';
 import { EditorSession } from '../session/session-service.ts';
 import { EditorAlerts } from '../alerts/alerts-service.ts';
@@ -41,10 +41,7 @@ export type OperationInput = Omit<WorkspaceOperation, 'clientId' | 'id'> & { id?
 export type EditorMutationsShape = {
   readonly state: SubscriptionRef.SubscriptionRef<MutationState>;
   /** The replace prompt shown; closing the editor answers it Cancel (don't replace). */
-  readonly replacePrompt: SubscriptionRef.SubscriptionRef<PendingPrompt<
-    ReplacePrompt,
-    boolean
-  > | null>;
+  readonly replacePrompt: SubscriptionRef.SubscriptionRef<ReplacePrompt | null>;
   /** The mutation gate: whether `mutate` would admit `action` now. */
   readonly admits: (action: MutationAction) => Effect.Effect<boolean>;
   /**
@@ -58,6 +55,8 @@ export type EditorMutationsShape = {
   ) => Effect.Effect<MutationRunResult>;
   /** Answers the replace prompt. */
   readonly answer: (promptId: string, replace: boolean) => Effect.Effect<void>;
+  /** Answers the shown replace prompt Cancel (don't replace), as the editor closes. */
+  readonly cancelPrompt: Effect.Effect<void>;
   /**
    * Dispatches an operation as given. `saving` is a Save of a buffer whose file isn't on disk,
    * which creates it with the buffer's text; it may run inside a Close's preservation, and so
@@ -318,7 +317,7 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
 
       return {
         state,
-        replacePrompt: replacePrompt.pending,
+        replacePrompt: replacePrompt.shown,
         admits,
         mutate: (action, options) =>
           Effect.uninterruptibleMask((restore) =>
@@ -348,6 +347,7 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
             }),
           ),
         answer: (promptId, replace) => replacePrompt.answer(promptId, replace === true),
+        cancelPrompt: replacePrompt.cancel,
         dispatch: (input, saving) =>
           saving ? session.run(dispatch(input, saving)) : admitted(dispatch(input)),
         resolve: (id, operationClientId) => admitted(resolve(id, operationClientId)),

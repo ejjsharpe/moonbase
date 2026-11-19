@@ -12,12 +12,7 @@ import type { BuffersState, EditorBuffer } from './buffers/buffers.ts';
 import type { DiscoveryState } from './discovery/discovery.ts';
 import { listUnsettled, type OperationsState } from './operations/operations.ts';
 import type { MutationState, ReplacePrompt } from './mutation/mutation.ts';
-import {
-  isRecoveryReady,
-  type CloseChoice,
-  type ClosePrompt,
-} from './preservation/preservation.ts';
-import type { PendingPrompt } from './editor-prompt.ts';
+import { isRecoveryReady, type ClosePrompt } from './preservation/preservation.ts';
 
 /** The editor as a view shows it, read from each concept's state. */
 export type EditorSnapshot = {
@@ -52,15 +47,15 @@ export type EditorParts = {
   operations: OperationsState;
   outbox: OutboxState;
   mutation: MutationState;
-  replacePrompt: PendingPrompt<ReplacePrompt, boolean> | null;
-  closePrompt: PendingPrompt<ClosePrompt, CloseChoice> | null;
+  replacePrompt: ReplacePrompt | null;
+  closePrompt: ClosePrompt | null;
 };
 
 export const toEditorSnapshot = (parts: EditorParts): EditorSnapshot => ({
   ready: parts.session.ready,
   recoveryReady: isRecoveryReady(parts.session, parts.outbox, parts.buffers, parts.operations),
   disposed: parts.session.disposed,
-  closePrompt: parts.closePrompt?.prompt ?? null,
+  closePrompt: parts.closePrompt,
   preserving: parts.session.preserving,
   initializing: parts.session.initializing,
   recovery: parts.views.recovery,
@@ -72,5 +67,5 @@ export const toEditorSnapshot = (parts: EditorParts): EditorSnapshot => ({
   errors: parts.alerts,
   operations: listUnsettled(parts.operations),
   mutating: parts.mutation.mutating,
-  replacePrompt: parts.replacePrompt?.prompt ?? null,
+  replacePrompt: parts.replacePrompt,
 });

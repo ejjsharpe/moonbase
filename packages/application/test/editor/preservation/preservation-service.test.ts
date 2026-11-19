@@ -63,6 +63,36 @@ test('exact close prompts ignore stale answers and disposal cancels an outstandi
   }
 });
 
+test('overlapping closes of a dirty file hold the editor until the shown prompt is answered', async () => {
+  const f = await controllerFixture.fixture('overlap', false);
+  try {
+    await f.editor.open(target('a.ts'));
+    f.editor.edit(target('a.ts'), 'older');
+    // A long batch is still checking its targets as the single close starts.
+    const batch = f.editor.close([
+      ...Array.from({ length: 2000 }, (_, at) => target(`missing-${at}.ts`)),
+      target('a.ts'),
+    ]);
+    const single = f.editor.close([target('a.ts')]);
+    const refused = await Promise.race([batch, single]);
+    assert.equal(refused, false);
+    const prompt = f.editor.getSnapshot().closePrompt!;
+    assert(prompt);
+    assert.equal(f.editor.getSnapshot().preserving, true);
+    assert.throws(() => f.editor.edit(target('a.ts'), 'newer'));
+    f.editor.answerClose(prompt.id, 'cancel');
+    assert.deepEqual(await Promise.all([batch, single]), [false, false]);
+    assert.equal(f.editor.getSnapshot().closePrompt, null);
+    await f.editor.flush();
+    assert.deepEqual(
+      draftsOf(await loadStoredState(f.client, f.editor.clientId)).map((d) => d.text),
+      ['older'],
+    );
+  } finally {
+    await f.dispose();
+  }
+});
+
 describe('captured preservation races', () => {
   const { checkout, second, target, fixture, held, holding, observedFixture, storedRecovery } =
     controllerFixture;

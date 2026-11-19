@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { Effect, Exit, Fiber, Scope, SubscriptionRef } from 'effect';
 import { makeEditorPrompt } from '../../src/editor/editor-prompt.ts';
 
-test('a prompt takes only its own answer, and closing its scope answers Cancel', () =>
+test('a second prompt is refused while one is shown, and closing the scope answers Cancel', () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const scope = yield* Scope.make();
@@ -11,23 +11,23 @@ test('a prompt takes only its own answer, and closing its scope answers Cancel',
         makeEditorPrompt<{ id: string }, string>('cancel'),
         scope,
       );
-      const shown = () => SubscriptionRef.getUnsafe(prompt.pending)?.prompt.id;
+      const shown = () => SubscriptionRef.getUnsafe(prompt.shown)?.id;
 
       const first = yield* Effect.forkChild(prompt.ask({ id: 'first' }), {
         startImmediately: true,
       });
-      yield* prompt.answer('stale', 'save');
+      assert.equal(yield* prompt.ask({ id: 'second' }), 'cancel');
       assert.equal(shown(), 'first');
       yield* prompt.answer('first', 'save');
       assert.equal(yield* Fiber.join(first), 'save');
       assert.equal(shown(), undefined);
 
-      const second = yield* Effect.forkChild(prompt.ask({ id: 'second' }), {
+      const third = yield* Effect.forkChild(prompt.ask({ id: 'third' }), {
         startImmediately: true,
       });
-      assert.equal(shown(), 'second');
+      assert.equal(shown(), 'third');
       yield* Scope.close(scope, Exit.void);
-      assert.equal(yield* Fiber.join(second), 'cancel');
+      assert.equal(yield* Fiber.join(third), 'cancel');
       assert.equal(shown(), undefined);
     }),
   ));
