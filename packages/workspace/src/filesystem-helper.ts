@@ -65,8 +65,10 @@ const startHelper = (
     );
     // Settled once the helper's exit and its last output are known.
     let settled = false;
-    // Set once the run is being stopped: nothing reads its stdout after that, so it is dropped.
-    let discarding = false;
+    // Set before the run first signals its group, by its limit or its release. Nothing reads its
+    // stdout after that, so it is dropped; the run then fails at its limit even when the helper
+    // exits cleanly, and its release finishes the stop even once the run has settled.
+    let stopping = false;
     // Spawning and registering the stop are one acquisition, so an interruption can't land
     // between them and leave a started helper unowned. The release runs before the group's own,
     // which ends the pipes.
@@ -92,10 +94,10 @@ const startHelper = (
           ),
         ),
       (group) =>
-        settled
+        settled && !stopping
           ? Effect.void
           : Effect.suspend(() => {
-              discarding = true;
+              stopping = true;
               return Effect.flatMap(Effect.exit(group.stop), (stopped) =>
                 Exit.isSuccess(stopped) ? Effect.void : Effect.asVoid(group.exit),
               );
@@ -110,7 +112,7 @@ const startHelper = (
     // Read from the start: output is never left for a reader that arrives late.
     const end = () => Queue.endUnsafe(output);
     child.stdout!.on('data', (chunk: Buffer) => {
-      if (!discarding) Queue.offerUnsafe(output, chunk);
+      if (!stopping) Queue.offerUnsafe(output, chunk);
     });
     child.stdout!.once('end', end).once('error', end);
     const stdout = Stream.fromQueue(output);
@@ -143,20 +145,25 @@ const startHelper = (
         ),
       ),
     );
-    /** The run's outcome once the helper exited: its output, or what went wrong. */
-    const outcome = (output: Buffer) =>
-      Effect.flatMap(awaitExit, (status) =>
-        status.code === 0 && !status.spawnFailed
-          ? Effect.succeed(output)
-          : Effect.fail(failure(status, output, false)),
-      );
     /**
-     * Stops a run at its output or time limit; it fails as uncertain. A group that can't be
-     * confirmed gone still keeps the run until the helper has exited.
+     * The run's outcome once the helper exited: its output, or what went wrong. A run its limit
+     * began stopping fails at the limit, however the helper exited.
+     */
+    const outcome = (output: Buffer) =>
+      Effect.flatMap(awaitExit, (status) => {
+        if (stopping) return Effect.fail(failure(status, output, true));
+        return status.code === 0 && !status.spawnFailed
+          ? Effect.succeed(output)
+          : Effect.fail(failure(status, output, false));
+      });
+    /**
+     * Stops a run at its output or time limit; it fails as uncertain. The run's release finishes
+     * a stop this one leaves in flight, and a group that can't be confirmed gone still keeps the
+     * run until the helper has exited.
      */
     const stopCapped = (output: Buffer) =>
       Effect.sync(() => {
-        discarding = true;
+        stopping = true;
       }).pipe(
         Effect.andThen(Effect.exit(group.stop)),
         Effect.andThen(awaitExit),
@@ -168,7 +175,10 @@ const startHelper = (
     yield* Effect.forkScoped(
       Effect.delay(group.exit, outputDrain).pipe(Effect.andThen(Queue.end(output))),
     );
-    /** Stops a streamed run at its time limit; its output then fails. */
+    /**
+     * Stops a streamed run at its time limit; its output then fails. Output that ends first
+     * (a helper that exits on SIGTERM) still fails at the limit through `outcome`.
+     */
     const limitOutput = Effect.sleep(runLimit).pipe(
       Effect.andThen(Effect.flip(stopCapped(Buffer.alloc(0)))),
       Effect.flatMap((failure) => Queue.fail(output, failure)),
