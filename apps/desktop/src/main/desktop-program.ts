@@ -32,7 +32,7 @@ const runWindow = (options: Omit<Parameters<typeof DesktopServicesLive>[0], 'bun
       yield* Layer.buildWithScope(DesktopServicesLive({ ...options, bundleDirectory }), services),
       IpcServer,
     );
-    yield* installWindowEvents({ app, window, dialog, releaseDocument: ipc.releaseDocument });
+    yield* installWindowEvents({ app, window, dialog, detachDocument: ipc.detachDocument });
     yield* Effect.tryPromise(() => window.loadURL(appURL));
     yield* lifecycle.awaitQuit;
     const closed = yield* Effect.exit(Scope.close(services, Exit.void));

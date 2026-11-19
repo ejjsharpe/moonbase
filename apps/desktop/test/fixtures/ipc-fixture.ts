@@ -407,6 +407,8 @@ export async function makeIpcFixture(
       for (const port of mainPorts) port.close();
       mainPorts.clear();
     },
+    /** Takes main's document out of the window, as a navigation does; the result releases it. */
+    detachDocument: server.detachDocument,
     /** Releases main's document, as a reload does, and starts the renderer's next one. */
     async releaseDocument() {
       raw?.close();

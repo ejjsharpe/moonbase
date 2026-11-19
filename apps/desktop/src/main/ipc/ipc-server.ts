@@ -97,6 +97,18 @@ export const makeIpcServer = (handlers: DocumentHandlers) =>
         Effect.forkIn(document.scope, { uninterruptible: true }),
       );
 
+    /**
+     * Takes the current document out of the window at once, so the next connection starts a new
+     * one; the result ends the taken document's connections and what its requests hold, and
+     * touches nothing of a later document.
+     */
+    const detachDocument = Effect.map(
+      SynchronizedRef.modify(state, (current): readonly [Document | undefined, ServerState] =>
+        current._tag === 'Open' ? [current.document, { _tag: 'Open' }] : [undefined, current],
+      ),
+      (document) => (document ? Scope.close(document.scope, Exit.void) : Effect.void),
+    );
+
     return {
       /**
        * Serves `port` for the current document, starting one if needed; refuses it (false) past
@@ -116,13 +128,9 @@ export const makeIpcServer = (handlers: DocumentHandlers) =>
             ] as const;
           }),
         ),
+      detachDocument,
       /** Ends the current document's connections and what its requests hold. */
-      releaseDocument: Effect.flatMap(
-        SynchronizedRef.modify(state, (current): readonly [Document | undefined, ServerState] =>
-          current._tag === 'Open' ? [current.document, { _tag: 'Open' }] : [undefined, current],
-        ),
-        (document) => (document ? Scope.close(document.scope, Exit.void) : Effect.void),
-      ),
+      releaseDocument: Effect.flatten(detachDocument),
     };
   });
 /** The window's IPC server. */

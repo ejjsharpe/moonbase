@@ -20,6 +20,8 @@ async function fixture(
   options: {
     deliver?: (action: WindowAction) => void;
     release?: Effect.Effect<void, unknown>;
+    /** The window's document, as the IPC server takes it out; by default one counted release. */
+    detach?: Effect.Effect<Effect.Effect<void, unknown>>;
   } = {},
 ) {
   const f = createTestWindow(),
@@ -30,6 +32,8 @@ async function fixture(
   /** The crash prompt's answer: 0 recovers the workbench, 1 quits, null waits to be closed. */
   let crashAnswer: number | null = 1;
   let dismissed = 0;
+  /** Finishes closing a dismissed prompt, which Electron does asynchronously. */
+  let closePrompt = () => {};
   const runtime = ManagedRuntime.make(Layer.empty);
   const scope = Scope.makeUnsafe();
   const lifecycle = await runtime.runPromise(
@@ -61,13 +65,14 @@ async function fixture(
               signal.addEventListener('abort', () => {
                 dismissed++;
                 // Closed by its signal, a box answers with its cancel button: here, Quit.
-                resolve(1);
+                closePrompt = () => resolve(1);
               }),
             ));
           return { response, checkboxChecked: false };
         },
       } as Pick<Dialog, 'showMessageBox'>,
-      releaseDocument: options.release ?? Effect.sync(() => void released++),
+      detachDocument:
+        options.detach ?? Effect.succeed(options.release ?? Effect.sync(() => void released++)),
     }).pipe(Scope.provide(scope), Effect.provideService(WindowLifecycle, lifecycle)),
   );
   const quit = runtime.runFork(lifecycle.awaitQuit);
@@ -88,6 +93,7 @@ async function fixture(
     answerCrash: (response: number | null) => {
       crashAnswer = response;
     },
+    closePrompt: () => closePrompt(),
     ready: () => run(lifecycle.markReady),
     requestQuit: () => run(lifecycle.requestQuit),
     answer: (answer: QuitAnswer) => run(lifecycle.answerQuit(answer)),
@@ -183,31 +189,41 @@ test('close hides; activation shows; a Quit veto returns to the workbench; conse
 });
 
 test('a crashed renderer releases its document, then recovers it or quits as the user answers', async () => {
-  const f = await fixture();
+  const ipc = await makeIpcFixture();
+  const f = await fixture({ detach: ipc.detachDocument });
   try {
+    const crashed = (await ipc.connectRaw())!;
     await f.ready();
     f.answerCrash(0);
     f.contents.emit('render-process-gone', {}, { reason: 'crashed' });
     await waitFor(() => f.calls.includes('reload'));
-    assert.equal(f.released, 1);
+    await crashed.closed;
     assert.deepEqual(f.prompts, ['The workbench stopped unexpectedly.']);
-    // A document that replaces the crashed one closes its prompt, whose answer is then ignored,
-    // and Quit finishes without waiting for the user.
+    // A document that replaces the crashed one closes its prompt, whose answer is then ignored.
+    // Electron finishes closing it later; meanwhile the new document connects and is ready, and
+    // neither its connection nor its readiness is the old document's to release.
     f.answerCrash(null);
+    await ipc.connectRaw();
     f.contents.emit('render-process-gone', {}, { reason: 'crashed' });
     await waitFor(() => f.prompts.length === 2);
     f.replace();
     await waitFor(() => f.dismissed === 1);
-    assert.equal(await f.finished(), false);
+    const replacing = (await ipc.connectRaw())!;
     await f.ready();
     await f.requestQuit();
     await f.answer({ id: f.last().id, consent: true });
     await f.answer({ id: f.last().id, consent: true });
-    assert.equal(await f.finished(), true);
+    assert.equal(await f.finished(), false);
+    f.closePrompt();
+    await waitFor(() => f.finished());
+    replacing.send({ _tag: 'Ping' });
+    const reply = await Promise.race([replacing.next(), replacing.closed.then(() => 'closed')]);
+    assert.deepEqual(reply, { _tag: 'Pong' });
     assert.equal(f.calls.filter((call) => call === 'reload').length, 1);
   } finally {
     // Closing the window's scope waits for no prompt.
     await f.dispose();
+    await ipc.dispose();
   }
   const g = await fixture();
   try {
@@ -220,7 +236,7 @@ test('a crashed renderer releases its document, then recovers it or quits as the
   }
 });
 
-test('Quit waits for a document release under way, and reports its failure, earlier ones and the disposal’s own', async () => {
+test('Quit runs its steps, waits for a document release under way, and reports its failure, earlier ones and the disposal’s own', async () => {
   const held = Effect.runSync(Deferred.make<void>());
   const f = await fixture({
     release: Effect.andThen(
@@ -228,7 +244,10 @@ test('Quit waits for a document release under way, and reports its failure, earl
       Effect.fail(new WindowFailure({ text: 'Old document failed' })),
     ),
   });
+  let surfaced = 0;
   try {
+    // Surfacing an open picker, say, which a release may be waiting on.
+    await f.run(f.lifecycle.addQuitStep(Effect.sync(() => void surfaced++)));
     await f.run(f.lifecycle.reportCleanup(Cause.fail(new WindowFailure({ text: 'Earlier' }))));
     await f.ready();
     // A ready document hears of earlier cleanup failures.
@@ -246,6 +265,7 @@ test('Quit waits for a document release under way, and reports its failure, earl
       cleanupError: new WindowFailure({ text: 'Disposal failed' }),
     });
     assert.equal(await f.finished(), false);
+    assert.equal(surfaced, 1);
     await f.run(Deferred.succeed(held, undefined));
     await waitFor(() => f.finished());
     const failures = await f.run(

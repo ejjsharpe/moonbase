@@ -148,8 +148,9 @@ export const DesktopServicesLive = (options: DesktopServicesOptions) => {
           ...(hooks.interception ? { intercept: hooks.interception } : {}),
         }),
       );
-      // Runs before the IPC server closes, whose requests wait for their pickers to be answered.
-      yield* Effect.addFinalizer(() => native.surfacePickers);
+      // Once Quit is agreed, before it waits for a document release or the IPC server's requests,
+      // which may wait for a picker to be answered: the picker must be in front of the user.
+      yield* lifecycle.addQuitStep(native.surfacePickers);
       yield* serveAppProtocol({
         protocol,
         net,

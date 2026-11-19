@@ -8,8 +8,11 @@ export type WindowEventsOptions = {
   app: Pick<App, 'on' | 'removeListener'>;
   window: BrowserWindow;
   dialog: Pick<Dialog, 'showMessageBox'>;
-  /** Releases the window's document: its connections, requests, watches and what they hold. */
-  releaseDocument: Effect.Effect<void, unknown>;
+  /**
+   * Takes the window's document out at once; the result releases it (its connections, requests,
+   * watches and what they hold) without touching a later document.
+   */
+  detachDocument: Effect.Effect<Effect.Effect<void, unknown>>;
 };
 
 /**
@@ -17,12 +20,7 @@ export type WindowEventsOptions = {
  * shows it, Quit asks the document first, a replaced document is released, and a crashed renderer
  * asks the user to recover the workbench or quit.
  */
-export const installWindowEvents = ({
-  app,
-  window,
-  dialog,
-  releaseDocument,
-}: WindowEventsOptions) =>
+export const installWindowEvents = ({ app, window, dialog, detachDocument }: WindowEventsOptions) =>
   Effect.gen(function* () {
     const lifecycle = yield* WindowLifecycle;
     const run = yield* FiberSet.makeRuntime();
@@ -48,10 +46,17 @@ export const installWindowEvents = ({
         if (!isMainFrame) return;
         run(
           Effect.gen(function* () {
-            // The crash prompt's answer no longer applies, so its dialog closes unanswered.
-            yield* FiberHandle.clear(crashPrompt);
+            // Before anything waits, so the new document's connections and readiness are its own.
+            const release = yield* detachDocument;
             yield* lifecycle.replaceDocument;
-            yield* lifecycle.runCleanup(releaseDocument);
+            // The crash prompt's answer no longer applies, so its dialog closes unanswered; Electron
+            // closes it asynchronously, and Quit waits for it as for the release.
+            yield* lifecycle.runCleanup(
+              Effect.all([FiberHandle.clear(crashPrompt), release], {
+                concurrency: 'unbounded',
+                discard: true,
+              }),
+            );
           }),
         );
       },
@@ -79,7 +84,7 @@ export const installWindowEvents = ({
       run(
         Effect.gen(function* () {
           if (!(yield* lifecycle.crashDocument)) return;
-          yield* lifecycle.runCleanup(releaseDocument);
+          yield* lifecycle.runCleanup(yield* detachDocument);
           yield* Effect.logError('Workbench renderer exited:', details.reason);
           yield* FiberHandle.run(crashPrompt, promptAfterCrash);
         }),
