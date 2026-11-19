@@ -105,7 +105,7 @@ export function makeApplication(options: Options) {
       /** The next close prompt, waiting for one if none is shown. */
       closePrompt: () =>
         through(EditorPreservation, (p) =>
-          SubscriptionRef.changes(p.closePrompt).pipe(
+          p.closePrompt.changes.pipe(
             Stream.filter((prompt): prompt is ClosePrompt => prompt !== null),
             Stream.runHead,
             Effect.map((prompt) => (prompt._tag === 'Some' ? prompt.value : undefined)),

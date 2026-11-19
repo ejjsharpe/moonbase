@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
-import { Effect, ManagedRuntime, Layer, SubscriptionRef } from 'effect';
+import { Context, Effect, ManagedRuntime, Layer, SubscriptionRef } from 'effect';
 import { type CheckoutTarget } from '@moonbase/contracts/workspace';
 import { WorkspaceStoreError } from '@moonbase/contracts/workspace-host-errors';
 import {
@@ -32,7 +32,7 @@ import {
 } from '@moonbase/application/editor';
 import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 
-test('exact close prompts ignore stale answers and disposal cancels an outstanding prompt', async () => {
+test('exact close prompts ignore stale answers, Cancel releases the editor as the prompt goes, and disposal cancels an outstanding prompt', async () => {
   const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
   const runtime = ManagedRuntime.make(memory.layer);
   const editor = await acquireEditor(runtime, {
@@ -49,17 +49,64 @@ test('exact close prompts ignore stale answers and disposal cancels an outstandi
     assert(prompt);
     editor.answerClose('stale-prompt', 'discard');
     assert.equal(editor.getSnapshot().closePrompt?.id, prompt.id);
-    editor.answerClose(prompt.id, 'cancel');
+    // Cancel takes the prompt off screen in the same step as it releases the editor. A view reads
+    // on a later microtask, as React does, so it never sees no prompt while edits and Save are
+    // still refused. Answered as the workbench does, through the runtime rather than synchronously.
+    const seen: boolean[] = [];
+    const unsubscribe = editor.subscribe(() =>
+      queueMicrotask(() => {
+        const { closePrompt, preserving } = editor.getSnapshot();
+        seen.push(!closePrompt && preserving);
+      }),
+    );
+    const preservation = Context.get(editor.context, EditorPreservation);
+    await Effect.runPromise(
+      Effect.provideContext(preservation.answerClose(prompt.id, 'cancel'), editor.context),
+    );
     assert.equal(await closing, false);
+    unsubscribe();
+    assert.deepEqual(seen.filter(Boolean), []);
+    assert.equal(await editor.save(target('a.ts')), true);
+    editor.edit(target('a.ts'), 'dirty again');
     const next = editor.close([target('a.ts')]);
-    // Disposal answers the outstanding prompt Cancel, or ends the close with the editor.
-    const result = next.catch(() => false);
+    assert(editor.getSnapshot().closePrompt);
+    // Disposal answers the outstanding prompt Cancel.
     await editor.dispose();
-    assert.equal(await result, false);
+    assert.equal(await next, false);
     assert.equal(editor.getSnapshot().closePrompt, null);
   } finally {
     await editor.dispose();
     await runtime.dispose();
+  }
+});
+
+test('overlapping closes of a dirty file hold the editor until the shown prompt is answered', async () => {
+  const f = await controllerFixture.fixture('overlap', false);
+  try {
+    await f.editor.open(target('a.ts'));
+    f.editor.edit(target('a.ts'), 'older');
+    // A long batch is still checking its targets as the single close starts.
+    const batch = f.editor.close([
+      ...Array.from({ length: 2000 }, (_, at) => target(`missing-${at}.ts`)),
+      target('a.ts'),
+    ]);
+    const single = f.editor.close([target('a.ts')]);
+    const refused = await Promise.race([batch, single]);
+    assert.equal(refused, false);
+    const prompt = f.editor.getSnapshot().closePrompt!;
+    assert(prompt);
+    assert.equal(f.editor.getSnapshot().preserving, true);
+    assert.throws(() => f.editor.edit(target('a.ts'), 'newer'));
+    f.editor.answerClose(prompt.id, 'cancel');
+    assert.deepEqual(await Promise.all([batch, single]), [false, false]);
+    assert.equal(f.editor.getSnapshot().closePrompt, null);
+    await f.editor.flush();
+    assert.deepEqual(
+      draftsOf(await loadStoredState(f.client, f.editor.clientId)).map((d) => d.text),
+      ['older'],
+    );
+  } finally {
+    await f.dispose();
   }
 });
 

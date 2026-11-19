@@ -47,6 +47,7 @@ export type EditorParts = {
   operations: OperationsState;
   outbox: OutboxState;
   mutation: MutationState;
+  replacePrompt: ReplacePrompt | null;
   closePrompt: ClosePrompt | null;
 };
 
@@ -66,5 +67,5 @@ export const toEditorSnapshot = (parts: EditorParts): EditorSnapshot => ({
   errors: parts.alerts,
   operations: listUnsettled(parts.operations),
   mutating: parts.mutation.mutating,
-  replacePrompt: parts.mutation.replacePrompt,
+  replacePrompt: parts.replacePrompt,
 });

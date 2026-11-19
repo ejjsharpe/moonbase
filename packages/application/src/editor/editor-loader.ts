@@ -11,6 +11,8 @@ import { RecoverySync } from './recovery/recovery-sync-service.ts';
 import { readRecoveryState } from './recovery/recovery-layout.ts';
 import { EditorTabs } from './tabs/tabs-service.ts';
 import { EditorTree } from './tree/tree-service.ts';
+import { EditorMutations } from './mutation/mutation-service.ts';
+import { EditorPreservation } from './preservation/preservation-service.ts';
 
 export type EditorLoaderShape = {
   /**
@@ -37,9 +39,20 @@ export class EditorLoader extends Context.Service<EditorLoader, EditorLoaderShap
       const recovery = yield* RecoverySync;
       const tabs = yield* EditorTabs;
       const tree = yield* EditorTree;
+      const mutations = yield* EditorMutations;
+      const preservation = yield* EditorPreservation;
       const { clientId } = session;
-      // Built last, this closes first: nothing is admitted, reported or sent once it starts.
-      yield* Effect.addFinalizer(() => Effect.andThen(session.close, outbox.clear));
+      // Built last, this closes first: nothing is admitted, reported or sent once it starts. Each
+      // open prompt is answered Cancel before the work waiting on it is interrupted.
+      yield* Effect.addFinalizer(() =>
+        Effect.gen(function* () {
+          yield* session.update((s) => ({ ...s, closing: true, admissionsOpen: false }));
+          yield* preservation.cancelPrompt;
+          yield* mutations.cancelPrompt;
+          yield* session.close;
+          yield* outbox.clear;
+        }),
+      );
       const closing = Effect.map(session.get, (s) => s.closing);
 
       const loadOnce = Effect.gen(function* () {

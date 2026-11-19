@@ -1,6 +1,7 @@
-import { Context, Deferred, Effect, Layer, SubscriptionRef } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 import type { CheckoutTarget, FileTarget } from '@moonbase/contracts/workspace';
 import { EditorError, type EditorFailure } from '../editor-errors.ts';
+import { makeEditorPrompt, type ShownPrompt } from '../editor-prompt.ts';
 import { EditorSession } from '../session/session-service.ts';
 import { EditorAlerts } from '../alerts/alerts-service.ts';
 import { EditorViews } from '../views/views-service.ts';
@@ -26,7 +27,8 @@ import {
 type CloseKind = 'files' | 'checkout' | 'quit';
 
 export type EditorPreservationShape = {
-  readonly closePrompt: SubscriptionRef.SubscriptionRef<ClosePrompt | null>;
+  /** The Save, Discard or Cancel prompt shown; closing the editor answers it Cancel. */
+  readonly closePrompt: ShownPrompt<ClosePrompt>;
   /**
    * Closes files: asks Save, Discard or Cancel for each with unsaved changes, then closes them.
    * Their drafts are kept until the store has committed each close, so a failure loses nothing.
@@ -38,6 +40,8 @@ export type EditorPreservationShape = {
   /** Confirms recovery is complete once composition has fenced admissions. */
   readonly finishQuitPreparation: Effect.Effect<boolean>;
   readonly answerClose: (promptId: string, choice: CloseChoice) => Effect.Effect<void>;
+  /** Answers the shown prompt Cancel, as the editor closes. */
+  readonly cancelPrompt: Effect.Effect<void>;
   /** Opens the files of the checkout's last close again. */
   readonly reopen: (checkout: CheckoutTarget) => Effect.Effect<boolean, EditorFailure>;
   /** Whether everything the editor holds is in recovery. */
@@ -63,8 +67,7 @@ export class EditorPreservation extends Context.Service<
       const tabs = yield* EditorTabs;
       const tree = yield* EditorTree;
       const saves = yield* EditorSaves;
-      const closePrompt = yield* SubscriptionRef.make<ClosePrompt | null>(null);
-      let answer: Deferred.Deferred<CloseChoice> | undefined;
+      const closePrompt = yield* makeEditorPrompt<ClosePrompt, CloseChoice>('cancel');
       const admitted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         session.run(Effect.andThen(session.admit, effect));
       const closing = Effect.map(session.get, (s) => s.closing);
@@ -72,28 +75,7 @@ export class EditorPreservation extends Context.Service<
         Effect.all([session.get, outbox.get, buffers.get, operations.get]),
         ([modes, sent, held, known]) => isRecoveryReady(modes, sent, held, known),
       );
-      // A closing editor answers a pending prompt Cancel.
-      yield* Effect.addFinalizer(() =>
-        Effect.suspend(() => (answer ? Deferred.succeed(answer, 'cancel') : Effect.void)),
-      );
-
-      const choose = (buffer: EditorBuffer) =>
-        Effect.gen(function* () {
-          const reply = yield* Deferred.make<CloseChoice>();
-          const prompt = { id: crypto.randomUUID(), buffer };
-          answer = reply;
-          yield* SubscriptionRef.set(closePrompt, prompt);
-          return yield* Deferred.await(reply).pipe(
-            Effect.ensuring(
-              Effect.gen(function* () {
-                if (answer === reply) answer = undefined;
-                yield* SubscriptionRef.update(closePrompt, (shown) =>
-                  shown?.id === prompt.id ? null : shown,
-                );
-              }),
-            ),
-          );
-        });
+      const choose = (buffer: EditorBuffer) => closePrompt.ask({ id: crypto.randomUUID(), buffer });
 
       /**
        * Closes files whose drafts were saved or discarded: once every edit made so far has
@@ -184,7 +166,7 @@ export class EditorPreservation extends Context.Service<
         });
 
       return {
-        closePrompt,
+        closePrompt: closePrompt.shown,
         close: (targets) => admitted(preserve(targets, 'files')),
         closeCheckout: (checkout) =>
           admitted(
@@ -234,10 +216,9 @@ export class EditorPreservation extends Context.Service<
         answerClose: (promptId, choice) =>
           Effect.gen(function* () {
             if (!(yield* session.get).admissionsOpen) return;
-            const shown = yield* SubscriptionRef.get(closePrompt);
-            if (!answer || shown?.id !== promptId || !isCloseChoice(choice)) return;
-            yield* Deferred.succeed(answer, choice);
+            if (isCloseChoice(choice)) yield* closePrompt.answer(promptId, choice);
           }),
+        cancelPrompt: closePrompt.cancel,
         reopen: (checkout) =>
           admitted(
             Effect.gen(function* () {

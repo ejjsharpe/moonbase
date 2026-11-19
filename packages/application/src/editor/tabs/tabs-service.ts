@@ -65,9 +65,12 @@ export type EditorTabsShape = {
   ) => Effect.Effect<void>;
   /**
    * Holds the editor for a close or reload: no open runs and edits are refused until `work`
-   * ends; then the selected file is shown again and the edits made meanwhile are sent.
+   * ends; then the selected file is shown again and the edits made meanwhile are sent. While
+   * another close or reload holds it, `work` doesn't run and this is false.
    */
-  readonly whilePreserving: <A, E, R>(work: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  readonly whilePreserving: <E, R>(
+    work: Effect.Effect<boolean, E, R>,
+  ) => Effect.Effect<boolean, E, R>;
 };
 
 /** Opening, arranging and editing the tabs of the editor's checkouts. */
@@ -387,19 +390,24 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
             if (changed) yield* outbox.changed;
           }),
         whilePreserving: (work) =>
-          Effect.gen(function* () {
-            yield* session.update((s) => ({ ...s, preserving: true }));
-            yield* FiberHandle.clear(activation);
-            return yield* work;
-          }).pipe(
-            Effect.ensuring(
-              Effect.gen(function* () {
-                if ((yield* session.get).closing) return;
-                yield* session.update((s) => ({ ...s, preserving: false }));
-                yield* Effect.catch(activateSelected, alerts.report);
-                yield* outbox.schedule;
-              }),
-            ),
+          Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              // Checking the gate and taking it are one step, and only its owner releases it.
+              const owner = yield* SubscriptionRef.modify(session.state, (s) =>
+                s.preserving ? [false, s] : [true, { ...s, preserving: true }],
+              );
+              if (!owner) return false;
+              return yield* restore(Effect.andThen(FiberHandle.clear(activation), work)).pipe(
+                Effect.ensuring(
+                  Effect.gen(function* () {
+                    if ((yield* session.get).closing) return;
+                    yield* session.update((s) => ({ ...s, preserving: false }));
+                    yield* Effect.catch(activateSelected, alerts.report);
+                    yield* outbox.schedule;
+                  }),
+                ),
+              );
+            }),
           ),
       } satisfies EditorTabsShape;
     }),
