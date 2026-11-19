@@ -15,7 +15,11 @@ export type EditorPrompt<P extends { readonly id: string }, A> = {
    * closed, it is refused: it answers Cancel at once and the shown prompt stays.
    */
   readonly ask: (prompt: P) => Effect.Effect<A>;
-  /** Answers the shown prompt if it is `promptId`; a stale answer does nothing. */
+  /**
+   * Answers the shown prompt if it is `promptId`; a stale or second answer does nothing. The
+   * prompt stays shown until its `ask` resumes, so it leaves the screen in the same step as
+   * whatever the asker does next (a close releasing the editor, say).
+   */
   readonly answer: (promptId: string, answer: A) => Effect.Effect<void>;
   /** Answers the shown prompt, if any, with Cancel. */
   readonly cancel: Effect.Effect<void>;
@@ -36,26 +40,29 @@ export const makeEditorPrompt = <P extends { readonly id: string }, A>(
     // each briefly and without waiting on anything else.
     const state = yield* SubscriptionRef.make<PromptState<P, A>>({ closed: false, current: null });
     /**
-     * Applies `next` and settles the reply of a prompt it takes off screen, in one step that
-     * can't be interrupted, so a prompt never leaves the screen with its reply unsettled.
+     * Applies `next` and answers Cancel to a prompt it takes off screen if it is still unanswered,
+     * in one step that can't be interrupted, so a prompt never leaves the screen unanswered.
      */
-    const settle = (next: (state: PromptState<P, A>) => PromptState<P, A>, answer: A) =>
+    const takeDown = (next: (state: PromptState<P, A>) => PromptState<P, A>) =>
       Effect.uninterruptible(
         SubscriptionRef.modifyEffect(state, (before) =>
           Effect.gen(function* () {
             const after = next(before);
             if (before.current && after.current !== before.current) {
-              yield* Deferred.succeed(before.current.reply, answer);
+              yield* Deferred.succeed(before.current.reply, cancel);
             }
             return [undefined, after] as const;
           }),
         ),
       );
-    const takeIf =
-      (accept: (current: Current<P, A>) => boolean) =>
-      (s: PromptState<P, A>): PromptState<P, A> =>
-        s.current && accept(s.current) ? { ...s, current: null } : s;
-    yield* Effect.addFinalizer(() => settle(() => ({ closed: true, current: null }), cancel));
+    /** Settles the shown prompt's reply, if `accept` takes it; its `ask` takes it off screen. */
+    const reply = (accept: (current: Current<P, A>) => boolean, answer: A) =>
+      Effect.flatMap(SubscriptionRef.get(state), ({ current }) =>
+        current && accept(current)
+          ? Effect.asVoid(Deferred.succeed(current.reply, answer))
+          : Effect.void,
+      );
+    yield* Effect.addFinalizer(() => takeDown(() => ({ closed: true, current: null })));
 
     const shown = SubscriptionRef.changes(state).pipe(
       Stream.map((s) => s.current?.prompt ?? null),
@@ -75,23 +82,11 @@ export const makeEditorPrompt = <P extends { readonly id: string }, A>(
             );
             if (!admitted) return cancel;
             return yield* restore(Deferred.await(entry.reply)).pipe(
-              Effect.ensuring(
-                settle(
-                  takeIf((current) => current === entry),
-                  cancel,
-                ),
-              ),
+              Effect.ensuring(takeDown((s) => (s.current === entry ? { ...s, current: null } : s))),
             );
           }),
         ),
-      answer: (promptId, answer) =>
-        settle(
-          takeIf((current) => current.prompt.id === promptId),
-          answer,
-        ),
-      cancel: settle(
-        takeIf(() => true),
-        cancel,
-      ),
+      answer: (promptId, answer) => reply((current) => current.prompt.id === promptId, answer),
+      cancel: reply(() => true, cancel),
     } satisfies EditorPrompt<P, A>;
   });
