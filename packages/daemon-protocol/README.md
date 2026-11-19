@@ -20,7 +20,7 @@ Remote hosts run the [daemon](../../apps/daemon/README.md#remote-host) in host m
 - **Refusals:** wrong proof, wrong host binding or a replayed nonce 401; any `Origin` header 403; a `Host` other than `127.0.0.1:<port>`, another path, a query or a malformed handshake 400; past the socket's connection cap 503.
 - **Signed health** is HMAC-SHA256 both ways (`moonbase-daemon-health-v1`) over the host's identity, protocol, version and capabilities. The client reads at most 8 KiB, follows no redirects and gives the check 5 s.
 - **Capabilities.** Every host has `chat-v0` and `rpc-v1`; a daemon adds `daemon-local-v1`, `providers-v1` and `folders-v1`, host mode `roots-v1`, and one with a file host `workspace-v2`. The server serves only what it advertises, and the client checks the capability before sending (`IncompatibleHostError` `not-served`). The protocol is version 3.
-- **Mutations are never resent.** A dropped or late mutation reply is `UncertainError`. Daemon mutations carry request IDs, and the server returns a recent request's outcome again instead of rerunning it. Workspace mutations (`isHostMutation`) are journalled by the host under their request ID: a repeat replays the first outcome, and one left uncertain is reported `InterruptedRequestError`, so the client inspects and mints a new ID.
+- **Mutations are never resent.** A dropped or late mutation reply is `UncertainError`. Daemon mutations carry request IDs, and the server returns a recent request's outcome again instead of rerunning it. Workspace mutations (each `Rpc` annotated `Mutation` in `@moonbase/contracts/rpc-annotations`) are journalled by the host under their request ID: a repeat replays the first outcome, and one left uncertain is reported `InterruptedRequestError`, so the client inspects and mints a new ID.
 - **Mutations run to completion** once admitted, even if their connection drops. Reads are interrupted when their caller cancels. A request past a connection's limits is refused `HostUnavailableError` (`busy`) before it runs, so a refused mutation was never applied.
 - **Errors (D11, D14).** Each procedure declares its error union; a handler sends only errors that union names (tag and fields, never a cause) and anything else as `HostUnavailableError`. The client decodes only those, and `presentRemoteError` and `presentWorkspaceError` replace any text a host could fill with the client's own.
 - **Host ownership.** Every request names its host, and each workspace input's checkout must be that host's (`UnauthorizedError`, checked by both sides).
@@ -32,7 +32,7 @@ Remote hosts run the [daemon](../../apps/daemon/README.md#remote-host) in host m
 
 ### Limits
 
-From `rpcLimits` and `workspaceRpcLimits` in `@moonbase/contracts/rpc-upgrade`, and `hostDeadlinesMs` in `workspace-host-schema`.
+From `rpcLimits` and `workspaceRpcLimits` in `@moonbase/contracts/rpc-upgrade`, and `hostDeadlinesMs` in `workspace-rpc`.
 
 | Bound | `/v3/rpc` | `/v3/workspace` |
 | --- | --- | --- |

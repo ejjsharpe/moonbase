@@ -14,6 +14,8 @@ import {
   recoveryInputSchemas,
   recoveryOutputSchemas,
 } from '@moonbase/contracts/recovery-schema';
+import { Mutation } from '@moonbase/contracts/rpc-annotations';
+import { isHostMutation } from '@moonbase/contracts/workspace-rpc';
 import { IpcAdmission } from './ipc-admission.ts';
 import {
   IpcAuthorityError,
@@ -37,18 +39,19 @@ const importError = union([IpcAuthorityError, NativeActionError, ...workspaceSer
 /** A reply's schema on the wire: no reply is `Schema.Void`, which encodes as JSON. */
 const wire = <S extends Schema.Top>(schema: S) =>
   (schema === (voidResult as unknown) ? Schema.Void : schema) as S;
+/** A workspace command, a mutation where the file host's operation it runs is one. */
 const command = <const K extends keyof typeof workspaceInputSchemas>(operation: K) =>
   Rpc.make(operation, {
     payload: exact(workspaceInputSchemas[operation]),
     success: wire(workspaceOutputSchemas[operation]),
     error,
-  });
+  }).annotate(Mutation, isHostMutation(operation));
 const statusCommand = <const K extends 'operationStatus' | 'acknowledgeOperation'>(operation: K) =>
   Rpc.make(operation, {
     payload: exact(workspaceInputSchemas[operation]),
     success: wire(workspaceOutputSchemas[operation]),
     error: statusError,
-  });
+  }).annotate(Mutation, isHostMutation(operation));
 const recovery = <const K extends keyof typeof recoveryInputSchemas>(operation: K) =>
   Rpc.make(operation, {
     payload: exact(recoveryInputSchemas[operation]),
@@ -62,7 +65,8 @@ const imports = Schema.NullOr(array(Schema.String));
 
 /**
  * The workspace commands and watch, the recovery store's load, edits and watch, and the native
- * actions on an approved checkout.
+ * actions on an approved checkout. Recovery edits are not mutations: each sets a state, so
+ * sending one again is safe.
  */
 export class EditorRpcs extends RpcGroup.make(
   command('openCheckout'),

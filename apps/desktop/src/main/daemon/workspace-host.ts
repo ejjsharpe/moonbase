@@ -5,11 +5,8 @@ import { isIncompatible } from '@moonbase/contracts/error-groups';
 import { chatHostCapabilities } from '@moonbase/contracts/host';
 import type { VerifiedChatEndpoint, WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import type { HostCommand } from '@moonbase/contracts/workspace-host';
-import {
-  hostDeadlineMs,
-  hostDeadlinesMs,
-  hostInputSchemas,
-} from '@moonbase/contracts/workspace-host-schema';
+import { hostInputSchemas } from '@moonbase/contracts/workspace-host-schema';
+import { hostDeadlineMs, hostDeadlinesMs } from '@moonbase/contracts/workspace-rpc';
 import type { LocalDaemon } from './local-daemon.ts';
 
 const unreachable = () => new LocalDaemonError({ reason: 'reach-timeout' });

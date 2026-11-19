@@ -106,15 +106,6 @@ export const daemonCommandCapabilities: Record<DaemonCommand, ChatHostCapability
   logoutProvider: chatHostCapabilities.providers,
   releaseProviderOwner: chatHostCapabilities.providers,
 };
-/** Operations that change state: they carry a request ID, and a lost reply is `Uncertain`. */
-export const isDaemonMutation = (operation: DaemonCommand) =>
-  operation === 'approveFolder' ||
-  operation === 'markFolderAsProject' ||
-  operation === 'startProviderLogin' ||
-  operation === 'answerProviderPrompt' ||
-  operation === 'cancelProviderLogin' ||
-  operation === 'logoutProvider';
-
 export const isDaemonCommand = (value: unknown): value is DaemonCommand =>
   typeof value === 'string' && Object.hasOwn(daemonInputSchemas, value);
 export const isLocalHostCommand = (value: unknown): value is LocalHostCommand =>

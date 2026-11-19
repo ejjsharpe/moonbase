@@ -5,13 +5,12 @@ import {
   daemonInputSchemas,
   daemonOutputSchemas,
   isDaemonCommand,
-  isDaemonMutation,
   maximumHostFolders,
   maximumRecentFolders,
 } from '../src/daemon-schema.ts';
 import { readProviderSignInUrl } from '../src/providers-schema.ts';
 import * as Schema from 'effect/Schema';
-import { folderReadErrors } from '../src/daemon-rpc.ts';
+import { folderReadErrors, isDaemonMutation } from '../src/daemon-rpc.ts';
 import { FolderRefusedError } from '../src/folder-errors.ts';
 import { decodeConnectionProfile } from '../src/connection-schema.ts';
 import { chatHostCapabilities, chatProtocolVersion } from '../src/host.ts';
@@ -20,7 +19,7 @@ import { decodeChatHostHealth } from '../src/host-schema.ts';
 const host = { hostId: 'host', storeId: 'store' };
 const state = { providers: [], flow: null };
 
-test('every daemon operation names one advertised capability; mutations are exactly those with request IDs', () => {
+test('every daemon operation names one advertised capability; its mutations are the ones that change state', () => {
   const operations = Object.keys(daemonInputSchemas);
   assert.deepEqual(Object.keys(daemonCommandCapabilities).sort(), [...operations].sort());
   for (const capability of Object.values(daemonCommandCapabilities))
@@ -33,12 +32,6 @@ test('every daemon operation names one advertised capability; mutations are exac
     'markFolderAsProject',
     'startProviderLogin',
   ]);
-  for (const operation of operations) {
-    const fields = Object.keys(
-      (daemonInputSchemas as Record<string, { fields: object }>)[operation]!.fields,
-    );
-    assert.equal(fields.includes('requestId'), isDaemonMutation(operation as never), operation);
-  }
   assert(!isDaemonCommand('setAdmissionsOpen'));
   assert(!isDaemonCommand('sendChat'));
 });

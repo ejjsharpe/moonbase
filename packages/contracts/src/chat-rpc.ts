@@ -13,7 +13,6 @@ import {
 import { UncertainError } from './errors.ts';
 import { FolderRefusedError } from './folder-errors.ts';
 import { hostErrors, RequestReusedError } from './host-errors.ts';
-import { isChatMutation } from './chat-validation.ts';
 import type { ChatCommand } from './chat.ts';
 import { ChatHostTargetSchema } from './host-schema.ts';
 import {
@@ -25,6 +24,7 @@ import {
 } from './chat-schema.ts';
 import { ChatDeltaSchema, ChatListDeltaSchema, ChatListStateSchema } from './watch-schema.ts';
 import { RpcAdmission } from './rpc-admission.ts';
+import { findMarkedProcedures, isMutationRpc, Mutation, StatusCall } from './rpc-annotations.ts';
 
 // What each chat procedure fails with on the wire, besides the host's own errors.
 const store = [ChatAccessError, ChatStoreError, ChatStoreMismatchError, ChatUnavailableError];
@@ -53,25 +53,22 @@ const ChatReadErrorSchema = Schema.Union(chatReadErrors),
   ChatFileSearchErrorSchema = Schema.Union(chatFileSearchErrors),
   ChatSendLookupErrorSchema = Schema.Union(chatSendLookupErrors),
   ChatMutationErrorSchema = Schema.Union(chatMutationErrors);
-/** The error union a chat operation or watch declares; its `members` are the error classes. */
-export function chatErrorSchemaOf(operation: ChatCommand | 'watchChat' | 'watchChatList') {
-  if (operation === 'watchChat' || operation === 'watchChatList') return ChatReadErrorSchema;
-  if (isChatMutation(operation)) return ChatMutationErrorSchema;
-  if (operation === 'findChatFiles') return ChatFileSearchErrorSchema;
-  if (operation === 'getChatSend') return ChatSendLookupErrorSchema;
-  return ChatReadErrorSchema;
-}
 /** One request: the host it is for, named at the top level, and the operation's input. */
 const request = <S extends Schema.Top>(input: S) => ({ host: ChatHostTargetSchema, input });
 /** A reply's schema on the wire: no reply is `Schema.Void`, which encodes as JSON. */
 const wire = <S extends Schema.Top>(schema: S) =>
   (schema === (voidResult as unknown) ? Schema.Void : schema) as S;
-const call = <const K extends keyof typeof chatInputSchemas>(operation: K) =>
+const procedure = <const K extends ChatCommand, E extends Schema.Top>(operation: K, error: E) =>
   Rpc.make(operation, {
     payload: request(chatInputSchemas[operation]),
     success: wire(chatOutputSchemas[operation]),
-    error: chatErrorSchemaOf(operation),
+    error,
   });
+const read = <const K extends ChatCommand>(operation: K) =>
+  procedure(operation, ChatReadErrorSchema);
+/** A command that changes chat state: a lost reply is `Uncertain`, and Quit waits for it. */
+const mutation = <const K extends ChatCommand>(operation: K) =>
+  procedure(operation, ChatMutationErrorSchema).annotate(Mutation, true);
 /** A watch's first value, then deltas from it where one pays, else whole values again. */
 const update = <V extends Schema.Top, D extends Schema.Top>(value: V, delta: D) =>
   Schema.Union([
@@ -83,19 +80,21 @@ export const ChatListUpdateSchema = update(ChatListStateSchema, ChatListDeltaSch
 
 /** A chat host's operations and watches. */
 export class ChatRpcs extends RpcGroup.make(
-  call('getChatHost'),
-  call('listChats'),
-  call('createChat'),
-  call('getChat'),
-  call('getChatHistory'),
-  call('getChatTranscriptContent'),
-  call('findChatTranscript'),
-  call('getChatHistoryAround'),
-  call('sendChat'),
-  call('getChatSend'),
-  call('stopChat'),
-  call('settleChat'),
-  call('findChatFiles'),
+  read('getChatHost'),
+  read('listChats'),
+  mutation('createChat'),
+  read('getChat'),
+  read('getChatHistory'),
+  read('getChatTranscriptContent'),
+  read('findChatTranscript'),
+  read('getChatHistoryAround'),
+  mutation('sendChat'),
+  /** Resolves an `Uncertain` Send by its request ID, which may name another request. */
+  procedure('getChatSend', ChatSendLookupErrorSchema).annotate(StatusCall, true),
+  mutation('stopChat'),
+  mutation('settleChat'),
+  /** A file search, which also refuses a folder chats may not use. */
+  procedure('findChatFiles', ChatFileSearchErrorSchema),
   Rpc.make('watchChat', {
     payload: { host: ChatHostTargetSchema, target: ChatTargetSchema },
     success: ChatUpdateSchema,
@@ -109,3 +108,14 @@ export class ChatRpcs extends RpcGroup.make(
     stream: true,
   }),
 ).middleware(RpcAdmission) {}
+
+const chatMutations = findMarkedProcedures(ChatRpcs, isMutationRpc);
+/** Commands that change chat state: a lost reply is `Uncertain`, and Quit waits for them. */
+export const isChatMutation = (operation: ChatCommand) => chatMutations.has(operation);
+/** The error union a chat operation or watch declares; its `members` are the error classes. */
+export const chatErrorSchemaOf = (operation: ChatCommand | 'watchChat' | 'watchChatList') =>
+  ChatRpcs.requests.get(operation)!.errorSchema as
+    | typeof ChatReadErrorSchema
+    | typeof ChatFileSearchErrorSchema
+    | typeof ChatSendLookupErrorSchema
+    | typeof ChatMutationErrorSchema;

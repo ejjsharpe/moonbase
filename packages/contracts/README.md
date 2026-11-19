@@ -14,7 +14,7 @@
 | `providers`, `providers-schema`, `provider-errors` | Provider setup state and commands, `readProviderSignInUrl` and the provider setup errors |
 | `connection`, `connection-schema`, `connection-errors` | Connection profiles and snapshots, and `ConnectionFailure` |
 | `host`, `host-schema`, `host-errors` | Protocol version, capabilities and signed health; the host link's errors (`hostErrors`, `DaemonLinkError`, `RequestReusedError`) |
-| `rpc-upgrade`, `rpc-admission` | Both sockets' paths, protocols and limits; `RpcAdmission`, the middleware every procedure declares and daemon-protocol's server implements |
+| `rpc-upgrade`, `rpc-admission`, `rpc-annotations` | Both sockets' paths, protocols and limits; `RpcAdmission`, the middleware every procedure declares and daemon-protocol's server implements; `Mutation` and `StatusCall`, the annotations that say on each `Rpc` whether it changes state or resolves an `Uncertain` one, which clients and servers read instead of keeping lists of names |
 | `watch`, `watch-schema` | Watch values and deltas: `applyWatchDelta`, `decodeWatchValue` |
 | `errors`, `error-groups` | The shared outcomes and what a failure means (below) |
 | `ipc-errors` | What desktop IPC fails with, here because the application reads them |

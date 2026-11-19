@@ -2,8 +2,7 @@ import { Cause, Effect, Predicate, Stream } from 'effect';
 import * as Schema from 'effect/Schema';
 import * as Socket from 'effect/socket/Socket';
 import type { RpcClientError } from 'effect/rpc/RpcClientError';
-import type { ChatCommand } from '@moonbase/contracts/chat';
-import { isChatMutation } from '@moonbase/contracts/chat-validation';
+import { isMutationRpc } from '@moonbase/contracts/rpc-annotations';
 import { IpcClosedError, IpcInputError, IpcReplyError } from '@moonbase/contracts/ipc-errors';
 import { DesktopRpcs } from '../../ipc/desktop-rpcs.ts';
 import { DesktopIpc } from './desktop-ipc.ts';
@@ -14,27 +13,11 @@ import { DesktopIpc } from './desktop-ipc.ts';
 type Client = DesktopIpc['Service'];
 
 /**
- * Commands that change state: one whose connection closes may have run, so it is `Uncertain`.
- * Recovery edits are not among them: each sets a state, so sending one again is safe.
+ * A closed connection: a procedure its `Rpc` marks as a `Mutation` may have run, so it is
+ * `Uncertain`; any other was safe to send again.
  */
-const mutations = new Set<string>([
-  'saveFile',
-  'mutate',
-  'createWorktree',
-  'initializeRepository',
-  'acknowledgeOperation',
-  'startProviderLogin',
-  'answerProviderPrompt',
-  'cancelProviderLogin',
-  'logoutProvider',
-  'connect',
-  'disconnect',
-  'createChatWorktree',
-  'turnChatIntoProject',
-]);
-const isMutation = (tag: string) => mutations.has(tag) || isChatMutation(tag as ChatCommand);
-
-const closedError = (tag: string) => new IpcClosedError({ sent: isMutation(tag) });
+const closedError = (tag: string) =>
+  new IpcClosedError({ sent: isMutationRpc(DesktopRpcs.requests.get(tag)!) });
 const isClientError = (value: unknown): value is RpcClientError =>
   Predicate.isTagged(value, 'RpcClientError');
 /** Whether the renderer's schemas encode `payload` for `tag`: whether it was ever sent. */

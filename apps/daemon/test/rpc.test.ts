@@ -9,9 +9,10 @@ import { daemonInputSchemas } from '@moonbase/contracts/daemon-schema';
 import type { ProviderState } from '@moonbase/contracts/providers';
 import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import type { DaemonCommand, DaemonInput, DaemonOutput } from '@moonbase/contracts/daemon';
-import { daemonCommandCapabilities, isDaemonMutation } from '@moonbase/contracts/daemon-schema';
+import { daemonCommandCapabilities } from '@moonbase/contracts/daemon-schema';
+import { isDaemonMutation } from '@moonbase/contracts/daemon-rpc';
 import type { ChatCommand, ChatInput } from '@moonbase/contracts/chat';
-import { isChatMutation } from '@moonbase/contracts/chat-validation';
+import { isChatMutation } from '@moonbase/contracts/chat-rpc';
 import { chatHostCapabilities } from '@moonbase/contracts/host';
 import {
   DaemonRpcLink,

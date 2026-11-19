@@ -203,40 +203,6 @@ export function decodeHostInput<K extends HostCommand>(operation: K, value: unkn
   }
 }
 
-/** Operations that change the host: a lost reply is `Uncertain` and is never sent again. */
-const hostMutations: ReadonlySet<string> = new Set<HostCommand>([
-  'saveFile',
-  'mutate',
-  'createWorktree',
-  'initializeRepository',
-  'acknowledgeOperation',
-  'acknowledgeSave',
-  'createChatWorktree',
-  'turnChatIntoProject',
-  'captureImports',
-]);
-export const isHostMutation = (operation: string) => hostMutations.has(operation);
-/**
- * How long a client waits for a reply before it is lost: reads, lookup and search, mutations
- * (the helper's 30 s limit and a margin), and the Git steps of a worktree or `git init`. Past
- * it a mutation is `Uncertain`; `saveStatus` and `operationStatus` resolve it.
- */
-export const hostDeadlinesMs = {
-  read: 20_000,
-  search: 30_000,
-  mutation: 60_000,
-  git: 120_000,
-} as const;
-export function hostDeadlineMs(operation: HostCommand): number {
-  if (operation === 'lookupFiles' || operation === 'searchText') return hostDeadlinesMs.search;
-  if (
-    operation === 'createWorktree' ||
-    operation === 'initializeRepository' ||
-    operation === 'createChatWorktree'
-  )
-    return hostDeadlinesMs.git;
-  return isHostMutation(operation) ? hostDeadlinesMs.mutation : hostDeadlinesMs.read;
-}
 /**
  * The checkout (or, for a chat, host) an operation's input names, if any: the daemon and its
  * clients check it is the host's own.
