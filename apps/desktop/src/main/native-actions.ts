@@ -118,6 +118,7 @@ export const makeNativeActions = ({
   shell,
   capture,
   release,
+  isClosing,
 }: {
   window: BrowserWindow;
   dialog: Pick<Dialog, 'showOpenDialog' | 'showMessageBox'>;
@@ -125,15 +126,26 @@ export const makeNativeActions = ({
   shell: Pick<Shell, 'showItemInFolder'>;
   capture: NativeActions['capture'];
   release: NativeActions['release'];
+  /** Whether Quit is releasing everything, after which no picker opens. */
+  isClosing: Effect.Effect<boolean>;
 }) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const openPickers = yield* Ref.make(0);
-    /** A picker on the window, counted while open. */
+    /**
+     * A picker on the window, counted while open. Once Quit is closing it answers as cancelled
+     * without opening: counted first, then checked, so a picker either opens before Quit surfaces
+     * the open ones or sees that Quit is closing.
+     */
     const pick = (options: OpenDialogOptions) =>
       Effect.acquireUseRelease(
         Ref.update(openPickers, (count) => count + 1),
-        () => showDialog(() => dialog.showOpenDialog(window, options)),
+        () =>
+          Effect.flatMap(isClosing, (closing) =>
+            closing
+              ? Effect.succeed({ canceled: true, filePaths: [] })
+              : showDialog(() => dialog.showOpenDialog(window, options)),
+          ),
         () => Ref.update(openPickers, (count) => count - 1),
       );
     const chooseDirectory = (title: string) =>

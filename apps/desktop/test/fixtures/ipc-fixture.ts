@@ -207,14 +207,28 @@ export const noChat: ChatIpcOptions['backends'] = {
   turnIntoProject: () => Effect.die('Projects are not part of this test.'),
 };
 
-/** Polls `check` until it holds, failing if it never does. */
+/** How long a test waits for a condition or a port before it fails. */
+const testDeadline = 15_000;
+/** Polls `check`, awaiting it, until it holds, failing if it never does. */
 export async function waitFor(check: () => unknown) {
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + testDeadline;
   while (Date.now() < deadline) {
-    if (check()) return;
+    if (await check()) return;
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
   throw Error('The condition never held: ' + String(check));
+}
+/** `promise`'s outcome, or a failure naming `what` if it never settles. */
+export async function settleWithin<A>(promise: Promise<A>, what: string): Promise<A> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(Error(what + ' never settled')), testDeadline);
+  });
+  try {
+    return await Promise.race([promise, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 /** One request's outcome on the wire: its value, its failure, or a refusal of its frame. */
 export type RawReply = {

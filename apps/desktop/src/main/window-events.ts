@@ -1,5 +1,5 @@
 import type { App, BrowserWindow, Dialog, Event } from 'electron';
-import { Effect, FiberHandle, FiberSet } from 'effect';
+import { Effect, Exit, FiberHandle, FiberSet } from 'effect';
 import { listen } from './electron-listener.ts';
 import { showDialog } from './native-actions.ts';
 import { WindowLifecycle } from './window-lifecycle.ts';
@@ -50,12 +50,15 @@ export const installWindowEvents = ({ app, window, dialog, detachDocument }: Win
             const release = yield* detachDocument;
             yield* lifecycle.replaceDocument;
             // The crash prompt's answer no longer applies, so its dialog closes unanswered; Electron
-            // closes it asynchronously, and Quit waits for it as for the release.
+            // closes it asynchronously, and Quit waits for it as for the release. Each is waited
+            // for whatever the other does, and then their failures are reported together.
             yield* lifecycle.runCleanup(
-              Effect.all([FiberHandle.clear(crashPrompt), release], {
-                concurrency: 'unbounded',
-                discard: true,
-              }),
+              Effect.flatMap(
+                Effect.all([Effect.exit(FiberHandle.clear(crashPrompt)), Effect.exit(release)], {
+                  concurrency: 'unbounded',
+                }),
+                (exits) => Exit.asVoidAll(exits),
+              ),
             );
           }),
         );

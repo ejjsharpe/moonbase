@@ -110,6 +110,7 @@ export const DesktopServicesLive = (options: DesktopServicesOptions) => {
           Effect.flatMap(Effect.zip(local.peek, local.isRunning), ([backend, running]) =>
             backend && running ? backend.workspace.releaseImports(input) : Effect.void,
           ),
+        isClosing: lifecycle.isClosing,
       });
       const approvals = new EditorApprovals();
       const backends = makeChatBackends({

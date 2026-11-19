@@ -52,9 +52,12 @@ export class WindowLifecycle extends Context.Service<
     readonly isQuitting: Effect.Effect<boolean>;
     /** Whether Quit is releasing everything. */
     readonly isClosing: Effect.Effect<boolean>;
-    /** Adds `step`, which Quit runs once it is agreed, before it waits for document releases. */
+    /**
+     * Adds `step`, which Quit runs once it is agreed, before it waits for document releases. A
+     * step's failure is reported with the cleanup failures, and the later steps still run.
+     */
     addQuitStep(step: Effect.Effect<void>): Effect.Effect<void>;
-    /** Waits for Quit, runs its steps, then waits for the document releases under way. */
+    /** Waits for Quit, runs its steps once, then waits for the document releases under way. */
     readonly awaitQuit: Effect.Effect<void>;
   }
 >()('moonbase/desktop/WindowLifecycle') {}
@@ -111,6 +114,15 @@ export const makeWindowLifecycle = ({ window, deliver }: WindowLifecycleOptions)
         ),
       );
     const phase = Effect.map(SubscriptionRef.get(state), (current) => current.phase._tag);
+    /**
+     * Quit's steps, once however many wait for Quit: each in the order added, its failure reported
+     * so the next still runs and Quit still waits for the document releases.
+     */
+    const runQuitSteps = yield* Effect.cached(
+      Effect.flatMap(Ref.get(quitSteps), (steps) =>
+        Effect.forEach(steps, (step) => Effect.catchCause(step, reportCleanup), { discard: true }),
+      ),
+    );
     return WindowLifecycle.of({
       state,
       actions,
@@ -145,7 +157,7 @@ export const makeWindowLifecycle = ({ window, deliver }: WindowLifecycleOptions)
       addQuitStep: (step) => Ref.update(quitSteps, (steps) => [...steps, step]),
       awaitQuit: Effect.gen(function* () {
         yield* Deferred.await(quit);
-        yield* Effect.all(yield* Ref.get(quitSteps), { discard: true });
+        yield* runQuitSteps;
         yield* FiberSet.awaitEmpty(cleanups);
       }),
     });
