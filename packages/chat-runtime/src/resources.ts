@@ -12,6 +12,7 @@ import {
   type ChatError,
 } from '@moonbase/contracts/chat-errors';
 import { IncompatibleHostError } from '@moonbase/contracts/host-errors';
+import { ProcessGroups } from '@moonbase/process-group';
 import { Host } from './commands/chat-host.ts';
 import { makeChatFileIndex } from './files.ts';
 import { safeError } from './commands/safe-error.ts';
@@ -187,7 +188,7 @@ export function openHost(config: LocalPiRuntimeConfiguration & { readonly regist
     const files = yield* makeChatFileIndex({
       ripgrepExecutable: config.ripgrepExecutable,
       ...(config.fileListingTiming ? { timing: config.fileListingTiming } : {}),
-    });
+    }).pipe(Effect.provide(ProcessGroups.layer));
     const host = yield* Host.make({
       config,
       harness,

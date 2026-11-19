@@ -1,6 +1,7 @@
 import { Cause, Clock, Context, Effect, FiberSet, Layer, type Scope, Stream } from 'effect';
 import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import type { HostInput } from '@moonbase/contracts/workspace-host';
+import { ProcessGroups } from '@moonbase/process-group';
 import {
   WorkspaceUnsupportedError,
   type WorkspaceHostError,
@@ -209,7 +210,11 @@ export function makeFileHostLayer(configuration: WorkspaceHostConfiguration) {
     WorkspaceWorktrees.layer,
     NativeReferences.layer,
     WorkspaceObservations.layer,
-  ).pipe(Layer.provideMerge(Layer.mergeAll(Checkouts.layer, Leases.layer)));
+  ).pipe(
+    Layer.provideMerge(
+      Layer.mergeAll(Checkouts.layer.pipe(Layer.provide(ProcessGroups.layer)), Leases.layer),
+    ),
+  );
   return Layer.effect(FileHost, makeFileHost).pipe(
     Layer.provide(helpers),
     Layer.provide(HostStore.layer),

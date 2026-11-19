@@ -1,5 +1,5 @@
 import { Data, Deferred, Duration, Effect, Exit, Option } from 'effect';
-import { spawnProcessGroup, type ProcessGroupExit } from '@moonbase/process-group';
+import { type ProcessGroupExit, type ProcessGroupsShape } from '@moonbase/process-group';
 
 /** How long a listing may run, and how long its stopped process group has after SIGTERM. */
 export type ChatFileListingTiming = { budget: Duration.Input; stopGrace: Duration.Input };
@@ -37,11 +37,12 @@ export type ChatFileListingRun = (
 /**
  * Runs listings in their own process group (`@moonbase/process-group`), so a listing stopped by
  * its budget or by closing takes any children with it: SIGTERM, then SIGKILL after `stopGrace`
- * whether or not the leader has exited, and as long again for the group to be gone. The stop runs
+ * whether or not the leader has exited, and as long again for the group to be gone. A listing
+ * whose group can't be confirmed gone fails rather than returning what it printed. The stop runs
  * on the system clock; the budget on the caller's.
  */
 export const makeRunListing =
-  ({ budget, stopGrace }: ChatFileListingTiming): ChatFileListingRun =>
+  ({ budget, stopGrace }: ChatFileListingTiming, groups: ProcessGroupsShape): ChatFileListingRun =>
   (executable, args, cwd) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -51,13 +52,15 @@ export const makeRunListing =
         const chunks: Buffer[] = [];
         let length = 0;
         // Closing the index, or a caller giving up, stops a listing that is still running.
-        const group = yield* spawnProcessGroup(executable, args, {
-          cwd,
-          stdio: ['ignore', 'pipe', 'ignore'],
-          stopTiming: { termGrace: stopGrace, deadline: Duration.toMillis(stopGrace) * 2 },
-        }).pipe(
-          Effect.mapError(() => new ListingError({ reason: 'failed', output: Buffer.alloc(0) })),
-        );
+        const group = yield* groups
+          .spawn(executable, args, {
+            cwd,
+            stdio: ['ignore', 'pipe', 'ignore'],
+            stopTiming: { termGrace: stopGrace, deadline: Duration.toMillis(stopGrace) * 2 },
+          })
+          .pipe(
+            Effect.mapError(() => new ListingError({ reason: 'failed', output: Buffer.alloc(0) })),
+          );
         group.process.stdout!.on('data', (chunk: Buffer) => {
           if (length >= listingBytes) return;
           if (length + chunk.length > listingBytes) {
@@ -78,7 +81,11 @@ export const makeRunListing =
           ),
         );
         if (Option.isNone(outcome)) {
-          yield* Effect.ignore(group.stop);
+          // A group still running could go on writing where the listing looked: nothing is kept.
+          yield* Effect.mapError(
+            group.stop,
+            () => new ListingError({ reason: 'failed', output: Buffer.alloc(0) }),
+          );
           return { bytes: Buffer.concat(chunks), truncated: true };
         }
         const { code, spawnFailed, spawnErrorCode } = outcome.value;

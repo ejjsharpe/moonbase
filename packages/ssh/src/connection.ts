@@ -27,6 +27,7 @@ import {
   type ChatHostEndpoint,
   type ConnectionServiceShape,
 } from '@moonbase/contracts/services';
+import { ProcessGroups } from '@moonbase/process-group';
 import {
   defaultSshStopTiming,
   startSshProcess,
@@ -104,6 +105,7 @@ export function SshLive(input: SshConfiguration, options: SshOptions) {
         startupMs = options.startupMs ?? 20_000,
         stopTiming = { ...defaultSshStopTiming, ...options.stopTiming };
       const scope = yield* Effect.scope;
+      const groups = yield* ProcessGroups;
       const attempts = yield* FiberMap.make<string, void, SshFailure>();
       const state = yield* SubscriptionRef.make<ConnectionState>({
         snapshot: { profile, state: 'disconnected', connectionId: null },
@@ -138,7 +140,9 @@ export function SshLive(input: SshConfiguration, options: SshOptions) {
       const start = (g: Generation, args: string[], captureOutput: boolean) =>
         Effect.uninterruptible(
           Effect.tap(
-            startSshProcess(config.sshExecutable, args, { token, captureOutput, stopTiming }),
+            startSshProcess(config.sshExecutable, args, { token, captureOutput, stopTiming }).pipe(
+              Effect.provideService(ProcessGroups, groups),
+            ),
             (child) => Effect.sync(() => g.processes.push(child)),
           ),
         );
@@ -376,5 +380,5 @@ export function SshLive(input: SshConfiguration, options: SshOptions) {
       };
       return service;
     }),
-  );
+  ).pipe(Layer.provide(ProcessGroups.layer));
 }

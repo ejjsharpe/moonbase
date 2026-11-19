@@ -1,5 +1,9 @@
 import { type Cause, Duration, Effect, Option, Queue, Stream } from 'effect';
-import { outputDrain, spawnProcessGroup, type ProcessGroupExit } from '@moonbase/process-group';
+import {
+  outputDrain,
+  type ProcessGroupExit,
+  type ProcessGroupsShape,
+} from '@moonbase/process-group';
 import { HelperFailure } from './system-failures.ts';
 
 /** How much stdout a run buffers, or one streamed line holds, before the run is stopped. */
@@ -43,28 +47,40 @@ const helperEnvironment = (overrides: Record<string, string | undefined> = {}) =
 /**
  * Starts the helper in its own process group, so stopping it reaches Git's children (checkout,
  * hooks, filters) as Ctrl-C would and Git can remove what it half-created. Closing the run's scope
- * stops the group and waits for it to exit, so the descriptors it holds and the checkout stay
- * owned until then.
+ * stops a helper still running and waits for it to exit, so the descriptors it holds and the
+ * checkout stay owned until then; one whose group can't be confirmed gone stays owned until the
+ * helper itself has exited.
  */
-const startHelper = (helper: string, args: string[], options: HelperOptions) =>
+const startHelper = (
+  groups: ProcessGroupsShape,
+  helper: string,
+  args: string[],
+  options: HelperOptions,
+) =>
   Effect.gen(function* () {
-    const output = yield* Queue.unbounded<Buffer, HelperFailure | Cause.Done>();
-    const group = yield* spawnProcessGroup(helper, args, {
-      stdio: ['pipe', 'pipe', 'pipe', options.fd, ...(options.extra ?? [])],
-      env: helperEnvironment(options.env),
-      stopTiming,
-    }).pipe(
-      Effect.mapError(
-        () =>
-          new HelperFailure({
-            message: 'Filesystem helper unavailable.',
-            status: null,
-            stderr: '',
-            uncertain: false,
-            output: Buffer.alloc(0),
-          }),
-      ),
+    // Shut down after the group's release, which stops the helper before its pipes are let go.
+    const output = yield* Effect.acquireRelease(
+      Queue.unbounded<Buffer, HelperFailure | Cause.Done>(),
+      Queue.shutdown,
     );
+    const group = yield* groups
+      .spawn(helper, args, {
+        stdio: ['pipe', 'pipe', 'pipe', options.fd, ...(options.extra ?? [])],
+        env: helperEnvironment(options.env),
+        stopTiming,
+      })
+      .pipe(
+        Effect.mapError(
+          () =>
+            new HelperFailure({
+              message: 'Filesystem helper unavailable.',
+              status: null,
+              stderr: '',
+              uncertain: false,
+              output: Buffer.alloc(0),
+            }),
+        ),
+      );
     const child = group.process;
     let stderr = '';
     child.stderr!.on('data', (chunk: Buffer) => {
@@ -76,20 +92,6 @@ const startHelper = (helper: string, args: string[], options: HelperOptions) =>
     child.stdout!.on('data', (chunk: Buffer) => Queue.offerUnsafe(output, chunk));
     child.stdout!.once('end', end).once('error', end);
     const stdout = Stream.fromQueue(output);
-    /** SIGTERM to the group, SIGKILL after its grace, then waits for the helper's exit. */
-    const stop = Effect.ignore(group.stop);
-    // The group is stopped before its pipes are let go, so a running helper is never cut off by
-    // a closed pipe.
-    yield* Effect.addFinalizer(() =>
-      Effect.andThen(
-        stop,
-        Effect.sync(() => {
-          child.stdout!.destroy();
-          child.stderr!.destroy();
-          Queue.shutdownUnsafe(output);
-        }),
-      ),
-    );
     const failure = (
       { code, signal, spawnFailed }: ProcessGroupExit,
       output: Buffer,
@@ -120,9 +122,12 @@ const startHelper = (helper: string, args: string[], options: HelperOptions) =>
           ? Effect.succeed(output)
           : Effect.fail(failure(status, output, false)),
       );
-    /** Stops a run at its output or time limit; it fails as uncertain. */
+    /**
+     * Stops a run at its output or time limit; it fails as uncertain. A group that can't be
+     * confirmed gone still keeps the run until the helper has exited.
+     */
     const stopCapped = (output: Buffer) =>
-      Effect.flatMap(Effect.andThen(stop, awaitExit), (status) =>
+      Effect.flatMap(Effect.andThen(Effect.exit(group.stop), awaitExit), (status) =>
         Effect.fail(failure(status, output, true)),
       );
     // A process the helper started outside its group (a hook's daemon, say) can hold stdout
@@ -140,11 +145,14 @@ const startHelper = (helper: string, args: string[], options: HelperOptions) =>
   });
 
 /** Runs the filesystem helper at `helper`. */
-export const makeFilesystemHelper = (helper: string): FilesystemHelper => ({
+export const makeFilesystemHelper = (
+  helper: string,
+  groups: ProcessGroupsShape,
+): FilesystemHelper => ({
   run: (args, options) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const started = yield* startHelper(helper, args, options);
+        const started = yield* startHelper(groups, helper, args, options);
         const chunks: Buffer[] = [];
         let length = 0,
           capped = false;
@@ -167,7 +175,7 @@ export const makeFilesystemHelper = (helper: string): FilesystemHelper => ({
     ),
   lines: (args, options) =>
     Stream.unwrap(
-      Effect.tap(startHelper(helper, args, options), (started) =>
+      Effect.tap(startHelper(groups, helper, args, options), (started) =>
         Effect.forkScoped(started.limitOutput),
       ).pipe(
         Effect.map((started) => {

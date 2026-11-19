@@ -4,7 +4,7 @@ import { ConnectionError, type ConnectionErrorReason } from '@moonbase/contracts
 import {
   onSystemClock,
   outputDrain,
-  spawnProcessGroup,
+  ProcessGroups,
   type ProcessGroupExit,
 } from '@moonbase/process-group';
 
@@ -35,8 +35,8 @@ export type SshProcess = {
   /**
    * Stops the group (SIGTERM, then SIGKILL after `termGraceMs`) and waits until no member is
    * left and its pipes are closed, all within `deadlineMs`. Only ESRCH confirms the group is gone.
-   * A stop that failed (`teardown`) is tried again by the next call; one that succeeded is final,
-   * so a reused group ID is never signalled.
+   * A stop that failed (`teardown`) is tried again by the next call; once ESRCH is seen, the group
+   * ID is never signalled again.
    */
   readonly stop: Effect.Effect<void, ConnectionError>;
 };
@@ -78,13 +78,16 @@ export const startSshProcess = (
     captureOutput,
     stopTiming,
   }: { token: string; captureOutput: boolean; stopTiming: SshStopTiming },
-): Effect.Effect<SshProcess, ConnectionError, Scope.Scope> =>
+): Effect.Effect<SshProcess, ConnectionError, Scope.Scope | ProcessGroups> =>
   Effect.gen(function* () {
-    const group = yield* spawnProcessGroup(executable, args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: environment(token),
-      stopTiming: { deadline: stopTiming.deadlineMs, termGrace: stopTiming.termGraceMs },
-    }).pipe(Effect.mapError(() => failure('process-start')));
+    const groups = yield* ProcessGroups;
+    const group = yield* groups
+      .spawn(executable, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: environment(token),
+        stopTiming: { deadline: stopTiming.deadlineMs, termGrace: stopTiming.termGraceMs },
+      })
+      .pipe(Effect.mapError(() => failure('process-start')));
     const child = group.process;
     const stdout = yield* Ref.make({ chunks: [] as Buffer[], bytes: 0, overflow: false });
     const stderr = yield* Ref.make('');

@@ -12,6 +12,7 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
 import { ChatService } from '@moonbase/contracts/services';
+import { ProcessGroups } from '@moonbase/process-group';
 import {
   ListingError,
   makeChatFileIndex,
@@ -54,10 +55,17 @@ async function folder(t: { after: (fn: () => Promise<void>) => void }, git = tru
 const paths = (result: { matches: { path: string }[] }) => result.matches.map((m) => m.path);
 /** Runs a test program on the platform's services and a TestClock the test moves. */
 const runIndexTest = <A, E>(
-  program: Effect.Effect<A, E, Scope.Scope | ChildProcessSpawner.ChildProcessSpawner>,
+  program: Effect.Effect<
+    A,
+    E,
+    Scope.Scope | ChildProcessSpawner.ChildProcessSpawner | ProcessGroups
+  >,
 ) =>
   Effect.runPromise(
-    program.pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, TestClock.layer()))),
+    program.pipe(
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(NodeServices.layer, TestClock.layer(), ProcessGroups.layer)),
+    ),
   );
 /** An index over `options` whose searches the test awaits as promises, on a TestClock. */
 const withIndex = <A>(
