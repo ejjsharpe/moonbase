@@ -67,11 +67,12 @@ test('exact close prompts ignore stale answers, Cancel releases the editor as th
     unsubscribe();
     assert.deepEqual(seen.filter(Boolean), []);
     assert.equal(await editor.save(target('a.ts')), true);
+    editor.edit(target('a.ts'), 'dirty again');
     const next = editor.close([target('a.ts')]);
-    // Disposal answers the outstanding prompt Cancel, or ends the close with the editor.
-    const result = next.catch(() => false);
+    assert(editor.getSnapshot().closePrompt);
+    // Disposal answers the outstanding prompt Cancel.
     await editor.dispose();
-    assert.equal(await result, false);
+    assert.equal(await next, false);
     assert.equal(editor.getSnapshot().closePrompt, null);
   } finally {
     await editor.dispose();
