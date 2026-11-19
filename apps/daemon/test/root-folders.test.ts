@@ -3,6 +3,7 @@ import { mkdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Effect, Layer } from 'effect';
+import * as BunServices from '@effect/platform-bun/BunServices';
 import { LocalHostService } from '@moonbase/contracts/services';
 import { LocalHostLive, LocalPiControl } from '@moonbase/chat-runtime';
 import { createRootFolders, temporaryFolder } from './folders-fixture.ts';
@@ -59,6 +60,7 @@ test('a host-mode daemon allows its roots and folders under them, and refuses es
               markFolderAsProject: (target) => Effect.sync(() => void marked.push(target)),
             }),
           ),
+          Layer.provide(BunServices.layer),
         ),
       ),
     );

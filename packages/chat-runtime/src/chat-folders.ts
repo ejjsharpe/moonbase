@@ -1,8 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import { lstat, mkdir, realpath, stat } from 'node:fs/promises';
+import { rmdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { Effect, FileSystem, Option } from 'effect';
 import { ChatUnavailableError } from '@moonbase/contracts/chat-errors';
 import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
+import { checkCanonicalFolder } from './canonical-folder.ts';
 
 const slugLength = 40;
 
@@ -30,48 +32,53 @@ function nameChatFolder(title: string, date: Date) {
 }
 
 /** Whether Git would count `folder` as part of a checkout: it or a folder above it has `.git`. */
-async function isInsideGitCheckout(folder: string) {
-  for (let current = folder; ; current = dirname(current)) {
-    if (
-      await lstat(join(current, '.git')).then(
-        () => true,
-        () => false,
-      )
-    )
-      return true;
-    if (dirname(current) === current) return false;
-  }
-}
+const isInsideGitCheckout = (folder: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    for (let current = folder; ; current = dirname(current)) {
+      if (Option.isSome(yield* Effect.option(fs.lstat(join(current, '.git'))))) return true;
+      if (dirname(current) === current) return false;
+    }
+  });
 
 /**
  * A new, empty, private folder under `parent` for a chat without a project, named for `title` and
  * the local day of `now`.
  * Refused inside a Git checkout, where the agent's Git commands would act on that repository.
  */
-export async function makeChatFolder(parent: string, title: string, now: Date) {
-  if (await isInsideGitCheckout(parent))
-    throw new ChatUnavailableError({ reason: 'own-folder-in-checkout' });
-  try {
-    await mkdir(parent, { recursive: true, mode: 0o700 });
-    // The random suffix makes a taken name a failure to report, not one to retry.
-    const folder = join(parent, nameChatFolder(title, now));
-    await mkdir(folder, { mode: 0o700 });
-    return await realpath(folder);
-  } catch {
-    throw new ChatUnavailableError({ reason: 'own-folder-failed' });
-  }
-}
+export const makeChatFolder = (parent: string, title: string, now: Date) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    if (yield* isInsideGitCheckout(parent))
+      return yield* new ChatUnavailableError({ reason: 'own-folder-in-checkout' });
+    return yield* Effect.gen(function* () {
+      yield* fs.makeDirectory(parent, { recursive: true, mode: 0o700 });
+      // The random suffix makes a taken name a failure to report, not one to retry.
+      const folder = join(parent, nameChatFolder(title, now));
+      yield* fs.makeDirectory(folder, { mode: 0o700 });
+      return yield* fs.realPath(folder);
+    }).pipe(Effect.mapError(() => new ChatUnavailableError({ reason: 'own-folder-failed' })));
+  });
+
+/**
+ * Removes a folder made by `makeChatFolder` for a request that made no chat. It is still empty, so
+ * a folder that is not is left alone.
+ */
+export const removeEmptyChatFolder = (folder: string) =>
+  Effect.ignore(Effect.tryPromise(() => rmdir(folder)));
 
 /**
  * Refuses any folder but one the runtime made directly under `chatFolders` for a chat without a
  * project, named by its real path.
  */
-export async function checkChatFolder(chatFolders: string, path: string) {
-  const [parent, folder] = await Promise.all([
-    realpath(chatFolders).catch(() => ''),
-    realpath(path).catch(() => ''),
-  ]);
-  const info = folder ? await stat(folder).catch(() => null) : null;
-  if (!parent || !folder || folder !== path || dirname(folder) !== parent || !info?.isDirectory())
-    throw new FolderRefusedError({ refusal: 'not-chat-folder' });
-}
+export const checkChatFolder = (chatFolders: string, path: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const parent = yield* Effect.option(fs.realPath(chatFolders));
+    if (
+      Option.isNone(parent) ||
+      dirname(path) !== parent.value ||
+      (yield* checkCanonicalFolder(path)) !== 'canonical'
+    )
+      return yield* new FolderRefusedError({ refusal: 'not-chat-folder' });
+  });

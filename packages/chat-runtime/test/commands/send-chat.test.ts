@@ -6,6 +6,7 @@ import { Harness, createRegistry, defineDocFamily } from '@earendil-works/pi-dur
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { readFile } from 'node:fs/promises';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import { ChatBusyError, ChatStoreError } from '@moonbase/contracts/chat-errors';
 import { session, until, fixture, runChat } from '../runtime-fixture.ts';
 
 test('duplicate/lost Send, read-only lookup, restart and cross-operation reuse never resend', async (t) => {
@@ -43,13 +44,25 @@ test('duplicate/lost Send, read-only lookup, restart and cross-operation reuse n
   assert.deepEqual(await runChat(f.runtime, (chat) => chat.sendChat(input)), receipts[0]);
   assert.equal(f.faux.state.callCount, 1);
 });
-for (const admitted of [false, true])
-  test(`interrupted ${admitted ? 'admitted binding' : 'reservation'} recovers without implicit resubmission`, async (t) => {
-    const original = Harness.open;
-    let fail = true;
+for (const lost of ['reservation', 'admitted binding', 'admitted receipt'] as const)
+  test(`interrupted ${lost} recovers without implicit resubmission`, async (t) => {
+    const original = Harness.open,
+      admitted = lost !== 'reservation',
+      requestKey = JSON.stringify([session.actorId, 'lost']);
+    let fail = true,
+      submitted = false;
     mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
       const harness = await original(...args),
-        get = harness.conversation.bind(harness);
+        get = harness.conversation.bind(harness),
+        snapshot = harness.snapshot.bind(harness);
+      harness.snapshot = (async (...values: Parameters<typeof snapshot>) => {
+        // The receipt read after a real submission fails as busy: no proof it was not admitted.
+        if (submitted && String(values[1]) === requestKey) {
+          submitted = false;
+          throw new ChatBusyError();
+        }
+        return snapshot(...values);
+      }) as typeof snapshot;
       harness.conversation = async (...values: Parameters<typeof get>) => {
         const conversation = await get(...values);
         if (conversation) {
@@ -57,8 +70,14 @@ for (const admitted of [false, true])
           conversation.submit = async (...input: Parameters<typeof submit>) => {
             if (fail) {
               fail = false;
+              if (lost === 'admitted receipt') {
+                const submission = await submit(...input);
+                submitted = true;
+                return submission;
+              }
               if (admitted) await submit(...input);
-              throw Error('Controlled lost admission response');
+              // A typed failure is no proof either: only Pi's busy refusal is.
+              throw new ChatStoreError({ problem: 'failed' });
             }
             return submit(...input);
           };
@@ -156,7 +175,7 @@ test('maximum escaped Send text retains its original serialized binding across r
   assert.equal(f.faux.state.callCount, 1);
 });
 for (const state of ['admitted', 'pending', 'empty'] as const)
-  test(`Send refuses to rewrite a saved ${state} request without its captured conversation`, async (t) => {
+  test(`Send is uncertain and rewrites nothing for a saved ${state} request without its captured conversation`, async (t) => {
     const original = Harness.open;
     let harness!: Harness;
     mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
@@ -220,9 +239,11 @@ for (const state of ['admitted', 'pending', 'empty'] as const)
       commits++;
     });
     try {
+      // An earlier attempt may have committed, so a Send whose journal fails to decode is
+      // uncertain, never a definite refusal, and resubmits nothing; the read stays a store error.
       await assert.rejects(
         runChat(f.runtime, (chat) => chat.sendChat(input)),
-        { _tag: 'ChatStoreError' },
+        { _tag: 'UncertainError' },
       );
       await assert.rejects(
         runChat(f.runtime, (chat) => chat.getChatSend({ target, requestId: input.requestId })),

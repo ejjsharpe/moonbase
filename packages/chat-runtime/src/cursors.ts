@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Cursor } from '@earendil-works/pi-durable';
+import { Effect } from 'effect';
 import * as Schema from 'effect/Schema';
 import { readObject } from '@moonbase/contracts/common';
 import { InvalidChatRequestError } from '@moonbase/contracts/chat-errors';
@@ -11,44 +12,42 @@ import { boundedText, naturalNumber, recordId } from './field-schemas.ts';
  * it continues; each read is authorized again before its cursor is opened.
  */
 
-/** Checks an opaque cursor: well-formed, NUL-free text of at most 1 KiB. */
-export function checkCursor(value: unknown): string {
-  if (
-    typeof value !== 'string' ||
-    !value.isWellFormed() ||
-    value.includes('\0') ||
-    !value.trim() ||
-    Buffer.byteLength(value) > 1024
-  )
-    throw new InvalidChatRequestError({ problem: 'text' });
-  return value;
-}
+/** Whether a cursor is well-formed, NUL-free text of at most 1 KiB. */
+const isCursorText = (value: string) =>
+  value.isWellFormed() &&
+  !value.includes('\0') &&
+  !!value.trim() &&
+  Buffer.byteLength(value) <= 1024;
 
 /** Encodes a cursor's value as base64url JSON. */
-export const writeCursor = (value: object) =>
-  checkCursor(Buffer.from(JSON.stringify(value)).toString('base64url'));
+export const writeCursor = (value: object): Effect.Effect<string, InvalidChatRequestError> => {
+  const encoded = Buffer.from(JSON.stringify(value)).toString('base64url');
+  return isCursorText(encoded)
+    ? Effect.succeed(encoded)
+    : Effect.fail(new InvalidChatRequestError({ problem: 'text' }));
+};
 
-/** Reads a cursor's JSON from its canonical base64url, refusing anything else. */
-function readCursorJson(encoded: string): unknown {
-  const bytes = Buffer.from(checkCursor(encoded), 'base64url');
-  if (bytes.toString('base64url') !== encoded)
-    throw new InvalidChatRequestError({ problem: 'cursor' });
-  return JSON.parse(new TextDecoder('utf8', { fatal: true }).decode(bytes));
-}
-
-// Cursors come back from clients, which are untrusted, so each is decoded when it is opened.
-function decode<S extends Schema.ConstraintDecoder<unknown, never>>(
+/**
+ * Reads a cursor's JSON from its canonical base64url and decodes it against `schema`. Cursors come
+ * back from clients, which are untrusted, so each is decoded when it is opened; the caller names
+ * what any failure is.
+ */
+const readCursor = <S extends Schema.ConstraintDecoder<unknown, never>>(
+  encoded: string,
   schema: S,
-  value: unknown,
-): S['Type'] {
-  try {
-    return Schema.decodeUnknownSync(schema, { onExcessProperty: 'error', reportInput: false })(
-      value,
+): Effect.Effect<S['Type'], unknown> =>
+  Effect.gen(function* () {
+    if (!isCursorText(encoded)) return yield* Effect.fail('text');
+    const bytes = Buffer.from(encoded, 'base64url');
+    if (bytes.toString('base64url') !== encoded) return yield* Effect.fail('encoding');
+    const value = yield* Effect.try(() =>
+      JSON.parse(new TextDecoder('utf8', { fatal: true }).decode(bytes)),
     );
-  } catch {
-    throw new InvalidChatRequestError({ problem: 'cursor' });
-  }
-}
+    return yield* Schema.decodeUnknownEffect(schema, {
+      onExcessProperty: 'error',
+      reportInput: false,
+    })(value);
+  });
 
 // Pi owns scan positions. Only Moonbase's envelope and start sentinel are interpreted here.
 const historyCursor = Schema.Struct({
@@ -61,31 +60,32 @@ export function getScanCursorScope(identity: string, conversationId?: string) {
   const owner = createHash('sha256').update(identity).digest('hex');
   return conversationId === undefined ? owner : owner + ':' + conversationId;
 }
+const scanStart = Schema.Struct({ start: Schema.Literal(true) });
 /** Opens a list or history cursor of `kind` in `scope`: Pi's scan position, or none at the start. */
-export function openScanCursor(
+export const openScanCursor = (
   encoded: string | undefined,
   kind: 'list' | 'history',
   scope: string,
-): Cursor | undefined {
-  if (encoded === undefined) return undefined;
-  try {
-    const value = decode(historyCursor, readCursorJson(encoded));
-    if (value.scan?.start === true)
-      decode(Schema.Struct({ start: Schema.Literal(true) }), value.scan);
-    if (value.kind !== kind || value.conversationId !== scope) throw Error();
-    return value.scan === null || value.scan?.start === true
-      ? undefined
-      : (readObject(value.scan) as Cursor);
-  } catch {
-    throw new InvalidChatRequestError({ problem: 'history-cursor' });
-  }
-}
+): Effect.Effect<Cursor | undefined, InvalidChatRequestError> =>
+  encoded === undefined
+    ? Effect.succeed(undefined)
+    : Effect.gen(function* () {
+        const value = yield* readCursor(encoded, historyCursor);
+        if (value.scan?.start === true)
+          yield* Schema.decodeUnknownEffect(scanStart, { onExcessProperty: 'error' })(value.scan);
+        if (value.kind !== kind || value.conversationId !== scope)
+          return yield* Effect.fail('other-read');
+        return value.scan === null || value.scan?.start === true
+          ? undefined
+          : ((yield* Effect.try(() => readObject(value.scan))) as Cursor);
+      }).pipe(Effect.mapError(() => new InvalidChatRequestError({ problem: 'history-cursor' })));
 /** A list or history cursor for Pi's scan position; none once the scan is done. */
 export const writeScanCursor = (
   scan: Cursor | { start: true } | undefined,
   kind: 'list' | 'history',
   scope: string,
-) => (scan === undefined ? null : writeCursor({ kind, conversationId: scope, scan }));
+): Effect.Effect<string | null, InvalidChatRequestError> =>
+  scan === undefined ? Effect.succeed(null) : writeCursor({ kind, conversationId: scope, scan });
 
 const findPartPositionSchema = Schema.Struct({
   message: naturalNumber,
@@ -131,16 +131,13 @@ export type TranscriptCursor = typeof transcriptCursorSchema.Type;
  * Opens a transcript cursor of `kind` for the read `binding` names. A malformed cursor, or one for
  * another read, is `transcript-cursor`; a position the read no longer has fails in that read.
  */
-export function openTranscriptCursor(
+export const openTranscriptCursor = (
   encoded: string,
   kind: TranscriptCursor['kind'],
   binding: string,
-): TranscriptCursor {
-  try {
-    const value = decode(transcriptCursorSchema, readCursorJson(encoded));
-    if (value.kind !== kind || value.binding !== binding) throw Error();
+): Effect.Effect<TranscriptCursor, InvalidChatRequestError> =>
+  Effect.gen(function* () {
+    const value = yield* readCursor(encoded, transcriptCursorSchema);
+    if (value.kind !== kind || value.binding !== binding) return yield* Effect.fail('other-read');
     return value;
-  } catch {
-    throw new InvalidChatRequestError({ problem: 'transcript-cursor' });
-  }
-}
+  }).pipe(Effect.mapError(() => new InvalidChatRequestError({ problem: 'transcript-cursor' })));

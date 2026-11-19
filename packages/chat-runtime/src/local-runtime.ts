@@ -1,6 +1,6 @@
 import { createRegistry } from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
-import { Context, Effect, Layer, Stream } from 'effect';
+import { Context, Effect, Layer, Stream, type FileSystem } from 'effect';
 import type { ChildProcessSpawner } from 'effect/process';
 import type { ChatError } from '@moonbase/contracts/chat-errors';
 import { ChatService, type ChatServiceShape } from '@moonbase/contracts/services';
@@ -50,12 +50,16 @@ function makeChatService(host: Host): ChatServiceShape {
   };
 }
 /**
- * The chat runtime on one Pi store. It needs a `ChildProcessSpawner` for the file search's checks;
- * the process root provides the platform's.
+ * The chat runtime on one Pi store. It needs a `ChildProcessSpawner` for the file search's checks
+ * and a `FileSystem` for its folder checks; the process root provides the platform's.
  */
 export const LocalPiRuntimeLive = (
   config: LocalPiRuntimeConfiguration,
-): Layer.Layer<ChatService | LocalPiControl, ChatError, ChildProcessSpawner.ChildProcessSpawner> =>
+): Layer.Layer<
+  ChatService | LocalPiControl,
+  ChatError,
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
+> =>
   Layer.effectContext(
     Effect.gen(function* () {
       const registry = config.registry ?? createRegistry();

@@ -89,7 +89,8 @@ for (const family of ['store', 'metadata', 'request', 'binding'] as const)
           runChat(f.runtime, (chat) =>
             chat.sendChat({ target, requestId: 'saved-send', text: 'Original' }),
           ),
-          { _tag: 'ChatStoreError' },
+          // A Send's journal or chat that fails to decode may hide an earlier attempt's commit.
+          { _tag: 'UncertainError' },
         );
         await assert.rejects(
           runChat(f.runtime, (chat) => chat.getChatSend({ target, requestId: 'saved-send' })),

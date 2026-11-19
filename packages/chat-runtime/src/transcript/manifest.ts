@@ -1,4 +1,5 @@
-import type { EntryRecord, Harness } from '@earendil-works/pi-durable';
+import type { EntryRecord } from '@earendil-works/pi-durable';
+import { Effect, Stream } from 'effect';
 import {
   chatLiveTextBytes,
   type ChatTarget,
@@ -6,10 +7,10 @@ import {
   type ChatTranscriptPart,
   type ChatTranscriptSource,
 } from '@moonbase/contracts/chat';
-import { TranscriptChangedError } from '@moonbase/contracts/chat-errors';
+import { TranscriptChangedError, type ChatError } from '@moonbase/contracts/chat-errors';
 import { writeCursor } from '../cursors.ts';
 import { hashJson } from '../hash-json.ts';
-import { getEntryTranscript } from './entry-transcript.ts';
+import { getEntryTranscript, type EntryReader, type EntryTranscript } from './entry-transcript.ts';
 import type { TranscriptCapture } from './live-capture.ts';
 import { getLiveTranscript } from './live-transcript.ts';
 import { describePart, giveWholeText, type Part, type TranscriptParts } from './transcript-part.ts';
@@ -20,7 +21,7 @@ const embeddedManifestParts = 4;
  * A manifest cursor binds the ordered part IDs and kinds before its position, so values may grow
  * and later parts may appear without invalidating it; per-selection revisions cover content.
  */
-export async function projectManifest(
+export const projectManifest = (
   source: ChatTranscriptSource,
   transcript: TranscriptParts,
   start: number,
@@ -28,67 +29,72 @@ export async function projectManifest(
   revision?: string,
   /** A running response's page carries its text parts whole within this many bytes of text. */
   wholeTextBytes?: number,
-): Promise<ChatTranscript> {
-  const seen: [string, ChatTranscriptPart['kind']][] = [];
-  const page: ChatTranscriptPart[] = [];
-  const pageParts: Part[] = [];
-  let more = false;
-  for await (const part of transcript.parts) {
-    if (seen.length === start + limit) {
-      more = true;
-      break;
-    }
-    if (seen.length >= start) {
-      page.push(describePart(part));
-      pageParts.push(part);
-    }
-    seen.push([part.id, part.kind]);
-  }
-  if (wholeTextBytes !== undefined) giveWholeText(page, pageParts, wholeTextBytes);
-  if (
-    revision !== undefined &&
-    (seen.length < start || hashJson(seen.slice(0, start)) !== revision)
-  )
-    throw new TranscriptChangedError({ change: 'manifest' });
-  return {
-    source,
-    parts: page,
-    nextCursor: more
-      ? writeCursor({
-          kind: 'manifest',
-          binding: hashJson(source),
-          revision: hashJson(seen),
-          position: seen.length,
-        })
-      : null,
-    thinking: transcript.thinking,
-  };
-}
-export async function projectEntryTranscript(
-  harness: Harness,
+): Effect.Effect<ChatTranscript, ChatError> =>
+  Effect.gen(function* () {
+    const seen: [string, ChatTranscriptPart['kind']][] = [];
+    const page: ChatTranscriptPart[] = [];
+    const pageParts: Part[] = [];
+    let more = false;
+    // One part past the page says whether there is another.
+    yield* transcript.parts.pipe(
+      Stream.take(start + limit + 1),
+      Stream.runForEach((part) =>
+        Effect.sync(() => {
+          if (seen.length === start + limit) {
+            more = true;
+            return;
+          }
+          if (seen.length >= start) {
+            page.push(describePart(part));
+            pageParts.push(part);
+          }
+          seen.push([part.id, part.kind]);
+        }),
+      ),
+    );
+    if (wholeTextBytes !== undefined) giveWholeText(page, pageParts, wholeTextBytes);
+    if (
+      revision !== undefined &&
+      (seen.length < start || hashJson(seen.slice(0, start)) !== revision)
+    )
+      return yield* new TranscriptChangedError({ change: 'manifest' });
+    return {
+      source,
+      parts: page,
+      nextCursor: more
+        ? yield* writeCursor({
+            kind: 'manifest',
+            binding: hashJson(source),
+            revision: hashJson(seen),
+            position: seen.length,
+          })
+        : null,
+      thinking: transcript.thinking,
+    };
+  });
+/** The parts of a saved entry's transcript, as a reader of any transcript takes them. */
+export const listEntryParts = (transcript: EntryTranscript): TranscriptParts => ({
+  parts: Stream.fromIterable(transcript.parts),
+  thinking: transcript.thinking,
+});
+export const projectEntryTranscript = (
+  reader: EntryReader,
   target: ChatTarget,
   entry: EntryRecord,
-  signal?: AbortSignal,
-) {
-  const source: ChatTranscriptSource = { kind: 'entry', target, entryId: String(entry.id) };
-  return projectManifest(
-    source,
-    await getEntryTranscript(harness, entry, signal),
-    0,
-    embeddedManifestParts,
+) =>
+  Effect.flatMap(getEntryTranscript(reader, entry), (transcript) =>
+    projectManifest(
+      { kind: 'entry', target, entryId: String(entry.id) },
+      listEntryParts(transcript),
+      0,
+      embeddedManifestParts,
+    ),
   );
-}
-export async function projectLiveTranscript(
-  harness: Harness,
+export const projectLiveTranscript = (
+  reader: EntryReader,
   source: ChatTranscriptSource,
   captured: TranscriptCapture,
-) {
-  return projectManifest(
-    source,
-    await getLiveTranscript(harness, source, { capture: captured }),
-    0,
-    embeddedManifestParts,
-    undefined,
-    chatLiveTextBytes,
+) =>
+  Effect.flatMap(getLiveTranscript(reader, source, captured), (transcript) =>
+    projectManifest(source, transcript, 0, embeddedManifestParts, undefined, chatLiveTextBytes),
   );
-}

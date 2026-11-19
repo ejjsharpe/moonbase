@@ -1,11 +1,10 @@
-import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import { DateTime, Effect } from 'effect';
 import type { ChatInput, ChatSummary, ChatTarget } from '@moonbase/contracts/chat';
 import type { ChatError } from '@moonbase/contracts/chat-errors';
 import { Metadata, cid, type ChatSettings } from '../documents.ts';
 import { decodeStoredMetadata } from '../stored-records.ts';
 import type { Host } from './chat-host.ts';
-import { callHarness } from './harness-call.ts';
+import { commitChange, mayHaveCommitted } from './commit-boundary.ts';
 
 /** Changes an owned chat's metadata, which the caller has already read through `metadata`. */
 function updateMetadata(
@@ -13,35 +12,40 @@ function updateMetadata(
   target: ChatTarget,
   change: (meta: { settledAt?: string; settings?: ChatSettings }) => void,
 ) {
-  return callHarness(
-    () =>
-      host.harness.commit(async (tx) => {
-        const meta = await tx.doc(Metadata, cid(target.conversationId), 'metadata', {
-          identity: host.identity,
-          title: '',
-          createdAt: '',
-        });
-        decodeStoredMetadata(meta);
-        change(meta);
-      }, context),
-    true,
-  );
+  return commitChange(host.harness, async (tx) => {
+    const meta = await tx.doc(Metadata, cid(target.conversationId), 'metadata', {
+      identity: host.identity,
+      title: '',
+      createdAt: '',
+    });
+    decodeStoredMetadata(meta);
+    change(meta);
+  });
 }
-/** Settles or unsettles a chat; asking for its current state again commits nothing. */
+/**
+ * Settles or unsettles a chat; asking for its current state again commits nothing. Once it
+ * commits, any failure, the read for its reply included, is uncertain.
+ */
 export function settleChat(
   host: Host,
   d: ChatInput<'settleChat'>,
 ): Effect.Effect<ChatSummary, ChatError> {
   return Effect.gen(function* () {
-    const current = yield* host.metadata(d.target, true);
-    if ((current.settledAt !== undefined) !== d.settled) {
-      const now = DateTime.formatIso(yield* DateTime.now);
-      yield* updateMetadata(host, d.target, (meta) => {
-        if (d.settled) meta.settledAt ??= now;
-        else delete meta.settledAt;
-      });
-    }
-    return yield* host.summary(d.target.conversationId, yield* host.metadata(d.target, true));
+    const current = yield* host.metadata(d.target);
+    const reply = Effect.andThen(host.metadata(d.target), (meta) =>
+      host.summary(d.target.conversationId, meta),
+    );
+    if ((current.settledAt !== undefined) === d.settled) return yield* reply;
+    const now = DateTime.formatIso(yield* DateTime.now);
+    return yield* mayHaveCommitted(
+      Effect.andThen(
+        updateMetadata(host, d.target, (meta) => {
+          if (d.settled) meta.settledAt ??= now;
+          else delete meta.settledAt;
+        }),
+        reply,
+      ),
+    );
   });
 }
 /**
@@ -53,12 +57,13 @@ export function markFolderAsProject(
   target: ChatTarget,
 ): Effect.Effect<void, ChatError> {
   return host.ownMutation(
-    (body) => body,
     Effect.gen(function* () {
-      if (!(yield* host.metadata(target, true)).settings?.ownFolder) return;
-      yield* updateMetadata(host, target, (meta) => {
-        delete meta.settings?.ownFolder;
-      });
+      if (!(yield* host.metadata(target)).settings?.ownFolder) return;
+      yield* mayHaveCommitted(
+        updateMetadata(host, target, (meta) => {
+          delete meta.settings?.ownFolder;
+        }),
+      );
     }),
   );
 }

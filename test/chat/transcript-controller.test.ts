@@ -93,20 +93,20 @@ test('public local controller receives successive Pi text before held completion
       delta: 'first',
       partial: fauxAssistantMessage('first'),
     });
-    await until(
-      async () => controller.getSnapshot(),
-      (state) => state.snapshot?.run?.text === 'first',
-    );
+    // Each update is awaited as the subscriber recorded it, so Stop can't end the run before then.
+    const seen = (text: string) =>
+      until(
+        async () => views.find((view) => view.snapshot?.run?.text === text),
+        (view) => !!view,
+      );
+    await seen('first');
     stream.push({
       type: 'text_delta',
       contentIndex: 0,
       delta: ' second',
       partial: fauxAssistantMessage('first second'),
     });
-    const active = await until(
-      async () => controller.getSnapshot(),
-      (state) => state.snapshot?.run?.text === 'first second',
-    );
+    const active = (await seen('first second'))!;
     const transcript = active.snapshot!.run!.transcript!,
       descriptor = transcript.parts[0];
     await controller.loadTranscriptPart(transcript.source, {
@@ -121,8 +121,6 @@ test('public local controller receives successive Pi text before held completion
     controller.setDraft('draft while reading');
     await controller.stop();
     assert.equal(controller.getSnapshot().draft, 'draft while reading');
-    assert(views.some((view) => view.snapshot?.run?.text === 'first'));
-    assert(views.some((view) => view.snapshot?.run?.text === 'first second'));
     gate.resolve();
     await read;
     off();

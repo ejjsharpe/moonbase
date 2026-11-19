@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { type ErrorGroup, getErrorGroup } from '@moonbase/contracts/error-groups';
 import { test } from 'node:test';
+import { Effect } from 'effect';
 import { Harness, type ConversationId } from '@earendil-works/pi-durable';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
@@ -164,7 +165,7 @@ test('Find dense pages advance within a part and empty saved conversations compl
   );
 });
 
-test('Find cancellation leaves exact Stop and unrelated reads responsive while shutdown owns actual SDK settlement', async (t) => {
+test('Find cancellation interrupts the read, leaves exact Stop and unrelated reads responsive, and shutdown owns actual SDK settlement', async (t) => {
   let harness!: Harness;
   const open = Harness.open;
   t.mock.method(
@@ -192,7 +193,9 @@ test('Find cancellation leaves exact Stop and unrelated reads responsive while s
   );
   let release!: () => void,
     held = false,
-    closed = false;
+    closed = false,
+    // Scans of the chat Find makes after the one it was cancelled during.
+    scansAfterCancel = 0;
   const gate = new Promise<void>((resolve) => (release = resolve));
   t.after(() => release());
   const commit = harness.commit.bind(harness),
@@ -200,7 +203,6 @@ test('Find cancellation leaves exact Stop and unrelated reads responsive while s
   t.mock.method(harness, 'commit', async (...args: Parameters<typeof commit>) => {
     const value = await commit(...args);
     if (
-      !held &&
       value &&
       typeof value === 'object' &&
       'items' in value &&
@@ -213,8 +215,11 @@ test('Find cancellation leaves exact Stop and unrelated reads responsive while s
           item.conversationId === Number(target.conversationId),
       )
     ) {
-      held = true;
-      await gate;
+      if (held) scansAfterCancel++;
+      else {
+        held = true;
+        await gate;
+      }
     }
     return value;
   });
@@ -242,15 +247,19 @@ test('Find cancellation leaves exact Stop and unrelated reads responsive while s
       ).outcome,
     ),
   );
+  // Disposal interrupts the runtime's own calls before it closes the host, so one held open
+  // settles as shutdown begins.
+  const caller = runChat(f.runtime, () => Effect.never).catch(() => undefined);
   let disposed = false;
   const disposal = f.dispose().then(() => (disposed = true));
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await caller;
   assert.equal(disposed, false);
   assert.equal(closed, false);
   release();
   releaseProvider();
   await disposal;
   assert(closed);
+  assert.equal(scansAfterCancel, 0);
 });
 
 test('Find JSON token continuations preserve string escaping, long keys, nesting and split Unicode', async (t) => {

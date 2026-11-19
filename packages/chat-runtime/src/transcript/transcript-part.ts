@@ -1,5 +1,7 @@
 import type { ChatTranscript, ChatTranscriptPart } from '@moonbase/contracts/chat';
 import { createHash } from 'node:crypto';
+import type { Stream } from 'effect';
+import type { ChatError } from '@moonbase/contracts/chat-errors';
 import { previewText } from '../text.ts';
 
 /** Long reads yield to other work after this many parts. */
@@ -106,7 +108,7 @@ export function summarizeThinking(parts: readonly Part[]): ChatTranscript['think
   return thinking.length ? 'redacted' : 'none';
 }
 export type TranscriptParts = {
-  /** Parts in display order; live sources build each one only when a reader reaches it. */
-  parts: Iterable<Part> | AsyncIterable<Part>;
+  /** Parts in display order; live sources build each tool's only when a reader reaches it. */
+  parts: Stream.Stream<Part, ChatError>;
   thinking: ChatTranscript['thinking'];
 };
