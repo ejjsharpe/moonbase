@@ -21,24 +21,33 @@ type PendingPrompt<P, A> = { readonly prompt: P; readonly reply: Deferred.Deferr
 export const makeEditorPrompt = <P extends { readonly id: string }, A>(
   cancel: A,
 ): Effect.Effect<EditorPrompt<P, A>, never, Scope.Scope> =>
+  Effect.acquireRelease(buildEditorPrompt<P, A>(cancel), (prompt) => prompt.cancel);
+
+const buildEditorPrompt = <P extends { readonly id: string }, A>(
+  cancel: A,
+): Effect.Effect<EditorPrompt<P, A>> =>
   Effect.gen(function* () {
     const shown = yield* SubscriptionRef.make<P | null>(null);
     // The reply stays here, so only `answer` and `cancel` settle it.
     const pending = yield* Ref.make<PendingPrompt<P, A> | null>(null);
     const lock = yield* Semaphore.make(1);
-    /** Takes the shown prompt off screen if `accept` takes it, and settles its reply. */
+    /**
+     * Takes the shown prompt off screen if `accept` takes it, and settles its reply. Once it holds
+     * the lock it can't be interrupted, so a prompt never leaves the screen with its reply unsettled.
+     */
     const settle = (accept: (entry: PendingPrompt<P, A>) => boolean, answer: A) =>
       lock.withPermits(1)(
-        Effect.gen(function* () {
-          const entry = yield* Ref.get(pending);
-          if (!entry || !accept(entry)) return;
-          yield* Ref.set(pending, null);
-          yield* SubscriptionRef.set(shown, null);
-          yield* Deferred.succeed(entry.reply, answer);
-        }),
+        Effect.uninterruptible(
+          Effect.gen(function* () {
+            const entry = yield* Ref.get(pending);
+            if (!entry || !accept(entry)) return;
+            yield* Ref.set(pending, null);
+            yield* SubscriptionRef.set(shown, null);
+            yield* Deferred.succeed(entry.reply, answer);
+          }),
+        ),
       );
     const cancelShown = settle(() => true, cancel);
-    yield* Effect.addFinalizer(() => cancelShown);
     return {
       shown,
       ask: (prompt) =>
