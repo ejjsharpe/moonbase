@@ -118,10 +118,10 @@ export class EditorSession extends Context.Service<EditorSession, EditorSessionS
               !s.closing,
               { ...s, closing: true, admissionsOpen: false },
             ]);
+            // Complete the shared wait even if a finalizer dies, so later closers never hang.
             if (first)
-              yield* Effect.andThen(
-                Scope.close(scope, Exit.void),
-                Deferred.succeed(closed, undefined),
+              yield* Scope.close(scope, Exit.void).pipe(
+                Effect.ensuring(Deferred.succeed(closed, undefined)),
               );
             yield* restore(Deferred.await(closed));
           }),
