@@ -17,6 +17,7 @@ import { errorText, folded, path, same } from '../validation.ts';
 import { cancellationPoint, isCancelled } from '../cancellation.ts';
 import { Checkouts } from './checkouts.ts';
 import { HostJournal } from './host-journal.ts';
+import { findNativeHelperRefusal } from './native-helper-refusal.ts';
 import type { NativeImport } from './native-import.ts';
 import { NativeReferences, type References } from './native-references.ts';
 
@@ -206,8 +207,13 @@ export const mutate = (input: HostInput<'mutate'>) =>
       if (Exit.isSuccess(done) && done.value === 'journalled') continue;
       if (Exit.isFailure(done)) {
         // An item stopped part way is uncertain, like one the helper reports as uncertain.
-        const error = Cause.hasInterruptsOnly(done.cause) ? undefined : Cause.squash(done.cause);
-        let outcome: 'failed' | 'uncertain' = 'uncertain';
+        const squashed = Cause.hasInterruptsOnly(done.cause) ? undefined : Cause.squash(done.cause);
+        const refusal = importing ? findNativeHelperRefusal(squashed) : undefined;
+        const error = refusal ?? squashed;
+        // The helper checks an import's whole source tree for unsupported entries (hard links,
+        // sockets) before it stages anything, so that refusal leaves nothing to inspect.
+        let outcome: 'failed' | 'uncertain' =
+          refusal?.problem === 'unsupported' ? 'failed' : 'uncertain';
         // A preflight error is known only while the original object still occupies its exact path.
         if (
           error !== undefined &&

@@ -11,6 +11,7 @@ import type { Directory } from '../filesystem.ts';
 import { same } from '../validation.ts';
 import { cancellationPoint } from '../cancellation.ts';
 import { Checkouts } from './checkouts.ts';
+import { findNativeHelperRefusal } from './native-helper-refusal.ts';
 import { NativeImport } from './native-import.ts';
 
 type NativeReference = {
@@ -164,7 +165,11 @@ export class References {
       );
       yield* Effect.interruptible(
         directory.io(['import-check', source.path, source.parents], undefined, [source.fd]),
-      ).pipe(Effect.onError(() => Scope.close(scope, Exit.void)));
+      ).pipe(
+        // A folder holding a hard link or other unsupported entry is refused with its reason.
+        Effect.mapError((error) => findNativeHelperRefusal(error) ?? error),
+        Effect.onError(() => Scope.close(scope, Exit.void)),
+      );
       this.unclaimed.set(token, entry);
       yield* FiberSet.run(
         this.expiries,
