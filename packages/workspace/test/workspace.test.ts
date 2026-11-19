@@ -577,28 +577,41 @@ head -c 17000000 /dev/zero | tr '\\0' e
 sleep 60 & wait
 `;
 
-test('a text search stopped at its limit reports itself partial however ripgrep exits', async () => {
+// Killed by a signal from elsewhere before it reports anything.
+const killedRipgrep = `#!/bin/sh
+kill -KILL $$
+`;
+
+test('a text search stopped at its limit reports itself partial however ripgrep exits, and a killed one fails', async () => {
   const base = mkdtempSync(join(tmpdir(), 'moonbase-ripgrep-'));
-  const ripgrep = join(base, 'rg');
-  writeFileSync(ripgrep, stoppedRipgrep, { mode: 0o700 });
-  const f = fixture({ ripgrepExecutable: ripgrep });
+  const search = async (script: string) => {
+    const ripgrep = join(base, 'rg');
+    writeFileSync(ripgrep, script, { mode: 0o700 });
+    const f = fixture({ ripgrepExecutable: ripgrep });
+    try {
+      const checkout = await f.client.command('openCheckout', { root: f.root });
+      return await f.client.command('searchText', {
+        checkout,
+        query: 'e',
+        matchCase: false,
+        wholeWord: false,
+        regex: false,
+      });
+    } finally {
+      await f.close();
+    }
+  };
   try {
-    const checkout = await f.client.command('openCheckout', { root: f.root });
-    const result = await f.client.command('searchText', {
-      checkout,
-      query: 'e',
-      matchCase: false,
-      wholeWord: false,
-      regex: false,
-    });
+    const result = await search(stoppedRipgrep);
     assert.equal(result.partial, true);
     assert.match(result.error ?? '', /time or output limit/);
     assert.deepEqual(
       result.files.map((file) => file.path),
       ['found.txt'],
     );
+    // A signal from elsewhere is no limit: the search fails rather than asking for a narrower query.
+    await assert.rejects(search(killedRipgrep), { _tag: 'WorkspaceUnavailableError' });
   } finally {
-    await f.close();
     rmSync(base, { recursive: true, force: true });
   }
 });

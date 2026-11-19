@@ -89,6 +89,7 @@ const startHelper = (
                 status: null,
                 stderr: '',
                 uncertain: false,
+                limitReached: false,
                 output: Buffer.alloc(0),
               }),
           ),
@@ -130,6 +131,7 @@ const startHelper = (
         status: spawnFailed ? null : code,
         stderr,
         uncertain: !spawnFailed && (!!signal || capped),
+        limitReached: capped,
         output,
       });
     /**

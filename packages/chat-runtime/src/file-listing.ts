@@ -84,9 +84,10 @@ export const makeRunListing =
         );
         if (Option.isNone(outcome)) {
           // A group still running could go on writing where the listing looked: nothing is kept.
-          yield* Effect.mapError(
-            group.stop,
-            () => new ListingError({ reason: 'failed', output: Buffer.alloc(0) }),
+          // Closing the index can't cut this stop short: once SIGTERM ends the leader and its
+          // pipes, the Scope's `while-open` close no longer stops a member that outlived it.
+          yield* Effect.uninterruptible(group.stop).pipe(
+            Effect.mapError(() => new ListingError({ reason: 'failed', output: Buffer.alloc(0) })),
           );
           return { bytes: Buffer.concat(chunks), truncated: true };
         }

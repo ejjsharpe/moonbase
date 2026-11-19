@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { closeSync, openSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
-import { Deferred, Effect, Exit, Fiber, Layer, Stream } from 'effect';
+import { Deferred, Duration, Effect, Exit, Fiber, Layer, Stream } from 'effect';
 import { TestClock } from 'effect/testing';
 import { type ProcessGroupExit, ProcessGroups } from '@moonbase/process-group';
 import { makeFilesystemHelper } from '../src/filesystem-helper.ts';
@@ -63,6 +63,8 @@ process.on('SIGTERM', () => process.stdout.write('last\\n', () => process.exit(0
 setInterval(() => {}, 1000);
 `;
 
+const stopTiming = { termGrace: Duration.millis(100), deadline: Duration.seconds(1) };
+
 test('a streamed run at its time limit fails and reaps its group though the helper exits cleanly', async () => {
   const fd = openSync(tmpdir(), 'r');
   let member: number | undefined;
@@ -72,10 +74,11 @@ test('a streamed run at its time limit fails and reaps its group though the help
         const groups = yield* ProcessGroups;
         const leaderExit = yield* Deferred.make<ProcessGroupExit>();
         // The limit's stop sends SIGTERM and holds its escalation until the leader has exited and
-        // its output has ended, so that EOF always comes before the stop fails the run.
+        // its output has ended, so that EOF always comes before the stop fails the run. A short
+        // grace keeps the member's SIGKILL from waiting out the production one.
         const helper = makeFilesystemHelper(process.execPath, {
           spawn: (executable, args, options) =>
-            Effect.map(groups.spawn(executable, args, options), (group) => {
+            Effect.map(groups.spawn(executable, args, { ...options, stopTiming }), (group) => {
               let gated = false;
               const stop = Effect.suspend(() => {
                 if (gated) return group.stop;
@@ -103,6 +106,7 @@ test('a streamed run at its time limit fails and reaps its group though the help
         const failure = exit.cause.reasons.find((reason) => reason._tag === 'Fail')?.error;
         assert.equal(failure?._tag, 'HelperFailure');
         assert.equal(failure.uncertain, true);
+        assert.equal(failure.limitReached, true);
         const { code, signal } = yield* Deferred.await(leaderExit);
         assert.deepEqual({ code, signal }, { code: 0, signal: null });
         assert(!isAlive(member));

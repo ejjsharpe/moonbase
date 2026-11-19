@@ -518,8 +518,9 @@ export class Discovery {
         Effect.catch((cause) => {
           const failure = helperFailure(cause);
           // A run stopped at its time or output limit may exit with any status, so its status
-          // says nothing about the search: what arrived before the stop is a partial result.
-          if (failure.uncertain) {
+          // says nothing about the search: what arrived before the stop is a partial result. A
+          // run killed from elsewhere is still uncertain, and fails or ends early below.
+          if (failure.limitReached) {
             partial = true;
             error =
               'Search stopped at its time or output limit; refine the query to see every match.';
