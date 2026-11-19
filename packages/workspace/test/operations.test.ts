@@ -459,7 +459,7 @@ test('a native import onto a path holding a draft is refused', async () => {
   }
 });
 
-test('a native import whose source changed after capture is refused with its reason', async () => {
+test('a native import whose source moved away after capture is refused with its reason', async () => {
   const f = fixture(),
     { runtime, client } = f.start();
   try {
@@ -470,7 +470,6 @@ test('a native import whose source changed after capture is refused with its rea
       captureNative({ checkout, clientId: 'alice', paths: [external] }),
     );
     renameSync(external, external + '-old');
-    writeFileSync(external, 'replacement bytes');
     await assert.rejects(
       client.command('mutate', {
         clientId: 'alice',

@@ -5,6 +5,19 @@ import { basename, dirname, isAbsolute } from 'node:path';
 
 const flags = constants.O_RDONLY | constants.O_NONBLOCK | O_NOFOLLOW_ANY;
 const identity = (s: { dev: number; ino: number }) => `${s.dev}:${s.ino}`;
+const isMissing = (error: unknown) => {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+};
+/** Runs a reopen of a captured path, refusing with `problem` when the path is gone. */
+const reopen = <T>(open: () => T, problem: 'parent-changed' | 'changed') => {
+  try {
+    return open();
+  } catch (error) {
+    if (isMissing(error)) throw new NativeSourceError({ problem });
+    throw error;
+  }
+};
 // Paths come from the daemon's host import capture (dropped or pasted Finder files).
 // Retain the source descriptor, never a parent-directory descriptor or Project approval.
 export class NativeImport {
@@ -22,9 +35,9 @@ export class NativeImport {
       path.split('/').some((p) => p === '.' || p === '..' || p.toLowerCase() === '.git')
     )
       throw new NativeSourceError({ problem: 'invalid-reference' });
-    protectedPath(path);
     this.source = basename(path);
     if (!this.source) throw new NativeSourceError({ problem: 'filesystem-root' });
+    protectedPath(path);
     this.parents = this.parentIdentities();
     this.fd = openSync(path, flags);
     try {
@@ -63,9 +76,10 @@ export class NativeImport {
     return this.directory && this.parentIdentities(directory).split(',').includes(this.identity);
   }
   validate() {
-    if (this.parentIdentities() !== this.parents)
+    // A captured path moved away since capture is a change, not a system failure.
+    if (reopen(() => this.parentIdentities(), 'parent-changed') !== this.parents)
       throw new NativeSourceError({ problem: 'parent-changed' });
-    const fd = openSync(this.path, flags);
+    const fd = reopen(() => openSync(this.path, flags), 'changed');
     try {
       const stat = fstatSync(fd);
       if (
