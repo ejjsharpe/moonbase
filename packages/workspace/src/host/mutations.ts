@@ -198,6 +198,10 @@ export const mutate = (input: HostInput<'mutate'>) =>
                 undefined,
                 source.native ? [source.native.fd] : [],
               ),
+            ).pipe(
+              // An import source the helper refuses keeps its reason; the item stays uncertain,
+              // since a replacement may already be in Trash and the helper may have staged entries.
+              Effect.mapError((error) => (importing && findNativeHelperRefusal(error)) || error),
             );
           }
           record.result.items.push({ source: source.path, destination, outcome: 'completed' });
@@ -207,13 +211,8 @@ export const mutate = (input: HostInput<'mutate'>) =>
       if (Exit.isSuccess(done) && done.value === 'journalled') continue;
       if (Exit.isFailure(done)) {
         // An item stopped part way is uncertain, like one the helper reports as uncertain.
-        const squashed = Cause.hasInterruptsOnly(done.cause) ? undefined : Cause.squash(done.cause);
-        const refusal = importing ? findNativeHelperRefusal(squashed) : undefined;
-        const error = refusal ?? squashed;
-        // The helper checks an import's whole source tree for unsupported entries (hard links,
-        // sockets) before it stages anything, so that refusal leaves nothing to inspect.
-        let outcome: 'failed' | 'uncertain' =
-          refusal?.problem === 'unsupported' ? 'failed' : 'uncertain';
+        const error = Cause.hasInterruptsOnly(done.cause) ? undefined : Cause.squash(done.cause);
+        let outcome: 'failed' | 'uncertain' = 'uncertain';
         // A preflight error is known only while the original object still occupies its exact path.
         if (
           error !== undefined &&

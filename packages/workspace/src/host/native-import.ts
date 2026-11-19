@@ -17,6 +17,9 @@ const refuseOn = <T>(open: () => T, codes: string[], problem: NativeSourceError[
 };
 // Gone (ENOENT/ENOTDIR) or replaced by a symlink, which the no-follow open refuses with ELOOP.
 const replacedCodes = ['ENOENT', 'ENOTDIR', 'ELOOP'];
+// The open failures that may mean the path is not a plain file or folder (a symlink gives ELOOP,
+// a socket EOPNOTSUPP or ENXIO). Any other failure (EACCES, EPERM, EIO…) stands as it is.
+const typeCodes = ['ELOOP', 'EOPNOTSUPP', 'ENOTSUP', 'ENXIO', 'ENODEV'];
 /** The path's own metadata, never following a final symlink, or undefined when it can't be read. */
 const linkStat = (path: string): Stats | undefined => {
   try {
@@ -63,13 +66,14 @@ export class NativeImport {
     }
   }
   /**
-   * Opens the source without following links. When the open fails and the path's metadata shows
-   * `refused`, refuses with `problem`; otherwise the open's own failure stands.
+   * Opens the source without following links. When the open fails with a type-related errno and
+   * the path's metadata shows `refused`, refuses with `problem`; otherwise the open's failure stands.
    */
   private openSource(problem: NativeSourceError['problem'], refused: (stat: Stats) => boolean) {
     try {
       return openSync(this.path, flags);
     } catch (error) {
+      if (!typeCodes.includes(errorCode(error) ?? '')) throw error;
       const stat = linkStat(this.path);
       if (stat && refused(stat)) throw new NativeSourceError({ problem });
       throw error;

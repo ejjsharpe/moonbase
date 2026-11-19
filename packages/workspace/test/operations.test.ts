@@ -548,8 +548,8 @@ test('a native import source that is unsupported at capture or replaced after it
       );
       assert(!existsSync(join(f.root, name)));
     }
-    // A hard link made inside a captured folder after admission fails that item with its reason,
-    // after the items before it completed.
+    // A hard link made inside a captured folder after admission leaves that item uncertain, with
+    // its reason, after the items before it completed.
     const batch = join(f.base, 'batch');
     mkdirSync(join(batch, 'folder'), { recursive: true });
     writeFileSync(join(batch, 'first.txt'), 'native bytes');
@@ -576,9 +576,10 @@ test('a native import source that is unsupported at capture or replaced after it
       result.items.map((item) => [item.outcome, item.message]),
       [
         ['completed', undefined],
-        ['failed', new NativeSourceError({ problem: 'unsupported' }).message],
+        ['uncertain', new NativeSourceError({ problem: 'unsupported' }).message],
       ],
     );
+    assert.equal(result.outcome, 'uncertain');
     assert(!existsSync(join(f.root, 'imports/folder')));
   } finally {
     for (const socket of sockets) socket.close();
