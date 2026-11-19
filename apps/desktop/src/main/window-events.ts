@@ -1,14 +1,18 @@
 import type { App, BrowserWindow, Dialog, Event } from 'electron';
-import { Effect, FiberHandle, FiberSet } from 'effect';
+import { Effect, Exit, FiberHandle, FiberSet } from 'effect';
 import { listen } from './electron-listener.ts';
+import { showDialog } from './native-actions.ts';
 import { WindowLifecycle } from './window-lifecycle.ts';
 
 export type WindowEventsOptions = {
   app: Pick<App, 'on' | 'removeListener'>;
   window: BrowserWindow;
   dialog: Pick<Dialog, 'showMessageBox'>;
-  /** Releases the window's document: its connections, requests, watches and what they hold. */
-  releaseDocument: Effect.Effect<void, unknown>;
+  /**
+   * Takes the window's document out at once; the result releases it (its connections, requests,
+   * watches and what they hold) without touching a later document.
+   */
+  detachDocument: Effect.Effect<Effect.Effect<void, unknown>>;
 };
 
 /**
@@ -16,12 +20,7 @@ export type WindowEventsOptions = {
  * shows it, Quit asks the document first, a replaced document is released, and a crashed renderer
  * asks the user to recover the workbench or quit.
  */
-export const installWindowEvents = ({
-  app,
-  window,
-  dialog,
-  releaseDocument,
-}: WindowEventsOptions) =>
+export const installWindowEvents = ({ app, window, dialog, detachDocument }: WindowEventsOptions) =>
   Effect.gen(function* () {
     const lifecycle = yield* WindowLifecycle;
     const run = yield* FiberSet.makeRuntime();
@@ -47,16 +46,28 @@ export const installWindowEvents = ({
         if (!isMainFrame) return;
         run(
           Effect.gen(function* () {
-            yield* FiberHandle.clear(crashPrompt);
+            // Before anything waits, so the new document's connections and readiness are its own.
+            const release = yield* detachDocument;
             yield* lifecycle.replaceDocument;
-            yield* lifecycle.runCleanup(releaseDocument);
+            // The crash prompt's answer no longer applies, so its dialog closes unanswered; Electron
+            // closes it asynchronously, and Quit waits for it as for the release. Each is waited
+            // for whatever the other does, and then their failures are reported together.
+            yield* lifecycle.runCleanup(
+              Effect.flatMap(
+                Effect.all([Effect.exit(FiberHandle.clear(crashPrompt)), Effect.exit(release)], {
+                  concurrency: 'unbounded',
+                }),
+                (exits) => Exit.asVoidAll(exits),
+              ),
+            );
           }),
         );
       },
     );
     const promptAfterCrash = Effect.gen(function* () {
-      const recovery = yield* Effect.promise(() =>
+      const recovery = yield* showDialog((signal) =>
         dialog.showMessageBox(window, {
+          signal,
           type: 'error',
           message: 'The workbench stopped unexpectedly.',
           detail:
@@ -76,7 +87,7 @@ export const installWindowEvents = ({
       run(
         Effect.gen(function* () {
           if (!(yield* lifecycle.crashDocument)) return;
-          yield* lifecycle.runCleanup(releaseDocument);
+          yield* lifecycle.runCleanup(yield* detachDocument);
           yield* Effect.logError('Workbench renderer exited:', details.reason);
           yield* FiberHandle.run(crashPrompt, promptAfterCrash);
         }),

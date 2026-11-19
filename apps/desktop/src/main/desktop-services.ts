@@ -110,6 +110,7 @@ export const DesktopServicesLive = (options: DesktopServicesOptions) => {
           Effect.flatMap(Effect.zip(local.peek, local.isRunning), ([backend, running]) =>
             backend && running ? backend.workspace.releaseImports(input) : Effect.void,
           ),
+        isClosing: lifecycle.isClosing,
       });
       const approvals = new EditorApprovals();
       const backends = makeChatBackends({
@@ -118,15 +119,7 @@ export const DesktopServicesLive = (options: DesktopServicesOptions) => {
         installationId,
         requestIds: createFileRequestIds(join(workspaceData, 'chat-requests.json')),
         adoptCheckout: (target) => approvals.adoptCheckout(target),
-        pickFolder: Effect.map(
-          Effect.promise(() =>
-            dialog.showOpenDialog(window, {
-              title: 'Choose a local chat working folder',
-              properties: ['openDirectory'],
-            }),
-          ),
-          (selection) => (selection.canceled ? null : (selection.filePaths[0] ?? null)),
-        ),
+        pickFolder: native.chooseFolder,
       });
       const documents = yield* makeChatDocuments(backends, { isClosing: lifecycle.isClosing });
       const ipc = yield* makeIpcServer(
@@ -156,6 +149,9 @@ export const DesktopServicesLive = (options: DesktopServicesOptions) => {
           ...(hooks.interception ? { intercept: hooks.interception } : {}),
         }),
       );
+      // Once Quit is agreed, before it waits for a document release or the IPC server's requests,
+      // which may wait for a picker to be answered: the picker must be in front of the user.
+      yield* lifecycle.addQuitStep(native.surfacePickers);
       yield* serveAppProtocol({
         protocol,
         net,

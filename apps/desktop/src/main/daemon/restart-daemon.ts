@@ -1,5 +1,6 @@
 import type { BrowserWindow, Dialog } from 'electron';
 import { Effect } from 'effect';
+import { showDialog } from '../native-actions.ts';
 import type { LocalDaemon } from './local-daemon.ts';
 
 /**
@@ -17,8 +18,10 @@ export const restartDaemon = ({
   window: BrowserWindow;
 }) =>
   Effect.gen(function* () {
-    const { response } = yield* Effect.promise(() =>
+    // Shutting down closes the confirmation unanswered.
+    const { response } = yield* showDialog((signal) =>
       dialog.showMessageBox(window, {
+        signal,
         type: 'question',
         message: 'Restart the Moonbase daemon?',
         detail:
@@ -31,7 +34,7 @@ export const restartDaemon = ({
     if (response !== 1) return;
     yield* daemon.restart.pipe(
       Effect.catch(({ message }) =>
-        Effect.sync(() => dialog.showErrorBox('Moonbase daemon', message)),
+        showDialog(async () => dialog.showErrorBox('Moonbase daemon', message)),
       ),
     );
   });

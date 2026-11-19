@@ -1,6 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import type { BrowserWindow } from 'electron';
-import { Cause, Context, Deferred, Effect, Exit, FiberSet, PubSub, SubscriptionRef } from 'effect';
+import {
+  Cause,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  FiberSet,
+  PubSub,
+  Ref,
+  SubscriptionRef,
+} from 'effect';
 import { makeWindowFailure } from '../ipc/ipc-errors.ts';
 import type { WindowAction } from '../ipc/window-rpcs.ts';
 import * as WindowState from './window-state.ts';
@@ -42,7 +52,12 @@ export class WindowLifecycle extends Context.Service<
     readonly isQuitting: Effect.Effect<boolean>;
     /** Whether Quit is releasing everything. */
     readonly isClosing: Effect.Effect<boolean>;
-    /** Waits for Quit, then for the document releases under way. */
+    /**
+     * Adds `step`, which Quit runs once it is agreed, before it waits for document releases. A
+     * step's failure is reported with the cleanup failures, and the later steps still run.
+     */
+    addQuitStep(step: Effect.Effect<void>): Effect.Effect<void>;
+    /** Waits for Quit, runs its steps once, then waits for the document releases under way. */
     readonly awaitQuit: Effect.Effect<void>;
   }
 >()('moonbase/desktop/WindowLifecycle') {}
@@ -59,6 +74,7 @@ export const makeWindowLifecycle = ({ window, deliver }: WindowLifecycleOptions)
     const actions = yield* PubSub.unbounded<WindowAction>();
     const quit = yield* Deferred.make<void>();
     const cleanups = yield* FiberSet.make();
+    const quitSteps = yield* Ref.make<readonly Effect.Effect<void>[]>([]);
     const show = Effect.sync(() => {
       if (window.isDestroyed()) return;
       window.show();
@@ -98,6 +114,17 @@ export const makeWindowLifecycle = ({ window, deliver }: WindowLifecycleOptions)
         ),
       );
     const phase = Effect.map(SubscriptionRef.get(state), (current) => current.phase._tag);
+    /**
+     * Quit's steps, once however many wait for Quit: each in the order added, its failure reported
+     * so the next still runs and Quit still waits for the document releases. Once started they run
+     * to the end: the cache would abandon a run whose last waiter is interrupted, and the next
+     * waiter would rerun the steps already done.
+     */
+    const runQuitSteps = yield* Effect.cached(
+      Effect.flatMap(Ref.get(quitSteps), (steps) =>
+        Effect.forEach(steps, (step) => Effect.catchCause(step, reportCleanup), { discard: true }),
+      ),
+    );
     return WindowLifecycle.of({
       state,
       actions,
@@ -129,7 +156,12 @@ export const makeWindowLifecycle = ({ window, deliver }: WindowLifecycleOptions)
       reportCleanup,
       isQuitting: Effect.map(SubscriptionRef.get(state), WindowState.isQuitting),
       isClosing: Effect.map(phase, (tag) => tag === 'Closing'),
-      awaitQuit: Effect.andThen(Deferred.await(quit), FiberSet.awaitEmpty(cleanups)),
+      addQuitStep: (step) => Ref.update(quitSteps, (steps) => [...steps, step]),
+      awaitQuit: Effect.gen(function* () {
+        yield* Deferred.await(quit);
+        yield* Effect.uninterruptible(runQuitSteps);
+        yield* FiberSet.awaitEmpty(cleanups);
+      }),
     });
   });
 

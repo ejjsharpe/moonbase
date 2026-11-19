@@ -12,6 +12,8 @@ export function nativeActionsFixture(plist: Uint8Array) {
     finderFiles: false,
     prompts: 0,
     reads: 0,
+    /** Whether Quit is releasing everything. */
+    closing: false,
     checkout: {
       hostId: 'local',
       checkoutId: 'c',
@@ -51,6 +53,7 @@ export function nativeActionsFixture(plist: Uint8Array) {
     shell: { showItemInFolder: () => {} },
     capture: () => Effect.succeed(['reference']),
     release: () => Effect.void,
+    isClosing: Effect.sync(() => state.closing),
   };
   return state;
 }

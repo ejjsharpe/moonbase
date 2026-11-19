@@ -1,5 +1,5 @@
-import type { BrowserWindow, Clipboard, Dialog, Shell } from 'electron';
-import { Effect, Stream } from 'effect';
+import type { BrowserWindow, Clipboard, Dialog, OpenDialogOptions, Shell } from 'electron';
+import { Effect, Ref, Stream } from 'effect';
 import { ChildProcess, ChildProcessSpawner } from 'effect/process';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
@@ -8,6 +8,13 @@ import { NativeActionError } from '@moonbase/contracts/ipc-errors';
 /** What the editor's document may ask of this Mac, through main. */
 export type NativeActions = {
   readonly chooseCheckout: Effect.Effect<string | null>;
+  /** A folder for local chat to work in, or null when the picker is cancelled. */
+  readonly chooseFolder: Effect.Effect<string | null>;
+  /**
+   * Shows the window if a picker is open on it. A picker can't be closed for the user, so Quit
+   * surfaces it to be answered, and its request's cancellation waits for that.
+   */
+  readonly surfacePickers: Effect.Effect<void>;
   /**
    * The paths to import: the picker's, or the Finder files on the clipboard. None when there is
    * nothing to import, or null for a declined prompt.
@@ -37,6 +44,22 @@ export type NativeActions = {
 const finderFiles = 'electron application/osclipboard;format="NSFilenamesPboardType"';
 /** The most `plutil` may print for one clipboard's Finder files. */
 const maximumFileListBytes = 2 ** 20;
+/**
+ * Shows a native dialog; every native dialog goes through here. A request cancelled meanwhile
+ * aborts `signal` and waits for the dialog to close, ignoring its answer. A message box closes
+ * on `signal`, as if cancelled; Electron's pickers can't, so they stay until the user answers.
+ */
+export const showDialog = <A>(show: (signal: AbortSignal) => Promise<A>) =>
+  Effect.callback<A>((resume, signal) => {
+    const answer = show(signal);
+    answer.then(
+      (value) => resume(Effect.succeed(value)),
+      (cause: unknown) => resume(Effect.die(cause)),
+    );
+    return Effect.promise(() => answer.then(ignore, ignore));
+  });
+const ignore = () => {};
+
 const invalid = (failure: NativeActionError['failure']) => new NativeActionError({ failure });
 
 /** A Finder file list (a binary or XML plist) as its paths, converted by `/usr/bin/plutil`. */
@@ -95,6 +118,7 @@ export const makeNativeActions = ({
   shell,
   capture,
   release,
+  isClosing,
 }: {
   window: BrowserWindow;
   dialog: Pick<Dialog, 'showOpenDialog' | 'showMessageBox'>;
@@ -102,19 +126,41 @@ export const makeNativeActions = ({
   shell: Pick<Shell, 'showItemInFolder'>;
   capture: NativeActions['capture'];
   release: NativeActions['release'];
+  /** Whether Quit is releasing everything, after which no picker opens. */
+  isClosing: Effect.Effect<boolean>;
 }) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    // A native dialog can't be withdrawn, so a request cancelled meanwhile waits for its answer.
-    const ask = <A>(show: () => Promise<A>) => Effect.uninterruptible(Effect.promise(show));
+    const openPickers = yield* Ref.make(0);
+    /**
+     * A picker on the window, counted while open. Once Quit is closing it answers as cancelled
+     * without opening: counted first, then checked, so a picker either opens before Quit surfaces
+     * the open ones or sees that Quit is closing.
+     */
+    const pick = (options: OpenDialogOptions) =>
+      Effect.acquireUseRelease(
+        Ref.update(openPickers, (count) => count + 1),
+        () =>
+          Effect.flatMap(isClosing, (closing) =>
+            closing
+              ? Effect.succeed({ canceled: true, filePaths: [] })
+              : showDialog(() => dialog.showOpenDialog(window, options)),
+          ),
+        () => Ref.update(openPickers, (count) => count - 1),
+      );
+    const chooseDirectory = (title: string) =>
+      Effect.map(pick({ title, properties: ['openDirectory'] }), (result) =>
+        result.canceled ? null : (result.filePaths[0] ?? null),
+      );
     const clipboardPaths = (checkout: CheckoutTarget) =>
       Effect.gen(function* () {
         // Only Finder files import. Without them, such as after text was copied, there is nothing
         // to ask about, and the renderer pastes its own entries instead. Until consent, only the
         // type's presence is checked; nothing on the clipboard is read.
         if (!(yield* Effect.promise(async () => clipboard.has(finderFiles)))) return [];
-        const consent = yield* ask(() =>
+        const consent = yield* showDialog((signal) =>
           dialog.showMessageBox(window, {
+            signal,
             type: 'question',
             message: 'Import clipboard files?',
             detail: 'Copy files from Finder, then confirm import into ' + checkout.root,
@@ -138,25 +184,24 @@ export const makeNativeActions = ({
         );
       });
     return {
-      chooseCheckout: Effect.map(
-        ask(() =>
-          dialog.showOpenDialog(window, {
-            title: 'Open a Git checkout',
-            properties: ['openDirectory'],
-          }),
-        ),
-        (result) => (result.canceled ? null : (result.filePaths[0] ?? null)),
+      chooseCheckout: chooseDirectory('Open a Git checkout'),
+      chooseFolder: chooseDirectory('Choose a local chat working folder'),
+      surfacePickers: Effect.flatMap(Ref.get(openPickers), (count) =>
+        count > 0 && !window.isDestroyed()
+          ? Effect.sync(() => {
+              window.show();
+              window.focus();
+            })
+          : Effect.void,
       ),
       choosePaths: (checkout, kind) =>
         kind === 'clipboard'
           ? clipboardPaths(checkout)
           : Effect.map(
-              ask(() =>
-                dialog.showOpenDialog(window, {
-                  title: 'Import files into ' + checkout.root,
-                  properties: ['openFile', 'openDirectory', 'multiSelections'],
-                }),
-              ),
+              pick({
+                title: 'Import files into ' + checkout.root,
+                properties: ['openFile', 'openDirectory', 'multiSelections'],
+              }),
               (result) => (result.canceled ? [] : result.filePaths),
             ),
       capture,
