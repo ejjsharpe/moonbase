@@ -9,6 +9,7 @@ import { FileHost, makeFileHostLayer } from './host/host.ts';
 import type { WorkspaceHostConfiguration } from './schema.ts';
 import type { WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
 import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
+import type { SystemFailure } from './system-failures.ts';
 
 export type {
   ChatFolders,
@@ -16,6 +17,7 @@ export type {
   WorkspaceConfiguration,
   WorkspaceHostConfiguration,
 } from './schema.ts';
+export type { SystemFailure } from './system-failures.ts';
 export type WorkspaceRecoveryConfiguration = {
   dataDirectory: string;
   /** The store's identity to a file host; when absent, the one the store holds or a new one. */
@@ -50,16 +52,20 @@ export function WorkspaceHostLive(configuration: WorkspaceHostConfiguration) {
 /**
  * The installation ID of the client recovery store in `dataDirectory`: the one it holds, or a new
  * one it keeps from now on. Open it before composing `WorkspaceRecoveryLive` over the same folder.
+ * It fails with a workspace error for the store's contents or the request, and with a
+ * `SystemFailure` when the store could not open for a reason of the system's own.
  */
-export const readInstallationId = (dataDirectory: string): Effect.Effect<string, WorkspaceError> =>
+export const readInstallationId = (
+  dataDirectory: string,
+): Effect.Effect<string, WorkspaceError | SystemFailure> =>
   Effect.scoped(
     Effect.gen(function* () {
       const config = yield* decodeClientConfiguration({ dataDirectory });
       return (yield* openClientStore(config.dataDirectory)).installationId;
     }),
   ).pipe(
-    // A client store that cannot open fails with a workspace error, never a system call's own.
-    Effect.mapError((failure) => asWorkspaceError(failure, true)),
+    // The store runs no helper, so this is never one; it is a store failure if it is.
+    Effect.catchTag('HelperFailure', (failure) => Effect.fail(asWorkspaceError(failure, true))),
   );
 
 /**

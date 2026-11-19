@@ -294,7 +294,7 @@ export class Checkouts extends Context.Service<
         Effect.gen(function* () {
           const root = directory.root;
           const top = (yield* directory.git(['rev-parse', '--show-toplevel'])).toString().trim();
-          if (!(realpathSync(top) === root))
+          if (!((yield* systemCall(() => realpathSync(top))) === root))
             return yield* new InvalidPathError({ problem: 'not-checkout-root' });
           const output = yield* directory.git(['rev-parse', '--git-dir', '--git-common-dir']);
           const [gitDirectory, common] = yield* systemCall(() =>

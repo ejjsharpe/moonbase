@@ -86,10 +86,8 @@ export const DesktopServicesLive = (options: DesktopServicesOptions) => {
       const requestIds = yield* RequestIds;
       const installationId = yield* readInstallationId(workspaceData).pipe(
         // A store that could not open for a reason of the system's own, not its contents.
-        Effect.catchTag('WorkspaceStoreError', (error) =>
-          Effect.fail(
-            error.failure === 'failed' ? new StartupError({ problem: 'recovery' }) : error,
-          ),
+        Effect.catchTag('SystemFailure', () =>
+          Effect.fail(new StartupError({ problem: 'recovery' })),
         ),
       );
       const host = createDaemonWorkspaceHost(local);

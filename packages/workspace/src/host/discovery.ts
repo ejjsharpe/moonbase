@@ -206,7 +206,7 @@ export class Discovery {
           '--untracked-files=all',
           '--no-renames',
         ]);
-        const changes = parseGitStatus(output.toString());
+        const changes = yield* parseGitStatus(output.toString());
         for (const change of changes) yield* requirePath(change.path);
         return { branch: yield* readBranch(directory), changes };
       }).pipe(

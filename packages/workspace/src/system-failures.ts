@@ -49,9 +49,11 @@ export class SystemFailure extends Schema.TaggedError<SystemFailure>()('SystemFa
   }
 }
 
-/** `error` thrown by a Node or OS call, as a `SystemFailure`. */
-export const asSystemFailure = (error: unknown) =>
-  new SystemFailure({ code: (error as NodeJS.ErrnoException | undefined)?.code, cause: error });
+/** `error` thrown by a Node or OS call, as a `SystemFailure`; a `code` that is not a string is dropped. */
+export const asSystemFailure = (error: unknown) => {
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return new SystemFailure({ code: typeof code === 'string' ? code : undefined, cause: error });
+};
 
 /** Runs a Node or OS call that throws only its own errors, failing with a `SystemFailure`. */
 export const systemCall = <A>(call: () => A): Effect.Effect<A, SystemFailure> =>

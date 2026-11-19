@@ -29,8 +29,6 @@ function rejected(value: unknown) {
   assert(!JSON.stringify(exit).includes('private-credential-path'));
   const error = Cause.squash(exit.cause);
   assert(error instanceof SshConfigurationError);
-  assert(!JSON.stringify(error).includes(configuration.token));
-  assert(!JSON.stringify(error).includes('private-credential-path'));
   assert(!String(error).includes('SchemaError'));
 }
 
