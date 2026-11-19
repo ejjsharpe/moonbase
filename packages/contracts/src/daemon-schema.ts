@@ -8,7 +8,7 @@ import {
   providerInputSchemas,
 } from './providers-schema.ts';
 import { chatHostCapabilities, type ChatHostCapability } from './host.ts';
-import type { DaemonCommand, DaemonInput, DaemonOutput, LocalHostCommand } from './daemon.ts';
+import type { DaemonCommand, LocalHostCommand } from './daemon.ts';
 
 /** An absolute path: at most 4 KiB of well-formed text without NULs. */
 export const AbsolutePathSchema = Schema.String.check(
@@ -115,39 +115,7 @@ export const isDaemonMutation = (operation: DaemonCommand) =>
   operation === 'cancelProviderLogin' ||
   operation === 'logoutProvider';
 
-const inputs = Object.fromEntries(
-  Object.entries(daemonInputSchemas).map(([name, schema]) => [
-    name,
-    Schema.decodeUnknownSync(schema as Schema.Codec<unknown, unknown>, {
-      onExcessProperty: 'error',
-      reportInput: false,
-    }),
-  ]),
-);
-const outputs = Object.fromEntries(
-  Object.entries(daemonOutputSchemas).map(([name, schema]) => [
-    name,
-    Schema.decodeUnknownSync(schema as Schema.Codec<unknown, unknown>, {
-      onExcessProperty: 'error',
-      reportInput: false,
-    }),
-  ]),
-);
 export const isDaemonCommand = (value: unknown): value is DaemonCommand =>
   typeof value === 'string' && Object.hasOwn(daemonInputSchemas, value);
 export const isLocalHostCommand = (value: unknown): value is LocalHostCommand =>
   typeof value === 'string' && Object.hasOwn(localHostInputSchemas, value);
-export function decodeDaemonInput<K extends DaemonCommand>(
-  operation: K,
-  value: unknown,
-): DaemonInput<K> {
-  if (!isDaemonCommand(operation)) throw new TypeError('Unknown command.');
-  return inputs[operation](value) as DaemonInput<K>;
-}
-export function decodeDaemonOutput<K extends DaemonCommand>(
-  operation: K,
-  value: unknown,
-): DaemonOutput<K> {
-  if (!isDaemonCommand(operation)) throw new TypeError('Unknown command.');
-  return outputs[operation](value) as DaemonOutput<K>;
-}

@@ -19,7 +19,7 @@
 
 ## Layout
 
-`src/editor/` and `src/chat/` hold the two features; `src/runtime/` composes them and `src/place-history/` holds the window's place history. Each concept is a folder with up to three files:
+`src/editor/` and `src/chat/` hold the two features; `src/runtime/` composes them and `src/place-history/` holds the window's place history; `src/follow-ref.ts` gives both features read-only atoms over their services' state. Each concept is a folder with up to three files:
 
 | File | Holds |
 | --- | --- |

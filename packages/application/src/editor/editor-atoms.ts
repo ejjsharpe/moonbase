@@ -16,25 +16,20 @@ import { makeLookupAtoms } from './lookup/lookup-atoms.ts';
 import { makeTextSearchAtoms } from './text-search/text-search-atoms.ts';
 import { toEditorSnapshot } from './editor-snapshot.ts';
 import type { EditorServices } from './editor-layer.ts';
-
-/** Read-only atoms over a `SubscriptionRef`. */
-const follow = <A>(ref: Parameters<typeof Atom.subscriptionRef<A>>[0]) => {
-  const atom = Atom.subscriptionRef(ref);
-  return Atom.readable((get) => get(atom));
-};
+import { followRef } from '../follow-ref.ts';
 
 /** Atoms over one editor's state, for views to subscribe to. */
 export function makeEditorAtoms(context: Context.Context<EditorServices>) {
-  const session = follow(Context.get(context, EditorSession).state);
-  const alerts = follow(Context.get(context, EditorAlerts).alerts);
-  const views = follow(Context.get(context, EditorViews).state);
-  const operations = follow(Context.get(context, EditorOperations).state);
-  const outbox = follow(Context.get(context, RecoveryOutbox).state);
-  const discovery = follow(Context.get(context, EditorDiscovery).state);
-  const buffers = follow(Context.get(context, EditorBuffers).state);
-  const mutation = follow(Context.get(context, EditorMutations).state);
-  const closePrompt = follow(Context.get(context, EditorPreservation).closePrompt);
-  const worktrees = follow(Context.get(context, EditorWorktrees).state);
+  const session = followRef(Context.get(context, EditorSession).state);
+  const alerts = followRef(Context.get(context, EditorAlerts).alerts);
+  const views = followRef(Context.get(context, EditorViews).state);
+  const operations = followRef(Context.get(context, EditorOperations).state);
+  const outbox = followRef(Context.get(context, RecoveryOutbox).state);
+  const discovery = followRef(Context.get(context, EditorDiscovery).state);
+  const buffers = followRef(Context.get(context, EditorBuffers).state);
+  const mutation = followRef(Context.get(context, EditorMutations).state);
+  const closePrompt = followRef(Context.get(context, EditorPreservation).closePrompt);
+  const worktrees = followRef(Context.get(context, EditorWorktrees).state);
   return {
     session,
     views,

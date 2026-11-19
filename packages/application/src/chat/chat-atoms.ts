@@ -12,32 +12,27 @@ import { ChatFileSearch } from './file-search/file-search-service.ts';
 import { makeFileSearchAtoms } from './file-search/file-search-atoms.ts';
 import { isSameItems } from './transcript/transcript-row-state.ts';
 import type { ChatServices } from './chat-layer.ts';
-
-/** Read-only atoms over a `SubscriptionRef`. */
-const follow = <A>(ref: Parameters<typeof Atom.subscriptionRef<A>>[0]) => {
-  const atom = Atom.subscriptionRef(ref);
-  return Atom.readable((get) => get(atom));
-};
+import { followRef } from '../follow-ref.ts';
 
 /**
  * Atoms over one chat's concepts, for views to subscribe to. Each reads one concept's state and
  * notifies only when what it selects changes, so typing a draft tells only the draft's readers.
  */
 function makeChatAtoms(context: Context.Context<ChatServices>) {
-  const actions = follow(Context.get(context, ChatActions).state);
-  const drafts = follow(Context.get(context, ChatDrafts).state);
-  const link = follow(Context.get(context, ChatLink).state);
-  const selection = follow(Context.get(context, ChatSelection).state);
-  const sends = follow(Context.get(context, ChatSends).state);
+  const actions = followRef(Context.get(context, ChatActions).state);
+  const drafts = followRef(Context.get(context, ChatDrafts).state);
+  const link = followRef(Context.get(context, ChatLink).state);
+  const selection = followRef(Context.get(context, ChatSelection).state);
+  const sends = followRef(Context.get(context, ChatSends).state);
   const setup = Context.get(context, ChatProviderSetup);
-  const providers = follow(setup.state);
+  const providers = followRef(setup.state);
   return {
     /** The host: whether it is remote and verified, its connection and configuration. */
     link,
     /** Whether the host is verified and the chat can act. */
     ready: Atom.readable((get) => get(link).ready),
     /** The chats listed, and the cursor Show older continues from. */
-    list: follow(Context.get(context, ChatList).state),
+    list: followRef(Context.get(context, ChatList).state),
     /** The named actions running (`send`, `stop`, `settle`…); none while the chat closes. */
     active: Atom.readable((get): readonly string[] => listActive(get(actions))).pipe(
       Atom.withEquality(isSameItems),
@@ -81,6 +76,9 @@ function makeChatAtoms(context: Context.Context<ChatServices>) {
 }
 export type ChatAtoms = ReturnType<typeof makeChatAtoms>;
 
+// Not `Atom.family`: it keys on `Equal`, and a `Context` compares its services structurally and
+// hashes by their count, so every chat would share one bucket; and it holds the atoms weakly, so
+// a view that reads them in passing could get a new set. A `WeakMap` keys on the chat's identity.
 const made = new WeakMap<Context.Context<ChatServices>, ChatAtoms>();
 /** The chat's atoms, made once per chat so all its views share them. */
 export function getChatAtoms(context: Context.Context<ChatServices>): ChatAtoms {
