@@ -9,7 +9,7 @@ import { Request, cid, key, sid, tid } from '../documents.ts';
 import { decodeStoredRequest } from '../stored-records.ts';
 import type { Host } from './chat-host.ts';
 import { callHarness } from './harness-call.ts';
-import { runCheck, safeError } from './safe-error.ts';
+import { runCheck, safeError, uncertainError } from './safe-error.ts';
 
 /** Records the Stop's request, then stops what it captured, or says why it is past stopping. */
 const captureStop = (host: Host, d: ChatInput<'stopChat'>) =>
@@ -69,6 +69,8 @@ export function stopChat(
     if (captured === null) {
       const taskId = tid(d.stop.taskId!);
       // The deadline owns only this join; the abort request stays with the host through settlement.
+      // Pi may have recorded the abort whatever the abort or the wait after it reports, so either
+      // failure is uncertain; one still running at the deadline leaves the Stop pending.
       const joined = yield* Effect.interruptible(
         Effect.gen(function* () {
           const abort = yield* host.aborts.run(
@@ -77,7 +79,7 @@ export function stopChat(
           yield* Fiber.join(abort);
           const waiter = yield* host.waiters.run(waitForTerminal(host, taskId));
           return yield* Fiber.join(waiter).pipe(Effect.ensuring(Fiber.interrupt(waiter)));
-        }).pipe(Effect.timeoutOption('1 second')),
+        }).pipe(Effect.mapError(uncertainError), Effect.timeoutOption('1 second')),
       );
       outcome = Option.isSome(joined) ? 'stopped' : 'pending';
     }

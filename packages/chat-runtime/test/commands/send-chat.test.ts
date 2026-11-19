@@ -6,6 +6,7 @@ import { Harness, createRegistry, defineDocFamily } from '@earendil-works/pi-dur
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { readFile } from 'node:fs/promises';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import { ChatStoreError } from '@moonbase/contracts/chat-errors';
 import { session, until, fixture, runChat } from '../runtime-fixture.ts';
 
 test('duplicate/lost Send, read-only lookup, restart and cross-operation reuse never resend', async (t) => {
@@ -58,7 +59,8 @@ for (const admitted of [false, true])
             if (fail) {
               fail = false;
               if (admitted) await submit(...input);
-              throw Error('Controlled lost admission response');
+              // A typed failure is no proof either: only Pi's busy refusal is.
+              throw new ChatStoreError({ problem: 'failed' });
             }
             return submit(...input);
           };

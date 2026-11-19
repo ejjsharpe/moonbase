@@ -19,6 +19,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { Cause, Effect, Exit, Layer } from 'effect';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
+import { ChatStoreError } from '@moonbase/contracts/chat-errors';
 import { ChatService } from '@moonbase/contracts/services';
 import { session, delay, until, fixture, localPiRuntime } from './runtime-fixture.ts';
 /** Whether a failure means `group` for its request. */
@@ -930,17 +931,25 @@ test('root disposal retains every terminal waiter cleanup failure raised during 
   assert.equal(modelAborted, count);
 });
 
-test('multiple late abort failures remain composed after their Stop responses return pending', async (t) => {
+test('a lost abort acknowledgement is uncertain, and multiple late abort failures remain composed after their Stop responses return pending', async (t) => {
   const original = Harness.open;
   let entered!: () => void,
     release!: () => void,
-    aborted = 0;
+    aborted = 0,
+    lost = true;
   const requested = new Promise<void>((resolve) => (entered = resolve)),
     gate = new Promise<void>((resolve) => (release = resolve)),
     failures: string[] = [];
   mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
-    const harness = await original(...args);
-    harness.abortTask = async (id) => {
+    const harness = await original(...args),
+      abort = harness.abortTask.bind(harness);
+    harness.abortTask = async (id, context) => {
+      // Pi records the first abort, then its acknowledgement is lost.
+      if (lost) {
+        lost = false;
+        await abort(id, context);
+        throw new ChatStoreError({ problem: 'failed' });
+      }
       if (++aborted === 2) entered();
       await gate;
       const message = 'Controlled late abort failure ' + id;
@@ -954,15 +963,32 @@ test('multiple late abort failures remain composed after their Stop responses re
     mock.restoreAll();
   });
   const f = await fixture(t),
-    targets = await Promise.all([f.create('first'), f.create('second')]);
+    [lostTarget, ...targets] = await Promise.all([
+      f.create('lost'),
+      f.create('first'),
+      f.create('second'),
+    ]);
   f.faux.setResponses(
-    Array.from({ length: 2 }, () => async (_messages, options) => {
+    Array.from({ length: 3 }, () => async (_messages, options) => {
       await new Promise<void>((resolve) => {
         if (options?.signal?.aborted) return resolve();
         options?.signal?.addEventListener('abort', () => resolve(), { once: true });
       });
       return fauxAssistantMessage('Interrupted by root close');
     }),
+  );
+  await f.client.command('sendChat', { target: lostTarget!, requestId: 'lost-send', text: 'Held' });
+  const running = await until(
+    () => f.client.command('getChat', { target: lostTarget! }),
+    (value) => !!value.run,
+  );
+  await assert.rejects(
+    f.client.command('stopChat', { stop: running.run!.stop, requestId: 'lost-abort' }),
+    { _tag: 'UncertainError' },
+  );
+  await until(
+    () => f.client.command('getChat', { target: lostTarget! }),
+    (value) => !value.run,
   );
   await Promise.all(
     targets.map((target, index) =>

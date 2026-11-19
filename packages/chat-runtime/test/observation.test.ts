@@ -631,6 +631,30 @@ test('retiring LiveDoc reports a source failure, releases subscriptions and neve
   await assert.rejects(watch.off(), inGroup('storage'));
 });
 
+test("a corrupt live message fails a read and a watch alike as the store's", async (t) => {
+  const measured = instrument(t),
+    f = await fixture(t),
+    target = await f.create();
+  f.faux.setResponses([
+    async (_messages, options) => {
+      await new Promise<void>((resolve) =>
+        options?.signal?.addEventListener('abort', () => resolve(), { once: true }),
+      );
+      return fauxAssistantMessage('Held');
+    },
+  ]);
+  await f.client.command('sendChat', { target, requestId: 'held', text: 'Hold' });
+  const watch = observe(t, f.client, target);
+  await watch.wait((view) => !!view.run);
+  await measured.harness().commit(async (tx) => {
+    const live = await tx.doc(LiveDoc, conversationId(target));
+    Object.assign(live, { generation: { ...live.generation, message: { content: 7 } } });
+  }, context);
+  await assert.rejects(f.client.command('getChat', { target }), { _tag: 'ChatStoreError' });
+  await until(async () => watch.errors.length, Boolean);
+  assert.equal((watch.errors[0] as { _tag?: string })._tag, 'ChatStoreError');
+});
+
 for (const policy of [
   { limit: 1, restarts: 1, parked: true },
   { limit: 8, restarts: 5, parked: false },

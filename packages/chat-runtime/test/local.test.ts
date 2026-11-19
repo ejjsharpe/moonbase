@@ -183,7 +183,9 @@ test('a local chat without a project runs in a new, empty folder of its own', as
     faux = fauxProvider({ models: [{ id: 'model' }], tokensPerSecond: 100000 });
   models.setProvider(faux.provider);
   const approvals: unknown[] = [];
-  let refuse = false;
+  let refuse = false,
+    // While set, creates wait here after their checks until all of them have arrived.
+    held: { arrive: () => void; all: Promise<void> } | undefined;
   const config = {
     ...session,
     databasePath: join(root, 'local.sqlite'),
@@ -191,7 +193,11 @@ test('a local chat without a project runs in a new, empty folder of its own', as
     approveCreation: (settings: unknown) =>
       Effect.suspend(() => {
         approvals.push(settings);
-        return refuse ? Effect.fail(new Error('refused')) : Effect.void;
+        if (refuse) return Effect.fail(new Error('refused'));
+        if (!held) return Effect.void;
+        const { arrive, all } = held;
+        arrive();
+        return Effect.promise(() => all);
       }),
   };
   let runtime = ManagedRuntime.make(localPiRuntime(config));
@@ -284,6 +290,35 @@ test('a local chat without a project runs in a new, empty folder of its own', as
   assert.deepEqual(
     (await readdir(chatFolders)).sort(),
     [...folders, raced[0].conversation.cwd].map((folder) => basename(folder)).sort(),
+  );
+  // Two creates bound differently under one request ID, both past their checks: the first to
+  // commit makes the chat, and the other is refused and leaves no folder behind.
+  let arrived = 0,
+    release!: () => void;
+  const all = new Promise<void>((resolve) => (release = resolve));
+  held = {
+    arrive: () => {
+      if (++arrived === 2) release();
+    },
+    all,
+  };
+  const bound = await Promise.allSettled(
+    ['One', 'Two'].map((title) =>
+      runChat(runtime, (chat) => chat.createChat(input('bound', title))),
+    ),
+  );
+  held = undefined;
+  const made = bound.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
+  assert.equal(made.length, 1);
+  assert.deepEqual(
+    bound.flatMap((result) => (result.status === 'rejected' ? [result.reason._tag] : [])),
+    ['RequestReusedError'],
+  );
+  assert.deepEqual(
+    (await readdir(chatFolders)).sort(),
+    [...folders, raced[0].conversation.cwd, made[0]!.conversation.cwd]
+      .map((folder) => basename(folder))
+      .sort(),
   );
   // A foreign chat is refused.
   await assert.rejects(

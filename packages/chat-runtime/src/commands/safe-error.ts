@@ -25,6 +25,16 @@ export const safeError = (error: unknown, uncertain = false): ChatError => {
     : new ChatStoreError({ problem: 'failed' });
 };
 /**
+ * A failure of a call that may have taken effect, such as a Send's submission or a Stop's abort:
+ * uncertain, even a chat error, unless it is Pi's busy refusal, which proves nothing was written.
+ */
+export const uncertainError = (error: unknown): ChatError => {
+  const safe = safeError(error);
+  return safe instanceof ChatBusyError
+    ? safe
+    : new UncertainError({ operation: 'The chat request' });
+};
+/**
  * A watch's failure safe to show: a chat error as itself, and anything else (Pi's subscriptions,
  * a failed re-read) unavailable, so its client watches again.
  */

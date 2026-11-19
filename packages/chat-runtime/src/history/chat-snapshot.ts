@@ -11,6 +11,7 @@ import type {
   ChatTarget,
 } from '@moonbase/contracts/chat';
 import { callHarness } from '../commands/harness-call.ts';
+import { safeError } from '../commands/safe-error.ts';
 import { getScanCursorScope, writeScanCursor } from '../cursors.ts';
 import { historyPageBytes } from '../page-limits.ts';
 import { previewText } from '../text.ts';
@@ -43,12 +44,18 @@ type SnapshotInput = {
 };
 /** What a snapshot reads: history, and the platform's file system to check the chat's folder. */
 export type SnapshotReader = HistoryReader & { fileSystem: FileSystem.FileSystem };
-/** A chat's snapshot, read again (twice at most) when a nested tool's source ends under the read. */
+/**
+ * A chat's snapshot, read again (twice at most) when a nested tool's source ends under the read.
+ * Corrupt stored data the projection trips over fails as the store's, for a read and a watch alike.
+ */
 export const projectSnapshot = (
   reader: SnapshotReader,
   input: SnapshotInput,
 ): Effect.Effect<ChatSnapshot, ChatError> =>
-  projectSnapshotOnce(reader, input).pipe(Effect.retry({ times: 2, while: isNestedSourceEnded }));
+  projectSnapshotOnce(reader, input).pipe(
+    Effect.catchDefect((defect) => Effect.fail(safeError(defect))),
+    Effect.retry({ times: 2, while: isNestedSourceEnded }),
+  );
 const projectSnapshotOnce = (
   reader: SnapshotReader,
   { target, conversation, pending, cache }: SnapshotInput,

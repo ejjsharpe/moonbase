@@ -31,24 +31,23 @@ import {
 } from './transcript-part.ts';
 
 /** Progress a running model-issued or nested call publishes before its result is retained. */
-function makeRunningToolParts(
+function* makeRunningToolParts(
   prefix: string,
   tool: Pick<ToolSlot, 'output' | 'diagnostics' | 'details' | 'droppedBytes' | 'droppedLines'>,
   common: Partial<ChatTranscriptPart>,
-): Part[] {
+): Generator<Part> {
   const evidence = JSON.stringify([tool.droppedBytes ?? 0, tool.droppedLines ?? 0]);
-  const parts = [
-    makePart(prefix + 'output', 'result', 'tool', tool.output ?? '', common, evidence),
-  ];
+  yield makePart(prefix + 'output', 'result', 'tool', tool.output ?? '', common, evidence);
   if (tool.diagnostics?.length)
-    parts.push(
-      makePart(prefix + 'diagnostics', 'details', 'tool', JSON.stringify(tool.diagnostics), common),
+    yield makePart(
+      prefix + 'diagnostics',
+      'details',
+      'tool',
+      JSON.stringify(tool.diagnostics),
+      common,
     );
   if (tool.details !== undefined)
-    parts.push(
-      makePart(prefix + 'details', 'details', 'tool', JSON.stringify(tool.details), common),
-    );
-  return parts;
+    yield makePart(prefix + 'details', 'details', 'tool', JSON.stringify(tool.details), common);
 }
 export const getLiveTranscript = (
   reader: EntryReader,
@@ -73,14 +72,19 @@ export const getLiveTranscript = (
       thinking: summarizeThinking(generation),
     };
   });
-/** Each slot's parts, built only when a reader reaches that slot. */
+/**
+ * Each slot's parts. A slot's Pi reads run together when a reader reaches it; its parts are then
+ * built one at a time, so a reader that stops early never builds the rest.
+ */
 const listSlotParts = <T>(
   slots: readonly T[],
-  build: (slot: T, index: number) => Effect.Effect<Part[], ChatError>,
+  read: (slot: T, index: number) => Effect.Effect<Iterable<Part>, ChatError>,
 ): Stream.Stream<Part, ChatError> =>
   Stream.fromIterable(slots.entries()).pipe(
     Stream.flatMap(([index, slot]) =>
-      Stream.unwrap(Effect.map(build(slot, index), Stream.fromIterable)),
+      Stream.unwrap(
+        Effect.map(read(slot, index), (parts) => Stream.fromIterable(parts, { chunkSize: 1 })),
+      ),
     ),
   );
 function listLiveParts(
@@ -92,160 +96,152 @@ function listLiveParts(
   const toolParts = (tool: ToolSlot, i: number) =>
     Effect.gen(function* () {
       const conversationId = yield* runCheck(() => cid(source.target.conversationId));
-      const parts: Part[] = [];
       // A bounded snapshot capture covers more slots than its first page can reach.
       if (i >= capture.toolTasks.length) return yield* new ChatStoreError({ problem: 'failed' });
       const task = capture.toolTasks[i];
       if (task && task.conversationId !== conversationId)
         return yield* new ChatStoreError({ problem: 'live-tool' });
-      const prefix = `tool${i}.`;
       const pairing = (task?.kind === 'pi.tool'
         ? yield* getTaskPairing(harness, task.conversationId, task.input as ToolTaskInput)
         : undefined) ?? { pairing: 'unmatched' as const };
-      const call = { toolName: getLabel(tool.name), callId: previewText(tool.callId, 256).text };
-      if (
-        task?.kind === 'pi.tool' &&
-        task.state.checkpoint &&
-        typeof task.state.checkpoint === 'object' &&
-        !Array.isArray(task.state.checkpoint) &&
-        task.state.checkpoint.phase === 'execute'
-      )
-        parts.push(
-          makePart(
+      let saved: { entryId: string; parts: readonly Part[] } | undefined;
+      if (tool.entry) {
+        const entry = capture.tools[i];
+        if (!entry || entry.conversationId !== conversationId)
+          return yield* new ChatStoreError({ problem: 'tool-result' });
+        saved = {
+          entryId: String(entry.id),
+          parts: (yield* getEntryTranscript(reader, entry)).parts,
+        };
+      }
+      return (function* (): Generator<Part> {
+        const prefix = `tool${i}.`;
+        const call = { toolName: getLabel(tool.name), callId: previewText(tool.callId, 256).text };
+        if (
+          task?.kind === 'pi.tool' &&
+          task.state.checkpoint &&
+          typeof task.state.checkpoint === 'object' &&
+          !Array.isArray(task.state.checkpoint) &&
+          task.state.checkpoint.phase === 'execute'
+        )
+          yield makePart(
             prefix + 'executed',
             'executed-arguments',
             'tool',
             JSON.stringify(task.state.checkpoint.arguments),
             { ...pairing, ...call, taskId: String(task.id), state: 'running' },
-          ),
-        );
-      const taskId = tool.taskId ? { taskId: String(tool.taskId) } : {};
-      if (tool.entry) {
-        const entry = capture.tools[i];
-        if (!entry || entry.conversationId !== conversationId)
-          return yield* new ChatStoreError({ problem: 'tool-result' });
-        for (const part of (yield* getEntryTranscript(reader, entry)).parts)
-          parts.push({
-            ...part,
-            id: prefix + part.id,
-            extra: {
-              ...part.extra,
-              committed: { entryId: String(entry.id), partId: part.id },
-              ...taskId,
-            },
-          });
-      } else
-        parts.push(
-          ...makeRunningToolParts(prefix, tool, {
+          );
+        const taskId = tool.taskId ? { taskId: String(tool.taskId) } : {};
+        if (saved)
+          for (const part of saved.parts)
+            yield {
+              ...part,
+              id: prefix + part.id,
+              extra: {
+                ...part.extra,
+                committed: { entryId: saved.entryId, partId: part.id },
+                ...taskId,
+              },
+            };
+        else
+          yield* makeRunningToolParts(prefix, tool, {
             ...pairing,
             ...taskId,
             ...call,
             state: tool.status === 'done' ? 'missing-result' : 'running',
             droppedBytes: tool.droppedBytes ?? 0,
             droppedLines: tool.droppedLines ?? 0,
-          }),
-        );
-      return parts;
+          });
+      })();
     });
-  let built = 0;
   const nestedParts = (tool: NestedToolSlot) =>
-    Effect.gen(function* () {
-      const parts: Part[] = [];
-      const prefix = `nested.${tool.taskId}.`;
-      const { task, input, result } = yield* readNestedCall(harness, source.target, tool);
-      let state: ChatTranscriptPart['state'] = 'running';
-      if (tool.status === 'done') {
-        state = 'missing-result';
-        if (tool.summary) state = tool.summary.isError ? 'failed' : 'completed';
-      }
-      const common = {
-        toolName: getLabel(tool.name),
-        callId: previewText(tool.callId, 256).text,
-        taskId: String(tool.taskId),
-        parentTaskId: String(tool.parentTaskId),
-        state,
-        droppedBytes: tool.droppedBytes ?? 0,
-        droppedLines: tool.droppedLines ?? 0,
-      };
-      parts.push(
-        makePart(prefix + 'arguments', 'arguments', 'tool', JSON.stringify(input.call.arguments), {
-          ...common,
-          state: 'requested',
-        }),
-      );
-      const checkpoint = task.state.checkpoint as ToolTaskCheckpoint | undefined;
-      let executed: NestedToolSlot['arguments'] | undefined;
-      if (tool.status === 'running' && checkpoint?.phase === 'execute')
-        executed = checkpoint.arguments;
-      // Terminal tasks drop checkpoints; duration proves this slot's final arguments reached execution.
-      else if (tool.status === 'done' && result?.durationMs !== undefined)
-        executed = tool.arguments;
-      if (executed !== undefined)
-        parts.push(
-          makePart(
-            prefix + 'executed',
-            'executed-arguments',
-            'tool',
-            JSON.stringify(executed),
-            common,
-          ),
-        );
-      if (tool.status !== 'done') {
-        parts.push(...makeRunningToolParts(prefix, tool, common));
-        return parts;
-      }
-      if (!result) {
-        parts.push(
-          makePart(prefix + 'output', 'result', 'tool', '', {
-            ...common,
-            state: 'missing-result',
-            availability: 'unavailable',
-          }),
-        );
-        return parts;
-      }
-      const retained: Partial<ChatTranscriptPart> = {
-        ...common,
-        droppedBytes: undefined,
-        droppedLines: undefined,
-        state: result.isError ? 'failed' : 'completed',
-      };
-      if (result.diagnostics.some((item) => item.code === 'aborted' || item.code === 'interrupted'))
-        retained.state = 'interrupted';
-      const output: ToolResultMessage = {
-        role: 'toolResult',
-        toolCallId: tool.callId,
-        toolName: tool.name,
-        content: getNestedOutput(result.structuredOutput),
-        isError: result.isError,
-        ...(result.details === undefined ? {} : { details: result.details }),
-        timestamp: 0,
-      };
-      for (const part of buildMessageParts([output], prefix)) {
-        parts.push({ ...part, extra: { ...part.extra, ...retained } });
-        if (++built % partsPerTurn === 0) yield* Effect.yieldNow;
-      }
-      if (result.structuredOutput === undefined)
-        parts.push(
-          makePart(prefix + 'output', 'result', 'tool', '', {
-            ...retained,
-            availability: 'unavailable',
-          }),
-        );
-      if (result.diagnostics.length)
-        parts.push(
-          makePart(
-            prefix + 'diagnostics',
-            'details',
-            'tool',
-            JSON.stringify(result.diagnostics),
-            retained,
-          ),
-        );
-      return parts;
-    });
+    Effect.map(readNestedCall(harness, source.target, tool), (read) =>
+      buildNestedParts(tool, read),
+    );
   return Stream.concat(
     listSlotParts(capture.live.tools ?? [], toolParts),
     listSlotParts(capture.live.nestedTools ?? [], nestedParts),
   );
+}
+/** A nested call's parts, built from what `readNestedCall` read, one at a time. */
+function* buildNestedParts(
+  tool: NestedToolSlot,
+  { task, input, result }: Effect.Success<ReturnType<typeof readNestedCall>>,
+): Generator<Part> {
+  const prefix = `nested.${tool.taskId}.`;
+  let state: ChatTranscriptPart['state'] = 'running';
+  if (tool.status === 'done') {
+    state = 'missing-result';
+    if (tool.summary) state = tool.summary.isError ? 'failed' : 'completed';
+  }
+  const common = {
+    toolName: getLabel(tool.name),
+    callId: previewText(tool.callId, 256).text,
+    taskId: String(tool.taskId),
+    parentTaskId: String(tool.parentTaskId),
+    state,
+    droppedBytes: tool.droppedBytes ?? 0,
+    droppedLines: tool.droppedLines ?? 0,
+  };
+  yield makePart(prefix + 'arguments', 'arguments', 'tool', JSON.stringify(input.call.arguments), {
+    ...common,
+    state: 'requested',
+  });
+  const checkpoint = task.state.checkpoint as ToolTaskCheckpoint | undefined;
+  let executed: NestedToolSlot['arguments'] | undefined;
+  if (tool.status === 'running' && checkpoint?.phase === 'execute') executed = checkpoint.arguments;
+  // Terminal tasks drop checkpoints; duration proves this slot's final arguments reached execution.
+  else if (tool.status === 'done' && result?.durationMs !== undefined) executed = tool.arguments;
+  if (executed !== undefined)
+    yield makePart(
+      prefix + 'executed',
+      'executed-arguments',
+      'tool',
+      JSON.stringify(executed),
+      common,
+    );
+  if (tool.status !== 'done') {
+    yield* makeRunningToolParts(prefix, tool, common);
+    return;
+  }
+  if (!result) {
+    yield makePart(prefix + 'output', 'result', 'tool', '', {
+      ...common,
+      state: 'missing-result',
+      availability: 'unavailable',
+    });
+    return;
+  }
+  const retained: Partial<ChatTranscriptPart> = {
+    ...common,
+    droppedBytes: undefined,
+    droppedLines: undefined,
+    state: result.isError ? 'failed' : 'completed',
+  };
+  if (result.diagnostics.some((item) => item.code === 'aborted' || item.code === 'interrupted'))
+    retained.state = 'interrupted';
+  const output: ToolResultMessage = {
+    role: 'toolResult',
+    toolCallId: tool.callId,
+    toolName: tool.name,
+    content: getNestedOutput(result.structuredOutput),
+    isError: result.isError,
+    ...(result.details === undefined ? {} : { details: result.details }),
+    timestamp: 0,
+  };
+  for (const part of buildMessageParts([output], prefix))
+    yield { ...part, extra: { ...part.extra, ...retained } };
+  if (result.structuredOutput === undefined)
+    yield makePart(prefix + 'output', 'result', 'tool', '', {
+      ...retained,
+      availability: 'unavailable',
+    });
+  if (result.diagnostics.length)
+    yield makePart(
+      prefix + 'diagnostics',
+      'details',
+      'tool',
+      JSON.stringify(result.diagnostics),
+      retained,
+    );
 }

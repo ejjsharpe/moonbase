@@ -74,19 +74,8 @@ export const cid = (value: string) => numeric(value) as ConversationId;
 export const eid = (value: string) => numeric(value) as EntryId;
 export const sid = (value: string) => numeric(value) as SubmissionId;
 export const tid = (value: string) => numeric(value) as TaskId;
-/** Reads a chat's metadata in a Pi callback; refused unless `identity` owns it. */
-export async function readOwnedMetadataForPi(
-  harness: Harness,
-  identity: string,
-  conversationId: string,
-) {
-  return checkOwnedMetadata(
-    await harness.snapshot(Metadata, cid(conversationId), 'metadata', context),
-    identity,
-  );
-}
 /** A chat's saved metadata, refused unless `identity` owns it. */
-export function checkOwnedMetadata(meta: unknown, identity: string) {
+function checkOwnedMetadata(meta: unknown, identity: string) {
   if (!meta || (meta as { identity?: unknown }).identity !== identity)
     throw new ChatAccessError({ refusal: 'other-owner' });
   const saved = decodeStoredMetadata(meta);

@@ -70,6 +70,9 @@ const checkRequested = (host: Host, d: ChatInput<'createChat'>) =>
         return yield* new InvalidChatRequestError({ problem: 'folder-missing' });
       if (folder === 'not-canonical')
         return yield* new InvalidChatRequestError({ problem: 'folder-not-canonical' });
+      // Nothing proves the folder wrong, so the request is not refused.
+      if (folder === 'unreadable')
+        return yield* new UncertainError({ operation: 'Creating the chat' });
     } else if (!host.config.chatFolders)
       return yield* new InvalidChatRequestError({ problem: 'folder-required' });
     const model = host.config.models.getModel(requested.model.provider, requested.model.modelId);

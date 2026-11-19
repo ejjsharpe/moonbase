@@ -20,6 +20,7 @@ import {
   ChatUnavailableError,
   type ChatError,
 } from '@moonbase/contracts/chat-errors';
+import { UncertainError } from '@moonbase/contracts/errors';
 import type {
   ChatCommand,
   ChatInput,
@@ -194,9 +195,14 @@ export const makeHost = (parts: HostParts) =>
       handle: (data: ChatInput<K>) => Effect.Effect<ChatOutput<K>, ChatError>,
     ): Effect.Effect<ChatOutput<K>, ChatError> => {
       const mutation = isChatMutation(operation);
-      // An unknown failure stays hidden as the store's, or uncertain for a mutation.
+      // A defect stays hidden as the store's, or for a mutation, which it may have followed, uncertain
+      // even when it is a chat error.
       const invoke = Effect.suspend(() => handle(data)).pipe(
-        Effect.catchDefect((defect) => Effect.fail(safeError(defect, mutation))),
+        Effect.catchDefect((defect) =>
+          Effect.fail(
+            mutation ? new UncertainError({ operation: 'The chat request' }) : safeError(defect),
+          ),
+        ),
       );
       if (!mutation)
         return own(isCancellableChatRead(operation) ? invoke : Effect.uninterruptible(invoke));

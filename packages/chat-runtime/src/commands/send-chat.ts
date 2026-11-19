@@ -7,7 +7,9 @@ import {
   type ChatError,
 } from '@moonbase/contracts/chat-errors';
 import { isSameChatTarget } from '@moonbase/contracts/chat-validation';
+import { UncertainError } from '@moonbase/contracts/errors';
 import { RequestReusedError } from '@moonbase/contracts/host-errors';
+import { callAbortable } from '../abortable-call.ts';
 import { Metadata, Request, cid, key } from '../documents.ts';
 import {
   decodeStoredBinding,
@@ -16,7 +18,7 @@ import {
 } from '../stored-records.ts';
 import type { Host } from './chat-host.ts';
 import { callHarness } from './harness-call.ts';
-import { runCheck } from './safe-error.ts';
+import { runCheck, uncertainError } from './safe-error.ts';
 
 /** Admits a Send once: a retry of its request reads the first admission and never resubmits. */
 export const sendChat = (
@@ -62,15 +64,19 @@ export const sendChat = (
     );
     if (!conversation)
       return yield* new InvalidChatRequestError({ problem: 'unknown-conversation' });
-    yield* callHarness(
-      () =>
-        conversation.submit(
-          { type: 'input', requestId: requestKey, content: d.text, whenBusy: 'reject' },
-          context,
-        ),
-      true,
+    // Only Pi's busy refusal proves the submission was not admitted; once it was, any failure to
+    // read its receipt back is uncertain too.
+    yield* callAbortable(() =>
+      conversation.submit(
+        { type: 'input', requestId: requestKey, content: d.text, whenBusy: 'reject' },
+        context,
+      ),
+    ).pipe(Effect.mapError(uncertainError));
+    const receipt = yield* lookupSend(host, d.target, d.requestId, true).pipe(
+      Effect.mapError(uncertainError),
     );
-    return (yield* lookupSend(host, d.target, d.requestId, true))!;
+    if (!receipt) return yield* new UncertainError({ operation: 'The chat request' });
+    return receipt;
   });
 export function getSend(
   host: Host,
