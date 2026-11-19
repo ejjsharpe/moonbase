@@ -84,7 +84,7 @@ function checkOwnedMetadata(meta: unknown, identity: string) {
   if (!saved.settings) throw new ChatStoreError({ problem: 'settings-missing' });
   return saved;
 }
-/** An owned chat's metadata; `uncertain` inside a mutation, where an unknown failure may follow a commit. */
+/** An owned chat's metadata, refused unless the chat belongs to `identity`. */
 export const readOwnedMetadata = (harness: Harness, identity: string, target: ChatTarget) =>
   Effect.flatMap(
     callHarness(() => harness.snapshot(Metadata, cid(target.conversationId), 'metadata', context)),

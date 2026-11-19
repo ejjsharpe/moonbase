@@ -442,6 +442,20 @@ test('null-task Stop withdraws an actual Pi-queued submission, is uncertain when
     await assert.rejects(second, missing);
     await assert.rejects(f.client.command('stopChat', early), missing);
     assert.equal((await queued!.status(BACKGROUND_CONTEXT)).status, 'queued');
+    // An id that can name no chat is a definite refusal, never an uncertain outcome.
+    const unnamed = { ...target, conversationId: 'abc' };
+    const identity = { _tag: 'InvalidChatRequestError', problem: 'record-identity' };
+    await assert.rejects(
+      f.client.command('stopChat', {
+        stop: { target: unnamed, submissionId: String(queued!.id), taskId: null },
+        requestId: 'unnamed-stop',
+      }),
+      identity,
+    );
+    await assert.rejects(
+      f.client.command('sendChat', { target: unnamed, requestId: 'unnamed-send', text: 'No' }),
+      identity,
+    );
     const withdrawn = await f.client.command('stopChat', {
       stop: { target, submissionId: String(queued!.id), taskId: null },
       requestId: 'queued-stop',

@@ -32,7 +32,7 @@ import type {
 import { isCancellableChatRead, isSameChatHost } from '@moonbase/contracts/chat-validation';
 import { isChatMutation } from '@moonbase/contracts/chat-rpc';
 import { summarizeConversation } from '../chat-list/list-chats.ts';
-import { getSettings, readOwnedMetadata, type ChatSettings } from '../documents.ts';
+import { cid, getSettings, readOwnedMetadata, type ChatSettings } from '../documents.ts';
 import type { FindSubtreeCache } from '../transcript/find-transcript.ts';
 import type { EntryTranscriptCache } from '../transcript/entry-transcript.ts';
 import type { ChatFileIndex } from '../files.ts';
@@ -214,10 +214,11 @@ export const makeHost = (parts: HostParts) =>
       // a Send still waiting when the store closes never started, so it fails as the store's. An
       // earlier attempt may have committed whatever the check says, so only its authority
       // refusals stay definite.
+      // An id that can name no chat is refused before the check, the same on every replay.
       return ownMutation(invoke, (body) =>
-        Effect.andThen(
-          Effect.uninterruptible(keepAuthorityRefusals(metadata(target))),
-          admitSend(target.conversationId, body),
+        runCheck(() => cid(target.conversationId)).pipe(
+          Effect.andThen(Effect.uninterruptible(keepAuthorityRefusals(metadata(target)))),
+          Effect.andThen(admitSend(target.conversationId, body)),
         ),
       );
     };

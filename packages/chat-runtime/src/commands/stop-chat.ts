@@ -89,12 +89,13 @@ export function stopChat(
 ): Effect.Effect<ChatOutput<'stopChat'>, ChatError> {
   return Effect.gen(function* () {
     const { stop } = d;
-    yield* keepAuthorityRefusals(host.metadata(stop.target));
+    // An id that can name no record is refused before any read, the same on every replay.
     const ids = yield* runCheck((): StopIds => ({
       conversationId: cid(stop.target.conversationId),
       submissionId: sid(stop.submissionId),
       taskId: stop.taskId === null ? null : tid(stop.taskId),
     }));
+    yield* keepAuthorityRefusals(host.metadata(stop.target));
     const binding = JSON.stringify({ operation: 'stopChat', ...d }),
       requestKey = key(stop.target.actorId, d.requestId);
     return yield* mayHaveCommitted(
