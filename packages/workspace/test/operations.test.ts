@@ -1,4 +1,5 @@
 import { isAccessRefusal, isConflict, isRefusal } from '@moonbase/contracts/error-groups';
+import { NativeSourceError } from '@moonbase/contracts/workspace-host-errors';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
@@ -8,6 +9,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -451,6 +453,38 @@ test('a native import onto a path holding a draft is refused', async () => {
       isRefusal,
     );
     assert.equal(readFileSync(join(f.root, 'child.txt'), 'utf8'), 'must survive');
+  } finally {
+    await runtime.dispose();
+    f.cleanup();
+  }
+});
+
+test('a native import whose source changed after capture is refused with its reason', async () => {
+  const f = fixture(),
+    { runtime, client } = f.start();
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    const external = join(f.base, 'external.txt');
+    writeFileSync(external, 'native bytes');
+    const nativeReferences = await runtime.runPromise(
+      captureNative({ checkout, clientId: 'alice', paths: [external] }),
+    );
+    renameSync(external, external + '-old');
+    writeFileSync(external, 'replacement bytes');
+    await assert.rejects(
+      client.command('mutate', {
+        clientId: 'alice',
+        id: 'import-changed-source',
+        checkout,
+        kind: 'import',
+        sources: [],
+        nativeReferences,
+        destination: 'imported.txt',
+      }),
+      (error) =>
+        isRefusal(error) && error instanceof NativeSourceError && error.problem === 'changed',
+    );
+    assert(!existsSync(join(f.root, 'imported.txt')));
   } finally {
     await runtime.dispose();
     f.cleanup();

@@ -130,6 +130,26 @@ export class InvalidRequestError extends Schema.TaggedError<InvalidRequestError>
     return requestProblems[this.problem];
   }
 }
+const nativeSourceProblems = {
+  'invalid-reference': 'Invalid native file reference.',
+  'filesystem-root': 'Cannot import a filesystem root.',
+  unsupported: 'Unsupported native source type or hard link.',
+  'parent-changed': 'Native source parent changed. Drop or copy it again.',
+  changed: 'Native source changed. Drop or copy it again.',
+} as const;
+/** A dropped or pasted Finder source the host will not import as it now is. */
+export class NativeSourceError extends Schema.TaggedError<NativeSourceError>()(
+  'NativeSourceError',
+  {
+    problem: Schema.Literals(
+      Object.keys(nativeSourceProblems) as (keyof typeof nativeSourceProblems)[],
+    ),
+  },
+) {
+  override get message() {
+    return nativeSourceProblems[this.problem];
+  }
+}
 /** A worktree base that names no commit. */
 export class InvalidBaseError extends Schema.TaggedError<InvalidBaseError>()('InvalidBaseError', {
   base: Schema.optional(Schema.String),
@@ -331,6 +351,7 @@ type FileHostError =
   | CheckoutAccessError
   | CheckoutChangedError
   | InvalidRequestError
+  | NativeSourceError
   | InvalidBaseError
   | InvalidPatternError
   | WorkspaceConflictError
@@ -352,6 +373,7 @@ export const fileHostErrors = [
   CheckoutAccessError,
   CheckoutChangedError,
   InvalidRequestError,
+  NativeSourceError,
   InvalidBaseError,
   InvalidPatternError,
   WorkspaceConflictError,

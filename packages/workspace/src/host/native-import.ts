@@ -1,3 +1,4 @@
+import { NativeSourceError } from '@moonbase/contracts/workspace-host-errors';
 import { O_NOFOLLOW_ANY } from '../filesystem.ts';
 import fs, { openSync, fstatSync, constants } from 'node:fs';
 import { basename, dirname, isAbsolute } from 'node:path';
@@ -20,16 +21,16 @@ export class NativeImport {
       path.includes('\0') ||
       path.split('/').some((p) => p === '.' || p === '..' || p.toLowerCase() === '.git')
     )
-      throw Error('Invalid native file reference.');
+      throw new NativeSourceError({ problem: 'invalid-reference' });
     protectedPath(path);
     this.source = basename(path);
-    if (!this.source) throw Error('Cannot import a filesystem root.');
+    if (!this.source) throw new NativeSourceError({ problem: 'filesystem-root' });
     this.parents = this.parentIdentities();
     this.fd = openSync(path, flags);
     try {
       const stat = fstatSync(this.fd);
       if ((!stat.isFile() && !stat.isDirectory()) || (stat.isFile() && stat.nlink !== 1))
-        throw Error('Unsupported native source type or hard link.');
+        throw new NativeSourceError({ problem: 'unsupported' });
       this.identity = identity(stat);
       this.directory = stat.isDirectory();
       this.validate();
@@ -62,7 +63,8 @@ export class NativeImport {
     return this.directory && this.parentIdentities(directory).split(',').includes(this.identity);
   }
   validate() {
-    if (this.parentIdentities() !== this.parents) throw Error('Native source parent changed.');
+    if (this.parentIdentities() !== this.parents)
+      throw new NativeSourceError({ problem: 'parent-changed' });
     const fd = openSync(this.path, flags);
     try {
       const stat = fstatSync(fd);
@@ -71,7 +73,7 @@ export class NativeImport {
         stat.isDirectory() !== this.directory ||
         (stat.isFile() && stat.nlink !== 1)
       )
-        throw Error('Native source changed. Drop or copy it again.');
+        throw new NativeSourceError({ problem: 'changed' });
     } finally {
       fs.closeSync(fd);
     }
