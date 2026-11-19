@@ -1,4 +1,4 @@
-import { Context, Effect, FiberHandle, FiberSet, Layer, Semaphore, Stream } from 'effect';
+import { Context, Effect, FiberHandle, FiberSet, Layer, Scope, Semaphore, Stream } from 'effect';
 import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import type { RecoveryLoad, RecoveryOutline, RecoveryState } from '@moonbase/contracts/recovery';
 import type { OperationResult } from '@moonbase/contracts/workspace';
@@ -55,9 +55,9 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
       const outbox = yield* RecoveryOutbox;
       const { clientId } = session;
       const factsLock = yield* Semaphore.make(1);
-      const sends = yield* FiberSet.make();
-      const recoveryWatch = yield* FiberHandle.make();
-      const closing = Effect.map(session.get, (s) => s.closing);
+      // Owned by the session: closing the editor interrupts its sends and its recovery watch.
+      const sends = yield* Scope.provide(FiberSet.make(), session.scope);
+      const recoveryWatch = yield* Scope.provide(FiberHandle.make(), session.scope);
       const loadRecovery = (report = true) =>
         workspace
           .loadRecovery({ clientId })
@@ -150,29 +150,19 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
         });
 
       const watch: Effect.Effect<void> = FiberHandle.run(recoveryWatch, { onlyIfMissing: true })(
-        Effect.gen(function* () {
-          if (yield* closing) return;
-          yield* workspace
-            .watchRecovery({ clientId })
-            .pipe(
-              Stream.runForEach((outline) =>
-                Effect.flatMap(closing, (closed) =>
-                  closed ? Effect.void : Effect.catch(follow(outline, false), alerts.report),
-                ),
-              ),
-            );
-        }).pipe(Effect.catch(alerts.report)),
+        workspace.watchRecovery({ clientId }).pipe(
+          Stream.runForEach((outline) => Effect.catch(follow(outline, false), alerts.report)),
+          Effect.catch(alerts.report),
+        ),
       ).pipe(Effect.asVoid);
 
       const reconcile: RecoverySyncShape['reconcile'] = (result, initial) =>
         session.run(
           factsLock.withPermits(1)(
             Effect.gen(function* () {
-              if (yield* closing) return;
               yield* session.awaitInitialization;
               yield* watch;
               const loaded = initial ?? (yield* loadRecovery());
-              if (yield* closing) return;
               if (loaded.state.clientId !== clientId)
                 return yield* new EditorError({ reason: 'foreign-recovery' });
               yield* follow(loaded.state, true);
@@ -187,7 +177,7 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
               for (const fact of facts) yield* operations.applyFacts(fact);
               if (facts.length) yield* outbox.changed;
               for (const fact of facts) {
-                if (fact.outcome === 'uncertain' || (yield* closing)) continue;
+                if (fact.outcome === 'uncertain') continue;
                 yield* workspace
                   .acknowledgeOperation({ clientId, operationClientId: fact.clientId, id: fact.id })
                   .pipe(Effect.tapError(alerts.report));
@@ -235,7 +225,7 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
               (workspace[kind] as (input: unknown) => Effect.Effect<unknown, EditorFailure>)(input),
             )
             .pipe(Effect.asVoid),
-        resync: (edit, error) =>
+        resync: (edit) =>
           Effect.gen(function* () {
             // A tab the store would not close (it holds a draft the editor did not know) stays.
             if (edit.kind === 'closeTab') {
@@ -243,7 +233,6 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
               return false;
             }
             const loaded = yield* loadRecovery();
-            if (yield* closing) return yield* Effect.fail<EditorFailure>(error);
             yield* follow(loaded.state, true);
             return true;
           }),
@@ -260,26 +249,28 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
           }),
       };
 
-      const send = outbox.send(false, sender);
-      // Edits go a quiet moment after the last change; a send once begun is not cut short.
+      const send = session.run(outbox.send(false, sender));
+      // Edits go a quiet moment after the last change; a send once begun is not cut short by a
+      // later change, only by the editor closing.
       yield* outbox.scheduled.pipe(
         Stream.debounce('150 millis'),
         Stream.runForEach(() =>
           FiberSet.run(sends)(Effect.catch(outbox.send(true, sender), alerts.report)),
         ),
-        Effect.forkScoped,
+        Effect.forkIn(session.scope),
       );
 
       return {
-        flush: Effect.gen(function* () {
-          yield* session.assertReady;
-          // An edit now would name the folder target that `git init` retires.
-          yield* session.awaitInitialization;
-          yield* session.assertReady;
-          if ((yield* session.get).preserving)
-            return yield* new EditorError({ reason: 'preserving-flush' });
-          yield* send;
-        }),
+        flush: session.run(
+          Effect.gen(function* () {
+            yield* session.assertReady;
+            // An edit now would name the folder target that `git init` retires.
+            yield* session.awaitInitialization;
+            if ((yield* session.get).preserving)
+              return yield* new EditorError({ reason: 'preserving-flush' });
+            yield* send;
+          }),
+        ),
         send,
         watch,
         reconcile,

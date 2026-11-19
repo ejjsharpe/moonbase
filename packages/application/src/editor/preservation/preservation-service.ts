@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from 'effect';
+import { Cause, Context, Effect, Exit, Layer, Ref } from 'effect';
 import type { CheckoutTarget, FileTarget } from '@moonbase/contracts/workspace';
 import { EditorError, type EditorFailure } from '../editor-errors.ts';
 import { makeEditorPrompt, type ShownPrompt } from '../editor-prompt.ts';
@@ -40,8 +40,6 @@ export type EditorPreservationShape = {
   /** Confirms recovery is complete once composition has fenced admissions. */
   readonly finishQuitPreparation: Effect.Effect<boolean>;
   readonly answerClose: (promptId: string, choice: CloseChoice) => Effect.Effect<void>;
-  /** Answers the shown prompt Cancel, as the editor closes. */
-  readonly cancelPrompt: Effect.Effect<void>;
   /** Opens the files of the checkout's last close again. */
   readonly reopen: (checkout: CheckoutTarget) => Effect.Effect<boolean, EditorFailure>;
   /** Whether everything the editor holds is in recovery. */
@@ -68,14 +66,41 @@ export class EditorPreservation extends Context.Service<
       const tree = yield* EditorTree;
       const saves = yield* EditorSaves;
       const closePrompt = yield* makeEditorPrompt<ClosePrompt, CloseChoice>('cancel');
-      const admitted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        session.run(Effect.andThen(session.admit, effect));
-      const closing = Effect.map(session.get, (s) => s.closing);
       const recoveryReady = Effect.map(
         Effect.all([session.get, outbox.get, buffers.get, operations.get]),
         ([modes, sent, held, known]) => isRecoveryReady(modes, sent, held, known),
       );
       const choose = (buffer: EditorBuffer) => closePrompt.ask({ id: crypto.randomUUID(), buffer });
+      type Choose = typeof choose;
+
+      /**
+       * Runs a close as editor work. Closing the editor interrupts it; if that takes down a prompt
+       * it is still waiting on, the prompt went down answered Cancel, so its caller hears what
+       * Cancel answers: nothing closed. Once the prompt is answered, or if the caller itself is
+       * interrupted, the interruption stands.
+       */
+      const preserving = <E>(close: (ask: Choose) => Effect.Effect<boolean, E>) =>
+        Effect.gen(function* () {
+          const asking = yield* Ref.make(false);
+          const ask: Choose = (buffer) =>
+            Effect.uninterruptibleMask((restore) =>
+              Effect.gen(function* () {
+                yield* Ref.set(asking, true);
+                const choice = yield* restore(choose(buffer));
+                yield* Ref.set(asking, false);
+                return choice;
+              }),
+            );
+          const exit = yield* Effect.exit(session.admitted(close(ask)));
+          if (
+            Exit.isFailure(exit) &&
+            Cause.hasInterruptsOnly(exit.cause) &&
+            (yield* Ref.get(asking)) &&
+            (yield* session.get).closing
+          )
+            return false;
+          return yield* exit;
+        });
 
       /**
        * Closes files whose drafts were saved or discarded: once every edit made so far has
@@ -123,7 +148,12 @@ export class EditorPreservation extends Context.Service<
           return closed;
         });
 
-      const preserve = (targets: FileTarget[], kind: CloseKind, checkout?: CheckoutTarget) =>
+      const preserve = (
+        ask: Choose,
+        targets: FileTarget[],
+        kind: CloseKind,
+        checkout?: CheckoutTarget,
+      ) =>
         Effect.gen(function* () {
           yield* session.assertReady;
           const modes = yield* session.get;
@@ -145,8 +175,8 @@ export class EditorPreservation extends Context.Service<
               for (const target of captured) {
                 const buffer = yield* buffers.find(target);
                 if (!buffer || !isDirty(buffer)) continue;
-                const choice = yield* choose(structuredClone(buffer));
-                if ((yield* closing) || choice === 'cancel') return false;
+                const choice = yield* ask(structuredClone(buffer));
+                if (choice === 'cancel') return false;
                 if (choice === 'discard') discarded.add(fileKey(target));
                 else if (!(yield* saves.saveFile(target))) return false;
               }
@@ -167,21 +197,23 @@ export class EditorPreservation extends Context.Service<
 
       return {
         closePrompt: closePrompt.shown,
-        close: (targets) => admitted(preserve(targets, 'files')),
+        close: (targets) => preserving((ask) => preserve(ask, targets, 'files')),
         closeCheckout: (checkout) =>
-          admitted(
+          preserving((ask) =>
             Effect.gen(function* () {
               const selected = yield* views.view(checkout);
               return yield* preserve(
+                ask,
                 selected.openFiles.map((path) => ({ checkout, path })),
                 'checkout',
                 checkout,
               );
             }),
           ),
-        prepareQuit: admitted(
+        prepareQuit: preserving((ask) =>
           Effect.flatMap(buffers.get, (held) =>
             preserve(
+              ask,
               [...held.buffers.values()].map((buffer) => buffer.target),
               'quit',
             ),
@@ -194,7 +226,6 @@ export class EditorPreservation extends Context.Service<
               modes.admissionsOpen ||
               !modes.ready ||
               modes.loading ||
-              modes.closing ||
               modes.preserving ||
               modes.initializing ||
               [...(yield* buffers.get).buffers.values()].some(
@@ -218,9 +249,8 @@ export class EditorPreservation extends Context.Service<
             if (!(yield* session.get).admissionsOpen) return;
             if (isCloseChoice(choice)) yield* closePrompt.answer(promptId, choice);
           }),
-        cancelPrompt: closePrompt.cancel,
         reopen: (checkout) =>
-          admitted(
+          session.admitted(
             Effect.gen(function* () {
               yield* views.view(checkout);
               if ((yield* session.get).preserving) return false;

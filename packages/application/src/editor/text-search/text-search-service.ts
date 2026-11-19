@@ -1,4 +1,4 @@
-import { Context, Effect, Exit, Layer, type Scope, Stream, type SubscriptionRef } from 'effect';
+import { Context, Effect, Exit, Layer, type Scope, type SubscriptionRef } from 'effect';
 import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { describeEditorFailure } from '../alerts/alerts.ts';
@@ -28,7 +28,10 @@ export type TextSearch = {
 };
 
 export type EditorTextSearchShape = {
-  /** A popup's search, for as long as its scope: a change on disk refreshes its last query. */
+  /**
+   * A popup's search, for as long as both its scope and the editor live: a change on disk refreshes
+   * its last query.
+   */
   readonly make: Effect.Effect<TextSearch, never, Scope.Scope>;
 };
 
@@ -43,19 +46,17 @@ export class EditorTextSearch extends Context.Service<EditorTextSearch, EditorTe
       const session = yield* EditorSession;
       const views = yield* EditorViews;
       const discovery = yield* EditorDiscovery;
-      const admits = Effect.map(session.get, (s) => s.admissionsOpen && !s.closing);
       return {
         make: Effect.gen(function* () {
-          const runner = yield* makeEditorQuery(emptyTextSearch);
-          yield* discovery.changes.pipe(
-            Stream.runForEach(() => runner.refresh),
-            Effect.forkScoped,
-          );
+          const runner = yield* makeEditorQuery(emptyTextSearch, {
+            scope: session.scope,
+            changes: discovery.changes,
+          });
           return {
             state: runner.state,
             query: (query, options, checkout) =>
               Effect.gen(function* () {
-                if (!(yield* admits)) return;
+                if (!(yield* session.admits)) return;
                 const { matchCase, wholeWord, regex } = options;
                 const key = JSON.stringify([
                   query,
@@ -109,11 +110,11 @@ export class EditorTextSearch extends Context.Service<EditorTextSearch, EditorTe
                 );
               }),
             open: (open) =>
-              Effect.flatMap(admits, (admitted) =>
+              Effect.flatMap(session.admits, (admitted) =>
                 admitted ? runner.open(open) : Effect.succeed(false),
               ),
             message: (message) =>
-              Effect.flatMap(admits, (admitted) =>
+              Effect.flatMap(session.admits, (admitted) =>
                 admitted ? runner.update({ message }) : Effect.void,
               ),
           } satisfies TextSearch;

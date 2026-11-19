@@ -21,8 +21,6 @@ export type EditorPrompt<P extends { readonly id: string }, A> = {
    * whatever the asker does next (a close releasing the editor, say).
    */
   readonly answer: (promptId: string, answer: A) => Effect.Effect<void>;
-  /** Answers the shown prompt, if any, with Cancel. */
-  readonly cancel: Effect.Effect<void>;
 };
 
 type Current<P, A> = { readonly prompt: P; readonly reply: Deferred.Deferred<A> };
@@ -55,13 +53,6 @@ export const makeEditorPrompt = <P extends { readonly id: string }, A>(
           }),
         ),
       );
-    /** Settles the shown prompt's reply, if `accept` takes it; its `ask` takes it off screen. */
-    const reply = (accept: (current: Current<P, A>) => boolean, answer: A) =>
-      Effect.flatMap(SubscriptionRef.get(state), ({ current }) =>
-        current && accept(current)
-          ? Effect.asVoid(Deferred.succeed(current.reply, answer))
-          : Effect.void,
-      );
     yield* Effect.addFinalizer(() => takeDown(() => ({ closed: true, current: null })));
 
     const shown = SubscriptionRef.changes(state).pipe(
@@ -86,7 +77,11 @@ export const makeEditorPrompt = <P extends { readonly id: string }, A>(
             );
           }),
         ),
-      answer: (promptId, answer) => reply((current) => current.prompt.id === promptId, answer),
-      cancel: reply(() => true, cancel),
+      answer: (promptId, answer) =>
+        Effect.flatMap(SubscriptionRef.get(state), ({ current }) =>
+          current?.prompt.id === promptId
+            ? Effect.asVoid(Deferred.succeed(current.reply, answer))
+            : Effect.void,
+        ),
     } satisfies EditorPrompt<P, A>;
   });

@@ -59,9 +59,6 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
       const recovery = yield* RecoverySync;
       const tabs = yield* EditorTabs;
       const tree = yield* EditorTree;
-      const admitted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        session.run(Effect.andThen(session.admit, effect));
-      const closing = Effect.map(session.get, (s) => s.closing);
       const isOpen = (checkout: CheckoutTarget) =>
         Effect.map(views.get, ({ recovery }) =>
           recovery.openCheckoutIds.includes(checkout.checkoutId),
@@ -131,7 +128,6 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
 
       const addCheckout = (target: CheckoutTarget): Effect.Effect<CheckoutTarget, EditorFailure> =>
         Effect.gen(function* () {
-          if (yield* closing) return target;
           const { recovery: known } = yield* views.get;
           const collision = known.checkouts.find(
             (item) => item.checkoutId === target.checkoutId && !sameCheckout(item, target),
@@ -208,18 +204,17 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
             else {
               // A failed or lost reply may follow a `git init` that ran: the folder then opens as
               // its repository, and moves there as if the reply had arrived.
-              const reopened = (yield* closing) ? undefined : yield* findInitialized(checkout);
+              const reopened = yield* findInitialized(checkout);
               if (!reopened) {
                 const failure = replied.cause.reasons.find((reason) => reason._tag === 'Fail');
                 if (failure) yield* alerts.report(failure.error);
-                if (!(yield* closing) && (yield* isOpen(checkout))) yield* tree.observe(checkout);
+                if (yield* isOpen(checkout)) yield* tree.observe(checkout);
                 return yield* Effect.failCause(replied.cause);
               }
               initialized = reopened;
             }
             const added = yield* Effect.exit(addCheckout(initialized));
             if (Exit.isSuccess(added)) return { target: added.value, failure: undefined };
-            if (yield* closing) return yield* Effect.failCause(added.cause);
             yield* settleInitialization(checkout, initialized);
             const reason = added.cause.reasons.find((item) => item._tag === 'Fail');
             return {
@@ -231,19 +226,17 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
             };
           }).pipe(Effect.ensuring(session.endInitialization));
           // Edits made meanwhile are sent now, under the Git target.
-          const modes = yield* session.get;
-          if (!modes.closing && !modes.preserving) {
+          if (!(yield* session.get).preserving) {
             if (outcome.failure) yield* Effect.catch(recovery.flush, alerts.report);
             else yield* recovery.flush;
           }
           if (outcome.failure) return yield* outcome.failure;
-          if (!outcome.target) return yield* new EditorError({ reason: 'closed' });
           return outcome.target;
         });
 
       return {
         openCheckout: (root) =>
-          admitted(
+          session.admitted(
             Effect.gen(function* () {
               yield* session.assertReady;
               const target = yield* reported(workspace.openCheckout({ root }));
@@ -252,20 +245,20 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
               return yield* addCheckout(target);
             }),
           ),
-        selectCheckout: (target) => admitted(selectOpenCheckout(target)),
+        selectCheckout: (target) => session.admitted(selectOpenCheckout(target)),
         listWorktrees: (checkout) =>
-          admitted(
+          session.admitted(
             Effect.andThen(views.view(checkout), reported(workspace.listWorktrees({ checkout }))),
           ),
         createWorktree: (input) =>
-          admitted(
+          session.admitted(
             Effect.gen(function* () {
               yield* session.assertReady;
               yield* views.view(input.checkout);
               return yield* addCheckout(yield* reported(workspace.createWorktree(input)));
             }),
           ),
-        initializeRepository: (checkout) => admitted(initializeRepository(checkout)),
+        initializeRepository: (checkout) => session.admitted(initializeRepository(checkout)),
       } satisfies EditorCheckoutsShape;
     }),
   );

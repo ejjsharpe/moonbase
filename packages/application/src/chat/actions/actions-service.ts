@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, Exit, Fiber, FiberSet, Layer, SubscriptionRef } from 'effect';
+import { Cause, Context, Effect, Exit, Fiber, Layer, Scope, SubscriptionRef } from 'effect';
 import { ChatConfig } from '../chat-config.ts';
 import { describeChatFailure } from '../chat-errors.ts';
 import { countAction, initialNotice, type ActionsState } from './actions.ts';
@@ -42,11 +42,18 @@ export class ChatActions extends Context.Service<ChatActions, ChatActionsShape>(
         admissionsOpen: true,
         closing: false,
       });
-      const fibers = yield* FiberSet.make<void, unknown>();
-      // Closing stops admissions and reports before the set interrupts the chat's work.
+      // The chat's work runs in its own scope. Closing the chat stops admissions and reports, then
+      // closes the scope, interrupting that work. An action admitted just as the scope closed is
+      // never started, so never settles its count: the closed chat clears them all.
+      const scope = yield* Scope.fork(yield* Effect.scope, 'parallel');
       yield* Effect.addFinalizer(() =>
-        SubscriptionRef.update(state, (s) => ({ ...s, closing: true, counts: {} })),
+        SubscriptionRef.update(state, (s) => ({ ...s, closing: true })).pipe(
+          Effect.andThen(Scope.close(scope, Exit.void)),
+          Effect.andThen(SubscriptionRef.update(state, (s) => ({ ...s, counts: {} }))),
+        ),
       );
+      const own = <A, E>(work: Effect.Effect<A, E>) =>
+        Effect.forkIn(work, scope, { startImmediately: true });
       const accepting = Effect.map(
         SubscriptionRef.get(state),
         (s) => s.admissionsOpen && !s.closing,
@@ -58,9 +65,7 @@ export class ChatActions extends Context.Service<ChatActions, ChatActionsShape>(
             : { ...s, error: describeChatFailure(error) },
         );
       const settle = (name: string) =>
-        SubscriptionRef.update(state, (s) =>
-          s.closing ? s : { ...s, counts: countAction(s.counts, name, -1) },
-        );
+        SubscriptionRef.update(state, (s) => ({ ...s, counts: countAction(s.counts, name, -1) }));
       return {
         state,
         accepting,
@@ -84,14 +89,11 @@ export class ChatActions extends Context.Service<ChatActions, ChatActionsShape>(
                     : Effect.void,
                 ),
               );
-              const fiber = yield* FiberSet.run(fibers, settled, { startImmediately: true });
+              const fiber = yield* own(settled);
               yield* restore(Fiber.await(fiber));
             }),
           ),
-        fork: (work) =>
-          FiberSet.run(fibers, work.pipe(Effect.ignore), { startImmediately: true }).pipe(
-            Effect.asVoid,
-          ),
+        fork: (work) => Effect.asVoid(own(Effect.ignore(work))),
         report,
         setNotice: (notice) => SubscriptionRef.update(state, (s) => ({ ...s, notice })),
         setAdmissionsOpen: (open) =>

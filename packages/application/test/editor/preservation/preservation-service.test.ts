@@ -22,6 +22,7 @@ import {
 import {
   type CloseChoice,
   EditorCheckouts,
+  EditorError,
   EditorLoader,
   EditorPreservation,
   EditorSession,
@@ -32,13 +33,14 @@ import {
 } from '@moonbase/application/editor';
 import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 
-test('exact close prompts ignore stale answers, Cancel releases the editor as the prompt goes, and disposal cancels an outstanding prompt', async () => {
+test('exact close prompts ignore stale answers, Cancel releases the editor as the prompt goes, and disposal cancels an outstanding prompt but not an answered one', async () => {
   const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
   const runtime = ManagedRuntime.make(memory.layer);
   const editor = await acquireEditor(runtime, {
     client: makeEditorClient(runtime),
     clientId: 'prompts',
   });
+  let answered: EditorDriver | undefined;
   try {
     await editor.load();
     await editor.openCheckout(checkout.root);
@@ -74,8 +76,29 @@ test('exact close prompts ignore stale answers, Cancel releases the editor as th
     await editor.dispose();
     assert.equal(await next, false);
     assert.equal(editor.getSnapshot().closePrompt, null);
+    // Once Discard is answered, disposal interrupts the close rather than reporting nothing closed.
+    const h = controllerFixture.holding(makeEditorClient(runtime));
+    answered = await acquireEditor(runtime, { client: h.client, clientId: 'prompts' });
+    await answered.load();
+    await answered.open(target('a.ts'));
+    answered.edit(target('a.ts'), 'discard me');
+    await answered.flush();
+    const commit = h.hold('closeTab');
+    const discarding = answering(
+      answered,
+      () => answered!.close([target('a.ts')]),
+      async () => 'discard',
+    );
+    await commit.entered;
+    await answered.dispose();
+    await assert.rejects(
+      discarding,
+      (error) => error instanceof EditorError && error.reason === 'closed',
+    );
+    commit.release();
   } finally {
     await editor.dispose();
+    await answered?.dispose();
     await runtime.dispose();
   }
 });

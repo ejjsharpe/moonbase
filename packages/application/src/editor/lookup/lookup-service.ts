@@ -1,4 +1,4 @@
-import { Context, Effect, Exit, Layer, type Scope, Stream, type SubscriptionRef } from 'effect';
+import { Context, Effect, Exit, Layer, type Scope, type SubscriptionRef } from 'effect';
 import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { describeEditorFailure } from '../alerts/alerts.ts';
@@ -20,7 +20,10 @@ export type Lookup = {
 };
 
 export type EditorLookupShape = {
-  /** A popup's lookup, for as long as its scope: a change on disk refreshes its last query. */
+  /**
+   * A popup's lookup, for as long as both its scope and the editor live: a change on disk refreshes
+   * its last query.
+   */
   readonly make: Effect.Effect<Lookup, never, Scope.Scope>;
 };
 
@@ -35,14 +38,12 @@ export class EditorLookup extends Context.Service<EditorLookup, EditorLookupShap
       const session = yield* EditorSession;
       const views = yield* EditorViews;
       const discovery = yield* EditorDiscovery;
-      const admits = Effect.map(session.get, (s) => s.admissionsOpen && !s.closing);
       return {
         make: Effect.gen(function* () {
-          const runner = yield* makeEditorQuery(emptyLookup);
-          yield* discovery.changes.pipe(
-            Stream.runForEach(() => runner.refresh),
-            Effect.forkScoped,
-          );
+          const runner = yield* makeEditorQuery(emptyLookup, {
+            scope: session.scope,
+            changes: discovery.changes,
+          });
           const search = (checkout: CheckoutTarget, query: string) =>
             Effect.gen(function* () {
               yield* views.view(checkout);
@@ -60,7 +61,7 @@ export class EditorLookup extends Context.Service<EditorLookup, EditorLookupShap
             state: runner.state,
             query: (query, checkouts) =>
               Effect.gen(function* () {
-                if (!(yield* admits)) return;
+                if (!(yield* session.admits)) return;
                 const key = JSON.stringify([query, checkouts.map(checkoutKey)]);
                 // Earlier rows stay until the new ones arrive, so the list doesn't flicker while
                 // typing. A refresh keeps its message too: the rows already answer the same query.
@@ -99,11 +100,11 @@ export class EditorLookup extends Context.Service<EditorLookup, EditorLookupShap
                 );
               }),
             open: (open) =>
-              Effect.flatMap(admits, (admitted) =>
+              Effect.flatMap(session.admits, (admitted) =>
                 admitted ? runner.open(open) : Effect.succeed(false),
               ),
             message: (message) =>
-              Effect.flatMap(admits, (admitted) =>
+              Effect.flatMap(session.admits, (admitted) =>
                 admitted ? runner.update({ message }) : Effect.void,
               ),
           } satisfies Lookup;
