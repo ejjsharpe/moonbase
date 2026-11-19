@@ -1,4 +1,4 @@
-import { Effect, Layer } from 'effect';
+import { Effect, FileSystem, Layer } from 'effect';
 import type { ChatHostTarget } from '@moonbase/contracts/host';
 import type { FolderApprovals, LocalHostCommand, LocalHostInput } from '@moonbase/contracts/daemon';
 import {
@@ -8,12 +8,7 @@ import {
 } from '@moonbase/contracts/services';
 import { isSameChatHost } from '@moonbase/contracts/chat-validation';
 import { UnauthorizedError } from '@moonbase/contracts/errors';
-import {
-  FolderRefusedError,
-  FoldersUnavailableError,
-  isFolderError,
-  type FolderError,
-} from '@moonbase/contracts/folder-errors';
+import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
 import { IncompatibleHostError } from '@moonbase/contracts/host-errors';
 import { checkChatFolder } from './chat-folders.ts';
 import { LocalPiControl } from './local-pi-control.ts';
@@ -30,11 +25,12 @@ export type LocalHostConfiguration = {
  */
 export const LocalHostLive = (
   config: LocalHostConfiguration,
-): Layer.Layer<LocalHostService, never, LocalPiControl> =>
+): Layer.Layer<LocalHostService, never, LocalPiControl | FileSystem.FileSystem> =>
   Layer.effect(
     LocalHostService,
     Effect.gen(function* () {
       const control = yield* LocalPiControl;
+      const fs = yield* FileSystem.FileSystem;
       const handle =
         <K extends LocalHostCommand, A>(
           operation: K,
@@ -58,11 +54,9 @@ export const LocalHostLive = (
           Effect.map(config.folders.listRecent(), (folders) => ({ folders })),
         ),
         checkChatFolder: handle('checkChatFolder', ({ path }) =>
-          Effect.tryPromise({
-            try: () => checkChatFolder(config.chatFolders, path),
-            catch: (error): FolderError =>
-              isFolderError(error) ? error : new FoldersUnavailableError(),
-          }),
+          checkChatFolder(config.chatFolders, path).pipe(
+            Effect.provideService(FileSystem.FileSystem, fs),
+          ),
         ),
         checkApprovedFolder: handle('checkApprovedFolder', ({ path }) =>
           Effect.flatMap(config.folders.has(path), (approved) =>

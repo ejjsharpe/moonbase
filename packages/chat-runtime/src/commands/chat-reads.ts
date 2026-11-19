@@ -26,19 +26,14 @@ import { decodeStoreOwner } from '../stored-records.ts';
 import { findTranscript } from '../transcript/find-transcript.ts';
 import { readTranscriptContent } from '../transcript/transcript-content.ts';
 import type { Host } from './chat-host.ts';
-import { safeError } from './safe-error.ts';
+import { callHarness } from './harness-call.ts';
+import { runCheck, safeError } from './safe-error.ts';
 
 export function getTranscriptContent(host: Host, d: ChatInput<'getChatTranscriptContent'>) {
-  return Effect.andThen(
-    host.metadata(d.source.target),
-    host.read((signal) => readTranscriptContent(host.harness, d, signal)),
-  );
+  return Effect.andThen(host.metadata(d.source.target), readTranscriptContent(host, d));
 }
 export function findInTranscript(host: Host, d: ChatInput<'findChatTranscript'>) {
-  return Effect.andThen(
-    host.metadata(d.target),
-    host.read((signal) => findTranscript(host.harness, d, signal)),
-  );
+  return Effect.andThen(host.metadata(d.target), findTranscript(host, d));
 }
 /** Searches only a chat's own working folder, or one a new chat could be created in. */
 export function findFiles(
@@ -47,9 +42,7 @@ export function findFiles(
 ): Effect.Effect<ChatOutput<'findChatFiles'>, ChatError> {
   const folder =
     'target' in d
-      ? Effect.flatMap(host.metadata(d.target), (meta) =>
-          Effect.try({ try: () => getSettings(meta).cwd, catch: safeError }),
-        )
+      ? Effect.flatMap(host.metadata(d.target), (meta) => runCheck(() => getSettings(meta).cwd))
       : Effect.andThen(host.checkSession(d.session), () => {
           const { approveFolder } = host.config;
           return approveFolder
@@ -62,13 +55,13 @@ export function findFiles(
   return Effect.flatMap(folder, (cwd) => host.files.find(cwd, d.query));
 }
 export function getHistoryAround(host: Host, d: ChatInput<'getChatHistoryAround'>) {
-  return Effect.andThen(
-    host.metadata(d.target),
-    host.read((signal) => readHistoryAround(host.harness, d, signal)),
-  );
+  return Effect.andThen(host.metadata(d.target), readHistoryAround(host, d));
 }
 const readStoreOwner = (host: Host) =>
-  host.read(async () => decodeStoreOwner(await host.harness.snapshot(Store, 'identity', context)));
+  Effect.flatMap(
+    callHarness(() => host.harness.snapshot(Store, 'identity', context)),
+    (owner) => runCheck(() => decodeStoreOwner(owner)),
+  );
 export function getChatHost(
   host: Host,
   d: ChatInput<'getChatHost'>,
@@ -89,7 +82,7 @@ export function readListedChat(
 ): Effect.Effect<ChatSummary | undefined, ChatError> {
   return Effect.andThen(
     host.checkSession(session),
-    host.read(() => readListedConversation(host.harness, session, host.identity, conversationId)),
+    readListedConversation(host.harness, session, host.identity, conversationId),
   );
 }
 export function listChats(
@@ -98,7 +91,7 @@ export function listChats(
 ): Effect.Effect<ChatOutput<'listChats'>, ChatError> {
   return Effect.andThen(
     host.checkSession(d.session),
-    host.read(() => listConversations(host.harness, d.session, host.identity, d.cursor)),
+    listConversations(host.harness, d.session, host.identity, d.cursor),
   );
 }
 export function getHistory(
@@ -107,14 +100,7 @@ export function getHistory(
 ): Effect.Effect<ChatHistoryPage, ChatError> {
   return Effect.andThen(
     host.metadata(d.target),
-    host.read((signal) =>
-      readHistory(host.harness, {
-        identity: host.identity,
-        target: d.target,
-        cursor: d.cursor,
-        signal,
-      }),
-    ),
+    readHistory(host, { target: d.target, cursor: d.cursor }),
   );
 }
 export function readSnapshot(
@@ -128,13 +114,12 @@ export function readSnapshot(
     if (owner.identity !== host.identity)
       return yield* Effect.fail(new ChatAccessError({ refusal: 'store-authority' }));
     if (cache && cache.boundary === undefined) {
-      const live = yield* host.read(() =>
+      const live = yield* callHarness(() =>
         host.harness.snapshot(LiveDoc, cid(target.conversationId), context),
       );
       if (!live) return yield* Effect.fail(new ChatStoreError({ problem: 'live-state' }));
     }
-    return yield* projectSnapshot(host.harness, {
-      identity: host.identity,
+    return yield* projectSnapshot(host, {
       target,
       conversation: yield* host.summary(target.conversationId, meta),
       pending: meta.pending,

@@ -9,61 +9,60 @@ import {
 import type { ToolResultMessage } from '@earendil-works/pi-ai';
 import type { ChatTarget } from '@moonbase/contracts/chat';
 import { ChatStoreError, TranscriptChangedError } from '@moonbase/contracts/chat-errors';
+import { Effect } from 'effect';
+import { callHarness } from '../commands/harness-call.ts';
+import { runCheck } from '../commands/safe-error.ts';
 import { cid } from '../documents.ts';
 
 /** Whether a read failed because a nested tool's source ended under it; reading again may pass. */
-export const isNestedSourceEnded = (error: unknown) =>
+export const isNestedSourceEnded = (error: unknown): boolean =>
   error instanceof TranscriptChangedError && error.change === 'nested-ended';
-export async function readNestedCall(
-  harness: Harness,
-  target: ChatTarget,
-  tool: NestedToolSlot,
-  signal?: AbortSignal,
-) {
-  const task = await harness.getTask(tool.taskId, context);
-  signal?.throwIfAborted();
-  if (
-    !task ||
-    task.kind !== 'pi.tool' ||
-    task.conversationId !== cid(target.conversationId) ||
-    task.owner !== tool.parentTaskId
-  )
-    throw new ChatStoreError({ problem: 'nested-tool' });
-  const input = task.input as ToolTaskInput;
-  if (
-    input.kind !== 'nested' ||
-    input.parent !== tool.parentTaskId ||
-    input.parentCallId !== tool.parentCallId ||
-    input.call.id !== tool.callId ||
-    input.call.name !== tool.name ||
-    tool.callId !== `${input.parentCallId}/${input.key}`
-  )
-    throw new ChatStoreError({ problem: 'nested-call' });
-  const parent = await harness.getTask(input.parent, context);
-  signal?.throwIfAborted();
-  if (!parent || parent.kind !== 'pi.tool' || parent.conversationId !== task.conversationId)
-    throw new ChatStoreError({ problem: 'nested-parent' });
-  const record = await harness.snapshot(NestedCallDoc, input.parent, input.key, context);
-  signal?.throwIfAborted();
-  if (!record) {
-    const currentParent = await harness.getTask(input.parent, context);
-    signal?.throwIfAborted();
+export const readNestedCall = (harness: Harness, target: ChatTarget, tool: NestedToolSlot) =>
+  Effect.gen(function* () {
+    const conversationId = yield* runCheck(() => cid(target.conversationId));
+    const task = yield* callHarness(() => harness.getTask(tool.taskId, context));
     if (
-      !currentParent ||
-      currentParent.kind !== 'pi.tool' ||
-      currentParent.conversationId !== task.conversationId
+      !task ||
+      task.kind !== 'pi.tool' ||
+      task.conversationId !== conversationId ||
+      task.owner !== tool.parentTaskId
     )
-      throw new ChatStoreError({ problem: 'nested-parent' });
-    if (currentParent.state.status === 'terminal' || currentParent.state.status === 'completing')
-      throw new TranscriptChangedError({ change: 'nested-ended' });
-    throw new TranscriptChangedError({ change: 'nested-source' });
-  }
-  if (record.taskId !== task.id || (record.result && record.result.taskId !== task.id))
-    throw new ChatStoreError({ problem: 'nested-result' });
-  if (tool.status === 'done' && tool.summary && !record.result)
-    throw new TranscriptChangedError({ change: 'nested-result' });
-  return { task, input, result: record.result };
-}
+      return yield* new ChatStoreError({ problem: 'nested-tool' });
+    const input = task.input as ToolTaskInput;
+    if (
+      input.kind !== 'nested' ||
+      input.parent !== tool.parentTaskId ||
+      input.parentCallId !== tool.parentCallId ||
+      input.call.id !== tool.callId ||
+      input.call.name !== tool.name ||
+      tool.callId !== `${input.parentCallId}/${input.key}`
+    )
+      return yield* new ChatStoreError({ problem: 'nested-call' });
+    const readParent = callHarness(() => harness.getTask(input.parent, context));
+    const parent = yield* readParent;
+    if (!parent || parent.kind !== 'pi.tool' || parent.conversationId !== task.conversationId)
+      return yield* new ChatStoreError({ problem: 'nested-parent' });
+    const record = yield* callHarness(() =>
+      harness.snapshot(NestedCallDoc, input.parent, input.key, context),
+    );
+    if (!record) {
+      const currentParent = yield* readParent;
+      if (
+        !currentParent ||
+        currentParent.kind !== 'pi.tool' ||
+        currentParent.conversationId !== task.conversationId
+      )
+        return yield* new ChatStoreError({ problem: 'nested-parent' });
+      if (currentParent.state.status === 'terminal' || currentParent.state.status === 'completing')
+        return yield* new TranscriptChangedError({ change: 'nested-ended' });
+      return yield* new TranscriptChangedError({ change: 'nested-source' });
+    }
+    if (record.taskId !== task.id || (record.result && record.result.taskId !== task.id))
+      return yield* new ChatStoreError({ problem: 'nested-result' });
+    if (tool.status === 'done' && tool.summary && !record.result)
+      return yield* new TranscriptChangedError({ change: 'nested-result' });
+    return { task, input, result: record.result };
+  });
 export function getNestedOutput(
   value: NestedToolExecutionResult['structuredOutput'],
 ): ToolResultMessage['content'] {

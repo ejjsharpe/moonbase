@@ -1,5 +1,5 @@
-import { setImmediate } from 'node:timers/promises';
 import type { Harness } from '@earendil-works/pi-durable';
+import { Effect } from 'effect';
 import { LRUCache } from 'lru-cache';
 import {
   maximumChatReplyBytes,
@@ -19,7 +19,8 @@ import {
   type TranscriptCursor,
 } from '../cursors.ts';
 import { checkChatReplySize } from '@moonbase/contracts/chat-validation';
-import { InvalidChatRequestError } from '@moonbase/contracts/chat-errors';
+import { InvalidChatRequestError, type ChatError } from '@moonbase/contracts/chat-errors';
+import { runCheck } from '../commands/safe-error.ts';
 
 const windowSize = 16 * 1024;
 const sliceBytes = 256 * 1024;
@@ -34,21 +35,15 @@ type Token = { path: number[]; text: string };
 type Serialize = (subtree: object, path: number[]) => string;
 /**
  * Subtrees past the path bound resume by serialized chunk across invocations; saved entries are
- * immutable, so each Harness keeps recent serializations up to this many UTF-16 units.
+ * immutable, so a host keeps recent serializations up to this many UTF-16 units.
  */
 const subtreeCacheUnits = 8 * 1024 * 1024;
-const subtreeCaches = new WeakMap<Harness, LRUCache<string, string>>();
-function getSubtreeCache(harness: Harness) {
-  let cache = subtreeCaches.get(harness);
-  if (!cache) {
-    cache = new LRUCache<string, string>({
-      maxSize: subtreeCacheUnits,
-      sizeCalculation: (text) => Math.max(1, text.length),
-    });
-    subtreeCaches.set(harness, cache);
-  }
-  return cache;
-}
+export type FindSubtreeCache = LRUCache<string, string>;
+export const makeFindSubtreeCache = (): FindSubtreeCache =>
+  new LRUCache<string, string>({
+    maxSize: subtreeCacheUnits,
+    sizeCalculation: (text) => Math.max(1, text.length),
+  });
 const isBefore = (path: number[], seek: number[]) => {
   for (let i = 0; i < Math.min(path.length, seek.length); i++)
     if (path[i] !== seek[i]) return path[i] < seek[i];
@@ -126,244 +121,242 @@ function* jsonTokens(
 }
 
 type Position = { path: number[]; offset: number; textOffset: number };
-async function readWindow(
+const readWindow = (
   value: string | { json: unknown },
   position: Position,
   limit: number,
   serialize: Serialize,
-  signal?: AbortSignal,
-) {
-  const tokens =
-    typeof value === 'string'
-      ? (function* () {
-          yield { path: [], text: value };
-        })()
-      : jsonTokens(value.json, position.path, serialize);
-  const segments: { token: Token; offset: number; start: number; length: number }[] = [];
-  let text = '',
-    count = 0,
-    done = true;
-  for (const token of tokens) {
-    signal?.throwIfAborted();
-    if (++count % tokensPerTurn === 0) await setImmediate();
-    const offset =
-      JSON.stringify(token.path) === JSON.stringify(position.path) ? position.offset : 0;
-    // Find only resumes between characters; an offset inside a surrogate pair is forged.
-    if (
-      /[\ud800-\udbff]/.test(token.text[offset - 1] ?? '') &&
-      /[\udc00-\udfff]/.test(token.text[offset] ?? '')
-    )
-      throw new InvalidChatRequestError({ problem: 'transcript-cursor' });
-    const end = alignBoundary(
-      token.text,
-      Math.min(token.text.length, offset + limit - text.length),
-    );
-    const piece = token.text.slice(offset, end);
-    segments.push({ token, offset, start: text.length, length: piece.length });
-    text += piece;
-    if (text.length >= limit - 1) {
-      done = false;
-      break;
+) =>
+  Effect.gen(function* () {
+    const tokens =
+      typeof value === 'string'
+        ? (function* () {
+            yield { path: [], text: value };
+          })()
+        : jsonTokens(value.json, position.path, serialize);
+    const segments: { token: Token; offset: number; start: number; length: number }[] = [];
+    let text = '',
+      count = 0,
+      done = true;
+    for (const token of tokens) {
+      if (++count % tokensPerTurn === 0) yield* Effect.yieldNow;
+      const offset =
+        JSON.stringify(token.path) === JSON.stringify(position.path) ? position.offset : 0;
+      // Find only resumes between characters; an offset inside a surrogate pair is forged.
+      if (
+        /[\ud800-\udbff]/.test(token.text[offset - 1] ?? '') &&
+        /[\udc00-\udfff]/.test(token.text[offset] ?? '')
+      )
+        return yield* new InvalidChatRequestError({ problem: 'transcript-cursor' });
+      const end = alignBoundary(
+        token.text,
+        Math.min(token.text.length, offset + limit - text.length),
+      );
+      const piece = token.text.slice(offset, end);
+      segments.push({ token, offset, start: text.length, length: piece.length });
+      text += piece;
+      if (text.length >= limit - 1) {
+        done = false;
+        break;
+      }
     }
-  }
-  return {
-    text,
-    done,
-    at(index: number): Position {
-      const segment = segments.findLast((item) => item.start <= index);
-      return segment
-        ? {
-            path: segment.token.path,
-            offset: segment.offset + index - segment.start,
-            textOffset: position.textOffset + index,
-          }
-        : position;
-    },
-  };
-}
+    return {
+      text,
+      done,
+      at(index: number): Position {
+        const segment = segments.findLast((item) => item.start <= index);
+        return segment
+          ? {
+              path: segment.token.path,
+              offset: segment.offset + index - segment.start,
+              textOffset: position.textOffset + index,
+            }
+          : position;
+      },
+    };
+  });
 
 /** Saved entries only. Every invocation is reauthorized by Host before opening a continuation. */
-export async function findTranscript(
-  harness: Harness,
+export const findTranscript = (
+  { harness, findSubtrees: subtrees }: { harness: Harness; findSubtrees: FindSubtreeCache },
   input: ChatInput<'findChatTranscript'>,
-  signal?: AbortSignal,
-): Promise<ChatOutput<'findChatTranscript'>> {
-  const { target, query } = input;
-  const binding = hashJson({ operation: 'findChatTranscript', target, query });
-  const cursor = input.cursor ? openTranscriptCursor(input.cursor, 'find', binding) : undefined;
-  const upper = cursor
-    ? (cursor.upper ?? null)
-    : String((await scanAdjacentEntry(harness, target, 'older'))?.id ?? '') || null;
-  signal?.throwIfAborted();
-  const start: TranscriptCursor = {
-    kind: 'find',
-    binding,
-    position: 1,
-    ...(upper ? { upper } : {}),
-    part: { message: 0, block: 0, auxiliary: 0 },
-    path: [],
-    offset: 0,
-    textOffset: 0,
-    entries: 0,
-    bytes: 0,
-  };
-  let next = cursor ?? start;
-  const startCursor = writeCursor(start);
-  const matches: ChatOutput<'findChatTranscript'>['matches'] = [];
-  const expression = getChatFindExpression(query);
-  const subtrees = getSubtreeCache(harness);
-  let rows = 0,
-    examined = 0,
-    parts = 0;
-  const reply = (complete: boolean) =>
-    checkChatReplySize({
-      target,
-      query,
-      cursor: input.cursor ?? null,
-      startCursor,
-      upperEntryId: upper,
-      matches,
-      progress: { entries: next.entries ?? 0, bytes: next.bytes ?? 0 },
-      nextCursor: complete ? null : writeCursor(next),
-    });
-  while (
-    upper &&
-    next.position <= Number(upper) &&
-    rows < entriesPerSlice &&
-    examined < sliceBytes &&
-    parts < partsPerSlice
-  ) {
-    signal?.throwIfAborted();
-    const entry = await scanAdjacentEntry(harness, target, 'newer', next.position, upper);
-    signal?.throwIfAborted();
-    if (!entry) return reply(true);
-    rows++;
-    next = { ...next, position: Number(entry.id), entries: (next.entries ?? 0) + 1 };
-    let finished = true;
-    for (const step of getEntryTextValues(entry, next.part)) {
-      signal?.throwIfAborted();
-      if (parts++ >= partsPerSlice || examined >= sliceBytes) {
-        next = { ...next, part: step.position };
-        finished = false;
-        break;
-      }
-      const part = step.part;
-      if (
-        !part ||
-        (part.extra.availability && part.extra.availability !== 'available') ||
-        (typeof part.value !== 'string' && 'image' in part.value)
-      ) {
-        next = { ...next, part: step.next, path: [], offset: 0, textOffset: 0 };
-        continue;
-      }
-      const value = part.value as string | { json: unknown };
-      if (typeof value === 'string' && !value.isWellFormed()) {
-        next = { ...next, part: step.next, path: [], offset: 0, textOffset: 0 };
-        continue;
-      }
-      const position = {
-        path: [...(next.path ?? [])],
-        offset: next.offset ?? 0,
-        textOffset: next.textOffset ?? 0,
-      };
-      const scanLength = Math.min(
-        windowSize,
-        Math.floor((sliceBytes - examined) / 4) - query.length,
+): Effect.Effect<ChatOutput<'findChatTranscript'>, ChatError> =>
+  Effect.gen(function* () {
+    const { target, query } = input;
+    const binding = hashJson({ operation: 'findChatTranscript', target, query });
+    const cursor = input.cursor
+      ? yield* openTranscriptCursor(input.cursor, 'find', binding)
+      : undefined;
+    const upper = cursor
+      ? (cursor.upper ?? null)
+      : String((yield* scanAdjacentEntry(harness, target, 'older'))?.id ?? '') || null;
+    const start: TranscriptCursor = {
+      kind: 'find',
+      binding,
+      position: 1,
+      ...(upper ? { upper } : {}),
+      part: { message: 0, block: 0, auxiliary: 0 },
+      path: [],
+      offset: 0,
+      textOffset: 0,
+      entries: 0,
+      bytes: 0,
+    };
+    let next = cursor ?? start;
+    const startCursor = yield* writeCursor(start);
+    const matches: ChatOutput<'findChatTranscript'>['matches'] = [];
+    const expression = getChatFindExpression(query);
+    let rows = 0,
+      examined = 0,
+      parts = 0;
+    const reply = (complete: boolean) =>
+      Effect.flatMap(complete ? Effect.succeed(null) : writeCursor(next), (nextCursor) =>
+        runCheck(() =>
+          checkChatReplySize({
+            target,
+            query,
+            cursor: input.cursor ?? null,
+            startCursor,
+            upperEntryId: upper,
+            matches,
+            progress: { entries: next.entries ?? 0, bytes: next.bytes ?? 0 },
+            nextCursor,
+          }),
+        ),
       );
-      if (scanLength < 1) {
-        next = { ...next, part: step.position };
-        finished = false;
-        break;
-      }
-      const serialize: Serialize = (subtree, path) => {
-        const key = JSON.stringify([String(entry.id), part.id, path]);
-        let text = subtrees.get(key);
-        if (text === undefined) subtrees.set(key, (text = JSON.stringify(subtree)));
-        return text;
-      };
-      const window = await readWindow(
-        value,
-        position,
-        scanLength + query.length + 256,
-        serialize,
-        signal,
-      );
-      const text = window.text;
-      let consumed =
-        window.done && text.length <= scanLength
-          ? text.length
-          : alignBoundary(text, Math.min(scanLength, text.length));
-      let envelopeFull = false;
-      expression.lastIndex = 0;
-      for (
-        let match = expression.exec(text);
-        match && match.index < consumed;
-        match = expression.exec(text)
-      ) {
-        const end = match.index + match[0].length;
-        consumed = Math.max(consumed, end);
-        const snippetStart = alignBoundary(text, Math.max(0, match.index - 80));
-        const snippetEnd = alignBoundary(text, Math.min(text.length, end + 80));
-        const candidate: ChatOutput<'findChatTranscript'>['matches'][number] = {
-          source: { kind: 'entry', target, entryId: String(entry.id) },
-          partId: part.id,
-          start: position.textOffset + match.index,
-          end: position.textOffset + end,
-          snippet: {
-            start: position.textOffset + snippetStart,
-            text: text.slice(snippetStart, snippetEnd),
-          },
+    while (
+      upper &&
+      next.position <= Number(upper) &&
+      rows < entriesPerSlice &&
+      examined < sliceBytes &&
+      parts < partsPerSlice
+    ) {
+      const entry = yield* scanAdjacentEntry(harness, target, 'newer', next.position, upper);
+      if (!entry) return yield* reply(true);
+      rows++;
+      next = { ...next, position: Number(entry.id), entries: (next.entries ?? 0) + 1 };
+      let finished = true;
+      for (const step of getEntryTextValues(entry, next.part)) {
+        if (parts++ >= partsPerSlice || examined >= sliceBytes) {
+          next = { ...next, part: step.position };
+          finished = false;
+          break;
+        }
+        const part = step.part;
+        if (
+          !part ||
+          (part.extra.availability && part.extra.availability !== 'available') ||
+          (typeof part.value !== 'string' && 'image' in part.value)
+        ) {
+          next = { ...next, part: step.next, path: [], offset: 0, textOffset: 0 };
+          continue;
+        }
+        const value = part.value as string | { json: unknown };
+        if (typeof value === 'string' && !value.isWellFormed()) {
+          next = { ...next, part: step.next, path: [], offset: 0, textOffset: 0 };
+          continue;
+        }
+        const position = {
+          path: [...(next.path ?? [])],
+          offset: next.offset ?? 0,
+          textOffset: next.textOffset ?? 0,
         };
-        const envelopeBytes =
-          Buffer.byteLength(
-            JSON.stringify({
-              target,
-              query,
-              cursor: input.cursor ?? null,
-              startCursor,
-              upperEntryId: upper,
-              matches: [...matches, candidate],
-            }),
-          ) + 4096;
-        if (envelopeBytes >= maximumChatReplyBytes - 256) {
-          if (!matches.length && match.index === 0)
-            throw new InvalidChatRequestError({ problem: 'find-limit' });
-          consumed = match.index;
-          envelopeFull = true;
+        const scanLength = Math.min(
+          windowSize,
+          Math.floor((sliceBytes - examined) / 4) - query.length,
+        );
+        if (scanLength < 1) {
+          next = { ...next, part: step.position };
+          finished = false;
           break;
         }
-        matches.push(candidate);
-        if (matches.length === chatFindPageSize) {
-          consumed = end;
-          break;
+        const serialize: Serialize = (subtree, path) => {
+          const key = JSON.stringify([String(entry.id), part.id, path]);
+          let text = subtrees.get(key);
+          if (text === undefined) subtrees.set(key, (text = JSON.stringify(subtree)));
+          return text;
+        };
+        const window = yield* readWindow(
+          value,
+          position,
+          scanLength + query.length + 256,
+          serialize,
+        );
+        const text = window.text;
+        let consumed =
+          window.done && text.length <= scanLength
+            ? text.length
+            : alignBoundary(text, Math.min(scanLength, text.length));
+        let envelopeFull = false;
+        expression.lastIndex = 0;
+        for (
+          let match = expression.exec(text);
+          match && match.index < consumed;
+          match = expression.exec(text)
+        ) {
+          const end = match.index + match[0].length;
+          consumed = Math.max(consumed, end);
+          const snippetStart = alignBoundary(text, Math.max(0, match.index - 80));
+          const snippetEnd = alignBoundary(text, Math.min(text.length, end + 80));
+          const candidate: ChatOutput<'findChatTranscript'>['matches'][number] = {
+            source: { kind: 'entry', target, entryId: String(entry.id) },
+            partId: part.id,
+            start: position.textOffset + match.index,
+            end: position.textOffset + end,
+            snippet: {
+              start: position.textOffset + snippetStart,
+              text: text.slice(snippetStart, snippetEnd),
+            },
+          };
+          const envelopeBytes =
+            Buffer.byteLength(
+              JSON.stringify({
+                target,
+                query,
+                cursor: input.cursor ?? null,
+                startCursor,
+                upperEntryId: upper,
+                matches: [...matches, candidate],
+              }),
+            ) + 4096;
+          if (envelopeBytes >= maximumChatReplyBytes - 256) {
+            if (!matches.length && match.index === 0)
+              return yield* new InvalidChatRequestError({ problem: 'find-limit' });
+            consumed = match.index;
+            envelopeFull = true;
+            break;
+          }
+          matches.push(candidate);
+          if (matches.length === chatFindPageSize) {
+            consumed = end;
+            break;
+          }
         }
+        const bytes = Buffer.byteLength(text.slice(0, consumed));
+        examined += bytes;
+        next = {
+          ...next,
+          ...window.at(consumed),
+          bytes: (next.bytes ?? 0) + bytes,
+          part: step.position,
+        };
+        if (window.done && consumed === text.length)
+          next = { ...next, part: step.next, path: [], offset: 0, textOffset: 0 };
+        else finished = false;
+        if (envelopeFull || matches.length === chatFindPageSize) return yield* reply(false);
+        if (!finished) break;
+        yield* Effect.yieldNow;
       }
-      const bytes = Buffer.byteLength(text.slice(0, consumed));
-      examined += bytes;
-      next = {
-        ...next,
-        ...window.at(consumed),
-        bytes: (next.bytes ?? 0) + bytes,
-        part: step.position,
-      };
-      if (window.done && consumed === text.length)
-        next = { ...next, part: step.next, path: [], offset: 0, textOffset: 0 };
-      else finished = false;
-      if (envelopeFull || matches.length === chatFindPageSize) return reply(false);
-      if (!finished) break;
-      await setImmediate();
+      if (finished)
+        next = {
+          ...next,
+          position: Number(entry.id) + 1,
+          part: { message: 0, block: 0, auxiliary: 0 },
+          path: [],
+          offset: 0,
+          textOffset: 0,
+        };
+      else break;
     }
-    if (finished)
-      next = {
-        ...next,
-        position: Number(entry.id) + 1,
-        part: { message: 0, block: 0, auxiliary: 0 },
-        path: [],
-        offset: 0,
-        textOffset: 0,
-      };
-    else break;
-  }
-  signal?.throwIfAborted();
-  return reply(!upper || next.position > Number(upper));
-}
+    return yield* reply(!upper || next.position > Number(upper));
+  });

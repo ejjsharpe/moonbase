@@ -634,7 +634,10 @@ async function setupLocal(t: { after: (fn: () => Promise<void>) => void }) {
   }).pipe(Layer.provide(NodeServices.layer));
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
-      LocalHostLive({ host: localHost, folders, chatFolders }).pipe(Layer.provideMerge(local)),
+      LocalHostLive({ host: localHost, folders, chatFolders }).pipe(
+        Layer.provideMerge(local),
+        Layer.provide(NodeServices.layer),
+      ),
       ProviderSetupLive({ models, deviceId: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa' }),
     ),
   );

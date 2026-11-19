@@ -11,8 +11,8 @@ import {
   RcMap,
   Ref,
   Semaphore,
+  type FileSystem,
   type PubSub,
-  type Scope,
 } from 'effect';
 import {
   ChatAccessError,
@@ -32,10 +32,12 @@ import { isCancellableChatRead, isSameChatHost } from '@moonbase/contracts/chat-
 import { isChatMutation } from '@moonbase/contracts/chat-rpc';
 import { summarizeConversation } from '../chat-list/list-chats.ts';
 import { getSettings, readOwnedMetadata, type ChatSettings } from '../documents.ts';
+import type { FindSubtreeCache } from '../transcript/find-transcript.ts';
+import type { EntryTranscriptCache } from '../transcript/entry-transcript.ts';
 import type { ChatFileIndex } from '../files.ts';
 import type { LocalPiRuntimeConfiguration, RetainedWork } from '../runtime-types.ts';
 import { callHarness } from './harness-call.ts';
-import { safeError } from './safe-error.ts';
+import { runCheck, safeError } from './safe-error.ts';
 
 /** How many watches one host serves at once. */
 const maximumObservers = 64;
@@ -43,18 +45,24 @@ const maximumObservers = 64;
 /** Whether new mutations are admitted, and how many admitted ones have not finished. */
 type Admissions = { open: boolean; mutations: number };
 
-/** What the host is made of; `Host.make` adds the gates. */
+/** What the host is made of; `makeHost` adds the gates. */
 export type HostParts = {
   config: LocalPiRuntimeConfiguration;
   harness: Harness;
   identity: string;
   files: ChatFileIndex;
+  /** The platform's file system, for the folder checks reads and creates make. */
+  fileSystem: FileSystem.FileSystem;
   /** Conversations Pi reported a status change for without a commit (a parked task). */
   statuses: PubSub.PubSub<ConversationId>;
   /** Root-owned command work; closing it is closing the host. */
   work: FiberSet.FiberSet<unknown, ChatError>;
   aborts: RetainedWork;
   waiters: RetainedWork;
+  /** Built transcripts of saved entries, which never change. */
+  entryTranscripts: EntryTranscriptCache;
+  /** Serialized JSON subtrees Find resumes inside, for saved entries. */
+  findSubtrees: FindSubtreeCache;
 };
 
 /**
@@ -62,216 +70,187 @@ export type HostParts = {
  * per-chat Send admission and cancellable reads. The commands beside it take it as their first
  * argument.
  */
-export class Host {
-  readonly config: LocalPiRuntimeConfiguration;
-  readonly harness: Harness;
-  readonly identity: string;
-  readonly files: ChatFileIndex;
-  readonly statuses: PubSub.PubSub<ConversationId>;
-  readonly work: FiberSet.FiberSet<unknown, ChatError>;
-  readonly aborts: RetainedWork;
-  readonly waiters: RetainedWork;
-  /** One Send at a time per conversation; held while any Send for it waits or runs. */
-  readonly sends: RcMap.RcMap<string, Semaphore.Semaphore>;
-  /** One permit per watch. */
-  readonly observers: Semaphore.Semaphore;
-  readonly admissions: Ref.Ref<Admissions>;
-  private constructor(
-    parts: HostParts,
-    sends: RcMap.RcMap<string, Semaphore.Semaphore>,
-    observers: Semaphore.Semaphore,
-    admissions: Ref.Ref<Admissions>,
-  ) {
-    this.config = parts.config;
-    this.harness = parts.harness;
-    this.identity = parts.identity;
-    this.files = parts.files;
-    this.statuses = parts.statuses;
-    this.work = parts.work;
-    this.aborts = parts.aborts;
-    this.waiters = parts.waiters;
-    this.sends = sends;
-    this.observers = observers;
-    this.admissions = admissions;
-  }
-  static make(parts: HostParts): Effect.Effect<Host, never, Scope.Scope> {
-    return Effect.gen(function* () {
-      const sends = yield* RcMap.make({ lookup: (_conversationId: string) => Semaphore.make(1) });
-      return new Host(
-        parts,
-        sends,
-        yield* Semaphore.make(maximumObservers),
-        yield* Ref.make<Admissions>({ open: true, mutations: 0 }),
-      );
+export type Host = Effect.Success<ReturnType<typeof makeHost>>;
+
+export const makeHost = (parts: HostParts) =>
+  Effect.gen(function* () {
+    const { config, harness, identity, work } = parts;
+    /** One Send at a time per conversation; held while any Send for it waits or runs. */
+    const sends = yield* RcMap.make({
+      lookup: (_conversationId: string) => Semaphore.make(1),
     });
-  }
-  checkSession(value: ChatSession): Effect.Effect<void, ChatError> {
-    return Effect.suspend((): Effect.Effect<void, ChatError> => {
-      if (!isSameChatHost(value.host, this.config.host))
+    /** One permit per watch. */
+    const observers = yield* Semaphore.make(maximumObservers);
+    const admissions = yield* Ref.make<Admissions>({ open: true, mutations: 0 });
+
+    const checkSession = (value: ChatSession): Effect.Effect<void, ChatError> => {
+      if (!isSameChatHost(value.host, config.host))
         return Effect.fail(new ChatStoreMismatchError({ mismatch: 'other-host' }));
-      if (value.actorId !== this.config.actorId)
+      if (value.actorId !== config.actorId)
         return Effect.fail(new ChatAccessError({ refusal: 'other-actor' }));
       return Effect.void;
-    });
-  }
-  /** An owned chat's metadata; `uncertain` inside a mutation, where an unknown failure may follow a commit. */
-  metadata(target: ChatTarget, uncertain = false) {
-    return Effect.andThen(
-      this.checkSession(target),
-      callHarness(() => readOwnedMetadata(this.harness, this.identity, target), uncertain),
-    );
-  }
-  /** A chat as listings show it; fails when its saved settings are missing. */
-  summary(
-    conversationId: string,
-    meta: { title: string; createdAt: string; settings?: ChatSettings; settledAt?: string },
-  ): Effect.Effect<ChatSummary, ChatError> {
-    return Effect.try({
-      try: () =>
+    };
+    /** An owned chat's metadata; `uncertain` inside a mutation, where an unknown failure may follow a commit. */
+    const metadata = (target: ChatTarget, uncertain = false) =>
+      Effect.andThen(
+        Effect.suspend(() => checkSession(target)),
+        readOwnedMetadata(harness, identity, target, uncertain),
+      );
+    /** A chat as listings show it; fails when its saved settings are missing. */
+    const summary = (
+      conversationId: string,
+      meta: { title: string; createdAt: string; settings?: ChatSettings; settledAt?: string },
+    ): Effect.Effect<ChatSummary, ChatError> =>
+      runCheck(() =>
         summarizeConversation(
-          { host: this.config.host, actorId: this.config.actorId },
+          { host: config.host, actorId: config.actorId },
           conversationId,
           meta,
           getSettings(meta),
         ),
-      catch: safeError,
-    });
-  }
-  /**
-   * Runs `effect` as the host's own work: a caller that stops waiting leaves it running, and
-   * closing the host waits for it. Work the closing host interrupted, or refused because it had
-   * closed, fails as the store's, unless its `body` had already ended: closing interrupts at the
-   * first boundary after an uninterruptible body, which would discard what it committed, so the
-   * body's own result is returned instead.
-   */
-  own<A>(
-    effect: Effect.Effect<A, ChatError>,
-    body?: Deferred.Deferred<A, ChatError>,
-  ): Effect.Effect<A, ChatError> {
-    return Effect.uninterruptibleMask((restore) =>
-      Effect.gen({ self: this }, function* () {
-        const fiber = yield* FiberSet.run(this.work, effect);
-        const exit = yield* restore(Fiber.await(fiber)).pipe(
-          Effect.onInterrupt(() => Effect.sync(() => fiber.interruptUnsafe())),
-        );
-        if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) {
-          const ended = body ? yield* Deferred.poll(body) : Option.none();
-          return yield* Option.isSome(ended) ? ended.value : Effect.fail(safeError(null));
-        }
-        return yield* exit;
-      }),
-    );
-  }
-  /** Runs a mutation's committing `body` as owned, admitted work; see `own` for its result. */
-  ownMutation<A>(
-    wrap: (body: Effect.Effect<A, ChatError>) => Effect.Effect<A, ChatError>,
-    body: Effect.Effect<A, ChatError>,
-  ): Effect.Effect<A, ChatError> {
-    return Effect.flatMap(Deferred.make<A, ChatError>(), (ended) =>
-      this.own(
-        this.admitMutation(
-          wrap(
-            Effect.uninterruptible(body.pipe(Effect.onExit((exit) => Deferred.done(ended, exit)))),
-          ),
-        ),
-        ended,
-      ),
-    );
-  }
-  /**
-   * Admits one mutation, refused as `quitting` once admissions close, and counts it until it ends.
-   * The check and the count are one step, so Quit never misses a mutation it let in. Runs inside
-   * `own`, so the count lasts as long as the work does.
-   */
-  admitMutation<A>(effect: Effect.Effect<A, ChatError>): Effect.Effect<A, ChatError> {
-    return Effect.uninterruptibleMask((restore) =>
-      Effect.flatMap(
-        Ref.modify(this.admissions, (admissions): [boolean, Admissions] =>
-          admissions.open
-            ? [true, { ...admissions, mutations: admissions.mutations + 1 }]
-            : [false, admissions],
-        ),
-        (admitted) =>
-          admitted
-            ? restore(effect).pipe(
-                Effect.ensuring(
-                  Ref.update(this.admissions, (admissions) => ({
-                    ...admissions,
-                    mutations: admissions.mutations - 1,
-                  })),
-                ),
-              )
-            : Effect.fail(new ChatUnavailableError({ reason: 'quitting' })),
-      ),
-    );
-  }
-  setAdmissionsOpen(open: boolean): Effect.Effect<void> {
-    return Ref.update(this.admissions, (admissions) => ({ ...admissions, open }));
-  }
-  /** Runs one Send for a conversation at a time; its body can't be interrupted once it starts. */
-  private admitSend<A>(conversationId: string, effect: Effect.Effect<A, ChatError>) {
-    return Effect.scoped(
-      Effect.flatMap(RcMap.get(this.sends, conversationId), (semaphore) =>
-        semaphore.withPermit(Effect.uninterruptible(effect)),
-      ),
-    );
-  }
-  run<K extends ChatCommand>(
-    operation: K,
-    data: ChatInput<K>,
-    handle: (data: ChatInput<K>) => Effect.Effect<ChatOutput<K>, ChatError>,
-  ): Effect.Effect<ChatOutput<K>, ChatError> {
-    const invoke = Effect.suspend(() => handle(data));
-    if (!isChatMutation(operation))
-      return this.own(isCancellableChatRead(operation) ? invoke : Effect.uninterruptible(invoke));
-    // Counted inside the owned work, so Quit still sees a mutation whose caller stopped waiting.
-    if (operation !== 'sendChat') return this.ownMutation((body) => body, invoke);
-    const { target } = data as ChatInput<'sendChat'>;
-    // The metadata check runs to completion, then the Send waits its turn for the conversation; a
-    // Send still waiting when the store closes never started, so it fails as the store's.
-    return this.ownMutation(
-      (body) =>
-        Effect.andThen(
-          Effect.uninterruptible(this.metadata(target)),
-          this.admitSend(target.conversationId, body),
-        ),
-      invoke,
-    );
-  }
-  /** Reads Pi with the signal that aborts it when the caller stops waiting. */
-  read<A>(handle: (signal: AbortSignal) => Promise<A>): Effect.Effect<A, ChatError> {
-    return callHarness(handle);
-  }
-  hasActiveWork(): Effect.Effect<boolean, ChatError> {
-    return Effect.gen({ self: this }, function* () {
-      const busy = Effect.map(
-        Effect.all([Ref.get(this.admissions), RcMap.keys(this.sends)]),
-        ([admissions, sends]) => admissions.mutations > 0 || [...sends].length > 0,
       );
-      if (yield* busy) return true;
-      let scan: Cursor | undefined;
-      do {
-        const page = yield* callHarness(() =>
-          this.harness.commit((tx) => tx.scanTasks({}, 32, scan), context),
+    /**
+     * Runs `effect` as the host's own work: a caller that stops waiting leaves it running, and
+     * closing the host waits for it. Work the closing host interrupted, or refused because it had
+     * closed, fails as the store's, unless its `body` had already ended: closing interrupts at the
+     * first boundary after an uninterruptible body, which would discard what it committed, so the
+     * body's own result is returned instead.
+     */
+    const own = <A>(
+      effect: Effect.Effect<A, ChatError>,
+      body?: Deferred.Deferred<A, ChatError>,
+    ): Effect.Effect<A, ChatError> =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const fiber = yield* FiberSet.run(work, effect);
+          const exit = yield* restore(Fiber.await(fiber)).pipe(
+            Effect.onInterrupt(() => Effect.sync(() => fiber.interruptUnsafe())),
+          );
+          if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) {
+            const ended = body ? yield* Deferred.poll(body) : Option.none();
+            return yield* Option.isSome(ended) ? ended.value : Effect.fail(safeError(null));
+          }
+          return yield* exit;
+        }),
+      );
+    /**
+     * Admits one mutation, refused as `quitting` once admissions close, and counts it until it
+     * ends. The check and the count are one step, so Quit never misses a mutation it let in. Runs
+     * inside `own`, so the count lasts as long as the work does.
+     */
+    const admitMutation = <A>(effect: Effect.Effect<A, ChatError>): Effect.Effect<A, ChatError> =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.flatMap(
+          Ref.modify(admissions, (current): [boolean, Admissions] =>
+            current.open
+              ? [true, { ...current, mutations: current.mutations + 1 }]
+              : [false, current],
+          ),
+          (admitted) =>
+            admitted
+              ? restore(effect).pipe(
+                  Effect.ensuring(
+                    Ref.update(admissions, (current) => ({
+                      ...current,
+                      mutations: current.mutations - 1,
+                    })),
+                  ),
+                )
+              : Effect.fail(new ChatUnavailableError({ reason: 'quitting' })),
+        ),
+      );
+    /**
+     * Runs a mutation's committing `body` as owned, admitted work; see `own` for its result.
+     * `prepare` runs what must come first inside the admission, such as a Send's turn.
+     */
+    const ownMutation = <A>(
+      body: Effect.Effect<A, ChatError>,
+      prepare: (body: Effect.Effect<A, ChatError>) => Effect.Effect<A, ChatError> = (body) => body,
+    ): Effect.Effect<A, ChatError> =>
+      Effect.flatMap(Deferred.make<A, ChatError>(), (ended) =>
+        own(
+          admitMutation(
+            prepare(
+              Effect.uninterruptible(
+                body.pipe(Effect.onExit((exit) => Deferred.done(ended, exit))),
+              ),
+            ),
+          ),
+          ended,
+        ),
+      );
+    const setAdmissionsOpen = (open: boolean): Effect.Effect<void> =>
+      Ref.update(admissions, (current) => ({ ...current, open }));
+    /** Runs one Send for a conversation at a time; its body can't be interrupted once it starts. */
+    const admitSend = <A>(conversationId: string, effect: Effect.Effect<A, ChatError>) =>
+      Effect.scoped(
+        Effect.flatMap(RcMap.get(sends, conversationId), (semaphore) =>
+          semaphore.withPermit(Effect.uninterruptible(effect)),
+        ),
+      );
+    const run = <K extends ChatCommand>(
+      operation: K,
+      data: ChatInput<K>,
+      handle: (data: ChatInput<K>) => Effect.Effect<ChatOutput<K>, ChatError>,
+    ): Effect.Effect<ChatOutput<K>, ChatError> => {
+      const mutation = isChatMutation(operation);
+      // An unknown failure stays hidden as the store's, or uncertain for a mutation.
+      const invoke = Effect.suspend(() => handle(data)).pipe(
+        Effect.catchDefect((defect) => Effect.fail(safeError(defect, mutation))),
+      );
+      if (!mutation)
+        return own(isCancellableChatRead(operation) ? invoke : Effect.uninterruptible(invoke));
+      // Counted inside the owned work, so Quit still sees a mutation whose caller stopped waiting.
+      if (operation !== 'sendChat') return ownMutation(invoke);
+      const { target } = data as ChatInput<'sendChat'>;
+      // The metadata check runs to completion, then the Send waits its turn for the conversation;
+      // a Send still waiting when the store closes never started, so it fails as the store's.
+      return ownMutation(invoke, (body) =>
+        Effect.andThen(
+          Effect.uninterruptible(metadata(target)),
+          admitSend(target.conversationId, body),
+        ),
+      );
+    };
+    const hasActiveWork = (): Effect.Effect<boolean, ChatError> =>
+      Effect.gen(function* () {
+        const busy = Effect.map(
+          Effect.all([Ref.get(admissions), RcMap.keys(sends)]),
+          ([current, running]) => current.mutations > 0 || [...running].length > 0,
         );
-        if (page.items.some((task) => task.state.status !== 'terminal')) return true;
-        scan = page.next;
-      } while (scan);
-      scan = undefined;
-      do {
-        const page = yield* callHarness(() =>
-          this.harness.commit((tx) => tx.scanConversations({}, 32, scan), context),
-        );
-        for (const conversation of page.items) {
-          const meta = yield* this.metadata({
-            ...this.config,
-            conversationId: String(conversation.id),
-          });
-          if (meta.pending) return true;
-        }
-        scan = page.next;
-      } while (scan);
-      return yield* busy;
-    });
-  }
-}
+        if (yield* busy) return true;
+        let scan: Cursor | undefined;
+        do {
+          const page = yield* callHarness(() =>
+            harness.commit((tx) => tx.scanTasks({}, 32, scan), context),
+          );
+          if (page.items.some((task) => task.state.status !== 'terminal')) return true;
+          scan = page.next;
+        } while (scan);
+        scan = undefined;
+        do {
+          const page = yield* callHarness(() =>
+            harness.commit((tx) => tx.scanConversations({}, 32, scan), context),
+          );
+          for (const conversation of page.items) {
+            const meta = yield* metadata({ ...config, conversationId: String(conversation.id) });
+            if (meta.pending) return true;
+          }
+          scan = page.next;
+        } while (scan);
+        return yield* busy;
+      });
+    return {
+      ...parts,
+      sends,
+      observers,
+      checkSession,
+      metadata,
+      summary,
+      own,
+      ownMutation,
+      setAdmissionsOpen,
+      run,
+      hasActiveWork,
+    };
+  });

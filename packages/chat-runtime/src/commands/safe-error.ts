@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { ConversationBusy } from '@earendil-works/pi-durable';
 import {
   ChatBusyError,
@@ -29,3 +30,9 @@ export const safeError = (error: unknown, uncertain = false): ChatError => {
  */
 export const watchError = (error: unknown): ChatError =>
   isChatError(error) ? error : new ChatUnavailableError({ reason: 'watch-failed' });
+/**
+ * Runs a synchronous check that throws a chat error, such as a stored-record decoder Pi's commit
+ * callbacks share, keeping its failure typed.
+ */
+export const runCheck = <A>(check: () => A, uncertain = false): Effect.Effect<A, ChatError> =>
+  Effect.try({ try: check, catch: (error) => safeError(error, uncertain) });

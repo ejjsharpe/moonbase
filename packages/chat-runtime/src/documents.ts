@@ -7,6 +7,7 @@ import {
   type SubmissionId,
   type TaskId,
 } from '@earendil-works/pi-durable';
+import { Effect } from 'effect';
 import type { ChatCreationSettings, ChatTarget } from '@moonbase/contracts/chat';
 /** A chat's saved folder and model; `ownFolder` marks a folder made for a chat without a project. */
 export type ChatSettings = ChatCreationSettings & { cwd: string; ownFolder?: true };
@@ -16,6 +17,8 @@ import {
   InvalidChatRequestError,
 } from '@moonbase/contracts/chat-errors';
 import { decodeStoredBinding, decodeStoredMetadata } from './stored-records.ts';
+import { callHarness } from './commands/harness-call.ts';
+import { runCheck } from './commands/safe-error.ts';
 
 export const Request = defineDocFamily({
   kind: 'moonbase.chat.request',
@@ -71,13 +74,39 @@ export const cid = (value: string) => numeric(value) as ConversationId;
 export const eid = (value: string) => numeric(value) as EntryId;
 export const sid = (value: string) => numeric(value) as SubmissionId;
 export const tid = (value: string) => numeric(value) as TaskId;
-export async function readOwnedMetadata(harness: Harness, identity: string, target: ChatTarget) {
-  const meta = await harness.snapshot(Metadata, cid(target.conversationId), 'metadata', context);
-  if (!meta || meta.identity !== identity) throw new ChatAccessError({ refusal: 'other-owner' });
+/** Reads a chat's metadata in a Pi callback; refused unless `identity` owns it. */
+export async function readOwnedMetadataForPi(
+  harness: Harness,
+  identity: string,
+  conversationId: string,
+) {
+  return checkOwnedMetadata(
+    await harness.snapshot(Metadata, cid(conversationId), 'metadata', context),
+    identity,
+  );
+}
+/** A chat's saved metadata, refused unless `identity` owns it. */
+export function checkOwnedMetadata(meta: unknown, identity: string) {
+  if (!meta || (meta as { identity?: unknown }).identity !== identity)
+    throw new ChatAccessError({ refusal: 'other-owner' });
   const saved = decodeStoredMetadata(meta);
   if (!saved.settings) throw new ChatStoreError({ problem: 'settings-missing' });
   return saved;
 }
+/** An owned chat's metadata; `uncertain` inside a mutation, where an unknown failure may follow a commit. */
+export const readOwnedMetadata = (
+  harness: Harness,
+  identity: string,
+  target: ChatTarget,
+  uncertain = false,
+) =>
+  Effect.flatMap(
+    callHarness(
+      () => harness.snapshot(Metadata, cid(target.conversationId), 'metadata', context),
+      uncertain,
+    ),
+    (meta) => runCheck(() => checkOwnedMetadata(meta, identity), uncertain),
+  );
 export function getSettings(meta: { settings?: ChatSettings }): ChatSettings {
   if (!meta.settings) throw new ChatStoreError({ problem: 'settings-missing' });
   return meta.settings;
