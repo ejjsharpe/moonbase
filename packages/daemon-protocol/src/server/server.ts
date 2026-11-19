@@ -1,4 +1,4 @@
-import { Clock, Effect, Exit, Fiber, FiberSet, Scope } from 'effect';
+import { Cause, Clock, Effect, Exit, Fiber, FiberSet, Option, Scope, Semaphore } from 'effect';
 import type {
   LocalHostHandlers,
   ChatServiceShape,
@@ -126,7 +126,6 @@ export const serveChat = (
     if (JSON.stringify(configuration).includes(token))
       return yield* Effect.fail(new HostKeyExposedError());
     const admit = options.admit ?? Effect.void;
-    const run = yield* FiberSet.makeRuntimePromise<never>();
     const clock = yield* Clock.Clock;
     const nonces = createUpgradeNonces(() => clock.currentTimeMillisUnsafe());
     // The RPC servers live in a scope of their own. Closing it waits for the mutations they run,
@@ -193,30 +192,54 @@ export const serveChat = (
           }
         : {}),
     };
-    let closed = false,
-      active = 0;
+    /**
+     * The listener's plain HTTP answers run in its own scope: releasing the listener closes it,
+     * interrupting the answers still running and refusing any later request.
+     */
+    const listening = yield* Scope.fork(yield* Effect.scope);
+    const answer = yield* FiberSet.makeRuntimePromise<never>().pipe(Scope.provide(listening));
+    const requests = yield* Semaphore.make(maximumRequests);
+    const jsonHeaders = { ...plainHeaders, 'Content-Type': 'application/json' };
     /** Signed health: the proof is checked first, so an unauthenticated probe reaches nothing. */
-    const answerHealth = async (request: Request) => {
-      const headers = { ...plainHeaders, 'Content-Type': 'application/json' };
-      try {
-        const value = createHostHealthReply({
-          token,
-          nonce: request.headers.get('x-moonbase-nonce') ?? undefined,
-          authorization: request.headers.get('authorization') ?? undefined,
-          health,
-          issue: () => nonces.issue(),
-        });
-        await run(
+    const answerHealth = (request: Request) =>
+      Effect.try({
+        try: () =>
+          createHostHealthReply({
+            token,
+            nonce: request.headers.get('x-moonbase-nonce') ?? undefined,
+            authorization: request.headers.get('authorization') ?? undefined,
+            health,
+            issue: () => nonces.issue(),
+          }),
+        catch: (error) => error,
+      }).pipe(
+        Effect.tap(() =>
           Effect.scoped(Effect.andThen(admit, services.chat.getChatHost({ host: expected }))),
-        );
-        return new Response(JSON.stringify(value), { status: 200, headers });
-      } catch (thrown) {
-        const refused =
-          (thrown instanceof HostVerificationError && thrown.reason === 'request-rejected') ||
-          thrown instanceof UnauthorizedError;
-        return new Response(healthRefusal(refused), { status: refused ? 401 : 503, headers });
-      }
-    };
+        ),
+        Effect.map(
+          (value) => new Response(JSON.stringify(value), { status: 200, headers: jsonHeaders }),
+        ),
+        Effect.catchCause((cause) => {
+          const thrown = Cause.squash(cause);
+          const refused =
+            (thrown instanceof HostVerificationError && thrown.reason === 'request-rejected') ||
+            thrown instanceof UnauthorizedError;
+          return Effect.succeed(
+            new Response(healthRefusal(refused), {
+              status: refused ? 401 : 503,
+              headers: jsonHeaders,
+            }),
+          );
+        }),
+      );
+    /** A plain HTTP request: health, or 404. */
+    const respond = (request: Request) =>
+      Effect.suspend(() => {
+        const url = new URL(request.url);
+        if (request.method === 'GET' && url.pathname === '/v1/health' && url.search === '')
+          return answerHealth(request);
+        return Effect.succeed(new Response(null, { status: 404, headers: plainHeaders }));
+      });
     /**
      * Upgrades a request for one of the sockets, or answers the status it is refused with, before
      * Bun accepts it: a browser's (403), anything but a plain local WebSocket handshake for a
@@ -281,7 +304,8 @@ export const serveChat = (
             development: false,
             error: () => new Response(null, { status: 503, headers: plainHeaders }),
             fetch: async (request, bun) => {
-              if (closed) return new Response(null, { status: 503, headers: plainHeaders });
+              if (listening.state._tag === 'Closed')
+                return new Response(null, { status: 503, headers: plainHeaders });
               if (request.headers.get('upgrade') !== null) {
                 try {
                   return upgrade(request, bun);
@@ -289,21 +313,15 @@ export const serveChat = (
                   return new Response(null, { status: 400, headers: plainHeaders });
                 }
               }
-              if (active >= maximumRequests)
-                return new Response(null, { status: 503, headers: plainHeaders });
-              active++;
               try {
-                const url = new URL(request.url);
-                if (request.method === 'GET' && url.pathname === '/v1/health' && url.search === '')
-                  return await answerHealth(request);
-                return new Response(null, { status: 404, headers: plainHeaders });
+                // Past `maximumRequests` answering at once, a request is refused.
+                const answered = await answer(requests.withPermitsIfAvailable(1)(respond(request)));
+                return Option.getOrElse(
+                  answered,
+                  () => new Response(null, { status: 503, headers: plainHeaders }),
+                );
               } catch {
-                return new Response(healthRefusal(false), {
-                  status: 503,
-                  headers: { ...plainHeaders, 'Content-Type': 'application/json' },
-                });
-              } finally {
-                active--;
+                return new Response(healthRefusal(false), { status: 503, headers: jsonHeaders });
               }
             },
             websocket: {
@@ -328,10 +346,10 @@ export const serveChat = (
         catch: () => new HostUnavailableError({ reason: 'listener' }),
       }),
       (server) =>
-        Effect.promise(async () => {
-          closed = true;
-          await server.stop(true);
-        }),
+        Effect.andThen(
+          Scope.close(listening, Exit.void),
+          Effect.promise(() => server.stop(true)),
+        ),
     );
     return { origin: `http://127.0.0.1:${server.port}` };
   });

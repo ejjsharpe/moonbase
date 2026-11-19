@@ -417,3 +417,36 @@ test('a connection runs a bounded number of requests at once, and a handler’s 
   const first = await runtime.runPromise(Stream.runHead(chat.watch({ target })));
   assert.equal(first._tag, 'Some');
 });
+
+test('the listener answers a bounded number of plain requests at once, and closing it ends those still running', async (t) => {
+  const { client } = controlledChat();
+  let hold = false;
+  const chat: ChatServiceShape = {
+    ...client,
+    getChatHost: (input) => (hold ? Effect.never : client.getChatHost(input)),
+  };
+  const token = randomNonce(),
+    runtime = ManagedRuntime.make(TestClock.layer()),
+    scope = Effect.runSync(Scope.make());
+  t.after(() => runtime.dispose());
+  const server = await runtime.runPromise(
+    serveChat({ host, token, port: 0 }, { chat }).pipe(Effect.provideService(Scope.Scope, scope)),
+  );
+  const endpoint = { origin: server.origin, token, expected: host };
+  hold = true;
+  // Each authenticated probe waits on the chat service, holding its place.
+  const probes = Array.from({ length: 128 }, () =>
+    Effect.runPromiseExit(checkHostHealth(endpoint)),
+  );
+  // Under the bound an unauthenticated probe is answered 401; past it, refused 503.
+  await until(
+    async () => {
+      const response = await fetch(`${server.origin}/v1/health`);
+      await response.arrayBuffer();
+      return response.status;
+    },
+    (status) => status === 503,
+  );
+  await Effect.runPromise(Scope.close(scope, Exit.void));
+  for (const exit of await Promise.all(probes)) assert.equal(exit._tag, 'Failure');
+});
