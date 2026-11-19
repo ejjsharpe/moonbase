@@ -92,7 +92,9 @@ test('EPERM is signalled again in SIGTERM’s turn, SIGKILL is always tried, and
   );
 
   const unconfirmed = tracedSignal(() => 'EPERM');
+  const kills = () => unconfirmed.sent.filter((signal) => signal === 'SIGKILL').length;
   let pid: number | undefined;
+  let killsAtStop = 0;
   try {
     // A defect, rather than the typed failure, would reject the run; a close that waits for the
     // leader would never end it.
@@ -106,8 +108,10 @@ test('EPERM is signalled again in SIGTERM’s turn, SIGKILL is always tried, and
           Effect.gen(function* () {
             const group = yield* spawnRunning;
             pid = group.process.pid!;
-            // The stop has given up once it returns; the close then tries once more.
-            yield* group.stop;
+            // The stop has given up once it returns its failure; the close then tries once more.
+            const stopped = yield* Effect.flip(group.stop);
+            killsAtStop = kills();
+            return yield* Effect.fail(stopped);
           }),
         ),
       ),
@@ -117,7 +121,8 @@ test('EPERM is signalled again in SIGTERM’s turn, SIGKILL is always tried, and
     assert(isAlive(pid!));
     assert(failure instanceof ProcessGroupError && failure.reason === 'teardown');
     // SIGKILL was tried by the stop and again by the close.
-    assert(unconfirmed.sent.filter((signal) => signal === 'SIGKILL').length > 1);
+    assert(killsAtStop > 0);
+    assert(kills() > killsAtStop);
   } finally {
     killIfAlive(pid);
   }
