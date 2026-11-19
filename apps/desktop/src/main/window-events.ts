@@ -46,11 +46,10 @@ export const installWindowEvents = ({
       'did-frame-navigate',
       (_event: Event, _url: string, _code: number, _status: string, isMainFrame: boolean) => {
         if (!isMainFrame) return;
-        // The crash prompt's answer no longer applies. Its dialog stays until answered, so the
-        // prompt ends then, in its own fiber, rather than holding up the new document.
-        run(FiberHandle.clear(crashPrompt));
         run(
           Effect.gen(function* () {
+            // The crash prompt's answer no longer applies, so its dialog closes unanswered.
+            yield* FiberHandle.clear(crashPrompt);
             yield* lifecycle.replaceDocument;
             yield* lifecycle.runCleanup(releaseDocument);
           }),
@@ -58,8 +57,9 @@ export const installWindowEvents = ({
       },
     );
     const promptAfterCrash = Effect.gen(function* () {
-      const recovery = yield* showDialog(() =>
+      const recovery = yield* showDialog((signal) =>
         dialog.showMessageBox(window, {
+          signal,
           type: 'error',
           message: 'The workbench stopped unexpectedly.',
           detail:

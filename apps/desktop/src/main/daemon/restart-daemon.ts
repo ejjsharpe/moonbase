@@ -18,8 +18,10 @@ export const restartDaemon = ({
   window: BrowserWindow;
 }) =>
   Effect.gen(function* () {
-    const { response } = yield* showDialog(() =>
+    // Shutting down closes the confirmation unanswered.
+    const { response } = yield* showDialog((signal) =>
       dialog.showMessageBox(window, {
+        signal,
         type: 'question',
         message: 'Restart the Moonbase daemon?',
         detail:

@@ -148,6 +148,8 @@ export const DesktopServicesLive = (options: DesktopServicesOptions) => {
           ...(hooks.interception ? { intercept: hooks.interception } : {}),
         }),
       );
+      // Runs before the IPC server closes, whose requests wait for their pickers to be answered.
+      yield* Effect.addFinalizer(() => native.surfacePickers);
       yield* serveAppProtocol({
         protocol,
         net,

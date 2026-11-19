@@ -27,8 +27,9 @@ async function fixture(
     actions: WindowAction[] = [];
   const prompts: string[] = [];
   let released = 0;
-  /** The crash prompt's answer: 0 recovers the workbench, 1 quits. */
-  let crashAnswer = 1;
+  /** The crash prompt's answer: 0 recovers the workbench, 1 quits, null waits to be closed. */
+  let crashAnswer: number | null = 1;
+  let dismissed = 0;
   const runtime = ManagedRuntime.make(Layer.empty);
   const scope = Scope.makeUnsafe();
   const lifecycle = await runtime.runPromise(
@@ -49,9 +50,21 @@ async function fixture(
       app: app as unknown as App,
       window: f.window,
       dialog: {
-        showMessageBox: async (_window: unknown, { message }: { message: string }) => {
+        showMessageBox: async (
+          _window: unknown,
+          { message, signal }: { message: string; signal: AbortSignal },
+        ) => {
           prompts.push(message);
-          return { response: crashAnswer, checkboxChecked: false };
+          const response =
+            crashAnswer ??
+            (await new Promise<number>((resolve) =>
+              signal.addEventListener('abort', () => {
+                dismissed++;
+                // Closed by its signal, a box answers with its cancel button: here, Quit.
+                resolve(1);
+              }),
+            ));
+          return { response, checkboxChecked: false };
         },
       } as Pick<Dialog, 'showMessageBox'>,
       releaseDocument: options.release ?? Effect.sync(() => void released++),
@@ -69,7 +82,10 @@ async function fixture(
     get released() {
       return released;
     },
-    answerCrash: (response: number) => {
+    get dismissed() {
+      return dismissed;
+    },
+    answerCrash: (response: number | null) => {
       crashAnswer = response;
     },
     ready: () => run(lifecycle.markReady),
@@ -175,13 +191,32 @@ test('a crashed renderer releases its document, then recovers it or quits as the
     await waitFor(() => f.calls.includes('reload'));
     assert.equal(f.released, 1);
     assert.deepEqual(f.prompts, ['The workbench stopped unexpectedly.']);
-    f.answerCrash(1);
+    // A document that replaces the crashed one closes its prompt, whose answer is then ignored,
+    // and Quit finishes without waiting for the user.
+    f.answerCrash(null);
     f.contents.emit('render-process-gone', {}, { reason: 'crashed' });
     await waitFor(() => f.prompts.length === 2);
+    f.replace();
+    await waitFor(() => f.dismissed === 1);
+    assert.equal(await f.finished(), false);
+    await f.ready();
+    await f.requestQuit();
+    await f.answer({ id: f.last().id, consent: true });
+    await f.answer({ id: f.last().id, consent: true });
     assert.equal(await f.finished(), true);
     assert.equal(f.calls.filter((call) => call === 'reload').length, 1);
   } finally {
+    // Closing the window's scope waits for no prompt.
     await f.dispose();
+  }
+  const g = await fixture();
+  try {
+    await g.ready();
+    g.contents.emit('render-process-gone', {}, { reason: 'crashed' });
+    await waitFor(() => g.finished());
+    assert.equal(g.calls.includes('reload'), false);
+  } finally {
+    await g.dispose();
   }
 });
 

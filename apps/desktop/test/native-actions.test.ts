@@ -38,6 +38,12 @@ test('clipboard imports ask only when Finder files are there, and read them only
 
 test('a chat folder choice cancelled while the picker is open waits for it to close', async () => {
   const f = nativeActionsFixture(new Uint8Array());
+  const shown: string[] = [];
+  f.options.window = {
+    isDestroyed: () => false,
+    show: () => void shown.push('show'),
+    focus: () => void shown.push('focus'),
+  } as never;
   let close!: (result: { canceled: boolean; filePaths: string[] }) => void;
   f.options.dialog.showOpenDialog = (() =>
     new Promise((resolve) => {
@@ -46,8 +52,13 @@ test('a chat folder choice cancelled while the picker is open waits for it to cl
   const actions = await Effect.runPromise(
     makeNativeActions(f.options).pipe(Effect.provide(NodeServices.layer)),
   );
+  await Effect.runPromise(actions.surfacePickers);
+  assert.deepEqual(shown, []);
   const choosing = Effect.runFork(actions.chooseFolder);
   await new Promise((resolve) => setImmediate(resolve));
+  // Quit shows the window, so the user can answer the picker it waits for.
+  await Effect.runPromise(actions.surfacePickers);
+  assert.deepEqual(shown, ['show', 'focus']);
   let cancelled = false;
   const cancelling = Effect.runPromise(Fiber.interrupt(choosing)).then(() => {
     cancelled = true;
@@ -57,4 +68,6 @@ test('a chat folder choice cancelled while the picker is open waits for it to cl
   close({ canceled: false, filePaths: ['/obsolete'] });
   await cancelling;
   assert.equal(Exit.hasInterrupts(await Effect.runPromise(Fiber.await(choosing))), true);
+  await Effect.runPromise(actions.surfacePickers);
+  assert.equal(shown.length, 2);
 });
