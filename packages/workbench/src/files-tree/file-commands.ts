@@ -3,6 +3,7 @@ import { checkoutKey, type MutationAction } from '@moonbase/application/editor';
 import type { Icon } from '@moonbase/ui/icons';
 import { onMac } from '../shortcuts.ts';
 import type { EditorActions } from '../editor-actions.ts';
+import type { WorkbenchWork } from '../workbench-editor.ts';
 
 /** What a name typed in the tree does. */
 export type TreeEditKind = 'rename' | 'duplicate' | 'create-file' | 'create-directory';
@@ -41,8 +42,8 @@ export type FileCommandContext = {
   startEdit: (kind: TreeEditKind, path: string) => void;
   /** Where focus goes after a mutation dialog closes. */
   returnTreeFocus: () => HTMLElement | false;
-  copyPaths?: (checkout: CheckoutTarget, paths: string[], relative: boolean) => Promise<void>;
-  revealPath?: (checkout: CheckoutTarget, path: string) => Promise<void>;
+  /** Runs a command's work for as long as the tree shows. */
+  run: (work: WorkbenchWork) => void;
   mentionInChat?: (checkout: CheckoutTarget, paths: string[]) => void;
   /** Puts entries on the workbench's file clipboard, to copy or move where they are pasted. */
   putOnClipboard: (paths: string[], mode: 'copy' | 'cut') => void;
@@ -65,8 +66,7 @@ export function listFileCommands(
     requestMutation,
     startEdit,
     returnTreeFocus,
-    copyPaths,
-    revealPath,
+    run,
     mentionInChat,
     putOnClipboard,
     canPasteInto,
@@ -75,6 +75,7 @@ export function listFileCommands(
   paths: string[],
   row = paths[0],
 ): (FileCommand | 'separator')[] {
+  const { copyPaths, revealPath } = actions.platform;
   // Every listed folder of this checkout, including selected ones a collapse has since hidden.
   const listingKey = JSON.stringify([checkoutKey(checkout), '']).slice(0, -3);
   const directories = new Set(
@@ -110,7 +111,7 @@ export function listFileCommands(
       // Like Enter in the tree, so the keyboard stays where it was.
       staysInTree: true,
       run: () => {
-        void actions.open({ checkout, path: one }, { view: 'file', intent: 'keep' });
+        run(actions.open({ checkout, path: one }, { view: 'file', intent: 'keep' }));
       },
     });
   if (folder)
@@ -192,7 +193,7 @@ export function listFileCommands(
         label: count > 1 ? 'Copy Paths' : 'Copy Path',
         keys: 'Alt+Meta+C',
         staysInTree: true,
-        run: () => void copyPaths(checkout, paths, false).catch(actions.report),
+        run: () => run(copyPaths(checkout, paths, false)),
       },
       {
         id: 'copy-relative-path',
@@ -200,7 +201,7 @@ export function listFileCommands(
         label: count > 1 ? 'Copy Relative Paths' : 'Copy Relative Path',
         keys: 'Shift+Alt+Meta+C',
         staysInTree: true,
-        run: () => void copyPaths(checkout, paths, true).catch(actions.report),
+        run: () => run(copyPaths(checkout, paths, true)),
       },
     );
   if (revealPath && one !== null)
@@ -210,7 +211,7 @@ export function listFileCommands(
       label: revealLabel,
       keys: 'Alt+Meta+R',
       staysInTree: true,
-      run: () => void revealPath(checkout, one).catch(actions.report),
+      run: () => run(revealPath(checkout, one)),
     });
   const trash: FileCommand = {
     id: 'trash',

@@ -39,7 +39,8 @@ export type EditorTabsShape = {
   /**
    * Opens a file as the active tab, reading it from disk (or its comparison), or `intent:
    * 'preview'` in the checkout's one preview tab. Succeeds false when it was superseded by a newer
-   * open or selection, when `current` turned false, or when the file couldn't be read.
+   * open or selection, or when the file couldn't be read. Interrupting it abandons the open
+   * before it changes the view.
    */
   readonly open: (
     target: FileTarget,
@@ -226,7 +227,12 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
           yield* outbox.changed;
         });
 
-      const openFile: EditorTabsShape['openFile'] = (target, options = {}) =>
+      /** `openFile`, abandoned once `wanted` turns false. */
+      const openWhile = (
+        target: FileTarget,
+        options: OpenOptions,
+        wanted: Effect.Effect<boolean> = Effect.succeed(true),
+      ) =>
         Effect.gen(function* () {
           const selected = yield* views.view(target.checkout);
           if (!isRelativePath(target.path))
@@ -235,11 +241,9 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
           const key = fileKey(target),
             mode = options.view ?? selected.fileViews.get(target.path) ?? 'file';
           const isCurrent = Effect.map(
-            Effect.all([session.get, views.get]),
-            ([{ preserving }, { recovery }]) =>
-              !preserving &&
-              (options.current?.() ?? true) &&
-              isCheckoutOpen(recovery, target.checkout),
+            Effect.all([session.get, views.get, wanted]),
+            ([{ preserving }, { recovery }, stillWanted]) =>
+              !preserving && stillWanted && isCheckoutOpen(recovery, target.checkout),
           );
           const work = Effect.gen(function* () {
             const opened = yield* Effect.exit(read(target, mode, isCurrent));
@@ -261,9 +265,11 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
             return true;
           }).pipe(Effect.catchCause(() => Effect.succeed(false)));
           const fiber = yield* FiberHandle.run(activation)(work);
-          const exit = yield* Fiber.await(fiber);
+          const exit = yield* Effect.onInterrupt(Fiber.await(fiber), () => Fiber.interrupt(fiber));
           return Exit.isSuccess(exit) ? exit.value : false;
         });
+      const openFile: EditorTabsShape['openFile'] = (target, options = {}) =>
+        openWhile(target, options);
 
       const activateSelected: Effect.Effect<boolean, EditorFailure> = Effect.gen(function* () {
         if ((yield* session.get).preserving) return false;
@@ -288,15 +294,16 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
         const needsWorking =
           !hasBuffer && working != null && working.version !== attempt?.failedWorkingVersion;
         if (mode === 'file' ? hasBuffer : attempt?.mode === mode && !needsWorking) return true;
-        return yield* openFile(target, {
-          current: () => {
-            const { recovery } = SubscriptionRef.getUnsafe(views.state);
-            return (
+        return yield* openWhile(
+          target,
+          {},
+          Effect.map(
+            views.get,
+            ({ recovery }) =>
               recovery.selectedCheckoutId === checkout.checkoutId &&
-              recovery.views.get(checkout.checkoutId)?.active === path
-            );
-          },
-        });
+              recovery.views.get(checkout.checkoutId)?.active === path,
+          ),
+        );
       });
 
       const keepOpen = (target: FileTarget) =>
@@ -311,8 +318,9 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
 
       return {
         open: (target, options = {}) =>
-          session.admitted(
+          session.runWithCaller(
             Effect.gen(function* () {
+              yield* session.admit;
               // The folder's reads end during `git init`: open the file once it is the repository.
               if ((yield* session.get).initializing === target.checkout.checkoutId) {
                 yield* session.awaitInitialization;

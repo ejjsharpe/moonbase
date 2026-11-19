@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Effect } from 'effect';
 import { getParentPath, getPathName } from '@moonbase/contracts/paths';
 import type { CheckoutTarget, DirectoryListing } from '@moonbase/contracts/workspace';
 import { checkoutKey } from '@moonbase/application/editor';
@@ -15,6 +16,7 @@ import { listFoldersToExpand, type MoveRecord } from './files-tree-drop.ts';
 import { canRefocus, type TreeFocus } from './use-tree-focus.ts';
 import type { RunMutation } from '../mutation-runner.tsx';
 import type { EditorActions } from '../editor-actions.ts';
+import type { WorkbenchServices } from '../workbench-editor.ts';
 
 /**
  * A name being typed in the tree: renaming or duplicating `path`, or creating in folder `path`.
@@ -62,7 +64,6 @@ export function useTreeEdit({
   expanded,
   hideIgnored,
   setAnchor,
-  mounted,
   focus,
   runMutation,
   onMoved,
@@ -76,7 +77,6 @@ export function useTreeEdit({
   hideIgnored: boolean;
   /** Sets the entry a Shift-selection extends from, or clears it. */
   setAnchor: (path: string | null) => void;
-  mounted: RefObject<boolean>;
   focus: TreeFocus;
   runMutation: RunMutation;
   onMoved: (record: MoveRecord) => void;
@@ -117,7 +117,7 @@ export function useTreeEdit({
         (folder) => !current.expanded.includes(folder),
       );
       if (opening.length) actions.tree(checkout, { expanded: [...current.expanded, ...opening] });
-      for (const folder of opening) void actions.list(checkout, folder).catch(actions.report);
+      for (const folder of opening) actions.start(actions.list(checkout, folder));
     } else {
       setAnchor(path);
       actions.tree(checkout, { focus: path, selected: [path] });
@@ -138,20 +138,16 @@ export function useTreeEdit({
    */
   function endEdit(ended: TreeEdit, focusPath: string | undefined, focusTree: boolean) {
     setEdit((current) => (current?.id === ended.id ? null : current));
-    if (!mounted.current) return;
     const now = actions.getSnapshot().recovery.views.get(checkout.checkoutId)?.tree;
     const untouched =
       !!now &&
       now.focus === ended.focus &&
       now.selected.length === ended.selected.length &&
       now.selected.every((path, index) => path === ended.selected[index]);
-    if (focusPath && untouched)
-      try {
-        setAnchor(focusPath);
-        actions.tree(checkout, { focus: focusPath, selected: [focusPath] });
-      } catch (error) {
-        actions.report(error);
-      }
+    if (focusPath && untouched) {
+      setAnchor(focusPath);
+      actions.tree(checkout, { focus: focusPath, selected: [focusPath] });
+    }
     if (focusTree && focus.focusStayed()) focus.refocusTree();
   }
   /**
@@ -159,57 +155,62 @@ export function useTreeEdit({
    * a declined replacement, or null once the edit has ended. Blur reports errors and ends it; a
    * replace prompt it raises returns focus to `next`, where focus went, or else to the tree.
    */
-  async function commitEdit(
+  const commitEdit = (
     current: TreeEdit,
     name: string,
     how: NameCommit,
     next: Element | null,
-  ) {
-    const enter = how === 'enter',
-      create = isCreate(current),
-      parent = create ? current.path : getParentPath(current.path);
-    const end = (focusPath?: string) => {
-      endEdit(current, focusPath, enter);
-      return null;
-    };
-    const invalid = (message: string) => {
-      if (enter) return message;
-      actions.report(message);
-      return end();
-    };
-    // Names are taken as typed, spaces included, but one of only spaces is no name.
-    if (!name.trim()) return current.kind === 'rename' && enter ? 'Enter a name.' : end();
-    if (name.includes('/')) return invalid('A name can’t contain “/”.');
-    if (current.kind === 'rename' && name === getPathName(current.path)) return end(current.path);
-    const destination = parent ? `${parent}/${name}` : name;
-    const directory = isListedDirectory(listings, checkoutIdentity, current.path);
-    let error = '';
-    committing.current = true;
-    const { completed } = await runMutation(
-      { checkout, kind: editMutations[current.kind], paths: create ? [] : [current.path] },
-      destination,
-      enter
-        ? {
-            inlineError: (message) => {
-              error = message;
-            },
-          }
-        : { finalFocus: () => (canRefocus(next) ? next : focus.returnTreeFocus()) },
-    ).finally(() => {
-      committing.current = false;
+  ): Effect.Effect<string | null, unknown, WorkbenchServices> =>
+    Effect.gen(function* () {
+      const enter = how === 'enter',
+        create = isCreate(current),
+        parent = create ? current.path : getParentPath(current.path);
+      const end = (focusPath?: string) => {
+        endEdit(current, focusPath, enter);
+        return null;
+      };
+      const invalid = (message: string) => {
+        if (enter) return message;
+        actions.report(message);
+        return end();
+      };
+      // Names are taken as typed, spaces included, but one of only spaces is no name.
+      if (!name.trim()) return current.kind === 'rename' && enter ? 'Enter a name.' : end();
+      if (name.includes('/')) return invalid('A name can’t contain “/”.');
+      if (current.kind === 'rename' && name === getPathName(current.path)) return end(current.path);
+      const destination = parent ? `${parent}/${name}` : name;
+      const directory = isListedDirectory(listings, checkoutIdentity, current.path);
+      let error = '';
+      committing.current = true;
+      const { completed } = yield* runMutation(
+        { checkout, kind: editMutations[current.kind], paths: create ? [] : [current.path] },
+        destination,
+        enter
+          ? {
+              inlineError: (message) => {
+                error = message;
+              },
+            }
+          : { finalFocus: () => (canRefocus(next) ? next : focus.returnTreeFocus()) },
+      ).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            committing.current = false;
+          }),
+        ),
+      );
+      if (completed) {
+        if (current.kind === 'rename')
+          onMoved({ kind: 'rename', moves: [{ from: current.path, to: destination, directory }] });
+        if (current.kind === 'create-file')
+          actions.start(
+            actions.open({ checkout, path: destination }, { view: 'file', intent: 'keep' }),
+          );
+        return end(destination);
+      }
+      if (error) return error;
+      return enter ? '' : end();
     });
-    if (completed) {
-      if (current.kind === 'rename')
-        onMoved({ kind: 'rename', moves: [{ from: current.path, to: destination, directory }] });
-      if (current.kind === 'create-file' && mounted.current)
-        void actions
-          .open({ checkout, path: destination }, { view: 'file', intent: 'keep' })
-          .catch(actions.report);
-      return end(destination);
-    }
-    if (error) return error;
-    return enter ? '' : end();
-  }
   useEffect(() => {
     if (!createRequest) return;
     onCreateRequestTaken();

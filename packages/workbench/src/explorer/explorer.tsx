@@ -9,6 +9,7 @@ import { listExplorerActions, type ExplorerActionContext } from './explorer-acti
 import { ExplorerMenu } from './explorer-menu.tsx';
 import { WorktreeSwitcher } from './worktree-switcher.tsx';
 import type { EditorActions } from '../editor-actions.ts';
+import { useEditorTask } from '../use-editor-task.ts';
 
 /** The explorer's two views of a checkout: its files, and a Git checkout's changes. */
 export type ExplorerPanel = 'files' | 'git';
@@ -28,7 +29,6 @@ export function Explorer({
   onPanel,
   changedFiles,
   onPaste,
-  run,
   children,
 }: {
   ref?: Ref<HTMLDivElement>;
@@ -37,16 +37,16 @@ export function Explorer({
   actions: EditorActions;
   checkout: CheckoutTarget;
   /** What the "…" menu's actions act on and through. */
-  menu: ExplorerActionContext;
+  menu: Omit<ExplorerActionContext, 'run'>;
   git: boolean;
   panel: ExplorerPanel;
   onPanel: (panel: ExplorerPanel) => void;
   /** How many files have changes, each counted once. */
   changedFiles: number;
   onPaste: (event: ClipboardEvent | KeyboardEvent) => void;
-  run: (work: Promise<unknown>) => void;
   children: ReactNode;
 }) {
+  const run = useEditorTask(actions);
   return (
     <div
       ref={ref}
@@ -57,8 +57,11 @@ export function Explorer({
       }}>
       <div {...stylex.props(workbench.pane, workbench.explorerPane)}>
         <div {...stylex.props(workbench.explorerHeader)}>
-          <WorktreeSwitcher actions={actions} checkout={checkout} run={run} />
-          <ExplorerMenu actions={listExplorerActions(menu)} triggerRef={actionsButtonRef} />
+          <WorktreeSwitcher actions={actions} checkout={checkout} />
+          <ExplorerMenu
+            actions={listExplorerActions({ ...menu, run })}
+            triggerRef={actionsButtonRef}
+          />
         </div>
         {git && (
           <div {...stylex.props(workbench.viewNav)}>

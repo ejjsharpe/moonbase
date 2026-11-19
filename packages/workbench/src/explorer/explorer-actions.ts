@@ -1,4 +1,5 @@
 import type { RefObject } from 'react';
+import { Effect } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { type MutationAction } from '@moonbase/application/editor';
 import type { FollowedFiles } from '../files-tree/use-follow-active-file.ts';
@@ -6,6 +7,7 @@ import type { useMoveUndo } from '../files-tree/use-move-undo.ts';
 import { formatKeys } from '../shortcuts.ts';
 import type { ExplorerAction } from './explorer-menu.tsx';
 import type { EditorActions } from '../editor-actions.ts';
+import type { WorkbenchWork } from '../workbench-editor.ts';
 
 /** What the explorer's "…" menu acts on and through. */
 export type ExplorerActionContext = {
@@ -22,17 +24,18 @@ export type ExplorerActionContext = {
   canRequestMutation: (action: MutationAction) => boolean;
   /** Types a new entry's name in the tree. */
   requestCreate: (kind: 'create-file' | 'create-directory') => void;
-  selectNativeImports?: (checkout: CheckoutTarget) => Promise<string[]>;
   importFiles: (checkout: CheckoutTarget, references: string[]) => void;
   revealActive: () => void;
   openGoTo: () => void;
   /** Where an undo's replace prompt returns focus: the "…" button. */
   menuButton: RefObject<HTMLElement | null>;
-  run: (work: Promise<unknown>) => void;
+  /** Runs the menu's work for as long as the explorer shows. */
+  run: (work: WorkbenchWork) => void;
 };
 
 /**
- * The explorer's "…" menu: New File/Folder, Import Files (with `selectNativeImports`), Undo Move,
+ * The explorer's "…" menu: New File/Folder, Import Files (with the platform's
+ * `selectNativeImports`), Undo Move,
  * Collapse All Folders, Reveal Active File, the Follow Active File and Hide Ignored Files
  * settings, Go to File and Refresh.
  */
@@ -47,7 +50,6 @@ export function listExplorerActions({
   moveUndo,
   canRequestMutation,
   requestCreate,
-  selectNativeImports,
   importFiles,
   revealActive,
   openGoTo,
@@ -55,6 +57,7 @@ export function listExplorerActions({
   run,
 }: ExplorerActionContext): ExplorerAction[] {
   const undoLabel = moveUndo.labelFor(checkout);
+  const { selectNativeImports } = actions.platform;
   return [
     {
       label: 'New File…',
@@ -76,13 +79,14 @@ export function listExplorerActions({
             label: 'Import Files…',
             icon: 'import',
             disabled: preserving,
-            run: () =>
+            run: () => {
+              const target = { ...checkout };
               run(
-                (async () => {
-                  const target = { ...checkout };
-                  importFiles(target, await selectNativeImports(target));
-                })(),
-              ),
+                Effect.flatMap(selectNativeImports(target), (references) =>
+                  Effect.sync(() => importFiles(target, references)),
+                ),
+              );
+            },
           } satisfies ExplorerAction,
         ]
       : []),
@@ -93,7 +97,7 @@ export function listExplorerActions({
       disabled:
         !undoLabel ||
         !canRequestMutation({ checkout, kind: 'move', paths: moveUndo.movedPaths(checkout) }),
-      run: () => void moveUndo.undo(checkout, () => menuButton.current ?? false),
+      run: () => run(moveUndo.undo(checkout, () => menuButton.current ?? false)),
     },
     'separator',
     {

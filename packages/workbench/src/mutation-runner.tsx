@@ -1,6 +1,7 @@
 import * as stylex from '@stylexjs/stylex';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@base-ui/react/button';
+import { Effect } from 'effect';
 import { Dialog } from '@base-ui/react/dialog';
 import { controls } from '@moonbase/ui/controls';
 import {
@@ -14,7 +15,7 @@ import type { EditorActions } from './editor-actions.ts';
 
 /**
  * Runs a file operation without its dialog, asking only before replacing existing entries.
- * Resolves with whether it completed and, for a batch that failed partway, the items that did. A
+ * Succeeds with whether it completed and, for a batch that failed partway, the items that did. A
  * failure goes to `inlineError` when the caller shows it beside its own field, otherwise to the
  * editor's alerts. The caller places focus afterwards, or names with `finalFocus` where the
  * replace prompt returns it as it closes.
@@ -26,7 +27,7 @@ export type RunMutation = (
     inlineError?: (message: string) => void;
     finalFocus?: () => HTMLElement | false;
   },
-) => Promise<MutationRunResult>;
+) => Effect.Effect<MutationRunResult>;
 
 /**
  * One workbench's direct mutations, run by the editor's mutations, whose gate admits one at a
@@ -48,26 +49,23 @@ export function useMutationRunner(
     },
     [actions],
   );
-  const runMutation: RunMutation = async (
-    action,
-    destination,
-    { inlineError, finalFocus } = {},
-  ) => {
-    const fail = (message: string) => {
-      if (inlineError) inlineError(message);
-      else actions.report(message);
-    };
-    if (dialogOpen()) {
-      fail(mutationUnavailable);
-      return { completed: false, error: mutationUnavailable, items: [] };
-    }
-    // The editor applies the rest of the gate, refusing with `mutationUnavailable`. Only an
-    // admitted run takes the prompt's focus, so a refused one never redirects a running one's.
-    if (actions.admitsMutation(action)) setPromptFocus({ finalFocus });
-    const result = await actions.mutate(action, { destination });
-    if (result.error) fail(result.error);
-    return result;
-  };
+  const runMutation: RunMutation = (action, destination, { inlineError, finalFocus } = {}) =>
+    Effect.gen(function* () {
+      const fail = (message: string) => {
+        if (inlineError) inlineError(message);
+        else actions.report(message);
+      };
+      if (dialogOpen()) {
+        fail(mutationUnavailable);
+        return { completed: false, error: mutationUnavailable, items: [] };
+      }
+      // The editor applies the rest of the gate, refusing with `mutationUnavailable`. Only an
+      // admitted run takes the prompt's focus, so a refused one never redirects a running one's.
+      if (actions.admitsMutation(action)) setPromptFocus({ finalFocus });
+      const result = yield* actions.mutate(action, { destination });
+      if (result.error) fail(result.error);
+      return result;
+    });
   const prompt = state.replacePrompt;
   const confirmation = prompt && (
     <ReplacePrompt

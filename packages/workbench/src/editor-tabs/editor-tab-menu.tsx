@@ -10,6 +10,9 @@ import type { EditorSnapshot } from '@moonbase/application/editor';
 type Buffer = EditorSnapshot['buffers'][number];
 import type { FocusReturn } from '../focus-return.ts';
 import type { EditorActions } from '../editor-actions.ts';
+import { useEditorTask } from '../use-editor-task.ts';
+import type { Effect } from 'effect';
+import type { WorkbenchServices } from '../workbench-editor.ts';
 
 const closeLabels = ['Close', 'Close Others', 'Close to the Right', 'Close All'] as const;
 
@@ -28,7 +31,6 @@ export function EditorTabMenu({
   fileView,
   git,
   openedByKeyboard,
-  run,
   closeFiles,
   withFocus,
 }: {
@@ -44,10 +46,10 @@ export function EditorTabMenu({
   git: boolean;
   /** Whether the menu was just opened from the keyboard, so its first item takes focus; asking clears it. */
   openedByKeyboard: () => boolean;
-  run: (work: Promise<unknown>) => void;
-  closeFiles: (paths: string[]) => Promise<boolean>;
+  closeFiles: (paths: string[]) => Effect.Effect<boolean, unknown, WorkbenchServices>;
   withFocus: FocusReturn['withFocus'];
 }) {
+  const run = useEditorTask(actions);
   const { checkout, path } = file;
   function closeFor(label: (typeof closeLabels)[number]) {
     const paths = captured.current;
@@ -72,7 +74,8 @@ export function EditorTabMenu({
             <Menu.Item
               key={label}
               {...stylex.props(overlays.option)}
-              onClick={() => run(withFocus(closeFiles(closeFor(label)), 'strip', true))}>
+              // The editor's own work, which outlives the menu and the tabs it closes.
+              onClick={() => actions.start(withFocus(closeFiles(closeFor(label)), 'strip', true))}>
               {label}
             </Menu.Item>
           ))}

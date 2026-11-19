@@ -13,6 +13,8 @@ import {
 import type { FocusReturn } from '../focus-return.ts';
 import { EditorTab, type TabDrag } from './editor-tab.tsx';
 import type { EditorActions } from '../editor-actions.ts';
+import type { Effect } from 'effect';
+import type { WorkbenchServices } from '../workbench-editor.ts';
 
 /** What the tab strip offers its workbench, to tell where focus was and to return it. */
 export type EditorTabsHandle = {
@@ -30,7 +32,6 @@ export function EditorTabs({
   checkout,
   view,
   git,
-  run,
   closeFiles,
   withFocus,
 }: {
@@ -40,8 +41,7 @@ export function EditorTabs({
   checkout: CheckoutTarget;
   view: CheckoutView;
   git: boolean;
-  run: (work: Promise<unknown>) => void;
-  closeFiles: (paths: string[]) => Promise<boolean>;
+  closeFiles: (paths: string[]) => Effect.Effect<boolean, unknown, WorkbenchServices>;
   withFocus: FocusReturn['withFocus'];
 }) {
   const strip = useRef<HTMLDivElement>(null),
@@ -94,7 +94,6 @@ export function EditorTabs({
                 if (tabs.current.get(path) === element) tabs.current.delete(path);
               };
             }}
-            run={run}
             closeFiles={closeFiles}
             withFocus={withFocus}
           />

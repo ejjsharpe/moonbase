@@ -1,5 +1,6 @@
 import { getParentPath } from '@moonbase/contracts/paths';
 import { useEffect, useRef, useState } from 'react';
+import { Effect } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { checkoutKey } from '@moonbase/application/editor';
 import {
@@ -58,11 +59,12 @@ export function useMoveUndo(
    * Runs a file operation from the tree, forgetting the checkout's move unless the operation was
    * declined without effect. A move or rename it makes is recorded afterwards by the caller.
    */
-  const run: RunMutation = async (action, destination, options) => {
-    const result = await runMutation(action, destination, options);
-    if (result.completed || result.error || result.items.length) clear(action.checkout);
-    return result;
-  };
+  const run: RunMutation = (action, destination, options) =>
+    Effect.tap(runMutation(action, destination, options), (result) =>
+      Effect.sync(() => {
+        if (result.completed || result.error || result.items.length) clear(action.checkout);
+      }),
+    );
   const find = (checkout: CheckoutTarget) =>
     Object.hasOwn(records, checkoutKey(checkout)) ? records[checkoutKey(checkout)] : undefined;
   /** Replaces a checkout's move with `next`, or forgets it, unless a newer one replaced `expected`. */
@@ -79,63 +81,67 @@ export function useMoveUndo(
    * undone, because an entry has gone or its original path is taken, reports why and is
    * forgotten; one whose folders can't be listed reports that and is kept. One declined or failing
    * partway keeps exactly the entries still to move back. A replace prompt returns focus to
-   * `finalFocus`. Resolves true once undone.
+   * `finalFocus`. Succeeds true once undone.
    */
-  async function undo(checkout: CheckoutTarget, finalFocus?: () => HTMLElement | false) {
-    const key = checkoutKey(checkout),
-      current = find(checkout);
-    if (!current || undoing.current) return false;
-    undoing.current = true;
-    try {
-      const folders = [
-        ...new Set(
-          current.moves.flatMap((move) => [getParentPath(move.to), getParentPath(move.from)]),
-        ),
-      ];
-      const { listings, unlisted } = await listFolders(actions, checkout, folders);
-      if (unlisted !== undefined) {
-        actions.report(
-          `Can’t undo the move yet: ${unlisted || 'the checkout’s root'} couldn’t be listed. Try again.`,
-        );
-        return false;
-      }
-      const problem = findUndoProblem(current.moves, (folder) => listings.get(folder));
-      if (problem) {
-        actions.report(problem);
-        settle(key, current);
-        return false;
-      }
-      const restored: string[] = [];
-      const steps = listUndoMoves(current.moves);
-      for (const [index, step] of steps.entries()) {
-        const result = await runMutation(
-          { checkout, kind: 'move', paths: step.paths },
-          step.destination,
-          finalFocus ? { finalFocus } : {},
-        );
-        if (!result.completed) {
-          const back = new Set(listTransferred(step.paths, result));
-          restored.push(...step.moves.filter((move) => back.has(move.to)).map((move) => move.from));
-          const left = [
-            ...step.moves.filter((move) => !back.has(move.to)),
-            ...steps.slice(index + 1).flatMap((step) => step.moves),
-          ];
-          settle(key, current, { ...current, moves: left });
-          if (restored.length) selectEntries(actions, checkout, restored);
+  const undo = (checkout: CheckoutTarget, finalFocus?: () => HTMLElement | false) =>
+    Effect.suspend(() => {
+      const key = checkoutKey(checkout),
+        current = find(checkout);
+      if (!current || undoing.current) return Effect.succeed(false);
+      undoing.current = true;
+      return Effect.gen(function* () {
+        const folders = [
+          ...new Set(
+            current.moves.flatMap((move) => [getParentPath(move.to), getParentPath(move.from)]),
+          ),
+        ];
+        const { listings, unlisted } = yield* listFolders(actions, checkout, folders);
+        if (unlisted !== undefined) {
+          actions.report(
+            `Can’t undo the move yet: ${unlisted || 'the checkout’s root'} couldn’t be listed. Try again.`,
+          );
           return false;
         }
-        restored.push(...step.moves.map((move) => move.from));
-      }
-      settle(key, current);
-      selectEntries(actions, checkout, restored);
-      return true;
-    } catch (error) {
-      actions.report(error);
-      return false;
-    } finally {
-      undoing.current = false;
-    }
-  }
+        const problem = findUndoProblem(current.moves, (folder) => listings.get(folder));
+        if (problem) {
+          actions.report(problem);
+          settle(key, current);
+          return false;
+        }
+        const restored: string[] = [];
+        const steps = listUndoMoves(current.moves);
+        for (const [index, step] of steps.entries()) {
+          const result = yield* runMutation(
+            { checkout, kind: 'move', paths: step.paths },
+            step.destination,
+            finalFocus ? { finalFocus } : {},
+          );
+          if (!result.completed) {
+            const back = new Set(listTransferred(step.paths, result));
+            restored.push(
+              ...step.moves.filter((move) => back.has(move.to)).map((move) => move.from),
+            );
+            const left = [
+              ...step.moves.filter((move) => !back.has(move.to)),
+              ...steps.slice(index + 1).flatMap((step) => step.moves),
+            ];
+            settle(key, current, { ...current, moves: left });
+            if (restored.length) selectEntries(actions, checkout, restored);
+            return false;
+          }
+          restored.push(...step.moves.map((move) => move.from));
+        }
+        settle(key, current);
+        selectEntries(actions, checkout, restored);
+        return true;
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            undoing.current = false;
+          }),
+        ),
+      );
+    });
   return {
     record,
     clear,

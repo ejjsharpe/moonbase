@@ -12,6 +12,9 @@ import type { Shortcut } from '../shortcuts.ts';
 import { Breadcrumbs } from './breadcrumbs.tsx';
 import { FileNotices } from './file-notices.tsx';
 import type { EditorActions } from '../editor-actions.ts';
+import { useEditorTask } from '../use-editor-task.ts';
+import type { Effect } from 'effect';
+import type { WorkbenchServices } from '../workbench-editor.ts';
 
 /**
  * The main editor: a checkout's open files as tabs over the active file's breadcrumbs, notices
@@ -33,7 +36,6 @@ export function EditorArea({
   onRevealed,
   tabsRef,
   monacoRef,
-  run,
   closeFiles,
   withFocus,
 }: {
@@ -52,10 +54,10 @@ export function EditorArea({
   onRevealed: () => void;
   tabsRef: Ref<EditorTabsHandle>;
   monacoRef: Ref<MonacoViewHandle>;
-  run: (work: Promise<unknown>) => void;
-  closeFiles: (paths: string[]) => Promise<boolean>;
+  closeFiles: (paths: string[]) => Effect.Effect<boolean, unknown, WorkbenchServices>;
   withFocus: FocusReturn['withFocus'];
 }) {
+  const run = useEditorTask(actions);
   return (
     <section
       data-title-anchor=""
@@ -72,7 +74,6 @@ export function EditorArea({
           checkout={checkout}
           view={view}
           git={git}
-          run={run}
           closeFiles={closeFiles}
           withFocus={withFocus}
         />
@@ -85,13 +86,7 @@ export function EditorArea({
             />
           )}
           {target ? (
-            <FileNotices
-              actions={actions}
-              state={state}
-              target={target}
-              buffer={buffer}
-              run={run}
-            />
+            <FileNotices actions={actions} state={state} target={target} buffer={buffer} />
           ) : (
             <CheatSheet shortcuts={[...editorShortcuts, ...shortcuts]} />
           )}

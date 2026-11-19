@@ -6,6 +6,7 @@ import { space } from '@moonbase/ui/tokens.stylex';
 import type { FileTarget } from '@moonbase/contracts/workspace';
 import { fileKey, type EditorSnapshot } from '@moonbase/application/editor';
 import type { EditorActions } from '../editor-actions.ts';
+import { useEditorTask } from '../use-editor-task.ts';
 
 /**
  * What stands between the active file and its editor: a save whose result is unconfirmed, a
@@ -16,14 +17,13 @@ export function FileNotices({
   state,
   target,
   buffer,
-  run,
 }: {
   actions: EditorActions;
   state: EditorSnapshot;
   target: FileTarget;
   buffer: EditorSnapshot['buffers'][number] | undefined;
-  run: (work: Promise<unknown>) => void;
 }) {
+  const run = useEditorTask(actions);
   return (
     <>
       {buffer?.pendingSave && !buffer.saving && (

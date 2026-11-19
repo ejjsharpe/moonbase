@@ -2,7 +2,6 @@ import {
   forwardRef,
   useEffect,
   useImperativeHandle,
-  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -14,7 +13,9 @@ import { colors, space, type } from '@moonbase/ui/tokens.stylex';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { useAtomValue } from '@effect/atom-react';
 import { checkoutKey, fileKey } from '@moonbase/application/editor';
+import { Deferred, Effect } from 'effect';
 import { useEditorActions } from './editor-actions.ts';
+import { useEditorTask } from './use-editor-task.ts';
 import type { WorkbenchEditor } from './workbench-editor.ts';
 import { ClosePrompt } from './close-prompt.tsx';
 import { EditorArea } from './editor-area/editor-area.tsx';
@@ -48,7 +49,10 @@ export type WorkbenchHandle = {
   keyUp(event: KeyboardEvent): void;
 };
 export type WorkbenchProps = {
-  /** The editor this workbench shows: its services, atoms and the app root's runner. */
+  /**
+   * The editor this workbench shows: its services, atoms, atom runtime and the app's platform
+   * capabilities.
+   */
   editor: WorkbenchEditor;
   checkout: CheckoutTarget | undefined;
   visible?: boolean;
@@ -59,22 +63,6 @@ export type WorkbenchProps = {
   pickerEntries?: () => PickerEntry[];
   /** Called when the picker opens a file or runs an editor command, to bring the editor into view. */
   onShowEditor?: () => void;
-  /** Native/user-authorized selection belongs to the shell. A renderer path alone grants no access. */
-  selectNativeImports?: (checkout: CheckoutTarget) => Promise<string[]>;
-  /**
-   * Approves files copied in the OS for importing: none when the OS clipboard holds no files, so
-   * ⌘V pastes the tree's own entries instead, or null when the user declined, which pastes nothing.
-   */
-  selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[] | null>;
-  /**
-   * Approves files dropped from the OS onto the files tree, one reference per file in order, for
-   * importing into the folder dropped on. Without it, such drops pass through to the app.
-   */
-  selectDroppedImports?: (checkout: CheckoutTarget, files: File[]) => Promise<string[]>;
-  /** Copies a checkout's paths to the clipboard, joined by newlines: absolute, or as `relative`. */
-  copyPaths?: (checkout: CheckoutTarget, paths: string[], relative: boolean) => Promise<void>;
-  /** Shows a checkout's file or folder in the OS file manager. */
-  revealPath?: (checkout: CheckoutTarget, path: string) => Promise<void>;
   /** Mentions a checkout's files in the chat beside it. */
   mentionInChat?: (checkout: CheckoutTarget, paths: string[]) => void;
   /** False when the window's title bar already names the open file. */
@@ -97,11 +85,6 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     trailing,
     pickerEntries,
     onShowEditor,
-    selectNativeImports,
-    selectClipboardImports,
-    selectDroppedImports,
-    copyPaths,
-    revealPath,
     mentionInChat,
     showBreadcrumbs = true,
     sidebarHidden = false,
@@ -122,15 +105,15 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const buffer =
     target && state.buffers.find((buffer) => fileKey(buffer.target) === fileKey(target));
   const mode = (target && view?.fileViews?.get(target.path)) || 'file';
-  // The checkout this workbench shows, for a close that settles after its prompt; null once
-  // unmounted. It must not open a file of a checkout the app has since switched away from, and
-  // the checkout shown need not be the editor's selected one.
-  const shownCheckout = useRef<string | null>(null),
-    projectIdentity = project ? checkoutKey(project) : null;
-  useLayoutEffect(() => {
-    shownCheckout.current = projectIdentity;
+  const projectIdentity = project ? checkoutKey(project) : null;
+  // Ends once this workbench stops showing the checkout, abandoning a close's open of the file
+  // left active: the checkout shown need not be the editor's selected one.
+  const shown = useRef<Deferred.Deferred<void>>(null);
+  useEffect(() => {
+    const left = Deferred.makeUnsafe<void>();
+    shown.current = left;
     return () => {
-      shownCheckout.current = null;
+      Deferred.doneUnsafe(left, Effect.void);
     };
   }, [projectIdentity]);
   // A plain folder has no Git changes, comparisons or Changes view.
@@ -158,16 +141,13 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     treeElement = useRef<HTMLDivElement>(null),
     tabs = useRef<EditorTabsHandle>(null),
     monaco = useRef<MonacoViewHandle>(null);
-  const run = (work: Promise<unknown>) => {
-    void work.catch(actions.report);
-  };
+  const run = useEditorTask(actions);
 
   const mutations = useWorkbenchMutations({
     actions,
     state,
     openCheckouts,
     pickerOpen: !!picker,
-    copyPaths,
   });
   const { dialog, dialogOpen, canRequestMutation, importFiles, moveUndo, fileClipboard } =
     mutations;
@@ -195,39 +175,32 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     [actions],
   );
   /** Closes a checkout's tabs, then opens the file left active, unless the app moved on. */
-  const closeFiles = async (paths: string[]) => {
-    if (!checkout) return false;
-    const closed = await actions.close(paths.map((path) => ({ checkout, path })));
-    const next = actions.getSnapshot().recovery;
-    const path = next.views.get(checkout.checkoutId)?.active;
-    const current = () => shownCheckout.current === checkoutKey(checkout);
-    if (closed && path && next.openCheckoutIds.includes(checkout.checkoutId) && current())
-      await actions.open({ checkout, path }, { current });
-    return closed;
-  };
+  const closeFiles = (paths: string[]) =>
+    Effect.gen(function* () {
+      const left = shown.current;
+      if (!checkout) return false;
+      const closed = yield* actions.close(paths.map((path) => ({ checkout, path })));
+      const next = actions.getSnapshot().recovery;
+      const path = next.views.get(checkout.checkoutId)?.active;
+      const shownStill = left && !(yield* Deferred.isDone(left));
+      if (closed && path && next.openCheckoutIds.includes(checkout.checkoutId) && shownStill)
+        yield* actions
+          .open({ checkout, path })
+          .pipe(Effect.raceFirst(Effect.as(Deferred.await(left), false)));
+      return closed;
+    });
   function openPicker(mode: PickerMode) {
     if (state.preserving || dialog) return;
     setPicker({ mode, text: mode === 'find' ? readSelection(root.current) : '' });
   }
-  const openPickedFile: PickerOpenFile = async (target, at, current) => {
-    const isOpen = () => {
-      const recovery = actions.getSnapshot().recovery;
-      return (
-        recovery.openCheckoutIds.includes(target.checkout.checkoutId) &&
-        recovery.checkouts.some((item) => checkoutKey(item) === checkoutKey(target.checkout))
-      );
-    };
-    const opened = await actions.open(target, {
-      view: 'file',
-      intent: 'keep',
-      current: () => current() && isOpen(),
-    });
-    if (opened) {
-      if (at) setReveal({ id: ++reveals.current, key: fileKey(target), ...at });
-      onShowEditor?.();
-    }
-    return opened;
-  };
+  const openPickedFile: PickerOpenFile = (target, at) =>
+    Effect.tap(actions.open(target, { view: 'file', intent: 'keep' }), (opened) =>
+      Effect.sync(() => {
+        if (!opened) return;
+        if (at) setReveal({ id: ++reveals.current, key: fileKey(target), ...at });
+        onShowEditor?.();
+      }),
+    );
   /** Switches the explorer's view, asking the app to show the explorer when it is hidden. */
   function showPanel(next: ExplorerPanel) {
     setPanel(next);
@@ -237,14 +210,17 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     if (!checkout || !target) return;
     showPanel('files');
     run(
-      actions.reveal(target).then(() => {
-        const current = actions.getSnapshot().recovery;
-        if (
-          current.openCheckoutIds.includes(checkout.checkoutId) &&
-          current.checkouts.some((item) => checkoutKey(item) === checkoutKey(checkout))
-        )
-          setAnchorReset((value) => value + 1);
-      }),
+      Effect.andThen(
+        actions.reveal(target),
+        Effect.sync(() => {
+          const current = actions.getSnapshot().recovery;
+          if (
+            current.openCheckoutIds.includes(checkout.checkoutId) &&
+            current.checkouts.some((item) => checkoutKey(item) === checkoutKey(checkout))
+          )
+            setAnchorReset((value) => value + 1);
+        }),
+      ),
     );
   }
   /** Types a new entry's name in the focused folder, the focused file's folder, or the root. */
@@ -284,7 +260,6 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     openPicker,
     showPanel,
     closeFiles,
-    run,
   });
   useImperativeHandle(ref, () => ({
     importFiles,
@@ -293,17 +268,16 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     keyUp: keys.keyUp,
   }));
   const paste = useExplorerPaste({
+    actions,
     checkout,
     focus: view?.tree.focus,
     panel,
     listings: state.listings,
     fileClipboard,
-    selectClipboardImports,
     importFiles,
     explorerElement,
     treeElement,
     onPasted: () => setAnchorReset((value) => value + 1),
-    run,
   });
   const explorer =
     checkout && view ? (
@@ -323,19 +297,16 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           moveUndo,
           canRequestMutation,
           requestCreate,
-          selectNativeImports,
           importFiles,
           revealActive,
           openGoTo: () => openPicker('goto'),
           menuButton: explorerActionsButton,
-          run,
         }}
         git={git}
         panel={panel}
         onPanel={setPanel}
         changedFiles={changedFiles}
-        onPaste={paste.pasteFiles}
-        run={run}>
+        onPaste={paste.pasteFiles}>
         {panel === 'files' ? (
           <FilesTree
             ref={treeElement}
@@ -357,10 +328,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
             onUndo={(finalFocus) => moveUndo.undo(checkout, finalFocus)}
             createRequest={createRequest}
             onCreateRequestTaken={() => setCreateRequest(null)}
-            copyPaths={copyPaths}
-            revealPath={revealPath}
             mentionInChat={mentionInChat}
-            selectDroppedImports={selectDroppedImports}
             clipboard={fileClipboard.clipboard}
             onClipboard={(paths, mode) => fileClipboard.put(checkout, paths, mode)}
             onCancelCut={() => fileClipboard.cancelCut(checkout)}
@@ -374,7 +342,6 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
             checkout={checkout}
             target={target}
             mode={mode}
-            run={run}
           />
         )}
       </Explorer>
@@ -397,7 +364,6 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         onRevealed={() => setReveal(undefined)}
         tabsRef={tabs}
         monacoRef={monaco}
-        run={run}
         closeFiles={closeFiles}
         withFocus={focus.withFocus}
       />
@@ -461,13 +427,12 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         retryRecovery={() =>
           run(
             focus.withFocus(
-              actions.flush().then(() => true),
+              Effect.as(actions.flush(), true),
               focus.pendingOrigin ?? 'editor',
               true,
             ),
           )
         }
-        run={run}
       />
       {picker && (
         <Picker

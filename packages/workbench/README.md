@@ -8,7 +8,7 @@ import { makeWorkbenchEditor, Workbench, type WorkbenchHandle } from '@moonbase/
 import { configureMonacoWorkers } from '@moonbase/workbench/workers';
 
 configureMonacoWorkers(); // once per browser root
-const editor = makeWorkbenchEditor(context, (effect) => runtime.runPromise(effect));
+const editor = makeWorkbenchEditor(context, { copyPaths, revealPath }); // a WorkbenchPlatform
 <RegistryProvider>
   <Workbench editor={editor} checkout={checkout} ref={handle} />
 </RegistryProvider>;
@@ -18,12 +18,12 @@ const editor = makeWorkbenchEditor(context, (effect) => runtime.runPromise(effec
 
 | Export | Gives |
 | --- | --- |
-| `.` | `Workbench` with `WorkbenchProps` and `WorkbenchHandle`; `makeWorkbenchEditor`/`WorkbenchEditor`; `makeEditorActions`/`useEditorActions`/`EditorActions`; `pickerCommand`, `pickerMode`, `PickerMode`, `PickerEntry` and `Shortcut`; `isFileDropTaken` |
+| `.` | `Workbench` with `WorkbenchProps` and `WorkbenchHandle`; `makeWorkbenchEditor`/`WorkbenchEditor`; `WorkbenchPlatform`/`WorkbenchPlatformShape`; `makeEditorActions`/`useEditorActions`/`EditorActions`; `useEditorTask`; `pickerCommand`, `pickerMode`, `PickerMode`, `PickerEntry` and `Shortcut`; `isFileDropTaken` |
 | `./workers` | `configureMonacoWorkers` for browser roots |
 
-A `WorkbenchEditor` is the built editor's services (`editorLayer`'s context), atoms over them (`makeEditorAtoms`) and the app root's runner. The workbench reads state through `@effect/atom-react` from the surrounding registry and runs each action as one service Effect on that runner (`useEditorActions` names them). Pass the exact open checkout, or `undefined` for the empty view.
+A `WorkbenchEditor` is the built editor's services (`editorLayer`'s context), atoms over them (`makeEditorAtoms`), the app's `WorkbenchPlatform` and an atom runtime (`Atom.runtime`) over both; the workbench runs no runtime of its own. It reads state through `@effect/atom-react` from the surrounding registry. Each action (`useEditorActions` names them) is a service Effect, which a view runs through its own atom function (`useEditorTask`): unmounting the view, or with `replace` starting a newer one, interrupts what it started, and a failure shows in the editor's alerts. The editor's own work (a save, a file operation, a close) runs on past its caller, or on the editor's keep-alive work atom (`actions.start`). Pass the exact open checkout, or `undefined` for the empty view.
 
-The app plugs in through optional props: `renderLayout`, `trailing`, `pickerEntries`, `onShowEditor`, `selectNativeImports`, `selectClipboardImports`, `selectDroppedImports`, `copyPaths`, `revealPath`, `mentionInChat`, `showBreadcrumbs`, `sidebarHidden`, `onShowSidebar` and `shortcuts`. Each is documented where `WorkbenchProps` is declared in `src/workbench.tsx`.
+The app's platform capabilities (`selectNativeImports`, `selectClipboardImports`, `selectDroppedImports`, `copyPaths`, `revealPath`) are a `WorkbenchPlatform` of Effects, each optional, documented in `src/workbench-platform.ts`. The app plugs in its views through optional props: `renderLayout`, `trailing`, `pickerEntries`, `onShowEditor`, `mentionInChat`, `showBreadcrumbs`, `sidebarHidden`, `onShowSidebar` and `shortcuts`. Each is documented where `WorkbenchProps` is declared in `src/workbench.tsx`.
 
 ## Layout
 

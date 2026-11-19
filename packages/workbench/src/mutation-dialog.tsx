@@ -3,6 +3,7 @@ import { controls } from '@moonbase/ui/controls';
 import { useState } from 'react';
 import { useAtomValue } from '@effect/atom-react';
 import { Button } from '@base-ui/react/button';
+import { Effect } from 'effect';
 import { Dialog } from '@base-ui/react/dialog';
 import { Popup, popupStyles } from './popup.tsx';
 import { space } from '@moonbase/ui/tokens.stylex';
@@ -11,6 +12,7 @@ export type { MutationAction as Action } from '@moonbase/application/editor';
 import type { MutationAction as Action } from '@moonbase/application/editor';
 import { checkoutKey } from '@moonbase/application/editor';
 import type { EditorActions } from './editor-actions.ts';
+import { usePendingEditorTask } from './use-editor-task.ts';
 
 /**
  * The dialog for Move to Trash and Import, which need a confirmation or a destination; the tree
@@ -39,7 +41,7 @@ export function Mutation({
     !state.recovery.checkouts.some((target) => checkoutKey(target) === checkoutKey(checkout));
   const [destination, setDestination] = useState('');
   const [replacementPaths, setReplacementPaths] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [busy, run] = usePendingEditorTask(actions);
   const [error, setError] = useState('');
   // One operation per dialog: applying again after its outcome was lost resolves it, never
   // repeats it.
@@ -50,19 +52,18 @@ export function Mutation({
     selectionDescription = `${action.nativeReferences.length} selected item(s)`;
   const descriptionSuffix =
     action.kind === 'trash' ? '. Unsaved text remains in recovery at its original path.' : '';
-  async function apply() {
+  function apply() {
     if (unavailable || busy || (action.kind !== 'trash' && !batchImport && !destination)) return;
-    setBusy(true);
     setError('');
-    try {
-      // Replacing existing entries is confirmed through the editor's replace prompt.
-      const result = await actions.mutate(action, { destination, replacementPaths, id });
-      setError(result.error);
-      if (result.completed || result.error || result.items.length) onApplied?.();
-      if (result.completed) close();
-    } finally {
-      setBusy(false);
-    }
+    run(
+      Effect.gen(function* () {
+        // Replacing existing entries is confirmed through the editor's replace prompt.
+        const result = yield* actions.mutate(action, { destination, replacementPaths, id });
+        setError(result.error);
+        if (result.completed || result.error || result.items.length) onApplied?.();
+        if (result.completed) close();
+      }),
+    );
   }
   return (
     <Popup

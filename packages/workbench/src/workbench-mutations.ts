@@ -30,13 +30,11 @@ export function useWorkbenchMutations({
   state,
   openCheckouts,
   pickerOpen,
-  copyPaths,
 }: {
   actions: EditorActions;
   state: EditorSnapshot;
   openCheckouts: readonly CheckoutTarget[];
   pickerOpen: boolean;
-  copyPaths?: (checkout: CheckoutTarget, paths: string[], relative: boolean) => Promise<void>;
 }) {
   // The open dialog, read at once by a second request in the same tick (two `importFiles` calls,
   // say), ahead of the render that shows the first.
@@ -59,7 +57,6 @@ export function useWorkbenchMutations({
     runMutation: moveUndo.run,
     recordMove: moveUndo.record,
     canRequestMutation,
-    copyPaths,
   });
   /** Opens a file operation's dialog, Move to Trash, if the gate admits it. */
   function requestMutation(action: MutationAction, finalFocus?: MutationDialog['finalFocus']) {

@@ -23,7 +23,11 @@ import {
   type OperationInput,
   type RevealOptions,
 } from '@moonbase/application/editor';
-import { makeEditorActions, makeWorkbenchEditor } from '../src/index.ts';
+import {
+  makeEditorActions,
+  makeWorkbenchEditor,
+  type WorkbenchPlatformShape,
+} from '../src/index.ts';
 
 // The demos' composition root: one runtime over the faux workspace, editors built on it, and the
 // Promise handles the browser specs drive and intercept. Feature packages construct no runtimes.
@@ -66,6 +70,28 @@ export function makeDemoWorkspace(
   return shape as WorkspaceServiceShape;
 }
 
+/** The actions as specs call them: each one returning an Effect runs it to a Promise. */
+type PromisedActions<T> = {
+  [K in keyof T]: T[K] extends (...args: infer P) => Effect.Effect<infer A, infer _E, never>
+    ? (...args: P) => Promise<A>
+    : T[K];
+};
+const promiseActions = <T extends object>(
+  actions: T,
+  run: <A, E>(effect: Effect.Effect<A, E>) => Promise<A>,
+): PromisedActions<T> =>
+  Object.fromEntries(
+    Object.entries(actions).map(([name, value]) => [
+      name,
+      typeof value === 'function'
+        ? (...args: unknown[]) => {
+            const result = (value as (...a: unknown[]) => unknown)(...args);
+            return Effect.isEffect(result) ? run(result as Effect.Effect<unknown>) : result;
+          }
+        : value,
+    ]),
+  ) as PromisedActions<T>;
+
 /**
  * Builds and loads one editor in its own scope on `runtime`. Its handle is the workbench's actions
  * plus `mutate` (dispatch an operation as given), and its `open` and `reveal`, which the
@@ -76,6 +102,7 @@ export async function buildDemoEditor(
   registry: AtomRegistry.AtomRegistry,
   workspace: WorkspaceServiceShape,
   clientId: string,
+  platform: WorkbenchPlatformShape = {},
 ) {
   const scope = await runtime.runPromise(Scope.make());
   const built = await runtime.runPromise(
@@ -104,17 +131,16 @@ export async function buildDemoEditor(
     }),
   );
   const run = <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect);
-  const editor = makeWorkbenchEditor(context, run);
+  const editor = makeWorkbenchEditor(context, platform);
   const actions = makeEditorActions(editor, registry);
   const handle = {
-    ...actions,
+    ...promiseActions(actions, run),
     ...hooks,
     clientId,
-    mutate: (input: OperationInput) =>
-      actions.call(Context.get(built, EditorMutations).dispatch(input)),
-    reconcileRecovery: () => actions.call(Context.get(built, EditorMutations).reconcile),
+    mutate: (input: OperationInput) => run(Context.get(built, EditorMutations).dispatch(input)),
+    reconcileRecovery: () => run(Context.get(built, EditorMutations).reconcile),
     inspect: (checkout: CheckoutTarget, paths: string[]) =>
-      actions.call(Context.get(built, EditorMutations).inspect(checkout, paths)),
+      run(Context.get(built, EditorMutations).inspect(checkout, paths)),
     /** Closes the editor's scope, releasing it. */
     release: () => runtime.runPromise(Scope.close(scope, Exit.void)),
   };

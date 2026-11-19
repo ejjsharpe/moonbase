@@ -22,5 +22,5 @@ export function selectEntries(
     focus: paths[0],
     selected: [...paths],
   });
-  for (const folder of opening) void actions.list(checkout, folder).catch(actions.report);
+  for (const folder of opening) actions.start(actions.list(checkout, folder));
 }

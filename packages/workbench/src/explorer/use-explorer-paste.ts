@@ -1,42 +1,45 @@
 import type { ClipboardEvent, KeyboardEvent, RefObject } from 'react';
+import { Effect } from 'effect';
 import type { CheckoutTarget, DirectoryListing } from '@moonbase/contracts/workspace';
 import { checkoutKey } from '@moonbase/application/editor';
 import { findCreateFolder } from '../files-tree/files-tree-rows.ts';
 import type { useFileClipboard } from '../files-tree/use-file-clipboard.ts';
 import type { ExplorerPanel } from './explorer.tsx';
+import type { EditorActions } from '../editor-actions.ts';
+import { useEditorTask } from '../use-editor-task.ts';
 
 /**
- * Pasting in the explorer: files copied in the OS import, through `selectClipboardImports`, or
- * else, in the Files view, the tree's cut or copied entries paste, and are then selected in the
+ * Pasting in the explorer: files copied in the OS import, through the platform's
+ * `selectClipboardImports`, or else, in the Files view, the tree's cut or copied entries paste, and are then selected in the
  * tree, which takes focus unless the user moved it elsewhere meanwhile.
  */
 export function useExplorerPaste({
+  actions,
   checkout,
   focus,
   panel,
   listings,
   fileClipboard,
-  selectClipboardImports,
   importFiles,
   explorerElement,
   treeElement,
   onPasted,
-  run,
 }: {
+  actions: EditorActions;
   checkout: CheckoutTarget | undefined;
   /** The tree's focused entry. */
   focus: string | undefined;
   panel: ExplorerPanel;
   listings: Readonly<Record<string, DirectoryListing>>;
   fileClipboard: ReturnType<typeof useFileClipboard>;
-  selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[] | null>;
   importFiles: (checkout: CheckoutTarget, references: string[]) => void;
   explorerElement: RefObject<HTMLElement | null>;
   treeElement: RefObject<HTMLElement | null>;
   /** Called once entries pasted from the tree's clipboard have landed. */
   onPasted: () => void;
-  run: (work: Promise<unknown>) => void;
 }) {
+  const run = useEditorTask(actions);
+  const { selectClipboardImports } = actions.platform;
   /**
    * Pastes into a checkout's `folder`: files copied in the OS since, which import as before, or
    * else, with `tree`, the tree's cut or copied entries. A declined import pastes nothing.
@@ -45,9 +48,9 @@ export function useExplorerPaste({
     const captured = { ...target };
     const filesTree = () => treeElement.current ?? false;
     run(
-      (async () => {
+      Effect.gen(function* () {
         if (selectClipboardImports) {
-          const references = await selectClipboardImports(captured);
+          const references = yield* selectClipboardImports(captured);
           if (references === null) return;
           if (references.length) {
             importFiles(captured, references);
@@ -55,16 +58,22 @@ export function useExplorerPaste({
           }
         }
         if (!tree) return;
-        const landed = await fileClipboard.paste(captured, folder, filesTree);
+        const landed = yield* fileClipboard.paste(captured, folder, filesTree);
         if (!landed.length) return;
         onPasted();
-        // Focus the user moved elsewhere meanwhile stays there.
+        // Focus the user moved elsewhere meanwhile stays there; the menu Paste was chosen from
+        // may still be closing.
         const focused = document.activeElement;
-        if (!focused || focused === document.body || explorerElement.current?.contains(focused)) {
+        if (
+          !focused ||
+          focused === document.body ||
+          explorerElement.current?.contains(focused) ||
+          focused.closest('[role="menu"]')
+        ) {
           const tree = filesTree();
           if (tree) tree.focus();
         }
-      })(),
+      }),
     );
   }
   /**

@@ -53,6 +53,7 @@ Authority and liveness:
 - Work over a connected host runs in its `ChatLink` (`link.run`): a new connection, a Disconnect or the chat's end interrupts it, so a late reply never lands.
 - Ports that receive untrusted data decode and size-bound every reply. The chat trusts its ports' outputs and checks only their meaning: echoed sources and selections, cursors, offsets, authority and liveness.
 - Lists and setup follow their port's watch; nothing polls on a timer.
+- An open or a reveal is its caller's (`EditorSession.runWithCaller`): interrupting the caller abandons it before it changes the view. Saves, file operations and closes are the editor's (`EditorSession.run`), which only closing the editor interrupts; a caller interrupted meanwhile just stops waiting.
 
 Errors (D14) and host text (D11):
 

@@ -5,8 +5,6 @@ export type OpenOptions = {
   view?: FileView;
   /** `preview` opens in the checkout's one preview tab; `keep` keeps a preview tab open. */
   intent?: 'preview' | 'keep';
-  /** Checked once the file is read; once false, the open is abandoned. */
-  current?: () => boolean;
 };
 
 /** A conflict's comparison: what is on disk now against the edits. */
