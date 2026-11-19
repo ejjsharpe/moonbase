@@ -99,6 +99,29 @@ export class NativeActionError extends Schema.TaggedError<NativeActionError>()(
   }
 }
 
+const requestStoreFailures = {
+  unreadable: 'Moonbase could not read its record of chat requests left unknown. Try again.',
+  corrupt:
+    'Moonbase’s record of chat requests left unknown is damaged, so it cannot tell whether this was already sent.',
+  unwritable: 'Moonbase could not record this chat request before sending it. Try again.',
+} as const;
+/**
+ * Main's own record of request IDs whose outcome is unknown could not be read or written, so it
+ * sent nothing rather than send under a new ID what may already have run.
+ */
+export class RequestStoreError extends Schema.TaggedError<RequestStoreError>()(
+  'RequestStoreError',
+  {
+    failure: Schema.Literals(
+      Object.keys(requestStoreFailures) as [keyof typeof requestStoreFailures],
+    ),
+  },
+) {
+  override get message(): string {
+    return requestStoreFailures[this.failure];
+  }
+}
+
 /**
  * The renderer's connection to main closed. A request already `sent` may have run, so it is
  * uncertain; one that wasn't never ran.
@@ -134,6 +157,7 @@ export type IpcError =
   | IpcBusyError
   | IpcUnavailableError
   | NativeActionError
+  | RequestStoreError
   | IpcFailedError
   | IpcClosedError
   | IpcReplyError;
@@ -152,6 +176,8 @@ export function getIpcErrorGroup(error: IpcError): ErrorGroup {
       return 'unavailable';
     case 'NativeActionError':
       return nativeActionFailures[error.failure][0];
+    case 'RequestStoreError':
+      return 'storage';
     case 'IpcClosedError':
       return error.sent ? 'uncertain' : 'unavailable';
     case 'IpcReplyError':

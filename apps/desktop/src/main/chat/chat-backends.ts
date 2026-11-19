@@ -39,7 +39,7 @@ export type ChatBackendsOptions = {
   /** Lets the editor open a checkout the daemon made for a chat. */
   adoptCheckout?(checkout: CheckoutTarget): void;
   /** Request IDs of chat operations left unknown, kept across reloads and restarts. */
-  requestIds: RequestIds;
+  requestIds: RequestIds['Service'];
 };
 
 /**
@@ -74,23 +74,23 @@ export function makeChatBackends({
    * unknown (`Uncertain`, or cancelled); an answer, a refusal included, is final.
    */
   const withRequestId = <A, E>(key: string, send: (requestId: string) => Effect.Effect<A, E>) =>
-    Effect.suspend(() => {
-      const requestId = requestIds.get(key) ?? randomUUID();
-      requestIds.put(key, requestId);
-      return send(requestId).pipe(
-        Effect.onExit((exit) =>
-          Effect.sync(() => {
-            if (Exit.isSuccess(exit)) return requestIds.delete(key);
+    Effect.flatMap(requestIds.issue(key), (requestId) =>
+      send(requestId).pipe(
+        Effect.onExit((exit) => {
+          if (Exit.isFailure(exit)) {
             const error = Cause.findErrorOption(exit.cause);
             const unknown =
               error._tag === 'None'
                 ? Cause.hasInterrupts(exit.cause)
                 : isUncertain(error.value) || isCancelled(error.value);
-            if (!unknown) requestIds.delete(key);
-          }),
-        ),
-      );
-    });
+            if (unknown) return Effect.void;
+          }
+          // A kept ID only asks again for an outcome already known, so failing to forget it is
+          // no reason to fail the request.
+          return Effect.ignore(requestIds.forget(key), { log: 'Warn' });
+        }),
+      ),
+    );
 
   return {
     targets,

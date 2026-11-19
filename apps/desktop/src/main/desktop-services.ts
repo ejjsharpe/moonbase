@@ -31,7 +31,7 @@ import { createTrustedDocumentCheck, installIpcConnect } from './ipc/ipc-connect
 import { IpcServer, makeIpcServer } from './ipc/ipc-server.ts';
 import { appURL, MainWindow } from './main-window.ts';
 import { makeNativeActions } from './native-actions.ts';
-import { createFileRequestIds } from './request-ids.ts';
+import { RequestIds, RequestIdsLive } from './request-ids.ts';
 import type { TestHooks } from './test-hooks.ts';
 import { WindowLifecycle } from './window-lifecycle.ts';
 
@@ -53,6 +53,8 @@ export type DesktopServicesOptions = {
  */
 export const DesktopServicesLive = (options: DesktopServicesOptions) => {
   const { userData, hooks } = options;
+  // The recovery store keeps this installation's identity to the daemon's file host.
+  const workspaceData = join(userData, 'workspace-v1');
   const openUrl = (url: string) => shell.openExternal(url);
   // Files, Git, search and local chat are served by the profile's daemon, which outlives the app;
   // main finds or starts it on demand. This process keeps only this installation's recovery store
@@ -82,8 +84,7 @@ export const DesktopServicesLive = (options: DesktopServicesOptions) => {
       const lifecycle = yield* WindowLifecycle;
       const local = yield* LocalDaemon;
       const remote = Option.getOrNull(yield* RemoteHost);
-      // The recovery store keeps this installation's identity to the daemon's file host.
-      const workspaceData = join(userData, 'workspace-v1');
+      const requestIds = yield* RequestIds;
       const installationId = yield* Effect.try({
         try: () => readInstallationId(workspaceData),
         catch: (error) =>
@@ -116,7 +117,7 @@ export const DesktopServicesLive = (options: DesktopServicesOptions) => {
         local,
         remote,
         installationId,
-        requestIds: createFileRequestIds(join(workspaceData, 'chat-requests.json')),
+        requestIds,
         adoptCheckout: (target) => approvals.adoptCheckout(target),
         pickFolder: Effect.map(
           Effect.promise(() =>
@@ -179,6 +180,7 @@ export const DesktopServicesLive = (options: DesktopServicesOptions) => {
     }),
   ).pipe(
     Layer.provide(RemoteHostLive(options.chatConfiguration, openUrl)),
+    Layer.provide(RequestIdsLive(join(workspaceData, 'chat-requests.json'))),
     // Built first, so the daemon's clients, however late they are bound, are released last: the
     // recovery store and the documents' imports still reach the daemon as Quit releases them.
     Layer.provide(localDaemon),

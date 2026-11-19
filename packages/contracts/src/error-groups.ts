@@ -66,6 +66,7 @@ const ipcTagRecord: Record<IpcError['_tag'], true> = {
   IpcBusyError: true,
   IpcUnavailableError: true,
   NativeActionError: true,
+  RequestStoreError: true,
   IpcFailedError: true,
   IpcClosedError: true,
   IpcReplyError: true,
