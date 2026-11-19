@@ -1,4 +1,14 @@
-import { Context, Effect, Exit, Fiber, FiberHandle, Layer, Option, SubscriptionRef } from 'effect';
+import {
+  Context,
+  Effect,
+  Exit,
+  Fiber,
+  FiberHandle,
+  Layer,
+  Option,
+  Scope,
+  SubscriptionRef,
+} from 'effect';
 import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import { getParentPath } from '@moonbase/contracts/paths';
 import {
@@ -87,9 +97,8 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
       const buffers = yield* EditorBuffers;
       const discovery = yield* EditorDiscovery;
       const outbox = yield* RecoveryOutbox;
-      const activation = yield* FiberHandle.make<boolean, never>();
-      const admitted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        session.run(Effect.andThen(session.admit, effect));
+      // Owned by the session: closing the editor interrupts the activation running.
+      const activation = yield* Scope.provide(FiberHandle.make<boolean, never>(), session.scope);
 
       /** Whether the file's folder lists in full without it: a failed read found nothing there. */
       const isMissing = (target: FileTarget) =>
@@ -227,8 +236,7 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
             mode = options.view ?? selected.fileViews.get(target.path) ?? 'file';
           const isCurrent = Effect.map(
             Effect.all([session.get, views.get]),
-            ([{ closing, preserving }, { recovery }]) =>
-              !closing &&
+            ([{ preserving }, { recovery }]) =>
               !preserving &&
               (options.current?.() ?? true) &&
               isCheckoutOpen(recovery, target.checkout),
@@ -258,8 +266,7 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
         });
 
       const activateSelected: Effect.Effect<boolean, EditorFailure> = Effect.gen(function* () {
-        const { closing, preserving } = yield* session.get;
-        if (closing || preserving) return false;
+        if ((yield* session.get).preserving) return false;
         const { recovery } = yield* views.get;
         const checkout = recovery.checkouts.find(
           (target) => target.checkoutId === recovery.selectedCheckoutId,
@@ -304,7 +311,7 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
 
       return {
         open: (target, options = {}) =>
-          admitted(
+          session.admitted(
             Effect.gen(function* () {
               // The folder's reads end during `git init`: open the file once it is the repository.
               if ((yield* session.get).initializing === target.checkout.checkoutId) {
@@ -313,7 +320,7 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
                 const checkout = recovery.checkouts.find(
                   (item) => item.checkoutId === target.checkout.checkoutId,
                 );
-                if (!checkout || (yield* session.get).closing) return false;
+                if (!checkout) return false;
                 return yield* openFile({ ...target, checkout }, options);
               }
               return yield* openFile(target, options);
@@ -329,7 +336,7 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
             yield* Fiber.await(fiber);
           }),
         navigate: (checkout, direction) =>
-          admitted(
+          session.admitted(
             Effect.gen(function* () {
               const selected = yield* views.view(checkout),
                 paths = selected.openFiles;
@@ -340,7 +347,7 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
             }),
           ),
         edit: (target, text) =>
-          admitted(
+          session.admitted(
             Effect.gen(function* () {
               yield* views.view(target.checkout);
               if (!isRelativePath(target.path))
@@ -359,9 +366,9 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
               yield* outbox.changed;
             }),
           ),
-        keepOpen: (target) => admitted(keepOpen(target)),
+        keepOpen: (target) => session.admitted(keepOpen(target)),
         reorder: (checkout, from, to) =>
-          admitted(
+          session.admitted(
             Effect.gen(function* () {
               const selected = yield* views.view(checkout);
               if ((yield* session.get).preserving || !selected.openFiles.includes(from)) return;
@@ -376,8 +383,7 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
           ),
         position: (target, mode, position) =>
           Effect.gen(function* () {
-            const { admissionsOpen, closing, preserving } = yield* session.get;
-            if (!admissionsOpen || closing || preserving) return;
+            if (!(yield* session.admits) || (yield* session.get).preserving) return;
             const changed = yield* views.modify(({ recovery }) => {
               if (!isCheckoutOpen(recovery, target.checkout)) return false;
               const selected = recovery.views.get(target.checkout.checkoutId);
@@ -399,12 +405,18 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
               if (!owner) return false;
               return yield* restore(Effect.andThen(FiberHandle.clear(activation), work)).pipe(
                 Effect.ensuring(
-                  Effect.gen(function* () {
-                    if ((yield* session.get).closing) return;
-                    yield* session.update((s) => ({ ...s, preserving: false }));
-                    yield* Effect.catch(activateSelected, alerts.report);
-                    yield* outbox.schedule;
-                  }),
+                  Effect.andThen(
+                    session.update((s) => ({ ...s, preserving: false })),
+                    // What it held back follows as the editor's own work: a closed editor runs none.
+                    session
+                      .run(
+                        Effect.andThen(
+                          Effect.catch(activateSelected, alerts.report),
+                          outbox.schedule,
+                        ),
+                      )
+                      .pipe(Effect.exit),
+                  ),
                 ),
               );
             }),

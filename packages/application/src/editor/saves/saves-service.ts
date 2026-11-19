@@ -50,18 +50,11 @@ export class EditorSaves extends Context.Service<EditorSaves, EditorSavesShape>(
       const recovery = yield* RecoverySync;
       const tabs = yield* EditorTabs;
       const mutations = yield* EditorMutations;
-      const admitted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        session.run(Effect.andThen(session.admit, effect));
-      const closing = Effect.map(session.get, (s) => s.closing);
-      /** Clears `saving` once the save ends, unless the editor closed meanwhile. */
+      /** Clears `saving` once the save ends, however it ends. */
       const settle = (buffer: EditorBuffer) =>
-        Effect.flatMap(closing, (closed) =>
-          closed
-            ? Effect.void
-            : buffers.updateBuffer(buffer.id, (b) => {
-                b.saving = false;
-              }),
-        );
+        buffers.updateBuffer(buffer.id, (b) => {
+          b.saving = false;
+        });
       const textOf = (buffer: EditorBuffer) =>
         Effect.map(
           buffers.get,
@@ -138,14 +131,13 @@ export class EditorSaves extends Context.Service<EditorSaves, EditorSavesShape>(
               Effect.tapError((error) =>
                 Effect.gen(function* () {
                   yield* alerts.report(error);
-                  if (!(yield* closing) && isRefusal(error))
+                  if (isRefusal(error))
                     yield* buffers.updateBuffer(taken.id, (b) => {
                       b.pendingSave = undefined;
                     });
                 }),
               ),
             );
-            if (yield* closing) return false;
             if (result.kind === 'conflict') {
               yield* buffers.updateBuffer(taken.id, (b) => {
                 b.pendingSave = undefined;
@@ -179,10 +171,10 @@ export class EditorSaves extends Context.Service<EditorSaves, EditorSavesShape>(
         });
 
       return {
-        save: (target, overwrite = false) => admitted(saveFile(target, overwrite)),
+        save: (target, overwrite = false) => session.admitted(saveFile(target, overwrite)),
         saveFile: (target) => session.run(saveFile(target)),
         reload: (target) =>
-          admitted(
+          session.admitted(
             Effect.gen(function* () {
               const captured = structuredClone(target),
                 key = fileKey(captured);
@@ -200,7 +192,7 @@ export class EditorSaves extends Context.Service<EditorSaves, EditorSavesShape>(
                   const disk = yield* workspace
                     .readFile(captured)
                     .pipe(Effect.tapError(alerts.report));
-                  if ((yield* closing) || !(yield* sameBuffer))
+                  if (!(yield* sameBuffer))
                     return yield* new EditorError({ reason: 'reload-changed' });
                   const tab = (yield* buffers.get).tabs.get(key);
                   if (tab) {

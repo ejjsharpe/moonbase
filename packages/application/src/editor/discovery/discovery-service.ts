@@ -117,12 +117,13 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
         const session = yield* EditorSession;
         const alerts = yield* EditorAlerts;
         const views = yield* EditorViews;
-        const root = yield* Effect.scope;
+        // Each checkout's watch and reads run in a scope under the session's, so closing the
+        // editor ends them all.
+        const root = session.scope;
         const state = yield* SubscriptionRef.make(emptyDiscovery);
         const changed = yield* PubSub.unbounded<CheckoutTarget>();
         const update = (f: (state: DiscoveryState) => DiscoveryState) =>
           SubscriptionRef.update(state, f);
-        const closing = Effect.map(session.get, (s) => s.closing);
         /** Per checkout, the scope its watch and reads run in. */
         const observations = new Map<string, Scope.Closeable>();
         const reads = new Map<string, ListingRead>();
@@ -154,13 +155,12 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
           Effect.gen(function* () {
             const key = checkoutKey(checkout);
             yield* release(checkout);
-            if (yield* closing) return;
             const scope = yield* Scope.fork(root);
             observations.set(key, scope);
             const isCurrent = Effect.sync(() => observations.get(key) === scope);
             const live = Effect.map(
-              Effect.all([closing, isOpen, isCurrent]),
-              ([closed, open, current]) => !closed && open && current,
+              Effect.all([isOpen, isCurrent]),
+              ([open, current]) => open && current,
             );
             const receive = (event: WorkspaceEvent, rewatched: boolean, up: Effect.Effect<void>) =>
               Effect.gen(function* () {
@@ -243,9 +243,8 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
             // Closed only once this read replaced it, so its end can't take it for the current.
             if (pending && !keep) yield* Scope.close(pending.classificationScope, Exit.void);
             const isOpen = Effect.map(
-              Effect.all([closing, views.get]),
-              ([closed, { recovery }]) =>
-                !closed &&
+              views.get,
+              ({ recovery }) =>
                 scope.state._tag !== 'Closed' &&
                 recovery.openCheckoutIds.includes(checkout.checkoutId),
             );
@@ -365,21 +364,21 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
             const entry = { again: false } as { fiber: Fiber.Fiber<void>; again: boolean };
             const once = Effect.gen(function* () {
               yield* steps.refreshListings;
-              if ((yield* closing) || !(yield* steps.isCurrent)) return;
+              if (!(yield* steps.isCurrent)) return;
               const status = yield* Effect.exit(
                 runIn(checkoutScope(checkout), workspace.gitStatus({ checkout })),
               );
               // A failed status was reported; retained buffers stay usable.
-              if (Exit.isSuccess(status) && !(yield* closing) && (yield* steps.isCurrent))
+              if (Exit.isSuccess(status) && (yield* steps.isCurrent))
                 yield* update((s) => ({ ...s, git: { ...s.git, [key]: status.value } }));
-              if ((yield* closing) || !(yield* steps.isCurrent)) return;
+              if (!(yield* steps.isCurrent)) return;
               yield* steps.refreshComparison;
             });
             const work = Effect.gen(function* () {
               do {
                 entry.again = false;
                 yield* once;
-              } while (entry.again && !(yield* closing) && (yield* steps.isCurrent));
+              } while (entry.again && (yield* steps.isCurrent));
             }).pipe(
               Effect.ensuring(
                 Effect.sync(() => {

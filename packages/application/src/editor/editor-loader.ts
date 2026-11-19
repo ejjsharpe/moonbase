@@ -11,8 +11,6 @@ import { RecoverySync } from './recovery/recovery-sync-service.ts';
 import { readRecoveryState } from './recovery/recovery-layout.ts';
 import { EditorTabs } from './tabs/tabs-service.ts';
 import { EditorTree } from './tree/tree-service.ts';
-import { EditorMutations } from './mutation/mutation-service.ts';
-import { EditorPreservation } from './preservation/preservation-service.ts';
 
 export type EditorLoaderShape = {
   /**
@@ -39,21 +37,11 @@ export class EditorLoader extends Context.Service<EditorLoader, EditorLoaderShap
       const recovery = yield* RecoverySync;
       const tabs = yield* EditorTabs;
       const tree = yield* EditorTree;
-      const mutations = yield* EditorMutations;
-      const preservation = yield* EditorPreservation;
       const { clientId } = session;
-      // Built last, this closes first: nothing is admitted, reported or sent once it starts. Each
-      // open prompt is answered Cancel before the work waiting on it is interrupted.
-      yield* Effect.addFinalizer(() =>
-        Effect.gen(function* () {
-          yield* session.update((s) => ({ ...s, closing: true, admissionsOpen: false }));
-          yield* preservation.cancelPrompt;
-          yield* mutations.cancelPrompt;
-          yield* session.close;
-          yield* outbox.clear;
-        }),
-      );
-      const closing = Effect.map(session.get, (s) => s.closing);
+      // Built last, this closes first: nothing is admitted, reported or sent once it starts.
+      // Closing the session interrupts its work, and each open prompt's asker with it, which takes
+      // the prompt down answered Cancel.
+      yield* Effect.addFinalizer(() => Effect.andThen(session.close, outbox.clear));
 
       const loadOnce = Effect.gen(function* () {
         if ((yield* session.get).ready) return;
@@ -61,7 +49,6 @@ export class EditorLoader extends Context.Service<EditorLoader, EditorLoaderShap
         const loaded = yield* workspace
           .loadRecovery({ clientId })
           .pipe(Effect.tapError(alerts.report));
-        if (yield* closing) return;
         if (loaded.state.clientId !== clientId)
           return yield* new EditorError({ reason: 'foreign-recovery' });
         const { recovery: shown, tabs: held } = readRecoveryState(loaded.state);
@@ -87,7 +74,6 @@ export class EditorLoader extends Context.Service<EditorLoader, EditorLoaderShap
         for (const checkout of restored.checkouts.filter((target) =>
           restored.openCheckoutIds.includes(target.checkoutId),
         )) {
-          if (yield* closing) break;
           yield* tree.observe(checkout);
           const selected = (yield* views.get).recovery.views.get(checkout.checkoutId);
           if (selected?.active)

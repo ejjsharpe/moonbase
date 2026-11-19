@@ -1,4 +1,4 @@
-import { Context, Deferred, Effect, Fiber, FiberSet, Layer, Ref, SubscriptionRef } from 'effect';
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Ref, Scope, SubscriptionRef } from 'effect';
 import { EditorError } from '../editor-errors.ts';
 
 /** The editor's modes, which gate what every concept admits. */
@@ -35,8 +35,22 @@ export type EditorSessionShape = {
   readonly state: SubscriptionRef.SubscriptionRef<SessionState>;
   readonly get: Effect.Effect<SessionState>;
   readonly update: (f: (state: SessionState) => SessionState) => Effect.Effect<void>;
-  /** Runs work the editor owns: closing the editor interrupts it. */
+  /**
+   * The scope the editor's work runs in, watches included. Closing the editor closes it, which
+   * interrupts that work; anything forked into it afterwards is interrupted at once.
+   */
+  readonly scope: Scope.Scope;
+  /**
+   * Runs work the editor owns in its scope and waits for it. Closing the editor interrupts it; a
+   * caller that stops waiting leaves it running.
+   */
   readonly run: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  /** Runs an action the editor owns once it admits it: `run` after `admit`. */
+  readonly admitted: <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | EditorError, R>;
+  /** Whether the editor admits new actions. */
+  readonly admits: Effect.Effect<boolean>;
   /** Fails unless the editor admits new actions. */
   readonly admit: Effect.Effect<void, EditorError>;
   /** Fails unless recovery has loaded and the editor isn't closing. */
@@ -49,7 +63,7 @@ export type EditorSessionShape = {
   readonly endInitialization: Effect.Effect<void>;
   /** Waits until no `initializeRepository` runs. */
   readonly awaitInitialization: Effect.Effect<void>;
-  /** Stops admitting and reporting, and interrupts the work the editor owns. */
+  /** Stops admitting and reporting, then closes the editor's scope, interrupting its work. */
   readonly close: Effect.Effect<void>;
 };
 
@@ -64,7 +78,8 @@ export class EditorSession extends Context.Service<EditorSession, EditorSessionS
         const clientId = options.clientId ?? crypto.randomUUID();
         if (!clientId.trim()) return yield* new EditorError({ reason: 'client-id' });
         const state = yield* SubscriptionRef.make(initialState);
-        const fibers = yield* FiberSet.make();
+        // Closing interrupts all of its work at once: no piece of it waits on another's end.
+        const scope = yield* Scope.fork(yield* Effect.scope, 'parallel');
         const initialization = yield* Ref.make<Deferred.Deferred<void> | undefined>(undefined);
         const get = SubscriptionRef.get(state);
         const update = (f: (state: SessionState) => SessionState) =>
@@ -76,26 +91,32 @@ export class EditorSession extends Context.Service<EditorSession, EditorSessionS
             yield* Deferred.await(done);
           }
         });
-        yield* Effect.addFinalizer(() => update((s) => ({ ...s, closing: true, disposed: true })));
+        const admits = Effect.map(get, (current) => current.admissionsOpen && !current.closing);
+        const admit = Effect.flatMap(admits, (open) =>
+          open ? Effect.void : Effect.fail(new EditorError({ reason: 'closing' })),
+        );
+        const run = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+          Effect.flatMap(Effect.forkIn(effect, scope, { startImmediately: true }), Fiber.join);
+        const close = Effect.andThen(
+          update((s) => ({ ...s, closing: true, admissionsOpen: false })),
+          Scope.close(scope, Exit.void),
+        );
+        yield* Effect.addFinalizer(() =>
+          Effect.andThen(
+            close,
+            update((s) => ({ ...s, disposed: true })),
+          ),
+        );
         return {
           clientId,
           state,
           get,
           update,
-          run: (effect) =>
-            Effect.flatMap(get, (current) =>
-              current.closing
-                ? Effect.interrupt
-                : Effect.flatMap(
-                    FiberSet.run(fibers, { startImmediately: true })(effect),
-                    Fiber.join,
-                  ),
-            ),
-          admit: Effect.flatMap(get, (current) =>
-            current.admissionsOpen && !current.closing
-              ? Effect.void
-              : Effect.fail(new EditorError({ reason: 'closing' })),
-          ),
+          scope,
+          run,
+          admitted: (effect) => run(Effect.andThen(admit, effect)),
+          admits,
+          admit,
           assertReady: Effect.flatMap(get, (current) => {
             if (current.closing) return Effect.fail(new EditorError({ reason: 'closed' }));
             if (!current.ready) return Effect.fail(new EditorError({ reason: 'not-ready' }));
@@ -112,10 +133,7 @@ export class EditorSession extends Context.Service<EditorSession, EditorSessionS
             yield* update((s) => ({ ...s, initializing: null }));
           }),
           awaitInitialization,
-          close: Effect.gen(function* () {
-            yield* update((s) => ({ ...s, closing: true, admissionsOpen: false }));
-            yield* FiberSet.clear(fibers);
-          }),
+          close,
         } satisfies EditorSessionShape;
       }),
     );

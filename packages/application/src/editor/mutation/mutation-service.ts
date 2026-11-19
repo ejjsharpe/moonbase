@@ -55,8 +55,6 @@ export type EditorMutationsShape = {
   ) => Effect.Effect<MutationRunResult>;
   /** Answers the replace prompt. */
   readonly answer: (promptId: string, replace: boolean) => Effect.Effect<void>;
-  /** Answers the shown replace prompt Cancel (don't replace), as the editor closes. */
-  readonly cancelPrompt: Effect.Effect<void>;
   /**
    * Dispatches an operation as given. `saving` is a Save of a buffer whose file isn't on disk,
    * which creates it with the buffer's text; it may run inside a Close's preservation, and so
@@ -98,8 +96,6 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
       const { clientId } = session;
       const state = yield* SubscriptionRef.make<MutationState>({ mutating: false });
       const replacePrompt = yield* makeEditorPrompt<ReplacePrompt, boolean>(false);
-      const admitted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        session.run(Effect.andThen(session.admit, effect));
       const fail = (reason: EditorError['reason']) => Effect.fail(new EditorError({ reason }));
       const refreshIfOpen = (checkout: CheckoutTarget) =>
         Effect.flatMap(views.get, ({ recovery }) =>
@@ -181,8 +177,7 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
               Effect.tapError((error) =>
                 Effect.gen(function* () {
                   yield* alerts.report(error);
-                  if (!(yield* session.get).closing && isRefusal(error))
-                    yield* operations.forget(clientId, operation.id);
+                  if (isRefusal(error)) yield* operations.forget(clientId, operation.id);
                 }),
               ),
             );
@@ -347,12 +342,11 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
             }),
           ),
         answer: (promptId, replace) => replacePrompt.answer(promptId, replace === true),
-        cancelPrompt: replacePrompt.cancel,
         dispatch: (input, saving) =>
-          saving ? session.run(dispatch(input, saving)) : admitted(dispatch(input)),
-        resolve: (id, operationClientId) => admitted(resolve(id, operationClientId)),
-        inspect: (checkout, paths) => admitted(inspect(checkout, paths)),
-        reconcile: admitted(Effect.andThen(session.assertReady, recovery.reconcile())),
+          saving ? session.run(dispatch(input, saving)) : session.admitted(dispatch(input)),
+        resolve: (id, operationClientId) => session.admitted(resolve(id, operationClientId)),
+        inspect: (checkout, paths) => session.admitted(inspect(checkout, paths)),
+        reconcile: session.admitted(Effect.andThen(session.assertReady, recovery.reconcile())),
       } satisfies EditorMutationsShape;
     }),
   );

@@ -35,7 +35,6 @@ export class EditorLookup extends Context.Service<EditorLookup, EditorLookupShap
       const session = yield* EditorSession;
       const views = yield* EditorViews;
       const discovery = yield* EditorDiscovery;
-      const admits = Effect.map(session.get, (s) => s.admissionsOpen && !s.closing);
       return {
         make: Effect.gen(function* () {
           const runner = yield* makeEditorQuery(emptyLookup);
@@ -60,7 +59,7 @@ export class EditorLookup extends Context.Service<EditorLookup, EditorLookupShap
             state: runner.state,
             query: (query, checkouts) =>
               Effect.gen(function* () {
-                if (!(yield* admits)) return;
+                if (!(yield* session.admits)) return;
                 const key = JSON.stringify([query, checkouts.map(checkoutKey)]);
                 // Earlier rows stay until the new ones arrive, so the list doesn't flicker while
                 // typing. A refresh keeps its message too: the rows already answer the same query.
@@ -99,11 +98,11 @@ export class EditorLookup extends Context.Service<EditorLookup, EditorLookupShap
                 );
               }),
             open: (open) =>
-              Effect.flatMap(admits, (admitted) =>
+              Effect.flatMap(session.admits, (admitted) =>
                 admitted ? runner.open(open) : Effect.succeed(false),
               ),
             message: (message) =>
-              Effect.flatMap(admits, (admitted) =>
+              Effect.flatMap(session.admits, (admitted) =>
                 admitted ? runner.update({ message }) : Effect.void,
               ),
           } satisfies Lookup;

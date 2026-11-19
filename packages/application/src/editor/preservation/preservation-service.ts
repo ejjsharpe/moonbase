@@ -40,8 +40,6 @@ export type EditorPreservationShape = {
   /** Confirms recovery is complete once composition has fenced admissions. */
   readonly finishQuitPreparation: Effect.Effect<boolean>;
   readonly answerClose: (promptId: string, choice: CloseChoice) => Effect.Effect<void>;
-  /** Answers the shown prompt Cancel, as the editor closes. */
-  readonly cancelPrompt: Effect.Effect<void>;
   /** Opens the files of the checkout's last close again. */
   readonly reopen: (checkout: CheckoutTarget) => Effect.Effect<boolean, EditorFailure>;
   /** Whether everything the editor holds is in recovery. */
@@ -68,9 +66,6 @@ export class EditorPreservation extends Context.Service<
       const tree = yield* EditorTree;
       const saves = yield* EditorSaves;
       const closePrompt = yield* makeEditorPrompt<ClosePrompt, CloseChoice>('cancel');
-      const admitted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        session.run(Effect.andThen(session.admit, effect));
-      const closing = Effect.map(session.get, (s) => s.closing);
       const recoveryReady = Effect.map(
         Effect.all([session.get, outbox.get, buffers.get, operations.get]),
         ([modes, sent, held, known]) => isRecoveryReady(modes, sent, held, known),
@@ -146,7 +141,7 @@ export class EditorPreservation extends Context.Service<
                 const buffer = yield* buffers.find(target);
                 if (!buffer || !isDirty(buffer)) continue;
                 const choice = yield* choose(structuredClone(buffer));
-                if ((yield* closing) || choice === 'cancel') return false;
+                if (choice === 'cancel') return false;
                 if (choice === 'discard') discarded.add(fileKey(target));
                 else if (!(yield* saves.saveFile(target))) return false;
               }
@@ -167,9 +162,9 @@ export class EditorPreservation extends Context.Service<
 
       return {
         closePrompt: closePrompt.shown,
-        close: (targets) => admitted(preserve(targets, 'files')),
+        close: (targets) => session.admitted(preserve(targets, 'files')),
         closeCheckout: (checkout) =>
-          admitted(
+          session.admitted(
             Effect.gen(function* () {
               const selected = yield* views.view(checkout);
               return yield* preserve(
@@ -179,7 +174,7 @@ export class EditorPreservation extends Context.Service<
               );
             }),
           ),
-        prepareQuit: admitted(
+        prepareQuit: session.admitted(
           Effect.flatMap(buffers.get, (held) =>
             preserve(
               [...held.buffers.values()].map((buffer) => buffer.target),
@@ -194,7 +189,6 @@ export class EditorPreservation extends Context.Service<
               modes.admissionsOpen ||
               !modes.ready ||
               modes.loading ||
-              modes.closing ||
               modes.preserving ||
               modes.initializing ||
               [...(yield* buffers.get).buffers.values()].some(
@@ -218,9 +212,8 @@ export class EditorPreservation extends Context.Service<
             if (!(yield* session.get).admissionsOpen) return;
             if (isCloseChoice(choice)) yield* closePrompt.answer(promptId, choice);
           }),
-        cancelPrompt: closePrompt.cancel,
         reopen: (checkout) =>
-          admitted(
+          session.admitted(
             Effect.gen(function* () {
               yield* views.view(checkout);
               if ((yield* session.get).preserving) return false;

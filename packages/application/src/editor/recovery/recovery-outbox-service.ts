@@ -33,10 +33,7 @@ export type OutboxSender = {
    * holds its file), queueing whatever the store then needs to match the editor. Succeeds false
    * when the refusal stands: the edit is dropped and the flush fails with it.
    */
-  readonly resync: (
-    edit: RecoveryEditRequest,
-    error: EditorFailure,
-  ) => Effect.Effect<boolean, EditorFailure>;
+  readonly resync: (edit: RecoveryEditRequest) => Effect.Effect<boolean, EditorFailure>;
   /** Whether the store no longer holds the buffer: a close sent for it committed. */
   readonly settleClose: (bufferId: string) => Effect.Effect<boolean, EditorFailure>;
   /**
@@ -109,8 +106,9 @@ export class RecoveryOutbox extends Context.Service<RecoveryOutbox, RecoveryOutb
       const closeTab = (bufferId: string, discard = false) =>
         queue((q) => [...q, { kind: 'closeTab', bufferId, discard }]);
       const updateLayout = queue(queueLayout);
-      const schedule = Effect.flatMap(session.get, ({ ready, loading, closing }) =>
-        !ready || loading || closing ? Effect.void : Queue.offer(wakes, undefined),
+      // Once the editor closes, nothing takes a wake: its sends ended with its scope.
+      const schedule = Effect.flatMap(session.get, ({ ready, loading }) =>
+        !ready || loading ? Effect.void : Queue.offer(wakes, undefined),
       );
 
       const drain = (scheduled: boolean, sender: OutboxSender) =>
@@ -215,7 +213,7 @@ export class RecoveryOutbox extends Context.Service<RecoveryOutbox, RecoveryOutb
                 next?.kind === 'openTab' && next.bufferId === edit.bufferId ? next : undefined;
               yield* queue((q) => q.filter((queued) => !isStructural(queued, edit.bufferId)));
               if (isRefusal(error)) {
-                if (resyncs++ < maximumResyncs) yield* sender.resync(edit, error);
+                if (resyncs++ < maximumResyncs) yield* sender.resync(edit);
                 return yield* refuse(error);
               }
               // Its reply was lost: the store says whether it committed. One that did stands (the
@@ -230,7 +228,7 @@ export class RecoveryOutbox extends Context.Service<RecoveryOutbox, RecoveryOutb
               continue;
             }
             if (isRefusal(error)) {
-              if (resyncs++ < maximumResyncs && (yield* sender.resync(edit, error))) continue;
+              if (resyncs++ < maximumResyncs && (yield* sender.resync(edit))) continue;
               return yield* refuse(error);
             }
             yield* queue((q) => [edit, ...q]);

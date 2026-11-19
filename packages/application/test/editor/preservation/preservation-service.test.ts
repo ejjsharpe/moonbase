@@ -32,7 +32,7 @@ import {
 } from '@moonbase/application/editor';
 import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 
-test('exact close prompts ignore stale answers, Cancel releases the editor as the prompt goes, and disposal cancels an outstanding prompt', async () => {
+test('exact close prompts ignore stale answers, Cancel releases the editor as the prompt goes, and disposal ends an outstanding prompt', async () => {
   const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'A' } }]);
   const runtime = ManagedRuntime.make(memory.layer);
   const editor = await acquireEditor(runtime, {
@@ -70,9 +70,9 @@ test('exact close prompts ignore stale answers, Cancel releases the editor as th
     editor.edit(target('a.ts'), 'dirty again');
     const next = editor.close([target('a.ts')]);
     assert(editor.getSnapshot().closePrompt);
-    // Disposal answers the outstanding prompt Cancel.
+    // Disposal interrupts the close, which takes its prompt down answered Cancel.
     await editor.dispose();
-    assert.equal(await next, false);
+    await assert.rejects(next, /disposed/);
     assert.equal(editor.getSnapshot().closePrompt, null);
   } finally {
     await editor.dispose();

@@ -12,8 +12,10 @@ import {
   checkout,
   target,
   fixture,
+  holding,
   loadStoredState,
   draftsOf,
+  type EditorDriver,
 } from '../editor-fixture.ts';
 
 test('two editors share one workspace, and a disposed editor admits and sends nothing', async () => {
@@ -64,23 +66,51 @@ test('two editors share one workspace, and a disposed editor admits and sends no
   }
 });
 
-test('disposal releases view subscriptions without discarding a kept draft or ending the process runtime', async () => {
+test('disposal interrupts a load and a save in flight and releases watches, keeping the draft and the process runtime', async () => {
   const f = await fixture();
+  const h = holding(f.client);
+  const editors: EditorDriver[] = [];
+  const acquire = async () => {
+    const editor = await acquireEditor(f.runtime, {
+      client: h.client,
+      clientId: f.editor.clientId,
+    });
+    editors.push(editor);
+    return editor;
+  };
   try {
     await f.editor.open(target('a.ts'));
     f.editor.edit(target('a.ts'), 'recover me');
     await f.editor.flush();
     await f.editor.dispose();
+
+    const loading = await acquire();
+    const load = h.hold('loadRecovery');
+    const loaded = loading.load();
+    await load.entered;
+    await loading.dispose();
+    await assert.rejects(loaded, /disposed/);
+    load.release();
+
+    const editor = await acquire();
+    await editor.load();
+    const save = h.hold('saveFile');
+    const saved = editor.save(target('a.ts'));
+    await save.entered;
+    await editor.dispose();
+    await assert.rejects(saved, /disposed/);
+    save.release();
     await f.runtime.runPromise(Effect.yieldNow);
+    // The editor stopped waiting; whatever the host made of the save, the draft is still kept.
     assert.equal(f.memory.stats.active, 0);
     assert.equal(f.memory.stats.subscriptions, f.memory.stats.released);
     assert.deepEqual(
       draftsOf(await loadStoredState(f.client, f.editor.clientId)).map((d) => d.text),
       ['recover me'],
     );
-    assert.equal((await f.client.command('readFile', target('b.ts'))).text, 'second');
-    await assert.rejects(f.editor.open(target('b.ts')), /disposed/);
+    await assert.rejects(editor.open(target('b.ts')), /disposed/);
   } finally {
+    for (const editor of editors) await editor.dispose();
     await f.dispose();
   }
 });
