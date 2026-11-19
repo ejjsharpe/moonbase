@@ -77,8 +77,13 @@ export function Picker({
   editorFocus: () => HTMLElement | null;
 }) {
   // An opened file takes focus; otherwise focus returns where it was, and an entry that changes
-  // view moves it from there.
-  const openedFile = useRef(false);
+  // view moves it from there. The picker closes once the opened file has rendered, so its editor
+  // is there to take focus.
+  const [openedFile, setOpenedFile] = useState(false);
+  useEffect(() => {
+    if (openedFile) close();
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- Closes once, when a file opened.
+  }, [openedFile]);
   // Where focus was before the field took it as it mounted, which the dialog would see instead.
   const [opener] = useState(() => document.activeElement);
   const input = useRef<HTMLInputElement>(null);
@@ -146,9 +151,7 @@ export function Picker({
     run(
       Effect.tap(model.open(openFile(target, at)), (opened) =>
         Effect.sync(() => {
-          if (!opened) return;
-          openedFile.current = true;
-          close();
+          if (opened) setOpenedFile(true);
         }),
       ),
     );
@@ -225,7 +228,7 @@ export function Picker({
         <Dialog.Popup
           initialFocus={input}
           finalFocus={() => {
-            if (openedFile.current) return editorFocus() ?? false;
+            if (openedFile) return editorFocus() ?? false;
             return opener instanceof HTMLElement && opener.isConnected ? opener : true;
           }}
           data-picker=""
