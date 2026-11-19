@@ -175,7 +175,7 @@ test('maximum escaped Send text retains its original serialized binding across r
   assert.equal(f.faux.state.callCount, 1);
 });
 for (const state of ['admitted', 'pending', 'empty'] as const)
-  test(`Send refuses to rewrite a saved ${state} request without its captured conversation`, async (t) => {
+  test(`Send is uncertain and rewrites nothing for a saved ${state} request without its captured conversation`, async (t) => {
     const original = Harness.open;
     let harness!: Harness;
     mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
@@ -239,9 +239,11 @@ for (const state of ['admitted', 'pending', 'empty'] as const)
       commits++;
     });
     try {
+      // An earlier attempt may have committed, so a Send whose journal fails to decode is
+      // uncertain, never a definite refusal, and resubmits nothing; the read stays a store error.
       await assert.rejects(
         runChat(f.runtime, (chat) => chat.sendChat(input)),
-        { _tag: 'ChatStoreError' },
+        { _tag: 'UncertainError' },
       );
       await assert.rejects(
         runChat(f.runtime, (chat) => chat.getChatSend({ target, requestId: input.requestId })),

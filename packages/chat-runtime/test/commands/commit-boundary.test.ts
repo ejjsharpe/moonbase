@@ -113,7 +113,11 @@ const mutations: Record<string, (scene: Scene) => Promise<void>> = {
       return runChat(f.runtime, (chat) => chat.createChat(input));
     });
     await f.restart();
+    // The first attempt made the chat: it is listed before any retry, which returns that chat.
+    const made = (await listed(scene)).filter((chat) => chat.title === input.title);
+    assert.equal(made.length, 1);
     const recovered = await runChat(f.runtime, (chat) => chat.createChat(input));
+    assert.deepEqual(recovered.conversation.target, made[0]!.target);
     assert.equal((await listed(scene)).length, 2);
     await assert.rejects(
       runChat(f.runtime, (chat) => chat.createChat({ ...input, title: 'Changed' })),

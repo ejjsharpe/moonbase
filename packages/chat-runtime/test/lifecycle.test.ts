@@ -335,12 +335,20 @@ test('a watch Pi cannot subscribe is unavailable, so its client watches again, a
   await off().catch(() => {});
 });
 
-test('null-task Stop withdraws an actual Pi-queued submission, is uncertain when its acknowledgement is lost, and preserves the unrelated active input', async (t) => {
+test('null-task Stop withdraws an actual Pi-queued submission, is uncertain when its acknowledgement is lost, keeps a missing-target refusal on replay, and preserves the unrelated active input', async (t) => {
   const original = Harness.open;
   let harness: Harness | undefined,
-    lose = true;
+    lose = true,
+    unallocated: string | undefined;
   mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
     harness = await original(...args);
+    // The first lookup of `unallocated` sees it as Pi saw it before allocating that ID.
+    const submission = harness.submission.bind(harness);
+    harness.submission = async (...values: Parameters<typeof submission>) => {
+      if (String(values[0]) !== unallocated) return submission(...values);
+      unallocated = undefined;
+      return undefined;
+    };
     const abort = harness.abortSubmission.bind(harness);
     harness.abortSubmission = async (...values: Parameters<typeof abort>) => {
       const result = await abort(...values);
@@ -401,6 +409,16 @@ test('null-task Stop withdraws an actual Pi-queued submission, is uncertain when
       inGroup('uncertain'),
     );
     assert.equal((await lost!.status(BACKGROUND_CONTEXT)).status, 'unanswered');
+    // A Stop that found no such submission keeps that refusal when replayed after Pi allocates it.
+    const early = {
+      stop: { target, submissionId: (unallocated = String(queued!.id)), taskId: null },
+      requestId: 'early-stop',
+    };
+    const missing = { _tag: 'InvalidChatRequestError', problem: 'stop-submission' };
+    await assert.rejects(f.client.command('stopChat', early), missing);
+    assert.equal(unallocated, undefined);
+    await assert.rejects(f.client.command('stopChat', early), missing);
+    assert.equal((await queued!.status(BACKGROUND_CONTEXT)).status, 'queued');
     const withdrawn = await f.client.command('stopChat', {
       stop: { target, submissionId: String(queued!.id), taskId: null },
       requestId: 'queued-stop',

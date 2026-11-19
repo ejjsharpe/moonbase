@@ -13,13 +13,14 @@ import {
 } from '../stored-records.ts';
 import type { Host } from './chat-host.ts';
 import { callHarness } from './harness-call.ts';
-import { commitChange, mayHaveCommitted, submitError } from './commit-boundary.ts';
+import { Refusal, commitChange, mayHaveCommitted, submitError } from './commit-boundary.ts';
 import { runCheck, uncertainError } from './safe-error.ts';
 
 /**
  * Admits a Send once: a retry of its request reads the first admission and never resubmits. From
- * its reservation's commit on, only the reservation's own refusals and Pi's raw busy refusal from
- * submit stay definite; anything else may follow a commit, so it is uncertain.
+ * its reservation's commit on, only a conflicting binding and Pi's raw busy refusal from submit
+ * stay definite; anything else, a journal that fails to decode included, may follow a commit, so
+ * it is uncertain.
  */
 export const sendChat = (
   host: Host,
@@ -32,7 +33,7 @@ export const sendChat = (
       yield* commitChange(host.harness, async (tx) => {
         const request = await tx.doc(Request, requestKey, binding);
         decodeStoredRequest(request, d.target.actorId, d.requestId);
-        if (request.binding !== binding) throw new RequestReusedError();
+        if (request.binding !== binding) throw new Refusal(new RequestReusedError());
         const meta = await tx.doc(Metadata, cid(d.target.conversationId), 'metadata', {
           identity: host.identity,
           title: '',

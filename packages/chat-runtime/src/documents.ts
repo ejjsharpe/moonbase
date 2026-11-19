@@ -32,6 +32,8 @@ export const Request = defineDocFamily({
       conversationId: input.operation === 'sendChat' ? input.target.conversationId : null,
       submissionId: null as string | null,
       pending: false as boolean,
+      /** A Stop's recorded refusal of a target that did not exist, returned on each replay. */
+      refused: null as 'stop-submission' | 'stop-task' | null,
     };
   },
   checkpointWhen: () => true,

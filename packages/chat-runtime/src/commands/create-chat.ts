@@ -44,7 +44,8 @@ const replyWith = (host: Host, d: ChatInput<'createChat'>, conversationId: strin
   );
 /**
  * The chat an earlier attempt of this request made; a request ID reused for another is refused.
- * An earlier attempt may have committed, so any failure to read its request is uncertain.
+ * An earlier attempt may have committed, so any failure to read or decode its request is
+ * uncertain.
  */
 const findCreated = (host: Host, d: ChatInput<'createChat'>) =>
   mayHaveCommitted(
@@ -53,9 +54,7 @@ const findCreated = (host: Host, d: ChatInput<'createChat'>) =>
         host.harness.snapshot(Request, key(d.session.actorId, d.requestId), context),
       );
       if (!existing) return undefined;
-      yield* runCheck(() => decodeStoredRequest(existing, d.session.actorId, d.requestId)).pipe(
-        Effect.mapError((error) => new Refusal(error)),
-      );
+      yield* runCheck(() => decodeStoredRequest(existing, d.session.actorId, d.requestId));
       if (existing.binding !== bindingOf(d))
         return yield* Effect.fail(new Refusal(new RequestReusedError()));
       return existing.conversationId ?? undefined;
@@ -100,11 +99,11 @@ const createOnce = (host: Host, d: ChatInput<'createChat'>, now: DateTime.Utc) =
       ownFolder === undefined
         ? { ...requested, cwd: requested.cwd! }
         : { ...requested, cwd: ownFolder, ownFolder: true };
-    // Only a refusal the commit itself made is definite: anything else may have followed it.
+    // Only a conflicting binding is definite: anything else may have followed a commit.
     const committed = yield* commitChange(host.harness, async (tx) => {
       const request = await tx.doc(Request, key(d.session.actorId, d.requestId), binding);
       decodeStoredRequest(request, d.session.actorId, d.requestId);
-      if (request.binding !== binding) throw new RequestReusedError();
+      if (request.binding !== binding) throw new Refusal(new RequestReusedError());
       if (request.conversationId) return { conversationId: request.conversationId, made: false };
       const conversation = await tx.createConversation({ ownership: { kind: 'ownerless' } });
       await configure(tx, conversation.id, {

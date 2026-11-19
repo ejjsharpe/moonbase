@@ -24,16 +24,27 @@ type StopIds = {
   taskId: TaskId | null;
 };
 
-/** Stops what the Stop's request captured, or says why it is past stopping. */
-const captureStop = (host: Host, ids: StopIds) =>
+/** A Stop's refusal of a target it cannot stop. */
+type StopRefusal = 'stop-submission' | 'stop-task';
+const refusal = (problem: StopRefusal) =>
+  Effect.fail(new Refusal(new InvalidChatRequestError({ problem })));
+
+/**
+ * Stops what the Stop's request captured, or says why it is past stopping. A target another chat
+ * owns is refused outright, since Pi never moves it; a missing one may be allocated later, so
+ * `refuseMissing` records that refusal for every replay.
+ */
+const captureStop = (
+  host: Host,
+  ids: StopIds,
+  refuseMissing: (problem: StopRefusal) => Effect.Effect<never, ChatError | Refusal>,
+) =>
   Effect.gen(function* () {
     const { conversationId, submissionId, taskId } = ids;
     const submission = yield* callHarness(() => host.harness.submission(submissionId, context));
     const record = submission ? yield* callHarness(() => submission.status(context)) : undefined;
-    if (!record || record.conversationId !== conversationId)
-      return yield* Effect.fail(
-        new Refusal(new InvalidChatRequestError({ problem: 'stop-submission' })),
-      );
+    if (!record) return yield* refuseMissing('stop-submission');
+    if (record.conversationId !== conversationId) return yield* refusal('stop-submission');
     if (taskId === null) {
       // Pi may have withdrawn the submission whatever it reports, so every failure is uncertain.
       const result = yield* callAbortable(() =>
@@ -44,8 +55,8 @@ const captureStop = (host: Host, ids: StopIds) =>
     }
     const live = yield* callHarness(() => host.harness.snapshot(LiveDoc, conversationId, context));
     const task = yield* callHarness(() => host.harness.getTask(taskId, context));
-    if (!task || task.conversationId !== conversationId)
-      return yield* Effect.fail(new Refusal(new InvalidChatRequestError({ problem: 'stop-task' })));
+    if (!task) return yield* refuseMissing('stop-task');
+    if (task.conversationId !== conversationId) return yield* refusal('stop-task');
     if (task.state.status === 'terminal') return 'terminal' as const;
     if (live?.run?.taskId !== taskId || !live.run.inputs.includes(submissionId))
       return 'superseded' as const;
@@ -53,8 +64,9 @@ const captureStop = (host: Host, ids: StopIds) =>
   });
 
 /**
- * Records the Stop's request, then stops what it names. From that commit on, only the binding's
- * own refusal and a target that is not the chat's stay definite; any other failure is uncertain.
+ * Records the Stop's request, then stops what it names. From that commit on, only a conflicting
+ * binding, a target another chat owns and a refusal the request recorded stay definite; any other
+ * failure is uncertain. A replay of a recorded refusal returns it without looking again.
  */
 export function stopChat(
   host: Host,
@@ -72,12 +84,20 @@ export function stopChat(
       requestKey = key(stop.target.actorId, d.requestId);
     return yield* mayHaveCommitted(
       Effect.gen(function* () {
-        yield* commitChange(host.harness, async (tx) => {
-          const request = await tx.doc(Request, requestKey, binding);
-          decodeStoredRequest(request, stop.target.actorId, d.requestId);
-          if (request.binding !== binding) throw new RequestReusedError();
-        });
-        const captured = yield* captureStop(host, ids);
+        /** Binds the request, recording `refused` if it has no refusal yet; returns the recorded one. */
+        const bind = (refused: StopRefusal | null) =>
+          commitChange(host.harness, async (tx) => {
+            const request = await tx.doc(Request, requestKey, binding);
+            decodeStoredRequest(request, stop.target.actorId, d.requestId);
+            if (request.binding !== binding) throw new Refusal(new RequestReusedError());
+            request.refused ??= refused;
+            return request.refused;
+          });
+        const recorded = yield* bind(null);
+        if (recorded) return yield* refusal(recorded);
+        const captured = yield* captureStop(host, ids, (problem) =>
+          Effect.flatMap(bind(problem), (refused) => refusal(refused ?? problem)),
+        );
         let outcome: ChatOutput<'stopChat'>['outcome'] = captured ?? 'pending';
         if (captured === null) {
           const taskId = ids.taskId!;

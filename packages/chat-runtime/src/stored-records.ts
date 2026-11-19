@@ -38,6 +38,7 @@ const request = Schema.Struct({
   conversationId: Schema.NullOr(recordId),
   submissionId: Schema.NullOr(recordId),
   pending: Schema.Boolean,
+  refused: Schema.NullOr(Schema.Literals(['stop-submission', 'stop-task'])),
 });
 const identity = Schema.Struct({ ...ChatSessionSchema.fields, mode: Schema.Literal('local') });
 const store = Schema.Struct({ identity: Schema.String });
@@ -103,6 +104,7 @@ export function decodeStoredRequest(value: unknown, actorId: string, requestId: 
     throw new ChatStoreError({ problem: 'request-conversation' });
   if (
     (bound.operation !== 'sendChat' && (result.pending || result.submissionId !== null)) ||
+    (bound.operation !== 'stopChat' && result.refused !== null) ||
     (result.pending && result.submissionId !== null)
   )
     throw new ChatStoreError({ problem: 'request-state' });
