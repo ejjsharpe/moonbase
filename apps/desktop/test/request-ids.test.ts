@@ -132,10 +132,18 @@ test('a write that fails before its rename is simply retried; one that fails aft
         // A fresh profile whose folder could not be made yet.
         assert.equal((yield* Effect.flip(ids.issue('k'))).failure, 'unwritable');
         const kept = yield* ids.issue('k');
+        yield* ids.issue('other');
         breakFolder = true;
         // The rename removed `k` from the file, but the folder never synced.
         yield* ids.forget('k', kept);
         assert(Exit.isFailure(yield* Effect.exit(ids.issue('k'))));
+        // Nor does a restart trust the file, even for an ID it holds, while the folder won't sync.
+        const reopening = makeFileRequestIds(file).pipe(Effect.provide(files));
+        assert(
+          Exit.isFailure(
+            yield* Effect.exit(Effect.scoped(Effect.flatMap(reopening, (r) => r.issue('other')))),
+          ),
+        );
         breakFolder = false;
         const issued = yield* ids.issue('k');
         const restarted = yield* Effect.scoped(Effect.flatMap(reopen(file), (r) => r.issue('k')));
@@ -149,7 +157,7 @@ test('a write that fails before its rename is simply retried; one that fails aft
 
 test('forgetting an ID leaves one issued since for the same key', async (t) => {
   const file = await makeStorePath(t);
-  const { later, kept } = await Effect.runPromise(
+  const { later, current, kept } = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const ids = yield* reopen(file);
@@ -158,10 +166,13 @@ test('forgetting an ID leaves one issued since for the same key', async (t) => {
         const later = yield* ids.issue('k');
         // A late answer to the earlier attempt.
         yield* ids.forget('k', earlier);
+        // Queued behind that forget, so it reads what the forget left.
+        const current = yield* ids.issue('k');
         const kept = yield* Effect.scoped(Effect.flatMap(reopen(file), (r) => r.issue('k')));
-        return { later, kept };
+        return { later, current, kept };
       }),
     ),
   );
+  assert.equal(current, later);
   assert.equal(kept, later);
 });

@@ -55,8 +55,10 @@ const decodeText = (bytes: Uint8Array) =>
  * rather than close a file under it. Closing the store waits for that one write. A write that fails
  * before its rename leaves the file as it was; one that fails at or after it, however it fails,
  * may or may not have replaced it, so the folder is synced and the file read again before another
- * ID is returned. A missing file is a fresh profile; an unreadable or corrupt one fails every
- * request, since a new ID could send again what already ran.
+ * ID is returned. The same holds for a write an earlier run left unsynced, so the first read after
+ * opening syncs the folder too, and a store whose folder won't sync fails every request. A missing
+ * file (or folder) is a fresh profile; an unreadable or corrupt one fails every request, since a
+ * new ID could send again what already ran.
  */
 export const makeFileRequestIds = (file: string) =>
   Effect.gen(function* () {
@@ -65,8 +67,11 @@ export const makeFileRequestIds = (file: string) =>
     const changes = yield* FiberSet.make();
     /** The kept IDs, or none until the file has been read (again). */
     const cache = yield* Ref.make(Option.none<ReadonlyMap<string, string>>());
-    /** Whether a failed write may have replaced the file without making it durable. */
-    const unsettled = yield* Ref.make(false);
+    /**
+     * Whether the file may have been replaced without being made durable: by a failed write, or,
+     * until the folder first syncs, by an earlier run.
+     */
+    const unsettled = yield* Ref.make(true);
     const unwritable = () => new RequestStoreError({ failure: 'unwritable' });
 
     const syncFolder = Effect.scoped(
@@ -89,7 +94,13 @@ export const makeFileRequestIds = (file: string) =>
     /** Makes durable what a failed write may have left in the file, so it can be read again. */
     const settle = Effect.flatMap(Ref.get(unsettled), (pending) =>
       pending
-        ? syncFolder.pipe(Effect.mapError(unwritable), Effect.andThen(Ref.set(unsettled, false)))
+        ? syncFolder.pipe(
+            // A folder not made yet holds no file: a fresh profile.
+            Effect.catchTag('PlatformError', (error) =>
+              error.reason._tag === 'NotFound' ? Effect.void : Effect.fail(unwritable()),
+            ),
+            Effect.andThen(Ref.set(unsettled, false)),
+          )
         : Effect.void,
     );
     /** The kept IDs, read from the file only until a read succeeds, and again after a failed write. */
