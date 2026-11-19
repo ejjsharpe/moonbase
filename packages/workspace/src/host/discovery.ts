@@ -64,6 +64,15 @@ export function regexFailure(stderr: string) {
 const helperFailure = (error: unknown): Partial<HelperFailure> =>
   error instanceof HelperFailure ? error : {};
 
+/**
+ * Whether the run ended on its own with exit 1 and nothing on stderr, which Git and ripgrep use
+ * for "nothing found". A run stopped at its limit may exit 1 too, and found nothing certain.
+ */
+const foundNothing = (error: unknown) => {
+  const failure = helperFailure(error);
+  return failure.status === 1 && !failure.stderr && !failure.uncertain;
+};
+
 /** The first standalone ripgrep on `PATH`, when none is configured. */
 const findRipgrep = () =>
   (process.env.PATH ?? '')
@@ -175,9 +184,7 @@ export class Discovery {
           )
           .pipe(
             Effect.catch((error) =>
-              helperFailure(error).status === 1 && !helperFailure(error).stderr
-                ? Effect.succeed(Buffer.alloc(0))
-                : Effect.fail(error),
+              foundNothing(error) ? Effect.succeed(Buffer.alloc(0)) : Effect.fail(error),
             ),
           );
         return { paths: output.toString().split('\0').filter(Boolean) };
@@ -245,7 +252,9 @@ export class Discovery {
           const exists = yield* directory.git(['rev-parse', '--verify', '--quiet', 'HEAD']).pipe(
             Effect.as(true),
             Effect.catch((error) =>
-              helperFailure(error).status === 1 ? Effect.succeed(false) : Effect.fail(error),
+              helperFailure(error).status === 1 && !helperFailure(error).uncertain
+                ? Effect.succeed(false)
+                : Effect.fail(error),
             ),
           );
           const entries = exists
@@ -325,8 +334,7 @@ export class Discovery {
               enumerationError = errorText(error);
               return Effect.succeed(output.subarray(0, output.lastIndexOf(0) + 1));
             }
-            if (helperFailure(error).status === 1 && !helperFailure(error).stderr)
-              return Effect.succeed(Buffer.alloc(0));
+            if (foundNothing(error)) return Effect.succeed(Buffer.alloc(0));
             return Effect.fail(error);
           }),
         );
@@ -509,8 +517,16 @@ export class Discovery {
         Stream.runDrain,
         Effect.catch((cause) => {
           const failure = helperFailure(cause);
-          // Exit 1 is "no matches".
-          if (failure.status === 1 && !failure.stderr) return Effect.void;
+          // A run stopped at its time or output limit may exit with any status, so its status
+          // says nothing about the search: what arrived before the stop is a partial result. A
+          // run killed from elsewhere is still uncertain, and fails or ends early below.
+          if (failure.limitReached) {
+            partial = true;
+            error =
+              'Search stopped at its time or output limit; refine the query to see every match.';
+            return Effect.void;
+          }
+          if (foundNothing(cause)) return Effect.void;
           const stderr = String(failure.stderr ?? '').trim();
           if (!received) {
             // A bad pattern fails before any file is searched, so it leaves no JSON behind.
@@ -522,9 +538,7 @@ export class Discovery {
             error = 'Some files could not be searched. ' + stderr.split('\n')[0];
           else {
             partial = true;
-            error = failure.uncertain
-              ? 'Search stopped at its time or output limit; refine the query to see every match.'
-              : 'Search ended early. ' + (stderr.split('\n')[0] || 'ripgrep failed.');
+            error = 'Search ended early. ' + (stderr.split('\n')[0] || 'ripgrep failed.');
           }
           return Effect.void;
         }),

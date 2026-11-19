@@ -1,5 +1,6 @@
 import { Context, Effect, Layer, Scope } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
+import { ProcessGroups } from '@moonbase/process-group';
 import {
   CheckoutAccessError,
   CheckoutChangedError,
@@ -101,7 +102,7 @@ export class Checkouts extends Context.Service<
       const gitReady = yield* makeGitGate(git);
       const helper =
         config.filesystemHelper ?? fileURLToPath(new URL('../../dist/filesystem', import.meta.url));
-      const filesystemHelper = makeFilesystemHelper(helper);
+      const filesystemHelper = makeFilesystemHelper(helper, yield* ProcessGroups);
       // Resolved once: the host's own reserved paths don't move while it runs.
       const reserved = [store.directory, ...(config.reserved ?? [])].map(resolveNearest);
       // Open directories close after everything that may use them has stopped.

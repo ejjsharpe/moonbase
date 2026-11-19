@@ -11,6 +11,8 @@ export class HelperFailure extends Data.TaggedError('HelperFailure')<{
   readonly stderr: string;
   /** Stopped part way (by a signal or its limit): what it was doing may have happened. */
   readonly uncertain: boolean;
+  /** Stopped at its own time or output limit, rather than by a signal from elsewhere. */
+  readonly limitReached: boolean;
   /** What it wrote to stdout before it ended. */
   readonly output: Buffer;
 }> {}

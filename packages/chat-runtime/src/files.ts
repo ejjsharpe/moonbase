@@ -3,6 +3,7 @@ import { ChildProcess, ChildProcessSpawner } from 'effect/process';
 import { ChatUnavailableError, type ChatError } from '@moonbase/contracts/chat-errors';
 import { chatFileMatchLimit, isChatMentionPath, type ChatOutput } from '@moonbase/contracts/chat';
 import { matchPath, compareMatches } from '@moonbase/contracts/lookup';
+import { ProcessGroups } from '@moonbase/process-group';
 import {
   defaultListingTiming,
   makeRunListing,
@@ -87,11 +88,17 @@ export type ChatFileIndex = {
  */
 export const makeChatFileIndex = (
   options: ChatFileIndexOptions = {},
-): Effect.Effect<ChatFileIndex, never, Scope.Scope | ChildProcessSpawner.ChildProcessSpawner> =>
+): Effect.Effect<
+  ChatFileIndex,
+  never,
+  Scope.Scope | ChildProcessSpawner.ChildProcessSpawner | ProcessGroups
+> =>
   Effect.gen(function* () {
     const ripgrep = options.ripgrepExecutable ?? 'rg';
     const git = options.gitExecutable ?? 'git';
-    const run = options.run ?? makeRunListing({ ...defaultListingTiming, ...options.timing });
+    const run =
+      options.run ??
+      makeRunListing({ ...defaultListingTiming, ...options.timing }, yield* ProcessGroups);
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const canRunGit =
       options.canRunGit ??

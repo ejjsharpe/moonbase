@@ -114,7 +114,7 @@ assert(
 );
 for (const input of Object.keys(smoke.metafile.inputs)) {
   assert(
-    !/(?:^|\/)node_modules\/(?:react(?:-dom)?|monaco-editor|electron)\/|@earendil-works|node:|packages\/(?:workspace|chat-runtime|daemon-protocol|ssh)\//.test(
+    !/(?:^|\/)node_modules\/(?:react(?:-dom)?|monaco-editor|electron)\/|@earendil-works|node:|packages\/(?:workspace|chat-runtime|daemon-protocol|ssh|process-group)\//.test(
       input,
     ),
     `Forbidden dependency in public headless consumer: ${input}`,

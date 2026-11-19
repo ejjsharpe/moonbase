@@ -1,25 +1,17 @@
+import { type Cause, Duration, Effect, Exit, Option, Queue, Stream } from 'effect';
 import {
-  type Cause,
-  Deferred,
-  Duration,
-  Effect,
-  Exit,
-  Option,
-  Queue,
-  Schedule,
-  Stream,
-} from 'effect';
-import { spawn } from 'node:child_process';
+  outputDrain,
+  type ProcessGroupExit,
+  type ProcessGroupsShape,
+} from '@moonbase/process-group';
 import { HelperFailure } from './system-failures.ts';
 
 /** How much stdout a run buffers, or one streamed line holds, before the run is stopped. */
 const outputLimit = 16 * 1024 * 1024;
 /** How long a run may take before it is stopped. */
 const runLimit = Duration.seconds(30);
-/** How long output a helper wrote before it exited has to arrive when something holds its pipes. */
-const outputDrain = Duration.millis(100);
-/** How long a stopped process group has to clean up after SIGTERM before SIGKILL, and then to exit. */
-export const stopGrace = Duration.seconds(2);
+/** A stopped helper's group has 2 s after SIGTERM before SIGKILL, and 4 s in all to be gone. */
+const stopTiming = { termGrace: Duration.seconds(2), deadline: Duration.seconds(4) };
 const stderrLimit = 4096;
 
 /** What a helper run is given: the checkout root as fd 3, then `extra` descriptors. */
@@ -42,8 +34,6 @@ export type FilesystemHelper = {
   lines(args: string[], options: HelperOptions): Stream.Stream<string, HelperFailure>;
 };
 
-type ExitStatus = { readonly code: number | null; readonly signal: NodeJS.Signals | null };
-
 const helperEnvironment = (overrides: Record<string, string | undefined> = {}) => {
   const env: Record<string, string | undefined> = {
     ...process.env,
@@ -54,164 +44,159 @@ const helperEnvironment = (overrides: Record<string, string | undefined> = {}) =
   for (const [name, value] of Object.entries(env)) if (value === undefined) delete env[name];
   return env;
 };
-const groupAlive = (group: number) => {
-  try {
-    process.kill(-group, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-};
-const signalGroup = (group: number, signal: NodeJS.Signals) => {
-  try {
-    process.kill(-group, signal);
-  } catch {
-    // The group already exited.
-  }
-};
-/** Waits until no process of the group is left, at most `stopGrace`; whether it emptied. */
-const awaitGroupExit = (group: number) =>
-  Effect.sync(() => groupAlive(group)).pipe(
-    Effect.repeat({ schedule: Schedule.spaced('10 millis'), while: (alive) => alive }),
-    Effect.timeoutOption(stopGrace),
-    Effect.map(Option.isSome),
-  );
-
 /**
  * Starts the helper in its own process group, so stopping it reaches Git's children (checkout,
- * hooks, filters) as Ctrl-C would and Git can remove what it half-created. Its Node events enter
- * here once. Releasing a run that has not settled stops the group and waits for it to exit, so the
- * descriptors it holds and the checkout stay owned until then.
+ * hooks, filters) as Ctrl-C would and Git can remove what it half-created. Closing the scope of a
+ * run that has not settled stops its group, so the descriptors the helper holds and the checkout
+ * (its lease and journal) stay owned until then; one whose group can't be confirmed gone stays
+ * owned until the helper itself has exited.
  */
-const startHelper = (helper: string, args: string[], options: HelperOptions) =>
-  Effect.acquireRelease(
-    Effect.flatMap(Queue.unbounded<Buffer, HelperFailure | Cause.Done>(), (output) =>
-      Effect.sync(() => {
-        const child = spawn(helper, args, {
+const startHelper = (
+  groups: ProcessGroupsShape,
+  helper: string,
+  args: string[],
+  options: HelperOptions,
+) =>
+  Effect.gen(function* () {
+    // Shut down after the group's release, which stops the helper before its pipes are let go.
+    const output = yield* Effect.acquireRelease(
+      Queue.unbounded<Buffer, HelperFailure | Cause.Done>(),
+      Queue.shutdown,
+    );
+    // Settled once the helper's exit and its last output are known.
+    let settled = false;
+    // Set before the run first signals its group, by its limit or its release. Nothing reads its
+    // stdout after that, so it is dropped; the run then fails at its limit even when the helper
+    // exits cleanly, and its release finishes the stop even once the run has settled.
+    let stopping = false;
+    // Spawning and registering the stop are one acquisition, so an interruption can't land
+    // between them and leave a started helper unowned. The release runs before the group's own,
+    // which ends the pipes.
+    const group = yield* Effect.acquireRelease(
+      groups
+        .spawn(helper, args, {
           stdio: ['pipe', 'pipe', 'pipe', options.fd, ...(options.extra ?? [])],
           env: helperEnvironment(options.env),
-          detached: true,
-        });
-        const exited = Deferred.makeUnsafe<ExitStatus>();
-        const exit = (code: number | null, signal: NodeJS.Signals | null) =>
-          Deferred.doneUnsafe(exited, Exit.succeed({ code, signal }));
-        let stderr = '',
-          spawnError: unknown,
-          settled = false;
-        child.once('error', (error) => {
-          spawnError = error;
-          exit(null, null);
-          Deferred.doneUnsafe(closed, Exit.void);
-        });
-        // Every pipe closed after the helper exited, so stderr has been read too.
-        const closed = Deferred.makeUnsafe<void>();
-        child.once('exit', exit);
-        child.once('close', (code, signal) => {
-          exit(code, signal);
-          Deferred.doneUnsafe(closed, Exit.void);
-        });
-        child.stderr!.on('data', (chunk: Buffer) => {
-          stderr = (stderr + chunk.toString()).slice(0, stderrLimit);
-        });
-        child.stdin!.on('error', () => {});
-        child.stdin!.end(options.input);
-        // Read from the start: output is never left for a reader that arrives late.
-        const end = () => Queue.endUnsafe(output);
-        child.stdout!.on('data', (chunk: Buffer) => Queue.offerUnsafe(output, chunk));
-        child.stdout!.once('end', end).once('error', end);
-        const stdout = Stream.fromQueue(output);
-        /** SIGTERM to the group, SIGKILL after `stopGrace`, then waits for the helper's exit. */
-        const stop = Effect.suspend(() => {
-          const group = child.pid;
-          if (group === undefined) return Effect.void;
-          signalGroup(group, 'SIGTERM');
-          return awaitGroupExit(group).pipe(
-            Effect.flatMap((empty) => {
-              if (empty) return Effect.void;
-              signalGroup(group, 'SIGKILL');
-              return awaitGroupExit(group);
-            }),
-            Effect.andThen(Effect.timeoutOption(Deferred.await(exited), stopGrace)),
-          );
-        });
-        const failure = ({ code, signal }: ExitStatus, output: Buffer, capped: boolean) =>
-          new HelperFailure({
-            message:
-              stderr ||
-              (capped
-                ? 'Filesystem output/time limit reached; refine request.'
-                : 'Filesystem helper unavailable.'),
-            status: spawnError ? null : code,
-            stderr,
-            uncertain: !spawnError && (!!signal || capped),
-            output,
-          });
-        /**
-         * Waits for the helper's exit and its last output, which pipes another process holds may
-         * never deliver in full; the run has settled once it is known.
-         */
-        const awaitExit = Effect.tap(Deferred.await(exited), () =>
-          Effect.raceFirst(Deferred.await(closed), Effect.sleep(outputDrain)),
-        ).pipe(
-          Effect.tap(() =>
-            Effect.sync(() => {
-              settled = true;
-            }),
+          stopTiming,
+          // This run's release stops the group while the run is unsettled.
+          stopOnClose: 'never',
+        })
+        .pipe(
+          Effect.mapError(
+            () =>
+              new HelperFailure({
+                message: 'Filesystem helper unavailable.',
+                status: null,
+                stderr: '',
+                uncertain: false,
+                limitReached: false,
+                output: Buffer.alloc(0),
+              }),
           ),
-        );
-        /** The run's outcome once the helper exited: its output, or what went wrong. */
-        const outcome = (output: Buffer) =>
-          Effect.flatMap(awaitExit, (status) =>
-            status.code === 0 && !spawnError
-              ? Effect.succeed(output)
-              : Effect.fail(failure(status, output, false)),
-          );
-        /** Stops a run at its output or time limit; it fails as uncertain. */
-        const stopCapped = (output: Buffer) =>
-          Effect.flatMap(Effect.andThen(stop, awaitExit), (status) =>
-            Effect.fail(failure(status, output, true)),
-          );
-        const release = Effect.gen(function* () {
-          if (!settled) yield* stop;
-          child.stdout!.destroy();
-          child.stderr!.destroy();
-          Queue.shutdownUnsafe(output);
-          child.removeAllListeners();
-          child.stdout!.removeAllListeners();
-          child.stdin!.removeAllListeners();
-          child.stderr!.removeAllListeners();
-        });
-        // A process the helper started outside its group (a hook's daemon, say) can hold stdout
-        // open long after the helper exits, so its output ends once the helper has exited and its
-        // last output has had a moment to arrive, not when every holder of the pipe lets go.
-        const endOutput = Effect.delay(Deferred.await(exited), outputDrain).pipe(
-          Effect.andThen(Queue.end(output)),
-        );
-        /** Stops a streamed run at its time limit; its output then fails. */
-        const limitOutput = Effect.sleep(runLimit).pipe(
-          Effect.andThen(Effect.flip(stopCapped(Buffer.alloc(0)))),
-          Effect.flatMap((failure) => Queue.fail(output, failure)),
-        );
-        return {
-          stdout,
-          exited: Deferred.await(exited),
-          outcome,
-          stopCapped,
-          release,
-          endOutput,
-          limitOutput,
-        };
-      }),
-    ),
-    (started) => started.release,
-  ).pipe(Effect.tap((started) => Effect.forkScoped(started.endOutput)));
+        ),
+      (group) =>
+        settled && !stopping
+          ? Effect.void
+          : Effect.suspend(() => {
+              stopping = true;
+              return Effect.flatMap(Effect.exit(group.stop), (stopped) =>
+                Exit.isSuccess(stopped) ? Effect.void : Effect.asVoid(group.exit),
+              );
+            }),
+    );
+    const child = group.process;
+    let stderr = '';
+    child.stderr!.on('data', (chunk: Buffer) => {
+      stderr = (stderr + chunk.toString()).slice(0, stderrLimit);
+    });
+    child.stdin!.end(options.input);
+    // Read from the start: output is never left for a reader that arrives late.
+    const end = () => Queue.endUnsafe(output);
+    child.stdout!.on('data', (chunk: Buffer) => {
+      if (!stopping) Queue.offerUnsafe(output, chunk);
+    });
+    child.stdout!.once('end', end).once('error', end);
+    const stdout = Stream.fromQueue(output);
+    const failure = (
+      { code, signal, spawnFailed }: ProcessGroupExit,
+      output: Buffer,
+      capped: boolean,
+    ) =>
+      new HelperFailure({
+        message:
+          stderr ||
+          (capped
+            ? 'Filesystem output/time limit reached; refine request.'
+            : 'Filesystem helper unavailable.'),
+        status: spawnFailed ? null : code,
+        stderr,
+        uncertain: !spawnFailed && (!!signal || capped),
+        limitReached: capped,
+        output,
+      });
+    /**
+     * Waits for the helper's exit and its last output, which pipes another process holds may
+     * never deliver in full; the run has settled once it is known.
+     */
+    const awaitExit = Effect.tap(group.exit, () =>
+      Effect.raceFirst(group.closed, Effect.sleep(outputDrain)).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            settled = true;
+          }),
+        ),
+      ),
+    );
+    /**
+     * The run's outcome once the helper exited: its output, or what went wrong. A run its limit
+     * began stopping fails at the limit, however the helper exited.
+     */
+    const outcome = (output: Buffer) =>
+      Effect.flatMap(awaitExit, (status) => {
+        if (stopping) return Effect.fail(failure(status, output, true));
+        return status.code === 0 && !status.spawnFailed
+          ? Effect.succeed(output)
+          : Effect.fail(failure(status, output, false));
+      });
+    /**
+     * Stops a run at its output or time limit; it fails as uncertain. The run's release finishes
+     * a stop this one leaves in flight, and a group that can't be confirmed gone still keeps the
+     * run until the helper has exited.
+     */
+    const stopCapped = (output: Buffer) =>
+      Effect.sync(() => {
+        stopping = true;
+      }).pipe(
+        Effect.andThen(Effect.exit(group.stop)),
+        Effect.andThen(awaitExit),
+        Effect.flatMap((status) => Effect.fail(failure(status, output, true))),
+      );
+    // A process the helper started outside its group (a hook's daemon, say) can hold stdout
+    // open long after the helper exits, so its output ends once the helper has exited and its
+    // last output has had a moment to arrive, not when every holder of the pipe lets go.
+    yield* Effect.forkScoped(
+      Effect.delay(group.exit, outputDrain).pipe(Effect.andThen(Queue.end(output))),
+    );
+    /**
+     * Stops a streamed run at its time limit; its output then fails. Output that ends first
+     * (a helper that exits on SIGTERM) still fails at the limit through `outcome`.
+     */
+    const limitOutput = Effect.sleep(runLimit).pipe(
+      Effect.andThen(Effect.flip(stopCapped(Buffer.alloc(0)))),
+      Effect.flatMap((failure) => Queue.fail(output, failure)),
+    );
+    return { stdout, exited: group.exit, outcome, stopCapped, limitOutput };
+  });
 
 /** Runs the filesystem helper at `helper`. */
-export const makeFilesystemHelper = (helper: string): FilesystemHelper => ({
+export const makeFilesystemHelper = (
+  helper: string,
+  groups: ProcessGroupsShape,
+): FilesystemHelper => ({
   run: (args, options) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const started = yield* startHelper(helper, args, options);
+        const started = yield* startHelper(groups, helper, args, options);
         const chunks: Buffer[] = [];
         let length = 0,
           capped = false;
@@ -234,7 +219,7 @@ export const makeFilesystemHelper = (helper: string): FilesystemHelper => ({
     ),
   lines: (args, options) =>
     Stream.unwrap(
-      Effect.tap(startHelper(helper, args, options), (started) =>
+      Effect.tap(startHelper(groups, helper, args, options), (started) =>
         Effect.forkScoped(started.limitOutput),
       ).pipe(
         Effect.map((started) => {

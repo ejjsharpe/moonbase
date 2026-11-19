@@ -12,6 +12,7 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
 import { ChatService } from '@moonbase/contracts/services';
+import { ProcessGroups } from '@moonbase/process-group';
 import {
   ListingError,
   makeChatFileIndex,
@@ -54,12 +55,23 @@ async function folder(t: { after: (fn: () => Promise<void>) => void }, git = tru
 const paths = (result: { matches: { path: string }[] }) => result.matches.map((m) => m.path);
 /** Runs a test program on the platform's services and a TestClock the test moves. */
 const runIndexTest = <A, E>(
-  program: Effect.Effect<A, E, Scope.Scope | ChildProcessSpawner.ChildProcessSpawner>,
+  program: Effect.Effect<
+    A,
+    E,
+    Scope.Scope | ChildProcessSpawner.ChildProcessSpawner | ProcessGroups
+  >,
+  groups: Layer.Layer<ProcessGroups>,
 ) =>
   Effect.runPromise(
-    program.pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, TestClock.layer()))),
+    program.pipe(
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(NodeServices.layer, TestClock.layer(), groups)),
+    ),
   );
-/** An index over `options` whose searches the test awaits as promises, on a TestClock. */
+/**
+ * An index over `options` whose searches the test awaits as promises, on a TestClock. Closing it
+ * once `use` settles stops its listings; `groups` may inject the group signal.
+ */
 const withIndex = <A>(
   options: ChatFileIndexOptions,
   use: (index: {
@@ -67,6 +79,7 @@ const withIndex = <A>(
     /** Moves the TestClock the index's budgets and freshness run on. */
     advance: (duration: Duration.Input) => Promise<void>;
   }) => Promise<A>,
+  groups: Layer.Layer<ProcessGroups> = ProcessGroups.layer,
 ) =>
   runIndexTest(
     Effect.gen(function* () {
@@ -79,6 +92,7 @@ const withIndex = <A>(
         }),
       );
     }),
+    groups,
   );
 type FindResult = {
   query: string;
@@ -275,23 +289,23 @@ test('a Send carries the mentions its text spells', async (t) => {
 /**
  * Writes a listing command that prints part of the folder, then stalls like ripgrep or Git on a
  * hung mount, with a child that ignores SIGTERM. The child holds no pipe unless `childHoldsOutput`,
- * and the listing itself ignores SIGTERM when `ignoresTerm`. It records its pid in `pids` and the
- * child's in `children`.
+ * and the listing itself ignores SIGTERM when `ignoresTerm`, or exits 0 on it when `exitsOnTerm`.
+ * It records its pid in `pids`, and the child records its own in `children` once it ignores SIGTERM.
  */
 async function writeStalledListing(
   bin: string,
   name: string,
-  { ignoresTerm = false, childHoldsOutput = false } = {},
+  { ignoresTerm = false, childHoldsOutput = false, exitsOnTerm = false } = {},
 ) {
   const command = join(bin, name);
   await writeFile(
     command,
     `#!/bin/sh
 ${ignoresTerm ? 'trap "" TERM' : ''}
+${exitsOnTerm ? 'trap "exit 0" TERM' : ''}
 echo $$ >> '${join(bin, 'pids')}'
 printf 'README.md\\0src/app/main.ts\\0'
-sh -c 'trap "" TERM; exec sleep 60' < /dev/null ${childHoldsOutput ? '' : '> /dev/null 2>&1'} &
-echo $! >> '${join(bin, 'children')}'
+sh -c 'trap "" TERM; echo $$ >> "${join(bin, 'children')}"; exec sleep 60' < /dev/null ${childHoldsOutput ? '' : '> /dev/null 2>&1'} &
 wait
 `,
     { mode: 0o755 },
@@ -390,7 +404,7 @@ test('a stalled Git listing is stopped with its children at its time budget', as
   await assertListingStopped(bin);
 });
 
-test('a listing that ignores SIGTERM, or whose child holds its output, is killed after the grace period', async (t) => {
+test('a listing that ignores SIGTERM, or whose child holds its output, is killed after the grace period, even when the index closes mid-stop', async (t) => {
   const root = await folder(t);
   const search = async (options: { ignoresTerm?: boolean; childHoldsOutput?: boolean }) => {
     const bin = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-files-bin-')));
@@ -408,8 +422,46 @@ test('a listing that ignores SIGTERM, or whose child holds its output, is killed
     );
     await assertListingStopped(bin);
   };
-  // Both wait out the same grace, so they run together.
-  await Promise.all([search({ ignoresTerm: true }), search({ childHoldsOutput: true })]);
+  /**
+   * Closes the index while the budget's stop waits out the grace: the listing exited 0 on SIGTERM
+   * and closed its output, and its child ignores SIGTERM. SIGKILL is refused (EPERM) until the
+   * index is closing and one more retry was refused, so the close lands before the stop escalates
+   * and an interrupted stop sends no SIGKILL; the stop must still kill the child.
+   */
+  const closeMidStop = async () => {
+    const bin = await realpath(await mkdtemp(join(tmpdir(), 'moonbase-files-bin-')));
+    t.after(() => rm(bin, { recursive: true, force: true }));
+    const gitExecutable = await writeStalledListing(bin, 'git', { exitsOnTerm: true });
+    let closing = false,
+      refusedWhileClosing = false;
+    const groups = ProcessGroups.layerWith((groupId, signal) => {
+      if (signal === 'SIGKILL' && !refusedWhileClosing) {
+        refusedWhileClosing = closing;
+        throw Object.assign(new Error('Refused until the index closes'), { code: 'EPERM' });
+      }
+      process.kill(-groupId, signal);
+    });
+    await withIndex(
+      { ripgrepExecutable: missing, gitExecutable, timing: { stopGrace: '1 second' } },
+      async (index) => {
+        index.find(root, '').catch(() => {});
+        await expireBudget(bin, index.advance);
+        const pid = (await readPid(join(bin, 'pids')))!;
+        for (let i = 0; i < 500 && isRunning(pid); i++)
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        assert(!isRunning(pid), 'The listing did not exit on SIGTERM');
+        closing = true;
+      },
+      groups,
+    );
+    await assertListingStopped(bin);
+  };
+  // Each waits out a grace at most, so they run together.
+  await Promise.all([
+    search({ ignoresTerm: true }),
+    search({ childHoldsOutput: true }),
+    closeMidStop(),
+  ]);
 });
 
 test('disposing the runtime stops its running listings and waits for them to exit', async (t) => {

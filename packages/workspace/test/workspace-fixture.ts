@@ -8,7 +8,7 @@ import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
 import { initRepository } from './repository-fixture.ts';
 
-export function fixture() {
+export function fixture(options: { ripgrepExecutable?: string } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'moonbase-workspace-'))),
     root = join(base, 'repo'),
     dataDirectory = join(base, 'state');
@@ -22,6 +22,7 @@ export function fixture() {
         ...(process.env.MOONBASE_TEST_RIPGREP
           ? { ripgrepExecutable: process.env.MOONBASE_TEST_RIPGREP }
           : {}),
+        ...options,
       }),
     );
     return { runtime, client: makeWorkspaceClient(runtime) };

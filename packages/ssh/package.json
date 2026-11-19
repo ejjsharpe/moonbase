@@ -16,7 +16,8 @@
   },
   "dependencies": {
     "effect": "4.1.0",
-    "@moonbase/contracts": "workspace:*"
+    "@moonbase/contracts": "workspace:*",
+    "@moonbase/process-group": "workspace:*"
   },
   "devDependencies": {
     "@moonbase/application": "workspace:*"
