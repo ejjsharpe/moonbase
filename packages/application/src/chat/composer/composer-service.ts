@@ -321,6 +321,7 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
             return joinNewChatDraft(draft, folders, text, mentions, folder);
           })
           .pipe(Effect.catch((error) => Effect.succeed(error)));
+        // A stale `/new` fails silently on purpose: the first command already ran and moved the draft.
         if (moved instanceof NewChatDraftError && moved.reason === 'stale') return false;
         // A chat whose drafts couldn't move keeps its draft without the command.
         if (moved !== true) yield* chat.setDraft(text, mentions);
