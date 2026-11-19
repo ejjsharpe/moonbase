@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import { Effect, Exit, Fiber, Schedule, Scope } from 'effect';
-import { ProcessGroupError, ProcessGroups, type SignalGroup } from '../src/index.ts';
+import {
+  ProcessGroupError,
+  ProcessGroups,
+  type ProcessGroupCloseStop,
+  type SignalGroup,
+} from '../src/index.ts';
 
 const stopTiming = { termGrace: '100 millis', deadline: '400 millis' } as const;
 const running = ['-e', 'setInterval(() => {}, 1000)'];
@@ -28,15 +34,20 @@ const tracedSignal = (decide: (signal: NodeJS.Signals | 0) => Outcome) => {
 };
 const runWith = <A, E>(signalGroup: SignalGroup, effect: Effect.Effect<A, E, ProcessGroups>) =>
   Effect.runPromise(effect.pipe(Effect.provide(ProcessGroups.layerWith(signalGroup))));
-const spawnGroup = (args: string[]) =>
+const spawnGroup = (args: string[], stopOnClose: ProcessGroupCloseStop = 'always') =>
   Effect.gen(function* () {
     const groups = yield* ProcessGroups;
     return yield* groups.spawn(process.execPath, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       stopTiming,
+      stopOnClose,
     });
   });
 const spawnRunning = spawnGroup(running);
+/** Kills `pid` if it is still running, for cleanup that must happen even when a test fails. */
+const killIfAlive = (pid: number | undefined) => {
+  if (pid !== undefined && isAlive(pid)) process.kill(pid, 'SIGKILL');
+};
 const until = (done: () => boolean) =>
   Effect.repeat(Effect.sync(done), { schedule: Schedule.spaced('5 millis'), until: (d) => d });
 
@@ -65,7 +76,7 @@ test('once ESRCH is seen, a later stop or signal never reaches a group that reus
   assert.deepEqual(sent, [0]);
 });
 
-test('EPERM is signalled again in SIGTERM’s turn, SIGKILL is always tried, and an unconfirmed stop fails its scope close', async () => {
+test('EPERM is signalled again in SIGTERM’s turn, SIGKILL is always tried, and an unconfirmed stop keeps its typed failure through a bounded scope close', async () => {
   const denied = tracedSignal((signal) => (signal === 'SIGTERM' ? 'EPERM' : 'system'));
   await runWith(
     denied.signalGroup,
@@ -81,29 +92,38 @@ test('EPERM is signalled again in SIGTERM’s turn, SIGKILL is always tried, and
   );
 
   const unconfirmed = tracedSignal(() => 'EPERM');
-  await runWith(
-    unconfirmed.signalGroup,
-    Effect.gen(function* () {
-      const scope = yield* Scope.make();
-      const group = yield* Scope.provide(scope)(spawnRunning);
-      const pid = group.process.pid!;
-      const stopped = yield* Effect.flip(group.stop);
-      assert(stopped instanceof ProcessGroupError && stopped.reason === 'teardown');
-      assert(unconfirmed.sent.includes('SIGKILL'));
-      // Closing tries again, then keeps the group until its leader has exited.
-      const kills = unconfirmed.sent.length;
-      const closing = yield* Effect.forkChild(Effect.exit(Scope.close(scope, Exit.void)));
-      yield* until(() => unconfirmed.sent.slice(kills).includes('SIGKILL'));
-      assert(isAlive(pid));
-      process.kill(pid, 'SIGKILL');
-      const closed = yield* Fiber.join(closing);
-      assert(yield* group.hasExited);
-      assert(Exit.isFailure(closed));
-    }),
-  );
+  let pid: number | undefined;
+  try {
+    // A defect, rather than the typed failure, would reject the run; a close that waits for the
+    // leader would never end it.
+    const pending = delay(5_000, undefined, { ref: false }).then(() => {
+      throw new Error('The scope close stayed pending.');
+    });
+    const run = runWith(
+      unconfirmed.signalGroup,
+      Effect.flip(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const group = yield* spawnRunning;
+            pid = group.process.pid!;
+            // The stop has given up once it returns; the close then tries once more.
+            yield* group.stop;
+          }),
+        ),
+      ),
+    );
+    const failure = await Promise.race([run, pending]);
+    // The scope close ended with the group still running, and kept the stop's typed failure.
+    assert(isAlive(pid!));
+    assert(failure instanceof ProcessGroupError && failure.reason === 'teardown');
+    // SIGKILL was tried by the stop and again by the close.
+    assert(unconfirmed.sent.filter((signal) => signal === 'SIGKILL').length > 1);
+  } finally {
+    killIfAlive(pid);
+  }
 });
 
-test('closing the scope stops a running group, even in a scope already closed, and leaves one whose leader exited unsignalled', async () => {
+test('closing the scope stops the group as stopOnClose says, even in a scope already closed', async () => {
   const { sent, signalGroup } = tracedSignal(() => 'system');
   await runWith(
     signalGroup,
@@ -115,15 +135,42 @@ test('closing the scope stops a running group, even in a scope already closed, a
       assert(!isAlive(group.process.pid!));
     }),
   );
+
+  // `while-open`: a member of the group still holding stdout after the leader exited is stopped.
+  let member: number | undefined;
+  try {
+    await runWith(
+      signalGroup,
+      Effect.scoped(
+        Effect.gen(function* () {
+          const group = yield* spawnGroup(
+            [
+              '-e',
+              `const c = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: ['ignore', 'inherit', 'ignore'] }); process.stdout.write(c.pid + '\\n', () => process.exit(0));`,
+            ],
+            'while-open',
+          );
+          let printed = '';
+          group.process.stdout!.on('data', (chunk: Buffer) => {
+            printed += chunk.toString();
+          });
+          yield* group.exit;
+          yield* until(() => printed.includes('\n'));
+          member = Number(printed.trim());
+          assert(isAlive(member));
+        }),
+      ),
+    );
+    assert(!isAlive(member!));
+  } finally {
+    killIfAlive(member);
+  }
+
+  // `while-open` with every pipe closed leaves the group unsignalled.
   sent.length = 0;
   await runWith(
     signalGroup,
-    Effect.scoped(
-      Effect.gen(function* () {
-        const group = yield* spawnGroup(['-e', '']);
-        yield* group.closed;
-      }),
-    ),
+    Effect.scoped(Effect.flatMap(spawnGroup(['-e', ''], 'while-open'), (group) => group.closed)),
   );
   assert.deepEqual(sent, []);
 });

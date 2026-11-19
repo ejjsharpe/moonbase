@@ -56,6 +56,8 @@ export const makeRunListing =
           .spawn(executable, args, {
             cwd,
             stdio: ['ignore', 'pipe', 'ignore'],
+            // A member still holding the output after the leader exited is stopped too.
+            stopOnClose: 'while-open',
             stopTiming: { termGrace: stopGrace, deadline: Duration.toMillis(stopGrace) * 2 },
           })
           .pipe(

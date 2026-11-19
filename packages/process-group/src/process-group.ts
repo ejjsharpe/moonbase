@@ -35,8 +35,17 @@ export type ProcessGroupExit = {
   readonly spawnErrorCode?: string;
 };
 
+/**
+ * When closing the group's Scope stops it. `always`: unless the group was already seen gone.
+ * `while-open`: while a pipe is open or the leader is unreaped, so a member still holding the
+ * group's output is stopped after the leader exits. `never`: the owner stops it in a finalizer of
+ * its own, added after the group, when it knows the group still needs stopping.
+ */
+export type ProcessGroupCloseStop = 'always' | 'while-open' | 'never';
+
 export type ProcessGroupOptions = {
   readonly stdio: StdioOptions;
+  readonly stopOnClose: ProcessGroupCloseStop;
   /** The leader's whole environment; the current process's when omitted. */
   readonly env?: NodeJS.ProcessEnv;
   readonly cwd?: string;
@@ -92,7 +101,7 @@ const acquireGroup = (
   signalGroup: SignalGroup,
   executable: string,
   args: readonly string[],
-  { stdio, env, cwd, stopTiming }: ProcessGroupOptions,
+  { stdio, env, cwd, stopTiming, stopOnClose }: ProcessGroupOptions,
 ): Effect.Effect<OwnedGroup, ProcessGroupError> =>
   Effect.gen(function* () {
     const exited = yield* Deferred.make<ProcessGroupExit>();
@@ -208,19 +217,20 @@ const acquireGroup = (
     const stop = stopping.withPermits(1)(stopGroup);
 
     /**
-     * Closing the Scope. A running leader holds its group's ID, so its group is stopped; once the
-     * leader has exited, the ID may already be free, so the group is left alone, as an explicit
-     * `stop` would not. A stop that stays unconfirmed keeps the Scope closing until the leader has
-     * exited, then fails the close: it is never reported as clean.
+     * Closing the Scope stops the group when `stopOnClose` asks for it, then ends the pipes. It
+     * stays bounded by the stop's deadline: a stop that fails here is not retried or waited out,
+     * so a caller's own failure (such as an explicit `stop`'s `teardown`) is what its Scope ends
+     * with. An owner that must keep what the group holds until its leader exits waits for that
+     * itself (`never`).
      */
-    const release = Effect.gen(function* () {
-      if (!(yield* Deferred.isDone(exited)) && Exit.isFailure(yield* Effect.exit(stop))) {
-        yield* Deferred.await(exited);
-        yield* endPipes;
-        return yield* Effect.die(teardown());
-      }
-      yield* endPipes;
+    const stopsOnClose = Effect.map(Deferred.isDone(closed), (done) => {
+      if (stopOnClose === 'while-open') return !done;
+      return stopOnClose === 'always';
     });
+    const release = Effect.andThen(
+      Effect.flatMap(stopsOnClose, (stops) => (stops ? Effect.ignore(stop) : Effect.void)),
+      endPipes,
+    );
 
     const group: ProcessGroup = {
       process: child,

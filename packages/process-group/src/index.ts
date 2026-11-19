@@ -2,6 +2,7 @@ export {
   onSystemClock,
   outputDrain,
   type ProcessGroup,
+  type ProcessGroupCloseStop,
   type ProcessGroupExit,
   type ProcessGroupOptions,
   type ProcessGroupStopTiming,

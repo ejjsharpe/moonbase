@@ -1,4 +1,4 @@
-import { type Cause, Duration, Effect, Option, Queue, Stream } from 'effect';
+import { type Cause, Duration, Effect, Exit, Option, Queue, Stream } from 'effect';
 import {
   outputDrain,
   type ProcessGroupExit,
@@ -46,10 +46,10 @@ const helperEnvironment = (overrides: Record<string, string | undefined> = {}) =
 };
 /**
  * Starts the helper in its own process group, so stopping it reaches Git's children (checkout,
- * hooks, filters) as Ctrl-C would and Git can remove what it half-created. Closing the run's scope
- * stops a helper still running and waits for it to exit, so the descriptors it holds and the
- * checkout stay owned until then; one whose group can't be confirmed gone stays owned until the
- * helper itself has exited.
+ * hooks, filters) as Ctrl-C would and Git can remove what it half-created. Closing the scope of a
+ * run that has not settled stops its group, so the descriptors the helper holds and the checkout
+ * (its lease and journal) stay owned until then; one whose group can't be confirmed gone stays
+ * owned until the helper itself has exited.
  */
 const startHelper = (
   groups: ProcessGroupsShape,
@@ -68,6 +68,8 @@ const startHelper = (
         stdio: ['pipe', 'pipe', 'pipe', options.fd, ...(options.extra ?? [])],
         env: helperEnvironment(options.env),
         stopTiming,
+        // This run's release, below, stops the group while the run is unsettled.
+        stopOnClose: 'never',
       })
       .pipe(
         Effect.mapError(
@@ -82,6 +84,16 @@ const startHelper = (
         ),
       );
     const child = group.process;
+    // Settled once the helper's exit and its last output are known.
+    let settled = false;
+    // Runs before the group's own release, which ends the pipes.
+    yield* Effect.addFinalizer(() =>
+      settled
+        ? Effect.void
+        : Effect.flatMap(Effect.exit(group.stop), (stopped) =>
+            Exit.isSuccess(stopped) ? Effect.void : Effect.asVoid(group.exit),
+          ),
+    );
     let stderr = '';
     child.stderr!.on('data', (chunk: Buffer) => {
       stderr = (stderr + chunk.toString()).slice(0, stderrLimit);
@@ -110,10 +122,16 @@ const startHelper = (
       });
     /**
      * Waits for the helper's exit and its last output, which pipes another process holds may
-     * never deliver in full.
+     * never deliver in full; the run has settled once it is known.
      */
     const awaitExit = Effect.tap(group.exit, () =>
-      Effect.raceFirst(group.closed, Effect.sleep(outputDrain)),
+      Effect.raceFirst(group.closed, Effect.sleep(outputDrain)).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            settled = true;
+          }),
+        ),
+      ),
     );
     /** The run's outcome once the helper exited: its output, or what went wrong. */
     const outcome = (output: Buffer) =>

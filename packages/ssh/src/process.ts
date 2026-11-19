@@ -84,6 +84,8 @@ export const startSshProcess = (
     const group = yield* groups
       .spawn(executable, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
+        // An exited leader does not release its proxy or helper group.
+        stopOnClose: 'always',
         env: environment(token),
         stopTiming: { deadline: stopTiming.deadlineMs, termGrace: stopTiming.termGraceMs },
       })
