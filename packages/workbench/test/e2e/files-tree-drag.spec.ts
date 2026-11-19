@@ -308,8 +308,9 @@ test('⌘Z in the tree undoes a move, and the … menu names what it undoes', as
   await menu.getByRole('menuitem', { name: 'Undo Move', exact: true }).click();
   await expect(row(page, 'welcome.ts')).toBeVisible();
   expect(await exists(page, 'dest/welcome.ts')).toBe(false);
-  // A move whose reply comes once the tree has gone is still the one to undo.
-  await create(page, 'other/');
+  // A move whose reply comes once the tree has gone is still the one to undo. It moves two items,
+  // so its Undo is told from the earlier move's by name.
+  await create(page, 'other/', 'notes.ts');
   await row(page, 'README.md').click();
   await row(page, 'README.md').dragTo(row(page, 'dest'));
   await expect(row(page, 'dest/README.md')).toBeVisible();
@@ -326,19 +327,22 @@ test('⌘Z in the tree undoes a move, and the … menu names what it undoes', as
     }) as typeof command;
     Object.assign(window, { releaseMove: held.resolve });
   });
-  await row(page, 'welcome.ts').click();
+  await row(page, 'notes.ts').click();
+  await row(page, 'welcome.ts').click({ modifiers: ['Meta'] });
   await row(page, 'welcome.ts').dragTo(row(page, 'other'));
   await expect.poll(() => page.evaluate(() => 'moveHeld' in window)).toBe(true);
   const nav = region(page).getByRole('group', { name: 'Sidebar view', exact: true });
   await nav.getByRole('button', { name: 'Changes', exact: true }).click();
   await expect(tree(page)).toHaveCount(0);
   await page.evaluate(() => (window as unknown as { releaseMove(): void }).releaseMove());
-  await expect.poll(() => exists(page, 'other/welcome.ts')).toBe(true);
   await nav.getByRole('button', { name: 'Files', exact: true }).click();
   menu = await explorerMenu(page);
-  await menu.getByRole('menuitem', { name: 'Undo Move', exact: true }).click();
-  await expect.poll(() => exists(page, 'welcome.ts')).toBe(true);
-  expect(await exists(page, 'other/welcome.ts')).toBe(false);
+  // The menu names the move once its reply has recorded it.
+  await menu.getByRole('menuitem', { name: 'Undo Move of 2 Items', exact: true }).click();
+  const placed = (paths: string[]) => Promise.all(paths.map((path) => exists(page, path)));
+  await expect
+    .poll(() => placed(['welcome.ts', 'notes.ts', 'other/welcome.ts', 'other/notes.ts']))
+    .toEqual([true, true, false, false]);
   expect(await exists(page, 'dest/README.md')).toBe(true);
 });
 

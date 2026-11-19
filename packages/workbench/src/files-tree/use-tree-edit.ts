@@ -180,7 +180,10 @@ export function useTreeEdit({
       if (current.kind === 'rename' && name === getPathName(current.path)) return end(current.path);
       const destination = parent ? `${parent}/${name}` : name;
       const directory = isListedDirectory(listings, checkoutIdentity, current.path);
-      let error = '';
+      // A failure is shown beside the field while it waits for one; once its wait is interrupted
+      // (the field gone), the editor's alerts show it instead.
+      let error = '',
+        fieldGone = false;
       committing.current = true;
       // A rename is Undo's to record, even if the tree goes before it finishes.
       const settled = (result: MutationRunResult) => {
@@ -193,12 +196,19 @@ export function useTreeEdit({
         enter
           ? {
               inlineError: (message) => {
-                error = message;
+                if (fieldGone) actions.report(message);
+                else error = message;
               },
               settled,
             }
           : { finalFocus: () => (canRefocus(next) ? next : focus.returnTreeFocus()), settled },
       ).pipe(
+        Effect.onInterrupt(() =>
+          Effect.sync(() => {
+            fieldGone = true;
+            if (error) actions.report(error);
+          }),
+        ),
         Effect.ensuring(
           Effect.sync(() => {
             committing.current = false;
