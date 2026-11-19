@@ -167,6 +167,35 @@ export const isUncertain = (error: unknown) => getErrorGroup(error) === 'uncerta
 /** Its caller cancelled it. */
 export const isCancelled = (error: unknown) => getErrorGroup(error) === 'cancelled';
 
+/**
+ * The tags of failures a client or its link raises about one attempt, not the host's answer to the
+ * request: its IPC, connection, host verification and admission, and a host it could not use.
+ */
+const attemptTags: ReadonlySet<string> = new Set([
+  ...ipcTags,
+  'ConnectionError',
+  'HostVerificationError',
+  'HostKeyExposedError',
+  'HostUnavailableError',
+  'IncompatibleHostError',
+  'LocalDaemonError',
+  'UnauthorizedError',
+]);
+/**
+ * Whether `error` is the host's final answer to a request, so the request ID it was sent under has
+ * an outcome: a refusal recorded for that ID, or one the host gave as it was asked. Anything else
+ * (a failure of this attempt, such as never sent, busy or refused before it reached the host, a
+ * cancellation, or an unknown outcome) says nothing of an earlier attempt under the same ID, so the
+ * ID is kept and sent again.
+ */
+export const isFinalAnswer = (error: unknown) => {
+  const tag = tagOf(error);
+  if (tag === 'RecordedRefusalError') return true;
+  if (tag === undefined || attemptTags.has(tag)) return false;
+  const group = getErrorGroup(error);
+  return group === 'refusal' || group === 'access' || group === 'conflict';
+};
+
 /** A chat, folder or provider setup service's error, or its daemon link's, as it reaches a client. */
 export type DaemonServiceError =
   | ChatServiceError

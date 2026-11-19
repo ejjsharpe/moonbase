@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Cause, Effect, Exit } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { isCancelled, isUncertain } from '@moonbase/contracts/error-groups';
+import { isFinalAnswer } from '@moonbase/contracts/error-groups';
 import type {
   ChatServiceShape,
   ConnectionServiceShape,
@@ -70,8 +70,10 @@ export function makeChatBackends({
   ];
   /**
    * Sends under a request ID kept durably before it is sent, so a repeat after a lost reply, a
-   * reload or a restart asks for the first outcome. The ID is kept only while the outcome is
-   * unknown (`Uncertain`, or cancelled); an answer, a refusal included, is final.
+   * reload or a restart asks for the first outcome. The ID is forgotten only once the host has
+   * answered it: a success, or a final refusal. A failure of one attempt (busy, unreachable,
+   * cancelled, interrupted) or an unknown outcome keeps it, since an earlier attempt under it may
+   * have run. Forgetting compares the ID, so a late answer never forgets a later attempt's ID.
    */
   const withRequestId = <A, E>(key: string, send: (requestId: string) => Effect.Effect<A, E>) =>
     Effect.flatMap(requestIds.issue(key), (requestId) =>
@@ -79,15 +81,11 @@ export function makeChatBackends({
         Effect.onExit((exit) => {
           if (Exit.isFailure(exit)) {
             const error = Cause.findErrorOption(exit.cause);
-            const unknown =
-              error._tag === 'None'
-                ? Cause.hasInterrupts(exit.cause)
-                : isUncertain(error.value) || isCancelled(error.value);
-            if (unknown) return Effect.void;
+            if (error._tag === 'None' || !isFinalAnswer(error.value)) return Effect.void;
           }
           // A kept ID only asks again for an outcome already known, so failing to forget it is
           // no reason to fail the request.
-          return Effect.ignore(requestIds.forget(key), { log: 'Warn' });
+          return Effect.ignore(requestIds.forget(key, requestId), { log: 'Warn' });
         }),
       ),
     );

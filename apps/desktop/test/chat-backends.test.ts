@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { Deferred, Effect, Exit, Fiber, Scope } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
-import { UncertainError, UnauthorizedError } from '@moonbase/contracts/errors';
+import { UncertainError } from '@moonbase/contracts/errors';
+import { RecordedRefusalError } from '@moonbase/contracts/workspace-host-errors';
 import { FolderRefusedError } from '@moonbase/contracts/folder-errors';
 import { HostUnavailableError } from '@moonbase/contracts/host-errors';
 import { getErrorGroup } from '@moonbase/contracts/error-groups';
@@ -225,14 +226,16 @@ test('turning a chat into a project is one daemon operation, asked again only wh
       adoptCheckout: (target) => adopted.push(target.root),
     });
   const owner = await make();
-  refusal = new UnauthorizedError({ operation: 'turnChatIntoProject' });
+  refusal = new RecordedRefusalError({ refusal: 'unauthorized', text: 'Not yours.' });
   assert.equal(getErrorGroup(await fail(owner.turnIntoProject('planted'))), 'access');
   assert.deepEqual(adopted, []);
-  // An unknown outcome is asked for again under its request, after a restart too; an answer,
-  // a refusal included, is final.
+  // An unknown outcome is asked for again under its request, after a restart too, and so after
+  // an attempt that never reached the host; an answer, a refusal included, is final.
   refusal = new UncertainError({ operation: 'turnChatIntoProject' });
   assert.equal(getErrorGroup(await fail(owner.turnIntoProject('own'))), 'uncertain');
   assert.equal(getErrorGroup(await fail((await make()).turnIntoProject('own'))), 'uncertain');
+  refusal = new HostUnavailableError({ reason: 'busy' });
+  assert.equal(getErrorGroup(await fail(owner.turnIntoProject('own'))), 'unavailable');
   refusal = undefined;
   assert.equal(await run(owner.turnIntoProject('own')), '/profile/chats/own');
   assert.deepEqual(adopted, ['/profile/chats/own']);
@@ -242,8 +245,8 @@ test('turning a chat into a project is one daemon operation, asked again only wh
     requests.filter((r) => r.target.conversationId === conversationId).map((r) => r.requestId);
   const own = ids('own'),
     planted = ids('planted');
-  assert.deepEqual(new Set(own.slice(0, 3)).size, 1);
-  assert.notEqual(own[2], own[3]);
+  assert.deepEqual(new Set(own.slice(0, 4)).size, 1);
+  assert.notEqual(own[3], own[4]);
   assert.notEqual(planted[0], planted[1]);
   assert(requests.every((request) => request.installationId === 'installation'));
 });
