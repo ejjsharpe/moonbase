@@ -90,7 +90,15 @@ export const processRoots = new Set([
   'packages/workspace/examples/local.ts',
 ]);
 // The daemon protocol is infrastructure beside the chat engine; neither imports the other.
-const infrastructure = new Set(['workspace', 'chat-runtime', 'daemon-protocol', 'ssh']);
+const infrastructure = new Set([
+  'workspace',
+  'chat-runtime',
+  'daemon-protocol',
+  'ssh',
+  'process-group',
+]);
+// Node-only infrastructure the other infrastructure packages share; it imports none of them.
+const sharedInfrastructure = new Set(['process-group']);
 const portable = new Set(['application', 'contracts']);
 // Browser-safe, dependency-free externals portable packages may import.
 const portableExternal = /^(?:effect|lru-cache)(?:\/|$)/;
@@ -204,7 +212,8 @@ export function checkBoundaries({ files, packages }) {
         infrastructure.has(sourceOwner) &&
         destination &&
         destination !== sourceOwner &&
-        !['contracts', 'application'].includes(destination)
+        !['contracts', 'application'].includes(destination) &&
+        !(sharedInfrastructure.has(destination) && !sharedInfrastructure.has(sourceOwner))
       )
         reject(path, edge, 'infrastructure imports another implementation');
     }

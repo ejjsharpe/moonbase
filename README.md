@@ -13,6 +13,7 @@ The daemon owns projects and chats: it serves files, saves, Git, worktrees, sear
 | [Chat runtime](packages/chat-runtime/README.md) | Pi chat execution, provider setup and credentials |
 | [Daemon protocol](packages/daemon-protocol/README.md) | Signed health, the authenticated RPC sockets, the daemon's listener and the client services over them |
 | [SSH](packages/ssh/README.md) | Authenticated SSH port forwarding to a chat host |
+| [Process group](packages/process-group/README.md) | Starting a child in its own process group and stopping the whole group |
 | [UI](packages/ui/README.md) | Shared StyleX tokens, recipes and icons |
 | [Config](packages/config/README.md) | Lint, formatting and TypeScript defaults |
 | [Desktop](apps/desktop/README.md) | Electron app: navigation, Chat view, native capabilities and packaging |

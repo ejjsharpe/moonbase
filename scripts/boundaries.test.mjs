@@ -29,6 +29,10 @@ const packages = new Map([
     { directory: 'packages/daemon-protocol', exports: { './remote': './src/remote.ts' } },
   ],
   ['@moonbase/ssh', { directory: 'packages/ssh', exports: { '.': './src/index.ts' } }],
+  [
+    '@moonbase/process-group',
+    { directory: 'packages/process-group', exports: { '.': './src/index.ts' } },
+  ],
 ]);
 function check(sources) {
   return checkBoundaries({
@@ -151,6 +155,7 @@ for (const [path, specifier] of [
   ['packages/chat-runtime/src/index.ts', '@moonbase/daemon-protocol/remote'],
   ['packages/ssh/src/index.ts', '@moonbase/daemon-protocol/remote'],
   ['packages/daemon-protocol/src/remote.ts', '@moonbase/ssh'],
+  ['packages/process-group/src/index.ts', '@moonbase/ssh'],
 ])
   assert(
     check({ [path]: `import type {} from '${specifier}';` }).some((error) =>
@@ -158,6 +163,13 @@ for (const [path, specifier] of [
     ),
     `${path} -> ${specifier}`,
   );
+assert.deepEqual(
+  check({
+    'packages/ssh/src/index.ts': "import '@moonbase/process-group';",
+    'packages/process-group/src/index.ts': '',
+  }),
+  [],
+);
 assert(
   check({
     'packages/contracts/src/index.ts': "import '@moonbase/application';",

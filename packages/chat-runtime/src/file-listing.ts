@@ -1,15 +1,5 @@
-import { spawn } from 'node:child_process';
-import {
-  Clock,
-  Context,
-  Data,
-  Deferred,
-  Effect,
-  Exit,
-  Option,
-  Schedule,
-  type Duration,
-} from 'effect';
+import { Data, Deferred, Duration, Effect, Exit, Option } from 'effect';
+import { spawnProcessGroup, type ProcessGroupExit } from '@moonbase/process-group';
 
 /** How long a listing may run, and how long its stopped process group has after SIGTERM. */
 export type ChatFileListingTiming = { budget: Duration.Input; stopGrace: Duration.Input };
@@ -44,126 +34,58 @@ export type ChatFileListingRun = (
   cwd: string,
 ) => Effect.Effect<ListingOutput, ListingError>;
 
-type Ended = { code: number | null; error?: NodeJS.ErrnoException };
-
-/** Whether any process of the group is left. EPERM is an exiting group: only ESRCH is gone. */
-const isGroupAlive = (group: number) => {
-  try {
-    process.kill(-group, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-};
-const signalGroup = (group: number, signal: NodeJS.Signals) => {
-  try {
-    process.kill(-group, signal);
-  } catch {
-    // The group already exited.
-  }
-};
-/** Waits up to `limit` for the group to be gone; whether it is. */
-const awaitGroupGone = (group: number, limit: Duration.Input) =>
-  Effect.sync(() => isGroupAlive(group)).pipe(
-    Effect.repeat({ schedule: Schedule.spaced('10 millis'), while: (alive) => alive }),
-    Effect.timeoutOption(limit),
-    Effect.map(Option.isSome),
-  );
 /**
- * Runs `effect` on the system clock: it waits on real processes, so it keeps real time even when
- * the caller's clock is a TestClock.
- */
-const onSystemClock = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
-  Effect.updateContext(effect, (context: Context.Context<never>) =>
-    Context.omit(Clock.Clock)(context),
-  );
-
-/**
- * Runs listings in their own process group, so a listing stopped by its budget or by closing
- * takes any children with it. Node's `child_process` is wrapped here, once, rather than run
- * through `effect/process`: stopping a group needs the negative-PID signal to the whole group,
- * SIGKILL after the grace whether or not the leader has exited, and a wait until no member is left,
- * which its spawner's kill doesn't do (it can signal only the leader and doesn't confirm the group
- * is gone). The stop runs on the system clock; the budget on the caller's.
+ * Runs listings in their own process group (`@moonbase/process-group`), so a listing stopped by
+ * its budget or by closing takes any children with it: SIGTERM, then SIGKILL after `stopGrace`
+ * whether or not the leader has exited, and as long again for the group to be gone. The stop runs
+ * on the system clock; the budget on the caller's.
  */
 export const makeRunListing =
   ({ budget, stopGrace }: ChatFileListingTiming): ChatFileListingRun =>
   (executable, args, cwd) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const ended = yield* Deferred.make<Ended>();
         const overflowed = yield* Deferred.make<void>();
         // Output still arriving after a stop is kept, up to the size budget: what the listing
         // printed before its budget ran out is its partial listing, however late it is read.
         const chunks: Buffer[] = [];
         let length = 0;
-        const stopped = yield* Deferred.make<void>();
-        const stop = (group: number) =>
-          Effect.uninterruptible(
-            Effect.flatMap(Deferred.succeed(stopped, undefined), (first) =>
-              first
-                ? Effect.gen(function* () {
-                    signalGroup(group, 'SIGTERM');
-                    // A group that ignores SIGTERM, or a child holding the output, is killed
-                    // after the grace whether or not the leader exited.
-                    if (!(yield* awaitGroupGone(group, stopGrace))) {
-                      signalGroup(group, 'SIGKILL');
-                      yield* awaitGroupGone(group, stopGrace);
-                    }
-                    yield* Effect.timeoutOption(Deferred.await(ended), stopGrace);
-                  }).pipe(onSystemClock)
-                : Deferred.await(stopped),
-            ),
-          );
-        const child = yield* Effect.acquireRelease(
-          Effect.sync(() => {
-            const child = spawn(executable, [...args], {
-              cwd,
-              detached: true,
-              stdio: ['ignore', 'pipe', 'ignore'],
-            });
-            const end = (value: Ended) => Deferred.doneUnsafe(ended, Exit.succeed(value));
-            child.stdout!.on('data', (chunk: Buffer) => {
-              if (length >= listingBytes) return;
-              if (length + chunk.length > listingBytes) {
-                chunks.push(chunk.subarray(0, listingBytes - length));
-                length = listingBytes;
-                Deferred.doneUnsafe(overflowed, Exit.void);
-                return;
-              }
-              chunks.push(chunk);
-              length += chunk.length;
-            });
-            child.stdout!.on('error', () => {});
-            child.once('error', (error) => {
-              if (child.pid !== undefined) signalGroup(child.pid, 'SIGKILL');
-              end({ code: null, error });
-            });
-            child.once('close', (code) => end({ code }));
-            return child;
-          }),
-          // Closing the index, or a caller giving up, stops a listing that is still running.
-          (child) =>
-            Effect.flatMap(Deferred.isDone(ended), (done) =>
-              done || child.pid === undefined ? Effect.void : stop(child.pid),
-            ),
+        // Closing the index, or a caller giving up, stops a listing that is still running.
+        const group = yield* spawnProcessGroup(executable, args, {
+          cwd,
+          stdio: ['ignore', 'pipe', 'ignore'],
+          stopTiming: { termGrace: stopGrace, deadline: Duration.toMillis(stopGrace) * 2 },
+        }).pipe(
+          Effect.mapError(() => new ListingError({ reason: 'failed', output: Buffer.alloc(0) })),
         );
+        group.process.stdout!.on('data', (chunk: Buffer) => {
+          if (length >= listingBytes) return;
+          if (length + chunk.length > listingBytes) {
+            chunks.push(chunk.subarray(0, listingBytes - length));
+            length = listingBytes;
+            Deferred.doneUnsafe(overflowed, Exit.void);
+            return;
+          }
+          chunks.push(chunk);
+          length += chunk.length;
+        });
+        // A listing has ended once every pipe closed, so all it printed has been read.
         const outcome = yield* Effect.raceFirst(
-          Effect.map(Deferred.await(ended), (value) => Option.some(value)),
+          Effect.andThen(group.closed, Effect.map(group.exit, Option.some)),
           Effect.as(
             Effect.raceFirst(Effect.sleep(budget), Deferred.await(overflowed)),
-            Option.none<Ended>(),
+            Option.none<ProcessGroupExit>(),
           ),
         );
         if (Option.isNone(outcome)) {
-          if (child.pid !== undefined) yield* stop(child.pid);
+          yield* Effect.ignore(group.stop);
           return { bytes: Buffer.concat(chunks), truncated: true };
         }
-        const { code, error } = outcome.value;
+        const { code, spawnFailed, spawnErrorCode } = outcome.value;
         const output = Buffer.concat(chunks);
-        if (error)
+        if (spawnFailed)
           return yield* new ListingError({
-            reason: error.code === 'ENOENT' ? 'missing' : 'failed',
+            reason: spawnErrorCode === 'ENOENT' ? 'missing' : 'failed',
             output,
           });
         if (code === 0) return { bytes: output, truncated: false };
