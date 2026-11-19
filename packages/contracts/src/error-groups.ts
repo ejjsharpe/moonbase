@@ -80,6 +80,7 @@ const groups: Record<Exclude<ContractsError, ReasonedError>['_tag'], ErrorGroup>
   InvalidPathError: 'refusal',
   CheckoutChangedError: 'refusal',
   InvalidRequestError: 'refusal',
+  NativeSourceError: 'refusal',
   InvalidBaseError: 'refusal',
   InvalidPatternError: 'refusal',
   InvalidRecoveryRequestError: 'refusal',

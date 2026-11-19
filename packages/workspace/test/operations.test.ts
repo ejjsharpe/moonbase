@@ -1,19 +1,24 @@
 import { isAccessRefusal, isConflict, isRefusal } from '@moonbase/contracts/error-groups';
+import { NativeSourceError } from '@moonbase/contracts/workspace-host-errors';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { createServer, type Server } from 'node:net';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
-import { Layer, ManagedRuntime } from 'effect';
+import { Effect, Layer, ManagedRuntime } from 'effect';
 import { TestClock } from 'effect/testing';
 import { makeWorkspaceClient } from './workspace-client-fixture.ts';
 import { WorkspaceLive } from './workspace-live-fixture.ts';
@@ -452,6 +457,132 @@ test('a native import onto a path holding a draft is refused', async () => {
     );
     assert.equal(readFileSync(join(f.root, 'child.txt'), 'utf8'), 'must survive');
   } finally {
+    await runtime.dispose();
+    f.cleanup();
+  }
+});
+
+test('a native import source that is unsupported at capture or replaced after it is refused with its reason', async () => {
+  const f = fixture(),
+    { runtime, client } = f.start();
+  const sockets: Server[] = [];
+  const listen = (path: string) =>
+    new Promise<void>((resolve) => sockets.push(createServer().listen(path, resolve)));
+  const refused = (problem: string) => (error: unknown) =>
+    isRefusal(error) && error instanceof NativeSourceError && error.problem === problem;
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    const folder = join(f.base, 'external');
+    mkdirSync(folder);
+    writeFileSync(join(f.base, 'target.txt'), 'native bytes');
+    symlinkSync(join(f.base, 'target.txt'), join(folder, 'symlink.txt'));
+    await listen(join(folder, 'socket'));
+    mkdirSync(join(folder, 'linked-folder'));
+    writeFileSync(join(folder, 'linked-folder/a.txt'), 'native bytes');
+    linkSync(join(folder, 'linked-folder/a.txt'), join(f.base, 'hard-link'));
+    symlinkSync(folder, join(f.base, 'via-link'));
+    // Capture refuses a source that is not a plain file or folder, or is named through a symlink.
+    for (const [path, problem] of [
+      [join(folder, 'symlink.txt'), 'unsupported'],
+      [join(folder, 'socket'), 'unsupported'],
+      [join(folder, 'linked-folder'), 'unsupported'],
+      [join(f.base, 'via-link/symlink.txt'), 'invalid-reference'],
+    ] as const) {
+      const error = await runtime.runPromise(
+        Effect.flip(captureNative({ checkout, clientId: 'alice', paths: [path] })),
+      );
+      assert(refused(problem)(error), `${path}: ${String(error)}`);
+    }
+    const cases = [
+      // Moved away: the reopen finds nothing.
+      {
+        name: 'moved.txt',
+        replace: (path: string) => renameSync(path, path + '-old'),
+        problem: 'changed',
+      },
+      // Swapped for a symlink, at the source or an ancestor: the no-follow reopen fails with ELOOP.
+      {
+        name: 'linked.txt',
+        replace: (path: string) => {
+          renameSync(path, path + '-old');
+          symlinkSync(path + '-old', path);
+        },
+        problem: 'changed',
+      },
+      // Swapped for a socket, which the reopen refuses before it can compare identities.
+      {
+        name: 'sock.txt',
+        replace: (path: string) => {
+          renameSync(path, path + '-old');
+          return listen(path);
+        },
+        problem: 'changed',
+      },
+      {
+        name: 'nested.txt',
+        replace: () => {
+          renameSync(folder, folder + '-old');
+          symlinkSync(folder + '-old', folder);
+        },
+        problem: 'parent-changed',
+      },
+    ] as const;
+    for (const { name, replace, problem } of cases) {
+      const external = join(folder, name);
+      writeFileSync(external, 'native bytes');
+      const nativeReferences = await runtime.runPromise(
+        captureNative({ checkout, clientId: 'alice', paths: [external] }),
+      );
+      await replace(external);
+      await assert.rejects(
+        client.command('mutate', {
+          clientId: 'alice',
+          id: `import-replaced-${name}`,
+          checkout,
+          kind: 'import',
+          sources: [],
+          nativeReferences,
+          destination: name,
+        }),
+        refused(problem),
+      );
+      assert(!existsSync(join(f.root, name)));
+    }
+    // A hard link made inside a captured folder after admission leaves that item uncertain, with
+    // its reason, after the items before it completed.
+    const batch = join(f.base, 'batch');
+    mkdirSync(join(batch, 'folder'), { recursive: true });
+    writeFileSync(join(batch, 'first.txt'), 'native bytes');
+    writeFileSync(join(batch, 'folder/a.txt'), 'native bytes');
+    const nativeReferences = await runtime.runPromise(
+      captureNative({
+        checkout,
+        clientId: 'alice',
+        paths: [join(batch, 'first.txt'), join(batch, 'folder')],
+      }),
+    );
+    linkSync(join(batch, 'folder/a.txt'), join(f.base, 'later-link'));
+    mkdirSync(join(f.root, 'imports'));
+    const result = await client.command('mutate', {
+      clientId: 'alice',
+      id: 'import-hard-linked',
+      checkout,
+      kind: 'import',
+      sources: [],
+      nativeReferences,
+      destination: 'imports',
+    });
+    assert.deepEqual(
+      result.items.map((item) => [item.outcome, item.message]),
+      [
+        ['completed', undefined],
+        ['uncertain', new NativeSourceError({ problem: 'unsupported' }).message],
+      ],
+    );
+    assert.equal(result.outcome, 'uncertain');
+    assert(!existsSync(join(f.root, 'imports/folder')));
+  } finally {
+    for (const socket of sockets) socket.close();
     await runtime.dispose();
     f.cleanup();
   }

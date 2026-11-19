@@ -17,6 +17,7 @@ import { errorText, folded, path, same } from '../validation.ts';
 import { cancellationPoint, isCancelled } from '../cancellation.ts';
 import { Checkouts } from './checkouts.ts';
 import { HostJournal } from './host-journal.ts';
+import { findNativeHelperRefusal } from './native-helper-refusal.ts';
 import type { NativeImport } from './native-import.ts';
 import { NativeReferences, type References } from './native-references.ts';
 
@@ -197,6 +198,10 @@ export const mutate = (input: HostInput<'mutate'>) =>
                 undefined,
                 source.native ? [source.native.fd] : [],
               ),
+            ).pipe(
+              // An import source the helper refuses keeps its reason; the item stays uncertain,
+              // since a replacement may already be in Trash and the helper may have staged entries.
+              Effect.mapError((error) => (importing && findNativeHelperRefusal(error)) || error),
             );
           }
           record.result.items.push({ source: source.path, destination, outcome: 'completed' });
