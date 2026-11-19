@@ -3,13 +3,15 @@ import {
   useContext,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
-import { Context, type Effect } from 'effect';
+import { Context, Effect } from 'effect';
 import { RegistryContext, useAtomValue } from '@effect/atom-react';
 import * as AsyncResult from 'effect/reactivity/AsyncResult';
+import * as Atom from 'effect/reactivity/Atom';
 import { Tabs } from '@base-ui/react/tabs';
 import * as stylex from '@stylexjs/stylex';
 import { titleBar } from './title-bar.stylex.ts';
@@ -29,9 +31,10 @@ import {
 } from '@moonbase/workbench';
 import { useStoredToggle } from '../hooks/use-stored-toggle.ts';
 import { nowAtom } from '../hooks/use-now.ts';
-import type { TranscriptNative } from '../chat/transcript/transcript-actions.ts';
 import { focusMessage, focusMessageEnd } from '../chat/open-chat.ts';
-import { runChatAction } from '../chat/chat-context.ts';
+import type { TranscriptNative } from '../chat/transcript/transcript-actions.ts';
+import type { ChatTargetId } from '../../ipc/chat-rpcs.ts';
+import { reporting, useRun, type ViewWork } from '../hooks/use-run.ts';
 import { Settings, type SettingsSection } from './settings.tsx';
 import { Rail, tabValue } from './rail/rail.tsx';
 import { TitleBar } from './title-bar.tsx';
@@ -47,33 +50,42 @@ import { usePlaceHistory } from './use-place-history.ts';
 import { useDesktopApplication, type DesktopApplication } from './desktop-application.ts';
 
 export type DesktopShellHandle = {
-  prepareQuit(): Promise<boolean>;
+  /** Asks to quit, showing what must be answered first; succeeds whether the window may close. */
+  prepareQuit: Effect.Effect<boolean, unknown>;
   importFiles(checkout: CheckoutTarget, references: string[]): void;
+};
+/**
+ * Main's native capabilities the shell offers (`DesktopNative`'s), each only where supplied. They
+ * return user-approved roots, never source paths. The editor's own (Copy Path, Reveal, imports)
+ * are its workbench platform.
+ */
+export type ShellNative = {
+  /** Each chat target's transcript Copy, Open and image URLs. */
+  transcripts?: Readonly<Record<ChatTargetId, TranscriptNative>>;
+  /** A local chat's folder, chosen in the native picker; null when the user cancelled. */
+  chooseChatFolder?: Effect.Effect<string | null, unknown>;
+  /**
+   * Folders a new chat on the target may use without a picker: local chat's recently approved
+   * ones, or a remote host's approved roots and their folders.
+   */
+  listChatFolders?: (targetId: ChatTargetId) => Effect.Effect<readonly string[], unknown>;
+  /** Creates a new local chat's linked worktree beside the repository, returning its root. */
+  createChatWorktree?: (
+    root: string,
+    branch: string,
+    requestId: string,
+  ) => Effect.Effect<string, unknown>;
+  /** Opens a local chat without a project's folder as a project where it is, returning its root. */
+  turnChatIntoProject?: (conversationId: string) => Effect.Effect<string, unknown>;
+  /** A project's root, chosen in the native picker; null when the user cancelled. */
+  chooseCheckout?: Effect.Effect<string | null, unknown>;
 };
 export type DesktopShellProps = {
   application: DesktopApplication;
   /** The project editor the shell's workbench shows. */
   editor: WorkbenchEditor;
   closing?: boolean;
-  /** These callbacks return user-approved roots or opaque native references, never source paths. */
-  transcriptNative?: (backendId: string) => TranscriptNative;
-  chooseChatFolder?: () => Promise<string | null>;
-  /**
-   * Folders a new chat on the target may use without a picker: local chat's recently approved
-   * ones, or a remote host's approved roots and their folders.
-   */
-  recentChatFolders?: (targetId: string) => Promise<readonly string[]>;
-  /** Creates a new local chat's linked worktree beside the repository, returning its root. */
-  createChatWorktree?: (root: string, branch: string, requestId: string) => Promise<string>;
-  /** Opens a local chat without a project's folder as a project where it is, returning its root. */
-  turnChatIntoProject?: (conversationId: string) => Promise<string>;
-  selectCheckout?: () => Promise<string | null>;
-  selectClipboardImports?: (checkout: CheckoutTarget) => Promise<string[] | null>;
-  /** Copies a checkout's paths to the clipboard, joined by newlines: absolute, or as `relative`. */
-  copyPaths?: (checkout: CheckoutTarget, paths: string[], relative: boolean) => Promise<void>;
-  /** Shows a checkout's file or folder in the OS file manager. */
-  revealPath?: (checkout: CheckoutTarget, path: string) => Promise<void>;
-  selectDroppedImports?: (checkout: CheckoutTarget, files: File[]) => Promise<string[]>;
+  native?: ShellNative;
 };
 const railCollapsedKey = 'moonbase.rail.collapsed';
 const sidebarHiddenKey = 'moonbase.sidebar.hidden';
@@ -84,21 +96,7 @@ const windowShortcuts = [{ label: 'Project chats', keys: 'Meta+J' }];
  * workbench with its chats docked beside it), with Settings over them.
  */
 export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(function DesktopShell(
-  {
-    application: desktopApplication,
-    editor,
-    closing = false,
-    chooseChatFolder,
-    recentChatFolders,
-    createChatWorktree,
-    turnChatIntoProject,
-    transcriptNative,
-    selectCheckout,
-    selectClipboardImports,
-    selectDroppedImports,
-    copyPaths,
-    revealPath,
-  },
+  { application: desktopApplication, editor, closing = false, native = {} },
   ref,
 ) {
   const application = useDesktopApplication(desktopApplication),
@@ -143,7 +141,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   // A chat in any of the project's worktrees, including one a chat created, belongs to its dock.
   const dockCheckout = dockVisible ? selected : undefined;
   useEffect(() => {
-    if (dockCheckout) void editor.run(worktrees.list(dockCheckout));
+    if (dockCheckout) controller.start(worktrees.list(dockCheckout));
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- Listed again only for another checkout.
   }, [dockCheckout?.checkoutId]);
   const dockRoots = [
@@ -152,39 +150,43 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       ? projectWorktrees.roots
       : []),
   ];
-  const report = controller?.report ?? application.reportCleanup;
-  const run = (task: Promise<unknown>) => {
-    void task.catch(report);
-  };
-  /** Runs one of the open chat's actions; it shows its own failure. */
+  const report = controller.report;
+  // The shell's own work, which ends with it; a failure shows in the editor's alerts.
+  const start = useRun();
+  const run = (work: ViewWork) => start(reporting(work, report));
+  /** One of the open chat's actions, which shows its own failure. */
   const actInChat = (action: (selection: ChatSelection['Service']) => Effect.Effect<void>) =>
-    chat
-      ? runChatAction(desktopApplication, action(Context.get(chat, ChatSelection)))
-      : Promise.resolve();
+    chat ? action(Context.get(chat, ChatSelection)) : Effect.void;
   const startNewChat = () => {
     if (!chat) return;
     setDestination('chat');
-    run(actInChat((selection) => selection.closeView).then(focusMessage));
+    run(
+      Effect.tap(
+        actInChat((selection) => selection.closeView),
+        () => Effect.sync(focusMessage),
+      ),
+    );
   };
   const showChat = () => {
     setDestination('chat');
     if (view !== 'chat') restoreFocus('chat');
   };
-  const showPlace = async (place: Place) => {
-    if (place.kind === 'chat') {
-      if (!chat) return;
-      setDestination('chat');
-      const target = place.chat;
-      await actInChat((selection) => (target ? selection.select(target) : selection.closeView));
-      return;
-    }
-    const checkout = openCheckouts.find((open) => open.checkoutId === place.checkoutId);
-    if (!checkout || !controller) return;
-    setDestination('project');
-    if (checkout.checkoutId !== selected?.checkoutId) await controller.selectCheckout(checkout);
-    // A file closed since opens again, as a preview, as in VS Code.
-    if (place.path) await controller.open({ checkout, path: place.path }, { intent: 'preview' });
-  };
+  const showPlace = (place: Place) =>
+    Effect.gen(function* () {
+      if (place.kind === 'chat') {
+        if (!chat) return;
+        setDestination('chat');
+        const target = place.chat;
+        yield* actInChat((selection) => (target ? selection.select(target) : selection.closeView));
+        return;
+      }
+      const checkout = openCheckouts.find((open) => open.checkoutId === place.checkoutId);
+      if (!checkout) return;
+      setDestination('project');
+      if (checkout.checkoutId !== selected?.checkoutId) yield* controller.selectCheckout(checkout);
+      // A file closed since opens again, as a preview, as in VS Code.
+      if (place.path) yield* controller.open({ checkout, path: place.path }, { intent: 'preview' });
+    });
   const { back, forward } = usePlaceHistory({
     application: desktopApplication,
     chat,
@@ -220,10 +222,10 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     setDockOpen(open);
   };
   useImperativeHandle(ref, () => ({
-    async prepareQuit() {
+    prepareQuit: Effect.gen(function* () {
       // Reveal the editor's exact prompts and uncertainty controls, including Quit from Chat.
-      if (controller && openCheckouts.length) setDestination('project');
-      const consent = await application.prepareQuit();
+      if (openCheckouts.length) setDestination('project');
+      const consent = yield* application.prepareQuit;
       if (
         !consent &&
         (application.readChat((atoms) => atoms.storageError) ||
@@ -231,7 +233,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       )
         setDestination('chat');
       return consent;
-    },
+    }),
     importFiles(checkout, references) {
       if (application.getSnapshot().phase === 'live') {
         setDestination('project');
@@ -242,14 +244,12 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   // Chat stays attached while it exists, behind a project or a hidden window too, so coming back
   // shows the transcript as it was, still following a running reply. Disposal detaches it.
   useEffect(() => {
-    if (chat) void runChatAction(desktopApplication, Context.get(chat, ChatConnection).start);
-  }, [chat, desktopApplication]);
+    if (chat) start(Context.get(chat, ChatConnection).start);
+  }, [chat, start]);
   const checkoutActions = makeCheckoutActions({
     editor: controller,
     isLive: () => application.getSnapshot().phase === 'live',
-    selectCheckout,
-    selectClipboardImports,
-    selectDroppedImports,
+    selectCheckout: native.chooseCheckout,
     showProject: () => setDestination('project'),
     importInto: (checkout, references) => handle.current?.importFiles(checkout, references),
   });
@@ -284,16 +284,23 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     keyUp: (event) => !shellInert && keyUp(event),
   });
   const chatTargetId = lifecycle.chatTargetId;
+  // Each target's recent folders, listed again each time a folder menu opens.
+  const { listChatFolders, createChatWorktree, turnChatIntoProject } = native;
+  const recentChatFolders = useMemo(
+    () =>
+      listChatFolders &&
+      Atom.family((targetId: string) => Atom.make(listChatFolders(targetId as ChatTargetId))),
+    [listChatFolders],
+  );
   // What both chat views (Agents and the dock) take.
   const chatViews = chat &&
     composer && {
       services: chat,
       composer,
-      runner: desktopApplication,
-      chooseFolder: chooseChatFolder,
-      recentFolders: recentChatFolders && (() => recentChatFolders(chatTargetId ?? 'local')),
+      chooseFolder: native.chooseChatFolder,
+      recentFolders: recentChatFolders?.(chatTargetId ?? 'local'),
       folderProjects,
-      transcriptNative: transcriptNative?.(chatTargetId ?? 'remote'),
+      transcriptNative: native.transcripts?.[(chatTargetId ?? 'remote') as ChatTargetId],
     };
   return (
     <Tabs.Root
@@ -307,7 +314,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
           const checkout = openCheckouts.find(
             (checkout) => tabValue({ kind: 'project', checkout }) === next,
           );
-          if (checkout && controller) {
+          if (checkout) {
             run(controller.selectCheckout(checkout));
             setDestination('project');
           }
@@ -368,16 +375,12 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         chatOpen={!!chat}
         disabled={lifecycle.phase !== 'live'}
         preserving={!!state?.preserving}
-        openCheckout={selectCheckout && controller ? () => run(openCheckout()) : undefined}
+        openCheckout={native.chooseCheckout ? () => run(openCheckout) : undefined}
         recentCheckouts={recentCheckouts}
-        reopenCheckout={
-          controller
-            ? (checkout) => {
-                setDestination('project');
-                run(controller.openCheckout(checkout.root));
-              }
-            : undefined
-        }
+        reopenCheckout={(checkout) => {
+          setDestination('project');
+          run(controller.openCheckout(checkout.root));
+        }}
         openSettings={() => setSettings('hosts')}
         collapsed={railCollapsed}
         toggleCollapsed={toggleRailKeepingFocus}
@@ -385,7 +388,10 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         mac={mac}
         openChat={
           !chat && lifecycle.chat.state !== 'unavailable'
-            ? () => run(application.openChat().then(() => setDestination('chat')))
+            ? () =>
+                run(
+                  Effect.tap(application.openChat, () => Effect.sync(() => setDestination('chat'))),
+                )
             : undefined
         }
         chatDisabled={
@@ -410,7 +416,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         recoveryFailed={!!state?.recoveryFailed}
         preserving={!!state?.preserving}
         editorError={view === 'chat' && !selected ? state?.errors.at(-1) : undefined}
-        clearEditorErrors={() => controller?.clearErrors()}
+        clearEditorErrors={() => controller.clearErrors()}
       />
       {controller ? (
         <Tabs.Panel
@@ -451,7 +457,7 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                       }
                     : undefined,
                   showCheckout: (checkout) => {
-                    if (controller) run(controller.selectCheckout(checkout));
+                    run(controller.selectCheckout(checkout));
                     setDestination('project');
                     restoreFocus(tabValue({ kind: 'project', checkout }));
                   },
@@ -461,11 +467,9 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                       ? { open: dockOpen, toggle: () => showDock(!dockOpen) }
                       : undefined,
                   showAgents: view !== 'chat' && chatTab ? showChat : undefined,
-                  openProject: selectCheckout && controller ? () => run(openCheckout()) : undefined,
+                  openProject: native.chooseCheckout ? () => run(openCheckout) : undefined,
                 })
               }
-              copyPaths={copyPaths}
-              revealPath={revealPath}
               mentionInChat={
                 chat && composer && selected
                   ? (checkout, paths) => {
@@ -475,9 +479,9 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                       const place = findComposerPlace(selected.root, remote);
                       const files = paths.map((path) => `${checkout.root}/${path}`);
                       run(
-                        desktopApplication
-                          .run(composer.mention(place, files))
-                          .then(focusMessageEnd),
+                        Effect.tap(composer.mention(place, files), () =>
+                          Effect.sync(focusMessageEnd),
+                        ),
                       );
                     }
                   : undefined
@@ -504,19 +508,18 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
                       ...chatViews!,
                       createWorktree:
                         createChatWorktree &&
-                        (async (root, branch, requestId) => {
-                          const created = await createChatWorktree(root, branch, requestId);
-                          await editor.run(worktrees.list(selected));
-                          // Kept even if listing failed, so the new chat stays in this dock.
-                          await editor.run(worktrees.add(selected.checkoutId, created));
-                          return created;
-                        }),
+                        ((root, branch, requestId) =>
+                          Effect.tap(createChatWorktree(root, branch, requestId), (created) =>
+                            Effect.andThen(
+                              worktrees.list(selected),
+                              // Kept even if listing failed, so the new chat stays in this dock.
+                              worktrees.add(selected.checkoutId, created),
+                            ),
+                          )),
                     }}
                   />
                 ) : undefined
               }
-              selectClipboardImports={checkoutActions.selectClipboardImports}
-              selectDroppedImports={checkoutActions.selectDroppedImports}
             />
           </section>
         </Tabs.Panel>
@@ -540,14 +543,14 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
               sidebarHidden,
               createWorktree: createChatWorktree,
               turnIntoProject:
-                turnChatIntoProject && controller
-                  ? async (conversationId) => {
-                      const root = await turnChatIntoProject(conversationId);
-                      // The new project joins the rail; the chat stays open here.
-                      if (application.getSnapshot().phase === 'live')
-                        await controller.openCheckout(root);
-                    }
-                  : undefined,
+                turnChatIntoProject &&
+                ((conversationId: string) =>
+                  Effect.flatMap(turnChatIntoProject(conversationId), (root) =>
+                    // The new project joins the rail; the chat stays open here.
+                    application.getSnapshot().phase === 'live'
+                      ? Effect.asVoid(controller.openCheckout(root))
+                      : Effect.void,
+                  )),
               visible: view === 'chat',
             }
           }
@@ -561,7 +564,6 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         <Settings
           application={application}
           chat={chat}
-          runner={desktopApplication}
           section={settings}
           onSectionChange={setSettings}
           close={() => setSettings(null)}

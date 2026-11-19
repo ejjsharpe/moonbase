@@ -22,25 +22,15 @@ const effectNativeEdges: { files: string[]; allow: string[]; reason: string }[] 
   },
   {
     files: ['apps/desktop/src/renderer/main.tsx'],
-    allow: ['runPromise', 'runPromiseExit', 'runSync'],
-    reason: "The renderer's root owns its one runtime and the runners it hands the views.",
+    allow: ['runPromise', 'runFork', 'runSync'],
+    reason:
+      "The renderer's root owns its one runtime: it builds the document, answers main's window actions and checks unload; views run theirs through atom functions.",
   },
   {
     files: ['apps/desktop/src/main/test-hooks.ts'],
     allow: ['runPromiseExitWith'],
     reason:
       "The unpackaged test hook is Promise code; a request it proceeds with runs on main's fiber.",
-  },
-  {
-    files: [
-      'apps/desktop/src/renderer/shell/desktop-application.ts',
-      'apps/desktop/src/renderer/chat/chat-header.tsx',
-      'apps/desktop/src/renderer/chat/composer/composer.tsx',
-      'apps/desktop/src/renderer/chat/transcript/transcript-actions.ts',
-    ],
-    allow: ['runner.runSync'],
-    reason:
-      "DOM event handlers, and an effect cancelling a transcript's actions, make synchronous service updates on the renderer root's runner.",
   },
   {
     files: ['packages/workbench/src/files-tree/use-drop-target.ts'],
@@ -51,12 +41,6 @@ const effectNativeEdges: { files: string[]; allow: string[]; reason: string }[] 
     files: ['packages/workbench/src/files-tree/use-entry-drag.ts'],
     allow: ['setTimeout'],
     reason: 'The drag image is removed once the browser has captured it, after dragstart.',
-  },
-  {
-    files: ['packages/workbench/src/files-tree/use-follow-active-file.ts'],
-    allow: ['setTimeout'],
-    reason:
-      "Following settles on the last of rapid active-file switches, in a React effect's cleanup.",
   },
 ];
 

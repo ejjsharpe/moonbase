@@ -1,4 +1,7 @@
 import { useRef, useState } from 'react';
+import * as AsyncResult from 'effect/reactivity/AsyncResult';
+import * as Atom from 'effect/reactivity/Atom';
+import { useAtomValue } from '@effect/atom-react';
 import * as stylex from '@stylexjs/stylex';
 import { Popover } from '@base-ui/react/popover';
 import { controls } from '@moonbase/ui/controls';
@@ -24,11 +27,16 @@ export type ChatFolderProject = {
   open: boolean;
 };
 
+/** Folders listed each time they are read, newest first, such as each time a menu opens. */
+export type RecentFolders = Atom.Atom<AsyncResult.AsyncResult<readonly string[], unknown>>;
+
+const noFolders: RecentFolders = Atom.make(AsyncResult.success<readonly string[]>([]));
+
 export type FolderPickerProps = {
   cwd: string;
   projects: readonly ChatFolderProject[];
-  /** Folders the native picker approved before, newest first; read each time the menu opens. */
-  recentFolders?: () => Promise<readonly string[]>;
+  /** Folders the native picker approved before; read each time the menu opens. */
+  recentFolders?: RecentFolders;
   /**
    * Names `recentFolders` for a host with no picker here, whose folders are its approved roots and
    * the folders inside them.
@@ -57,7 +65,9 @@ export function FolderPicker({
   disabled = false,
 }: FolderPickerProps) {
   const [open, setOpen] = useState(false);
-  const [recent, setRecent] = useState<readonly string[]>([]);
+  // Read only while the menu is open, so each opening lists them again.
+  const recentResult = useAtomValue(open && recentFolders ? recentFolders : noFolders);
+  const recent = AsyncResult.getOrElse(recentResult, () => []);
   const focusTarget = useRef<HTMLElement>(null);
   // Open projects first, then the rest; a linked worktree only while it is open.
   const listed = projects
@@ -68,15 +78,7 @@ export function FolderPicker({
   const current = projects.find((project) => project.root === cwd);
   const name = cwd ? folderName(cwd) : '';
   return (
-    <Popover.Root
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (next && recentFolders)
-          void recentFolders()
-            .then(setRecent)
-            .catch(() => setRecent([]));
-      }}>
+    <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger
         aria-label="Choose working folder"
         title={cwd || (noProject ? 'No project · runs in a new empty folder' : undefined)}
@@ -163,7 +165,11 @@ export function FolderPicker({
                 })
               }
               browseLabel="Choose folder…"
-              empty={hostFolders?.empty ?? 'Folders you open or choose for a chat appear here.'}
+              empty={
+                AsyncResult.isFailure(recentResult)
+                  ? 'Recent folders could not be listed.'
+                  : (hostFolders?.empty ?? 'Folders you open or choose for a chat appear here.')
+              }
             />
           </Popover.Popup>
         </Popover.Positioner>

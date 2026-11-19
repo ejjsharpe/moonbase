@@ -1,4 +1,15 @@
-import { Cause, Effect, Exit, Layer, ManagedRuntime, PubSub, Queue, Scope, Stream } from 'effect';
+import {
+  Cause,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  ManagedRuntime,
+  PubSub,
+  Queue,
+  Scope,
+  Stream,
+} from 'effect';
 import type {
   ChatServiceShape,
   ConnectionServiceShape,
@@ -14,10 +25,13 @@ import type {
 } from '@moonbase/contracts/chat';
 import type { ConnectionCommand, ConnectionSnapshot } from '@moonbase/contracts/connection';
 import { isKnownError } from '@moonbase/contracts/error-groups';
+import { CancelledError } from '@moonbase/contracts/errors';
 import { HostUnavailableError } from '@moonbase/contracts/host-errors';
 import type { ChatServiceError } from '@moonbase/contracts/services';
 import type { MessagePortLike } from '../../src/ipc/port-socket.ts';
 import type { WindowAction } from '../../src/ipc/window-rpcs.ts';
+import type { WindowFailure } from '../../src/ipc/ipc-errors.ts';
+import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
   makeDocumentHandlers,
   type DocumentHandlersOptions,
@@ -29,11 +43,10 @@ import { EditorApprovals } from '../../src/main/ipc/editor-approvals.ts';
 import type { EditorIpcOptions } from '../../src/main/ipc/editor-ipc.ts';
 import { makeIpcServer } from '../../src/main/ipc/ipc-server.ts';
 import type { NativeActions } from '../../src/main/native-actions.ts';
-import {
-  makeChatTargetClients,
-  makeChatTargetPorts,
-  makeShellClients,
-} from '../../src/renderer/ipc/application-clients.ts';
+import { makeChatTargetPorts } from '../../src/renderer/ipc/chat-target-ports.ts';
+import { DesktopNative, type DesktopNativeShape } from '../../src/renderer/ipc/desktop-native.ts';
+import { callEffect } from '../../src/renderer/ipc/ipc-failures.ts';
+import { makeWindowActions } from '../../src/renderer/ipc/window-actions.ts';
 import { makeDesktopIpcLayer, toMessagePortLike } from '../../src/renderer/ipc/desktop-ipc.ts';
 import { WorkspaceIpcLive } from '../../src/renderer/ipc/workspace-ipc.ts';
 import { forkWorkspace, makeWorkspaceRunner } from './workspace-client-fixture.ts';
@@ -324,7 +337,10 @@ export async function makeIpcFixture(
   const makeRenderer = () =>
     ManagedRuntime.make(
       Layer.provideMerge(
-        WorkspaceIpcLive,
+        Layer.merge(
+          WorkspaceIpcLive,
+          DesktopNative.layer({ connect: async () => {}, pathForFile: (file) => file.name }),
+        ),
         makeDesktopIpcLayer(
           Effect.flatMap(Effect.promise(openPort), (port) =>
             port
@@ -405,14 +421,67 @@ export async function makeIpcFixture(
     /** Forks `use` (a watch, say) of the renderer's workspace; the returned close interrupts it. */
     forkWorkspace: <A, E>(use: (workspace: WorkspaceServiceShape) => Effect.Effect<A, E>) =>
       forkWorkspace(renderer, use),
+    /** Main's native and window procedures as the renderer calls them, each run to a Promise. */
     get shell() {
-      return makeShellClients((effect, options) => renderer.runPromiseExit(effect, options), {
-        connect: async () => {},
-        pathForFile: (file) => file.name,
-      });
+      const native = <A, E>(use: (native: DesktopNativeShape) => Effect.Effect<A, E>) =>
+        renderer.runPromise(Effect.flatMap(DesktopNative, use));
+      const window = makeWindowActions();
+      return {
+        chatTargets: () =>
+          renderer.runPromise(callEffect('getChatTargets', undefined, 'desktop-request')),
+        chooseChatFolder: () => native((n) => n.chooseChatFolder),
+        chooseCheckout: () => native((n) => n.chooseCheckout),
+        createChatWorktree: (root: string, branch: string, requestId: string) =>
+          native((n) => n.createChatWorktree(root, branch, requestId)),
+        pasteImports: (checkout: CheckoutTarget) => native((n) => n.pasteImports(checkout)),
+        dropImports: (checkout: CheckoutTarget, files: File[]) =>
+          native((n) => n.dropImports(checkout, files)),
+        copyPaths: (checkout: CheckoutTarget, paths: string[], relative: boolean) =>
+          native((n) => n.copyPaths(checkout, paths, relative)),
+        revealPath: (checkout: CheckoutTarget, path: string) =>
+          native((n) => n.revealPath(checkout, path)),
+        /** Watches main's window actions; the returned close interrupts the watch. */
+        watchWindowActions: (receive: (action: WindowAction) => void) => {
+          const watching = renderer.runFork(window.watch(receive));
+          return () => renderer.runPromise(Fiber.interrupt(watching)).then(() => undefined);
+        },
+        answerQuit: (id: string, consent: boolean, cleanupError?: WindowFailure) =>
+          renderer.runPromise(window.answerQuit(id, consent, cleanupError)),
+      };
     },
-    target: (id: 'local' | 'remote') =>
-      makeChatTargetClients((effect, options) => renderer.runPromiseExit(effect, options), id),
+    /**
+     * One chat target's transcript native actions, each run to a Promise that rejects with its
+     * failure, or a `CancelledError` once `signal` aborts.
+     */
+    target: (id: 'local' | 'remote') => {
+      type Transcript = DesktopNativeShape['transcripts']['local'];
+      const transcript = async <A, E>(
+        use: (native: Transcript) => Effect.Effect<A, E>,
+        operation: string,
+        signal?: AbortSignal,
+      ) => {
+        const exit = await renderer.runPromiseExit(
+          Effect.flatMap(DesktopNative, (n) => use(n.transcripts[id])),
+          { signal },
+        );
+        if (Exit.isSuccess(exit)) return exit.value;
+        const failure = Cause.findErrorOption(exit.cause);
+        if (failure._tag === 'Some') throw failure.value;
+        throw Cause.hasInterruptsOnly(exit.cause)
+          ? new CancelledError({ operation })
+          : Cause.squash(exit.cause);
+      };
+      return {
+        transcript: {
+          copy: (input: Parameters<Transcript['copy']>[0], signal?: AbortSignal) =>
+            transcript((t) => t.copy(input), 'copyTranscript', signal),
+          openLink: (url: string, signal?: AbortSignal) =>
+            transcript((t) => t.openLink(url), 'openTranscriptLink', signal),
+          imageUrl: (image: Parameters<Transcript['imageUrl']>[0], signal?: AbortSignal) =>
+            transcript((t) => t.imageUrl(image), 'getTranscriptImageUrl', signal),
+        },
+      };
+    },
     /** The chat, provider setup and connection ports the renderer's chat runs on, for `id`. */
     ports: (id: 'local' | 'remote') => renderer.runPromise(makeChatTargetPorts(id)),
     connectRaw,

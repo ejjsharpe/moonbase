@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { useMemo, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { Button } from '@base-ui/react/button';
 import { Dialog } from '@base-ui/react/dialog';
@@ -8,7 +8,9 @@ import { workbench } from '@moonbase/ui/workbench';
 import { Icon } from '@moonbase/ui/icons';
 import { projectInitials, projectTiles } from '@moonbase/ui/projects';
 import { colors, space, type } from '@moonbase/ui/tokens.stylex';
-import { Context } from 'effect';
+import { Context, Effect } from 'effect';
+import * as Atom from 'effect/reactivity/Atom';
+import { useAtom } from '@effect/atom-react';
 import { ChatList, ChatSelection, type ChatComposer } from '@moonbase/application/chat';
 import { folderName } from '../components/folder-menu.tsx';
 import { activateChatFind, type ChatFindOwner } from './find.tsx';
@@ -30,7 +32,7 @@ function SettleButton({ open }: { open: OpenChat }) {
       title={chat.settledAt ? 'Unsettle chat' : 'Settle chat'}
       {...stylex.props(controls.button, controls.iconButton)}
       disabled={open.settled === null}
-      onClick={() => void act(Context.get(services, ChatList).settle(selected, !chat.settledAt))}>
+      onClick={() => act(Context.get(services, ChatList).settle(selected, !chat.settledAt))}>
       <Icon name={chat.settledAt ? 'unsettle' : 'settle'} />
     </Button>
   );
@@ -68,10 +70,29 @@ function TurnButton({
 }: {
   open: OpenChat;
   composer: ChatComposer;
-  turnIntoProject: (conversationId: string) => Promise<void>;
+  turnIntoProject: (conversationId: string) => Effect.Effect<void, unknown>;
 }) {
-  const { services, runner, act } = useChat();
-  const [turning, setTurning] = useState(false);
+  const { services, act } = useChat();
+  // Turning shows until it settles; closing the chat's header interrupts the wait.
+  const turnAtom = useMemo(
+    () =>
+      Atom.setIdleTTL(
+        Atom.fn((id: string) =>
+          Effect.andThen(composer.dismiss({ chat: id }), turnIntoProject(id)).pipe(
+            Effect.tap(() => Effect.sync(() => act(Context.get(services, ChatList).reload()))),
+            Effect.catch((error: unknown) =>
+              composer.report({
+                chat: id,
+                text: `The chat could not become a project. ${error instanceof Error ? error.message : ''}`.trim(),
+              }),
+            ),
+          ),
+        ),
+        0,
+      ),
+    [composer, turnIntoProject, services, act],
+  );
+  const [turning, turn] = useAtom(turnAtom);
   if (!open.selected || !open.chat?.ownFolder) return null;
   const id = open.selected.conversationId;
   return (
@@ -79,23 +100,8 @@ function TurnButton({
       aria-label="Turn into project"
       title="Turn into project · opens this chat’s folder as a project"
       {...stylex.props(controls.button, controls.iconButton)}
-      disabled={turning || !open.ready}
-      onClick={() => {
-        setTurning(true);
-        runner.runSync(composer.dismiss({ chat: id }));
-        void turnIntoProject(id)
-          .then(
-            () => act(Context.get(services, ChatList).reload()),
-            (error: unknown) =>
-              runner.runSync(
-                composer.report({
-                  chat: id,
-                  text: `The chat could not become a project. ${error instanceof Error ? error.message : ''}`.trim(),
-                }),
-              ),
-          )
-          .finally(() => setTurning(false));
-      }}>
+      disabled={turning.waiting || !open.ready}
+      onClick={() => turn(id)}>
       <Icon name="newFolder" />
     </Button>
   );
@@ -177,7 +183,7 @@ export function ChatHeader({
   onFindKeyDown,
 }: {
   composer: ChatComposer;
-  turnIntoProject?: (conversationId: string) => Promise<void>;
+  turnIntoProject?: (conversationId: string) => Effect.Effect<void, unknown>;
   findInput: RefObject<HTMLInputElement | null>;
   titleId: string;
   /** The title bar's slot, null until it mounts; undefined for a header of the view's own. */

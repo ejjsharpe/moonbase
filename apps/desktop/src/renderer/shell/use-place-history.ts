@@ -7,6 +7,7 @@ import { findStep, type Place } from '@moonbase/application';
 import { getChatAtoms, type ChatServices } from '@moonbase/application/chat';
 import type { ChatTarget } from '@moonbase/contracts/chat';
 import type { DesktopApplication } from './desktop-application.ts';
+import { reporting, useRun } from '../hooks/use-run.ts';
 
 const noChat = Atom.make<ChatTarget | null>(null);
 
@@ -31,7 +32,7 @@ export function usePlaceHistory({
   project: CheckoutTarget | undefined;
   activePath: string | null | undefined;
   openCheckouts: readonly CheckoutTarget[];
-  show(place: Place): Promise<void>;
+  show(place: Place): Effect.Effect<void, unknown>;
   report(error: unknown): void;
 }) {
   const chatSelected = useAtomValue(chat ? getChatAtoms(chat).selected : noChat);
@@ -46,17 +47,17 @@ export function usePlaceHistory({
   const { navigation } = application.service;
   const history = useAtomValue(application.atoms.history);
   const placeKey = place && JSON.stringify(place);
+  // A step still showing its place ends with the shell.
+  const run = useRun();
   useEffect(() => {
-    void application.run(navigation.show(place));
+    run(navigation.show(place));
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- The key stands for the place.
   }, [placeKey]);
   const stepTo = (index: number | undefined) => {
     const target = index === undefined ? undefined : history.places[index];
     if (index === undefined || !target) return undefined;
-    const go = Effect.tryPromise({ try: () => show(target), catch: (error) => error }).pipe(
-      Effect.catch((error) => Effect.sync(() => report(error))),
-    );
-    return () => void application.run(navigation.step(index, go)).catch(report);
+    const go = Effect.catch(show(target), (error) => Effect.sync(() => report(error)));
+    return () => run(reporting(navigation.step(index, go), report));
   };
   return {
     /** Steps back or forward, absent when there is nowhere to go. */

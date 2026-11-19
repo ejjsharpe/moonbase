@@ -91,7 +91,7 @@ export const Entry = memo(function Entry({
     );
   }, [matchedPart, findMatch, source, parts, manifest, act, selection, replay]);
   const copy = () => {
-    if (native && source) actions.run((signal) => native.copy({ source }, signal), 'copy');
+    if (native && source) actions.run(native.copy({ source }), 'copy');
   };
   // Messages and tool steps need no names; only a system record with content keeps its own.
   const kind = classifyEntry(entry);

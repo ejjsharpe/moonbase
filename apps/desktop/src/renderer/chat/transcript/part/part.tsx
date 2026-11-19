@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { memo, useMemo, useRef, type MouseEvent } from 'react';
 import { Button } from '@base-ui/react/button';
 import { Collapsible } from '@base-ui/react/collapsible';
@@ -139,21 +140,20 @@ export const Part = memo(function Part({
   const copy = (codeStart?: number) => {
     const body = displayed.takeCopyBody();
     if (native)
-      actions.run(async (signal) => {
-        if (!body) throw Error('The displayed output changed. Try Copy again.');
-        await native.copy(
-          {
-            source: body.source,
-            selection: {
-              partId: body.part.partId,
-              bytes: body.part.bytes,
-              revision: body.part.revision,
-            },
-            ...(codeStart !== undefined ? { code: { start: codeStart } } : {}),
-          },
-          signal,
-        );
-      }, 'copy');
+      actions.run(
+        body
+          ? native.copy({
+              source: body.source,
+              selection: {
+                partId: body.part.partId,
+                bytes: body.part.bytes,
+                revision: body.part.revision,
+              },
+              ...(codeStart !== undefined ? { code: { start: codeStart } } : {}),
+            })
+          : Effect.fail(Error('The displayed output changed. Try Copy again.')),
+        'copy',
+      );
   };
   // A code block's Copy carries its offset; the part handles it, so the message's blocks never
   // re-render for a new Copy as its text streams.

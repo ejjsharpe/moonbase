@@ -18,7 +18,8 @@ import {
   type ChatComposer,
 } from '@moonbase/application/chat';
 import { ModelPicker } from '../model-picker.tsx';
-import type { ChatFolderProject } from '../folder-picker.tsx';
+import type { ChatFolderProject, RecentFolders } from '../folder-picker.tsx';
+import { useRun } from '../../hooks/use-run.ts';
 import { effortLabels, readModelChoice } from '../model-choice.ts';
 import { focusMessage, isBusy, readOpenSettled } from '../open-chat.ts';
 import { useChat } from '../chat-context.ts';
@@ -55,12 +56,18 @@ export function Composer({
   dockCwd?: string;
   hosts?: ChatHosts;
   folderProjects?: readonly ChatFolderProject[];
-  recentFolders?: () => Promise<readonly string[]>;
-  chooseFolder?: () => Promise<string | null>;
-  createWorktree?: (root: string, branch: string, requestId: string) => Promise<string>;
+  recentFolders?: RecentFolders;
+  chooseFolder?: Effect.Effect<string | null, unknown>;
+  createWorktree?: (
+    root: string,
+    branch: string,
+    requestId: string,
+  ) => Effect.Effect<string, unknown>;
   setUpProviders?: () => void;
 }) {
-  const { atoms, services, runner, act } = useChat();
+  const { atoms, services, act } = useChat();
+  // The composer's own updates, synchronous in its event handlers.
+  const run = useRun();
   const drafts = Context.get(services, ChatDrafts),
     sends = Context.get(services, ChatSends);
   const composerState = useAtomValue(composerAtoms.state(composer));
@@ -91,11 +98,11 @@ export function Composer({
     : null;
   const choice = readModelChoice(providerState, modelPreference);
   const { models, entry, effort, effortUnavailable, selection } = choice;
-  const run = snapshot?.run;
+  const running = snapshot?.run;
   const choose = (change: Parameters<ChatComposer['choose']>[1]) =>
-    runner.runSync(composer.choose(place, change));
+    run(composer.choose(place, change));
   const setFolderError = (text: string | null) =>
-    runner.runSync(
+    run(
       text
         ? composer.report({ chat: '', place: place.key, text })
         : composer.dismiss({ chat: '', place: place.key }),
@@ -103,7 +110,7 @@ export function Composer({
   const chooseModel = (value: string) => {
     const model = models.find((item) => item.value === value);
     if (model)
-      void act(
+      act(
         drafts.setModelPreference({
           model: model.model,
           ...(model.defaultReasoningEffort
@@ -115,7 +122,7 @@ export function Composer({
   const chooseEffort = (value: string) => {
     const chosen = entry?.reasoningEfforts?.find((item) => item === value);
     if (entry && chosen)
-      void act(drafts.setModelPreference({ model: entry.model, reasoningEffort: chosen }));
+      act(drafts.setModelPreference({ model: entry.model, reasoningEffort: chosen }));
   };
   const tools = remote ? 'Tools on the host' : 'Local tools';
   let toolNotice =
@@ -135,10 +142,10 @@ export function Composer({
     !folderProjects.some((project) => project.root === cwd && project.branch === undefined);
   const settled = readOpenSettled({ selected, chat: openChatSummary, ready: connected, active });
   const settle = (value: boolean) =>
-    selected && void act(Context.get(services, ChatList).settle(selected, value));
+    selected && act(Context.get(services, ChatList).settle(selected, value));
   const commands = listChatCommands({
     selected: !!selected,
-    running: !!run && connected && !busy('stop') && !storageError,
+    running: !!running && connected && !busy('stop') && !storageError,
     settled,
     models: choosing
       ? models.map((model) => ({
@@ -156,21 +163,24 @@ export function Composer({
       : [],
     // The lines after `/new` start the new chat's draft; the open chat's is left empty.
     newChat: () =>
-      void runner
-        .run(composer.startNewChat(removeCommandLine(draft), mentions, openChatSummary?.cwd))
-        .then((started) => started && focusMessage()),
-    stop: () => void act(sends.stop),
+      run(
+        Effect.tap(
+          composer.startNewChat(removeCommandLine(draft), mentions, openChatSummary?.cwd),
+          (started) => Effect.sync(() => started && focusMessage()),
+        ),
+      ),
+    stop: () => act(sends.stop),
     settle: () => settle(true),
     unsettle: () => settle(false),
-    clearDraft: () => void act(drafts.setDraft('')),
+    clearDraft: () => act(drafts.setDraft('')),
     chooseModel,
     chooseEffort,
   });
   // A command consumes its line before it runs, so `/clear` starts from the rest; `/new` takes the
   // rest to the new chat itself.
   const runCommand = (command: ChatCommand, option?: ChatCommandOption) => {
-    runner.runSync(composer.dismiss({ chat: openChat, place: place.key }));
-    if (command.name !== 'new') void act(drafts.setDraft(removeCommandLine(draft), mentions));
+    run(composer.dismiss({ chat: openChat, place: place.key }));
+    if (command.name !== 'new') act(drafts.setDraft(removeCommandLine(draft), mentions));
     command.run(option);
   };
   const typedCommand = resolveCommandLine(draft, commands);
@@ -215,22 +225,14 @@ export function Composer({
           event.preventDefault();
           if (typedCommand) {
             if ('error' in typedCommand)
-              runner.runSync(composer.report({ chat: openChat, draft, text: typedCommand.error }));
+              run(composer.report({ chat: openChat, draft, text: typedCommand.error }));
             else runCommand(typedCommand.command, typedCommand.option);
             return;
           }
-          runner.runSync(
+          run(
             composer.send(place, {
               ...(selection ? { selection } : {}),
-              ...(worktreeChoice
-                ? {
-                    createWorktree: (root: string, branch: string, requestId: string) =>
-                      Effect.tryPromise({
-                        try: () => createWorktree!(root, branch, requestId),
-                        catch: (error) => error,
-                      }),
-                  }
-                : {}),
+              ...(worktreeChoice ? { createWorktree: createWorktree! } : {}),
             }),
           );
         }}>
@@ -244,9 +246,7 @@ export function Composer({
             searchable={connected && (!!selected || (!!cwd && !creatingWorktree))}
             cwd={!selected && cwd ? cwd : undefined}
             onMention={
-              !selected && cwd
-                ? (path) => runner.runSync(composer.noteMentions([path], cwd))
-                : undefined
+              !selected && cwd ? (path) => run(composer.noteMentions([path], cwd)) : undefined
             }
             refuseMention={
               !selected && cwd
@@ -288,15 +288,22 @@ export function Composer({
                 browse &&
                 (() => {
                   setFolderError(null);
-                  void browse()
-                    .then((folder) => {
-                      if (folder) choose({ cwd: folder, newWorktree: false });
-                    })
-                    .catch(() =>
-                      setFolderError(
-                        'The folder could not be approved. Choose an existing working folder again.',
+                  run(
+                    browse.pipe(
+                      Effect.tap((folder) =>
+                        Effect.sync(() => {
+                          if (folder) choose({ cwd: folder, newWorktree: false });
+                        }),
                       ),
-                    );
+                      Effect.catch(() =>
+                        Effect.sync(() =>
+                          setFolderError(
+                            'The folder could not be approved. Choose an existing working folder again.',
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
                 })
               }
             />
@@ -326,13 +333,13 @@ export function Composer({
                   : ''}
               </span>
             )}
-            {run && (
+            {running && (
               <Button
                 aria-label="Stop"
                 title="Stop"
                 {...stylex.props(controls.button, controls.iconButton)}
                 disabled={!connected || busy('stop') || !!storageError}
-                onClick={() => void act(sends.stop)}>
+                onClick={() => act(sends.stop)}>
                 <Icon name="stop" />
               </Button>
             )}
