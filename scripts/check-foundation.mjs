@@ -158,10 +158,6 @@ for (const [entry, owner] of [
       module === undefined || module === owner || ['application', 'contracts'].includes(module),
       `Foreign package reached ${entry}: ${input}`,
     );
-    assert(
-      !/packages\/application\/src\/runtime\/(?:handlers|clients)\.ts$/.test(input),
-      `Privileged application implementation reached ${entry}: ${input}`,
-    );
   }
   console.log(
     `Verified headless browser ${owner}: browser-safe Effect permitted, no UI or backend.`,

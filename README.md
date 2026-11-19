@@ -2,16 +2,16 @@
 
 A macOS workbench for editing local projects and chatting with Pi Durable agents, locally or on a remote host over SSH.
 
-The daemon owns projects: it serves files, saves, Git, worktrees, search and watching, and chats, over one authenticated WebSocket. Electron is a client of the local daemon; it keeps the native pickers, clipboard, Finder and each client's own drafts. A daemon in host mode serves its approved roots the same way to clients on other machines.
+The daemon owns projects and chats: it serves files, saves, Git, worktrees, search, watching and chats over two authenticated WebSockets, one for chat and one for files. Electron is a client of the local daemon; it keeps the native pickers, clipboard, Finder and each client's own drafts. A daemon in host mode serves its approved roots the same way to clients on other machines.
 
 | Module | Owns |
 | --- | --- |
-| [Contracts](packages/contracts/README.md) | Shared DTOs, schemas, client interfaces and Effect service ports |
-| [Application](packages/application/README.md) | Headless editor/chat controllers, composition and lifecycle |
+| [Contracts](packages/contracts/README.md) | Shared DTOs, schemas, tagged errors, RPC groups and Effect service ports |
+| [Application](packages/application/README.md) | Headless editor and chat state as per-concept services and atoms, and their composition |
 | [Workbench](packages/workbench/README.md) | Project file sidebar, buffers and React/Monaco editor |
 | [Workspace](packages/workspace/README.md) | The macOS file host (files, Git, worktrees, search, watching, journals) and the client recovery store (drafts, editor state) |
 | [Chat runtime](packages/chat-runtime/README.md) | Pi chat execution, provider setup and credentials |
-| [Daemon protocol](packages/daemon-protocol/README.md) | The daemon's signed health, authenticated WebSocket, its server, the remote client services and host folder authority |
+| [Daemon protocol](packages/daemon-protocol/README.md) | Signed health, the authenticated RPC sockets, the daemon's listener and the client services over them |
 | [SSH](packages/ssh/README.md) | Authenticated SSH port forwarding to a chat host |
 | [UI](packages/ui/README.md) | Shared StyleX tokens, recipes and icons |
 | [Config](packages/config/README.md) | Lint, formatting and TypeScript defaults |
@@ -36,8 +36,8 @@ bun run --cwd test/editor-workspace test:macos
 bun run --cwd test/chat test
 ```
 
-`check:foundation` also checks that the Electron version pinned in the manifests, the packaging config and the workspace runtime gate agree.
-
-`bun run test` runs three package suites at a time; each runs its files in up to `MOONBASE_TEST_WORKERS` processes (default 4: Bun `--parallel`, Node `--test-concurrency`), as the chat integration suite does. PR checks run tests that need macOS (each package's `test/macos/` and all of `packages/workspace`, through `test:macos`) on one macOS runner, and the rest (`test`, or `test:linux` in packages tagged `macos-tests`) on Linux; the browser Playwright suites (`packages/workbench` `test:ui`, `apps/desktop` `test:browser`) run on Linux, and Electron's (`test:native` and `test:package`, one macOS job each) on two more. A PR runs only the suites of the packages it changes and their dependents; a push to main runs them all. Generated test output goes in ignored `test-results/`, with each Playwright run's per-test timings (`timings.json`); build output goes in `dist/` and `release/`.
+- `bun run test` runs three package suites at a time, each in up to `MOONBASE_TEST_WORKERS` processes (default 4).
+- PR checks run only the suites of the packages a PR changes and their dependents; a push to main runs them all. Tests that need macOS (each package's `test/macos/`, and all of `packages/workspace`, through `test:macos`) run on one macOS runner and the rest on Linux. The browser Playwright suites (`packages/workbench` `test:ui`, `apps/desktop` `test:browser`) run on Linux, and Electron's (`test:native`, `test:package`) on macOS.
+- Test output goes in ignored `test-results/`, build output in `dist/` and `release/`.
 
 PR titles use Conventional Commits, for example `fix(editor): retain drafts`; the `conventional-commits` check enforces this. PRs are squash-merged with the PR title as the commit subject.

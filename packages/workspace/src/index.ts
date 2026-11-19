@@ -86,9 +86,10 @@ export function WorkspaceRecoveryLive(
 }
 
 /**
- * The file host and one client recovery store in one process, as Electron main composes them: the
- * host journals and the client recovery share `dataDirectory`, in separate files. Provides
- * `WorkspaceService` and `WorkspaceHostService`.
+ * The file host and one client recovery store in one process, for a process that runs both (tests
+ * and `examples/local.ts`; Electron main composes only `WorkspaceRecoveryLive`, over the daemon's
+ * host): the host journals and the client recovery share `dataDirectory`, in separate files.
+ * Provides `WorkspaceService` and `WorkspaceHostService`.
  */
 export function WorkspaceLocalLive(
   configuration: WorkspaceHostConfiguration & { installationId: string },

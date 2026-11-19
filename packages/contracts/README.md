@@ -1,51 +1,48 @@
 # Contracts
 
-`@moonbase/contracts` holds the definitions shared by application, presentation and infrastructure: DTOs, commands, schemas, errors and Effect service ports. It imports only its own definitions and Effect, and creates no runtime.
+`@moonbase/contracts` holds the definitions every other module shares: DTOs, commands, schemas, tagged errors, RPC groups and Effect service ports. It imports only its own files and Effect, creates no runtime and implements nothing; the packages and apps that serve or call these contracts do.
 
-| Subpath | Contents |
+## Public interface
+
+| Subpaths | What they give |
 | --- | --- |
-| `workspace`, `chat`, `connection`, `host`, `providers`, `daemon` | Browser-safe DTOs, commands and protocol constants |
-| `errors`, `common` | The shared outcome errors `UncertainError` (may have committed: check, never resend), `CancelledError` and `UnauthorizedError`, and `areJsonValuesEqual` / `getJsonKey` (key-order-safe equality and keys for plain decoded data) |
-| `error-groups` | What a failure means for its request, for the few decisions that depend on it rather than on what failed: `isRefusal` (refused as given, it never ran), `isAccessRefusal`, `isConflict`, `isUnavailable` (trying again may succeed), `isIncompatible`, `isStorageFailure`, `isUncertain` and `isCancelled`, over every error contracts defines (by tag, and by reason where one class covers several); `isKnownError` says whether a failure is one of them, whose message may be shown |
-| `chat-errors`, `folder-errors`, `provider-errors`, `host-errors` | The tagged errors (D14) the `ChatService`, the folder approvals and `LocalHostService`, provider setup with its encrypted credentials, and a chat host or its RPC link fail with. Each names what happened with a literal (`problem`, `reason`, `refusal`) and builds its message from it, so one decoded from a remote host carries no text the host wrote (D11). Each module exports its classes (`chatErrors`, …), its union type and a guard that runs no Proxy trap. `services` types each service's error as its own union plus `DaemonLinkError` (the host's shared errors and connection failures). In the RPC groups each procedure declares only what it can fail with, from a few small unions (`chatErrorSchemaOf`: reads and watches, Send lookup, file search, mutations; `daemonErrorSchemas`: folder reads and approval, active work, marking a project, provider setup reads and mutations), each including the host's errors every procedure can get (`hostErrors`: a refused admission or failed handler, another host's request as `UnauthorizedError`, an operation not served); a lost mutation is `UncertainError` |
-| `connection-errors` | What a `ConnectionService` fails with (`ConnectionFailure`): `ConnectionError` (SSH and the loopback connection), `HostVerificationError` (signed health) and `LocalDaemonError` (desktop's own daemon), each a `reason` whose message is Moonbase's own, and `CancelledError` |
-| `ipc-errors` | What desktop IPC fails with: main's refusals of a window's requests (`IpcInputError`, `IpcAuthorityError`, `IpcBusyError`, `IpcUnavailableError`, `NativeActionError`, `IpcFailedError` for a handler that failed) and the renderer's own (`IpcClosedError`, sent or not; `IpcReplyError`). They are here because the application reads them |
-| `files` | `isPrivateTo(stats, uid)`: a file is owned by `uid` with no group or other permission bits, the check every private file passes |
-| `workspace-host`, `workspace-host-schema` | The file host's operations: the workspace commands without recovery, journalled with an installation, client and request ID, plus `saveStatus`, `acknowledgeSave` and `listOperations` (the operation feed, a page also bounded in bytes), with request IDs on `createWorktree` and `initializeRepository`, and `createChatWorktree`, `turnChatIntoProject` (journalled mutations) and local-mode `captureImports` and `releaseImports`; which are mutations, their deadline classes and the watch's `WorkspaceWatchValue` |
-| `workspace-rpc` | `WorkspaceRpcs`, the file host's RPC group: one procedure per operation (`{ host, input }`) and `watchWorkspace`, each declaring its error union (`workspaceErrorSchemaOf`: the host's errors, the file host's own and the shared outcomes; Turn into project also the chat's and folder's) |
-| `workspace-host-errors` | The file host's tagged errors (`fileHostErrors`; a field holding text the host wrote, such as Git's output or a path, is optional so a client can drop it, D11) and `WorkspaceHostError`: those, the chat and folder errors Turn into project passes on and, over a daemon link, the link's errors. A refusal recorded for a request ID replays as `RecordedRefusalError` with its kind (`refusal`) and text |
-| `workspace-errors` | The client-facing `WorkspaceService`'s errors (`WorkspaceError`: the host's and the recovery store's own tagged errors, `recoveryErrors`) |
-| `rpc-upgrade`, `rpc-admission` | The two sockets' paths, protocols and limits (`rpcLimits`, `workspaceRpcLimits`) and the upgrade proof's domain; `RpcAdmission`, the middleware every procedure declares, which the daemon implements |
-| `recovery`, `recovery-schema` | The client recovery store's buffer-keyed format (`RecoveryState`, `RecoveryOutline` without draft text), its commands (`loadRecovery`, giving a `RecoveryLoad`, and the edits `openTab`, `closeTab`, `updateDraft`, `updateLayout`) and `watchRecovery`, which `WorkspaceCommand` and `WorkspaceServiceShape` carry beside the file commands |
-| `lookup` | `matchPath` / `compareMatches`: the fuzzy path ranking shared by editor lookup and chat file search |
-| `*-schema`, `schema` | Request, saved-data and wire-reply decoders, and shared schema constructors. Values are decoded where they enter a process (RPC, IPC, files); typed values inside a process are trusted |
-| `chat-validation` | `checkChatOutput`: decodes a chat reply from the wire and checks its authority (its target, host, sources and request identity match the request) and size bound, once, in the client that receives it (a reply that fails is `IncompatibleHostError`); `isChatMutation`, `isCancellableChatRead`, `isSameChatHost` / `isSameChatTarget` |
-| `services` | Privileged Effect service ports and endpoint types |
+| `chat`, `chat-schema`, `chat-rpc`, `chat-validation`, `chat-errors` | Chat DTOs and commands, their decoders, `ChatRpcs`, `checkChatOutput` (a reply's decoding, authority and size check, run once by the client that receives it) and the chat errors |
+| `workspace`, `workspace-schema`, `workspace-service` | The client-facing workspace: targets (`CheckoutTarget`, plain folder or Git), files, Git, operations, limits such as `maximumFileBytes`, and the `WorkspaceService` port |
+| `workspace-host`, `workspace-host-schema`, `workspace-rpc`, `workspace-host-errors`, `workspace-errors` | The file host's commands (journalled by installation, client and request ID), `WorkspaceRpcs`, the host's errors (`WorkspaceHostError`) and the client's (`WorkspaceError`) |
+| `recovery`, `recovery-schema` | The client recovery store's buffer-keyed format (`RecoveryState`, `RecoveryOutline`), `loadRecovery` and its edits |
+| `daemon`, `daemon-schema`, `daemon-rpc`, `folder-errors` | The daemon's operations beyond chat (`LocalHostCommand`, `HostProviderCommand`, each mapped to a capability by `daemonCommandCapabilities`), `FolderApprovals`, `LocalHostRpcs`, `ProviderSetupRpcs` and the folder errors |
+| `providers`, `providers-schema`, `provider-errors` | Provider setup state and commands, `readProviderSignInUrl` and the provider setup errors |
+| `connection`, `connection-schema`, `connection-errors` | Connection profiles and snapshots, and `ConnectionFailure` |
+| `host`, `host-schema`, `host-errors` | Protocol version, capabilities and signed health; the host link's errors (`hostErrors`, `DaemonLinkError`, `RequestReusedError`) |
+| `rpc-upgrade`, `rpc-admission` | Both sockets' paths, protocols and limits; `RpcAdmission`, the middleware every procedure declares and daemon-protocol's server implements |
+| `watch`, `watch-schema` | Watch values and deltas: `applyWatchDelta`, `decodeWatchValue` |
+| `errors`, `error-groups` | The shared outcomes and what a failure means (below) |
+| `ipc-errors` | What desktop IPC fails with, here because the application reads them |
+| `services` | Privileged Effect service ports: `ChatService`, `ConnectionService`, `ProviderSetupService`, `LocalHostService`, `WorkspaceHostService` |
+| `schema`, `common`, `lookup`, `paths`, `files` | Small shared helpers: schema constructors, JSON equality and keys, fuzzy path ranking (`matchPath`), relative path joins, `isPrivateTo` |
 
-Errors (D14): each module defines `Schema.TaggedError` classes named for what happened, with literal fields and a message built from them, and each RPC procedure declares the union it can fail with; handlers pass service errors on and the UI turns tags into text. An error sent to or received from a host carries no cause, path or text the host wrote (D11). `UncertainError`, `CancelledError` and `UnauthorizedError` are the outcomes every caller treats the same; a decision that depends on what a failure means, not on what failed, asks `error-groups`. A schema decoder (`decodeChatInput` and the like) throws the schema's own error, with input reporting off.
+## Errors (D14)
 
-Chat Find (`getChatFindExpression`) matches the literal query in original text with simple Unicode case folding and no normalization: ẞ matches ß and Σ matches ς, but ß never matches SS and NFC/NFD spellings differ.
+- Each module defines `Schema.TaggedError` classes named for what happened, with literal fields (`problem`, `reason`, `refusal`) and a `message` built from them. Each exports its classes (`chatErrors`, `fileHostErrors`, …), its union type and a guard.
+- Each RPC procedure declares the union it can fail with (`chatErrorSchemaOf`, `daemonErrorSchemas`, `workspaceErrorSchemaOf`), always including `hostErrors`. Handlers pass service errors on, and the UI turns tags into text.
+- `UncertainError` (may have committed: check, never resend), `CancelledError` and `UnauthorizedError` in `errors` are the outcomes every caller treats the same.
+- A decision that depends on what a failure means rather than what failed asks `error-groups` (`isRefusal`, `isConflict`, `isUnavailable`, `isUncertain`, …). `isKnownError` says whether a failure is one contracts defines, so its message may be shown.
+- An error sent to or received from an untrusted host carries no cause, path or text the host wrote (D11). A field holding host text, such as Git output, is optional so a client can drop it.
 
-A message's file mentions are relative paths in its working folder, each spelled in the text by `formatChatMention` (`@path`, or `@"path"` with whitespace), so the text alone still names every file. `findChatFiles` searches an existing chat's folder, or a folder a new chat may use.
+## Rules worth knowing
 
-A local chat's creation settings may leave out `cwd` for a chat without a project; the host gives it a folder of its own and lists it with `ownFolder: true`.
+- Decode at the edge only (D7): values are decoded where they enter a process (RPC, IPC, files) with the `*-schema` decoders, and typed values inside a process are trusted. A decoder throws the schema's own error, with input reporting off.
+- `services` is privileged: `ConnectionService.endpoint` carries an origin and token that must never reach renderers, settings or logs. `WorkspaceService` carries no credential, so the renderer may take it.
+- Client entries bundle only contracts and portable Effect; type-only imports emit no runtime code.
+- The host protocol is version 3 (`chatProtocolVersion`). A host advertises what it serves in its signed health (`chatHostCapabilities`); a client checks the capability before calling, and the server refuses a daemon operation whose capability it does not advertise.
+- Mutations carry request IDs that their replies echo.
 
-The host protocol is version 3 (`chatProtocolVersion`). `chatHostCapabilities` names what a host's signed health may advertise: `chat-v0` and `rpc-v1` on every host, on the daemon in either mode `daemon-local-v1`, `providers-v1` and `folders-v1`, on one that composes the workspace file host `workspace-v2` (its own RPC socket), and on a host-mode daemon `roots-v1` (`listHostFolders`: its approved roots and their folders). `daemon-schema` decodes the daemon's operations beyond chat, each mapped to the capability it needs (`daemonCommandCapabilities`): folder approvals and control (`LocalHostCommand`, served by the `LocalHostService` port) and provider setup on the wire (`HostProviderCommand`, naming a host and owner). Mutations carry request IDs that their replies echo. `FolderApprovals` is the daemon's folder authority (which working folders its chats may use). A `ConnectionProfile`'s `remotePort` is optional: SSH requires it, and a loopback connection fills it once it has read the daemon's port. `readProviderSignInUrl` accepts only https pages on a provider's sign-in origin.
-
-Chat, chat list and provider setup watches (`watch`, `watch-schema`) send their first value whole, then deltas from the value last sent where one pays (`watchDeltaBytes`): appended live text and replaced parts of the running response, chat-list rows upserted and removed with their order and changed chats past the page upserted with theirs, changed provider setup fields. `applyWatchDelta` applies one and `decodeWatchValue` checks the result; one that does not apply is `IncompatibleHostError` (`invalid-update`).
-
-`ChatService.watchChatList` delivers the chat list's first page and the chats past it that changed while watching (`ChatListUpdate`: `{ list, changed, dropped, reset }`; `reset` after missed updates, and a growing `dropped` count when changed chats were let go) and again after each change; `ProviderSetupService.watch(ownerId)` delivers an owner's setup state the same way, so nothing polls.
-
-`settleChat` settles or unsettles a chat (`{ target, settled }`) and returns its summary, whose `settledAt` says when it was settled.
-
-The file host (`WorkspaceHostService`) reports a save as `saved` (with the version of the request's text, which the client holds) or `conflict` and an operation with its items, and carries no editor recovery. `saveStatus` answers `saved`, `conflict`, `not-started` (the request never reached the host) or `uncertain`. `listOperations {checkout, after}` returns one page of completed moves, copies and Trash after a feed sequence, with `through` (what the page covers), `floor` (entries up to it may have been discarded) and `more`; `after: null` only reports the present position. The client-facing `WorkspaceService` carries the host's commands and results plus the client's recovery, which the editor follows through `watchRecovery`.
-
-A `CheckoutTarget` is a Git checkout (`vcs: 'git'`, with `branch` and `worktree`: `main` or `linked`) or a plain folder (`vcs: 'none'`); worktrees of one repository share `projectId`. Saved targets without `vcs` decode as Git.
-
-Client entries bundle only contracts and portable Effect (errors are schema classes); type-only client imports emit no runtime code. `services` is privileged: `ConnectionService.endpoint` carries origin and key data that must never reach renderers, settings or logs.
+## Checks
 
 ```sh
 bun run --cwd packages/contracts typecheck
 bun run --cwd packages/contracts lint
 bun run --cwd packages/contracts test
 ```
+
+Tests run under `node --test` and need no macOS.

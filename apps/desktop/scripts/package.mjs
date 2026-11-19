@@ -35,6 +35,8 @@ await build({
     ],
     electronVersion: '45.1.0',
     npmRebuild: false,
+    // Unsigned. Signing needs Bun's JIT entitlements on the helper under the hardened runtime (Bun's
+    // own entitlements.plist: allow-jit, allow-unsigned-executable-memory and the rest).
     mac: { identity: null, category: 'public.app-category.developer-tools' },
   },
 });
