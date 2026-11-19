@@ -13,14 +13,23 @@
 - **Stopping** sends SIGTERM to the group, then SIGKILL after `termGrace`, and waits until no member is left and its pipes are closed, all within `deadline`. Pipes another process still holds once the group is gone are ended here.
 - **Only ESRCH confirms the group is gone.** Darwin can report EPERM for an exiting group, so EPERM is signalled again: SIGTERM until `termGrace` ends, then SIGKILL until the deadline, so SIGKILL is always tried. A stop that fails is a `ProcessGroupError` (`teardown`) and is tried again by the next call.
 - **ESRCH is final.** The step that sees it records it, and no stop or signal reaches that group ID again, even after an interrupted stop.
-- **Closing the Scope** stops the group as its owner's `stopOnClose` says, even when the Scope was already closed, then ends the pipes: `always` (OpenSSH, whose exited leader can leave a proxy behind), `while-open`, while a pipe is open or the leader is unreaped (the chat file listing, so a member still holding its output is stopped), or `never`, when the owner stops it from its own finalizer (the file host's helper, while its run is unsettled, waiting for the helper's exit when the stop fails so the checkout's lease and journal stay held).
+- **Closing the Scope** stops the group as its owner's `stopOnClose` says, even when the Scope was already closed, then ends the pipes. Known limit gives the reuse window each policy leaves:
+  - `always`: unless the group was already seen gone. OpenSSH uses it, since its exited leader can leave a proxy behind.
+  - `while-open`: while a pipe is open or the leader is unreaped. The chat file listing uses it, so a member still holding its output is stopped. An unreaped leader keeps the ID taken, and a group whose pipes all closed is not signalled.
+  - `never`: the owner stops the group from its own finalizer. The file host's helper does so while its run is unsettled or once its limit began a stop, and waits for the helper's exit when the stop fails, so the checkout's lease and journal stay held.
 - **The close stays bounded.** A stop that fails while closing is not retried or waited out and adds no defect, so a caller's typed failure, such as an explicit `stop`'s `teardown`, is what its Scope ends with.
 - **The stop runs on the system clock**, since it waits on real processes, even when the caller's clock is a TestClock.
 - **It wraps `node:child_process` once** rather than using `effect/process`, because the stop must signal the whole group, keep signalling through EPERM and fail when the group's absence stays unconfirmed, and `effect/process`'s release would signal the group again after it was confirmed gone.
 
 ## Known limit
 
-A group ID is free for reuse once the leader has been reaped and its last member has exited. A check or signal sent in that window, between the last exit and the ESRCH that records it, can reach a new group with the same ID. Each owner signals on close under the same condition it did before this package, which keeps the window as narrow as it was. Closing it would take a native supervisor that holds the group.
+A group ID is free for reuse once the leader has been reaped and its last member has exited. A check or signal sent between that last exit and the ESRCH that records it can reach a new group with the same ID. The close policies keep that window as narrow as each owner had it before this package:
+
+- `always` signals on close after the leader may have been reaped, so a group that emptied since the last check is the one case it can reach a reused ID.
+- `while-open` signals only while the leader is unreaped, which keeps the ID taken, or while a pipe is open, which a member usually still holds; a pipe held only by a process outside the group leaves the same window.
+- The file host's helper also finishes on close a stop that its limit began, even once the run has settled. A recorded ESRCH ends its signals, but a group that emptied before a signal saw ESRCH leaves the same window.
+
+Closing it would take a native supervisor that holds the group.
 
 ## Checks
 

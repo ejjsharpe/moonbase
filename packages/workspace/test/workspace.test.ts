@@ -11,7 +11,9 @@ import {
   symlinkSync,
   linkSync,
   chmodSync,
+  mkdtempSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { fixture } from './workspace-fixture.ts';
@@ -563,6 +565,41 @@ test('a broad text search stops at the cap with a clean partial result', async (
     assert.equal(result.files.at(-1)!.matches.at(-1)!.after.length, 3);
   } finally {
     await f.close();
+  }
+});
+
+// Reports a match, then a line past the output limit, and exits 1 with nothing on stderr when
+// the stop's SIGTERM arrives, as "no matches" would.
+const stoppedRipgrep = `#!/bin/sh
+trap 'exit 1' TERM
+printf '%s\\n' '{"type":"match","data":{"path":{"text":"found.txt"},"lines":{"text":"e\\n"},"line_number":1,"submatches":[]}}'
+head -c 17000000 /dev/zero | tr '\\0' e
+sleep 60 & wait
+`;
+
+test('a text search stopped at its limit reports itself partial however ripgrep exits', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'moonbase-ripgrep-'));
+  const ripgrep = join(base, 'rg');
+  writeFileSync(ripgrep, stoppedRipgrep, { mode: 0o700 });
+  const f = fixture({ ripgrepExecutable: ripgrep });
+  try {
+    const checkout = await f.client.command('openCheckout', { root: f.root });
+    const result = await f.client.command('searchText', {
+      checkout,
+      query: 'e',
+      matchCase: false,
+      wholeWord: false,
+      regex: false,
+    });
+    assert.equal(result.partial, true);
+    assert.match(result.error ?? '', /time or output limit/);
+    assert.deepEqual(
+      result.files.map((file) => file.path),
+      ['found.txt'],
+    );
+  } finally {
+    await f.close();
+    rmSync(base, { recursive: true, force: true });
   }
 });
 

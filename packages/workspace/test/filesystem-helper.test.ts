@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { Deferred, Effect, Exit, Fiber, Layer, Stream } from 'effect';
 import { TestClock } from 'effect/testing';
-import { ProcessGroups } from '@moonbase/process-group';
+import { type ProcessGroupExit, ProcessGroups } from '@moonbase/process-group';
 import { makeFilesystemHelper } from '../src/filesystem-helper.ts';
 
 const isAlive = (pid: number) => {
@@ -69,7 +69,27 @@ test('a streamed run at its time limit fails and reaps its group though the help
   try {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const helper = makeFilesystemHelper(process.execPath, yield* ProcessGroups);
+        const groups = yield* ProcessGroups;
+        const leaderExit = yield* Deferred.make<ProcessGroupExit>();
+        // The limit's stop sends SIGTERM and holds its escalation until the leader has exited and
+        // its output has ended, so that EOF always comes before the stop fails the run.
+        const helper = makeFilesystemHelper(process.execPath, {
+          spawn: (executable, args, options) =>
+            Effect.map(groups.spawn(executable, args, options), (group) => {
+              let gated = false;
+              const stop = Effect.suspend(() => {
+                if (gated) return group.stop;
+                gated = true;
+                return group.signal('SIGTERM').pipe(
+                  Effect.andThen(group.exit),
+                  Effect.flatMap((exit) => Deferred.succeed(leaderExit, exit)),
+                  Effect.andThen(group.closed),
+                  Effect.andThen(group.stop),
+                );
+              });
+              return { ...group, stop };
+            }),
+        });
         const started = yield* Deferred.make<number>();
         const run = yield* Effect.forkChild(
           Stream.runForEach(helper.lines(['-e', cleanExitOnStop], { fd }), (line) =>
@@ -83,6 +103,8 @@ test('a streamed run at its time limit fails and reaps its group though the help
         const failure = exit.cause.reasons.find((reason) => reason._tag === 'Fail')?.error;
         assert.equal(failure?._tag, 'HelperFailure');
         assert.equal(failure.uncertain, true);
+        const { code, signal } = yield* Deferred.await(leaderExit);
+        assert.deepEqual({ code, signal }, { code: 0, signal: null });
         assert(!isAlive(member));
       }).pipe(Effect.provide(Layer.merge(ProcessGroups.layer, TestClock.layer()))),
     );
