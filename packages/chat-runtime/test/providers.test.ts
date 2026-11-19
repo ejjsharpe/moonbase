@@ -116,6 +116,9 @@ test('provider-owned setup binds prompts and URLs to the live document, supports
     authContext: { env: async () => undefined, fileExists: async () => false },
   });
   let authenticated = false;
+  // Pi withdraws a prompt through its own signal while the sign-in goes on.
+  const optional = new AbortController(),
+    resumed = Promise.withResolvers<void>();
   for (const id of localProviderIds) {
     const faux = fauxProvider({ provider: id });
     models.setProvider({
@@ -127,6 +130,14 @@ test('provider-owned setup binds prompts and URLs to the live document, supports
               oauth: {
                 name: 'Controlled Codex',
                 login: async (interaction) => {
+                  await assert.rejects(
+                    interaction.prompt({
+                      type: 'text',
+                      message: 'Optional',
+                      signal: optional.signal,
+                    }),
+                  );
+                  await resumed.promise;
                   const method = await interaction.prompt({
                     type: 'select',
                     message: 'Sign-in method',
@@ -167,23 +178,50 @@ test('provider-owned setup binds prompts and URLs to the live document, supports
     });
   }
   const opened: string[] = [];
+  let openerThrows = true;
   const runtime = ManagedRuntime.make(
     ProviderSetupLive({
       deviceId: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',
       models,
-      openUrl: (url) =>
-        Effect.sync(() => {
+      openUrl: (url) => {
+        if (openerThrows) throw Error('Private opener diagnostic');
+        return Effect.sync(() => {
           opened.push(url);
-        }),
+        });
+      },
     }),
   );
   t.after(() => runtime.dispose());
   const client = makeProviderSetupCalls(runtime, 'document-a'),
     foreign = makeProviderSetupCalls(runtime, 'document-b');
+  type Status = Awaited<ReturnType<typeof client.command<'getProviders'>>>;
+  /** The client's status once its flow matches, failing if it never settles there. */
+  const waitForFlow = async (matches: (flow: Status['flow']) => boolean) => {
+    for (let i = 0; i < 20; i++) {
+      const status = await client.command('getProviders', {});
+      if (matches(status.flow)) return status;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.fail('The flow never reached the expected state');
+  };
   let state = await client.command('startProviderLogin', { providerId: 'openai' });
   assert.equal(state.providers[0]!.defaultModel, undefined);
+  const withdrawn = state.flow!.prompt!;
+  optional.abort();
+  state = await waitForFlow((flow) => !flow?.prompt);
+  assert.equal(state.flow?.state, 'running');
+  await assert.rejects(
+    client.command('answerProviderPrompt', {
+      flowId: state.flow!.id,
+      promptId: withdrawn.id,
+      answer: 'late',
+    }),
+    inGroup('refusal'),
+  );
+  resumed.resolve();
+  state = await waitForFlow((flow) => !!flow?.prompt);
   const initial = state.flow!;
-  assert(initial.prompt);
+  assert.equal(initial.prompt?.type, 'select');
   await assert.rejects(
     foreign.command('answerProviderPrompt', {
       flowId: initial.id,
@@ -197,8 +235,13 @@ test('provider-owned setup binds prompts and URLs to the live document, supports
     promptId: initial.prompt.id,
     answer: 'browser',
   });
-  state = await client.command('getProviders', {});
-  assert.equal(state.flow?.canOpenUrl, true);
+  state = await waitForFlow((flow) => !!flow?.canOpenUrl);
+  await assert.rejects(client.command('openProviderUrl', { flowId: initial.id }), (error) => {
+    assert(inGroup('unavailable')(error));
+    assert(!JSON.stringify(error).includes('Private opener'));
+    return true;
+  });
+  openerThrows = false;
   await client.command('openProviderUrl', { flowId: initial.id });
   assert.equal(opened.length, 1);
   await assert.rejects(
@@ -215,13 +258,8 @@ test('provider-owned setup binds prompts and URLs to the live document, supports
     promptId: prompt.id,
     answer: 'private-code',
   });
-  for (let i = 0; i < 10; i++) {
-    state = await client.command('getProviders', {});
-    if (state.flow?.state === 'completed') break;
-    await new Promise((resolve) => setImmediate(resolve));
-  }
+  state = await waitForFlow((flow) => flow?.state === 'completed');
   assert(authenticated);
-  assert.equal(state.flow?.state, 'completed');
   assert.equal(state.providers.find((provider) => provider.id === 'openai')?.configured, true);
   assert(!/private-(?:code|access|refresh)/.test(JSON.stringify(state)));
   await assert.rejects(

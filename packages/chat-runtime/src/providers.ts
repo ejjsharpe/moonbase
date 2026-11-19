@@ -187,45 +187,49 @@ export const ProviderSetupLive = (
 
       /** Shows Pi's prompt as the flow's, until it is answered or the flow stops waiting. */
       const askPrompt = (owner: string, id: string, prompt: AuthPrompt, signal: AbortSignal) =>
-        Effect.gen(function* () {
-          const answer = yield* Deferred.make<string>();
-          const promptId = randomUUID();
-          const shown = yield* SubscriptionRef.modify(setup, (s): [boolean, Setup] => {
-            const flow = s.owners.get(owner);
-            if (!isRunning(flow, id) || signal.aborted || prompt.signal?.aborted) return [false, s];
-            const options = prompt.type === 'select' ? prompt.options : [];
-            return [
-              true,
-              withFlow(s, owner, {
-                ...flow,
-                prompt: {
-                  id: promptId,
-                  answer,
-                  ...(prompt.type === 'select' ? { options: options.map(({ id }) => id) } : {}),
-                },
-                state: {
-                  ...flow.state,
+        // Publishing and its cleanup are one step: an abort cannot leave the prompt shown.
+        Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const answer = yield* Deferred.make<string>();
+            const promptId = randomUUID();
+            const shown = yield* SubscriptionRef.modify(setup, (s): [boolean, Setup] => {
+              const flow = s.owners.get(owner);
+              if (!isRunning(flow, id) || signal.aborted || prompt.signal?.aborted)
+                return [false, s];
+              const options = prompt.type === 'select' ? prompt.options : [];
+              return [
+                true,
+                withFlow(s, owner, {
+                  ...flow,
                   prompt: {
                     id: promptId,
-                    type: prompt.type,
-                    message: prompt.message,
-                    options: options.map(({ id, label }) => ({ id, label })),
+                    answer,
+                    ...(prompt.type === 'select' ? { options: options.map(({ id }) => id) } : {}),
                   },
-                },
-              }),
-            ];
-          });
-          if (!shown) return yield* Effect.fail(cancelled());
-          return yield* Deferred.await(answer).pipe(
-            Effect.ensuring(
-              updateFlow(owner, id, (flow) =>
-                flow.prompt?.id === promptId
-                  ? { ...flow, prompt: undefined, state: { ...flow.state, prompt: null } }
-                  : flow,
+                  state: {
+                    ...flow.state,
+                    prompt: {
+                      id: promptId,
+                      type: prompt.type,
+                      message: prompt.message,
+                      options: options.map(({ id, label }) => ({ id, label })),
+                    },
+                  },
+                }),
+              ];
+            });
+            if (!shown) return yield* Effect.fail(cancelled());
+            return yield* restore(Deferred.await(answer)).pipe(
+              Effect.ensuring(
+                updateFlow(owner, id, (flow) =>
+                  flow.prompt?.id === promptId
+                    ? { ...flow, prompt: undefined, state: { ...flow.state, prompt: null } }
+                    : flow,
+                ),
               ),
-            ),
-          );
-        });
+            );
+          }),
+        );
       const notify = (owner: string, id: string, event: AuthEvent, signal: AbortSignal) => {
         if (!isLive(owner, id, signal)) return;
         // An unsupported URL fails Pi's sign-in, as the refusal it is.
@@ -254,8 +258,9 @@ export const ProviderSetupLive = (
           // Cancelled before it started.
           if (!isRunning(SubscriptionRef.getUnsafe(setup).owners.get(owner), id))
             return yield* Effect.interrupt;
-          // Interrupting aborts Pi's sign-in and waits for it to settle: a provider's loopback
-          // callback (ChatGPT's 127.0.0.1:1455) serves the next flow only once the last one has let go.
+          // Interrupting aborts Pi's sign-in and waits for `models.login` to settle. Pi races the
+          // provider's own login against the signal, so the provider's cleanup (such as ChatGPT's
+          // 127.0.0.1:1455 loopback listener) may still be running when the next flow starts (#395).
           yield* callAbortable((signal) =>
             config.models.login(
               providerId,
@@ -393,11 +398,13 @@ export const ProviderSetupLive = (
               owner,
               (value as ProviderInput<'openProviderUrl'>).flowId,
             );
-            if (!config.openUrl)
+            const { openUrl } = config;
+            if (!openUrl)
               return yield* Effect.fail(
                 new ProviderSetupUnavailableError({ reason: 'client-opens-links' }),
               );
-            yield* config.openUrl(url);
+            // The opener is injected: a throw is its failure, like a failed Effect.
+            yield* Effect.flatten(Effect.try({ try: () => openUrl(url), catch: (error) => error }));
           } else if (operation === 'logoutProvider') {
             const { providerId } = value as ProviderInput<'logoutProvider'>;
             if (!isLocalProvider(providerId)) return yield* refuse('unknown-provider');
