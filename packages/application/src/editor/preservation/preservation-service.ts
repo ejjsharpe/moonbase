@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from 'effect';
+import { Cause, Context, Effect, Exit, Layer, Ref } from 'effect';
 import type { CheckoutTarget, FileTarget } from '@moonbase/contracts/workspace';
 import { EditorError, type EditorFailure } from '../editor-errors.ts';
 import { makeEditorPrompt, type ShownPrompt } from '../editor-prompt.ts';
@@ -71,6 +71,28 @@ export class EditorPreservation extends Context.Service<
         ([modes, sent, held, known]) => isRecoveryReady(modes, sent, held, known),
       );
       const choose = (buffer: EditorBuffer) => closePrompt.ask({ id: crypto.randomUUID(), buffer });
+      type Choose = typeof choose;
+
+      /**
+       * Runs a close as editor work. Closing the editor interrupts it; once it has asked, its
+       * prompt went down answered Cancel, so its caller hears what Cancel answers: nothing closed.
+       */
+      const preserving = <E>(close: (ask: Choose) => Effect.Effect<boolean, E>) =>
+        Effect.gen(function* () {
+          const asked = yield* Ref.make(false);
+          const exit = yield* Effect.exit(
+            session.admitted(
+              close((buffer) => Effect.andThen(Ref.set(asked, true), choose(buffer))),
+            ),
+          );
+          if (
+            Exit.isFailure(exit) &&
+            Cause.hasInterruptsOnly(exit.cause) &&
+            (yield* Ref.get(asked))
+          )
+            return false;
+          return yield* exit;
+        });
 
       /**
        * Closes files whose drafts were saved or discarded: once every edit made so far has
@@ -118,7 +140,12 @@ export class EditorPreservation extends Context.Service<
           return closed;
         });
 
-      const preserve = (targets: FileTarget[], kind: CloseKind, checkout?: CheckoutTarget) =>
+      const preserve = (
+        ask: Choose,
+        targets: FileTarget[],
+        kind: CloseKind,
+        checkout?: CheckoutTarget,
+      ) =>
         Effect.gen(function* () {
           yield* session.assertReady;
           const modes = yield* session.get;
@@ -140,7 +167,7 @@ export class EditorPreservation extends Context.Service<
               for (const target of captured) {
                 const buffer = yield* buffers.find(target);
                 if (!buffer || !isDirty(buffer)) continue;
-                const choice = yield* choose(structuredClone(buffer));
+                const choice = yield* ask(structuredClone(buffer));
                 if (choice === 'cancel') return false;
                 if (choice === 'discard') discarded.add(fileKey(target));
                 else if (!(yield* saves.saveFile(target))) return false;
@@ -162,21 +189,23 @@ export class EditorPreservation extends Context.Service<
 
       return {
         closePrompt: closePrompt.shown,
-        close: (targets) => session.admitted(preserve(targets, 'files')),
+        close: (targets) => preserving((ask) => preserve(ask, targets, 'files')),
         closeCheckout: (checkout) =>
-          session.admitted(
+          preserving((ask) =>
             Effect.gen(function* () {
               const selected = yield* views.view(checkout);
               return yield* preserve(
+                ask,
                 selected.openFiles.map((path) => ({ checkout, path })),
                 'checkout',
                 checkout,
               );
             }),
           ),
-        prepareQuit: session.admitted(
+        prepareQuit: preserving((ask) =>
           Effect.flatMap(buffers.get, (held) =>
             preserve(
+              ask,
               [...held.buffers.values()].map((buffer) => buffer.target),
               'quit',
             ),

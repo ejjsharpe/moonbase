@@ -43,12 +43,13 @@ export class ChatActions extends Context.Service<ChatActions, ChatActionsShape>(
         closing: false,
       });
       // The chat's work runs in its own scope. Closing the chat stops admissions and reports, then
-      // closes the scope, interrupting that work: each interrupted action settles its own count.
+      // closes the scope, interrupting that work. An action admitted just as the scope closed is
+      // never started, so never settles its count: the closed chat clears them all.
       const scope = yield* Scope.fork(yield* Effect.scope, 'parallel');
       yield* Effect.addFinalizer(() =>
-        Effect.andThen(
-          SubscriptionRef.update(state, (s) => ({ ...s, closing: true })),
-          Scope.close(scope, Exit.void),
+        SubscriptionRef.update(state, (s) => ({ ...s, closing: true })).pipe(
+          Effect.andThen(Scope.close(scope, Exit.void)),
+          Effect.andThen(SubscriptionRef.update(state, (s) => ({ ...s, counts: {} }))),
         ),
       );
       const own = <A, E>(work: Effect.Effect<A, E>) =>

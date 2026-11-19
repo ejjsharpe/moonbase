@@ -7,6 +7,7 @@ import {
   type WorkspaceClient,
 } from '@moonbase/application/testing/editor-fixture';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
+import { EditorError, EditorSession } from '@moonbase/application/editor';
 import {
   acquireEditor,
   checkout,
@@ -66,18 +67,28 @@ test('two editors share one workspace, and a disposed editor admits and sends no
   }
 });
 
-test('disposal interrupts a load and a save in flight and releases watches, keeping the draft and the process runtime', async () => {
+test('closing the editor interrupts a load and a save in flight and releases its watches, keeping the draft and the process runtime', async () => {
   const f = await fixture();
   const h = holding(f.client);
+  let recoveryWatches = 0;
+  const client: WorkspaceClient = {
+    ...h.client,
+    watchRecovery(input, receive, onError) {
+      recoveryWatches++;
+      const close = h.client.watchRecovery(input, receive, onError);
+      return async () => {
+        recoveryWatches--;
+        await close();
+      };
+    },
+  };
   const editors: EditorDriver[] = [];
   const acquire = async () => {
-    const editor = await acquireEditor(f.runtime, {
-      client: h.client,
-      clientId: f.editor.clientId,
-    });
+    const editor = await acquireEditor(f.runtime, { client, clientId: f.editor.clientId });
     editors.push(editor);
     return editor;
   };
+  const closed = (error: unknown) => error instanceof EditorError && error.reason === 'closed';
   try {
     await f.editor.open(target('a.ts'));
     f.editor.edit(target('a.ts'), 'recover me');
@@ -89,26 +100,29 @@ test('disposal interrupts a load and a save in flight and releases watches, keep
     const loaded = loading.load();
     await load.entered;
     await loading.dispose();
-    await assert.rejects(loaded, /disposed/);
+    await assert.rejects(loaded, closed);
     load.release();
 
     const editor = await acquire();
     await editor.load();
+    assert.equal(recoveryWatches, 1);
     const save = h.hold('saveFile');
     const saved = editor.save(target('a.ts'));
     await save.entered;
-    await editor.dispose();
-    await assert.rejects(saved, /disposed/);
+    // Closing the session, before its layers are released, ends the save and every watch.
+    await editor.runtime.runPromise(Effect.flatMap(Effect.service(EditorSession), (s) => s.close));
+    await assert.rejects(saved, closed);
+    assert.equal(recoveryWatches, 0);
+    assert.equal(f.memory.stats.active, 0);
     save.release();
     await f.runtime.runPromise(Effect.yieldNow);
     // The editor stopped waiting; whatever the host made of the save, the draft is still kept.
-    assert.equal(f.memory.stats.active, 0);
-    assert.equal(f.memory.stats.subscriptions, f.memory.stats.released);
     assert.deepEqual(
       draftsOf(await loadStoredState(f.client, f.editor.clientId)).map((d) => d.text),
       ['recover me'],
     );
-    await assert.rejects(editor.open(target('b.ts')), /disposed/);
+    await editor.dispose();
+    assert.equal(f.memory.stats.subscriptions, f.memory.stats.released);
   } finally {
     for (const editor of editors) await editor.dispose();
     await f.dispose();

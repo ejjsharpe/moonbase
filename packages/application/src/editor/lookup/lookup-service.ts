@@ -1,4 +1,4 @@
-import { Context, Effect, Exit, Layer, type Scope, Stream, type SubscriptionRef } from 'effect';
+import { Context, Effect, Exit, Layer, type Scope, type SubscriptionRef } from 'effect';
 import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { describeEditorFailure } from '../alerts/alerts.ts';
@@ -20,7 +20,10 @@ export type Lookup = {
 };
 
 export type EditorLookupShape = {
-  /** A popup's lookup, for as long as its scope: a change on disk refreshes its last query. */
+  /**
+   * A popup's lookup, for as long as both its scope and the editor live: a change on disk refreshes
+   * its last query.
+   */
   readonly make: Effect.Effect<Lookup, never, Scope.Scope>;
 };
 
@@ -37,11 +40,10 @@ export class EditorLookup extends Context.Service<EditorLookup, EditorLookupShap
       const discovery = yield* EditorDiscovery;
       return {
         make: Effect.gen(function* () {
-          const runner = yield* makeEditorQuery(emptyLookup);
-          yield* discovery.changes.pipe(
-            Stream.runForEach(() => runner.refresh),
-            Effect.forkScoped,
-          );
+          const runner = yield* makeEditorQuery(emptyLookup, {
+            scope: session.scope,
+            changes: discovery.changes,
+          });
           const search = (checkout: CheckoutTarget, query: string) =>
             Effect.gen(function* () {
               yield* views.view(checkout);

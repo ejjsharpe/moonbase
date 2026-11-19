@@ -1,4 +1,4 @@
-import { Effect, Exit, Fiber, FiberHandle, type Scope, SubscriptionRef } from 'effect';
+import { Effect, Exit, Fiber, FiberHandle, Scope, Stream, SubscriptionRef } from 'effect';
 import { describeEditorFailure } from './alerts/alerts.ts';
 
 /** What every popup query shows: its message and whether an open from it is running. */
@@ -17,8 +17,6 @@ export type EditorQuery<S extends QueryState> = {
    * several a second while an agent works) can't keep restarting the query.
    */
   readonly replace: (key: string, work: Effect.Effect<void>) => Effect.Effect<void>;
-  /** Runs the last query again as a refresh. */
-  readonly refresh: Effect.Effect<void>;
   /** Whether `key` repeats the last query. */
   readonly repeats: (key: string) => boolean;
   /** A query's message, unless a failed open is still on screen: a refresh only updates rows. */
@@ -31,9 +29,25 @@ export type EditorQuery<S extends QueryState> = {
   readonly open: <E>(open: Effect.Effect<boolean, E>) => Effect.Effect<boolean>;
 };
 
-/** Makes a popup's query, living as long as the popup's scope. */
+/**
+ * Makes a popup's query, living as long as both the popup's scope and the editor's `scope`: closing
+ * either interrupts its queries and opens and ends its refreshes on each of `changes`.
+ */
 export const makeEditorQuery = <S extends QueryState>(
   initial: S,
+  editor: { readonly scope: Scope.Scope; readonly changes: Stream.Stream<unknown> },
+): Effect.Effect<EditorQuery<S>, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    // A scope of the editor's that the popup's closes too. A closed editor's is closed from the
+    // start, so the query runs nothing.
+    const scope = yield* Scope.fork(editor.scope, 'parallel');
+    yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+    return yield* Scope.provide(makeQuery(initial, editor.changes), scope);
+  });
+
+const makeQuery = <S extends QueryState>(
+  initial: S,
+  changes: Stream.Stream<unknown>,
 ): Effect.Effect<EditorQuery<S>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const state = yield* SubscriptionRef.make(initial);
@@ -80,10 +94,15 @@ export const makeEditorQuery = <S extends QueryState>(
           FiberHandle.run(running, { startImmediately: true })(run),
         ).pipe(Effect.asVoid);
       });
+    // Each change runs the last query again as a refresh.
+    const refresh = Effect.suspend(() => (last ? replace(last.key, last.work) : Effect.void));
+    yield* changes.pipe(
+      Stream.runForEach(() => refresh),
+      Effect.forkScoped,
+    );
     return {
       state,
       replace,
-      refresh: Effect.suspend(() => (last ? replace(last.key, last.work) : Effect.void)),
       repeats: (key) => key === last?.key,
       resultMessage: (message) => failedOpen ?? message,
       update,
