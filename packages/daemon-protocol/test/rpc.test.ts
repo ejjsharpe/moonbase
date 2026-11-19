@@ -357,14 +357,19 @@ test('before authentication Bun’s 16 KiB header bound refuses a request before
   assert.deepEqual(source.calls.slice(before), []);
   assert.match(await upgradeStatus(port, sockets[0], health), /^HTTP\/1\.1 200/);
   assert.deepEqual(source.calls.slice(before), ['getChatHost']);
-  // An unauthenticated request announcing a 1 GiB body, of which nothing is sent, is answered
-  // without waiting for it: nothing reads a body before authentication.
+  // A POST, for which Bun delivers a body, announces 64 MiB (under Bun's own 128 MiB bound, past
+  // which it answers 413 itself) and sends none of it. It is answered at once rather than after a
+  // body that never comes, so the listener reads no body before authentication.
   assert.match(
     await upgradeStatus(port, sockets[0], {
-      line: 'GET /v1/health HTTP/1.1',
-      headers: { ...health.headers, Authorization: undefined, 'Content-Length': String(2 ** 30) },
+      line: 'POST /v1/health HTTP/1.1',
+      headers: {
+        ...health.headers,
+        Authorization: undefined,
+        'Content-Length': String(64 * 1024 * 1024),
+      },
     }),
-    /^HTTP\/1\.1 401/,
+    /^HTTP\/1\.1 404/,
   );
   assert.deepEqual(source.calls.slice(before), ['getChatHost']);
 });
