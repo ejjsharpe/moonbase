@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, SubscriptionRef } from 'effect';
 import type { ChatMention, ChatModelPreference, ChatSummary } from '@moonbase/contracts/chat';
 import { ChatConfig } from '../chat-config.ts';
-import { ChatRefusedError, DraftStorageError } from '../chat-errors.ts';
+import { ChatRefusedError, DraftStorageError, NewChatDraftError } from '../chat-errors.ts';
 import { ChatActions } from '../actions/actions-service.ts';
 import {
   countBytes,
@@ -28,6 +28,9 @@ export type DraftsState = {
   stored: string | null;
 };
 
+/** A draft's text and the files it mentions. */
+export type DraftText = { readonly text: string; readonly mentions: readonly ChatMention[] };
+
 export type ChatDraftsShape = {
   readonly state: SubscriptionRef.SubscriptionRef<DraftsState>;
   readonly get: Effect.Effect<DraftsState>;
@@ -35,7 +38,7 @@ export type ChatDraftsShape = {
    * Keeps `change(saved)`, failing if it isn't valid saved data, if drafts are already blocked, or
    * if storage refuses it or another client changed it (which blocks drafts from then on).
    */
-  readonly commit: <E extends ChatRefusedError = never>(
+  readonly commit: <E extends ChatRefusedError | NewChatDraftError = never>(
     change: (saved: Saved) => Saved | E,
   ) => Effect.Effect<void, DraftStorageError | E>;
   /**
@@ -43,6 +46,14 @@ export type ChatDraftsShape = {
    * its text still spells, so deleting a mention's text drops the mention. Shows why it couldn't.
    */
   readonly setDraft: (value: string, mentions?: readonly ChatMention[]) => Effect.Effect<void>;
+  /**
+   * In one write, deselects the open chat, empties its draft and makes the new chat's draft what
+   * `join` makes of it, as `/new` carries the rest of a message; every draft stays as it was if
+   * `join` refuses (its error) or the write can't be kept (shown, and false).
+   */
+  readonly moveToNewChat: (
+    join: (draft: DraftText) => DraftText | NewChatDraftError,
+  ) => Effect.Effect<boolean, NewChatDraftError>;
   readonly setModelPreference: (value: ChatModelPreference) => Effect.Effect<void>;
   /** Records that you saw a chat as of its activity time; an older look never replaces a newer one. */
   readonly markSeen: (conversationId: string, at: string) => Effect.Effect<void>;
@@ -85,11 +96,14 @@ export class ChatDrafts extends Context.Service<ChatDrafts, ChatDraftsShape>()(
       });
 
       // Checking, writing and recording the write are one synchronous step.
-      const commit = <E extends ChatRefusedError = never>(change: (saved: Saved) => Saved | E) =>
+      const commit = <E extends ChatRefusedError | NewChatDraftError = never>(
+        change: (saved: Saved) => Saved | E,
+      ) =>
         SubscriptionRef.modify(state, (s): readonly [DraftStorageError | E | null, DraftsState] => {
           if (s.storageError) return [new DraftStorageError({ problem: 'blocked' }), s];
           const next = change(s.saved);
-          if (next instanceof ChatRefusedError) return [next, s];
+          if (next instanceof ChatRefusedError || next instanceof NewChatDraftError)
+            return [next, s];
           if (!decodeSaved(next, session))
             return [new DraftStorageError({ problem: 'incompatible' }), s];
           const written = JSON.stringify(next);
@@ -141,6 +155,28 @@ export class ChatDrafts extends Context.Service<ChatDrafts, ChatDraftsShape>()(
               );
             }),
           ),
+        moveToNewChat: (join) =>
+          Effect.gen(function* () {
+            if (!(yield* actions.accepting)) return false;
+            return yield* commit((saved) => {
+              const joined = join(readDraft({ ...saved, selected: null }));
+              if (joined instanceof NewChatDraftError) return joined;
+              const kept = keepMentions(joined.text, joined.mentions);
+              if (typeof kept === 'string') return new ChatRefusedError({ reason: kept });
+              return writeDraft(
+                { ...writeDraft(saved, '', []), selected: null },
+                joined.text,
+                kept,
+              );
+            }).pipe(
+              Effect.as(true),
+              Effect.catch((error) =>
+                error instanceof NewChatDraftError
+                  ? Effect.fail(error)
+                  : Effect.as(actions.report(error), false),
+              ),
+            );
+          }),
         setModelPreference: (value) =>
           whenAccepting(
             commit((saved) => ({

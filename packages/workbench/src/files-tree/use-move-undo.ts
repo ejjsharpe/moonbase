@@ -57,14 +57,17 @@ export function useMoveUndo(
   }
   /**
    * Runs a file operation from the tree, forgetting the checkout's move unless the operation was
-   * declined without effect. A move or rename it makes is recorded afterwards by the caller.
+   * declined without effect. A move or rename it makes is recorded by the caller's `settled`, in
+   * the same step, so a caller gone meanwhile still leaves Undo the move it made.
    */
   const run: RunMutation = (action, destination, options) =>
-    Effect.tap(runMutation(action, destination, options), (result) =>
-      Effect.sync(() => {
+    runMutation(action, destination, {
+      ...options,
+      settled: (result) => {
         if (result.completed || result.error || result.items.length) clear(action.checkout);
-      }),
-    );
+        options?.settled?.(result);
+      },
+    });
   const find = (checkout: CheckoutTarget) =>
     Object.hasOwn(records, checkoutKey(checkout)) ? records[checkoutKey(checkout)] : undefined;
   /** Replaces a checkout's move with `next`, or forgets it, unless a newer one replaced `expected`. */
@@ -89,58 +92,67 @@ export function useMoveUndo(
         current = find(checkout);
       if (!current || undoing.current) return Effect.succeed(false);
       undoing.current = true;
-      return Effect.gen(function* () {
-        const folders = [
-          ...new Set(
-            current.moves.flatMap((move) => [getParentPath(move.to), getParentPath(move.from)]),
-          ),
-        ];
-        const { listings, unlisted } = yield* listFolders(actions, checkout, folders);
-        if (unlisted !== undefined) {
-          actions.report(
-            `Can’t undo the move yet: ${unlisted || 'the checkout’s root'} couldn’t be listed. Try again.`,
-          );
-          return false;
-        }
-        const problem = findUndoProblem(current.moves, (folder) => listings.get(folder));
-        if (problem) {
-          actions.report(problem);
-          settle(key, current);
-          return false;
-        }
-        const restored: string[] = [];
-        const steps = listUndoMoves(current.moves);
-        for (const [index, step] of steps.entries()) {
-          const result = yield* runMutation(
-            { checkout, kind: 'move', paths: step.paths },
-            step.destination,
-            finalFocus ? { finalFocus } : {},
-          );
-          if (!result.completed) {
-            const back = new Set(listTransferred(step.paths, result));
-            restored.push(
-              ...step.moves.filter((move) => back.has(move.to)).map((move) => move.from),
-            );
-            const left = [
-              ...step.moves.filter((move) => !back.has(move.to)),
-              ...steps.slice(index + 1).flatMap((step) => step.moves),
+      // The moves back and the record they leave are the editor's own; selecting what came back
+      // is the caller's, and goes with it.
+      return actions
+        .own(
+          Effect.gen(function* () {
+            const folders = [
+              ...new Set(
+                current.moves.flatMap((move) => [getParentPath(move.to), getParentPath(move.from)]),
+              ),
             ];
-            settle(key, current, { ...current, moves: left });
+            const { listings, unlisted } = yield* listFolders(actions, checkout, folders);
+            if (unlisted !== undefined) {
+              actions.report(
+                `Can’t undo the move yet: ${unlisted || 'the checkout’s root'} couldn’t be listed. Try again.`,
+              );
+              return { undone: false, restored: [] };
+            }
+            const problem = findUndoProblem(current.moves, (folder) => listings.get(folder));
+            if (problem) {
+              actions.report(problem);
+              settle(key, current);
+              return { undone: false, restored: [] };
+            }
+            const restored: string[] = [];
+            const steps = listUndoMoves(current.moves);
+            for (const [index, step] of steps.entries()) {
+              const result = yield* runMutation(
+                { checkout, kind: 'move', paths: step.paths },
+                step.destination,
+                finalFocus ? { finalFocus } : {},
+              );
+              if (!result.completed) {
+                const back = new Set(listTransferred(step.paths, result));
+                restored.push(
+                  ...step.moves.filter((move) => back.has(move.to)).map((move) => move.from),
+                );
+                const left = [
+                  ...step.moves.filter((move) => !back.has(move.to)),
+                  ...steps.slice(index + 1).flatMap((step) => step.moves),
+                ];
+                settle(key, current, { ...current, moves: left });
+                return { undone: false, restored };
+              }
+              restored.push(...step.moves.map((move) => move.from));
+            }
+            settle(key, current);
+            return { undone: true, restored };
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                undoing.current = false;
+              }),
+            ),
+          ),
+        )
+        .pipe(
+          Effect.map(({ undone, restored }) => {
             if (restored.length) selectEntries(actions, checkout, restored);
-            return false;
-          }
-          restored.push(...step.moves.map((move) => move.from));
-        }
-        settle(key, current);
-        selectEntries(actions, checkout, restored);
-        return true;
-      }).pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            undoing.current = false;
+            return undone;
           }),
-        ),
-      );
+        );
     });
   return {
     record,

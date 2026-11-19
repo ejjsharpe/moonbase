@@ -1,6 +1,7 @@
 import { Effect } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import type { EditorActions } from '@moonbase/workbench';
+import type { ShellNative } from './desktop-shell.tsx';
 
 /**
  * The shell's project actions as Effects, each bringing the project into view (`showProject`)
@@ -18,7 +19,7 @@ export function makeCheckoutActions({
   /** Whether the application is live, so a project may still open or files arrive. */
   isLive(): boolean;
   /** A project's root, chosen in the native picker; null when the user cancelled. */
-  selectCheckout?: Effect.Effect<string | null, unknown>;
+  selectCheckout?: ShellNative['chooseCheckout'];
   showProject(): void;
   /** Imports approved references into the workbench's checkout. */
   importInto(checkout: CheckoutTarget, references: string[]): void;

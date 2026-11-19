@@ -11,6 +11,7 @@ export type {
 export {
   ChatRefusedError,
   DraftStorageError,
+  NewChatDraftError,
   describeChatFailure,
   type ChatRefusalReason,
 } from './chat-errors.ts';

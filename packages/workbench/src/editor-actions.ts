@@ -1,5 +1,5 @@
 import { useContext, useMemo } from 'react';
-import { Context } from 'effect';
+import { Context, type Effect } from 'effect';
 import type * as AtomRegistry from 'effect/reactivity/AtomRegistry';
 import { RegistryContext } from '@effect/atom-react';
 import type {
@@ -62,6 +62,11 @@ export function makeEditorActions(editor: WorkbenchEditor, registry: AtomRegistr
     /** The app's platform capabilities, which views offer only when supplied. */
     platform: editor.platform,
     start,
+    /**
+     * Runs `work` as the editor's own step of the caller's: interrupting the caller only stops it
+     * waiting, so what must follow the work (a late failure, Undo's record) still does.
+     */
+    own: <A, E, R>(work: Effect.Effect<A, E, R>) => session.run(work),
     /** Shows a failure, or Moonbase's own note, in the editor's alerts. */
     report: (error: unknown) => start(alerts.report(error)),
     clearErrors: () => start(alerts.clear),

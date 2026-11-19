@@ -9,15 +9,12 @@ import {
   type NativeActionKind,
   type TranscriptNotice,
 } from '@moonbase/application/chat';
-import type { TranscriptCopy, TranscriptImage } from '../../../ipc/chat-rpcs.ts';
+import type { ChatTargetId } from '../../../ipc/chat-rpcs.ts';
+import type { DesktopNativeShape } from '../../ipc/desktop-native.ts';
 import { useRun } from '../../hooks/use-run.ts';
 
 /** What a transcript asks of main for one chat target: Copy, opening a link, an image's URL. */
-export type TranscriptNative = {
-  copy(input: TranscriptCopy): Effect.Effect<void, unknown>;
-  openLink(url: string): Effect.Effect<void, unknown>;
-  imageUrl(input: TranscriptImage): Effect.Effect<string, unknown>;
-};
+export type TranscriptNative = DesktopNativeShape['transcripts'][ChatTargetId];
 
 /** Stable for the transcript's lifetime, so rows can memoize on them. */
 export type TranscriptActions = {

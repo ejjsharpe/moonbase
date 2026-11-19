@@ -561,6 +561,45 @@ test('stale file activation cannot replace a later successful comparison', async
   }
 });
 
+test('interrupting an open ends its read, and a worktree listing its request', async () => {
+  const f = await fixture();
+  const requests = new Map<string, AbortSignal | undefined>();
+  let entered = Promise.withResolvers<void>();
+  const client: WorkspaceClient = {
+    ...f.client,
+    async command(name, input, options) {
+      if (name === 'readFile' || name === 'listWorktrees') {
+        requests.set(name, options?.signal);
+        entered.resolve();
+        // Held until its caller lets it go.
+        await new Promise((resolve) => options?.signal?.addEventListener('abort', resolve));
+      }
+      return f.client.command(name, input, options);
+    },
+  };
+  const editor = await acquireEditor(f.runtime, { client, clientId: 'interrupted' });
+  try {
+    await editor.load();
+    await editor.openCheckout(checkout.root);
+    for (const [name, start] of [
+      ['readFile', (signal: AbortSignal) => editor.open(target('b.ts'), {}, signal)],
+      ['listWorktrees', (signal: AbortSignal) => editor.listWorktrees(checkout, signal)],
+    ] as const) {
+      const abort = new AbortController();
+      const call = start(abort.signal);
+      await entered.promise;
+      abort.abort();
+      await assert.rejects(call, { _tag: 'CancelledError' });
+      assert.equal(requests.get(name)?.aborted, true);
+      entered = Promise.withResolvers<void>();
+    }
+    assert.equal(editor.buffer(target('b.ts')), undefined);
+  } finally {
+    await editor.dispose();
+    await f.dispose();
+  }
+});
+
 test('removed checkout ignores late position recording', async () => {
   const f = await fixture();
   try {

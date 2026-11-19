@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Effect } from 'effect';
 import { getParentPath, getPathName } from '@moonbase/contracts/paths';
 import type { CheckoutTarget, DirectoryListing } from '@moonbase/contracts/workspace';
-import { checkoutKey } from '@moonbase/application/editor';
+import { checkoutKey, type MutationRunResult } from '@moonbase/application/editor';
 import { editMutations, type TreeEditKind } from './file-commands.ts';
 import { copyName } from './paste-plan.ts';
 import type { NameCommit } from './files-tree-name.tsx';
@@ -182,6 +182,11 @@ export function useTreeEdit({
       const directory = isListedDirectory(listings, checkoutIdentity, current.path);
       let error = '';
       committing.current = true;
+      // A rename is Undo's to record, even if the tree goes before it finishes.
+      const settled = (result: MutationRunResult) => {
+        if (result.completed && current.kind === 'rename')
+          onMoved({ kind: 'rename', moves: [{ from: current.path, to: destination, directory }] });
+      };
       const { completed } = yield* runMutation(
         { checkout, kind: editMutations[current.kind], paths: create ? [] : [current.path] },
         destination,
@@ -190,8 +195,9 @@ export function useTreeEdit({
               inlineError: (message) => {
                 error = message;
               },
+              settled,
             }
-          : { finalFocus: () => (canRefocus(next) ? next : focus.returnTreeFocus()) },
+          : { finalFocus: () => (canRefocus(next) ? next : focus.returnTreeFocus()), settled },
       ).pipe(
         Effect.ensuring(
           Effect.sync(() => {
@@ -200,8 +206,6 @@ export function useTreeEdit({
         ),
       );
       if (completed) {
-        if (current.kind === 'rename')
-          onMoved({ kind: 'rename', moves: [{ from: current.path, to: destination, directory }] });
         if (current.kind === 'create-file')
           actions.start(
             actions.open({ checkout, path: destination }, { view: 'file', intent: 'keep' }),

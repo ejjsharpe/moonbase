@@ -147,25 +147,31 @@ export function useFileClipboard({
         const options = finalFocus ? { finalFocus } : {};
         const landed: string[] = [];
         if (plan.kind === 'move') {
+          // The pasted cut is Undo's to record and the clipboard's to forget, even if the view
+          // that pasted goes meanwhile.
           const result = yield* runMutation(
             { checkout, kind: 'move', paths: plan.paths },
             getDropDestination(plan.paths, into),
-            options,
+            {
+              ...options,
+              settled: (result) => {
+                const moved = listTransferred(plan.paths, result);
+                if (!moved.length) return;
+                const to = listDroppedPaths(moved, into);
+                const directories = new Map(sources.map((entry) => [entry.path, entry.directory]));
+                recordMove(checkout, {
+                  kind: 'move',
+                  moves: moved.map((from, index) => ({
+                    from,
+                    to: to[index],
+                    directory: directories.get(from)!,
+                  })),
+                });
+                forget(current);
+              },
+            },
           );
-          const moved = listTransferred(plan.paths, result);
-          landed.push(...listDroppedPaths(moved, into));
-          if (moved.length) {
-            const directories = new Map(sources.map((entry) => [entry.path, entry.directory]));
-            recordMove(checkout, {
-              kind: 'move',
-              moves: moved.map((from, index) => ({
-                from,
-                to: landed[index],
-                directory: directories.get(from)!,
-              })),
-            });
-            forget(current);
-          }
+          landed.push(...listDroppedPaths(listTransferred(plan.paths, result), into));
         } else {
           let completed = true;
           if (plan.paths.length) {

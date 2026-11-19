@@ -15,6 +15,7 @@ export function makeComposerChat(context: Context.Context<ChatServices>): Compos
     state: Effect.provideContext(readChatState, context),
     changes: Stream.provideContext(watchChatState, context),
     setDraft: drafts.setDraft,
+    moveToNewChat: drafts.moveToNewChat,
     send: sends.send,
     closeView: selection.closeView,
     select: selection.select,

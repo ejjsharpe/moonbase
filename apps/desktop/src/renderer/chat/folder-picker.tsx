@@ -9,6 +9,7 @@ import { overlays } from '@moonbase/ui/overlays';
 import { projectHue, projectInitials, projectTiles } from '@moonbase/ui/projects';
 import { colors, radius } from '@moonbase/ui/tokens.stylex';
 import { Icon } from '@moonbase/ui/icons';
+import type { NativeFailure } from '../ipc/desktop-native.ts';
 import {
   FolderMenu,
   folderMenuStyles,
@@ -28,7 +29,9 @@ export type ChatFolderProject = {
 };
 
 /** Folders listed each time they are read, newest first, such as each time a menu opens. */
-export type RecentFolders = Atom.Atom<AsyncResult.AsyncResult<readonly string[], unknown>>;
+export type RecentFolders = Atom.Atom<
+  AsyncResult.AsyncResult<readonly string[], NativeFailure<'listChatFolders'>>
+>;
 
 const noFolders: RecentFolders = Atom.make(AsyncResult.success<readonly string[]>([]));
 
@@ -165,10 +168,11 @@ export function FolderPicker({
                 })
               }
               browseLabel="Choose folder…"
-              empty={
+              empty={hostFolders?.empty ?? 'Folders you open or choose for a chat appear here.'}
+              problem={
                 AsyncResult.isFailure(recentResult)
-                  ? 'Recent folders could not be listed.'
-                  : (hostFolders?.empty ?? 'Folders you open or choose for a chat appear here.')
+                  ? `${hostFolders?.label ?? 'Recent folders'} could not be listed.`
+                  : undefined
               }
             />
           </Popover.Popup>

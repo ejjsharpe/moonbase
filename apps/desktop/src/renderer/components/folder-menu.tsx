@@ -33,6 +33,7 @@ export function FolderMenu({
   browseLabel,
   browseShortcut,
   empty,
+  problem,
   focusRef,
   none,
 }: {
@@ -44,6 +45,8 @@ export function FolderMenu({
   browseLabel: string;
   browseShortcut?: string;
   empty: string;
+  /** Why some folders couldn't be listed, shown whatever the groups list. */
+  problem?: string;
   /** Receives what the popover should focus when it opens: the filter, else the chosen row. */
   focusRef?: (element: HTMLElement | null) => void;
 }) {
@@ -164,6 +167,11 @@ export function FolderMenu({
             })}
           </div>
         ))}
+        {problem && (
+          <p role="status" {...stylex.props(styles.empty)}>
+            {problem}
+          </p>
+        )}
         {!shown.length && (
           <p {...stylex.props(styles.empty)}>{needle ? 'Nothing matches.' : empty}</p>
         )}

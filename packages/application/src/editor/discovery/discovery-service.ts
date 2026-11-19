@@ -92,7 +92,10 @@ export type EditorDiscoveryShape = {
     path: string,
     report?: boolean,
   ) => Effect.Effect<DirectoryListing, EditorFailure>;
-  /** Runs a workspace command in the checkout's reads, which closing it ends, reporting failures. */
+  /**
+   * Runs a workspace command in the checkout's reads, reporting failures. Closing the checkout ends
+   * it, and so does interrupting the caller: it is a read only the caller wants.
+   */
   readonly read: <A>(
     checkout: CheckoutTarget,
     effect: Effect.Effect<A, WorkspaceError>,
@@ -140,6 +143,15 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
           Effect.flatMap(Effect.forkIn(effect, scope, { startImmediately: true }), Fiber.join).pipe(
             Effect.tapError((error) => (report ? alerts.report(error) : Effect.void)),
           );
+        /** `runIn` for a read only its caller wants: interrupting the caller ends it too. */
+        const runForCaller = <A, E>(
+          scope: Scope.Scope,
+          effect: Effect.Effect<A, E>,
+          report = true,
+        ) =>
+          Effect.flatMap(Effect.forkIn(effect, scope, { startImmediately: true }), (fiber) =>
+            Effect.onInterrupt(Fiber.join(fiber), () => Fiber.interrupt(fiber)),
+          ).pipe(Effect.tapError((error) => (report ? alerts.report(error) : Effect.void)));
 
         const release = (checkout: CheckoutTarget) =>
           Effect.gen(function* () {
@@ -405,7 +417,8 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
               s.lostWatches.includes(checkoutKey(checkout)),
             ),
           list,
-          read: (checkout, effect, report = true) => runIn(checkoutScope(checkout), effect, report),
+          read: (checkout, effect, report = true) =>
+            runForCaller(checkoutScope(checkout), effect, report),
           refresh,
         } satisfies EditorDiscoveryShape;
       }),

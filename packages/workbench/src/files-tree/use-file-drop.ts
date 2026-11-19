@@ -20,8 +20,8 @@ const isFileDrag = (dataTransfer: DataTransfer) =>
 /**
  * Dropping files from the OS, such as Finder's, into a files tree's folder to import them there,
  * once the platform's `selectDroppedImports` approves them. Without it, and for other drags, the
- * handlers leave the drag to the app. Unmounting the tree, as closing its checkout does, abandons
- * a drop still being approved.
+ * handlers leave the drag to the app. Unmounting the tree, as closing or switching its checkout
+ * does, refuses a drop still being approved.
  */
 export function useFileDrop({
   actions,
@@ -55,23 +55,21 @@ export function useFileDrop({
   // One drop imports at a time, from approval until its entries are selected.
   const run = useEditorTask(actions, { replace: true });
   const phase = useRef<'idle' | 'approving' | 'importing'>('idle');
-  const shownCheckout = useRef(checkoutIdentity);
-  // The tree moving on interrupts a drop: typing a name, opening a dialog or showing another
-  // checkout while it is approved refuses it; a name typed while it imports keeps its field,
-  // since the import itself runs on as the editor's.
+  /** Why the tree interrupted the drop being approved; none when the tree went away. */
+  const refusal = useRef<string | null>(null);
+  // The tree moving on interrupts a drop: typing a name or opening a dialog while it is approved
+  // refuses it; a name typed while it imports keeps its field, since the import itself runs on as
+  // the editor's. The tree is keyed by its checkout, so showing another one unmounts it.
   useEffect(() => {
-    const moved = shownCheckout.current !== checkoutIdentity;
-    shownCheckout.current = checkoutIdentity;
     const approving = phase.current === 'approving';
-    if (phase.current === 'idle' || !(editing || moved || (approving && dialogOpen))) return;
+    if (phase.current === 'idle' || !(editing || (approving && dialogOpen))) return;
     phase.current = 'idle';
+    refusal.current = editing
+      ? 'Finish naming the entry before importing files.'
+      : 'Finish the current editor dialog or preservation before importing files.';
     run(Atom.Interrupt);
-    if (!approving) return;
-    if (moved) actions.report('Open the exact import checkout before importing files.');
-    else if (editing) actions.report('Finish naming the entry before importing files.');
-    else actions.report('Finish the current editor dialog or preservation before importing files.');
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- what the tree is doing now.
-  }, [editing, dialogOpen, checkoutIdentity]);
+  }, [editing, dialogOpen]);
   /** Whether the tree takes a drag of OS files, importing them when the app can approve them. */
   const takesFiles = (dataTransfer: DataTransfer) =>
     !!selectDroppedImports && isFileDrag(dataTransfer);
@@ -117,7 +115,19 @@ export function useFileDrop({
         focusAtDrop = treeElement.current?.ownerDocument.activeElement;
       // Approval can take a while; the tree may have moved on meanwhile. An approval this abandons
       // has no release from here: its references expire unused, or go with the document.
-      const references = yield* selectDroppedImports!(captured, files);
+      // An approval interrupted says why: the tree's reason, or that the tree went away (another
+      // checkout or view shown in its place).
+      refusal.current = null;
+      const references = yield* selectDroppedImports!(captured, files).pipe(
+        Effect.onInterrupt(() =>
+          Effect.sync(() =>
+            actions.report(
+              refusal.current ??
+                'The files tree closed before the dropped files were approved. Drop them again.',
+            ),
+          ),
+        ),
+      );
       if (!references.length) return;
       const recovery = actions.getSnapshot().recovery;
       if (

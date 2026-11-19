@@ -139,7 +139,8 @@ export function useEntryDrag({
   }
   /**
    * Moves or copies dropped entries into `folder`, then expands it and selects them there. A batch
-   * that fails partway records and selects the entries it did move.
+   * that fails partway records and selects the entries it did move. The record is the move's own,
+   * kept even if the tree goes meanwhile; selecting and focusing go with the tree.
    */
   const dropEntries = (paths: string[], folder: string, copy: boolean) =>
     Effect.gen(function* () {
@@ -149,20 +150,26 @@ export function useEntryDrag({
       const result = yield* runMutation(
         { checkout, kind: copy ? 'copy' : 'move', paths },
         getDropDestination(paths, folder),
-        { finalFocus: focus.returnTreeFocus },
+        {
+          finalFocus: focus.returnTreeFocus,
+          settled: (result) => {
+            const transferred = listTransferred(paths, result);
+            if (copy || !transferred.length) return;
+            const landed = listDroppedPaths(transferred, folder);
+            onMoved({
+              kind: 'move',
+              moves: transferred.map((from, index) => ({
+                from,
+                to: landed[index],
+                directory: directories.get(from)!,
+              })),
+            });
+          },
+        },
       );
       const transferred = listTransferred(paths, result);
       if (!transferred.length) return;
       const landed = listDroppedPaths(transferred, folder);
-      if (!copy)
-        onMoved({
-          kind: 'move',
-          moves: transferred.map((from, index) => ({
-            from,
-            to: landed[index],
-            directory: directories.get(from)!,
-          })),
-        });
       selectEntries(actions, checkout, landed);
       setAnchor(landed[0]);
       focus.refocusTree();

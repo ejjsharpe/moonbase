@@ -6,11 +6,12 @@ import {
   type ChatMention,
   type ChatTarget,
 } from '@moonbase/contracts/chat';
-import { Effect, Queue, Scope, Stream, SubscriptionRef } from 'effect';
+import { Effect, Fiber, Queue, Scope, Stream, SubscriptionRef } from 'effect';
 import { CancelledError, UnauthorizedError, UncertainError } from '@moonbase/contracts/errors';
 import { WorkspaceConflictError } from '@moonbase/contracts/workspace-host-errors';
 import {
   ChatComposers,
+  NewChatDraftError,
   findMentionClash,
   readChoices,
   type ComposerChat,
@@ -31,14 +32,20 @@ function makeChat(selected: ChatTarget | null = null) {
   const key = () => selected?.conversationId ?? '';
   const sent: { cwd?: string; draft: string; mentions: ChatMention[] }[] = [];
   const listeners = new Set<() => void>();
-  let failClose = false,
+  let failMove = false,
     failSend = false,
-    rejectDraft = false;
+    rejectDraft = false,
+    holdClose: Promise<void> | undefined;
   const notify = () => listeners.forEach((listener) => listener());
   const chat = {
     sent,
     drafts,
-    failNextClose: () => (failClose = true),
+    /** Closes that finished. */
+    closes: 0,
+    /** The next move of a draft to the new chat can't be written. */
+    failNextMove: () => (failMove = true),
+    /** The next close waits for `released`, as a transcript closing does. */
+    holdNextClose: (released: Promise<void>) => (holdClose = released),
     /** The next send's outcome is unconfirmed: no chat is created or opened. */
     failNextSend: () => (failSend = true),
     rejectNextDraft: () => (rejectDraft = true),
@@ -83,9 +90,23 @@ function makeChat(selected: ChatTarget | null = null) {
       }
       notify();
     },
+    /** Deselects the open chat, empties its draft and joins the new chat's, in one step. */
+    moveToNewChat(join: (draft: { text: string; mentions: readonly ChatMention[] }) => unknown) {
+      if (failMove) return (failMove = false);
+      const joined = join(drafts.get('') ?? { text: '', mentions: [] });
+      if (joined instanceof Error) return joined;
+      drafts.delete(key());
+      drafts.set('', joined as { text: string; mentions: ChatMention[] });
+      selected = null;
+      notify();
+      return true;
+    },
     closeView: async () => {
-      if (failClose) failClose = false;
-      else selected = null;
+      const held = holdClose;
+      holdClose = undefined;
+      await held;
+      selected = null;
+      chat.closes++;
       notify();
     },
     select: async (next: ChatTarget) => {
@@ -107,6 +128,11 @@ const toComposerChat = (chat: ReturnType<typeof makeChat>): ComposerChat => ({
     ),
   ),
   setDraft: (text, mentions) => Effect.sync(() => chat.setDraft(text, mentions)),
+  moveToNewChat: (join) =>
+    Effect.suspend(() => {
+      const moved = chat.moveToNewChat(join);
+      return moved instanceof NewChatDraftError ? Effect.fail(moved) : Effect.succeed(!!moved);
+    }),
   send: (creation) => Effect.promise(() => chat.send(creation)),
   closeView: Effect.promise(() => chat.closeView()),
   select: (next) => Effect.promise(() => chat.select(next)),
@@ -447,7 +473,7 @@ test('/new carries the rest of the message to the new chat and empties the open 
     true,
   );
   assert.equal(chat.getSnapshot().selected, null);
-  assert.deepEqual(chat.drafts.get('open'), { text: '', mentions: [] });
+  assert.equal(chat.drafts.has('open'), false);
   assert.equal(chat.getSnapshot().draft, 'Look at @src/a.ts');
   assert.deepEqual(chat.getSnapshot().mentions, [{ path: 'src/a.ts' }]);
   // Its mentions stay in the open chat's folder: sending elsewhere says so before sending.
@@ -463,6 +489,40 @@ test('/new carries the rest of the message to the new chat and empties the open 
   assert.equal(chat.getSnapshot().draft, 'Mine @b.ts\nAnd @README.md');
   assert.deepEqual(chat.getSnapshot().mentions, [{ path: 'b.ts' }, { path: 'README.md' }]);
   assert.equal(composer.checkMentions('/repo'), null);
+});
+
+test('/new moves the rest before the chat closes, so a view gone meanwhile loses nothing', async () => {
+  const chat = makeChat(target('open'));
+  const composer = composerOf(chat);
+  chat.setDraft('/new\nKeep this');
+  const released = Promise.withResolvers<void>();
+  chat.holdNextClose(released.promise);
+  // The view that typed `/new` unmounts while the transcript closes.
+  const view = Effect.runFork(composer.composer.startNewChat('Keep this', [], '/repo'));
+  await until(() => chat.getSnapshot().draft === 'Keep this' && !chat.getSnapshot().selected);
+  await Effect.runPromise(Fiber.interrupt(view));
+  assert.equal(chat.drafts.has('open'), false);
+  assert.equal(chat.drafts.get('')?.text, 'Keep this');
+  // The composer still closes the chat it left.
+  released.resolve();
+  await until(() => chat.closes === 1);
+  assert.equal(chat.getSnapshot().draft, 'Keep this');
+});
+
+test('a chat turning into a project outlives the view that asked, once at a time', async () => {
+  const chat = makeChat(target('open'));
+  const composer = composerOf(chat);
+  const held = Promise.withResolvers<void>();
+  let turns = 0;
+  const turn = Effect.promise(() => (turns++, held.promise));
+  const view = Effect.runFork(composer.composer.turnIntoProject('open', turn));
+  await until(() => turns === 1);
+  await Effect.runPromise(Fiber.interrupt(view));
+  assert.deepEqual(composer.snapshot.turning, ['open']);
+  composer.sync(composer.composer.turnIntoProject('open', turn));
+  held.resolve();
+  await until(() => composer.snapshot.turning.length === 0);
+  assert.equal(turns, 1);
 });
 
 test('/new keeps the rest in the open chat when the new chat cannot take it', async () => {
@@ -488,9 +548,9 @@ test('/new keeps the rest in the open chat when the new chat cannot take it', as
   assert.match(composer.message!, /already mentions a\.ts in another folder/);
   assert.equal(chat.getSnapshot().draft, 'And @a.ts');
   assert.equal(chat.drafts.get('')!.text, 'See @a.ts');
-  // A view that can't close keeps the rest in the open chat too.
+  // A chat whose drafts can't move keeps the rest in the open chat too.
   chat.setDraft('/new\nStill here');
-  chat.failNextClose();
+  chat.failNextMove();
   assert.equal(await composer.startNewChat('Still here', [], '/repo'), true);
   assert.equal(chat.getSnapshot().selected?.conversationId, 'open');
   assert.equal(chat.getSnapshot().draft, 'Still here');

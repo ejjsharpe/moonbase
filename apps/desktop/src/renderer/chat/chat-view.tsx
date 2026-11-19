@@ -22,6 +22,9 @@ import {
 import { FindBar, handleChatFindKeyDown, type ChatFindOwner } from './find.tsx';
 import { Transcript } from './transcript/transcript.tsx';
 import type { TranscriptNative } from './transcript/transcript-actions.ts';
+import type { EditorFailure } from '@moonbase/application/editor';
+import type { NativeFailure } from '../ipc/desktop-native.ts';
+import type { ShellNative } from '../shell/desktop-shell.tsx';
 import type { ChatFolderProject, RecentFolders } from './folder-picker.tsx';
 import { ChatList } from './chat-list.tsx';
 import { ProjectChatList } from './project-chat-list.tsx';
@@ -30,6 +33,17 @@ import { PendingCommands } from './pending-commands.tsx';
 import { Composer } from './composer/composer.tsx';
 import { focusMessage } from './open-chat.ts';
 import { ChatContext, useChatShared, type ChatShared } from './chat-context.ts';
+
+/** Makes a local folder's linked worktree for a new chat, failing as main or the editor does. */
+export type ChatWorktreeCreation = (
+  root: string,
+  branch: string,
+  requestId: string,
+) => Effect.Effect<string, NativeFailure<'createChatWorktree'> | EditorFailure>;
+/** Turns a local chat's own folder into a project, failing as main or the editor does. */
+export type TurnIntoProject = (
+  conversationId: string,
+) => Effect.Effect<void, NativeFailure<'turnChatIntoProject'> | EditorFailure>;
 
 const compactLayout = window.matchMedia('(max-width: 640px)');
 const subscribeLayout = (listener: () => void) => {
@@ -111,19 +125,15 @@ export function ChatView({
   /** The chat's composer, made beside its services: it outlives this view. */
   composer: ChatComposer;
   /** A folder chosen in the native picker; null when the user cancelled. */
-  chooseFolder?: Effect.Effect<string | null, unknown>;
+  chooseFolder?: ShellNative['chooseChatFolder'];
   /** Folders the native picker approved before, offered again without it. */
   recentFolders?: RecentFolders;
   /** The editor's checkouts, which local chat may use without the picker. */
   folderProjects?: readonly ChatFolderProject[];
   /** Creates a linked worktree of a local folder, named for the branch, and returns its root. */
-  createWorktree?: (
-    root: string,
-    branch: string,
-    requestId: string,
-  ) => Effect.Effect<string, unknown>;
+  createWorktree?: ChatWorktreeCreation;
   /** Opens a local chat without a project's folder as a project where it is. */
-  turnIntoProject?: (conversationId: string) => Effect.Effect<void, unknown>;
+  turnIntoProject?: TurnIntoProject;
   transcriptNative?: TranscriptNative;
   /** Shows only one project's chats, beside its editor, with a back arrow to their list. */
   dock?: ChatDock;

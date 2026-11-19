@@ -3,6 +3,7 @@ import {
   maximumChatMentions,
   type ChatMention,
 } from '@moonbase/contracts/chat';
+import { NewChatDraftError } from '../chat-errors.ts';
 import type { ChatState } from '../chat-state.ts';
 import { appendMentions } from './mention-text.ts';
 
@@ -35,6 +36,8 @@ export type ChatComposerSnapshot = {
   readonly folders: Readonly<Record<string, string>>;
   /** Whether a worktree is being made for the new chat's first message, in any place. */
   readonly creatingWorktree: boolean;
+  /** The chats being turned into projects, by conversation id. */
+  readonly turning: readonly string[];
   readonly message: ComposerMessage | null;
 };
 
@@ -42,6 +45,7 @@ export const emptyComposer: ChatComposerSnapshot = {
   choices: {},
   folders: {},
   creatingWorktree: false,
+  turning: [],
   message: null,
 };
 
@@ -209,17 +213,18 @@ export function planFileMentions(
  * carries the rest of a message from an open chat; or why it can't join it.
  */
 export function joinNewChatDraft(
-  state: Pick<ChatState, 'draft' | 'mentions'>,
+  draft: { readonly text: string; readonly mentions: readonly ChatMention[] },
   folders: Readonly<Record<string, string>>,
   text: string,
   mentions: readonly ChatMention[],
   folder: string | undefined,
-): { text: string; mentions: ChatMention[] } | { problem: string } {
-  const combined = state.draft
-    ? `${state.draft}${state.draft.endsWith('\n') ? '' : '\n'}${text}`
+): { text: string; mentions: ChatMention[] } | NewChatDraftError {
+  if (!text) return { text: draft.text, mentions: [...draft.mentions] };
+  const combined = draft.text
+    ? `${draft.text}${draft.text.endsWith('\n') ? '' : '\n'}${text}`
     : text;
   const all = [
-    ...new Map([...state.mentions, ...mentions].map((mention) => [mention.path, mention])).values(),
+    ...new Map([...draft.mentions, ...mentions].map((mention) => [mention.path, mention])).values(),
   ];
   // One spelling can name only one file: the new draft's own mention of it from elsewhere wins.
   // A folder nobody knows can't be told apart, and Send will ask about it anyway.
@@ -230,19 +235,14 @@ export function joinNewChatDraft(
       return (
         own !== undefined &&
         own !== folder &&
-        state.mentions.some((mentioned) => mentioned.path === mention.path)
+        draft.mentions.some((mentioned) => mentioned.path === mention.path)
       );
     });
-  if (clash)
-    return {
-      problem: `The new chat's draft already mentions ${clash.path} in another folder, so the rest of this message stays here.`,
-    };
+  if (clash) return new NewChatDraftError({ reason: 'clash', path: clash.path });
   if (
     new TextEncoder().encode(combined).length > maximumChatInputBytes ||
     all.length > maximumChatMentions
   )
-    return {
-      problem: "The new chat's draft has no room for the rest of this message, so it stays here.",
-    };
+    return new NewChatDraftError({ reason: 'full' });
   return { text: combined, mentions: all };
 }

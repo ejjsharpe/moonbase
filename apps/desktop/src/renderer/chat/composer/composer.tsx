@@ -23,7 +23,8 @@ import { useRun } from '../../hooks/use-run.ts';
 import { effortLabels, readModelChoice } from '../model-choice.ts';
 import { focusMessage, isBusy, readOpenSettled } from '../open-chat.ts';
 import { useChat } from '../chat-context.ts';
-import type { ChatHosts } from '../chat-view.tsx';
+import type { ChatHosts, ChatWorktreeCreation } from '../chat-view.tsx';
+import type { ShellNative } from '../../shell/desktop-shell.tsx';
 import { MessageInput } from './message-input.tsx';
 import { NewChatPlace } from './new-chat-place.tsx';
 import {
@@ -57,12 +58,8 @@ export function Composer({
   hosts?: ChatHosts;
   folderProjects?: readonly ChatFolderProject[];
   recentFolders?: RecentFolders;
-  chooseFolder?: Effect.Effect<string | null, unknown>;
-  createWorktree?: (
-    root: string,
-    branch: string,
-    requestId: string,
-  ) => Effect.Effect<string, unknown>;
+  chooseFolder?: ShellNative['chooseChatFolder'];
+  createWorktree?: ChatWorktreeCreation;
   setUpProviders?: () => void;
 }) {
   const { atoms, services, act } = useChat();

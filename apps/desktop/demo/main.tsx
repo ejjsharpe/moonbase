@@ -13,6 +13,7 @@ import * as AtomRegistry from 'effect/reactivity/AtomRegistry';
 import { RegistryContext } from '@effect/atom-react';
 import { WorkspaceService } from '@moonbase/contracts/services';
 import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
+import { IpcClosedError } from '@moonbase/contracts/ipc-errors';
 import type { CommandInput, CommandOutput, WorkspaceCommand } from '@moonbase/contracts/workspace';
 import { makeEditorActions, makeWorkbenchEditor } from '@moonbase/workbench';
 import {
@@ -135,8 +136,9 @@ const promiseActions = <T extends object>(
     ]),
   ) as PromisedActions<T>;
 /** A spec's Promise answer, as the native capability's Effect. */
-const promised = <A,>(answer: () => Promise<A>) =>
-  Effect.tryPromise({ try: answer, catch: (error) => error });
+/** A spec's answer as main's: a rejection is what main would fail with. */
+const promised = <A, E = never>(answer: () => Promise<A>) =>
+  Effect.tryPromise({ try: answer, catch: (error) => error as E });
 /**
  * One window's composition root: the editor over the shared memory workspace, with `native` for
  * its files tree, and its chat.
@@ -317,22 +319,25 @@ const designNative: ShellNative = {
   ...firstNative,
   chooseChatFolder: Effect.succeed('/demo/moonbase'),
   listChatFolders: () =>
-    Effect.sync(() =>
-      // `?folders` lists enough recent folders for the menu to offer its filter.
-      new URLSearchParams(location.search).has('folders')
-        ? [
-            'notes',
-            'game-engine',
-            'dotfiles',
-            'blog',
-            'scratch',
-            'api',
-            'infra',
-            'design',
-            'tools',
-          ].map((name) => `/Users/demo/${name}`)
-        : ['/Users/demo/notes', '/demo/moonbase'],
-    ),
+    // `?unlistedFolders` lists none, as when main can't be reached.
+    new URLSearchParams(location.search).has('unlistedFolders')
+      ? Effect.fail(new IpcClosedError({ sent: false }))
+      : Effect.sync(() =>
+          // `?folders` lists enough recent folders for the menu to offer its filter.
+          new URLSearchParams(location.search).has('folders')
+            ? [
+                'notes',
+                'game-engine',
+                'dotfiles',
+                'blog',
+                'scratch',
+                'api',
+                'infra',
+                'design',
+                'tools',
+              ].map((name) => `/Users/demo/${name}`)
+            : ['/Users/demo/notes', '/demo/moonbase'],
+        ),
   createChatWorktree: (root, branch) => promised(() => createChatWorktree(root, branch)),
   turnChatIntoProject: (conversationId) => promised(() => chat.turnIntoProject(conversationId)),
 };

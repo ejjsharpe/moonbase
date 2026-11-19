@@ -1,7 +1,7 @@
 import { Context, Effect, Layer } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import type { DesktopBridge } from '../../ipc/desktop-bridge.ts';
-import type { ChatTargetId } from '../../ipc/chat-rpcs.ts';
+import type { ChatTargetId, TranscriptCopy, TranscriptImage } from '../../ipc/chat-rpcs.ts';
 import type { DesktopIpc } from './desktop-ipc.ts';
 import { callEffect, type Payload, type Refusal, type Tag } from './ipc-failures.ts';
 
@@ -14,10 +14,9 @@ const makeDesktopNative = (ipc: Context.Context<DesktopIpc>, bridge: DesktopBrid
   const call = <T extends Tag>(tag: T, payload: Payload<T>, refused: Refusal = 'desktop-request') =>
     callEffect(tag, payload, refused).pipe(Effect.provideContext(ipc));
   const transcript = (backendId: ChatTargetId) => ({
-    copy: (copy: Payload<'copyTranscript'>['copy']) =>
-      call('copyTranscript', { backendId, copy }, 'chat-request'),
+    copy: (copy: TranscriptCopy) => call('copyTranscript', { backendId, copy }, 'chat-request'),
     openLink: (url: string) => call('openTranscriptLink', { backendId, url }, 'chat-request'),
-    imageUrl: (image: Payload<'getTranscriptImageUrl'>['image']) =>
+    imageUrl: (image: TranscriptImage) =>
       call('getTranscriptImageUrl', { backendId, image }, 'chat-request'),
   });
   return {
@@ -58,6 +57,12 @@ const makeDesktopNative = (ipc: Context.Context<DesktopIpc>, bridge: DesktopBrid
   };
 };
 export type DesktopNativeShape = ReturnType<typeof makeDesktopNative>;
+/** What a `DesktopNative` capability fails with: main's errors for it, or the renderer's own. */
+export type NativeFailure<K extends keyof DesktopNativeShape> = DesktopNativeShape[K] extends (
+  ...args: never[]
+) => infer R
+  ? Effect.Error<R>
+  : Effect.Error<DesktopNativeShape[K]>;
 
 /** Main's native capabilities, as the renderer's views run them. */
 export class DesktopNative extends Context.Service<DesktopNative, DesktopNativeShape>()(

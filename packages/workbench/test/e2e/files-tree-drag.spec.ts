@@ -308,6 +308,38 @@ test('⌘Z in the tree undoes a move, and the … menu names what it undoes', as
   await menu.getByRole('menuitem', { name: 'Undo Move', exact: true }).click();
   await expect(row(page, 'welcome.ts')).toBeVisible();
   expect(await exists(page, 'dest/welcome.ts')).toBe(false);
+  // A move whose reply comes once the tree has gone is still the one to undo.
+  await create(page, 'other/');
+  await row(page, 'README.md').click();
+  await row(page, 'README.md').dragTo(row(page, 'dest'));
+  await expect(row(page, 'dest/README.md')).toBeVisible();
+  await page.evaluate(() => {
+    const { client } = window.demo;
+    const command = client.command;
+    const held = Promise.withResolvers<void>();
+    client.command = (async (...args: Parameters<typeof command>) => {
+      if (args[0] !== 'mutate') return command.apply(client, args);
+      client.command = command;
+      Object.assign(window, { moveHeld: true });
+      await held.promise;
+      return command.apply(client, args);
+    }) as typeof command;
+    Object.assign(window, { releaseMove: held.resolve });
+  });
+  await row(page, 'welcome.ts').click();
+  await row(page, 'welcome.ts').dragTo(row(page, 'other'));
+  await expect.poll(() => page.evaluate(() => 'moveHeld' in window)).toBe(true);
+  const nav = region(page).getByRole('group', { name: 'Sidebar view', exact: true });
+  await nav.getByRole('button', { name: 'Changes', exact: true }).click();
+  await expect(tree(page)).toHaveCount(0);
+  await page.evaluate(() => (window as unknown as { releaseMove(): void }).releaseMove());
+  await expect.poll(() => exists(page, 'other/welcome.ts')).toBe(true);
+  await nav.getByRole('button', { name: 'Files', exact: true }).click();
+  menu = await explorerMenu(page);
+  await menu.getByRole('menuitem', { name: 'Undo Move', exact: true }).click();
+  await expect.poll(() => exists(page, 'welcome.ts')).toBe(true);
+  expect(await exists(page, 'other/welcome.ts')).toBe(false);
+  expect(await exists(page, 'dest/README.md')).toBe(true);
 });
 
 test('⌘Z undoes an inline rename, but not while the name is typed', async ({ page }) => {

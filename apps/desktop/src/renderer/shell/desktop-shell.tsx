@@ -32,7 +32,7 @@ import {
 import { useStoredToggle } from '../hooks/use-stored-toggle.ts';
 import { nowAtom } from '../hooks/use-now.ts';
 import { focusMessage, focusMessageEnd } from '../chat/open-chat.ts';
-import type { TranscriptNative } from '../chat/transcript/transcript-actions.ts';
+import type { DesktopNativeShape } from '../ipc/desktop-native.ts';
 import type { ChatTargetId } from '../../ipc/chat-rpcs.ts';
 import { reporting, useRun, type ViewWork } from '../hooks/use-run.ts';
 import { Settings, type SettingsSection } from './settings.tsx';
@@ -59,27 +59,17 @@ export type DesktopShellHandle = {
  * return user-approved roots, never source paths. The editor's own (Copy Path, Reveal, imports)
  * are its workbench platform.
  */
-export type ShellNative = {
-  /** Each chat target's transcript Copy, Open and image URLs. */
-  transcripts?: Readonly<Record<ChatTargetId, TranscriptNative>>;
-  /** A local chat's folder, chosen in the native picker; null when the user cancelled. */
-  chooseChatFolder?: Effect.Effect<string | null, unknown>;
-  /**
-   * Folders a new chat on the target may use without a picker: local chat's recently approved
-   * ones, or a remote host's approved roots and their folders.
-   */
-  listChatFolders?: (targetId: ChatTargetId) => Effect.Effect<readonly string[], unknown>;
-  /** Creates a new local chat's linked worktree beside the repository, returning its root. */
-  createChatWorktree?: (
-    root: string,
-    branch: string,
-    requestId: string,
-  ) => Effect.Effect<string, unknown>;
-  /** Opens a local chat without a project's folder as a project where it is, returning its root. */
-  turnChatIntoProject?: (conversationId: string) => Effect.Effect<string, unknown>;
-  /** A project's root, chosen in the native picker; null when the user cancelled. */
-  chooseCheckout?: Effect.Effect<string | null, unknown>;
-};
+export type ShellNative = Partial<
+  Pick<
+    DesktopNativeShape,
+    | 'transcripts'
+    | 'chooseChatFolder'
+    | 'listChatFolders'
+    | 'createChatWorktree'
+    | 'turnChatIntoProject'
+    | 'chooseCheckout'
+  >
+>;
 export type DesktopShellProps = {
   application: DesktopApplication;
   /** The project editor the shell's workbench shows. */

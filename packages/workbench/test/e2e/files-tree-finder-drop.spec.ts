@@ -386,3 +386,19 @@ test('a checkout closed while a Finder drop is approved imports nothing', async 
   );
   expect(await page.evaluate(() => window.imported)).toEqual([]);
 });
+
+test('a files tree closed while a Finder drop is approved refuses it', async ({ page }) => {
+  await setup(page);
+  await holdApproval(page);
+  await dropFiles(page, row(page, 'src'), ['late.txt']);
+  // Showing another view, or another checkout, in the tree's place unmounts it.
+  const nav = region(page).getByRole('group', { name: 'Sidebar view', exact: true });
+  await nav.getByRole('button', { name: 'Changes', exact: true }).click();
+  await expect(region(page).getByRole('alert')).toContainText(
+    'The files tree closed before the dropped files were approved.',
+  );
+  await finishApproval(page);
+  await nav.getByRole('button', { name: 'Files', exact: true }).click();
+  await expect(row(page, 'src')).toBeVisible();
+  expect(await page.evaluate(() => window.imported)).toEqual([]);
+});

@@ -1,4 +1,4 @@
-import { useMemo, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { Button } from '@base-ui/react/button';
 import { Dialog } from '@base-ui/react/dialog';
@@ -9,15 +9,19 @@ import { Icon } from '@moonbase/ui/icons';
 import { projectInitials, projectTiles } from '@moonbase/ui/projects';
 import { colors, space, type } from '@moonbase/ui/tokens.stylex';
 import { Context, Effect } from 'effect';
-import * as Atom from 'effect/reactivity/Atom';
-import { useAtom } from '@effect/atom-react';
-import { ChatList, ChatSelection, type ChatComposer } from '@moonbase/application/chat';
+import { useAtomValue } from '@effect/atom-react';
+import {
+  ChatList,
+  ChatSelection,
+  composerAtoms,
+  type ChatComposer,
+} from '@moonbase/application/chat';
 import { folderName } from '../components/folder-menu.tsx';
 import { activateChatFind, type ChatFindOwner } from './find.tsx';
 import { describeOpenChat } from './open-chat.ts';
 import { useOpenChat } from './use-open-chat.ts';
 import { useChat } from './chat-context.ts';
-import type { ChatDock } from './chat-view.tsx';
+import type { ChatDock, TurnIntoProject } from './chat-view.tsx';
 
 type OpenChat = ReturnType<typeof useOpenChat>;
 
@@ -60,8 +64,9 @@ function FindButton({
 }
 
 /**
- * Opens a local chat's own folder (one without a project) as a project where it is. Why it
- * couldn't is the composer's message, in that chat.
+ * Opens a local chat's own folder (one without a project) as a project where it is. The composer
+ * owns the turn, so a header that goes away meanwhile leaves it running; why it couldn't is the
+ * composer's message, in that chat.
  */
 function TurnButton({
   open,
@@ -70,29 +75,10 @@ function TurnButton({
 }: {
   open: OpenChat;
   composer: ChatComposer;
-  turnIntoProject: (conversationId: string) => Effect.Effect<void, unknown>;
+  turnIntoProject: TurnIntoProject;
 }) {
   const { services, act } = useChat();
-  // Turning shows until it settles; closing the chat's header interrupts the wait.
-  const turnAtom = useMemo(
-    () =>
-      Atom.setIdleTTL(
-        Atom.fn((id: string) =>
-          Effect.andThen(composer.dismiss({ chat: id }), turnIntoProject(id)).pipe(
-            Effect.tap(() => Effect.sync(() => act(Context.get(services, ChatList).reload()))),
-            Effect.catch((error: unknown) =>
-              composer.report({
-                chat: id,
-                text: `The chat could not become a project. ${error instanceof Error ? error.message : ''}`.trim(),
-              }),
-            ),
-          ),
-        ),
-        0,
-      ),
-    [composer, turnIntoProject, services, act],
-  );
-  const [turning, turn] = useAtom(turnAtom);
+  const { turning } = useAtomValue(composerAtoms.state(composer));
   if (!open.selected || !open.chat?.ownFolder) return null;
   const id = open.selected.conversationId;
   return (
@@ -100,8 +86,15 @@ function TurnButton({
       aria-label="Turn into project"
       title="Turn into project · opens this chat’s folder as a project"
       {...stylex.props(controls.button, controls.iconButton)}
-      disabled={turning.waiting || !open.ready}
-      onClick={() => turn(id)}>
+      disabled={turning.includes(id) || !open.ready}
+      onClick={() =>
+        act(
+          composer.turnIntoProject(
+            id,
+            Effect.andThen(turnIntoProject(id), Context.get(services, ChatList).reload()),
+          ),
+        )
+      }>
       <Icon name="newFolder" />
     </Button>
   );
@@ -183,7 +176,7 @@ export function ChatHeader({
   onFindKeyDown,
 }: {
   composer: ChatComposer;
-  turnIntoProject?: (conversationId: string) => Effect.Effect<void, unknown>;
+  turnIntoProject?: TurnIntoProject;
   findInput: RefObject<HTMLInputElement | null>;
   titleId: string;
   /** The title bar's slot, null until it mounts; undefined for a header of the view's own. */

@@ -246,9 +246,13 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
             }),
           ),
         selectCheckout: (target) => session.admitted(selectOpenCheckout(target)),
+        // A listing only its caller wants: interrupting the caller ends it.
         listWorktrees: (checkout) =>
-          session.admitted(
-            Effect.andThen(views.view(checkout), reported(workspace.listWorktrees({ checkout }))),
+          session.runWithCaller(
+            Effect.andThen(
+              session.admit,
+              Effect.andThen(views.view(checkout), reported(workspace.listWorktrees({ checkout }))),
+            ),
           ),
         createWorktree: (input) =>
           session.admitted(

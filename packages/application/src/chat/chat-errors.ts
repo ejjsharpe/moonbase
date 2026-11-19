@@ -81,6 +81,22 @@ export class DraftStorageError extends Schema.TaggedError<DraftStorageError>()(
   }
 }
 
+/** Why the rest of a message after `/new` can't join the new chat's draft. */
+export class NewChatDraftError extends Schema.TaggedError<NewChatDraftError>()(
+  'NewChatDraftError',
+  {
+    reason: Schema.Literals(['clash', 'full']),
+    /** The mention whose spelling already names a file in another folder (`clash`). */
+    path: Schema.optional(Schema.String),
+  },
+) {
+  override get message(): string {
+    return this.reason === 'clash'
+      ? `The new chat's draft already mentions ${this.path} in another folder, so the rest of this message stays here.`
+      : "The new chat's draft has no room for the rest of this message, so it stays here.";
+  }
+}
+
 const isTagged = (value: unknown, tag: string) =>
   value instanceof Error && (value as { _tag?: unknown })._tag === tag;
 const isOwnError = (value: unknown): value is ChatRefusedError | DraftStorageError =>

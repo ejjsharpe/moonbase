@@ -18,7 +18,8 @@ import type { EditorActions } from './editor-actions.ts';
  * Succeeds with whether it completed and, for a batch that failed partway, the items that did. A
  * failure goes to `inlineError` when the caller shows it beside its own field, otherwise to the
  * editor's alerts. The caller places focus afterwards, or names with `finalFocus` where the
- * replace prompt returns it as it closes.
+ * replace prompt returns it as it closes. The run and `settled`, given its result, are the
+ * editor's own: a caller interrupted meanwhile (its view gone) only stops waiting.
  */
 export type RunMutation = (
   action: MutationAction,
@@ -26,6 +27,7 @@ export type RunMutation = (
   options?: {
     inlineError?: (message: string) => void;
     finalFocus?: () => HTMLElement | false;
+    settled?: (result: MutationRunResult) => void;
   },
 ) => Effect.Effect<MutationRunResult>;
 
@@ -49,23 +51,30 @@ export function useMutationRunner(
     },
     [actions],
   );
-  const runMutation: RunMutation = (action, destination, { inlineError, finalFocus } = {}) =>
-    Effect.gen(function* () {
-      const fail = (message: string) => {
-        if (inlineError) inlineError(message);
-        else actions.report(message);
-      };
-      if (dialogOpen()) {
-        fail(mutationUnavailable);
-        return { completed: false, error: mutationUnavailable, items: [] };
-      }
-      // The editor applies the rest of the gate, refusing with `mutationUnavailable`. Only an
-      // admitted run takes the prompt's focus, so a refused one never redirects a running one's.
-      if (actions.admitsMutation(action)) setPromptFocus({ finalFocus });
-      const result = yield* actions.mutate(action, { destination });
-      if (result.error) fail(result.error);
-      return result;
-    });
+  const runMutation: RunMutation = (
+    action,
+    destination,
+    { inlineError, finalFocus, settled } = {},
+  ) =>
+    actions.own(
+      Effect.gen(function* () {
+        const fail = (message: string) => {
+          if (inlineError) inlineError(message);
+          else actions.report(message);
+        };
+        const finish = (result: MutationRunResult) => {
+          if (result.error) fail(result.error);
+          settled?.(result);
+          return result;
+        };
+        if (dialogOpen())
+          return finish({ completed: false, error: mutationUnavailable, items: [] });
+        // The editor applies the rest of the gate, refusing with `mutationUnavailable`. Only an
+        // admitted run takes the prompt's focus, so a refused one never redirects a running one's.
+        if (actions.admitsMutation(action)) setPromptFocus({ finalFocus });
+        return finish(yield* actions.mutate(action, { destination }));
+      }),
+    );
   const prompt = state.replacePrompt;
   const confirmation = prompt && (
     <ReplacePrompt

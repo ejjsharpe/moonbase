@@ -31,6 +31,27 @@ test('a new chat’s draft is kept before any chat exists and reopens without re
   assert.deepEqual(f.calls, []);
 });
 
+test('/new moves the rest to the new chat’s draft in the write that leaves the chat', async (t) => {
+  const f = await chatFixture(t);
+  await f.setDraft('Waiting');
+  await openChat(f);
+  await f.setDraft('/new\nCarry this');
+  const written: string[] = [];
+  f.storage.onWrite = (value) => written.push(value);
+  assert.equal(
+    await f.runtime.runPromise(f.composer().startNewChat('Carry this', [], undefined)),
+    true,
+  );
+  // Neither chat is ever without the text: the first write has left the chat and carried it.
+  const first = JSON.parse(written[0]!);
+  assert.equal(first.selected, null);
+  assert.equal(first.newDraft, 'Waiting\nCarry this');
+  assert.deepEqual(first.drafts, []);
+  assert.equal((await f.state()).snapshot, null);
+  await f.reopen();
+  assert.equal((await f.state()).draft, 'Waiting\nCarry this');
+});
+
 test('a model and effort preference survives selection, new chats and a restart', async (t) => {
   const f = await chatFixture(t);
   assert.equal((await f.state()).modelPreference, null);

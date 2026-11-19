@@ -47,6 +47,8 @@ export function useExplorerPaste({
   function pasteInto(target: CheckoutTarget, folder: string, tree = true) {
     const captured = { ...target };
     const filesTree = () => treeElement.current ?? false;
+    // The menu Paste was chosen from, if any: it returns focus to the explorer as it closes.
+    const menu = document.activeElement?.closest('[role="menu"]') ?? null;
     run(
       Effect.gen(function* () {
         if (selectClipboardImports) {
@@ -61,14 +63,14 @@ export function useExplorerPaste({
         const landed = yield* fileClipboard.paste(captured, folder, filesTree);
         if (!landed.length) return;
         onPasted();
-        // Focus the user moved elsewhere meanwhile stays there; the menu Paste was chosen from
-        // may still be closing.
+        // Focus the user moved elsewhere meanwhile, another menu included, stays there; the menu
+        // Paste was chosen from may still be closing.
         const focused = document.activeElement;
         if (
           !focused ||
           focused === document.body ||
           explorerElement.current?.contains(focused) ||
-          focused.closest('[role="menu"]')
+          (menu && menu.contains(focused))
         ) {
           const tree = filesTree();
           if (tree) tree.focus();

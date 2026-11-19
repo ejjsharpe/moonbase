@@ -379,7 +379,9 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
       now(session.update((s) => (s.closing ? s : { ...s, admissionsOpen: open }))),
     load: () => run(get(EditorLoader).load),
     openCheckout: (root: string) => run(checkouts.openCheckout(root)),
-    listWorktrees: (checkout: CheckoutTarget) => run(checkouts.listWorktrees(checkout)),
+    /** Lists a checkout's worktrees; aborting `signal` interrupts the listing. */
+    listWorktrees: (checkout: CheckoutTarget, signal?: AbortSignal) =>
+      run(checkouts.listWorktrees(checkout), signal),
     createWorktree: (input: CommandInput<'createWorktree'>) => run(checkouts.createWorktree(input)),
     initializeRepository: (checkout: CheckoutTarget) =>
       run(checkouts.initializeRepository(checkout)),
@@ -389,7 +391,9 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
       getSnapshot().buffers.find((buffer) => fileKey(buffer.target) === fileKey(target)),
     edit: (target: FileTarget, text: string) => now(tabs.edit(target, text)),
     keepOpen: (target: FileTarget) => now(tabs.keepOpen(target)),
-    open: (target: FileTarget, options?: OpenOptions) => run(tabs.open(target, options)),
+    /** Opens a file; aborting `signal` interrupts the open. */
+    open: (target: FileTarget, options?: OpenOptions, signal?: AbortSignal) =>
+      run(tabs.open(target, options), signal),
     navigate: (checkout: CheckoutTarget, direction: 1 | -1) =>
       run(tabs.navigate(checkout, direction)),
     reorder: (checkout: CheckoutTarget, from: string, to: number) =>

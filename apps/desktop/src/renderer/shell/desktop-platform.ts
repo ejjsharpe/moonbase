@@ -1,14 +1,11 @@
 import { Effect } from 'effect';
-import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import type { WorkbenchPlatformShape } from '@moonbase/workbench';
+import type { DesktopNativeShape } from '../ipc/desktop-native.ts';
 
 /** The native capabilities the workbench's files tree uses, as `DesktopNative` has them. */
-export type EditorNative = {
-  pasteImports?: (checkout: CheckoutTarget) => Effect.Effect<string[] | null, unknown>;
-  dropImports?: (checkout: CheckoutTarget, files: File[]) => Effect.Effect<string[], unknown>;
-  copyPaths?: WorkbenchPlatformShape['copyPaths'];
-  revealPath?: WorkbenchPlatformShape['revealPath'];
-};
+export type EditorNative = Partial<
+  Pick<DesktopNativeShape, 'pasteImports' | 'dropImports' | 'copyPaths' | 'revealPath'>
+>;
 
 /**
  * The workbench's platform over main's native capabilities. Files copied or dropped import only

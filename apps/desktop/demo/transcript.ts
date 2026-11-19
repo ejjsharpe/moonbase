@@ -19,8 +19,9 @@ export type DemoTranscriptNative = {
 };
 /** The views' Effects over `native`, each calling what it holds when it runs. */
 export const toTranscriptNative = (native: DemoTranscriptNative): TranscriptNative => {
-  const promised = <A>(call: (signal: AbortSignal) => Promise<A>) =>
-    Effect.tryPromise({ try: call, catch: (error) => error });
+  // A spec's Promise rejects with what main would fail with.
+  const promised = <A, E>(call: (signal: AbortSignal) => Promise<A>) =>
+    Effect.tryPromise({ try: call, catch: (error) => error as E });
   return {
     copy: (input) => promised((signal) => native.copy(input, signal)),
     openLink: (url) => promised((signal) => native.openLink(url, signal)),
