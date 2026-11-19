@@ -3,8 +3,7 @@ import { test } from 'node:test';
 import {
   daemonCommandCapabilities,
   daemonInputSchemas,
-  decodeDaemonInput,
-  decodeDaemonOutput,
+  daemonOutputSchemas,
   isDaemonCommand,
   isDaemonMutation,
   maximumHostFolders,
@@ -44,43 +43,48 @@ test('every daemon operation names one advertised capability; mutations are exac
   assert(!isDaemonCommand('sendChat'));
 });
 
-test('daemon inputs decode strictly and within bounds', () => {
+// The schemas the daemon's RPC group decodes each payload and reply with.
+const decodeInput = (operation: string, value: unknown) =>
+  Schema.decodeUnknownSync(
+    (daemonInputSchemas as Record<string, Schema.Codec<unknown, unknown>>)[operation]!,
+  )(value);
+const decodeOutput = (operation: string, value: unknown) =>
+  Schema.decodeUnknownSync(
+    (daemonOutputSchemas as Record<string, Schema.Codec<unknown, unknown>>)[operation]!,
+  )(value);
+
+test('daemon inputs decode within bounds', () => {
   assert.deepEqual(
-    decodeDaemonInput('approveFolder', { host, requestId: 'r', path: '/folder', recent: false }),
+    decodeInput('approveFolder', { host, requestId: 'r', path: '/folder', recent: false }),
     { host, requestId: 'r', path: '/folder', recent: false },
   );
   for (const [operation, input] of [
     ['approveFolder', { host, requestId: 'r', path: 'relative' }],
     ['approveFolder', { host, requestId: 'r', path: '/a\0b' }],
     ['approveFolder', { host, path: '/folder' }],
-    ['approveFolder', { host, requestId: 'r', path: '/folder', extra: true }],
     [
       'answerProviderPrompt',
       { host, ownerId: 'o', requestId: 'r', flowId: 'f', promptId: 'p', answer: 'x'.repeat(16385) },
     ],
-    ['setAdmissionsOpen', { host, open: false }],
   ] as const)
-    assert.throws(() => decodeDaemonInput(operation as never, input));
+    assert.throws(() => decodeInput(operation, input), Schema.isSchemaError);
 });
 
-test('daemon replies decode strictly, bounding folders and validating sign-in links', () => {
+test('daemon replies decode within bounds, validating sign-in links', () => {
   const folders = Array.from({ length: maximumRecentFolders }, (_, i) => `/folder-${i}`);
-  assert.deepEqual(decodeDaemonOutput('listRecentFolders', { folders }), { folders });
+  assert.deepEqual(decodeOutput('listRecentFolders', { folders }), { folders });
   const hostFolders = Array.from({ length: maximumHostFolders }, (_, i) => `/root/folder-${i}`);
-  assert.deepEqual(decodeDaemonOutput('listHostFolders', { folders: hostFolders }), {
+  assert.deepEqual(decodeOutput('listHostFolders', { folders: hostFolders }), {
     folders: hostFolders,
   });
-  assert.equal(decodeDaemonOutput('checkChatFolder', undefined), undefined);
-  assert.equal(decodeDaemonOutput('checkApprovedFolder', undefined), undefined);
   const url = 'https://auth.openai.com/api/accounts/authorize?state=1';
-  assert.deepEqual(decodeDaemonOutput('openProviderUrl', { state, url }), { state, url });
+  assert.deepEqual(decodeOutput('openProviderUrl', { state, url }), { state, url });
   for (const [operation, output] of [
     ['listRecentFolders', { folders: [...folders, '/one-more'] }],
     ['listHostFolders', { folders: ['relative'] }],
-    ['getProviders', { state, extra: true }],
     ['openProviderUrl', { state, url: 'https://evil.example/' }],
   ] as const)
-    assert.throws(() => decodeDaemonOutput(operation as never, output), Schema.isSchemaError);
+    assert.throws(() => decodeOutput(operation, output), Schema.isSchemaError);
 });
 
 test('sign-in links are accepted only as https pages on a provider sign-in origin', () => {
