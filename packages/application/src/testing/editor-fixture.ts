@@ -8,7 +8,6 @@ import {
   Fiber,
   Layer,
   ManagedRuntime,
-  PubSub,
   Queue,
   Scope,
   Stream,
@@ -96,6 +95,9 @@ export type WorkspaceClient = {
     onError: (error: WorkspaceError) => void,
   ): () => Promise<void>;
 };
+
+/** A piece of the editor snapshot: its value now, and its changes from it. */
+type SnapshotSource = { readonly read: () => unknown; readonly changes: Stream.Stream<unknown> };
 
 /** A client's failure as the workspace's: its own error, else the fixed unavailable one. */
 const asWorkspaceError = (error: unknown): WorkspaceError =>
@@ -257,12 +259,20 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
     get(EditorOperations).state,
     get(RecoveryOutbox).state,
     mutations.state,
-    mutations.replacePrompt,
-    preservation.closePrompt,
-  ] as const;
+  ].map((ref) => ({
+    read: () => SubscriptionRef.getUnsafe(ref as SubscriptionRef.SubscriptionRef<unknown>),
+    changes: SubscriptionRef.changes(ref as SubscriptionRef.SubscriptionRef<unknown>),
+  }));
+  const sources: readonly SnapshotSource[] = [
+    ...refs,
+    ...[mutations.replacePrompt, preservation.closePrompt].map((shown) => ({
+      read: () => Effect.runSync(shown.get as Effect.Effect<unknown>),
+      changes: shown.changes as Stream.Stream<unknown>,
+    })),
+  ];
   let parts: unknown[] | undefined, snapshot: EditorSnapshot | undefined;
   const getSnapshot = (): EditorSnapshot => {
-    const next = refs.map((ref) => SubscriptionRef.getUnsafe(ref as never));
+    const next = sources.map((source) => source.read());
     if (!parts || next.some((part, index) => part !== parts![index])) {
       parts = next;
       const [s, a, v, b, d, o, x, m, r, c] = next;
@@ -293,29 +303,13 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
   const now = <A, E>(effect: Effect.Effect<A, E, EditorServices>): A =>
     unwrap(Effect.runSyncExitWith(services)(effect), cancelled);
   /** Calls `listener` after each change to `watched`, from now until unsubscribed. */
-  const watchRefs = (
-    watched: readonly SubscriptionRef.SubscriptionRef<unknown>[],
-    listener: () => void,
-  ) => {
-    // Subscribed at once, so no change after this call is missed.
-    const scope = Scope.makeUnsafe();
-    const queues = watched.map((ref) =>
-      Effect.runSync(Scope.provide(scope)(PubSub.subscribe(ref.pubsub))),
+  const watchChanges = (watched: readonly Stream.Stream<unknown>[], listener: () => void) => {
+    // Each fiber subscribes as it starts, before this returns, so no change after this call is
+    // missed. Each stream replays the value it started from first: that is no change.
+    const fibers = watched.map((changes) =>
+      Effect.runFork(Stream.runForEach(Stream.drop(changes, 1), () => Effect.sync(listener))),
     );
-    const fiber = Effect.runFork(
-      Effect.forEach(
-        queues,
-        // Each queue replays the value it started from first: that is no change.
-        (queue) =>
-          Effect.andThen(
-            PubSub.take(queue),
-            Effect.forever(Effect.andThen(PubSub.take(queue), Effect.sync(listener))),
-          ),
-        { concurrency: 'unbounded', discard: true },
-      ),
-    );
-    return () =>
-      void Effect.runFork(Effect.andThen(Fiber.interrupt(fiber), Scope.close(scope, Exit.void)));
+    return () => void Effect.runFork(Fiber.interruptAll(fibers));
   };
   const handles = new Set<Closeable>();
   /** A popup's query, as a lookup or a search. */
@@ -329,7 +323,7 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
       query,
       getSnapshot: (): S => SubscriptionRef.getUnsafe(query.state),
       subscribe: (listener: () => void) =>
-        watchRefs([query.state as SubscriptionRef.SubscriptionRef<unknown>], listener),
+        watchChanges([SubscriptionRef.changes(query.state)], listener),
       /** Opens a result: `current` turns false once a newer query or open cancels it. */
       open: (open: (current: () => boolean) => Promise<boolean>) =>
         run(
@@ -374,7 +368,10 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
     instanceId: crypto.randomUUID(),
     getSnapshot,
     subscribe: (listener: () => void) =>
-      watchRefs(refs as unknown as SubscriptionRef.SubscriptionRef<unknown>[], listener),
+      watchChanges(
+        sources.map((source) => source.changes),
+        listener,
+      ),
     report: (error: unknown) => now(alerts.report(error)),
     clearErrors: () => now(alerts.clear),
     /** Composition fences admissions while it prepares Quit. */

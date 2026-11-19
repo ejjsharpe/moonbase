@@ -9,7 +9,7 @@ import type {
 } from '@moonbase/contracts/workspace';
 import { EditorError, isRefusal, type EditorFailure } from '../editor-errors.ts';
 import { describeEditorFailure } from '../alerts/alerts.ts';
-import { makeEditorPrompt } from '../editor-prompt.ts';
+import { makeEditorPrompt, type ShownPrompt } from '../editor-prompt.ts';
 import { isRelativePath } from '../relative-path.ts';
 import { EditorSession } from '../session/session-service.ts';
 import { EditorAlerts } from '../alerts/alerts-service.ts';
@@ -41,7 +41,7 @@ export type OperationInput = Omit<WorkspaceOperation, 'clientId' | 'id'> & { id?
 export type EditorMutationsShape = {
   readonly state: SubscriptionRef.SubscriptionRef<MutationState>;
   /** The replace prompt shown; closing the editor answers it Cancel (don't replace). */
-  readonly replacePrompt: SubscriptionRef.SubscriptionRef<ReplacePrompt | null>;
+  readonly replacePrompt: ShownPrompt<ReplacePrompt>;
   /** The mutation gate: whether `mutate` would admit `action` now. */
   readonly admits: (action: MutationAction) => Effect.Effect<boolean>;
   /**

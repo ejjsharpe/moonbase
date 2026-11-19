@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Deferred, Effect, Exit, Fiber, Scope, SubscriptionRef } from 'effect';
+import { Effect, Exit, Fiber, Scope } from 'effect';
 import { makeEditorPrompt } from '../../src/editor/editor-prompt.ts';
 
-test('a second prompt is refused while one is shown, and closing the scope answers Cancel', () =>
+test('a second prompt is refused while one is shown, and closing the scope answers Cancel and refuses later asks', () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const scope = yield* Scope.make();
@@ -11,28 +11,29 @@ test('a second prompt is refused while one is shown, and closing the scope answe
         makeEditorPrompt<{ id: string }, string>('cancel'),
         scope,
       );
-      const shown = () => SubscriptionRef.getUnsafe(prompt.shown)?.id;
+      const shown = Effect.map(prompt.shown.get, (shown) => shown?.id);
 
       const first = yield* Effect.forkChild(prompt.ask({ id: 'first' }), {
         startImmediately: true,
       });
       assert.equal(yield* prompt.ask({ id: 'second' }), 'cancel');
-      assert.equal(shown(), 'first');
+      assert.equal(yield* shown, 'first');
       yield* prompt.answer('first', 'save');
       assert.equal(yield* Fiber.join(first), 'save');
-      assert.equal(shown(), undefined);
+      assert.equal(yield* shown, undefined);
 
       const third = yield* Effect.forkChild(prompt.ask({ id: 'third' }), {
         startImmediately: true,
       });
-      assert.equal(shown(), 'third');
+      assert.equal(yield* shown, 'third');
       yield* Scope.close(scope, Exit.void);
       assert.equal(yield* Fiber.join(third), 'cancel');
-      assert.equal(shown(), undefined);
+      assert.equal(yield* prompt.ask({ id: 'fourth' }), 'cancel');
+      assert.equal(yield* shown, undefined);
     }),
   ));
 
-test('an answer interrupted while it settles still settles the reply', () =>
+test('an interrupted ask takes its prompt off screen', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -40,26 +41,14 @@ test('an answer interrupted while it settles still settles the reply', () =>
         const asked = yield* Effect.forkChild(prompt.ask({ id: 'first' }), {
           startImmediately: true,
         });
-
-        // Hold `shown` so the answer stops between taking the prompt and settling its reply.
-        const release = yield* Deferred.make<void>();
-        yield* Effect.forkChild(
-          SubscriptionRef.updateEffect(prompt.shown, (shown) =>
-            Deferred.await(release).pipe(Effect.as(shown)),
-          ),
-          { startImmediately: true },
-        );
-        const answering = yield* Effect.forkChild(prompt.answer('first', 'save'), {
+        yield* Fiber.interrupt(asked);
+        assert.equal(yield* prompt.shown.get, null);
+        // The next ask is admitted.
+        const next = yield* Effect.forkChild(prompt.ask({ id: 'next' }), {
           startImmediately: true,
         });
-        const interrupting = yield* Effect.forkChild(Fiber.interrupt(answering), {
-          startImmediately: true,
-        });
-        yield* Deferred.succeed(release, undefined);
-        yield* Fiber.join(interrupting);
-
-        assert.equal(yield* Fiber.join(asked), 'save');
-        assert.equal(SubscriptionRef.getUnsafe(prompt.shown), null);
+        yield* prompt.answer('next', 'save');
+        assert.equal(yield* Fiber.join(next), 'save');
       }),
     ),
   ));

@@ -1,7 +1,7 @@
-import { Context, Effect, Layer, type SubscriptionRef } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 import type { CheckoutTarget, FileTarget } from '@moonbase/contracts/workspace';
 import { EditorError, type EditorFailure } from '../editor-errors.ts';
-import { makeEditorPrompt } from '../editor-prompt.ts';
+import { makeEditorPrompt, type ShownPrompt } from '../editor-prompt.ts';
 import { EditorSession } from '../session/session-service.ts';
 import { EditorAlerts } from '../alerts/alerts-service.ts';
 import { EditorViews } from '../views/views-service.ts';
@@ -28,7 +28,7 @@ type CloseKind = 'files' | 'checkout' | 'quit';
 
 export type EditorPreservationShape = {
   /** The Save, Discard or Cancel prompt shown; closing the editor answers it Cancel. */
-  readonly closePrompt: SubscriptionRef.SubscriptionRef<ClosePrompt | null>;
+  readonly closePrompt: ShownPrompt<ClosePrompt>;
   /**
    * Closes files: asks Save, Discard or Cancel for each with unsaved changes, then closes them.
    * Their drafts are kept until the store has committed each close, so a failure loses nothing.

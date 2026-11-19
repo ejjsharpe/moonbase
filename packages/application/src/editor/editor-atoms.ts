@@ -16,7 +16,7 @@ import { makeLookupAtoms } from './lookup/lookup-atoms.ts';
 import { makeTextSearchAtoms } from './text-search/text-search-atoms.ts';
 import { toEditorSnapshot } from './editor-snapshot.ts';
 import type { EditorServices } from './editor-layer.ts';
-import { followRef } from '../follow-ref.ts';
+import { followChanges, followRef } from '../follow-ref.ts';
 
 /** Atoms over one editor's state, for views to subscribe to. */
 export function makeEditorAtoms(context: Context.Context<EditorServices>) {
@@ -29,8 +29,11 @@ export function makeEditorAtoms(context: Context.Context<EditorServices>) {
   const buffers = followRef(Context.get(context, EditorBuffers).state);
   const mutations = Context.get(context, EditorMutations);
   const mutation = followRef(mutations.state);
-  const replacePrompt = followRef(mutations.replacePrompt);
-  const closePrompt = followRef(Context.get(context, EditorPreservation).closePrompt);
+  const replacePrompt = followChanges(mutations.replacePrompt.changes, null);
+  const closePrompt = followChanges(
+    Context.get(context, EditorPreservation).closePrompt.changes,
+    null,
+  );
   const worktrees = followRef(Context.get(context, EditorWorktrees).state);
   return {
     session,
