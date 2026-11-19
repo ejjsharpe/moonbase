@@ -3,6 +3,7 @@ import { InvalidPathError, InvalidRequestError } from '@moonbase/contracts/works
 import { isWorkspaceError } from '@moonbase/contracts/workspace-errors';
 import { isCheckoutPath, isWellFormed } from '@moonbase/contracts/workspace-schema';
 import { createHash } from 'node:crypto';
+import { Effect } from 'effect';
 import {
   maximumFileBytes,
   type CheckoutTarget,
@@ -12,37 +13,38 @@ import {
   type WorkspaceOperation,
 } from '@moonbase/contracts/workspace';
 /** Refuses a path that is not exactly checkout-relative (see `isCheckoutPath`). */
-export function path(value: unknown, directory = false): asserts value is string {
-  if (!(typeof value === 'string' && isCheckoutPath(value, directory)))
-    throw new InvalidPathError({ problem: 'not-relative' });
-}
+export const requirePath = (
+  value: unknown,
+  directory = false,
+): Effect.Effect<string, InvalidPathError> =>
+  typeof value === 'string' && isCheckoutPath(value, directory)
+    ? Effect.succeed(value)
+    : Effect.fail(new InvalidPathError({ problem: 'not-relative' }));
 /** Refuses a Git-only operation on a plain-folder checkout. */
-export function requireGit(target: CheckoutTarget): asserts target is GitCheckoutTarget {
-  if (!(target.vcs === 'git')) throw new InvalidRequestError({ problem: 'not-git' });
-}
+export const requireGit = (
+  target: CheckoutTarget,
+): Effect.Effect<GitCheckoutTarget, InvalidRequestError> =>
+  target.vcs === 'git'
+    ? Effect.succeed(target)
+    : Effect.fail(new InvalidRequestError({ problem: 'not-git' }));
 export const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
-export function document(bytes: Buffer): FileDocument {
-  if (!(bytes.length <= maximumFileBytes && !bytes.includes(0)))
-    throw new InvalidRequestError({ problem: 'text-too-large' });
-  let decoded: string;
-  try {
-    decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
-  } catch {
-    throw new InvalidRequestError({ problem: 'text-not-utf8' });
-  }
-  return { text: decoded, version: hash(bytes) };
-}
-/** Checks that `text` is a file's worth of well-formed text, without hashing it. */
-export function text(value: unknown): asserts value is string {
-  if (!(typeof value === 'string')) throw new InvalidRequestError({ problem: 'text-not-string' });
-  if (!isWellFormed(value)) throw new InvalidRequestError({ problem: 'text-not-unicode' });
-  if (!(!value.includes('\0') && Buffer.byteLength(value) <= maximumFileBytes))
-    throw new InvalidRequestError({ problem: 'text-too-large' });
-}
-export function textDocument(value: string): FileDocument {
-  text(value);
-  return { text: value, version: hash(value) };
-}
+const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+/** A file's bytes as a document: UTF-8 text of at most `maximumFileBytes`. */
+export const decodeDocument = (bytes: Buffer): Effect.Effect<FileDocument, InvalidRequestError> =>
+  Effect.suspend(() => {
+    if (!(bytes.length <= maximumFileBytes && !bytes.includes(0)))
+      return Effect.fail(new InvalidRequestError({ problem: 'text-too-large' }));
+    return Effect.try({
+      try: () => ({ text: utf8.decode(bytes), version: hash(bytes) }),
+      catch: () => new InvalidRequestError({ problem: 'text-not-utf8' }),
+    });
+  });
+/** Whether `value` is a file's worth of well-formed text. */
+export const isFileText = (value: unknown): value is string =>
+  typeof value === 'string' &&
+  isWellFormed(value) &&
+  !value.includes('\0') &&
+  Buffer.byteLength(value) <= maximumFileBytes;
 export const same = (a: unknown, b: unknown): boolean => canonical(a) === canonical(b);
 export function canonical(value: unknown): string {
   return JSON.stringify(value, (_key, v) =>

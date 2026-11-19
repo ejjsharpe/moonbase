@@ -1,10 +1,9 @@
-import { NativeSourceError } from '@moonbase/contracts/workspace-host-errors';
-import { O_NOFOLLOW_ANY } from '../filesystem.ts';
+import { InvalidPathError, NativeSourceError } from '@moonbase/contracts/workspace-host-errors';
+import { identity, O_NOFOLLOW_ANY, statDescriptor, withDescriptor } from '../filesystem.ts';
 import fs, { openSync, fstatSync, lstatSync, constants, type Stats } from 'node:fs';
 import { basename, dirname, isAbsolute } from 'node:path';
 
 const flags = constants.O_RDONLY | constants.O_NONBLOCK | O_NOFOLLOW_ANY;
-const identity = (s: { dev: number; ino: number }) => `${s.dev}:${s.ino}`;
 const errorCode = (error: unknown) => (error as NodeJS.ErrnoException | undefined)?.code;
 /** Runs a no-follow open, refusing with `problem` when it fails with one of `codes`. */
 const refuseOn = <T>(open: () => T, codes: string[], problem: NativeSourceError['problem']) => {
@@ -29,7 +28,8 @@ const linkStat = (path: string): Stats | undefined => {
   }
 };
 // Paths come from the daemon's host import capture (dropped or pasted Finder files).
-// Retain the source descriptor, never a parent-directory descriptor or Project approval.
+// Retain the source descriptor, never a parent-directory descriptor or Project approval. Its
+// checks are no-follow identity checks, each run in one synchronous step that throws what refuses.
 export class NativeImport {
   readonly source: string;
   readonly identity: string;
@@ -37,7 +37,7 @@ export class NativeImport {
   readonly parents: string;
   readonly fd: number;
   readonly path: string;
-  constructor(path: string, protectedPath: (path: string) => void) {
+  constructor(path: string, isReserved: (path: string) => boolean) {
     this.path = path;
     if (
       !isAbsolute(path) ||
@@ -47,7 +47,7 @@ export class NativeImport {
       throw new NativeSourceError({ problem: 'invalid-reference' });
     this.source = basename(path);
     if (!this.source) throw new NativeSourceError({ problem: 'filesystem-root' });
-    protectedPath(path);
+    if (isReserved(path)) throw new InvalidPathError({ problem: 'reserved' });
     // Finder names a source by its own path: one reached through a symlinked folder is not a
     // reference the host accepts, so the no-follow ancestor open's ELOOP is an invalid reference.
     this.parents = refuseOn(() => this.parentIdentities(), ['ELOOP'], 'invalid-reference');
@@ -87,14 +87,7 @@ export class NativeImport {
       paths.push(current);
     }
     return paths
-      .map((path) => {
-        const fd = openSync(path, flags | constants.O_DIRECTORY);
-        try {
-          return identity(fstatSync(fd));
-        } finally {
-          fs.closeSync(fd);
-        }
-      })
+      .map((path) => identity(statDescriptor(path, flags | constants.O_DIRECTORY)))
       .join(',');
   }
   containsDirectory(directory: string) {
@@ -107,26 +100,24 @@ export class NativeImport {
     if (refuseOn(() => this.parentIdentities(), replacedCodes, 'parent-changed') !== this.parents)
       throw new NativeSourceError({ problem: 'parent-changed' });
     // Some replacements fail the open itself (a socket gives EOPNOTSUPP): its metadata confirms one.
-    const fd = refuseOn(
-      () =>
-        this.openSource(
-          'changed',
-          (stat) => identity(stat) !== this.identity || stat.isDirectory() !== this.directory,
-        ),
-      replacedCodes,
-      'changed',
+    const stat = withDescriptor(
+      refuseOn(
+        () =>
+          this.openSource(
+            'changed',
+            (stat) => identity(stat) !== this.identity || stat.isDirectory() !== this.directory,
+          ),
+        replacedCodes,
+        'changed',
+      ),
+      (fd) => fstatSync(fd),
     );
-    try {
-      const stat = fstatSync(fd);
-      if (
-        identity(stat) !== this.identity ||
-        stat.isDirectory() !== this.directory ||
-        (stat.isFile() && stat.nlink !== 1)
-      )
-        throw new NativeSourceError({ problem: 'changed' });
-    } finally {
-      fs.closeSync(fd);
-    }
+    if (
+      identity(stat) !== this.identity ||
+      stat.isDirectory() !== this.directory ||
+      (stat.isFile() && stat.nlink !== 1)
+    )
+      throw new NativeSourceError({ problem: 'changed' });
   }
   /** Closes the source's descriptor; whoever holds the reference closes it once. */
   close() {

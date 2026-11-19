@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { Schema } from 'effect';
+import { Cause, Effect, Exit, Schema } from 'effect';
 import type { SshConfiguration } from '@moonbase/ssh';
 import {
   decodeSshConfiguration,
@@ -21,25 +21,25 @@ const configuration: SshConfiguration = {
   token: 'synthetic-private-host-key',
 };
 
+const decode = (value: unknown) => Effect.runSync(decodeSshConfiguration(value));
 function rejected(value: unknown) {
-  assert.throws(
-    () => decodeSshConfiguration(value),
-    (error) => {
-      assert(error instanceof SshConfigurationError);
-      assert(!JSON.stringify(error).includes(configuration.token));
-      assert(!JSON.stringify(error).includes('private-credential-path'));
-      assert(!String(error).includes('SchemaError'));
-      return true;
-    },
-  );
+  const exit = Effect.runSyncExit(decodeSshConfiguration(value));
+  assert(Exit.isFailure(exit));
+  assert(!JSON.stringify(exit).includes(configuration.token));
+  assert(!JSON.stringify(exit).includes('private-credential-path'));
+  const error = Cause.squash(exit.cause);
+  assert(error instanceof SshConfigurationError);
+  assert(!JSON.stringify(error).includes(configuration.token));
+  assert(!JSON.stringify(error).includes('private-credential-path'));
+  assert(!String(error).includes('SchemaError'));
 }
 
 test('public private-configuration schema resolves nullish executables and projects nested extras', () => {
   const expected = { ...configuration, sshExecutable: '/usr/bin/ssh' };
-  assert.deepEqual(decodeSshConfiguration(configuration), expected);
+  assert.deepEqual(decode(configuration), expected);
   for (const sshExecutable of [undefined, null]) {
     const input = { ...configuration, sshExecutable };
-    assert.deepEqual(decodeSshConfiguration(input), expected);
+    assert.deepEqual(decode(input), expected);
     assert.deepEqual(Schema.decodeUnknownSync(SshConfigurationSchema)(input), expected);
   }
   const extra = {
@@ -51,7 +51,7 @@ test('public private-configuration schema resolves nullish executables and proje
       expected: { ...configuration.profile.expected, token: configuration.token },
     },
   };
-  const decoded = decodeSshConfiguration(extra);
+  const decoded = decode(extra);
   assert.deepEqual(decoded, expected);
   decoded.profile.expected.hostId = 'changed-copy';
   assert.equal(extra.profile.expected.hostId, configuration.profile.expected.hostId);
@@ -99,19 +99,18 @@ test('private configuration accepts destinations, ports, keys and paths at their
     ['user@[fe80::1%25]', 65535],
   ] as const)
     assert.equal(
-      decodeSshConfiguration({
+      decode({
         ...configuration,
         profile: { ...configuration.profile, destination, remotePort },
       }).profile.destination,
       destination,
     );
   for (const token of ['a'.repeat(16), 'a'.repeat(4096)])
-    assert.equal(decodeSshConfiguration({ ...configuration, token }).token, token);
+    assert.equal(decode({ ...configuration, token }).token, token);
   const bounded = { ...configuration.profile, id: 'i'.repeat(256), label: 'l'.repeat(128) };
-  assert.deepEqual(decodeSshConfiguration({ ...configuration, profile: bounded }).profile, bounded);
+  assert.deepEqual(decode({ ...configuration, profile: bounded }).profile, bounded);
   assert.equal(
-    decodeSshConfiguration({ ...configuration, sshExecutable: '/private SSH resources/ssh' })
-      .sshExecutable,
+    decode({ ...configuration, sshExecutable: '/private SSH resources/ssh' }).sshExecutable,
     '/private SSH resources/ssh',
   );
 });

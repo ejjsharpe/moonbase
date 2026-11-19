@@ -12,7 +12,6 @@ import {
   InvalidRecoveryRequestError,
   RecoveryPublicationError,
 } from '@moonbase/contracts/workspace-errors';
-import { attempt } from '../attempt.ts';
 import { hash, key, same } from '../validation.ts';
 import { followCheckouts } from './feed-sync.ts';
 import type { RecoveryContext } from './recovery-context.ts';
@@ -41,7 +40,7 @@ export const makeRecoveryEdits = (context: RecoveryContext, inOrder: KeyedLock) 
   /** Verifies, and follows the feed of, the checkouts the recovery does not list yet. */
   const admitCheckouts = (clientId: string, targets: CheckoutTarget[]) =>
     Effect.gen(function* () {
-      const listed = (yield* attempt(() => store.readRecovery(clientId)))?.state.checkouts ?? [];
+      const listed = (yield* store.step(() => store.readRecovery(clientId)))?.state.checkouts ?? [];
       const added = targets.filter((t) => !listed.some((c) => same(c, t)));
       for (const target of added) yield* context.host.verifyCheckout(target);
       if (added.length) yield* followCheckouts(context, added);

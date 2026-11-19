@@ -11,9 +11,17 @@ export const floorKey = (checkoutId: string) => 'feed-floor/' + checkoutId;
 
 /**
  * One page of the operation feed for a checkout: its entries after `after`, in sequence order.
- * `epoch` names the store the sequences belong to.
+ * `epoch` names the store the sequences belong to. Read in one step, so the counters and the
+ * page agree.
  */
-export function readOperationFeed(
+export const readOperationFeed = (
+  store: Store,
+  epoch: string,
+  target: CheckoutTarget,
+  after: number | null,
+) => store.step(() => readPage(store, epoch, target, after));
+
+function readPage(
   store: Store,
   epoch: string,
   target: CheckoutTarget,

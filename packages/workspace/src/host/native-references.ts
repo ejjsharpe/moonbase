@@ -60,7 +60,12 @@ export class References {
   getSourceName(token: string) {
     return this.unclaimed.get(token)?.source.source ?? '';
   }
-  inspectReferences(tokens: string[], checkout: CheckoutTarget, clientId: string): NativeClaim[] {
+  /**
+   * The client's unclaimed references to `tokens` in `checkout`, each source checked unchanged
+   * since its capture. Synchronous and throwing, to run in one step with claiming them (see
+   * `claimReferences`); `inspectReferences` is the same as an Effect.
+   */
+  findReferences(tokens: string[], checkout: CheckoutTarget, clientId: string): NativeClaim[] {
     return tokens.map((token) => {
       const ref = this.unclaimed.get(token);
       if (!ref || ref.clientId !== clientId || !same(ref.checkout, checkout))
@@ -69,9 +74,13 @@ export class References {
       return { token, ref };
     });
   }
+  /** The client's unclaimed references to `tokens` in `checkout`, each checked unchanged. */
+  inspectReferences(tokens: string[], checkout: CheckoutTarget, clientId: string) {
+    return attempt(() => this.findReferences(tokens, checkout, clientId));
+  }
   /**
-   * Claims inspected references: no other operation can use them after this. Call it in the
-   * same synchronous step as their inspection and the operation's durable reservation.
+   * Claims found references: no other operation can use them after this. Call it in the same
+   * synchronous step as finding them (`findReferences`) and the operation's durable reservation.
    */
   claimReferences(claims: NativeClaim[]) {
     for (const { token, ref } of claims) {
@@ -101,7 +110,7 @@ export class References {
         if (entry.clientId !== input.clientId || !same(entry.checkout, input.checkout))
           return yield* new CheckoutAccessError({ refusal: 'native-reference-owner' });
       }
-      if (known.length) yield* attempt(() => this.checkouts.approval(input.checkout));
+      if (known.length) yield* this.checkouts.approval(input.checkout);
       // Every reference is released, whichever fail.
       yield* Effect.scoped(
         Effect.forEach(known, (token) => Effect.addFinalizer(() => this.releaseUnclaimed(token)), {
@@ -140,9 +149,7 @@ export class References {
     directory: Directory,
   ) {
     return Effect.gen({ self: this }, function* () {
-      const source = yield* attempt(
-        () => new NativeImport(p, (path) => this.checkouts.refuseReserved(path)),
-      );
+      const source = yield* attempt(() => new NativeImport(p, this.checkouts.isReserved));
       const scope = yield* Scope.fork(this.scope);
       const token = randomUUID();
       const claimed = Deferred.makeUnsafe<void>();
@@ -167,7 +174,9 @@ export class References {
         directory.io(['import-check', source.path, source.parents], undefined, [source.fd]),
       ).pipe(
         // A folder holding a hard link or other unsupported entry is refused with its reason.
-        Effect.mapError((error) => findNativeHelperRefusal(error) ?? error),
+        Effect.catchTag('HelperFailure', (failure) =>
+          Effect.fail(findNativeHelperRefusal(failure) ?? failure),
+        ),
         Effect.onError(() => Scope.close(scope, Exit.void)),
       );
       this.unclaimed.set(token, entry);

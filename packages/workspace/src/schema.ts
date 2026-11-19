@@ -27,11 +27,15 @@ export const absolute = Schema.String.check(
 export const storedDocument = FileDocumentSchema.check(
   Schema.makeFilter((document) => hash(document.text) === document.version),
 );
+/**
+ * Per bucket, the decoder of a stored record's JSON body: exactly its schema, no other fields.
+ * Synchronous, as the store reads records inside its one-step transactions.
+ */
 export const strictDecoders = (schemas: Record<string, Schema.Decoder<unknown>>) =>
   Object.fromEntries(
     Object.entries(schemas).map(([bucket, schema]) => [
       bucket,
-      Schema.decodeUnknownSync(schema, { onExcessProperty: 'error', reportInput: false }),
+      Schema.decodeUnknownExit(Schema.fromJsonString(schema), { onExcessProperty: 'error' }),
     ]),
   );
 
@@ -80,16 +84,13 @@ export type WorkspaceHostConfiguration = WorkspaceConfiguration & {
   allowRoot?: RootPredicate;
   chats?: ChatFolders;
 };
-const configuration = Schema.decodeUnknownSync(WorkspaceConfigurationSchema, {
-  reportInput: false,
-});
-export function decodeConfiguration(value: unknown): HostConfiguration {
-  try {
-    return configuration(value);
-  } catch {
-    throw new InvalidRequestError({ problem: 'configuration' });
-  }
-}
+/** The file host's configuration; one that does not decode is refused without naming its input. */
+export const decodeConfiguration = (
+  value: unknown,
+): Effect.Effect<HostConfiguration, InvalidRequestError> =>
+  Schema.decodeUnknownEffect(WorkspaceConfigurationSchema)(value).pipe(
+    Effect.mapError(() => new InvalidRequestError({ problem: 'configuration' })),
+  );
 /** A plain-folder checkout's approval has no repository: `common` and `gitEntry` are null. */
 export const ApprovalSchema = struct({
   target: CheckoutTargetSchema,

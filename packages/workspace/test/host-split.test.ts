@@ -716,8 +716,8 @@ test('the client store mints its installation ID once and names itself to the ho
     const checkout = await openCheckout(host, h.root),
       disk = await Effect.runPromise(host.readFile({ checkout, path: 'file.txt' }));
     const dataDirectory = join(h.base, 'profile');
-    const installationId = readInstallationId(dataDirectory);
-    assert.equal(readInstallationId(dataDirectory), installationId);
+    const installationId = await Effect.runPromise(readInstallationId(dataDirectory));
+    assert.equal(await Effect.runPromise(readInstallationId(dataDirectory)), installationId);
     const runtime = ManagedRuntime.make(WorkspaceRecoveryLive({ dataDirectory }, host));
     try {
       await makeWorkspaceClient(runtime).command('saveFile', {

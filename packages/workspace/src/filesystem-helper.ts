@@ -85,7 +85,6 @@ const startHelper = (
           Effect.mapError(
             () =>
               new HelperFailure({
-                message: 'Filesystem helper unavailable.',
                 status: null,
                 stderr: '',
                 uncertain: false,
@@ -123,11 +122,6 @@ const startHelper = (
       capped: boolean,
     ) =>
       new HelperFailure({
-        message:
-          stderr ||
-          (capped
-            ? 'Filesystem output/time limit reached; refine request.'
-            : 'Filesystem helper unavailable.'),
         status: spawnFailed ? null : code,
         stderr,
         uncertain: !spawnFailed && (!!signal || capped),

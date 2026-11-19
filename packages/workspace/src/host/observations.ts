@@ -1,4 +1,15 @@
-import { Context, Deferred, Duration, Effect, Exit, Layer, Queue, Scope, Stream } from 'effect';
+import {
+  Cause,
+  Context,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Layer,
+  Queue,
+  Scope,
+  Stream,
+} from 'effect';
 import {
   CheckoutChangedError,
   InvalidPathError,
@@ -7,8 +18,8 @@ import {
 import type { CheckoutTarget, WorkspaceEvent } from '@moonbase/contracts/workspace';
 import fs, { readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { attempt } from '../attempt.ts';
-import { errorText, path, same } from '../validation.ts';
+import { systemCall } from '../system-failures.ts';
+import { errorText, requirePath, same } from '../validation.ts';
 import { Checkouts } from './checkouts.ts';
 
 /** A watch reports at most one event this often. */
@@ -104,15 +115,12 @@ export class Observations {
             Queue.shutdownUnsafe(changes);
           }),
         );
-        yield* attempt(() => {
-          if (
-            !(input.paths.length > 0 && input.paths.length <= 128 && self.subscriptions.size < 64)
-          )
-            throw new InvalidRequestError({ problem: 'watch-limit' });
-          self.subscriptions.add(scope);
-        });
+        // Checked and counted in one step, so concurrent watches never pass the cap together.
+        if (!(input.paths.length > 0 && input.paths.length <= 128 && self.subscriptions.size < 64))
+          return yield* new InvalidRequestError({ problem: 'watch-limit' });
+        self.subscriptions.add(scope);
         const directory = yield* self.checkouts.directory(input.checkout);
-        const common = (yield* attempt(() => self.checkouts.approval(input.checkout))).common?.path;
+        const common = (yield* self.checkouts.approval(input.checkout)).common?.path;
         // Changed paths since the last event; `undefined` when a watcher could not name one.
         let changedPaths: Set<string> | undefined = new Set();
         const changed = (failure?: string, changedPath?: string) => {
@@ -124,7 +132,7 @@ export class Observations {
         };
         const acquire = (path: string) =>
           Effect.acquireRelease(
-            attempt(() => {
+            systemCall(() => {
               const closed = Deferred.makeUnsafe<void>();
               const watcher = fs
                 .watch(path, { persistent: false, recursive: true }, (_kind, name) =>
@@ -137,7 +145,7 @@ export class Observations {
                 });
               watcher.once('close', () => Deferred.doneUnsafe(closed, Effect.void));
               return Effect.gen(function* () {
-                yield* attempt(() => watcher.close()).pipe(Effect.orDie);
+                yield* systemCall(() => watcher.close()).pipe(Effect.orDie);
                 yield* Deferred.await(closed);
                 watcher.removeAllListeners();
               });
@@ -157,7 +165,7 @@ export class Observations {
         for (const p of new Set(input.paths)) {
           // Each watcher is a native call: other commands run between them.
           yield* Effect.yieldNow;
-          yield* attempt(() => path(p, true));
+          yield* requirePath(p, true);
           const before = yield* directory.entry(p);
           if (!before.directory)
             return yield* new InvalidPathError({ problem: 'watch-not-folder' });
@@ -174,25 +182,22 @@ export class Observations {
               // closing meanwhile shuts the queue, and clearing it then ends the stream.
               yield* Effect.sleep(observationInterval);
               yield* Queue.clear(changes);
-              return yield* Effect.sync(() => {
-                const paths = changedPaths;
-                changedPaths = new Set();
-                // Agents in other worktrees run Git and write files constantly; only changes
-                // that can affect this checkout reach its clients.
-                if (!error && paths && common) {
-                  const worktrees = readWorktrees(common);
-                  if (
-                    [...paths].every((changedPath) =>
-                      isOtherWorktreeChange(changedPath, directory.root, common, worktrees),
-                    )
+              const paths = changedPaths;
+              changedPaths = new Set();
+              // Agents in other worktrees run Git and write files constantly; only changes
+              // that can affect this checkout reach its clients.
+              if (!error && paths && common) {
+                const worktrees = readWorktrees(common);
+                if (
+                  [...paths].every((changedPath) =>
+                    isOtherWorktreeChange(changedPath, directory.root, common, worktrees),
                   )
-                    return undefined;
-                }
-                try {
-                  directory.check();
-                } catch (failure) {
-                  error = errorText(failure);
-                }
+                )
+                  return undefined;
+              }
+              const checked = yield* Effect.exit(directory.check());
+              return yield* Effect.sync(() => {
+                if (Exit.isFailure(checked)) error = errorText(Cause.squash(checked.cause));
                 const event: WorkspaceEvent = {
                   checkout: input.checkout,
                   paths: input.paths,

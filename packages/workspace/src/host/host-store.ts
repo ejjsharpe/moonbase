@@ -26,6 +26,7 @@ export class HostStore extends Context.Service<HostStore, Store>()('moonbase/wor
     Effect.gen(function* () {
       const { config } = yield* HostSettings;
       yield* requireQualifiedRuntime;
+      // Opening runs its no-follow checks and SQLite's open in one synchronous step.
       const store = yield* Effect.acquireRelease(
         attempt(
           () =>
@@ -40,9 +41,7 @@ export class HostStore extends Context.Service<HostStore, Store>()('moonbase/wor
         ),
         (store) => Effect.sync(() => store.close()),
       );
-      yield* attempt(() =>
-        store.claim('host', config.hostId, new InvalidRequestError({ problem: 'store-host' })),
-      );
+      yield* store.claim('host', config.hostId, new InvalidRequestError({ problem: 'store-host' }));
       return store;
     }),
   );

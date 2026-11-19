@@ -1,5 +1,5 @@
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
-import { Cause, Effect, Exit } from 'effect';
+import { Cause, Effect, Exit, Option } from 'effect';
 import type { HostInput, HostOperationResult } from '@moonbase/contracts/workspace-host';
 import {
   CheckoutChangedError,
@@ -10,10 +10,9 @@ import { randomUUID } from 'node:crypto';
 import { basename, dirname, join, resolve } from 'node:path';
 import { attempt } from '../attempt.ts';
 import { getOperationPaths } from '../operation-paths.ts';
-import { SystemFailure } from '../system-failures.ts';
 import type { Directory } from '../filesystem.ts';
 import type { HostOperationRecord } from '../schema.ts';
-import { errorText, folded, path, same } from '../validation.ts';
+import { errorText, folded, requirePath, same } from '../validation.ts';
 import { cancellationPoint, isCancelled } from '../cancellation.ts';
 import { Checkouts } from './checkouts.ts';
 import { HostJournal } from './host-journal.ts';
@@ -58,13 +57,11 @@ export const mutate = (input: HostInput<'mutate'>) =>
     const checkouts = yield* Checkouts;
     const journal = yield* HostJournal;
     const references = yield* NativeReferences;
-    yield* attempt(() => {
-      checkouts.approval(input.checkout);
-      if (!(input.text === undefined || input.kind === 'create-file'))
-        throw new InvalidRequestError({ problem: 'text-not-creation' });
-    });
+    yield* checkouts.approval(input.checkout);
+    if (!(input.text === undefined || input.kind === 'create-file'))
+      return yield* new InvalidRequestError({ problem: 'text-not-creation' });
     const id = journal.operationId(input),
-      previous = yield* attempt(() => journal.getOperation(id));
+      previous = yield* journal.getOperation(id);
     if (previous) return yield* journal.replayOperation(id, input, previous);
     yield* journal.assertSettled(
       input.checkout,
@@ -100,12 +97,12 @@ export const mutate = (input: HostInput<'mutate'>) =>
         destination,
       })),
     };
-    // The last point a cancelled operation stops. Inspecting the native references, reserving
-    // the operation and claiming them are one synchronous step, so no other operation can
-    // claim them in between.
+    // The last point a cancelled operation stops. Finding the native references, reserving the
+    // operation and claiming them are one synchronous step, so no other operation can claim them
+    // in between.
     yield* cancellationPoint;
     const { claims, occupied } = yield* attempt(() => {
-      const claims = references.inspectReferences(tokens, input.checkout, input.clientId);
+      const claims = references.findReferences(tokens, input.checkout, input.clientId);
       const occupied = journal.reserveOperation(id, record);
       if (!occupied) references.claimReferences(claims);
       return { claims, occupied };
@@ -146,7 +143,7 @@ export const mutate = (input: HostInput<'mutate'>) =>
               outcome: 'completed',
               message: 'Explicit replacement moved to macOS Trash: ' + trashLocation,
             });
-            yield* attempt(() => journal.writeOperation(id, record));
+            yield* journal.writeOperation(id, record);
           }
           if (create) {
             const parent = yield* directory.destination(destination!);
@@ -178,7 +175,7 @@ export const mutate = (input: HostInput<'mutate'>) =>
               outcome: 'completed',
               message: trashPath ? 'macOS Trash: ' + trashPath : 'Moved to macOS Trash.',
             });
-            yield* attempt(() => journal.writeOperation(id, record));
+            yield* journal.writeOperation(id, record);
             return 'journalled' as const;
           } else {
             const parent = yield* directory.destination(destination!);
@@ -201,7 +198,9 @@ export const mutate = (input: HostInput<'mutate'>) =>
             ).pipe(
               // An import source the helper refuses keeps its reason; the item stays uncertain,
               // since a replacement may already be in Trash and the helper may have staged entries.
-              Effect.mapError((error) => (importing && findNativeHelperRefusal(error)) || error),
+              Effect.catchTag('HelperFailure', (failure) =>
+                Effect.fail((importing && findNativeHelperRefusal(failure)) || failure),
+              ),
             );
           }
           record.result.items.push({ source: source.path, destination, outcome: 'completed' });
@@ -212,11 +211,12 @@ export const mutate = (input: HostInput<'mutate'>) =>
       if (Exit.isFailure(done)) {
         // An item stopped part way is uncertain, like one the helper reports as uncertain.
         const error = Cause.hasInterruptsOnly(done.cause) ? undefined : Cause.squash(done.cause);
+        const failure = Option.getOrUndefined(Cause.findErrorOption(done.cause));
         let outcome: 'failed' | 'uncertain' = 'uncertain';
         // A preflight error is known only while the original object still occupies its exact path.
         if (
           error !== undefined &&
-          !(error as { uncertain?: boolean }).uncertain &&
+          !(failure?._tag === 'HelperFailure' && failure.uncertain) &&
           !create &&
           !['copy', 'import'].includes(input.kind) &&
           !replacement
@@ -231,7 +231,7 @@ export const mutate = (input: HostInput<'mutate'>) =>
           message: error === undefined ? 'Cancelled while this item ran.' : errorText(error),
         });
       }
-      const written = yield* Effect.exit(attempt(() => journal.writeOperation(id, record)));
+      const written = yield* Effect.exit(journal.writeOperation(id, record));
       if (Exit.isFailure(written)) return retained(Cause.squash(written.cause));
       if (record.result.items.some((item) => item.outcome === 'uncertain')) break;
     }
@@ -264,23 +264,19 @@ const prepareMutation = (
     const create = input.kind.startsWith('create-');
     const importing = input.kind === 'import';
     const tokens = input.nativeReferences ?? [];
-    yield* attempt(() => {
-      if (!(new Set(tokens).size === tokens.length))
-        throw new InvalidRequestError({ problem: 'native-references' });
-      if (
-        !(importing
-          ? input.sources.length === 0 && tokens.length > 0
-          : tokens.length === 0 && (create ? input.sources.length === 0 : input.sources.length > 0))
-      )
-        throw new InvalidRequestError({ problem: 'sources' });
-    });
+    if (!(new Set(tokens).size === tokens.length))
+      return yield* new InvalidRequestError({ problem: 'native-references' });
+    if (
+      !(importing
+        ? input.sources.length === 0 && tokens.length > 0
+        : tokens.length === 0 && (create ? input.sources.length === 0 : input.sources.length > 0))
+    )
+      return yield* new InvalidRequestError({ problem: 'sources' });
     const sources: OperationSource[] = [];
     for (const entry of input.sources) {
-      yield* attempt(() => {
-        if (!same(entry.target.checkout, input.checkout))
-          throw new InvalidRequestError({ problem: 'source-checkout' });
-        path(entry.target.path);
-      });
+      if (!same(entry.target.checkout, input.checkout))
+        return yield* new InvalidRequestError({ problem: 'source-checkout' });
+      yield* requirePath(entry.target.path);
       const actual = yield* directory.entry(entry.target.path);
       if (!same(actual, { identity: entry.identity, directory: entry.directory }))
         return yield* new WorkspaceConflictError({ conflict: 'source-changed' });
@@ -294,8 +290,10 @@ const prepareMutation = (
         return yield* new InvalidRequestError({ problem: 'overlapping-sources' });
       sources.push({ path: entry.target.path, ...actual });
     }
-    for (const { ref } of yield* attempt(() =>
-      references.inspectReferences(tokens, input.checkout, input.clientId),
+    for (const { ref } of yield* references.inspectReferences(
+      tokens,
+      input.checkout,
+      input.clientId,
     )) {
       sources.push({
         path: ref.source.source,
@@ -306,7 +304,7 @@ const prepareMutation = (
     }
     if (create)
       sources.push({ path: '', identity: '', directory: input.kind === 'create-directory' });
-    if (input.kind !== 'trash') yield* attempt(() => path(input.destination, sources.length > 1));
+    if (input.kind !== 'trash') yield* requirePath(input.destination, sources.length > 1);
     const destinations = sources.map((source) => {
       if (input.kind === 'trash') return undefined;
       if (sources.length === 1) return input.destination!;
@@ -328,24 +326,22 @@ const prepareMutation = (
       return yield* new InvalidRequestError({ problem: 'replacements' });
     const replacementDestinations = new Set<string>();
     for (const replacement of replacements) {
-      yield* attempt(() => {
-        if (
-          !(
-            same(replacement.target.checkout, input.checkout) &&
-            destinations.some(
-              (destination) =>
-                destination !== undefined &&
-                dirname(destination) === dirname(replacement.target.path) &&
-                folded(destination) === folded(replacement.target.path),
-            )
+      if (
+        !(
+          same(replacement.target.checkout, input.checkout) &&
+          destinations.some(
+            (destination) =>
+              destination !== undefined &&
+              dirname(destination) === dirname(replacement.target.path) &&
+              folded(destination) === folded(replacement.target.path),
           )
         )
-          throw new InvalidRequestError({ problem: 'replacement-target' });
-        const destination = folded(replacement.target.path);
-        if (replacementDestinations.has(destination))
-          throw new InvalidRequestError({ problem: 'duplicate-replacement' });
-        replacementDestinations.add(destination);
-      });
+      )
+        return yield* new InvalidRequestError({ problem: 'replacement-target' });
+      const destination = folded(replacement.target.path);
+      if (replacementDestinations.has(destination))
+        return yield* new InvalidRequestError({ problem: 'duplicate-replacement' });
+      replacementDestinations.add(destination);
       const actual = yield* directory.entry(replacement.target.path);
       if (!same(actual, { identity: replacement.identity, directory: replacement.directory }))
         return yield* new WorkspaceConflictError({ conflict: 'replacement-changed' });
@@ -366,44 +362,41 @@ const prepareMutation = (
     });
     for (const { source, destination } of items) {
       if (!destination) continue;
-      yield* attempt(() => path(destination));
+      yield* requirePath(destination);
       yield* directory.destination(destination);
       for (const selected of sources.filter((s) => s.native)) {
         const native = selected.native!;
-        yield* attempt(() => {
+        // No-follow identity checks of the source and the destination's ancestors.
+        const inside = yield* attempt(() => {
           native.validate();
-          if (native.containsDirectory(resolve(input.checkout.root, dirname(destination))))
-            throw new InvalidRequestError({ problem: 'import-inside-source' });
+          return native.containsDirectory(resolve(input.checkout.root, dirname(destination)));
         });
+        if (inside) return yield* new InvalidRequestError({ problem: 'import-inside-source' });
         const actual = yield* directory.entry(destination).pipe(
           Effect.map((entry): { identity: string; directory: boolean } | undefined => entry),
-          Effect.catch((error) =>
-            error instanceof SystemFailure && error.code === 'ENOENT'
-              ? Effect.succeed(undefined)
-              : Effect.fail(error),
+          Effect.catchTag('SystemFailure', (failure) =>
+            failure.code === 'ENOENT' ? Effect.succeed(undefined) : Effect.fail(failure),
           ),
         );
         if (!(!actual || !containsSelectedSource({ path: destination, ...actual }, selected)))
           return yield* new InvalidRequestError({ problem: 'import-replaces-source' });
       }
-      yield* attempt(() => {
-        if (!source.native && !create)
-          if (
-            !(
-              !isPathAtOrInside(folded(destination), folded(source.path)) ||
-              (input.kind === 'move' &&
-                destination !== source.path &&
-                folded(destination) === folded(source.path))
-            )
-          )
-            throw new InvalidRequestError({ problem: 'destination-inside-source' });
+      if (!source.native && !create)
         if (
-          sources.some(
-            (s) => s.path !== source.path && isPathAtOrInside(folded(destination), folded(s.path)),
+          !(
+            !isPathAtOrInside(folded(destination), folded(source.path)) ||
+            (input.kind === 'move' &&
+              destination !== source.path &&
+              folded(destination) === folded(source.path))
           )
         )
-          throw new InvalidRequestError({ problem: 'destination-overlaps-source' });
-      });
+          return yield* new InvalidRequestError({ problem: 'destination-inside-source' });
+      if (
+        sources.some(
+          (s) => s.path !== source.path && isPathAtOrInside(folded(destination), folded(s.path)),
+        )
+      )
+        return yield* new InvalidRequestError({ problem: 'destination-overlaps-source' });
     }
     return { items, tokens, replacements };
   });

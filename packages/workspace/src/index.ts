@@ -2,13 +2,13 @@ import { Context, Effect, Layer } from 'effect';
 import { WorkspaceHostService, WorkspaceService } from '@moonbase/contracts/services';
 import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import { makeClientWorkspace } from './client/client.ts';
-import { attempt } from './attempt.ts';
 import { asWorkspaceError } from './owned-work.ts';
-import { ClientStore } from './client/client-store.ts';
+import { openClientStore } from './client/client-store.ts';
 import { decodeClientConfiguration } from './client/client-schema.ts';
 import { FileHost, makeFileHostLayer } from './host/host.ts';
 import type { WorkspaceHostConfiguration } from './schema.ts';
 import type { WorkspaceHostError } from '@moonbase/contracts/workspace-host-errors';
+import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
 
 export type {
   ChatFolders,
@@ -51,14 +51,16 @@ export function WorkspaceHostLive(configuration: WorkspaceHostConfiguration) {
  * The installation ID of the client recovery store in `dataDirectory`: the one it holds, or a new
  * one it keeps from now on. Open it before composing `WorkspaceRecoveryLive` over the same folder.
  */
-export function readInstallationId(dataDirectory: string) {
-  const store = new ClientStore(decodeClientConfiguration({ dataDirectory }).dataDirectory);
-  try {
-    return store.installationId;
-  } finally {
-    store.close();
-  }
-}
+export const readInstallationId = (dataDirectory: string): Effect.Effect<string, WorkspaceError> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const config = yield* decodeClientConfiguration({ dataDirectory });
+      return (yield* openClientStore(config.dataDirectory)).installationId;
+    }),
+  ).pipe(
+    // A client store that cannot open fails with a workspace error, never a system call's own.
+    Effect.mapError((failure) => asWorkspaceError(failure, true)),
+  );
 
 /**
  * One client's workspace over a file host: the editor's `WorkspaceService`, with this client's
@@ -72,12 +74,17 @@ export function WorkspaceRecoveryLive(
   return Layer.effect(
     WorkspaceService,
     Effect.gen(function* () {
-      const config = yield* attempt(() => decodeClientConfiguration(configuration));
-      const store = yield* Effect.acquireRelease(
-        attempt(() => new ClientStore(config.dataDirectory, config.installationId)),
-        (store) => Effect.sync(() => store.close()),
+      const config = yield* decodeClientConfiguration(configuration);
+      const { store, installationId } = yield* openClientStore(
+        config.dataDirectory,
+        config.installationId,
       );
-      return yield* makeClientWorkspace({ store, host, hostWaitMs: config.hostWaitMs ?? 5000 });
+      return yield* makeClientWorkspace({
+        store,
+        installationId,
+        host,
+        hostWaitMs: config.hostWaitMs ?? 5000,
+      });
     }).pipe(
       // A client store that cannot open fails with a workspace error, never a system call's own.
       Effect.mapError((failure) => asWorkspaceError(failure, true)),

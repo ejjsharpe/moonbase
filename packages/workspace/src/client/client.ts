@@ -32,11 +32,11 @@ import {
   InvalidRequestError,
   type WorkspaceHostError,
 } from '@moonbase/contracts/workspace-host-errors';
-import { attempt, type WorkspaceFailure } from '../attempt.ts';
+import type { WorkspaceFailure } from '../attempt.ts';
 import { cancellationPoint } from '../cancellation.ts';
 import { getOperationPaths } from '../operation-paths.ts';
 import { asWorkspaceError, runOwned, withWorkspaceErrors } from '../owned-work.ts';
-import { canonical, errorText, folded, hash, key, path, same } from '../validation.ts';
+import { canonical, errorText, folded, hash, key, requirePath, same } from '../validation.ts';
 import type { OperationRecord, SaveRecord } from './client-schema.ts';
 import type { ClientStore } from './client-store.ts';
 import {
@@ -93,15 +93,17 @@ const isCancelledExit = (cause: Cause.Cause<WorkspaceFailure>) =>
  */
 export const makeClientWorkspace = ({
   store,
+  installationId,
   host,
   hostWaitMs,
 }: {
   store: ClientStore;
+  /** The store's identity to the host (see `openClientStore`). */
+  installationId: string;
   host: WorkspaceHostServiceShape;
   hostWaitMs: number;
 }) =>
   Effect.gen(function* () {
-    const installationId = store.installationId;
     // Every command runs here, so closing the client stops each and waits for it to end before
     // the store closes.
     const operations = yield* FiberSet.make<unknown, WorkspaceError>();
@@ -141,16 +143,17 @@ export const makeClientWorkspace = ({
           Effect.gen(function* () {
             // Lets a duplicate sent at the same time find this one in flight and share it.
             yield* Effect.yieldNow;
-            const kept = (yield* attempt(() => store.get<{ requestId: string }>('requests', name)))
-              ?.requestId;
+            const kept = (yield* store.step(() =>
+              store.get<{ requestId: string }>('requests', name),
+            ))?.requestId;
             const requestId = kept ?? randomUUID();
-            if (!kept) yield* attempt(() => store.put('requests', name, { requestId }));
+            if (!kept) yield* store.step(() => store.put('requests', name, { requestId }));
             const sent = yield* Effect.exit(send(requestId));
             const unknown =
               Exit.isFailure(sent) &&
               (isCancelledExit(sent.cause) ||
                 (isUncertain(findWorkspaceError(sent.cause)) && !kept));
-            if (!unknown) yield* attempt(() => store.delete('requests', name));
+            if (!unknown) yield* store.step(() => store.delete('requests', name));
             return yield* sent;
           }),
         )) as A;
@@ -158,9 +161,9 @@ export const makeClientWorkspace = ({
 
     const initializeRepository = (target: CheckoutTarget) =>
       Effect.gen(function* () {
-        if ((yield* attempt(() => context.getPendingSaves(target))).length)
+        if ((yield* store.step(() => context.getPendingSaves(target))).length)
           return yield* new InvalidRequestError({ problem: 'save-pending' });
-        if ((yield* attempt(() => context.getUnsettledCheckoutOperations(target))).length)
+        if ((yield* store.step(() => context.getUnsettledCheckoutOperations(target))).length)
           return yield* new InvalidRequestError({ problem: 'operation-pending' });
         return yield* withRequestId('initializeRepository', target, (requestId) =>
           Effect.interruptible(
@@ -173,11 +176,11 @@ export const makeClientWorkspace = ({
       input: CommandInput<'saveFile'>,
     ): Effect.Effect<SaveResult, WorkspaceFailure> =>
       Effect.gen(function* () {
-        yield* attempt(() => path(input.target.path));
+        yield* requirePath(input.target.path);
         const proposed = { text: input.text, version: hash(input.text) };
-        const publication = yield* attempt(() => store.publication(input.clientId));
+        const publication = yield* store.step(() => store.publication(input.clientId));
         const id = key(input.clientId, input.requestId),
-          previous = yield* attempt(() => store.readSave(id));
+          previous = yield* store.step(() => store.readSave(id));
         if (previous) return yield* replaySave(context, id, input, previous);
         yield* context.assertSettled(input.target.checkout, [input.target.path], input.clientId);
         const baseline = yield* getBaseline(context, input);
@@ -297,17 +300,17 @@ export const makeClientWorkspace = ({
       Effect.gen(function* () {
         const replay = yield* replayOperation(context, id, input, record);
         if (!replay.missing) return replay.result;
-        yield* attempt(() => store.delete('operations', id));
+        yield* store.step(() => store.delete('operations', id));
         return yield* new RecoveryConflictError({ conflict: 'operation-not-sent' });
       });
 
     const mutate = (input: WorkspaceOperation) =>
       Effect.gen(function* () {
         const id = key(input.clientId, input.id),
-          previous = yield* attempt(() => store.get<OperationRecord>('operations', id));
+          previous = yield* store.step(() => store.get<OperationRecord>('operations', id));
         if (previous) return yield* replayOwnOperation(id, input, previous);
         yield* context.assertSettled(input.checkout, getOperationPaths(input), input.clientId);
-        const recoveries = yield* attempt(() => store.readRecoveries());
+        const recoveries = yield* store.step(() => store.readRecoveries());
         yield* assertDestinationAvailable(input, recoveries);
         const revisions: Record<string, number> = {
           [input.clientId]:
@@ -334,7 +337,7 @@ export const makeClientWorkspace = ({
         };
         yield* cancellationPoint;
         // Reserved and marked running in one step, so a load never asks the host about it.
-        const occupied = yield* attempt(() => {
+        const occupied = yield* store.step(() => {
           const occupied = store.reserve('operations', id, record);
           if (!occupied) context.activeOperations.set(id, input.checkout.checkoutId);
           return occupied;
@@ -352,7 +355,7 @@ export const makeClientWorkspace = ({
               settled.host.operationStatus({ clientId: input.clientId, id: input.id }),
             );
             if (Option.isSome(status) && status.value === null)
-              yield* attempt(() => store.delete('operations', id));
+              yield* store.step(() => store.delete('operations', id));
             if (Option.isNone(status) || !status.value) return yield* Effect.failCause(sent.cause);
             reply = status.value;
           }

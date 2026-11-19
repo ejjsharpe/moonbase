@@ -57,11 +57,15 @@ export class SshConfigurationError extends Schema.TaggedError<SshConfigurationEr
     return 'Invalid SSH configuration.';
   }
 }
-const decode = Schema.decodeUnknownSync(SshConfigurationSchema, { reportInput: false });
-export function decodeSshConfiguration(value: unknown): DecodedSshConfiguration {
-  try {
-    return decode(value);
-  } catch {
-    throw new SshConfigurationError();
-  }
-}
+const decode = Schema.decodeUnknownEffect(SshConfigurationSchema);
+/**
+ * The configuration as `SshLive` takes it. One that does not decode, or a hostile value that
+ * throws as it is read, is refused with `SshConfigurationError`, naming nothing of the input.
+ */
+export const decodeSshConfiguration = (
+  value: unknown,
+): Effect.Effect<DecodedSshConfiguration, SshConfigurationError> =>
+  Effect.suspend(() => decode(value)).pipe(
+    Effect.mapError(() => new SshConfigurationError()),
+    Effect.catchDefect(() => Effect.fail(new SshConfigurationError())),
+  );

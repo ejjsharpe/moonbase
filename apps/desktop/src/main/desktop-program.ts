@@ -3,7 +3,6 @@ import { join } from 'node:path';
 import { app, dialog, protocol } from 'electron';
 import { Context, Effect, Exit, Layer, Scope } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
-import { StartupError } from './startup-errors.ts';
 import { readConfiguration } from './chat/config.ts';
 import { DesktopServicesLive } from './desktop-services.ts';
 import { IpcServer } from './ipc/ipc-server.ts';
@@ -87,15 +86,7 @@ export const desktopProgram = Effect.gen(function* () {
   yield* Effect.promise(() => app.whenReady());
   const configurationPath = process.env.MOONBASE_CHAT_CONFIG;
   const chatConfiguration =
-    configurationPath === undefined
-      ? null
-      : yield* Effect.tryPromise({
-          try: () => readConfiguration(configurationPath),
-          catch: (error) =>
-            error instanceof StartupError
-              ? error
-              : new StartupError({ problem: 'chat-config-unreadable' }),
-        });
+    configurationPath === undefined ? null : yield* readConfiguration(configurationPath);
   return yield* runWindow({
     userData,
     packaged: app.isPackaged,

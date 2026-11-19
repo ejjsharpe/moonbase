@@ -14,7 +14,7 @@ import {
   UnresolvedWorkError,
   WorkspaceConflictError,
 } from '@moonbase/contracts/workspace-host-errors';
-import { attempt, type WorkspaceFailure } from '../attempt.ts';
+import type { WorkspaceFailure } from '../attempt.ts';
 import { canonical, errorText, isOriginalResult, key, same } from '../validation.ts';
 import type { OperationRecord } from './client-schema.ts';
 import { reconcile } from './reconcile.ts';
@@ -85,7 +85,9 @@ export const getOperationStatus = (
 ) =>
   Effect.gen(function* () {
     const id = key(input.clientId, input.id),
-      record = yield* attempt(() => context.store.get<OperationRecord>('operations', id));
+      record = yield* context.store.step(() =>
+        context.store.get<OperationRecord>('operations', id),
+      );
     if (!record) return null;
     if (
       !context.activeOperations.has(id) &&
@@ -111,9 +113,9 @@ export const acknowledgeOperation = (
   Effect.gen(function* () {
     const { store } = context;
     const id = key(input.operationClientId, input.id),
-      record = yield* attempt(() => store.get<OperationRecord>('operations', id));
+      record = yield* store.step(() => store.get<OperationRecord>('operations', id));
     if (!record || record.acknowledgedBy.includes(input.clientId)) return false;
-    const observation = yield* attempt(() => store.readRecovery(input.clientId));
+    const observation = yield* store.step(() => store.readRecovery(input.clientId));
     if (
       input.clientId !== input.operationClientId &&
       !observation?.state.checkouts.some((c) => same(c, record.input.checkout))
@@ -129,7 +131,7 @@ export const acknowledgeOperation = (
       return yield* new RecoveryPublicationError({ pending: 'operation-acknowledgement' });
     if (record.result.outcome === 'uncertain')
       return yield* new UnresolvedWorkError({ state: 'operation-unacknowledgeable' });
-    yield* attempt(() =>
+    yield* store.step(() =>
       context.putOperation(id, {
         ...record,
         acknowledgedBy: [...record.acknowledgedBy, input.clientId],
@@ -139,7 +141,7 @@ export const acknowledgeOperation = (
   });
 
 export const markOperationAcknowledged = (context: RecoveryContext, id: string) =>
-  attempt(() => {
+  context.store.step(() => {
     const record = context.store.get<OperationRecord>('operations', id);
     if (record) context.putOperation(id, { ...record, hostAcknowledged: true });
   });
@@ -158,8 +160,9 @@ export const publishOperation = (context: RecoveryContext, id: string, record: O
         delete record.publicationError;
         Object.assign(record, merged.updated);
       }),
-      Effect.catch((error) => attempt(() => recordPublicationFailure(context, id, record, error))),
-      Effect.ignore,
+      Effect.catch((error) =>
+        Effect.sync(() => recordPublicationFailure(context, id, record, error)),
+      ),
     );
 
 /** Keeps a record's failed publication, to be retried at the next load or repeat. */

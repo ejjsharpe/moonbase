@@ -241,7 +241,7 @@ for (const swap of ['source', 'ancestor', 'parent', 'root', 'stage'] as const) {
     mkdirSync(external);
     mkdirSync(join(root, 'target'));
     writeFileSync(join(external, 'source'), Buffer.alloc(4096, 173));
-    const source = new NativeImport(join(external, 'source'), () => {});
+    const source = new NativeImport(join(external, 'source'), () => false);
     const parent = statSync(join(root, 'target'));
     const fd = openSync(root, constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000);
     const child = spawn(
@@ -318,7 +318,7 @@ test('native helper rejects destination ancestry before any staging even without
   mkdirSync(join(root, 'source'));
   mkdirSync(join(root, 'source/child'));
   writeFileSync(join(root, 'source/child/original'), 'original bytes');
-  const source = new NativeImport(join(root, 'source'), () => {});
+  const source = new NativeImport(join(root, 'source'), () => false);
   const parent = statSync(join(root, 'source/child'));
   const fd = openSync(root, constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000);
   try {

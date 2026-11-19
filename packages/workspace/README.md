@@ -9,7 +9,7 @@
 | `.` `WorkspaceHostLive(config)` | The file host: `WorkspaceHostService` (every host command, its errors the tagged `WorkspaceHostError`s) and `WorkspaceFolders`. Approvals and journals live in `workspace-host.sqlite` in `dataDirectory` |
 | `.` `WorkspaceRecoveryLive({dataDirectory, installationId?, hostWaitMs?}, host)` | The client-facing `WorkspaceService` over a local or remote host, failing with `WorkspaceError`s. Drafts and editor state live in `moonbase-workspace-v1.sqlite` |
 | `.` `WorkspaceLocalLive(config)` | Both in one process; see [`examples/local.ts`](examples/local.ts) |
-| `.` `readInstallationId(dataDirectory)` | The recovery store's installation ID (minted once and kept there), for a process that needs it before composing the store |
+| `.` `readInstallationId(dataDirectory)` | An Effect of the recovery store's installation ID (minted once and kept there), for a process that needs it before composing the store |
 | `.` `WorkspaceFolders` | `has(path)`: whether a path is the root of an approved checkout, re-checked as any use is. It approves nothing; a daemon uses it so chats need no other grant for the editor's projects |
 | `.` types | `WorkspaceHostConfiguration`, `WorkspaceConfiguration`, `WorkspaceRecoveryConfiguration`, `RootPredicate`, `ChatFolders` |
 | `./filesystem` | The built native helper binary (`dist/filesystem`), which packaging copies beside the daemon |

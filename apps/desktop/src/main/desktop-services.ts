@@ -10,7 +10,6 @@ import {
   shell,
 } from 'electron';
 import { Context, Effect, Layer, Option } from 'effect';
-import { isWorkspaceError } from '@moonbase/contracts/workspace-errors';
 import { StartupError } from './startup-errors.ts';
 import { WorkspaceService } from '@moonbase/contracts/services';
 import { readInstallationId, WorkspaceRecoveryLive } from '@moonbase/workspace';
@@ -85,11 +84,14 @@ export const DesktopServicesLive = (options: DesktopServicesOptions) => {
       const local = yield* LocalDaemon;
       const remote = Option.getOrNull(yield* RemoteHost);
       const requestIds = yield* RequestIds;
-      const installationId = yield* Effect.try({
-        try: () => readInstallationId(workspaceData),
-        catch: (error) =>
-          isWorkspaceError(error) ? error : new StartupError({ problem: 'recovery' }),
-      });
+      const installationId = yield* readInstallationId(workspaceData).pipe(
+        // A store that could not open for a reason of the system's own, not its contents.
+        Effect.catchTag('WorkspaceStoreError', (error) =>
+          Effect.fail(
+            error.failure === 'failed' ? new StartupError({ problem: 'recovery' }) : error,
+          ),
+        ),
+      );
       const host = createDaemonWorkspaceHost(local);
       const workspace = Context.get(
         yield* Layer.build(
