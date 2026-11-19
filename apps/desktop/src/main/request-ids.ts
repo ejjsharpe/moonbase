@@ -74,9 +74,8 @@ export const makeFileRequestIds = (file: string) =>
     const unsettled = yield* Ref.make(true);
     const unwritable = () => new RequestStoreError({ failure: 'unwritable' });
 
-    const syncFolder = Effect.scoped(
-      Effect.flatMap(fs.open(dirname(file), { flag: 'r' }), (folder) => folder.sync),
-    );
+    const openFolder = fs.open(dirname(file), { flag: 'r' });
+    const syncFolder = Effect.scoped(Effect.flatMap(openFolder, (folder) => folder.sync));
     const read = fs.readFile(file).pipe(
       Effect.catchTag('PlatformError', (error) =>
         error.reason._tag === 'NotFound'
@@ -94,13 +93,21 @@ export const makeFileRequestIds = (file: string) =>
     /** Makes durable what a failed write may have left in the file, so it can be read again. */
     const settle = Effect.flatMap(Ref.get(unsettled), (pending) =>
       pending
-        ? syncFolder.pipe(
-            // A folder not made yet holds no file: a fresh profile.
-            Effect.catchTag('PlatformError', (error) =>
-              error.reason._tag === 'NotFound' ? Effect.void : Effect.fail(unwritable()),
+        ? Effect.scoped(
+            openFolder.pipe(
+              Effect.map(Option.some),
+              // A folder not made yet holds no file: a fresh profile.
+              Effect.catchTag('PlatformError', (error) =>
+                error.reason._tag === 'NotFound' ? Effect.succeedNone : Effect.fail(unwritable()),
+              ),
+              Effect.flatMap((folder: Option.Option<FileSystem.File>) =>
+                Option.match(folder, {
+                  onNone: () => Effect.void,
+                  onSome: (opened) => Effect.mapError(opened.sync, unwritable),
+                }),
+              ),
             ),
-            Effect.andThen(Ref.set(unsettled, false)),
-          )
+          ).pipe(Effect.andThen(Ref.set(unsettled, false)))
         : Effect.void,
     );
     /** The kept IDs, read from the file only until a read succeeds, and again after a failed write. */

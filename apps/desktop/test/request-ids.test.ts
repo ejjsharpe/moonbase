@@ -110,8 +110,9 @@ test('a write that fails before its rename is simply retried; one that fails aft
   const { kept, issued, restarted } = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        let failFolder = true,
-          breakFolder = false;
+        let failFolder = true;
+        /** How the folder's sync fails, if it does. */
+        let folderSync: 'defect' | 'missing' | undefined;
         const files = replaceFiles((fs) => ({
           makeDirectory: (path, options) =>
             Effect.suspend(() => {
@@ -123,7 +124,18 @@ test('a write that fails before its rename is simply retried; one that fails aft
             Effect.map(fs.open(path, options), (opened) =>
               path === dirname(file)
                 ? overrideFile(opened, {
-                    sync: Effect.suspend(() => (breakFolder ? Effect.die('sync') : opened.sync)),
+                    sync: Effect.suspend(() => {
+                      if (folderSync === 'defect') return Effect.die('sync');
+                      if (folderSync === 'missing')
+                        return Effect.fail(
+                          PlatformError.systemError({
+                            _tag: 'NotFound',
+                            module: 'FileSystem',
+                            method: 'sync',
+                          }),
+                        );
+                      return opened.sync;
+                    }),
                   })
                 : opened,
             ),
@@ -133,18 +145,19 @@ test('a write that fails before its rename is simply retried; one that fails aft
         assert.equal((yield* Effect.flip(ids.issue('k'))).failure, 'unwritable');
         const kept = yield* ids.issue('k');
         yield* ids.issue('other');
-        breakFolder = true;
+        folderSync = 'defect';
         // The rename removed `k` from the file, but the folder never synced.
         yield* ids.forget('k', kept);
         assert(Exit.isFailure(yield* Effect.exit(ids.issue('k'))));
-        // Nor does a restart trust the file, even for an ID it holds, while the folder won't sync.
+        // Nor does a restart trust the file, even for an ID it holds, while the folder opens but
+        // won't sync, even when the sync reports it missing.
+        folderSync = 'missing';
         const reopening = makeFileRequestIds(file).pipe(Effect.provide(files));
-        assert(
-          Exit.isFailure(
-            yield* Effect.exit(Effect.scoped(Effect.flatMap(reopening, (r) => r.issue('other')))),
-          ),
+        const refused = yield* Effect.flip(
+          Effect.scoped(Effect.flatMap(reopening, (r) => r.issue('other'))),
         );
-        breakFolder = false;
+        assert.equal(refused.failure, 'unwritable');
+        folderSync = undefined;
         const issued = yield* ids.issue('k');
         const restarted = yield* Effect.scoped(Effect.flatMap(reopen(file), (r) => r.issue('k')));
         return { kept, issued, restarted };
