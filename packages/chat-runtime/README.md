@@ -14,7 +14,7 @@ Inside, `commands/` holds the `Host` (the open store and the gates every command
 
 ## Rules worth knowing
 
-- **Errors (D14).** The runtime fails with the tagged errors of `@moonbase/contracts` `chat-errors`, `folder-errors` and `provider-errors`. `safeError` keeps those and hides anything else (Pi's or the platform's) as `ChatStoreError` (`failed`), or `UncertainError` for a mutation that may have committed. A call that may have taken effect (a Send's submission or a Stop's abort) is uncertain whatever it fails with, unless Pi proves a refusal, and so is a mutation's defect.
+- **Errors (D14).** The runtime fails with the tagged errors of `@moonbase/contracts` `chat-errors`, `folder-errors` and `provider-errors`. `safeError` keeps those and hides anything else (Pi's or the platform's) as `ChatStoreError` (`failed`). From a mutation's first commit attempt, or its first lookup of what an earlier attempt committed, it runs inside `mayHaveCommitted` (`commands/commit-boundary.ts`): every failure there is `UncertainError`, typed or not, unless it is a `Refusal` proven to write nothing (a chat error a `commitChange` callback threw, Pi's raw busy refusal from submit, a Stop naming another chat's work). A mutation's defect is uncertain too.
 - **Qualified runtimes only.** It runs on Node 26.13 or newer or exactly Bun 1.4.4; anything else, Electron included, is refused (`IncompatibleHostError` `runtime`) before the store opens.
 - **Mutations are never resent.** They carry request IDs bound to their full input. A lost or unproved reply is `UncertainError`; callers recover with the original request, and reconnects never resend.
 - **A working folder is tool context, not a filesystem sandbox.**

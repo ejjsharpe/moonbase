@@ -22,21 +22,9 @@ export const safeError = (error: unknown, uncertain = false): ChatError => {
   }
   return uncertain ? uncertainError() : new ChatStoreError({ problem: 'failed' });
 };
-/** A failure of a call that may have taken effect, such as a Stop's abort or the read after it. */
+/** A failure of a mutation that may have taken effect; see `mayHaveCommitted`. */
 export const uncertainError = (): ChatError =>
   new UncertainError({ operation: 'The chat request' });
-/**
- * A failure of Pi's submit itself: busy only for Pi's raw busy refusal, which proves nothing was
- * written, and uncertain for anything else, even a chat error.
- */
-export const submitError = (error: unknown): ChatError => {
-  try {
-    if (error instanceof ConversationBusy) return new ChatBusyError();
-  } catch {
-    /* Unknown SDK diagnostics remain private. */
-  }
-  return uncertainError();
-};
 /**
  * A watch's failure safe to show: a chat error as itself, and anything else (Pi's subscriptions,
  * a failed re-read) unavailable, so its client watches again.
@@ -47,5 +35,5 @@ export const watchError = (error: unknown): ChatError =>
  * Runs a synchronous check that throws a chat error, such as a stored-record decoder Pi's commit
  * callbacks share, keeping its failure typed.
  */
-export const runCheck = <A>(check: () => A, uncertain = false): Effect.Effect<A, ChatError> =>
-  Effect.try({ try: check, catch: (error) => safeError(error, uncertain) });
+export const runCheck = <A>(check: () => A): Effect.Effect<A, ChatError> =>
+  Effect.try({ try: check, catch: (error) => safeError(error) });

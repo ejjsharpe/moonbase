@@ -91,11 +91,11 @@ export const makeHost = (parts: HostParts) =>
         return Effect.fail(new ChatAccessError({ refusal: 'other-actor' }));
       return Effect.void;
     };
-    /** An owned chat's metadata; `uncertain` inside a mutation, where an unknown failure may follow a commit. */
-    const metadata = (target: ChatTarget, uncertain = false) =>
+    /** An owned chat's metadata. */
+    const metadata = (target: ChatTarget) =>
       Effect.andThen(
         Effect.suspend(() => checkSession(target)),
-        readOwnedMetadata(harness, identity, target, uncertain),
+        readOwnedMetadata(harness, identity, target),
       );
     /** A chat as listings show it; fails when its saved settings are missing. */
     const summary = (

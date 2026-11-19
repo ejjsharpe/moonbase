@@ -83,18 +83,10 @@ function checkOwnedMetadata(meta: unknown, identity: string) {
   return saved;
 }
 /** An owned chat's metadata; `uncertain` inside a mutation, where an unknown failure may follow a commit. */
-export const readOwnedMetadata = (
-  harness: Harness,
-  identity: string,
-  target: ChatTarget,
-  uncertain = false,
-) =>
+export const readOwnedMetadata = (harness: Harness, identity: string, target: ChatTarget) =>
   Effect.flatMap(
-    callHarness(
-      () => harness.snapshot(Metadata, cid(target.conversationId), 'metadata', context),
-      uncertain,
-    ),
-    (meta) => runCheck(() => checkOwnedMetadata(meta, identity), uncertain),
+    callHarness(() => harness.snapshot(Metadata, cid(target.conversationId), 'metadata', context)),
+    (meta) => runCheck(() => checkOwnedMetadata(meta, identity)),
   );
 export function getSettings(meta: { settings?: ChatSettings }): ChatSettings {
   if (!meta.settings) throw new ChatStoreError({ problem: 'settings-missing' });

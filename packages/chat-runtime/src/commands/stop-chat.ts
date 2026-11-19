@@ -1,5 +1,10 @@
 import { BACKGROUND_CONTEXT as context, withAbortSignal } from '@earendil-works/chord/context';
-import { LiveDoc, type TaskId } from '@earendil-works/pi-durable';
+import {
+  LiveDoc,
+  type ConversationId,
+  type SubmissionId,
+  type TaskId,
+} from '@earendil-works/pi-durable';
 import { Effect, Fiber, Option } from 'effect';
 import type { ChatInput, ChatOutput } from '@moonbase/contracts/chat';
 import { InvalidChatRequestError, type ChatError } from '@moonbase/contracts/chat-errors';
@@ -9,81 +14,92 @@ import { Request, cid, key, sid, tid } from '../documents.ts';
 import { decodeStoredRequest } from '../stored-records.ts';
 import type { Host } from './chat-host.ts';
 import { callHarness } from './harness-call.ts';
+import { Refusal, commitChange, mayHaveCommitted } from './commit-boundary.ts';
 import { runCheck, safeError, uncertainError } from './safe-error.ts';
 
-/** Records the Stop's request, then stops what it captured, or says why it is past stopping. */
-const captureStop = (host: Host, d: ChatInput<'stopChat'>) =>
+/** The Pi IDs a Stop names, checked before anything commits. */
+type StopIds = {
+  conversationId: ConversationId;
+  submissionId: SubmissionId;
+  taskId: TaskId | null;
+};
+
+/** Stops what the Stop's request captured, or says why it is past stopping. */
+const captureStop = (host: Host, ids: StopIds) =>
   Effect.gen(function* () {
-    const { stop } = d;
-    const binding = JSON.stringify({ operation: 'stopChat', ...d }),
-      requestKey = key(stop.target.actorId, d.requestId);
-    yield* callHarness(
-      () =>
-        host.harness.commit(async (tx) => {
-          const request = await tx.doc(Request, requestKey, binding);
-          decodeStoredRequest(request, stop.target.actorId, d.requestId);
-          if (request.binding !== binding) throw new RequestReusedError();
-        }, context),
-      true,
-    );
-    const submission = yield* callHarness(
-      () => host.harness.submission(sid(stop.submissionId), context),
-      true,
-    );
-    const record = submission
-      ? yield* callHarness(() => submission.status(context), true)
-      : undefined;
-    const conversationId = yield* runCheck(() => cid(stop.target.conversationId), true);
+    const { conversationId, submissionId, taskId } = ids;
+    const submission = yield* callHarness(() => host.harness.submission(submissionId, context));
+    const record = submission ? yield* callHarness(() => submission.status(context)) : undefined;
     if (!record || record.conversationId !== conversationId)
-      return yield* new InvalidChatRequestError({ problem: 'stop-submission' });
-    if (stop.taskId === null) {
+      return yield* Effect.fail(
+        new Refusal(new InvalidChatRequestError({ problem: 'stop-submission' })),
+      );
+    if (taskId === null) {
       // Pi may have withdrawn the submission whatever it reports, so every failure is uncertain.
       const result = yield* callAbortable(() =>
-        host.harness.abortSubmission(sid(stop.submissionId), context, conversationId),
+        host.harness.abortSubmission(submissionId, context, conversationId),
       ).pipe(Effect.mapError(uncertainError));
       if (result === 'aborted') return 'stopped' as const;
       return result === 'settled' ? ('terminal' as const) : ('superseded' as const);
     }
-    const taskId = yield* runCheck(() => tid(stop.taskId!), true);
-    const live = yield* callHarness(
-      () => host.harness.snapshot(LiveDoc, conversationId, context),
-      true,
-    );
-    const task = yield* callHarness(() => host.harness.getTask(taskId, context), true);
+    const live = yield* callHarness(() => host.harness.snapshot(LiveDoc, conversationId, context));
+    const task = yield* callHarness(() => host.harness.getTask(taskId, context));
     if (!task || task.conversationId !== conversationId)
-      return yield* new InvalidChatRequestError({ problem: 'stop-task' });
+      return yield* Effect.fail(new Refusal(new InvalidChatRequestError({ problem: 'stop-task' })));
     if (task.state.status === 'terminal') return 'terminal' as const;
-    if (live?.run?.taskId !== taskId || !live.run.inputs.includes(sid(stop.submissionId)))
+    if (live?.run?.taskId !== taskId || !live.run.inputs.includes(submissionId))
       return 'superseded' as const;
     return null;
   });
 
+/**
+ * Records the Stop's request, then stops what it names. From that commit on, only the binding's
+ * own refusal and a target that is not the chat's stay definite; any other failure is uncertain.
+ */
 export function stopChat(
   host: Host,
   d: ChatInput<'stopChat'>,
 ): Effect.Effect<ChatOutput<'stopChat'>, ChatError> {
   return Effect.gen(function* () {
-    yield* host.metadata(d.stop.target, true);
-    const captured = yield* captureStop(host, d);
-    let outcome: ChatOutput<'stopChat'>['outcome'] = captured ?? 'pending';
-    if (captured === null) {
-      const taskId = tid(d.stop.taskId!);
-      // The deadline owns only this join; the abort request stays with the host through settlement.
-      // Pi may have recorded the abort whatever the abort or the wait after it reports, so either
-      // failure is uncertain; one still running at the deadline leaves the Stop pending.
-      const joined = yield* Effect.interruptible(
-        Effect.gen(function* () {
-          const abort = yield* host.aborts.run(
-            callHarness(() => host.harness.abortTask(taskId, context)),
+    const { stop } = d;
+    yield* host.metadata(stop.target);
+    const ids = yield* runCheck((): StopIds => ({
+      conversationId: cid(stop.target.conversationId),
+      submissionId: sid(stop.submissionId),
+      taskId: stop.taskId === null ? null : tid(stop.taskId),
+    }));
+    const binding = JSON.stringify({ operation: 'stopChat', ...d }),
+      requestKey = key(stop.target.actorId, d.requestId);
+    return yield* mayHaveCommitted(
+      Effect.gen(function* () {
+        yield* commitChange(host.harness, async (tx) => {
+          const request = await tx.doc(Request, requestKey, binding);
+          decodeStoredRequest(request, stop.target.actorId, d.requestId);
+          if (request.binding !== binding) throw new RequestReusedError();
+        });
+        const captured = yield* captureStop(host, ids);
+        let outcome: ChatOutput<'stopChat'>['outcome'] = captured ?? 'pending';
+        if (captured === null) {
+          const taskId = ids.taskId!;
+          // The deadline owns only this join; the abort request stays with the host through
+          // settlement. Pi may have recorded the abort whatever the abort or the wait after it
+          // reports, so either failure is uncertain; one still running at the deadline leaves the
+          // Stop pending.
+          const joined = yield* Effect.interruptible(
+            Effect.gen(function* () {
+              const abort = yield* host.aborts.run(
+                callHarness(() => host.harness.abortTask(taskId, context)),
+              );
+              yield* Fiber.join(abort);
+              const waiter = yield* host.waiters.run(waitForTerminal(host, taskId));
+              return yield* Fiber.join(waiter).pipe(Effect.ensuring(Fiber.interrupt(waiter)));
+            }).pipe(Effect.mapError(uncertainError), Effect.timeoutOption('1 second')),
           );
-          yield* Fiber.join(abort);
-          const waiter = yield* host.waiters.run(waitForTerminal(host, taskId));
-          return yield* Fiber.join(waiter).pipe(Effect.ensuring(Fiber.interrupt(waiter)));
-        }).pipe(Effect.mapError(uncertainError), Effect.timeoutOption('1 second')),
-      );
-      outcome = Option.isSome(joined) ? 'stopped' : 'pending';
-    }
-    return { stop: d.stop, requestId: d.requestId, outcome };
+          outcome = Option.isSome(joined) ? 'stopped' : 'pending';
+        }
+        return { stop, requestId: d.requestId, outcome };
+      }),
+    );
   });
 }
 /**
