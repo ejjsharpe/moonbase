@@ -1,4 +1,4 @@
-import { Context, Deferred, Effect, Exit, Layer, SubscriptionRef } from 'effect';
+import { Context, Effect, Exit, Layer, SubscriptionRef } from 'effect';
 import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import { isPathAtOrInside } from '@moonbase/contracts/paths';
 import type {
@@ -9,6 +9,7 @@ import type {
 } from '@moonbase/contracts/workspace';
 import { EditorError, isRefusal, type EditorFailure } from '../editor-errors.ts';
 import { describeEditorFailure } from '../alerts/alerts.ts';
+import { makeEditorPrompt, type PendingPrompt } from '../editor-prompt.ts';
 import { isRelativePath } from '../relative-path.ts';
 import { EditorSession } from '../session/session-service.ts';
 import { EditorAlerts } from '../alerts/alerts-service.ts';
@@ -31,6 +32,7 @@ import {
   type MutationOptions,
   type MutationRunResult,
   type MutationState,
+  type ReplacePrompt,
 } from './mutation.ts';
 
 /** An operation as the editor's caller gives it: the editor adds its client and, if absent, ID. */
@@ -38,6 +40,11 @@ export type OperationInput = Omit<WorkspaceOperation, 'clientId' | 'id'> & { id?
 
 export type EditorMutationsShape = {
   readonly state: SubscriptionRef.SubscriptionRef<MutationState>;
+  /** The replace prompt shown; closing the editor answers it Cancel (don't replace). */
+  readonly replacePrompt: SubscriptionRef.SubscriptionRef<PendingPrompt<
+    ReplacePrompt,
+    boolean
+  > | null>;
   /** The mutation gate: whether `mutate` would admit `action` now. */
   readonly admits: (action: MutationAction) => Effect.Effect<boolean>;
   /**
@@ -90,11 +97,8 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
       const recovery = yield* RecoverySync;
       const tree = yield* EditorTree;
       const { clientId } = session;
-      const state = yield* SubscriptionRef.make<MutationState>({
-        mutating: false,
-        replacePrompt: null,
-      });
-      let answer: Deferred.Deferred<boolean> | undefined;
+      const state = yield* SubscriptionRef.make<MutationState>({ mutating: false });
+      const replacePrompt = yield* makeEditorPrompt<ReplacePrompt, boolean>(false);
       const admitted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         session.run(Effect.andThen(session.admit, effect));
       const fail = (reason: EditorError['reason']) => Effect.fail(new EditorError({ reason }));
@@ -222,26 +226,11 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
             admitsMutation({ ...modes, prompting: false, mutating, recovery }, action),
         );
 
-      /** Publishes the replace prompt and waits for `answer`. */
+      /** Shows the replace prompt and waits for `answer`. */
       const ask = (replacements: readonly EntryReference[]) =>
-        Effect.gen(function* () {
-          const reply = yield* Deferred.make<boolean>();
-          const prompt = {
-            id: crypto.randomUUID(),
-            paths: replacements.map((item) => item.target.path),
-          };
-          answer = reply;
-          yield* SubscriptionRef.update(state, (s) => ({ ...s, replacePrompt: prompt }));
-          return yield* Deferred.await(reply).pipe(
-            Effect.ensuring(
-              Effect.gen(function* () {
-                if (answer === reply) answer = undefined;
-                yield* SubscriptionRef.update(state, (s) =>
-                  s.replacePrompt?.id === prompt.id ? { ...s, replacePrompt: null } : s,
-                );
-              }),
-            ),
-          );
+        replacePrompt.ask({
+          id: crypto.randomUUID(),
+          paths: replacements.map((item) => item.target.path),
         });
 
       const apply = (action: MutationAction, options: MutationOptions) =>
@@ -329,6 +318,7 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
 
       return {
         state,
+        replacePrompt: replacePrompt.pending,
         admits,
         mutate: (action, options) =>
           Effect.uninterruptibleMask((restore) =>
@@ -357,12 +347,7 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
               );
             }),
           ),
-        answer: (promptId, replace) =>
-          Effect.gen(function* () {
-            const { replacePrompt } = yield* SubscriptionRef.get(state);
-            if (replacePrompt?.id !== promptId || !answer) return;
-            yield* Deferred.succeed(answer, replace === true);
-          }),
+        answer: (promptId, replace) => replacePrompt.answer(promptId, replace === true),
         dispatch: (input, saving) =>
           saving ? session.run(dispatch(input, saving)) : admitted(dispatch(input)),
         resolve: (id, operationClientId) => admitted(resolve(id, operationClientId)),

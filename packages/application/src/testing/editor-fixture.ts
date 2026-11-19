@@ -257,6 +257,7 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
     get(EditorOperations).state,
     get(RecoveryOutbox).state,
     mutations.state,
+    mutations.replacePrompt,
     preservation.closePrompt,
   ] as const;
   let parts: unknown[] | undefined, snapshot: EditorSnapshot | undefined;
@@ -264,7 +265,7 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
     const next = refs.map((ref) => SubscriptionRef.getUnsafe(ref as never));
     if (!parts || next.some((part, index) => part !== parts![index])) {
       parts = next;
-      const [s, a, v, b, d, o, x, m, c] = next;
+      const [s, a, v, b, d, o, x, m, r, c] = next;
       snapshot = toEditorSnapshot({
         session: s,
         alerts: a,
@@ -274,6 +275,7 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
         operations: o,
         outbox: x,
         mutation: m,
+        replacePrompt: r,
         closePrompt: c,
       } as EditorParts);
     }

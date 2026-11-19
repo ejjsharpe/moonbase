@@ -106,6 +106,7 @@ export function makeApplication(options: Options) {
       closePrompt: () =>
         through(EditorPreservation, (p) =>
           SubscriptionRef.changes(p.closePrompt).pipe(
+            Stream.map((pending) => pending?.prompt ?? null),
             Stream.filter((prompt): prompt is ClosePrompt => prompt !== null),
             Stream.runHead,
             Effect.map((prompt) => (prompt._tag === 'Some' ? prompt.value : undefined)),

@@ -182,6 +182,7 @@ test('disposing the editor while it asks declines the mutation and disposes it o
     await nextPrompt(f.editor);
     await f.editor.dispose();
     assert.deepEqual(await running, declined);
+    assert.equal(f.editor.getSnapshot().replacePrompt, null);
     assert.equal(await f.read('b.ts'), 'second');
   } finally {
     await f.dispose();

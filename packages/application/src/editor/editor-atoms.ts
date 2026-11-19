@@ -27,7 +27,9 @@ export function makeEditorAtoms(context: Context.Context<EditorServices>) {
   const outbox = followRef(Context.get(context, RecoveryOutbox).state);
   const discovery = followRef(Context.get(context, EditorDiscovery).state);
   const buffers = followRef(Context.get(context, EditorBuffers).state);
-  const mutation = followRef(Context.get(context, EditorMutations).state);
+  const mutations = Context.get(context, EditorMutations);
+  const mutation = followRef(mutations.state);
+  const replacePrompt = followRef(mutations.replacePrompt);
   const closePrompt = followRef(Context.get(context, EditorPreservation).closePrompt);
   const worktrees = followRef(Context.get(context, EditorWorktrees).state);
   return {
@@ -36,7 +38,6 @@ export function makeEditorAtoms(context: Context.Context<EditorServices>) {
     buffers,
     discovery,
     mutation,
-    closePrompt,
     worktrees,
     snapshot: Atom.readable((get) =>
       toEditorSnapshot({
@@ -48,6 +49,7 @@ export function makeEditorAtoms(context: Context.Context<EditorServices>) {
         operations: get(operations),
         outbox: get(outbox),
         mutation: get(mutation),
+        replacePrompt: get(replacePrompt),
         closePrompt: get(closePrompt),
       }),
     ),

@@ -50,7 +50,6 @@ export type ReplacePrompt = { id: string; paths: string[] };
 export type MutationState = {
   /** Whether a mutation is running, including while it asks. */
   mutating: boolean;
-  replacePrompt: ReplacePrompt | null;
 };
 
 /** The most entries one move or copy takes. */
