@@ -41,8 +41,9 @@ export type EditorSessionShape = {
    */
   readonly scope: Scope.Scope;
   /**
-   * Runs work the editor owns in its scope and waits for it. Closing the editor interrupts it; a
-   * caller that stops waiting leaves it running.
+   * Runs work the editor owns in its scope and waits for it. Closing the editor interrupts it, and
+   * once it is closing a run is interrupted before it starts; a caller that stops waiting leaves it
+   * running.
    */
   readonly run: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   /** Runs an action the editor owns once it admits it: `run` after `admit`. */
@@ -63,7 +64,10 @@ export type EditorSessionShape = {
   readonly endInitialization: Effect.Effect<void>;
   /** Waits until no `initializeRepository` runs. */
   readonly awaitInitialization: Effect.Effect<void>;
-  /** Stops admitting and reporting, then closes the editor's scope, interrupting its work. */
+  /**
+   * Stops admitting and reporting, then closes the editor's scope, interrupting its work. Every
+   * caller waits until the scope has closed, its finalizers included.
+   */
   readonly close: Effect.Effect<void>;
 };
 
@@ -95,11 +99,32 @@ export class EditorSession extends Context.Service<EditorSession, EditorSessionS
         const admit = Effect.flatMap(admits, (open) =>
           open ? Effect.void : Effect.fail(new EditorError({ reason: 'closing' })),
         );
+        const closed = yield* Deferred.make<void>();
+        // The fence is the forked fiber's first step, and the work starts in the same synchronous
+        // step: a close announced before it admits nothing, and one announced after it closes the
+        // scope the work already runs in.
         const run = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-          Effect.flatMap(Effect.forkIn(effect, scope, { startImmediately: true }), Fiber.join);
-        const close = Effect.andThen(
-          update((s) => ({ ...s, closing: true, admissionsOpen: false })),
-          Scope.close(scope, Exit.void),
+          Effect.flatMap(
+            Effect.forkIn(
+              Effect.flatMap(get, (current) => (current.closing ? Effect.interrupt : effect)),
+              scope,
+              { startImmediately: true },
+            ),
+            Fiber.join,
+          );
+        const close = Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const first = yield* SubscriptionRef.modify(state, (s) => [
+              !s.closing,
+              { ...s, closing: true, admissionsOpen: false },
+            ]);
+            if (first)
+              yield* Effect.andThen(
+                Scope.close(scope, Exit.void),
+                Deferred.succeed(closed, undefined),
+              );
+            yield* restore(Deferred.await(closed));
+          }),
         );
         yield* Effect.addFinalizer(() =>
           Effect.andThen(

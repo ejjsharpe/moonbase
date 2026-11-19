@@ -266,7 +266,6 @@ export class RecoverySync extends Context.Service<RecoverySync, RecoverySyncShap
             yield* session.assertReady;
             // An edit now would name the folder target that `git init` retires.
             yield* session.awaitInitialization;
-            yield* session.assertReady;
             if ((yield* session.get).preserving)
               return yield* new EditorError({ reason: 'preserving-flush' });
             yield* send;

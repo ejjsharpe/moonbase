@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Effect, ManagedRuntime } from 'effect';
+import { Effect, ManagedRuntime, Scope } from 'effect';
 import type { WorkspaceEvent } from '@moonbase/contracts/workspace';
 import {
   toWorkspaceClient as makeEditorClient,
@@ -13,6 +13,7 @@ import {
   checkout,
   target,
   fixture,
+  held,
   holding,
   loadStoredState,
   draftsOf,
@@ -67,7 +68,7 @@ test('two editors share one workspace, and a disposed editor admits and sends no
   }
 });
 
-test('closing the editor interrupts a load and a save in flight and releases its watches, keeping the draft and the process runtime', async () => {
+test('closing the editor interrupts a load and a save in flight and releases its watches once its finalizers finish, keeping the draft and the process runtime', async () => {
   const f = await fixture();
   const h = holding(f.client);
   let recoveryWatches = 0;
@@ -89,6 +90,9 @@ test('closing the editor interrupts a load and a save in flight and releases its
     return editor;
   };
   const closed = (error: unknown) => error instanceof EditorError && error.reason === 'closed';
+  const finalizer = held();
+  const sessionOf = (editor: EditorDriver) =>
+    editor.runtime.runPromise(Effect.service(EditorSession));
   try {
     await f.editor.open(target('a.ts'));
     f.editor.edit(target('a.ts'), 'recover me');
@@ -99,19 +103,39 @@ test('closing the editor interrupts a load and a save in flight and releases its
     const load = h.hold('loadRecovery');
     const loaded = loading.load();
     await load.entered;
-    await loading.dispose();
+    await loading.runtime.runPromise((await sessionOf(loading)).close);
     await assert.rejects(loaded, closed);
     load.release();
 
     const editor = await acquire();
     await editor.load();
     assert.equal(recoveryWatches, 1);
+    assert.equal(f.memory.stats.active, 1);
     const save = h.hold('saveFile');
-    const saved = editor.save(target('a.ts'));
+    const saved = assert.rejects(editor.save(target('a.ts')), closed);
     await save.entered;
-    // Closing the session, before its layers are released, ends the save and every watch.
-    await editor.runtime.runPromise(Effect.flatMap(Effect.service(EditorSession), (s) => s.close));
-    await assert.rejects(saved, closed);
+    // A finalizer the session owns holds its close open.
+    const session = await sessionOf(editor);
+    const finalizing = held();
+    await editor.runtime.runPromise(
+      Scope.addFinalizer(
+        session.scope,
+        Effect.promise(() => {
+          finalizing.release();
+          return finalizer.promise;
+        }),
+      ),
+    );
+    // Closing the session, before its layers are released, ends the save and every watch. A
+    // second close waits for the first to finish.
+    const settled: string[] = [];
+    const closing = editor.runtime.runPromise(session.close).then(() => settled.push('first'));
+    await finalizing.promise;
+    const again = editor.runtime.runPromise(session.close).then(() => settled.push('second'));
+    for (let turn = 0; turn < 10; turn++) await f.runtime.runPromise(Effect.yieldNow);
+    assert.deepEqual(settled, []);
+    finalizer.release();
+    await Promise.all([closing, again, saved]);
     assert.equal(recoveryWatches, 0);
     assert.equal(f.memory.stats.active, 0);
     save.release();
@@ -124,6 +148,7 @@ test('closing the editor interrupts a load and a save in flight and releases its
     await editor.dispose();
     assert.equal(f.memory.stats.subscriptions, f.memory.stats.released);
   } finally {
+    finalizer.release();
     for (const editor of editors) await editor.dispose();
     await f.dispose();
   }

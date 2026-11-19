@@ -74,21 +74,29 @@ export class EditorPreservation extends Context.Service<
       type Choose = typeof choose;
 
       /**
-       * Runs a close as editor work. Closing the editor interrupts it; once it has asked, its
-       * prompt went down answered Cancel, so its caller hears what Cancel answers: nothing closed.
+       * Runs a close as editor work. Closing the editor interrupts it; if that takes down a prompt
+       * it is still waiting on, the prompt went down answered Cancel, so its caller hears what
+       * Cancel answers: nothing closed. Once the prompt is answered, or if the caller itself is
+       * interrupted, the interruption stands.
        */
       const preserving = <E>(close: (ask: Choose) => Effect.Effect<boolean, E>) =>
         Effect.gen(function* () {
-          const asked = yield* Ref.make(false);
-          const exit = yield* Effect.exit(
-            session.admitted(
-              close((buffer) => Effect.andThen(Ref.set(asked, true), choose(buffer))),
-            ),
-          );
+          const asking = yield* Ref.make(false);
+          const ask: Choose = (buffer) =>
+            Effect.uninterruptibleMask((restore) =>
+              Effect.gen(function* () {
+                yield* Ref.set(asking, true);
+                const choice = yield* restore(choose(buffer));
+                yield* Ref.set(asking, false);
+                return choice;
+              }),
+            );
+          const exit = yield* Effect.exit(session.admitted(close(ask)));
           if (
             Exit.isFailure(exit) &&
             Cause.hasInterruptsOnly(exit.cause) &&
-            (yield* Ref.get(asked))
+            (yield* Ref.get(asking)) &&
+            (yield* session.get).closing
           )
             return false;
           return yield* exit;

@@ -49,7 +49,7 @@ Never duplicate a Send or a file operation:
 
 Authority and liveness:
 
-- The editor's work runs in its session's scope (`session.run`, `session.admitted`), watches included. Closing the editor fences admissions, then closes that scope: its loads, saves, watches and reads are interrupted, not polled, and an interrupted prompt goes off screen answered Cancel. The chat's actions run the same way in `ChatActions`' scope.
+- The editor's work runs in its session's scope (`session.run`, `session.admitted`), watches included. Closing the editor fences admissions (a run started after that is interrupted before it begins), then closes that scope, and every closer waits for it: its loads, saves, watches and reads are interrupted, not polled, and an interrupted prompt goes off screen answered Cancel. The chat's actions run the same way in `ChatActions`' scope.
 - Work over a connected host runs in its `ChatLink` (`link.run`): a new connection, a Disconnect or the chat's end interrupts it, so a late reply never lands.
 - Ports that receive untrusted data decode and size-bound every reply. The chat trusts its ports' outputs and checks only their meaning: echoed sources and selections, cursors, offsets, authority and liveness.
 - Lists and setup follow their port's watch; nothing polls on a timer.

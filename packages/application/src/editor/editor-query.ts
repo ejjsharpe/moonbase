@@ -40,8 +40,9 @@ export const makeEditorQuery = <S extends QueryState>(
   Effect.gen(function* () {
     // A scope of the editor's that the popup's closes too. A closed editor's is closed from the
     // start, so the query runs nothing.
-    const scope = yield* Scope.fork(editor.scope, 'parallel');
-    yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+    const scope = yield* Effect.acquireRelease(Scope.fork(editor.scope, 'parallel'), (forked) =>
+      Scope.close(forked, Exit.void),
+    );
     return yield* Scope.provide(makeQuery(initial, editor.changes), scope);
   });
 
