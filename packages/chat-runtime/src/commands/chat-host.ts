@@ -28,11 +28,8 @@ import type {
   ChatSummary,
   ChatTarget,
 } from '@moonbase/contracts/chat';
-import {
-  isCancellableChatRead,
-  isChatMutation,
-  isSameChatHost,
-} from '@moonbase/contracts/chat-validation';
+import { isCancellableChatRead, isSameChatHost } from '@moonbase/contracts/chat-validation';
+import { isChatMutation } from '@moonbase/contracts/chat-rpc';
 import { summarizeConversation } from '../chat-list/list-chats.ts';
 import { getSettings, readOwnedMetadata, type ChatSettings } from '../documents.ts';
 import type { ChatFileIndex } from '../files.ts';

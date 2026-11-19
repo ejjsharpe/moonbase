@@ -1,8 +1,10 @@
 import { Effect, Exit, Layer, Scope } from 'effect';
 import { RpcSchema, RpcSerialization, RpcServer } from 'effect/rpc';
+import type { Rpc } from 'effect/rpc';
 import { ChatRpcs } from '@moonbase/contracts/chat-rpc';
 import { LocalHostRpcs, ProviderSetupRpcs } from '@moonbase/contracts/daemon-rpc';
 import { RpcAdmission } from '@moonbase/contracts/rpc-admission';
+import { isStatusRpc } from '@moonbase/contracts/rpc-annotations';
 import { rpcLimits, workspaceRpcLimits } from '@moonbase/contracts/rpc-upgrade';
 import { HostUnavailableError } from '@moonbase/contracts/host-errors';
 import { WorkspaceRpcs } from '@moonbase/contracts/workspace-rpc';
@@ -25,8 +27,8 @@ export type RpcServerOptions = {
 type AdmissionLimits = {
   requests: number;
   watches: number;
-  /** Places of their own for `status` procedures, apart from `requests`. */
-  status?: { procedures: ReadonlySet<string>; requests: number };
+  /** Places of their own for status calls (`StatusCall`), apart from `requests`. */
+  statusRequests?: number;
   /** Request input the connection's running requests may hold, by `estimateBytes`. */
   inFlightBytes?: number;
 };
@@ -61,9 +63,11 @@ function estimateBytes(value: unknown): number {
 }
 
 /** Which of a connection's limits a procedure counts against. */
-const kindOf = (limits: AdmissionLimits, rpc: { _tag: string; successSchema: unknown }) => {
-  if (RpcSchema.isStreamSchema(rpc.successSchema as never)) return 'watches' as const;
-  return limits.status?.procedures.has(rpc._tag) ? ('status' as const) : ('requests' as const);
+const kindOf = (limits: AdmissionLimits, rpc: Rpc.AnyWithProps) => {
+  if (RpcSchema.isStreamSchema(rpc.successSchema)) return 'watches' as const;
+  return limits.statusRequests !== undefined && isStatusRpc(rpc)
+    ? ('status' as const)
+    : ('requests' as const);
 };
 
 /**
@@ -85,7 +89,7 @@ function makeAdmission(options: RpcServerOptions, limits: AdmissionLimits) {
         const limit = {
           requests: limits.requests,
           watches: limits.watches,
-          status: limits.status?.requests ?? 0,
+          status: limits.statusRequests ?? 0,
         }[kind];
         const bytes =
           kind === 'requests' && limits.inFlightBytes !== undefined ? estimateBytes(payload) : 0;
@@ -158,8 +162,6 @@ export const serveRpc = (services: RpcServices, options: RpcServerOptions) =>
     return connections;
   });
 
-/** The calls that resolve an `Uncertain` result, which keep places of their own. */
-const statusProcedures: ReadonlySet<string> = new Set(['saveStatus', 'operationStatus']);
 /**
  * Serves the file host's procedures and watch to the connections Bun upgrades on
  * `/v3/workspace`: a message up to `workspaceRpcLimits.messageBytes`, and per connection at most
@@ -179,7 +181,7 @@ export const serveWorkspaceRpc = (
     const admission = makeAdmission(options, {
       requests: workspaceRpcLimits.requests,
       watches: workspaceRpcLimits.watches,
-      status: { procedures: statusProcedures, requests: workspaceRpcLimits.statusRequests },
+      statusRequests: workspaceRpcLimits.statusRequests,
       inFlightBytes: workspaceRpcLimits.inFlightBytes,
     });
     yield* Layer.build(

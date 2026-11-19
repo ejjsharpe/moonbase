@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { Effect, Layer, Stream } from 'effect';
 import type { ChatCommand, ChatInput, ChatOutput } from '@moonbase/contracts/chat';
-import { checkChatOutput, isChatMutation } from '@moonbase/contracts/chat-validation';
+import { checkChatOutput } from '@moonbase/contracts/chat-validation';
+import { isChatMutation } from '@moonbase/contracts/chat-rpc';
 import { chatInputSchemas } from '@moonbase/contracts/chat-schema';
 import type {
   DaemonInput,
@@ -11,9 +12,9 @@ import type {
 } from '@moonbase/contracts/daemon';
 import {
   daemonCommandCapabilities,
-  isDaemonMutation,
   localHostInputSchemas,
 } from '@moonbase/contracts/daemon-schema';
+import { isDaemonMutation } from '@moonbase/contracts/daemon-rpc';
 import { chatHostCapabilities, type ChatHostTarget } from '@moonbase/contracts/host';
 import type { ProviderCommand, ProviderInput, ProviderState } from '@moonbase/contracts/providers';
 import { readProviderSignInUrl } from '@moonbase/contracts/providers-schema';

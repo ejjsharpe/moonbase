@@ -14,6 +14,7 @@
     "./chat-rpc": "./src/chat-rpc.ts",
     "./daemon-rpc": "./src/daemon-rpc.ts",
     "./rpc-admission": "./src/rpc-admission.ts",
+    "./rpc-annotations": "./src/rpc-annotations.ts",
     "./rpc-upgrade": "./src/rpc-upgrade.ts",
     "./workspace-schema": "./src/workspace-schema.ts",
     "./workspace-host": "./src/workspace-host.ts",

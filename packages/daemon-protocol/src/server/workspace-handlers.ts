@@ -8,12 +8,8 @@ import type { WorkspaceHostServiceShape } from '@moonbase/contracts/services';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import type { HostCommand, WorkspaceWatchValue } from '@moonbase/contracts/workspace-host';
 import { InvalidRequestError } from '@moonbase/contracts/workspace-host-errors';
-import {
-  hostInputCheckout,
-  hostInputSchemas,
-  isHostMutation,
-} from '@moonbase/contracts/workspace-host-schema';
-import { workspaceErrorSchemaOf } from '@moonbase/contracts/workspace-rpc';
+import { hostInputCheckout, hostInputSchemas } from '@moonbase/contracts/workspace-host-schema';
+import { isHostMutation, workspaceErrorSchemaOf } from '@moonbase/contracts/workspace-rpc';
 import { forHost, toWire } from './rpc-handlers.ts';
 
 type WatchState = { ready: boolean; revision: number };

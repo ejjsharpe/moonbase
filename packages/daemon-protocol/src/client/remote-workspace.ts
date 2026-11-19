@@ -34,12 +34,16 @@ import {
 } from '@moonbase/contracts/workspace-host-errors';
 import {
   decodeHostInput,
-  hostDeadlineMs,
   hostInputCheckout,
   hostInputSchemas,
-  isHostMutation,
 } from '@moonbase/contracts/workspace-host-schema';
-import { workspaceErrorSchemaOf, WorkspaceRpcs } from '@moonbase/contracts/workspace-rpc';
+import {
+  hostDeadlineMs,
+  isHostMutation,
+  isHostStatusCall,
+  workspaceErrorSchemaOf,
+  WorkspaceRpcs,
+} from '@moonbase/contracts/workspace-rpc';
 import { makeRpcLink, type ErrorClass } from './rpc-link.ts';
 
 /** The errors the workspace's procedures declare: the only failures a client takes from them. */
@@ -118,11 +122,6 @@ const checkoutMakers: ReadonlySet<string> = new Set<HostCommand>([
   'initializeRepository',
   'createChatWorktree',
   'turnChatIntoProject',
-]);
-/** The calls that resolve an `Uncertain` result, which keep places of their own. */
-const statusOperations: ReadonlySet<string> = new Set<HostCommand>([
-  'saveStatus',
-  'operationStatus',
 ]);
 /** The checkouts a reply names: the one it made or opened, an operation's, or a feed's. */
 const outputCheckouts = (operation: HostCommand, output: unknown): { hostId: string }[] => {
@@ -214,7 +213,7 @@ export const RemoteWorkspaceHostLive = (config: {
                 capability: chatHostCapabilities.workspace,
                 deadlineMs: hostDeadlineMs(operation),
                 // Status calls have places of their own and are not charged for their input.
-                places: statusOperations.has(operation)
+                places: isHostStatusCall(operation)
                   ? [{ semaphore: statusPlaces, permits: 1 }]
                   : [
                       { semaphore: places, permits: 1 },

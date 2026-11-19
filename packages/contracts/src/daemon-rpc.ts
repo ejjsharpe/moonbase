@@ -22,6 +22,7 @@ import {
 import { ProviderStateSchema } from './providers-schema.ts';
 import { ProviderSetupDeltaSchema } from './watch-schema.ts';
 import { RpcAdmission } from './rpc-admission.ts';
+import { findMarkedProcedures, isMutationRpc, Mutation } from './rpc-annotations.ts';
 
 // What each daemon procedure fails with on the wire, besides the host's own errors. A mutation
 // may also find its request ID reused.
@@ -96,23 +97,23 @@ export const ProviderSetupUpdateSchema = Schema.Union([
 
 /** A local-mode daemon's folder approvals and control (`daemon-local-v1`, `folders-v1`, `roots-v1`). */
 export class LocalHostRpcs extends RpcGroup.make(
-  localHost('approveFolder'),
+  localHost('approveFolder').annotate(Mutation, true),
   localHost('listRecentFolders'),
   localHost('checkChatFolder'),
   localHost('checkApprovedFolder'),
   localHost('getActiveWork'),
-  localHost('markFolderAsProject'),
+  localHost('markFolderAsProject').annotate(Mutation, true),
   localHost('listHostFolders'),
 ).middleware(RpcAdmission) {}
 
 /** Provider setup on a daemon, scoped to owners a client names (`providers-v1`). */
 export class ProviderSetupRpcs extends RpcGroup.make(
   providers('getProviders'),
-  providers('startProviderLogin'),
-  providers('answerProviderPrompt'),
-  providers('cancelProviderLogin'),
+  providers('startProviderLogin').annotate(Mutation, true),
+  providers('answerProviderPrompt').annotate(Mutation, true),
+  providers('cancelProviderLogin').annotate(Mutation, true),
   providers('openProviderUrl'),
-  providers('logoutProvider'),
+  providers('logoutProvider').annotate(Mutation, true),
   providers('releaseProviderOwner'),
   Rpc.make('watchProviderSetup', {
     payload: { host: ChatHostTargetSchema, ownerId: ChatIdentifierSchema },
@@ -121,3 +122,10 @@ export class ProviderSetupRpcs extends RpcGroup.make(
     stream: true,
   }),
 ).middleware(RpcAdmission) {}
+
+const daemonMutations = new Set([
+  ...findMarkedProcedures(LocalHostRpcs, isMutationRpc),
+  ...findMarkedProcedures(ProviderSetupRpcs, isMutationRpc),
+]);
+/** Operations that change state: they carry a request ID, and a lost reply is `Uncertain`. */
+export const isDaemonMutation = (operation: DaemonCommand) => daemonMutations.has(operation);

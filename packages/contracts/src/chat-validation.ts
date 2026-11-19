@@ -23,12 +23,6 @@ export const isSameChatTarget = (a: ChatTarget, b: ChatTarget) =>
   isSameChatHost(a.host, b.host) &&
   a.actorId === b.actorId &&
   a.conversationId === b.conversationId;
-/** Commands that change chat state: a lost reply is `Uncertain`, and Quit waits for them. */
-export const isChatMutation = (operation: ChatCommand) =>
-  operation === 'createChat' ||
-  operation === 'sendChat' ||
-  operation === 'stopChat' ||
-  operation === 'settleChat';
 /** Reads a caller may abandon; every other command runs to completion once dispatched. */
 export const isCancellableChatRead = (operation: ChatCommand) =>
   operation === 'getChatTranscriptContent' ||

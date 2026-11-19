@@ -6,7 +6,6 @@ import { isCancellableChatRead, isSameChatHost } from '@moonbase/contracts/chat-
 import { chatInputSchemas } from '@moonbase/contracts/chat-schema';
 import {
   daemonCommandCapabilities,
-  isDaemonMutation,
   localHostInputSchemas,
 } from '@moonbase/contracts/daemon-schema';
 import type { DaemonCommand } from '@moonbase/contracts/daemon';
@@ -30,7 +29,7 @@ import {
   RequestReusedError,
 } from '@moonbase/contracts/host-errors';
 import { chatErrorSchemaOf } from '@moonbase/contracts/chat-rpc';
-import { daemonErrorSchemas } from '@moonbase/contracts/daemon-rpc';
+import { daemonErrorSchemas, isDaemonMutation } from '@moonbase/contracts/daemon-rpc';
 import {
   ChatAccessError,
   ChatBusyError,
