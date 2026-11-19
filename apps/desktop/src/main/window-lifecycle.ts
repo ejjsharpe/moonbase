@@ -116,7 +116,9 @@ export const makeWindowLifecycle = ({ window, deliver }: WindowLifecycleOptions)
     const phase = Effect.map(SubscriptionRef.get(state), (current) => current.phase._tag);
     /**
      * Quit's steps, once however many wait for Quit: each in the order added, its failure reported
-     * so the next still runs and Quit still waits for the document releases.
+     * so the next still runs and Quit still waits for the document releases. Once started they run
+     * to the end: the cache would abandon a run whose last waiter is interrupted, and the next
+     * waiter would rerun the steps already done.
      */
     const runQuitSteps = yield* Effect.cached(
       Effect.flatMap(Ref.get(quitSteps), (steps) =>
@@ -157,7 +159,7 @@ export const makeWindowLifecycle = ({ window, deliver }: WindowLifecycleOptions)
       addQuitStep: (step) => Ref.update(quitSteps, (steps) => [...steps, step]),
       awaitQuit: Effect.gen(function* () {
         yield* Deferred.await(quit);
-        yield* runQuitSteps;
+        yield* Effect.uninterruptible(runQuitSteps);
         yield* FiberSet.awaitEmpty(cleanups);
       }),
     });

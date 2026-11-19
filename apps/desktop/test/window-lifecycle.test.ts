@@ -78,7 +78,7 @@ async function fixture(
         options.detach ?? Effect.succeed(options.release ?? Effect.sync(() => void released++)),
     }).pipe(Scope.provide(scope), Effect.provideService(WindowLifecycle, lifecycle)),
   );
-  const quit = runtime.runFork(lifecycle.awaitQuit);
+  let quit = runtime.runFork(lifecycle.awaitQuit);
   const run = <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect);
   return {
     ...f,
@@ -108,6 +108,11 @@ async function fixture(
       return quit.pollUnsafe() !== undefined;
     },
     isQuitting: () => run(lifecycle.isQuitting),
+    /** Interrupts the wait for Quit without waiting for it to end, and waits for Quit afresh. */
+    waitAgain: () => {
+      quit.interruptUnsafe();
+      quit = runtime.runFork(lifecycle.awaitQuit);
+    },
     async dispose() {
       // A prompt a failed assertion left closing still closes.
       tearingDown = true;
@@ -250,8 +255,10 @@ test('a crashed renderer releases its document, then recovers it or quits as the
   }
 });
 
-test('Quit runs each step once despite a failing one, waits for a document release under way, and reports its failure, the step’s, earlier ones and the disposal’s own', async () => {
+test('Quit runs each step once despite a failing one or an interrupted waiter, waits for a document release under way, and reports its failure, the step’s, earlier ones and the disposal’s own', async () => {
   const held = Effect.runSync(Deferred.make<void>());
+  const stepHeld = Effect.runSync(Deferred.make<void>());
+  const stepStarted = Effect.runSync(Deferred.make<void>());
   const f = await fixture({
     release: Effect.andThen(
       Deferred.await(held),
@@ -264,6 +271,11 @@ test('Quit runs each step once despite a failing one, waits for a document relea
     // reported, and the next still runs.
     await f.run(f.lifecycle.addQuitStep(Effect.die(new Error('Showing failed'))));
     await f.run(f.lifecycle.addQuitStep(Effect.sync(() => void surfaced++)));
+    await f.run(
+      f.lifecycle.addQuitStep(
+        Effect.andThen(Deferred.succeed(stepStarted, undefined), Deferred.await(stepHeld)),
+      ),
+    );
     await f.run(f.lifecycle.reportCleanup(Cause.fail(new WindowFailure({ text: 'Earlier' }))));
     await f.ready();
     // A ready document hears of earlier cleanup failures.
@@ -280,6 +292,10 @@ test('Quit runs each step once despite a failing one, waits for a document relea
       consent: true,
       cleanupError: new WindowFailure({ text: 'Disposal failed' }),
     });
+    // The only waiter is interrupted mid-steps; the next runs no completed step again.
+    await f.run(Deferred.await(stepStarted));
+    f.waitAgain();
+    await f.run(Deferred.succeed(stepHeld, undefined));
     assert.equal(await f.finished(), false);
     assert.equal(surfaced, 1);
     // Another waiter runs no step again, and also waits for the release.
