@@ -189,6 +189,7 @@ const toMainPortLike = (port: MessagePort): MessagePortLike => {
 };
 export const unusedNative: NativeActions = {
   chooseCheckout: Effect.die('The picker is not part of this test.'),
+  chooseFolder: Effect.die('The picker is not part of this test.'),
   choosePaths: () => Effect.die('Imports are not part of this test.'),
   capture: () => Effect.die('Imports are not part of this test.'),
   release: () => Effect.void,

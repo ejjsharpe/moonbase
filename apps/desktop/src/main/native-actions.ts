@@ -8,6 +8,8 @@ import { NativeActionError } from '@moonbase/contracts/ipc-errors';
 /** What the editor's document may ask of this Mac, through main. */
 export type NativeActions = {
   readonly chooseCheckout: Effect.Effect<string | null>;
+  /** A folder for local chat to work in, or null when the picker is cancelled. */
+  readonly chooseFolder: Effect.Effect<string | null>;
   /**
    * The paths to import: the picker's, or the Finder files on the clipboard. None when there is
    * nothing to import, or null for a declined prompt.
@@ -37,6 +39,13 @@ export type NativeActions = {
 const finderFiles = 'electron application/osclipboard;format="NSFilenamesPboardType"';
 /** The most `plutil` may print for one clipboard's Finder files. */
 const maximumFileListBytes = 2 ** 20;
+/**
+ * Shows a native dialog. One can't be withdrawn, so a request cancelled meanwhile waits for its
+ * answer and then ignores it. Every native dialog goes through here.
+ */
+export const showDialog = <A>(show: () => Promise<A>) =>
+  Effect.uninterruptible(Effect.promise(show));
+
 const invalid = (failure: NativeActionError['failure']) => new NativeActionError({ failure });
 
 /** A Finder file list (a binary or XML plist) as its paths, converted by `/usr/bin/plutil`. */
@@ -105,15 +114,18 @@ export const makeNativeActions = ({
 }) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    // A native dialog can't be withdrawn, so a request cancelled meanwhile waits for its answer.
-    const ask = <A>(show: () => Promise<A>) => Effect.uninterruptible(Effect.promise(show));
+    const chooseDirectory = (title: string) =>
+      Effect.map(
+        showDialog(() => dialog.showOpenDialog(window, { title, properties: ['openDirectory'] })),
+        (result) => (result.canceled ? null : (result.filePaths[0] ?? null)),
+      );
     const clipboardPaths = (checkout: CheckoutTarget) =>
       Effect.gen(function* () {
         // Only Finder files import. Without them, such as after text was copied, there is nothing
         // to ask about, and the renderer pastes its own entries instead. Until consent, only the
         // type's presence is checked; nothing on the clipboard is read.
         if (!(yield* Effect.promise(async () => clipboard.has(finderFiles)))) return [];
-        const consent = yield* ask(() =>
+        const consent = yield* showDialog(() =>
           dialog.showMessageBox(window, {
             type: 'question',
             message: 'Import clipboard files?',
@@ -138,20 +150,13 @@ export const makeNativeActions = ({
         );
       });
     return {
-      chooseCheckout: Effect.map(
-        ask(() =>
-          dialog.showOpenDialog(window, {
-            title: 'Open a Git checkout',
-            properties: ['openDirectory'],
-          }),
-        ),
-        (result) => (result.canceled ? null : (result.filePaths[0] ?? null)),
-      ),
+      chooseCheckout: chooseDirectory('Open a Git checkout'),
+      chooseFolder: chooseDirectory('Choose a local chat working folder'),
       choosePaths: (checkout, kind) =>
         kind === 'clipboard'
           ? clipboardPaths(checkout)
           : Effect.map(
-              ask(() =>
+              showDialog(() =>
                 dialog.showOpenDialog(window, {
                   title: 'Import files into ' + checkout.root,
                   properties: ['openFile', 'openDirectory', 'multiSelections'],

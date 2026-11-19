@@ -1,6 +1,7 @@
 import type { App, BrowserWindow, Dialog, Event } from 'electron';
 import { Effect, FiberHandle, FiberSet } from 'effect';
 import { listen } from './electron-listener.ts';
+import { showDialog } from './native-actions.ts';
 import { WindowLifecycle } from './window-lifecycle.ts';
 
 export type WindowEventsOptions = {
@@ -45,9 +46,11 @@ export const installWindowEvents = ({
       'did-frame-navigate',
       (_event: Event, _url: string, _code: number, _status: string, isMainFrame: boolean) => {
         if (!isMainFrame) return;
+        // The crash prompt's answer no longer applies. Its dialog stays until answered, so the
+        // prompt ends then, in its own fiber, rather than holding up the new document.
+        run(FiberHandle.clear(crashPrompt));
         run(
           Effect.gen(function* () {
-            yield* FiberHandle.clear(crashPrompt);
             yield* lifecycle.replaceDocument;
             yield* lifecycle.runCleanup(releaseDocument);
           }),
@@ -55,7 +58,7 @@ export const installWindowEvents = ({
       },
     );
     const promptAfterCrash = Effect.gen(function* () {
-      const recovery = yield* Effect.promise(() =>
+      const recovery = yield* showDialog(() =>
         dialog.showMessageBox(window, {
           type: 'error',
           message: 'The workbench stopped unexpectedly.',

@@ -8,6 +8,7 @@ import { readConfiguration } from './chat/config.ts';
 import { DesktopServicesLive } from './desktop-services.ts';
 import { IpcServer } from './ipc/ipc-server.ts';
 import { appURL, MainWindow, MainWindowLive } from './main-window.ts';
+import { showDialog } from './native-actions.ts';
 import { readTestHooks } from './test-hooks.ts';
 import { prepareUserData } from './user-data.ts';
 import { installWindowEvents } from './window-events.ts';
@@ -39,7 +40,7 @@ const runWindow = (options: Omit<Parameters<typeof DesktopServicesLive>[0], 'bun
     if (!failures.length) return 0;
     const detail = failures.join('\n');
     yield* Effect.logError('Quit cleanup failed:', detail);
-    yield* Effect.promise(() =>
+    yield* showDialog(() =>
       dialog.showMessageBox(window, {
         type: 'error',
         message: 'Moonbase could not finish cleanup.',

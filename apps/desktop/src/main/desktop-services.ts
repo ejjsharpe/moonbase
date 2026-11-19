@@ -118,15 +118,7 @@ export const DesktopServicesLive = (options: DesktopServicesOptions) => {
         installationId,
         requestIds: createFileRequestIds(join(workspaceData, 'chat-requests.json')),
         adoptCheckout: (target) => approvals.adoptCheckout(target),
-        pickFolder: Effect.map(
-          Effect.promise(() =>
-            dialog.showOpenDialog(window, {
-              title: 'Choose a local chat working folder',
-              properties: ['openDirectory'],
-            }),
-          ),
-          (selection) => (selection.canceled ? null : (selection.filePaths[0] ?? null)),
-        ),
+        pickFolder: native.chooseFolder,
       });
       const documents = yield* makeChatDocuments(backends, { isClosing: lifecycle.isClosing });
       const ipc = yield* makeIpcServer(
