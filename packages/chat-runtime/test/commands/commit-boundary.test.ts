@@ -67,9 +67,11 @@ const mutations: Record<string, (scene: Scene) => Promise<void>> = {
   'Send replaying an admitted request': async (scene) => {
     const { f, target } = scene;
     const receipt = await finishSend(scene);
-    await scene.lose({ lost: 'read', record: Request, skip: 0 }, () =>
-      runChat(f.runtime, (chat) => chat.sendChat(send(target))),
-    );
+    // The chat's metadata check comes first, before the replay's own lookup, and is as uncertain.
+    for (const record of [Metadata, Request])
+      await scene.lose({ lost: 'read', record, skip: 0 }, () =>
+        runChat(f.runtime, (chat) => chat.sendChat(send(target))),
+      );
     assert.deepEqual(await runChat(f.runtime, (chat) => chat.sendChat(send(target))), receipt);
     assert.equal(f.faux.state.callCount, 1);
   },

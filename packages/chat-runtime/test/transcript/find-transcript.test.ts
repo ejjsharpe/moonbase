@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { type ErrorGroup, getErrorGroup } from '@moonbase/contracts/error-groups';
 import { test } from 'node:test';
+import { Effect } from 'effect';
 import { Harness, type ConversationId } from '@earendil-works/pi-durable';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
@@ -246,9 +247,12 @@ test('Find cancellation interrupts the read, leaves exact Stop and unrelated rea
       ).outcome,
     ),
   );
+  // Disposal interrupts the runtime's own calls before it closes the host, so one held open
+  // settles as shutdown begins.
+  const caller = runChat(f.runtime, () => Effect.never).catch(() => undefined);
   let disposed = false;
   const disposal = f.dispose().then(() => (disposed = true));
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await caller;
   assert.equal(disposed, false);
   assert.equal(closed, false);
   release();

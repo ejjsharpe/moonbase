@@ -37,6 +37,7 @@ import type { FindSubtreeCache } from '../transcript/find-transcript.ts';
 import type { EntryTranscriptCache } from '../transcript/entry-transcript.ts';
 import type { ChatFileIndex } from '../files.ts';
 import type { LocalPiRuntimeConfiguration, RetainedWork } from '../runtime-types.ts';
+import { keepAuthorityRefusals } from './commit-boundary.ts';
 import { callHarness } from './harness-call.ts';
 import { runCheck, safeError } from './safe-error.ts';
 
@@ -210,10 +211,12 @@ export const makeHost = (parts: HostParts) =>
       if (operation !== 'sendChat') return ownMutation(invoke);
       const { target } = data as ChatInput<'sendChat'>;
       // The metadata check runs to completion, then the Send waits its turn for the conversation;
-      // a Send still waiting when the store closes never started, so it fails as the store's.
+      // a Send still waiting when the store closes never started, so it fails as the store's. An
+      // earlier attempt may have committed whatever the check says, so only its authority
+      // refusals stay definite.
       return ownMutation(invoke, (body) =>
         Effect.andThen(
-          Effect.uninterruptible(metadata(target)),
+          Effect.uninterruptible(keepAuthorityRefusals(metadata(target))),
           admitSend(target.conversationId, body),
         ),
       );

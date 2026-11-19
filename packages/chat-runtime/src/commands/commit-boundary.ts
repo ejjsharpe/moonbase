@@ -2,6 +2,7 @@ import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import { ConversationBusy, type Harness, type Tx } from '@earendil-works/pi-durable';
 import { Effect } from 'effect';
 import { ChatBusyError, type ChatError } from '@moonbase/contracts/chat-errors';
+import { isAccessRefusal, isIncompatible } from '@moonbase/contracts/error-groups';
 import { callAbortable } from '../abortable-call.ts';
 import { uncertainError } from './safe-error.ts';
 
@@ -38,6 +39,21 @@ export const mayHaveCommitted = <A>(
 ): Effect.Effect<A, ChatError> =>
   effect.pipe(
     Effect.mapError((error) => findRefusal(error)?.error ?? uncertainError()),
+    Effect.catchDefect(() => Effect.fail(uncertainError())),
+  );
+
+/**
+ * Runs a check that precedes a mutation's commit but may follow an earlier attempt's, such as its
+ * chat's metadata lookup. Only the chat's authority refusals (`access`, `incompatible`) stay
+ * definite; any other failure, a defect included, fails as `UncertainError`.
+ */
+export const keepAuthorityRefusals = <A>(
+  effect: Effect.Effect<A, ChatError>,
+): Effect.Effect<A, ChatError> =>
+  effect.pipe(
+    Effect.mapError((error) =>
+      isAccessRefusal(error) || isIncompatible(error) ? error : uncertainError(),
+    ),
     Effect.catchDefect(() => Effect.fail(uncertainError())),
   );
 

@@ -10,14 +10,18 @@ import {
 import { Effect, Fiber, Option } from 'effect';
 import type { ChatInput, ChatOutput } from '@moonbase/contracts/chat';
 import { InvalidChatRequestError, type ChatError } from '@moonbase/contracts/chat-errors';
-import { isAccessRefusal, isIncompatible } from '@moonbase/contracts/error-groups';
 import { RequestReusedError } from '@moonbase/contracts/host-errors';
 import { callAbortable } from '../abortable-call.ts';
 import { Request, cid, key, sid, tid } from '../documents.ts';
 import { decodeStoredRequest } from '../stored-records.ts';
 import type { Host } from './chat-host.ts';
 import { callHarness } from './harness-call.ts';
-import { Refusal, commitChange, mayHaveCommitted } from './commit-boundary.ts';
+import {
+  Refusal,
+  commitChange,
+  keepAuthorityRefusals,
+  mayHaveCommitted,
+} from './commit-boundary.ts';
 import { runCheck, safeError, uncertainError } from './safe-error.ts';
 
 /** The Pi IDs a Stop names, checked before anything commits. */
@@ -85,13 +89,7 @@ export function stopChat(
 ): Effect.Effect<ChatOutput<'stopChat'>, ChatError> {
   return Effect.gen(function* () {
     const { stop } = d;
-    yield* host
-      .metadata(stop.target)
-      .pipe(
-        Effect.mapError((error) =>
-          isAccessRefusal(error) || isIncompatible(error) ? error : uncertainError(),
-        ),
-      );
+    yield* keepAuthorityRefusals(host.metadata(stop.target));
     const ids = yield* runCheck((): StopIds => ({
       conversationId: cid(stop.target.conversationId),
       submissionId: sid(stop.submissionId),
