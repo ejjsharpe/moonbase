@@ -2,6 +2,7 @@ import {
   Cause,
   Deferred,
   Effect,
+  FiberHandle,
   FiberSet,
   Latch,
   Layer,
@@ -110,29 +111,49 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
           }),
           Effect.flatMap((done) => (done ? Effect.void : backpressure)),
         );
+        // A connection silent past its idle bound is closed; any message, a ping too, counts. The
+        // wait runs only while the daemon reads the connection: it stops when the daemon stops
+        // reading, as the client is not silent then, and a fresh one starts once it reads again.
+        // Meanwhile the drain bound applies.
+        const idle = Effect.forever(
+          Queue.take(activity).pipe(
+            Effect.timeoutOrElse({
+              duration: rpcLimits.idleMs,
+              orElse: () => Effect.sync(() => ws.close(closeCodes.policy)),
+            }),
+          ),
+        );
+        const idleWait = yield* FiberHandle.make<never>();
         const send = (chunk: Uint8Array | string) => {
           const bytes = typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.byteLength;
           // Counted and released in one uninterruptible step around the interruptible write.
           return Effect.uninterruptibleMask((restore) =>
             Effect.suspend(() => {
               queued += bytes;
-              if (queued >= options.queuedBytes && !isClosed() && reading.closeUnsafe()) ws.pause();
-              return restore(
-                writes.withPermits(1)(
-                  Effect.andThen(
-                    Effect.sync(() => {
-                      if (typeof chunk === 'string') ws.sendBinary(new TextEncoder().encode(chunk));
-                      else ws.sendBinary(chunk);
-                    }),
-                    backpressure,
+              const paused = queued >= options.queuedBytes && !isClosed() && reading.closeUnsafe();
+              if (paused) ws.pause();
+              return Effect.andThen(
+                paused ? FiberHandle.clear(idleWait) : Effect.void,
+                restore(
+                  writes.withPermits(1)(
+                    Effect.andThen(
+                      Effect.sync(() => {
+                        if (typeof chunk === 'string')
+                          ws.sendBinary(new TextEncoder().encode(chunk));
+                        else ws.sendBinary(chunk);
+                      }),
+                      backpressure,
+                    ),
                   ),
                 ),
               ).pipe(
                 Effect.ensuring(
-                  Effect.sync(() => {
+                  Effect.suspend(() => {
                     queued -= bytes;
-                    if (queued < options.queuedBytes && reading.openUnsafe() && !isClosed())
-                      ws.resume();
+                    if (queued >= options.queuedBytes || !reading.openUnsafe() || isClosed())
+                      return Effect.void;
+                    ws.resume();
+                    return FiberHandle.run(idleWait, idle);
                   }),
                 ),
               );
@@ -151,25 +172,7 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
           }),
           writer: Effect.succeed(writer),
         });
-        // A connection silent past its idle bound is closed; any message, a ping too, counts. While
-        // the daemon itself reads nothing, the client is not silent: the idle wait starts again once
-        // it reads, and meanwhile the drain bound applies.
-        yield* Effect.forkScoped(
-          Effect.forever(
-            Effect.andThen(
-              reading.await,
-              Queue.take(activity).pipe(
-                Effect.timeoutOrElse({
-                  duration: rpcLimits.idleMs,
-                  orElse: () =>
-                    Effect.sync(() => {
-                      if (Latch.isOpen(reading)) ws.close(closeCodes.policy);
-                    }),
-                }),
-              ),
-            ),
-          ),
-        );
+        yield* FiberHandle.run(idleWait, idle);
         if (handle) yield* handle(socket);
       }).pipe(
         Effect.scoped,

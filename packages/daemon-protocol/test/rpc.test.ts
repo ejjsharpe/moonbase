@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { connect } from 'node:net';
 import { test, type TestContext } from 'node:test';
-import { Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from 'effect';
+import { Deferred, Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from 'effect';
 import { TestClock } from 'effect/testing';
 import {
   rpcLimits,
@@ -418,23 +418,40 @@ test('a connection runs a bounded number of requests at once, and a handler’s 
   assert.equal(first._tag, 'Some');
 });
 
-test('the listener answers a bounded number of plain requests at once, and closing it ends those still running', async (t) => {
+test('the listener answers a bounded number of plain requests at once, and closing it stops at once, interrupting those still running', async (t) => {
   const { client } = controlledChat();
-  let hold = false;
+  // Once the server is up, each authenticated probe is admitted and then waits on the chat
+  // service; releasing an admission waits until the test ends.
+  const released = Effect.runSync(Deferred.make<void>());
+  t.after(() => Effect.runSync(Deferred.succeed(released, undefined)));
+  let hold = false,
+    admitted = 0,
+    interrupted = 0;
   const chat: ChatServiceShape = {
     ...client,
-    getChatHost: (input) => (hold ? Effect.never : client.getChatHost(input)),
+    getChatHost: (input) =>
+      hold
+        ? Effect.onInterrupt(Effect.never, () => Effect.sync(() => void interrupted++))
+        : client.getChatHost(input),
   };
+  const admit = Effect.acquireRelease(
+    Effect.sync(() => void admitted++),
+    () => Deferred.await(released),
+  );
   const token = randomNonce(),
     runtime = ManagedRuntime.make(TestClock.layer()),
     scope = Effect.runSync(Scope.make());
-  t.after(() => runtime.dispose());
+  t.after(async () => {
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+    await runtime.dispose();
+  });
   const server = await runtime.runPromise(
-    serveChat({ host, token, port: 0 }, { chat }).pipe(Effect.provideService(Scope.Scope, scope)),
+    serveChat({ host, token, port: 0 }, { chat }, { admit }).pipe(
+      Effect.provideService(Scope.Scope, scope),
+    ),
   );
   const endpoint = { origin: server.origin, token, expected: host };
   hold = true;
-  // Each authenticated probe waits on the chat service, holding its place.
   const probes = Array.from({ length: 128 }, () =>
     Effect.runPromiseExit(checkHostHealth(endpoint)),
   );
@@ -447,6 +464,14 @@ test('the listener answers a bounded number of plain requests at once, and closi
     },
     (status) => status === 503,
   );
+  assert.equal(admitted, 128);
+  // Closing ends while the held probes still release their admissions: the listener stops, and
+  // the close of the RPC servers after it goes on, interrupting each probe.
   await Effect.runPromise(Scope.close(scope, Exit.void));
+  await assert.rejects(fetch(`${server.origin}/v1/health`));
+  await until(
+    async () => interrupted,
+    (count) => count === 128,
+  );
   for (const exit of await Promise.all(probes)) assert.equal(exit._tag, 'Failure');
 });

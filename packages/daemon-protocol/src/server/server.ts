@@ -1,4 +1,4 @@
-import { Cause, Clock, Effect, Exit, Fiber, FiberSet, Option, Scope, Semaphore } from 'effect';
+import { Clock, Effect, Exit, Fiber, FiberSet, Option, Scope, Semaphore } from 'effect';
 import type {
   LocalHostHandlers,
   ChatServiceShape,
@@ -24,7 +24,7 @@ import {
   workspaceRpcPath,
   workspaceRpcProtocol,
 } from '@moonbase/contracts/rpc-upgrade';
-import { UnauthorizedError } from '@moonbase/contracts/errors';
+import { isAccessRefusal } from '@moonbase/contracts/error-groups';
 import { serveBun, type BunServer, type BunWebSocket } from './bun-server.ts';
 import { serveRpc, serveWorkspaceRpc } from './rpc-server.ts';
 import type { RpcConnections, RpcSocketData } from './rpc-connections.ts';
@@ -211,19 +211,22 @@ export const serveChat = (
             health,
             issue: () => nonces.issue(),
           }),
+        // The reply refuses with a HostVerificationError; anything else it throws is a defect.
         catch: (error) => error,
       }).pipe(
+        Effect.catch((error) =>
+          error instanceof HostVerificationError ? Effect.fail(error) : Effect.die(error),
+        ),
         Effect.tap(() =>
           Effect.scoped(Effect.andThen(admit, services.chat.getChatHost({ host: expected }))),
         ),
         Effect.map(
           (value) => new Response(JSON.stringify(value), { status: 200, headers: jsonHeaders }),
         ),
-        Effect.catchCause((cause) => {
-          const thrown = Cause.squash(cause);
-          const refused =
-            (thrown instanceof HostVerificationError && thrown.reason === 'request-rejected') ||
-            thrown instanceof UnauthorizedError;
+        // A refused proof or access is 401, any other failure 503; a defect or an interruption
+        // reaches the listener, which answers it 503.
+        Effect.catch((error) => {
+          const refused = isAccessRefusal(error);
           return Effect.succeed(
             new Response(healthRefusal(refused), {
               status: refused ? 401 : 503,
@@ -345,9 +348,12 @@ export const serveChat = (
           }),
         catch: () => new HostUnavailableError({ reason: 'listener' }),
       }),
+      // Closing `listening` refuses later requests at once and interrupts the answers still
+      // running, whose cleanup (each probe's admission) may take its time: Bun stops without
+      // waiting for it, and so does the bounded close of the RPC servers after it.
       (server) =>
         Effect.andThen(
-          Scope.close(listening, Exit.void),
+          Effect.forkDetach(Scope.close(listening, Exit.void), { startImmediately: true }),
           Effect.promise(() => server.stop(true)),
         ),
     );
