@@ -25,6 +25,7 @@ import {
   workspaceRpcProtocol,
 } from '@moonbase/contracts/rpc-upgrade';
 import { isAccessRefusal } from '@moonbase/contracts/error-groups';
+import { UnauthorizedError } from '@moonbase/contracts/errors';
 import { serveBun, type BunServer, type BunWebSocket } from './bun-server.ts';
 import { serveRpc, serveWorkspaceRpc } from './rpc-server.ts';
 import type { RpcConnections, RpcSocketData } from './rpc-connections.ts';
@@ -57,11 +58,12 @@ export type ChatServerOptions = {
   /** Held in each workspace connection's scope, from when it opens until it closes. */
   trackWorkspaceConnection?: Effect.Effect<void, never, Scope.Scope>;
   /**
-   * How long closing the server waits, on the Clock, for the mutations it still runs (5 s by
-   * default); past it the close goes on without them and runs `onCloseTimeout`.
+   * How long closing the server waits, on the Clock, for the mutations it still runs and the
+   * cleanup of the health probes it interrupts (5 s by default); past it the close goes on
+   * without them and runs `onCloseTimeout`.
    */
   closeMs?: number;
-  /** Runs once a close goes on without the mutations it waited for. */
+  /** Runs once a close goes on without the work it waited for. */
   onCloseTimeout?: Effect.Effect<void>;
 };
 /** A local-mode daemon's features beyond chat: local-mode chat and control, providers, folders. */
@@ -128,21 +130,9 @@ export const serveChat = (
     const admit = options.admit ?? Effect.void;
     const clock = yield* Clock.Clock;
     const nonces = createUpgradeNonces(() => clock.currentTimeMillisUnsafe());
-    // The RPC servers live in a scope of their own. Closing it waits for the mutations they run,
-    // which a stuck helper could hold for ever, so the wait is bounded; anything unfinished was
-    // journalled where it runs.
-    const serving = yield* Scope.make();
-    yield* Effect.addFinalizer(() =>
-      Effect.gen(function* () {
-        const closing = yield* Effect.forkDetach(Scope.close(serving, Exit.void));
-        yield* Fiber.await(closing).pipe(
-          Effect.timeoutOrElse({
-            duration: options.closeMs ?? 5_000,
-            orElse: () => options.onCloseTimeout ?? Effect.void,
-          }),
-        );
-      }),
-    );
+    // The RPC servers live in a scope of their own, which the listener's release closes. Should
+    // the listener never start, the server's scope closes it.
+    const serving = yield* Scope.fork(yield* Effect.scope);
     const rpc = yield* serveRpc(
       {
         host: expected,
@@ -223,10 +213,14 @@ export const serveChat = (
         Effect.map(
           (value) => new Response(JSON.stringify(value), { status: 200, headers: jsonHeaders }),
         ),
-        // A refused proof or access is 401, any other failure 503; a defect or an interruption
-        // reaches the listener, which answers it 503.
+        // A refused proof or an UnauthorizedError is 401. Any other failure, the chat service's
+        // own refusals included, is 503; a defect or an interruption reaches the listener, which
+        // answers it 503.
         Effect.catch((error) => {
-          const refused = isAccessRefusal(error);
+          const refused =
+            error instanceof HostVerificationError
+              ? isAccessRefusal(error)
+              : error instanceof UnauthorizedError;
           return Effect.succeed(
             new Response(healthRefusal(refused), {
               status: refused ? 401 : 503,
@@ -348,14 +342,36 @@ export const serveChat = (
           }),
         catch: () => new HostUnavailableError({ reason: 'listener' }),
       }),
-      // Closing `listening` refuses later requests at once and interrupts the answers still
-      // running, whose cleanup (each probe's admission) may take its time: Bun stops without
-      // waiting for it, and so does the bounded close of the RPC servers after it.
+      // Releasing the listener starts three closes at once, none waiting on another to begin:
+      // Bun's stop, first, so it cuts the connections before the RPC servers close them;
+      // `listening`, which refuses later requests and interrupts the answers still running; and
+      // the RPC servers', which waits for the mutations they run. The release then waits
+      // for the answers' cleanup (each probe's admission) and the mutations, so neither outlives
+      // the server's scope. A stuck helper could hold either for ever, so the wait is bounded by
+      // `closeMs`; past it the release goes on without them (a mutation left unfinished was
+      // journalled where it runs) and runs `onCloseTimeout`.
       (server) =>
-        Effect.andThen(
-          Effect.forkDetach(Scope.close(listening, Exit.void), { startImmediately: true }),
-          Effect.promise(() => server.stop(true)),
-        ),
+        Effect.gen(function* () {
+          const stopping = yield* Effect.forkDetach(
+            Effect.promise(() => server.stop(true)),
+            { startImmediately: true },
+          );
+          const closing = yield* Effect.forEach([listening, serving], (scope) =>
+            Effect.forkDetach(Scope.close(scope, Exit.void), { startImmediately: true }),
+          );
+          yield* Effect.all(
+            [
+              Fiber.await(stopping),
+              Fiber.awaitAll(closing).pipe(
+                Effect.timeoutOrElse({
+                  duration: options.closeMs ?? 5_000,
+                  orElse: () => options.onCloseTimeout ?? Effect.void,
+                }),
+              ),
+            ],
+            { concurrency: 'unbounded', discard: true },
+          );
+        }),
     );
     return { origin: `http://127.0.0.1:${server.port}` };
   });

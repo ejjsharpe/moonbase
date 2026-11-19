@@ -124,16 +124,34 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
           ),
         );
         const idleWait = yield* FiberHandle.make<never>();
+        // One transition of the read state at a time, so a pause and a resume that cross never
+        // leave the connection read with no idle wait running.
+        const transitions = yield* Semaphore.make(1);
+        /**
+         * Stops reading while `queued` is at its bound and reads again once it is under it, the
+         * idle wait with it, in one step: the state and the wait never disagree.
+         */
+        const updateReading = transitions.withPermits(1)(
+          Effect.suspend(() => {
+            if (isClosed()) return Effect.void;
+            if (queued >= options.queuedBytes) {
+              if (!reading.closeUnsafe()) return Effect.void;
+              ws.pause();
+              return FiberHandle.clear(idleWait);
+            }
+            if (!reading.openUnsafe()) return Effect.void;
+            ws.resume();
+            return Effect.asVoid(FiberHandle.run(idleWait, idle));
+          }),
+        );
         const send = (chunk: Uint8Array | string) => {
           const bytes = typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.byteLength;
           // Counted and released in one uninterruptible step around the interruptible write.
           return Effect.uninterruptibleMask((restore) =>
             Effect.suspend(() => {
               queued += bytes;
-              const paused = queued >= options.queuedBytes && !isClosed() && reading.closeUnsafe();
-              if (paused) ws.pause();
               return Effect.andThen(
-                paused ? FiberHandle.clear(idleWait) : Effect.void,
+                updateReading,
                 restore(
                   writes.withPermits(1)(
                     Effect.andThen(
@@ -150,10 +168,7 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
                 Effect.ensuring(
                   Effect.suspend(() => {
                     queued -= bytes;
-                    if (queued >= options.queuedBytes || !reading.openUnsafe() || isClosed())
-                      return Effect.void;
-                    ws.resume();
-                    return FiberHandle.run(idleWait, idle);
+                    return updateReading;
                   }),
                 ),
               );
