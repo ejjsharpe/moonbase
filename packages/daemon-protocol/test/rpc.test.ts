@@ -306,6 +306,69 @@ test('unauthenticated health probes are refused before they reach the chat servi
   assert.deepEqual(calls.slice(before), ['getChatHost']);
 });
 
+test('before authentication Bun’s 16 KiB header bound refuses a request before the upgrade or health sees it, and no body is read', async (t) => {
+  const source = controlledChat();
+  const { token, port, nonce } = await serve(t, source.client);
+  // Bun's own bound on a request's head is the daemon's before authentication; it adds none.
+  const padding = { 'X-Padding': 'x'.repeat(20 * 1024) };
+  for (const socket of sockets) {
+    // A good proof with oversized headers is refused before the upgrade checks it, so its nonce
+    // stays unused and opens the socket afterwards.
+    const proof = upgradeProtocols(token, await nonce(), host, socket.protocol);
+    const before = source.calls.length;
+    assert.match(
+      await upgradeStatus(port, socket, { headers: { ...offered(proof), ...padding } }),
+      /^HTTP\/1\.1 431/,
+      socket.name,
+    );
+    assert.deepEqual(source.calls.slice(before), [], socket.name);
+    assert.match(
+      await upgradeStatus(port, socket, { headers: offered(proof) }),
+      /^HTTP\/1\.1 101/,
+      socket.name,
+    );
+  }
+  // A health probe with the token's proof and oversized headers never reaches health, which would
+  // ask the chat service; the same probe within the bound is answered.
+  const probe = randomNonce();
+  const health = {
+    line: 'GET /v1/health HTTP/1.1',
+    headers: {
+      Upgrade: undefined,
+      Connection: undefined,
+      'Sec-WebSocket-Version': undefined,
+      'Sec-WebSocket-Key': undefined,
+      'X-Moonbase-Nonce': probe,
+      Authorization:
+        'Moonbase-HMAC-SHA256 ' +
+        createHmac('sha256', token)
+          .update(JSON.stringify([healthDomain, 'request', probe]))
+          .digest('hex'),
+    },
+  };
+  const before = source.calls.length;
+  assert.match(
+    await upgradeStatus(port, sockets[0], {
+      ...health,
+      headers: { ...health.headers, ...padding },
+    }),
+    /^HTTP\/1\.1 431/,
+  );
+  assert.deepEqual(source.calls.slice(before), []);
+  assert.match(await upgradeStatus(port, sockets[0], health), /^HTTP\/1\.1 200/);
+  assert.deepEqual(source.calls.slice(before), ['getChatHost']);
+  // An unauthenticated request announcing a 1 GiB body, of which nothing is sent, is answered
+  // without waiting for it: nothing reads a body before authentication.
+  assert.match(
+    await upgradeStatus(port, sockets[0], {
+      line: 'GET /v1/health HTTP/1.1',
+      headers: { ...health.headers, Authorization: undefined, 'Content-Length': String(2 ** 30) },
+    }),
+    /^HTTP\/1\.1 401/,
+  );
+  assert.deepEqual(source.calls.slice(before), ['getChatHost']);
+});
+
 test('a connection runs a bounded number of requests at once, and a handler’s defect is a fixed Unavailable', async (t) => {
   const source = controlledChat(),
     gate = Promise.withResolvers<void>();

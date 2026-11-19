@@ -46,7 +46,7 @@ From `rpcLimits` and `workspaceRpcLimits` in `@moonbase/contracts/rpc-upgrade`, 
 | Client reply deadline | 20 s | reads 20 s, lookup and search 30 s, mutations 60 s, worktree and `git init` 120 s |
 | Client drops a connection silent for | 5 s (Effect RPC's default) | 158 s (`workspacePingTimeoutMs`), so a 16 MiB reply at 128 KiB/s fits |
 
-Shared: upgrade nonces live 30 s, at most 64 outstanding; a connection silent for 30 s is closed (clients ping every 5 s); the daemon writes one message at a time, waits while Bun buffers more than 1 MiB and cuts a client that drains none for 20 s; a client connects within 20 s. The HTTP side answers 128 requests at once (more get 503) and closes an idle connection after 10 s. `serveChat` waits `closeMs` (5 s) for running mutations when it closes.
+Before authentication, Bun's 16 KiB header limit bounds a request (431 past it) and no body is read; the daemon adds no limit of its own. Shared: upgrade nonces live 30 s, at most 64 outstanding; a connection silent for 30 s is closed (clients ping every 5 s); the daemon writes one message at a time, waits while Bun buffers more than 1 MiB and cuts a client that drains none for 20 s; a client connects within 20 s. The HTTP side answers 128 requests at once (more get 503) and closes an idle connection after 10 s. `serveChat` waits `closeMs` (5 s) for running mutations when it closes.
 
 `RemoteWorkspaceHostLive` keeps the daemon's places and 32 MiB input bound itself, so the daemon never refuses an honest client: a request waits up to its deadline for room (`busy`, unsent, past it). It refuses a request too large to send (`request-too-large`).
 
