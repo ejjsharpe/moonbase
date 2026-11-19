@@ -20,19 +20,22 @@ export const safeError = (error: unknown, uncertain = false): ChatError => {
   } catch {
     /* Unknown SDK diagnostics remain private. */
   }
-  return uncertain
-    ? new UncertainError({ operation: 'The chat request' })
-    : new ChatStoreError({ problem: 'failed' });
+  return uncertain ? uncertainError() : new ChatStoreError({ problem: 'failed' });
 };
+/** A failure of a call that may have taken effect, such as a Stop's abort or the read after it. */
+export const uncertainError = (): ChatError =>
+  new UncertainError({ operation: 'The chat request' });
 /**
- * A failure of a call that may have taken effect, such as a Send's submission or a Stop's abort:
- * uncertain, even a chat error, unless it is Pi's busy refusal, which proves nothing was written.
+ * A failure of Pi's submit itself: busy only for Pi's raw busy refusal, which proves nothing was
+ * written, and uncertain for anything else, even a chat error.
  */
-export const uncertainError = (error: unknown): ChatError => {
-  const safe = safeError(error);
-  return safe instanceof ChatBusyError
-    ? safe
-    : new UncertainError({ operation: 'The chat request' });
+export const submitError = (error: unknown): ChatError => {
+  try {
+    if (error instanceof ConversationBusy) return new ChatBusyError();
+  } catch {
+    /* Unknown SDK diagnostics remain private. */
+  }
+  return uncertainError();
 };
 /**
  * A watch's failure safe to show: a chat error as itself, and anything else (Pi's subscriptions,

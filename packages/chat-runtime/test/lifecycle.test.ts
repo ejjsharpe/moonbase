@@ -335,14 +335,24 @@ test('a watch Pi cannot subscribe is unavailable, so its client watches again, a
   await off().catch(() => {});
 });
 
-test('null-task Stop withdraws an actual Pi-queued submission while preserving the unrelated active input', async (t) => {
+test('null-task Stop withdraws an actual Pi-queued submission, is uncertain when its acknowledgement is lost, and preserves the unrelated active input', async (t) => {
   const original = Harness.open;
-  let harness: Harness | undefined;
-  mock.method(
-    Harness,
-    'open',
-    async (...args: Parameters<typeof original>) => (harness = await original(...args)),
-  );
+  let harness: Harness | undefined,
+    lose = true;
+  mock.method(Harness, 'open', async (...args: Parameters<typeof original>) => {
+    harness = await original(...args);
+    const abort = harness.abortSubmission.bind(harness);
+    harness.abortSubmission = async (...values: Parameters<typeof abort>) => {
+      const result = await abort(...values);
+      // Pi withdraws the first submission, then its acknowledgement is lost as a typed failure.
+      if (lose) {
+        lose = false;
+        throw new ChatStoreError({ problem: 'failed' });
+      }
+      return result;
+    };
+    return harness;
+  });
   let release!: () => void;
   const gate = new Promise<void>((r) => (release = r)),
     f = await fixture(t),
@@ -369,18 +379,30 @@ test('null-task Stop withdraws an actual Pi-queued submission while preserving t
       Number(target.conversationId) as ConversationId,
       BACKGROUND_CONTEXT,
     );
-    const queued = await conversation!.submit(
-      {
-        type: 'input',
-        content: 'Withdraw only this queued input',
-        requestId: 'controlled-pi-queued',
-        whenBusy: 'followUp',
-      },
-      BACKGROUND_CONTEXT,
+    const [lost, queued] = await Promise.all(
+      ['lost', 'queued'].map((name) =>
+        conversation!.submit(
+          {
+            type: 'input',
+            content: `Withdraw only this ${name} input`,
+            requestId: `controlled-pi-${name}`,
+            whenBusy: 'followUp',
+          },
+          BACKGROUND_CONTEXT,
+        ),
+      ),
     );
-    assert.equal((await queued.status(BACKGROUND_CONTEXT)).status, 'queued');
+    assert.equal((await queued!.status(BACKGROUND_CONTEXT)).status, 'queued');
+    await assert.rejects(
+      f.client.command('stopChat', {
+        stop: { target, submissionId: String(lost!.id), taskId: null },
+        requestId: 'lost-stop',
+      }),
+      inGroup('uncertain'),
+    );
+    assert.equal((await lost!.status(BACKGROUND_CONTEXT)).status, 'unanswered');
     const withdrawn = await f.client.command('stopChat', {
-      stop: { target, submissionId: String(queued.id), taskId: null },
+      stop: { target, submissionId: String(queued!.id), taskId: null },
       requestId: 'queued-stop',
     });
     assert.equal(withdrawn.outcome, 'stopped');

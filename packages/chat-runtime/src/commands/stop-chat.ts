@@ -37,10 +37,10 @@ const captureStop = (host: Host, d: ChatInput<'stopChat'>) =>
     if (!record || record.conversationId !== conversationId)
       return yield* new InvalidChatRequestError({ problem: 'stop-submission' });
     if (stop.taskId === null) {
-      const result = yield* callHarness(
-        () => host.harness.abortSubmission(sid(stop.submissionId), context, conversationId),
-        true,
-      );
+      // Pi may have withdrawn the submission whatever it reports, so every failure is uncertain.
+      const result = yield* callAbortable(() =>
+        host.harness.abortSubmission(sid(stop.submissionId), context, conversationId),
+      ).pipe(Effect.mapError(uncertainError));
       if (result === 'aborted') return 'stopped' as const;
       return result === 'settled' ? ('terminal' as const) : ('superseded' as const);
     }
