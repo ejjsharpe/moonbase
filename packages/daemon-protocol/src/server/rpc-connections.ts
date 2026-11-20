@@ -1,4 +1,15 @@
-import { Cause, Effect, FiberSet, Layer, Queue, type Scope, Semaphore } from 'effect';
+import {
+  Cause,
+  Deferred,
+  Effect,
+  FiberHandle,
+  FiberSet,
+  Latch,
+  Layer,
+  Queue,
+  type Scope,
+  Semaphore,
+} from 'effect';
 import * as Socket from 'effect/socket/Socket';
 import * as SocketServer from 'effect/socket/SocketServer';
 import * as NetAddress from 'effect/net/NetAddress';
@@ -55,42 +66,42 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
         const inbound = yield* Queue.unbounded<string | Uint8Array, Socket.SocketError>();
         // Holds a mark while a message arrived since the idle wait last took one.
         const activity = yield* Queue.sliding<void>(1);
-        // Writes go one at a time, so at most one waits for a drain: its wake-up is this.
-        let waiting: (() => void) | undefined,
-          closed = false,
-          queued = 0,
-          // Set while replies past `queuedBytes` wait to be written: Bun reads nothing meanwhile.
-          paused = false;
-        const wake = () => {
-          const resume = waiting;
-          waiting = undefined;
-          resume?.();
-        };
+        // Done once Bun reports the connection closed.
+        const closed = yield* Deferred.make<void>();
+        // Writes go one at a time, so at most one waits for a drain: it waits for this to open.
+        const drain = yield* Latch.make(true);
+        // Open while Bun reads the connection; closed while replies past `queuedBytes` wait.
+        const reading = yield* Latch.make(true);
+        let queued = 0;
         ws.data.connection = {
           receive(message) {
             Queue.offerUnsafe(activity, undefined);
             Queue.offerUnsafe(inbound, message);
           },
-          drained: wake,
+          drained: () => drain.openUnsafe(),
           closed(code) {
-            closed = true;
+            Deferred.doneUnsafe(closed, Effect.void);
             Queue.failCauseUnsafe(
               inbound,
               Cause.fail(new Socket.SocketError({ reason: new Socket.SocketCloseError({ code }) })),
             );
-            wake();
           },
         };
+        const isClosed = () => Deferred.isDoneUnsafe(closed);
         const writes = yield* Semaphore.make(1);
         /**
          * Waits while Bun buffers more than `outboundBytes`. A client that drains nothing for
          * `drainMs` is disconnected, which ends every wait on it.
          */
-        // Checked and registered in one step, so a drain between the two is never missed.
-        const drained = Effect.callback<boolean>((resume) => {
-          if (closed || ws.getBufferedAmount() <= rpcLimits.outboundBytes)
-            return resume(Effect.succeed(true));
-          waiting = () => resume(Effect.succeed(false));
+        // Checked and the latch closed in one step, so a drain between the two is never missed.
+        // A closed connection needs no drain: the wait ends with it.
+        const drained = Effect.suspend(() => {
+          if (ws.getBufferedAmount() <= rpcLimits.outboundBytes) return Effect.succeed(true);
+          drain.closeUnsafe();
+          return Effect.raceFirst(
+            Effect.as(drain.await, false),
+            Effect.as(Deferred.await(closed), true),
+          );
         });
         const backpressure: Effect.Effect<void> = drained.pipe(
           Effect.timeoutOrElse({
@@ -100,34 +111,64 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
           }),
           Effect.flatMap((done) => (done ? Effect.void : backpressure)),
         );
+        // A connection silent past its idle bound is closed; any message, a ping too, counts. The
+        // wait runs only while the daemon reads the connection: it stops when the daemon stops
+        // reading, as the client is not silent then, and a fresh one starts once it reads again.
+        // Meanwhile the drain bound applies.
+        const idle = Effect.forever(
+          Queue.take(activity).pipe(
+            Effect.timeoutOrElse({
+              duration: rpcLimits.idleMs,
+              orElse: () => Effect.sync(() => ws.close(closeCodes.policy)),
+            }),
+          ),
+        );
+        const idleWait = yield* FiberHandle.make<never>();
+        // One transition of the read state at a time, so a pause and a resume that cross never
+        // leave the connection read with no idle wait running.
+        const transitions = yield* Semaphore.make(1);
+        /**
+         * Stops reading while `queued` is at its bound and reads again once it is under it, the
+         * idle wait with it, in one step: the state and the wait never disagree.
+         */
+        const updateReading = transitions.withPermits(1)(
+          Effect.suspend(() => {
+            if (isClosed()) return Effect.void;
+            if (queued >= options.queuedBytes) {
+              if (!reading.closeUnsafe()) return Effect.void;
+              ws.pause();
+              return FiberHandle.clear(idleWait);
+            }
+            if (!reading.openUnsafe()) return Effect.void;
+            ws.resume();
+            return Effect.asVoid(FiberHandle.run(idleWait, idle));
+          }),
+        );
         const send = (chunk: Uint8Array | string) => {
           const bytes = typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.byteLength;
           // Counted and released in one uninterruptible step around the interruptible write.
           return Effect.uninterruptibleMask((restore) =>
             Effect.suspend(() => {
               queued += bytes;
-              if (queued >= options.queuedBytes && !paused && !closed) {
-                paused = true;
-                ws.pause();
-              }
-              return restore(
-                writes.withPermits(1)(
-                  Effect.andThen(
-                    Effect.sync(() => {
-                      if (typeof chunk === 'string') ws.sendBinary(new TextEncoder().encode(chunk));
-                      else ws.sendBinary(chunk);
-                    }),
-                    backpressure,
+              return Effect.andThen(
+                updateReading,
+                restore(
+                  writes.withPermits(1)(
+                    Effect.andThen(
+                      Effect.sync(() => {
+                        if (typeof chunk === 'string')
+                          ws.sendBinary(new TextEncoder().encode(chunk));
+                        else ws.sendBinary(chunk);
+                      }),
+                      backpressure,
+                    ),
                   ),
                 ),
               ).pipe(
                 Effect.ensuring(
-                  Effect.sync(() => {
+                  Effect.suspend(() => {
                     queued -= bytes;
-                    if (queued < options.queuedBytes && paused) {
-                      paused = false;
-                      if (!closed) ws.resume();
-                    }
+                    return updateReading;
                   }),
                 ),
               );
@@ -146,21 +187,7 @@ export const makeRpcConnections = (options: RpcConnectionOptions) =>
           }),
           writer: Effect.succeed(writer),
         });
-        // A connection silent past its idle bound is closed; any message, a ping too, counts. While
-        // the daemon itself reads nothing, the client is not silent; the drain bound applies.
-        yield* Effect.forkScoped(
-          Effect.forever(
-            Queue.take(activity).pipe(
-              Effect.timeoutOrElse({
-                duration: rpcLimits.idleMs,
-                orElse: () =>
-                  Effect.sync(() => {
-                    if (!paused) ws.close(closeCodes.policy);
-                  }),
-              }),
-            ),
-          ),
-        );
+        yield* FiberHandle.run(idleWait, idle);
         if (handle) yield* handle(socket);
       }).pipe(
         Effect.scoped,

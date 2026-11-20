@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { connect } from 'node:net';
 import { test, type TestContext } from 'node:test';
-import { Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from 'effect';
+import { Deferred, Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from 'effect';
 import { TestClock } from 'effect/testing';
 import {
   rpcLimits,
@@ -17,6 +17,8 @@ import {
   type ChatServiceShape,
   type WorkspaceHostServiceShape,
 } from '@moonbase/contracts/services';
+import { ChatAccessError } from '@moonbase/contracts/chat-errors';
+import { UnauthorizedError } from '@moonbase/contracts/errors';
 import { serveChat } from '../src/server/server.ts';
 import { checkHostHealth, healthDomain, requestUpgradeNonce } from '../src/health.ts';
 import { upgradeProtocols } from '../src/upgrade-proof.ts';
@@ -280,9 +282,18 @@ test('after the upgrade a message past its socket’s bound or a silent client e
   assert.equal(code, 1008);
 });
 
-test('unauthenticated health probes are refused before they reach the chat service', async (t) => {
+test('unauthenticated health probes are refused before they reach the chat service, and an authenticated one is refused only for an UnauthorizedError', async (t) => {
   const { client, calls } = controlledChat();
-  const { endpoint, token } = await serve(t, client);
+  // Once set, the chat service fails health's lookup with this.
+  let failure: ChatAccessError | UnauthorizedError | undefined;
+  const chat = new Proxy(client, {
+    get: (source, name: keyof ChatServiceShape) =>
+      name === 'getChatHost'
+        ? (input: Parameters<ChatServiceShape['getChatHost']>[0]) =>
+            failure ? Effect.fail(failure) : source.getChatHost(input)
+        : source[name],
+  });
+  const { endpoint, token } = await serve(t, chat);
   const probe = randomNonce(),
     before = calls.length;
   const proof = (key: string) =>
@@ -304,6 +315,15 @@ test('unauthenticated health probes are refused before they reach the chat servi
   // A probe with the token's proof is answered, after asking the chat service.
   await Effect.runPromise(checkHostHealth({ origin: endpoint.origin, token, expected: host }));
   assert.deepEqual(calls.slice(before), ['getChatHost']);
+  // The chat service refusing the lookup leaves the host unavailable (503); only an
+  // UnauthorizedError refuses the probe itself (401).
+  for (const [refusal, reason] of [
+    [new ChatAccessError({ refusal: 'other-owner' }), 'status'],
+    [new UnauthorizedError({ operation: 'getChatHost' }), 'rejected'],
+  ] as const) {
+    failure = refusal;
+    await assert.rejects(Effect.runPromise(checkHostHealth(endpoint)), { reason });
+  }
 });
 
 test('before authentication Bun’s 16 KiB header bound refuses a request before the upgrade or health sees it, and no body is read', async (t) => {
@@ -416,4 +436,90 @@ test('a connection runs a bounded number of requests at once, and a handler’s 
   // A watch still runs on the same connection.
   const first = await runtime.runPromise(Stream.runHead(chat.watch({ target })));
   assert.equal(first._tag, 'Some');
+});
+
+test('the listener answers a bounded number of plain requests at once, and closing it interrupts those still running and waits a bounded time for their cleanup', async (t) => {
+  const source = controlledChat();
+  // Once the test holds them, authenticated probes are admitted and then wait on the chat
+  // service, and releasing their admissions waits until the test ends.
+  const released = Effect.runSync(Deferred.make<void>());
+  t.after(() => Effect.runSync(Deferred.succeed(released, undefined)));
+  let hold = false,
+    admitted = 0,
+    interrupted = 0,
+    timedOut = false;
+  const getChatHost: ChatServiceShape['getChatHost'] = (input) =>
+    hold
+      ? Effect.onInterrupt(Effect.never, () => Effect.sync(() => void interrupted++))
+      : source.client.getChatHost(input);
+  const chat = new Proxy(source.client, {
+    get: (client, name: keyof ChatServiceShape) =>
+      name === 'getChatHost' ? getChatHost : client[name],
+  });
+  const admit = Effect.acquireRelease(
+    Effect.sync(() => (admitted++, hold)),
+    (held) => (held ? Deferred.await(released) : Effect.void),
+  );
+  const closeMs = 1_000;
+  const token = randomNonce(),
+    runtime = ManagedRuntime.make(TestClock.layer()),
+    scope = Effect.runSync(Scope.make());
+  t.after(async () => {
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+    await runtime.dispose();
+  });
+  const advance = (ms: number) => runtime.runPromise(TestClock.adjust(ms));
+  const server = await runtime.runPromise(
+    serveChat(
+      { host, token, port: 0 },
+      { chat },
+      { admit, closeMs, onCloseTimeout: Effect.sync(() => void (timedOut = true)) },
+    ).pipe(Effect.provideService(Scope.Scope, scope)),
+  );
+  const endpoint = { origin: server.origin, token, expected: host };
+  const client = ManagedRuntime.make(
+    RemoteChatLive.pipe(
+      Layer.provide(DaemonRpcLinkLive({ host })),
+      Layer.provide(EndpointConnectionLive(endpoint)),
+    ),
+  );
+  t.after(() => client.dispose());
+  const remote = await client.runPromise(ChatService);
+  // A watch the RPC server runs until it closes.
+  client.runFork(Stream.runDrain(remote.watch({ target })));
+  await until(async () => source.watching, Boolean);
+  hold = true;
+  const before = admitted;
+  const probes = Array.from({ length: 128 }, () =>
+    Effect.runPromiseExit(checkHostHealth(endpoint)),
+  );
+  // Under the bound an unauthenticated probe is answered 401; past it, refused 503.
+  await until(
+    async () => {
+      const response = await fetch(`${server.origin}/v1/health`);
+      await response.arrayBuffer();
+      return response.status;
+    },
+    (status) => status === 503,
+  );
+  assert.equal(admitted - before, 128);
+  // Closing interrupts each probe, stops the listener and closes the RPC servers, which end the
+  // watch, while every probe's release is still held.
+  let closed = false;
+  const closing = runtime.runPromise(Scope.close(scope, Exit.void)).then(() => (closed = true));
+  await until(
+    async () => [interrupted, source.closes] as const,
+    ([probes, watches]) => probes === 128 && watches === 1,
+  );
+  await assert.rejects(fetch(`${server.origin}/v1/health`));
+  // The close waits for those releases, up to `closeMs`, then goes on without them.
+  await advance(closeMs - 1);
+  assert.equal(closed, false);
+  await until(async () => {
+    await advance(1);
+    return closed;
+  }, Boolean);
+  await closing;
+  assert.equal(timedOut, true);
+  for (const exit of await Promise.all(probes)) assert.equal(exit._tag, 'Failure');
 });

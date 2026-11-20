@@ -1,4 +1,4 @@
-import { Clock, Effect, Exit, Fiber, FiberSet, Scope } from 'effect';
+import { Clock, Effect, Exit, Fiber, FiberSet, Option, Scope, Semaphore } from 'effect';
 import type {
   LocalHostHandlers,
   ChatServiceShape,
@@ -24,6 +24,7 @@ import {
   workspaceRpcPath,
   workspaceRpcProtocol,
 } from '@moonbase/contracts/rpc-upgrade';
+import { isAccessRefusal } from '@moonbase/contracts/error-groups';
 import { UnauthorizedError } from '@moonbase/contracts/errors';
 import { serveBun, type BunServer, type BunWebSocket } from './bun-server.ts';
 import { serveRpc, serveWorkspaceRpc } from './rpc-server.ts';
@@ -57,11 +58,12 @@ export type ChatServerOptions = {
   /** Held in each workspace connection's scope, from when it opens until it closes. */
   trackWorkspaceConnection?: Effect.Effect<void, never, Scope.Scope>;
   /**
-   * How long closing the server waits, on the Clock, for the mutations it still runs (5 s by
-   * default); past it the close goes on without them and runs `onCloseTimeout`.
+   * How long closing the server waits, on the Clock, for the mutations it still runs and the
+   * cleanup of the health probes it interrupts (5 s by default); past it the close goes on
+   * without them and runs `onCloseTimeout`.
    */
   closeMs?: number;
-  /** Runs once a close goes on without the mutations it waited for. */
+  /** Runs once a close goes on without the work it waited for. */
   onCloseTimeout?: Effect.Effect<void>;
 };
 /** A local-mode daemon's features beyond chat: local-mode chat and control, providers, folders. */
@@ -126,24 +128,11 @@ export const serveChat = (
     if (JSON.stringify(configuration).includes(token))
       return yield* Effect.fail(new HostKeyExposedError());
     const admit = options.admit ?? Effect.void;
-    const run = yield* FiberSet.makeRuntimePromise<never>();
     const clock = yield* Clock.Clock;
     const nonces = createUpgradeNonces(() => clock.currentTimeMillisUnsafe());
-    // The RPC servers live in a scope of their own. Closing it waits for the mutations they run,
-    // which a stuck helper could hold for ever, so the wait is bounded; anything unfinished was
-    // journalled where it runs.
-    const serving = yield* Scope.make();
-    yield* Effect.addFinalizer(() =>
-      Effect.gen(function* () {
-        const closing = yield* Effect.forkDetach(Scope.close(serving, Exit.void));
-        yield* Fiber.await(closing).pipe(
-          Effect.timeoutOrElse({
-            duration: options.closeMs ?? 5_000,
-            orElse: () => options.onCloseTimeout ?? Effect.void,
-          }),
-        );
-      }),
-    );
+    // The RPC servers live in a scope of their own, which the listener's release closes. Should
+    // the listener never start, the server's scope closes it.
+    const serving = yield* Scope.fork(yield* Effect.scope);
     const rpc = yield* serveRpc(
       {
         host: expected,
@@ -193,30 +182,61 @@ export const serveChat = (
           }
         : {}),
     };
-    let closed = false,
-      active = 0;
+    /**
+     * The listener's plain HTTP answers run in its own scope: releasing the listener closes it,
+     * interrupting the answers still running and refusing any later request.
+     */
+    const listening = yield* Scope.fork(yield* Effect.scope);
+    const answer = yield* FiberSet.makeRuntimePromise<never>().pipe(Scope.provide(listening));
+    const requests = yield* Semaphore.make(maximumRequests);
+    const jsonHeaders = { ...plainHeaders, 'Content-Type': 'application/json' };
     /** Signed health: the proof is checked first, so an unauthenticated probe reaches nothing. */
-    const answerHealth = async (request: Request) => {
-      const headers = { ...plainHeaders, 'Content-Type': 'application/json' };
-      try {
-        const value = createHostHealthReply({
-          token,
-          nonce: request.headers.get('x-moonbase-nonce') ?? undefined,
-          authorization: request.headers.get('authorization') ?? undefined,
-          health,
-          issue: () => nonces.issue(),
-        });
-        await run(
+    const answerHealth = (request: Request) =>
+      Effect.try({
+        try: () =>
+          createHostHealthReply({
+            token,
+            nonce: request.headers.get('x-moonbase-nonce') ?? undefined,
+            authorization: request.headers.get('authorization') ?? undefined,
+            health,
+            issue: () => nonces.issue(),
+          }),
+        // The reply refuses with a HostVerificationError; anything else it throws is a defect.
+        catch: (error) => error,
+      }).pipe(
+        Effect.catch((error) =>
+          error instanceof HostVerificationError ? Effect.fail(error) : Effect.die(error),
+        ),
+        Effect.tap(() =>
           Effect.scoped(Effect.andThen(admit, services.chat.getChatHost({ host: expected }))),
-        );
-        return new Response(JSON.stringify(value), { status: 200, headers });
-      } catch (thrown) {
-        const refused =
-          (thrown instanceof HostVerificationError && thrown.reason === 'request-rejected') ||
-          thrown instanceof UnauthorizedError;
-        return new Response(healthRefusal(refused), { status: refused ? 401 : 503, headers });
-      }
-    };
+        ),
+        Effect.map(
+          (value) => new Response(JSON.stringify(value), { status: 200, headers: jsonHeaders }),
+        ),
+        // A refused proof or an UnauthorizedError is 401. Any other failure, the chat service's
+        // own refusals included, is 503; a defect or an interruption reaches the listener, which
+        // answers it 503.
+        Effect.catch((error) => {
+          const refused =
+            error instanceof HostVerificationError
+              ? isAccessRefusal(error)
+              : error instanceof UnauthorizedError;
+          return Effect.succeed(
+            new Response(healthRefusal(refused), {
+              status: refused ? 401 : 503,
+              headers: jsonHeaders,
+            }),
+          );
+        }),
+      );
+    /** A plain HTTP request: health, or 404. */
+    const respond = (request: Request) =>
+      Effect.suspend(() => {
+        const url = new URL(request.url);
+        if (request.method === 'GET' && url.pathname === '/v1/health' && url.search === '')
+          return answerHealth(request);
+        return Effect.succeed(new Response(null, { status: 404, headers: plainHeaders }));
+      });
     /**
      * Upgrades a request for one of the sockets, or answers the status it is refused with, before
      * Bun accepts it: a browser's (403), anything but a plain local WebSocket handshake for a
@@ -281,7 +301,8 @@ export const serveChat = (
             development: false,
             error: () => new Response(null, { status: 503, headers: plainHeaders }),
             fetch: async (request, bun) => {
-              if (closed) return new Response(null, { status: 503, headers: plainHeaders });
+              if (listening.state._tag === 'Closed')
+                return new Response(null, { status: 503, headers: plainHeaders });
               if (request.headers.get('upgrade') !== null) {
                 try {
                   return upgrade(request, bun);
@@ -289,21 +310,15 @@ export const serveChat = (
                   return new Response(null, { status: 400, headers: plainHeaders });
                 }
               }
-              if (active >= maximumRequests)
-                return new Response(null, { status: 503, headers: plainHeaders });
-              active++;
               try {
-                const url = new URL(request.url);
-                if (request.method === 'GET' && url.pathname === '/v1/health' && url.search === '')
-                  return await answerHealth(request);
-                return new Response(null, { status: 404, headers: plainHeaders });
+                // Past `maximumRequests` answering at once, a request is refused.
+                const answered = await answer(requests.withPermitsIfAvailable(1)(respond(request)));
+                return Option.getOrElse(
+                  answered,
+                  () => new Response(null, { status: 503, headers: plainHeaders }),
+                );
               } catch {
-                return new Response(healthRefusal(false), {
-                  status: 503,
-                  headers: { ...plainHeaders, 'Content-Type': 'application/json' },
-                });
-              } finally {
-                active--;
+                return new Response(healthRefusal(false), { status: 503, headers: jsonHeaders });
               }
             },
             websocket: {
@@ -327,10 +342,38 @@ export const serveChat = (
           }),
         catch: () => new HostUnavailableError({ reason: 'listener' }),
       }),
+      // Releasing the listener starts three closes at once, none waiting on another to begin:
+      // Bun's stop, first, so it cuts the connections before the RPC servers close them (otherwise
+      // they send each running watch an interrupt exit, which the client reads as its own and
+      // stops following, #404; this relies on `stop(true)` closing sockets synchronously and on
+      // `startImmediately`);
+      // `listening`, which refuses later requests and interrupts the answers still running; and
+      // the RPC servers', which waits for the mutations they run. The release then waits
+      // for the answers' cleanup (each probe's admission) and the mutations, so neither outlives
+      // the server's scope. A stuck helper could hold either for ever, so the wait is bounded by
+      // `closeMs`; past it the release goes on without them (a mutation left unfinished was
+      // journalled where it runs) and runs `onCloseTimeout`.
       (server) =>
-        Effect.promise(async () => {
-          closed = true;
-          await server.stop(true);
+        Effect.gen(function* () {
+          const stopping = yield* Effect.forkDetach(
+            Effect.promise(() => server.stop(true)),
+            { startImmediately: true },
+          );
+          const closing = yield* Effect.forEach([listening, serving], (scope) =>
+            Effect.forkDetach(Scope.close(scope, Exit.void), { startImmediately: true }),
+          );
+          yield* Effect.all(
+            [
+              Fiber.await(stopping),
+              Fiber.awaitAll(closing).pipe(
+                Effect.timeoutOrElse({
+                  duration: options.closeMs ?? 5_000,
+                  orElse: () => options.onCloseTimeout ?? Effect.void,
+                }),
+              ),
+            ],
+            { concurrency: 'unbounded', discard: true },
+          );
         }),
     );
     return { origin: `http://127.0.0.1:${server.port}` };
