@@ -57,31 +57,49 @@ export const makeRunAgain = <K, E = never>(): Effect.Effect<RunAgain<K, E>, neve
         while (yield* takeAgain(key, id));
       }).pipe(Effect.onError(() => leave(key, id)));
     return {
+      // The caller cannot be interrupted between forking a run and recording it, or another call
+      // would start a second; only its wait for the run is interruptible.
       run: (key, once, { latest = false } = {}) =>
-        Effect.flatMap(
-          SynchronizedRef.modifyEffect(runs, (map) => {
-            const running = HashMap.get(map, key);
-            if (Option.isSome(running)) {
-              const run = running.value;
-              return Effect.succeed([
-                run.fiber,
-                latest ? HashMap.set(map, key, { ...run, again: true }) : map,
-              ] as const);
-            }
-            // The run starts once recorded, so its first take finds it.
-            const id = {};
-            return Effect.map(
-              FiberSet.run(fibers, loop(key, id, once), { startImmediately: false }),
-              (fiber) => [fiber, HashMap.set(map, key, { id, fiber, again: false })] as const,
-            );
-          }),
-          Fiber.join,
+        Effect.uninterruptibleMask((restore) =>
+          Effect.flatMap(
+            SynchronizedRef.modifyEffect(runs, (map) => {
+              const running = HashMap.get(map, key);
+              if (Option.isSome(running)) {
+                const run = running.value;
+                return Effect.succeed([
+                  run.fiber,
+                  latest ? HashMap.set(map, key, { ...run, again: true }) : map,
+                ] as const);
+              }
+              // The run starts once recorded, so its first take finds it.
+              const id = {};
+              return Effect.map(
+                FiberSet.run(fibers, loop(key, id, once), { startImmediately: false }),
+                (fiber) => [fiber, HashMap.set(map, key, { id, fiber, again: false })] as const,
+              );
+            }),
+            (fiber) => restore(Fiber.join(fiber)),
+          ),
         ),
-      // A run interrupted before it started never ran `loop`'s cleanup, so its entry goes here.
+      // A run interrupted before it started never ran `loop`'s cleanup, so its entry goes here. The
+      // caller cannot be interrupted between removing the run and telling it to stop, or it would
+      // run on beside a successor; only the wait for it to stop is interruptible.
       interrupt: (key) =>
-        Effect.flatMap(
-          SynchronizedRef.modify(runs, (map) => [HashMap.get(map, key), HashMap.remove(map, key)]),
-          Option.match({ onNone: () => Effect.void, onSome: (run) => Fiber.interrupt(run.fiber) }),
+        Effect.uninterruptibleMask((restore) =>
+          Effect.flatMap(
+            SynchronizedRef.modify(runs, (map) => [
+              HashMap.get(map, key),
+              HashMap.remove(map, key),
+            ]),
+            Option.match({
+              onNone: () => Effect.void,
+              onSome: ({ fiber }) =>
+                Effect.withFiber((self) => {
+                  fiber.interruptUnsafe(self.id);
+                  return restore(Effect.asVoid(Fiber.await(fiber)));
+                }),
+            }),
+          ),
         ),
     } satisfies RunAgain<K, E>;
   });

@@ -12,7 +12,11 @@ import {
   SubscriptionRef,
 } from 'effect';
 import { WorkspaceService } from '@moonbase/contracts/workspace-service';
-import { type CheckoutTarget, type WorkspaceEvent } from '@moonbase/contracts/workspace';
+import {
+  type CheckoutTarget,
+  type DirectoryListing,
+  type WorkspaceEvent,
+} from '@moonbase/contracts/workspace';
 import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
 import {
   CheckoutChangedError,
@@ -131,6 +135,71 @@ describe('the discovery service on its own', () => {
           yield* Deferred.succeed(answer, undefined);
           const { entries } = yield* Fiber.join(listing);
           assert(entries.some((entry) => entry.path === 'a.ts'));
+        }),
+      );
+    } finally {
+      await editor.dispose();
+      await runtime.dispose();
+    }
+  });
+
+  test('a read made as a listing request starts shows what it replies', async () => {
+    const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'one' } }]);
+    const runtime = ManagedRuntime.make(memory.layer);
+    const base = await runtime.runPromise(Effect.service(WorkspaceService));
+    const [answer, nested] = await runtime.runPromise(
+      Effect.all([Deferred.make<void>(), Deferred.make<Fiber.Fiber<DirectoryListing, unknown>>()]),
+    );
+    const listing = (path: string) => ({ entries: [{ path, directory: false }], partial: false });
+    let counting = false;
+    let reread: Effect.Effect<DirectoryListing, unknown> = Effect.never;
+    // Once counting, the first request reads the folder again the moment it starts, then answers
+    // once `answer` opens; any later request answers at once.
+    const firstRequest = Effect.andThen(
+      Effect.flatMap(
+        Effect.forkDetach(
+          Effect.suspend(() => reread),
+          { startImmediately: true },
+        ),
+        (fiber) => Deferred.succeed(nested, fiber),
+      ),
+      Effect.as(Deferred.await(answer), listing('first.ts')),
+    );
+    let requests = [firstRequest];
+    const workspace = Layer.succeed(WorkspaceService, {
+      ...base,
+      listDirectory: (input) => {
+        if (!counting) return base.listDirectory(input);
+        const [request = Effect.succeed(listing('second.ts')), ...rest] = requests;
+        requests = rest;
+        return request;
+      },
+    });
+    const editor = ManagedRuntime.make(
+      Layer.provideMerge(editorLayer({ clientId: 'c' }), workspace),
+    );
+    try {
+      await editor.runPromise(
+        Effect.gen(function* () {
+          yield* (yield* EditorLoader).load;
+          const opened = yield* (yield* EditorCheckouts).openCheckout(checkout.root);
+          const discovery = yield* EditorDiscovery;
+          yield* discovery.release(opened);
+          reread = discovery.list(opened, '');
+          counting = true;
+          const first = yield* Effect.forkChild(discovery.list(opened, ''));
+          const again = yield* Deferred.await(nested);
+          yield* Deferred.succeed(answer, undefined);
+          const [replied, repliedAgain] = yield* Fiber.joinAll([first, again]);
+          // The read the request made is the latest: whatever it replied is what shows.
+          const shown = Object.values((yield* discovery.get).listings).flatMap((shown) =>
+            shown.entries.map((entry) => entry.path),
+          );
+          assert.deepEqual(
+            shown,
+            repliedAgain.entries.map((entry) => entry.path),
+          );
+          assert.deepEqual(replied, repliedAgain, 'the read began once the first was registered');
         }),
       );
     } finally {

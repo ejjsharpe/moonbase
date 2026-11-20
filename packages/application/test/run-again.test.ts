@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Deferred, Effect, Exit, Fiber, Latch, Ref, type Scope } from 'effect';
+import { Effect, Exit, Fiber, Latch, Ref, type Scope } from 'effect';
 import { makeRunAgain } from '../src/run-again.ts';
 
 /** A run whose passes each wait on `gate` once started, counting them. */
@@ -46,25 +46,6 @@ test('a call during a run joins it, and a latest one runs it once more after', (
     }),
   ));
 
-test('a call made as an interrupted run settles still gets a pass of its own', () =>
-  run(
-    Effect.gen(function* () {
-      const runAgain = yield* makeRunAgain<string>();
-      const { count, started, once } = yield* passes;
-      const passed = yield* Deferred.make<number>();
-      const pass = Ref.update(count, (n) => n + 1);
-      const askAgain = runAgain.run('k', pass, { latest: true }).pipe(
-        Effect.andThen(Ref.get(count)),
-        Effect.flatMap((n) => Deferred.succeed(passed, n)),
-      );
-      // The interrupted run's caller asks again the moment it settles, before `interrupt` returns.
-      yield* Effect.forkChild(runAgain.run('k', once).pipe(Effect.onExit(() => askAgain)));
-      yield* started.await;
-      yield* runAgain.interrupt('k');
-      assert.equal(yield* Deferred.await(passed), 2);
-    }),
-  ));
-
 test('interrupting a caller leaves the shared run going, and interrupting the key ends it and its callers', () =>
   run(
     Effect.gen(function* () {
@@ -79,17 +60,30 @@ test('interrupting a caller leaves the shared run going, and interrupting the ke
       assert.equal(yield* Ref.get(count), 1, 'the run finished for the caller that stayed');
       yield* gate.close;
       yield* started.close;
-      const ended = yield* Effect.forkChild(runAgain.run('k', once));
+      // The run's interruption is held in its finalizer, the window where it is still stopping.
+      const stopping = yield* Latch.make(false);
+      const stopped = yield* Latch.make(false);
+      const ending = once.pipe(
+        Effect.onInterrupt(() => Effect.andThen(stopping.open, stopped.await)),
+      );
+      const ended = yield* Effect.forkChild(runAgain.run('k', ending));
       yield* started.await;
       const joined = yield* Effect.forkChild(runAgain.run('k', once, { latest: true }));
       yield* Effect.yieldNow;
-      yield* runAgain.interrupt('k');
+      const interrupting = yield* Effect.forkChild(runAgain.interrupt('k'));
+      yield* stopping.await;
+      // A call made while the run stops starts a pass of its own, not one more of the ended run.
+      yield* gate.open;
+      yield* runAgain.run('k', once, { latest: true });
+      assert.equal(yield* Ref.get(count), 3);
+      assert.equal(interrupting.pollUnsafe(), undefined, '`interrupt` waits for the run to stop');
+      yield* stopped.open;
+      yield* Fiber.join(interrupting);
       assert(Exit.hasInterrupts(yield* Fiber.await(ended)));
       assert(Exit.hasInterrupts(yield* Fiber.await(joined)));
       // Nothing is left asked: the next call runs one pass.
-      yield* gate.open;
       yield* runAgain.run('k', once);
-      assert.equal(yield* Ref.get(count), 3);
+      assert.equal(yield* Ref.get(count), 4);
     }),
   ));
 

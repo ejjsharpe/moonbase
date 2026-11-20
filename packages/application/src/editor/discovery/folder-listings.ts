@@ -1,5 +1,6 @@
 import {
   Cache,
+  Deferred,
   Effect,
   Equal,
   Fiber,
@@ -96,24 +97,21 @@ export const makeFolderListings = (options: {
         Effect.uninterruptible(
           Effect.gen(function* () {
             const { checkout, path, key } = folder;
-            const scope = yield* checkoutScope(checkout);
-            yield* classification.cancel(key);
-            const listed = yield* Effect.forkIn(
-              workspace.listDirectory({
-                checkout,
-                path,
-                includeIgnoredStatus: false,
-              }),
-              scope,
-              { startImmediately: true },
-            );
+            // The read claims the folder's listing before anything can suspend it: a read admitted
+            // after this one, once a change drops it from the cache, claims it after, so shows.
+            const started = yield* Deferred.make<{
+              readonly scope: Scope.Scope;
+              readonly listed: Fiber.Fiber<DirectoryListing, WorkspaceError>;
+            }>();
             const loud = yield* Ref.make(folder.loud);
             // Started once the read is cached, so its end can drop it from the cache: callers
-            // after that read again. A newer read that replaced it began only once it was dropped.
+            // after that read again.
             const shown = yield* FiberMap.run(
               showing,
               key,
-              showListing(folder, scope, listed, loud).pipe(
+              Effect.flatMap(Deferred.await(started), ({ scope, listed }) =>
+                showListing(folder, scope, listed, loud),
+              ).pipe(
                 Effect.ensuring(
                   Effect.withFiber((self) =>
                     Cache.invalidateWhen(reads, folder, (read) => read.shown === self),
@@ -122,6 +120,19 @@ export const makeFolderListings = (options: {
               ),
               { startImmediately: false },
             );
+            const scope = yield* checkoutScope(checkout);
+            yield* classification.cancel(key);
+            // Asked once the read is cached, so a change the request causes drops this read.
+            const listed = yield* Effect.forkIn(
+              workspace.listDirectory({
+                checkout,
+                path,
+                includeIgnoredStatus: false,
+              }),
+              scope,
+              { startImmediately: false },
+            );
+            yield* Deferred.succeed(started, { scope, listed });
             const reportFailure = yield* Effect.cached(
               Effect.catch(Fiber.join(listed), report).pipe(Effect.ignoreCause),
             );
