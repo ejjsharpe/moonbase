@@ -1,5 +1,6 @@
 import type {
   ChatEntry,
+  ChatSnapshot,
   ChatTranscriptMatch,
   ChatTranscriptPart,
   ChatTranscriptSelection,
@@ -54,6 +55,8 @@ export type TranscriptManifestState = {
   error: string | null;
 };
 export type TranscriptState = {
+  /** The accepted snapshot, kept by identity while an accepted one is equal to it. */
+  snapshot: ChatSnapshot | null;
   find: TranscriptFindState;
   observation: 'inactive' | 'local' | 'streaming' | 'reconnecting' | 'failed';
   /** Every retained history record, oldest first. */
@@ -104,6 +107,7 @@ export const makeEmptyFindState = (): TranscriptFindState => ({
 });
 export function makeEmptyTranscriptState(): TranscriptState {
   return {
+    snapshot: null,
     find: makeEmptyFindState(),
     observation: 'inactive',
     entries: [],

@@ -204,7 +204,8 @@ export class ChatSends extends Context.Service<ChatSends, ChatSendsShape>()(
           'stop',
           Effect.gen(function* () {
             yield* link.current;
-            const stop = (yield* SubscriptionRef.get(selection.state)).snapshot?.run?.stop;
+            const { transcript } = yield* SubscriptionRef.get(selection.state);
+            const stop = (yield* SubscriptionRef.get(transcript)).snapshot?.run?.stop;
             if (!stop) return;
             yield* reserveAndSend(makeStop((yield* drafts.get).saved, stop, newId()));
           }),

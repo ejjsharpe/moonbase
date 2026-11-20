@@ -57,12 +57,12 @@ test('query replacement, closing Find and closing the transcript fence late resu
     // Closing the transcript does not wait for the host to answer the cancelled read.
     if (action === 'scope') await f.close();
     assert(signal?.aborted);
-    const publications = f.publications;
+    const before = f.state;
     release();
     await find;
     await tick();
     const state = f.state.find;
-    if (action === 'scope') assert.equal(f.publications, publications);
+    if (action === 'scope') assert.equal(f.state, before);
     else assert.notEqual(state.query, 'same');
     assert.equal(state.error, null);
   }

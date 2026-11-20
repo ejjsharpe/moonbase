@@ -1,4 +1,4 @@
-import { Effect, Fiber, type Scope } from 'effect';
+import { Effect, type Scope, type SubscriptionRef } from 'effect';
 import type {
   ChatSnapshot,
   ChatSummary,
@@ -15,7 +15,7 @@ import type { TranscriptLimits, TranscriptState } from './transcript-state.ts';
 import { isContentChanged } from './transcript-content.ts';
 import { checkSnapshotSources, reuseSnapshot } from './transcript-history.ts';
 import { isManifestChanged } from './transcript-manifest.ts';
-import { TranscriptStore } from './transcript-store.ts';
+import { isSourceCurrent, makeTranscriptStore } from './transcript-store.ts';
 import { makeTranscriptJobs, manifestJob } from './transcript-jobs.ts';
 import { makeTranscriptSearch } from './transcript-search.ts';
 import { makeTranscriptNavigation } from './transcript-navigation.ts';
@@ -29,8 +29,6 @@ export type TranscriptDependencies = {
   /** A chat on this machine is read in place ('local' observation); one over a connection streams. */
   local: boolean;
   limits: TranscriptLimits;
-  /** Publishes the state, with the accepted snapshot when it changed (else undefined). */
-  publish: (state: TranscriptState, snapshot: ChatSnapshot | undefined) => Effect.Effect<void>;
 };
 
 /**
@@ -38,7 +36,8 @@ export type TranscriptDependencies = {
  * superseded); read failures are published on the state, never failed with.
  */
 export type Transcript = {
-  readonly state: Effect.Effect<TranscriptState>;
+  /** What the transcript shows, with the accepted snapshot; set only when it changes. */
+  readonly state: SubscriptionRef.SubscriptionRef<TranscriptState>;
   /** Whether the transcript failed (observation 'failed'); it stays failed until reopened. */
   readonly failed: Effect.Effect<boolean>;
   /** Trusts the decoded, bounded snapshot; checks only its authority (fails if it belongs elsewhere). */
@@ -87,7 +86,7 @@ export const makeTranscript = (
   dependencies: TranscriptDependencies,
 ): Effect.Effect<Transcript, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const store = new TranscriptStore(dependencies);
+    const store = yield* makeTranscriptStore(dependencies);
     const jobs = yield* makeTranscriptJobs(store);
     const search = yield* makeTranscriptSearch(store, jobs, (entryId) =>
       navigation.revealEntry(entryId),
@@ -96,69 +95,61 @@ export const makeTranscript = (
     const acceptSnapshot = (input: ChatSnapshot) =>
       Effect.gen(function* () {
         yield* checkTranscript(() => checkSnapshotSources(input, dependencies.target));
-        // Marking reads stale and interrupting them are one synchronous step, so a reply can't
-        // land between them and overwrite the mark.
-        const { stopFind, stopped } = yield* Effect.withFiber((parent) => {
-          const old = store.snapshot;
-          const next = reuseSnapshot(input, old, store.history);
-          store.snapshot = old && areJsonValuesEqual(old, next) ? old : next;
-          const reconnecting = input.observationStatus === 'reconnecting';
-          const upper = store.findBoundary.upper;
-          let observation: TranscriptState['observation'] = dependencies.local
-            ? 'local'
-            : 'streaming';
-          if (reconnecting) observation = 'reconnecting';
-          store.state = {
-            ...store.state,
-            observation,
-            find: {
-              ...store.state.find,
-              refreshAvailable: upper !== undefined && upper !== input.transcriptBoundary,
-            },
+        const old = store.state.snapshot ?? undefined;
+        const next = reuseSnapshot(input, old, store.history);
+        store.history.acceptSnapshot(next.entries, old, input);
+        const reconnecting = input.observationStatus === 'reconnecting';
+        const upper = store.findBoundary.upper;
+        const stopFind = reconnecting && !!store.state.find.query;
+        if (stopFind) search.forgetFind();
+        // Parts and a manifest whose source the snapshot made stale, or that it changed. They are
+        // marked before their reads are interrupted, so an interrupted read leaves the mark.
+        const isCurrent = (source: ChatTranscriptSource) =>
+          isSourceCurrent(dependencies.target, next, source);
+        const stale = new Set(
+          store.contents.markStale(
+            (content) => !isCurrent(content.source) || isContentChanged(content, next),
+          ),
+        );
+        const { manifest } = store.state;
+        const manifestStale =
+          !!manifest && (!isCurrent(manifest.source) || isManifestChanged(manifest, old, next));
+        if (manifestStale) stale.add(manifestJob);
+        let observation: TranscriptState['observation'] = dependencies.local
+          ? 'local'
+          : 'streaming';
+        if (reconnecting) observation = 'reconnecting';
+        yield* store.update((state) => {
+          const find = {
+            ...state.find,
+            refreshAvailable: upper !== undefined && upper !== input.transcriptBoundary,
           };
-          const stopFind = reconnecting && !!store.state.find.query;
-          if (stopFind) {
-            search.forgetFind();
-            store.state = {
-              ...store.state,
-              find: {
-                ...store.state.find,
-                status: 'error',
-                error: 'Connection changed. Refresh results after reconnecting.',
-              },
-            };
-          }
-          store.history.acceptSnapshot(next.entries, old, input);
-          // Reads of a live source the snapshot made stale, and of parts or a manifest it changed.
-          const stale = new Set(
-            jobs.keys(({ source }) => source?.kind === 'live' && !store.isCurrent(source)),
-          );
-          const changed = store.contents.markStale(
-            (content) => !store.isCurrent(content.source) || isContentChanged(content, next),
-          );
-          for (const key of changed) stale.add(key);
-          const manifest = store.state.manifest;
-          if (
-            manifest &&
-            (!store.isCurrent(manifest.source) || isManifestChanged(manifest, old, next))
-          ) {
-            store.state = {
-              ...store.state,
-              manifest: {
-                ...manifest,
-                status: 'source-changed',
-                error: 'Transcript source changed or is stale. Reload the manifest.',
-              },
-            };
-            stale.add(manifestJob);
-          }
-          const stopped = jobs.fibers((_read, key) => stale.has(key));
-          for (const fiber of stopped) fiber.interruptUnsafe(parent.id);
-          return Effect.succeed({ stopFind, stopped });
+          return {
+            ...state,
+            snapshot: old && areJsonValuesEqual(old, next) ? old : next,
+            observation,
+            find: stopFind
+              ? {
+                  ...find,
+                  revealing: false,
+                  status: 'error',
+                  error: 'Connection changed. Refresh results after reconnecting.',
+                }
+              : find,
+            manifest: manifestStale
+              ? {
+                  ...manifest,
+                  status: 'source-changed',
+                  error: 'Transcript source changed or is stale. Reload the manifest.',
+                }
+              : manifest,
+          };
         });
+        // Reads of a live source the snapshot made stale, and of what it changed.
+        yield* jobs.interrupt(
+          ({ source }, key) => stale.has(key) || (source?.kind === 'live' && !isCurrent(source)),
+        );
         if (stopFind) yield* search.stopFind;
-        yield* Fiber.awaitAll(stopped);
-        yield* store.publish();
       });
 
     const navigation = makeTranscriptNavigation(store, jobs, {
@@ -168,47 +159,51 @@ export const makeTranscript = (
     const loads = makeTranscriptLoads(store, jobs);
 
     return {
-      state: Effect.sync(() => store.state),
+      state: store.ref,
       failed: Effect.sync(() => store.failed),
       acceptSnapshot,
       updateConversation: (conversation) =>
-        Effect.suspend(() => {
-          if (!store.snapshot) return Effect.void;
-          store.snapshot = { ...store.snapshot, conversation };
-          return store.publish();
-        }),
-      markReconnecting: Effect.suspend(() =>
-        store.snapshot && store.isCurrent()
+        store.update((state) =>
+          state.snapshot ? { ...state, snapshot: { ...state.snapshot, conversation } } : state,
+        ),
+      markReconnecting: Effect.suspend(() => {
+        const { snapshot } = store.state;
+        return snapshot && store.isCurrent()
           ? // The snapshot passed its authority check when it was accepted.
-            Effect.orDie(acceptSnapshot({ ...store.snapshot, observationStatus: 'reconnecting' }))
-          : Effect.void,
-      ),
+            Effect.orDie(acceptSnapshot({ ...snapshot, observationStatus: 'reconnecting' }))
+          : Effect.void;
+      }),
       fail: (error) =>
         Effect.suspend(() => {
           const failure = describeChatFailure(error);
-          // Mark before interrupting, so interrupted loads keep their failure rather than `partial`.
+          // Marked before interrupting (and failing stops new reads), so interrupted loads keep
+          // their failure rather than `partial`.
           store.contents.markFailed(failure);
-          const { manifest, find } = store.state;
-          store.state = {
-            ...store.state,
-            observation: 'failed',
-            find: find.query ? { ...find, status: 'error', error: failure } : find,
-            loading: false,
-            error: failure,
-            ...(manifest && (manifest.source.kind === 'live' || manifest.status === 'loading')
-              ? {
-                  manifest: {
-                    ...manifest,
-                    status: manifest.source.kind === 'live' ? 'source-changed' : 'error',
-                    error: failure,
-                  },
-                }
-              : {}),
-          };
           search.forgetFind();
-          return search.stopFind.pipe(
+          const failed = store.update((state) => {
+            const { manifest, find } = state;
+            return {
+              ...state,
+              observation: 'failed',
+              find: find.query
+                ? { ...find, revealing: false, status: 'error', error: failure }
+                : { ...find, revealing: false },
+              loading: false,
+              error: failure,
+              ...(manifest && (manifest.source.kind === 'live' || manifest.status === 'loading')
+                ? {
+                    manifest: {
+                      ...manifest,
+                      status: manifest.source.kind === 'live' ? 'source-changed' : 'error',
+                      error: failure,
+                    },
+                  }
+                : {}),
+            };
+          });
+          return failed.pipe(
+            Effect.andThen(search.stopFind),
             Effect.andThen(jobs.interrupt(() => true)),
-            Effect.andThen(store.publish()),
           );
         }),
       restoreView: navigation.restoreView,

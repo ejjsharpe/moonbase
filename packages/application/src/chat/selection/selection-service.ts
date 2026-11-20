@@ -35,16 +35,10 @@ import type { TranscriptView } from '../transcript/transcript-view-memory.ts';
 type OpenChat = { readonly target: ChatTarget; readonly transcript: Transcript };
 
 export type SelectionState = {
-  /** The open chat, which alone may publish here. */
   open: OpenChat | null;
-  snapshot: ChatSnapshot | null;
-  transcript: TranscriptState;
+  /** The open chat's transcript state (with its snapshot), or an empty one while none is open. */
+  transcript: SubscriptionRef.SubscriptionRef<TranscriptState>;
 };
-const closedView = (): SelectionState => ({
-  open: null,
-  snapshot: null,
-  transcript: makeEmptyTranscriptState(),
-});
 
 export type ChatSelectionShape = {
   readonly state: SubscriptionRef.SubscriptionRef<SelectionState>;
@@ -123,20 +117,23 @@ export class ChatSelection extends Context.Service<ChatSelection, ChatSelectionS
       const actions = yield* ChatActions;
       const drafts = yield* ChatDrafts;
       const link = yield* ChatLink;
-      const state = yield* SubscriptionRef.make(closedView());
+      const closedView: SelectionState = {
+        open: null,
+        transcript: yield* SubscriptionRef.make(makeEmptyTranscriptState()),
+      };
+      const state = yield* SubscriptionRef.make(closedView);
       const opened = yield* FiberHandle.make<never, unknown>();
       /** The target whose opening runs in `opened`, so a second open of it joins. */
       const opening = yield* Ref.make<ChatTarget | null>(null);
 
       const close = Effect.andThen(
         FiberHandle.clear(opened),
-        SubscriptionRef.set(state, closedView()),
+        SubscriptionRef.set(state, closedView),
       );
 
       /** The open chat for its scope's lifetime: its transcript, watch and re-watches. */
       const watchChat = (target: ChatTarget, ready: Deferred.Deferred<void, unknown>) =>
         Effect.gen(function* () {
-          const mine: { current?: OpenChat } = {};
           const transcript = yield* makeTranscript({
             chat: config.chat,
             target: structuredClone(target),
@@ -145,18 +142,12 @@ export class ChatSelection extends Context.Service<ChatSelection, ChatSelectionS
             // A chat on this machine is read in place; one over a connection streams.
             local: !config.connection,
             limits: config.limits,
-            publish: (published, snapshot) =>
-              SubscriptionRef.update(state, (s) =>
-                s.open === mine.current
-                  ? { ...s, transcript: published, ...(snapshot ? { snapshot } : {}) }
-                  : s,
-              ),
           });
-          const open: OpenChat = (mine.current = { target: structuredClone(target), transcript });
-          yield* SubscriptionRef.set(state, { ...closedView(), open });
+          const open: OpenChat = { target: structuredClone(target), transcript };
+          yield* SubscriptionRef.set(state, { open, transcript: transcript.state });
           // Registered after the transcript's, so it runs first: the view clears before it closes.
           yield* Effect.addFinalizer(() =>
-            SubscriptionRef.update(state, (s) => (s.open === open ? closedView() : s)),
+            SubscriptionRef.update(state, (s) => (s.open === open ? closedView : s)),
           );
           const accept = (snapshot: ChatSnapshot) =>
             Effect.flatMap(transcript.failed, (failed) =>

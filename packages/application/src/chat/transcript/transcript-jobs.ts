@@ -1,8 +1,7 @@
-import { Deferred, Effect, Exit, Fiber, FiberMap, type Scope } from 'effect';
+import { Cause, Context, Effect, Exit, Fiber, FiberMap, Option, type Scope } from 'effect';
 import type { ChatTranscriptSource } from '@moonbase/contracts/chat';
 import { describeChatFailure } from '../chat-errors.ts';
-import { catchReadFailure, TranscriptReadError } from './transcript-errors.ts';
-import { admitThrough, behindGate, joinRead } from './transcript-gate.ts';
+import type { TranscriptState } from './transcript-state.ts';
 import type { TranscriptFailure, TranscriptStore } from './transcript-store.ts';
 
 export const historyJob = 'history',
@@ -14,7 +13,10 @@ export type TranscriptJobRead = {
   /** Started for the Find match being revealed, so cancelling the reveal interrupts it. */
   readonly revealing: boolean;
 };
-type Job = TranscriptJobRead & { fiber?: Fiber.Fiber<void> };
+/** Each job's fiber carries what it reads. */
+const JobRead = Context.Reference<TranscriptJobRead>('moonbase/chat/TranscriptJobRead', {
+  defaultValue: () => ({ source: undefined, revealing: false }),
+});
 export type TranscriptJobOptions = {
   /** Interrupts a running job for the key rather than joining it. */
   replace?: boolean;
@@ -24,7 +26,7 @@ export type TranscriptJobOptions = {
    * Keeps a failure on the read's own state (manifest and part reads), so it neither blocks nor
    * clears history paging. Without it the failure is the transcript's `error`.
    */
-  fail?: (error: unknown) => void;
+  fail?: (state: TranscriptState, error: unknown) => TranscriptState;
 };
 
 /**
@@ -43,89 +45,97 @@ export type TranscriptJobs = {
   ) => Effect.Effect<void>;
   /** The key's running job, to join. */
   readonly running: (key: string) => Fiber.Fiber<void> | undefined;
-  /** The keys of the running jobs `select` picks. */
-  readonly keys: (select: (read: TranscriptJobRead, key: string) => boolean) => string[];
-  /** The fibers of the running jobs `select` picks. */
-  readonly fibers: (
-    select: (read: TranscriptJobRead, key: string) => boolean,
-  ) => Fiber.Fiber<void>[];
+  /** Interrupts the key's running job, making its read stale, and waits for it to end. */
+  readonly remove: (key: string) => Effect.Effect<void>;
   /** Interrupts the running jobs `select` picks and waits for them to end. */
   readonly interrupt: (
     select: (read: TranscriptJobRead, key: string) => boolean,
   ) => Effect.Effect<void>;
 };
 
+/**
+ * Waits for a read fiber to end. Its failures were published and its interruption is a
+ * cancellation, so only a defect (such as one thrown while publishing) fails the wait.
+ */
+export const joinRead = (fiber: Fiber.Fiber<void>): Effect.Effect<void> =>
+  Effect.flatMap(Fiber.await(fiber), (exit) =>
+    Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
+      ? Effect.failCause(exit.cause)
+      : Effect.void,
+  );
+
 export const makeTranscriptJobs = (
   store: TranscriptStore,
 ): Effect.Effect<TranscriptJobs, never, Scope.Scope> =>
   Effect.gen(function* () {
-    // Forks synchronously, so checking for a running job and installing one is a single step.
-    const fork = yield* Effect.flatMap(FiberMap.make<string, void>(), (map) =>
-      FiberMap.runtime(map)<never>(),
-    );
-    const jobs = new Map<string, Job>();
-    /** A replaced job leaves the key to its successor; whoever interrupted it published first. */
-    const settle = (key: string, job: Job, exit: Exit.Exit<void>) =>
-      Effect.suspend(() => {
-        if (jobs.get(key) !== job) return Effect.void;
-        jobs.delete(key);
-        if (Exit.hasInterrupts(exit)) {
-          if (store.contents.peek(key)?.status === 'loading')
-            store.contents.mark(key, { status: 'partial' });
-          const manifest = store.state.manifest;
-          if (key === manifestJob && manifest?.status === 'loading')
-            store.state = { ...store.state, manifest: { ...manifest, status: 'partial' } };
-        }
-        store.state = {
-          ...store.state,
-          loading: key !== historyJob && jobs.has(historyJob),
-        };
-        return store.publish();
+    const jobs = yield* FiberMap.make<string, void, never>();
+    const running = (key: string) => Option.getOrUndefined(FiberMap.getUnsafe(jobs, key));
+    /**
+     * Publishes how a job ended, in one update: its failure, if it failed, or a load it left
+     * unfinished, if interrupted. A replaced job leaves the key, and its state, to its successor.
+     */
+    const settle = (key: string, ended: Exit.Exit<unknown>, options: TranscriptJobOptions) =>
+      Effect.withFiber((self) => {
+        const interrupted = Exit.isFailure(ended);
+        // Replacing a job installs its successor first. A job that ends by itself is the key's,
+        // even one that ended as it started, before the map recorded it.
+        const current = running(key);
+        if (interrupted && current && current !== self) return Effect.void;
+        const failure = Exit.isSuccess(ended) ? ended.value : undefined;
+        if (interrupted && store.contents.peek(key)?.status === 'loading')
+          store.contents.mark(key, { status: 'partial' });
+        return store.update((input) => {
+          let state = input;
+          if (failure !== undefined)
+            state = options.fail
+              ? options.fail(state, failure)
+              : { ...state, error: describeChatFailure(failure) };
+          const manifest = state.manifest;
+          if (interrupted && key === manifestJob && manifest?.status === 'loading')
+            state = { ...state, manifest: { ...manifest, status: 'partial' } };
+          return { ...state, loading: key !== historyJob && FiberMap.hasUnsafe(jobs, historyJob) };
+        });
       });
     const run: TranscriptJobs['run'] = (key, work, options = {}) =>
       Effect.gen(function* () {
-        const gate = yield* Deferred.make<void>();
-        if (!store.isCurrent()) return;
-        const pending = jobs.get(key);
-        if (pending && !options.replace) return yield* joinRead(pending.fiber!);
+        if (store.failed) return;
         const history = key === historyJob;
-        const job: Job = { source: options.source, revealing: !!options.revealing };
-        const read = Effect.suspend(() =>
-          store.isCurrent()
-            ? work
-            : Effect.fail(new TranscriptReadError({ problem: 'source-changed' })),
-        ).pipe(
-          catchReadFailure((error) =>
-            Effect.sync(() => {
-              if (options.fail) options.fail(error);
-              else store.state = { ...store.state, error: describeChatFailure(error) };
-            }),
+        // Publishing that the read started is the job's first step, so whatever that prompts (a
+        // cancel, a newer read) finds the job in the map and can interrupt it.
+        const started = store.update((state) => ({
+          ...state,
+          error: history ? null : state.error,
+          loading: history || state.loading,
+        }));
+        const job = Effect.andThen(started, work).pipe(
+          // A failure ends the job with its value, to be published as it settles. The checks a read
+          // runs throw their `TranscriptReadError`, so a defect is published too.
+          Effect.as(undefined as unknown),
+          Effect.catchCause((cause) =>
+            Cause.hasInterrupts(cause) ? Effect.interrupt : Effect.succeed(Cause.squash(cause)),
           ),
-          Effect.onExit((exit) => settle(key, job, exit)),
+          Effect.onExit((ended) => settle(key, ended, options)),
+          Effect.asVoid,
         );
-        // Recorded before forking, which interrupts a replaced job: its settling then finds it gone.
-        jobs.set(key, job);
-        const fiber = (job.fiber = fork(key, behindGate(gate, read)));
-        store.state = {
-          ...store.state,
-          error: history ? null : store.state.error,
-          loading: history || store.state.loading,
-        };
-        yield* admitThrough(gate, store.publish());
-        yield* joinRead(fiber);
+        // `onlyIfMissing` starts none while the key's job runs; this then joins that one.
+        const fiber = yield* FiberMap.run(jobs, key, job, { onlyIfMissing: !options.replace }).pipe(
+          Effect.provideService(JobRead, {
+            source: options.source,
+            revealing: !!options.revealing,
+          }),
+        );
+        yield* joinRead(options.replace ? fiber : (running(key) ?? fiber));
       });
-    const keys: TranscriptJobs['keys'] = (select) =>
-      [...jobs].filter(([key, job]) => select(job, key)).map(([key]) => key);
     return {
       run,
-      running: (key) => jobs.get(key)?.fiber,
-      fibers: (select) =>
-        [...jobs].filter(([key, job]) => select(job, key)).map(([, job]) => job.fiber!),
-      keys,
+      running,
+      remove: (key) => FiberMap.remove(jobs, key),
       interrupt: (select) =>
         Effect.suspend(() =>
           Fiber.interruptAll(
-            [...jobs].filter(([key, job]) => select(job, key)).map(([, job]) => job.fiber!),
+            [...jobs]
+              .filter(([key, fiber]) => select(fiber.getRef(JobRead), key))
+              .map(([, f]) => f),
           ),
         ),
     } satisfies TranscriptJobs;

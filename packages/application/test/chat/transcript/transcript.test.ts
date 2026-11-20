@@ -137,17 +137,14 @@ test('cloned live-only DTOs preserve summary/part/cache identity and unrelated r
   assert.equal(f.state.entries[0].transcript!.parts[0], stablePart);
   assert.equal(f.state.content[0], cache);
   assert.equal(f.calls.length, calls);
-  const before = f.state,
-    publications = f.publications;
+  const before = f.state;
   await f.publish(structuredClone(value));
   assert.equal(f.state, before);
-  assert.equal(f.publications, publications);
   const revoked = new ChatAccessError({ refusal: 'other-owner' });
   await f.transcript.fail(revoked);
   assert.equal(f.state.observation, 'failed');
   assert.equal(f.state.error, revoked.message);
   assert.equal(await f.transcript.failed(), true);
-  assert(f.publications > publications);
 });
 
 test("Load more parts reads a source's first manifest page and then its next, but not past a failed one", async (t) => {
@@ -170,6 +167,11 @@ test("Load more parts reads a source's first manifest page and then its next, bu
   await f.transcript.loadMoreParts(second);
   assert.equal(reads, 1);
   assert.equal(f.state.manifest!.status, 'error');
+  // Another chat's source fails before anything is read, and that failure is shown too.
+  await f.transcript.loadMoreParts({ ...second, target: { ...second.target, actorId: 'other' } });
+  assert.equal(reads, 1);
+  assert.equal(f.state.manifest!.status, 'source-changed');
+  assert.equal(f.state.loading, false);
 });
 
 test('selected manifest hydration advances and retries errors; content validates exact echoes and offsets', async (t) => {

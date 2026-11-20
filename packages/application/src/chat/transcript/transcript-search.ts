@@ -1,11 +1,10 @@
-import { Deferred, Effect, FiberHandle, type Scope } from 'effect';
+import { Effect, FiberHandle, type Scope } from 'effect';
 import type { ChatTranscriptMatch } from '@moonbase/contracts/chat';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import { describeChatFailure } from '../chat-errors.ts';
 import { catchReadFailure, TranscriptReadError } from './transcript-errors.ts';
 import { appendFindPage, TranscriptFindPass } from './transcript-find.ts';
-import { admitThrough, behindGate, joinRead } from './transcript-gate.ts';
-import type { TranscriptJobs } from './transcript-jobs.ts';
+import { joinRead, type TranscriptJobs } from './transcript-jobs.ts';
 import { makeEmptyFindState, type TranscriptFindState } from './transcript-state.ts';
 import type { TranscriptFailure, TranscriptStore } from './transcript-store.ts';
 
@@ -21,8 +20,8 @@ export type TranscriptSearch = {
   /** Stops revealing the active match, keeping the query and its results. */
   readonly cancelFindReveal: Effect.Effect<void>;
   /**
-   * Drops the fixed boundary and the reveal, synchronously, for a caller that then runs `stopFind`
-   * once its own change is made.
+   * Drops the fixed boundary, synchronously, for a caller that then runs `stopFind` and publishes
+   * Find no longer revealing.
    */
   readonly forgetFind: () => void;
   /** Interrupts the search, the reveal and the reads started for it. */
@@ -36,29 +35,19 @@ export const makeTranscriptSearch = (
   revealEntry: (entryId: string) => Effect.Effect<void, TranscriptFailure>,
 ): Effect.Effect<TranscriptSearch, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const { target, limits } = store.dependencies;
-    // Each forks synchronously and interrupts the fiber it replaces in the same step.
-    const forkSearch = yield* Effect.flatMap(FiberHandle.make<void>(), (handle) =>
-      Effect.map(FiberHandle.runtime(handle)<never>(), (fork) => ({ handle, fork })),
-    );
-    const forkReveal = yield* Effect.flatMap(FiberHandle.make<void>(), (handle) =>
-      Effect.map(FiberHandle.runtime(handle)<never>(), (fork) => ({ handle, fork })),
-    );
-    const setFind = (find: Partial<TranscriptFindState>) => {
-      store.state = { ...store.state, find: { ...store.state.find, ...find } };
-    };
-    const showFindError = (error: unknown) =>
-      Effect.suspend(() => {
-        setFind({ error: describeChatFailure(error) });
-        return store.publish();
-      });
+    const { chat, target, limits } = store.dependencies;
+    // Running one interrupts the fiber it replaces.
+    const searches = yield* FiberHandle.make<void, never>();
+    const reveals = yield* FiberHandle.make<void, never>();
+    const updateFind = (find: Partial<TranscriptFindState>) =>
+      store.update((state) => ({ ...state, find: { ...state.find, ...find } }));
+    const showFindError = (error: unknown) => updateFind({ error: describeChatFailure(error) });
     const interruptRevealReads = jobs.interrupt((read) => read.revealing);
-    const stopReveal = Effect.andThen(FiberHandle.clear(forkReveal.handle), interruptRevealReads);
-    const stopFind = Effect.andThen(FiberHandle.clear(forkSearch.handle), stopReveal);
+    const stopReveal = Effect.andThen(FiberHandle.clear(reveals), interruptRevealReads);
+    const stopFind = Effect.andThen(FiberHandle.clear(searches), stopReveal);
     // A cancelled Find has no fixed boundary to replay or refresh against.
     const forgetFind = () => {
       store.findBoundary = { start: null, upper: undefined };
-      setFind({ revealing: false });
     };
 
     const showMatch = (match: ChatTranscriptMatch) =>
@@ -69,26 +58,20 @@ export const makeTranscriptSearch = (
       }).pipe(catchReadFailure(showFindError));
     /** Replaces any reveal with one of `match`; the search continues without waiting for it. */
     const revealMatch = (match: ChatTranscriptMatch) =>
-      Effect.gen(function* () {
-        const gate = yield* Deferred.make<void>();
-        forkReveal.fork(behindGate(gate, showMatch(match)));
-        yield* admitThrough(gate, interruptRevealReads);
-      });
+      Effect.andThen(interruptRevealReads, FiberHandle.run(reveals, showMatch(match)));
     const search = (query: string) =>
       Effect.gen(function* () {
         if (!query) return;
-        if (!store.isCurrent()) {
-          setFind({
+        if (!store.isCurrent())
+          return yield* updateFind({
             status: 'error',
             revealing: false,
             error: 'Reconnect or reopen this conversation before using Find.',
           });
-          return yield* store.publish();
-        }
         const pass = new TranscriptFindPass(target, query);
         let cursor: string | null = null;
         do {
-          const read = yield* store.read('findChatTranscript', {
+          const read = yield* chat.findChatTranscript({
             target,
             query,
             ...(cursor ? { cursor } : {}),
@@ -96,16 +79,13 @@ export const makeTranscriptSearch = (
           const page = pass.checkPage(read, cursor, store.findBoundary);
           store.findBoundary = { start: page.startCursor, upper: page.upperEntryId };
           const previous = store.state.find;
-          store.state = {
-            ...store.state,
-            find: appendFindPage(
-              previous,
-              page,
-              store.snapshot?.transcriptBoundary,
-              limits.findMatches,
-            ),
-          };
-          yield* store.publish();
+          const find = appendFindPage(
+            previous,
+            page,
+            store.state.snapshot?.transcriptBoundary,
+            limits.findMatches,
+          );
+          yield* store.update((state) => ({ ...state, find }));
           const first = previous.active === null ? page.matches[0] : undefined;
           if (first && store.state.find.revealing) yield* revealMatch(first);
           cursor = page.nextCursor;
@@ -113,10 +93,7 @@ export const makeTranscriptSearch = (
         } while (cursor);
       }).pipe(
         catchReadFailure((error) =>
-          Effect.suspend(() => {
-            setFind({ status: 'error', error: describeChatFailure(error) });
-            return store.publish();
-          }),
+          updateFind({ status: 'error', error: describeChatFailure(error) }),
         ),
       );
     /** Rereads Find pages from the fixed start to a match no longer retained in memory. */
@@ -130,7 +107,7 @@ export const makeTranscriptSearch = (
           );
         const pass = new TranscriptFindPass(target, query);
         while (cursor) {
-          const read = yield* store.read('findChatTranscript', { target, query, cursor });
+          const read = yield* chat.findChatTranscript({ target, query, cursor });
           const page = pass.checkPage(read, cursor, store.findBoundary);
           if (index < offset + page.matches.length) return page.matches[index - offset];
           offset += page.matches.length;
@@ -146,32 +123,27 @@ export const makeTranscriptSearch = (
         if (!match) match = yield* replayFind(previous.query, index);
         if (!match)
           return yield* Effect.fail(new TranscriptReadError({ problem: 'find-match-gone' }));
-        setFind({ active: match, activeIndex: index, error: null, revealing: true });
-        yield* store.publish();
+        yield* updateFind({ active: match, activeIndex: index, error: null, revealing: true });
         yield* showMatch(match);
       }).pipe(catchReadFailure(showFindError));
 
     return {
-      openFind: Effect.suspend(() => {
-        setFind({ open: true });
-        return store.publish();
-      }),
+      openFind: updateFind({ open: true }),
       closeFind: Effect.suspend(() => {
         forgetFind();
-        store.state = { ...store.state, find: makeEmptyFindState() };
-        return Effect.andThen(stopFind, store.publish());
+        return Effect.andThen(
+          stopFind,
+          store.update((state) => ({ ...state, find: makeEmptyFindState() })),
+        );
       }),
-      cancelFindReveal: Effect.suspend(() => {
-        const revealing = store.state.find.revealing;
-        setFind({ revealing: false });
-        return Effect.andThen(stopReveal, revealing ? store.publish() : Effect.void);
-      }),
+      cancelFindReveal: Effect.andThen(updateFind({ revealing: false }), stopReveal),
       findTranscript: (query) =>
         Effect.gen(function* () {
-          const gate = yield* Deferred.make<void>();
+          // The search it replaces ends before Find shows this one, so it can't write over it.
+          yield* stopFind;
           forgetFind();
-          store.state = {
-            ...store.state,
+          yield* store.update((state) => ({
+            ...state,
             find: {
               ...makeEmptyFindState(),
               open: true,
@@ -179,21 +151,17 @@ export const makeTranscriptSearch = (
               revealing: !!query,
               status: query ? 'searching' : 'idle',
             },
-          };
-          const fiber = forkSearch.fork(behindGate(gate, search(query)));
-          yield* admitThrough(gate, Effect.andThen(stopReveal, store.publish()));
-          yield* joinRead(fiber);
+          }));
+          yield* joinRead(yield* FiberHandle.run(searches, search(query)));
         }),
       moveFind: (direction) =>
         Effect.gen(function* () {
-          const gate = yield* Deferred.make<void>();
           const previous = store.state.find;
           if (!store.isCurrent() || !previous.query) return;
           const index = Math.max(0, (previous.activeIndex ?? -1) + (direction === 'next' ? 1 : -1));
           if (index >= previous.count) return;
-          const fiber = forkReveal.fork(behindGate(gate, moveToMatch(previous, index)));
-          yield* admitThrough(gate, interruptRevealReads);
-          yield* joinRead(fiber);
+          yield* interruptRevealReads;
+          yield* joinRead(yield* FiberHandle.run(reveals, moveToMatch(previous, index)));
         }),
       forgetFind,
       stopFind,

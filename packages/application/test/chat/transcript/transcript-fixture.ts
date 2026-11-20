@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { Effect, Exit, Scope } from 'effect';
+import { Effect, Exit, Scope, Stream, SubscriptionRef } from 'effect';
 import { TranscriptChangedError } from '@moonbase/contracts/chat-errors';
 import type {
   ChatEntry,
@@ -261,7 +261,8 @@ type Promised<T> = {
 
 /**
  * One open chat's transcript over `transcriptFixture`, as the selection opens it: in its own scope,
- * given the served snapshot, then restoring the remembered view. `state` is what it last published.
+ * given the served snapshot, then restoring the remembered view. `state` is what it publishes now;
+ * `publications` counts its changes as a subscriber sees them.
  */
 export async function transcriptHarness(
   t: { after: (close: () => Promise<void>) => void },
@@ -273,16 +274,12 @@ export async function transcriptHarness(
   const memory = new TranscriptViewMemory();
   let model!: Transcript,
     scope!: Scope.Closeable,
-    published: TranscriptState | undefined,
-    snapshot: ChatSnapshot | undefined,
     publications = 0;
   const harness = {
     ...fixture,
     fixture,
     limits,
     memory,
-    /** Runs on each publication, in the publishing fiber, after it is recorded. */
-    onPublish: undefined as ((state: TranscriptState) => Effect.Effect<void>) | undefined,
     /** The snapshot `getChat` serves, and the next opening accepts. */
     get snapshot() {
       return fixture.snapshot;
@@ -290,12 +287,12 @@ export async function transcriptHarness(
     set snapshot(value: ChatSnapshot) {
       fixture.snapshot = value;
     },
-    get state() {
-      return published!;
+    get state(): TranscriptState {
+      return SubscriptionRef.getUnsafe(model.state);
     },
-    /** The snapshot last published with the state. */
+    /** The snapshot published with the state. */
     get published() {
-      return snapshot;
+      return SubscriptionRef.getUnsafe(model.state).snapshot;
     },
     get publications() {
       return publications;
@@ -326,20 +323,21 @@ export async function transcriptHarness(
     scope = Scope.makeUnsafe();
     model = await Effect.runPromise(
       Scope.provide(scope)(
-        makeTranscript({
-          chat: fixture.port,
-          target: structuredClone(fixture.target),
-          backend: 'backend',
-          memory,
-          local: options.local ?? true,
-          limits,
-          publish: (state, next) =>
-            Effect.suspend(() => {
-              published = state;
-              if (next) snapshot = next;
-              publications++;
-              return harness.onPublish?.(state) ?? Effect.void;
-            }),
+        Effect.gen(function* () {
+          const transcript = yield* makeTranscript({
+            chat: fixture.port,
+            target: structuredClone(fixture.target),
+            backend: 'backend',
+            memory,
+            local: options.local ?? true,
+            limits,
+          });
+          yield* SubscriptionRef.changes(transcript.state).pipe(
+            Stream.drop(1),
+            Stream.runForEach(() => Effect.sync(() => publications++)),
+            Effect.forkScoped({ startImmediately: true }),
+          );
+          return transcript;
         }),
       ),
     );

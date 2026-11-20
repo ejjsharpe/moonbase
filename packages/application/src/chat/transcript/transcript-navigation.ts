@@ -1,9 +1,8 @@
 import { Effect } from 'effect';
 import type { ChatSnapshot } from '@moonbase/contracts/chat';
 import { checkTranscript, type TranscriptReadError } from './transcript-errors.ts';
-import { joinRead } from './transcript-gate.ts';
 import type { HistoryDirection } from './transcript-history.ts';
-import { historyJob, type TranscriptJobs } from './transcript-jobs.ts';
+import { historyJob, joinRead, type TranscriptJobs } from './transcript-jobs.ts';
 import { findRowEntryId, getEntryRowKey, isLiveRowKey } from './transcript-rows.ts';
 import type { TranscriptFailure, TranscriptStore } from './transcript-store.ts';
 import type { TranscriptView } from './transcript-view-memory.ts';
@@ -39,18 +38,11 @@ export function makeTranscriptNavigation(
     cancelFindReveal: Effect.Effect<void>;
   },
 ): TranscriptNavigation {
-  const { target } = store.dependencies;
+  const { chat, target } = store.dependencies;
   const { history } = store;
   let restorePending = true,
     restoringView = false;
-  /** Stops counting a running view restore as one; returns whether there was one. */
-  const leaveRestore = () => {
-    if (!restoringView) return false;
-    restoringView = false;
-    store.state = { ...store.state, loading: false };
-    return true;
-  };
-  const interruptHistory = jobs.interrupt((_read, key) => key === historyJob);
+  const interruptHistory = jobs.remove(historyJob);
 
   const readAround = (
     entryId: string,
@@ -60,7 +52,7 @@ export function makeTranscriptNavigation(
   ) =>
     Effect.gen(function* () {
       const dataset = history.dataset;
-      const page = yield* store.read('getChatHistoryAround', {
+      const page = yield* chat.getChatHistoryAround({
         target,
         entryId,
         ...(cursor ? { cursor } : {}),
@@ -69,20 +61,20 @@ export function makeTranscriptNavigation(
       // leaves the page nothing to extend.
       if (!replace && history.dataset !== dataset) return;
       history.checkAroundPage(page, target, { entryId, cursor, direction });
-      history.applyAroundPage(page, direction, replace, store.snapshot?.entries[0]?.id);
+      history.applyAroundPage(page, direction, replace, store.state.snapshot?.entries[0]?.id);
     });
   const readPage = (direction: HistoryDirection) =>
     Effect.gen(function* () {
       const read = history.findAroundRead(direction);
+      const cursor = store.state.snapshot?.olderCursor;
       if (read) yield* readAround(read.entryId, read.cursor, direction);
-      else if (direction === 'earlier' && store.snapshot?.olderCursor) {
+      else if (direction === 'earlier' && cursor) {
         // With no records to read around, history continues from the snapshot's older cursor.
-        const cursor = store.snapshot.olderCursor,
-          dataset = history.dataset;
-        const page = yield* store.read('getChatHistory', { target, cursor });
+        const dataset = history.dataset;
+        const page = yield* chat.getChatHistory({ target, cursor });
         if (history.dataset === dataset) history.applyOlderPage(page, cursor, target);
       }
-      yield* store.publish(direction);
+      yield* store.update(undefined, direction);
     });
   /**
    * Pages history, joining a page read that runs; a page replaces a view restore. The list pages
@@ -108,13 +100,19 @@ export function makeTranscriptNavigation(
         return view === current ? null : store.rememberView(view);
       });
       if (!captured) return;
-      const restoring = leaveRestore();
+      // Saving a view the reader scrolled to stops counting a running restore as one.
+      const restoring = restoringView;
+      restoringView = false;
       restorePending = false;
       // No anchor, or a live-edge row, follows once history reaches the newest entry.
       history.following =
         (!captured.anchor || isLiveRowKey(captured.anchor.key)) && !history.hasLater();
+      yield* store.update((state) => ({
+        ...state,
+        view: captured,
+        loading: restoring ? false : state.loading,
+      }));
       if (restoring) yield* interruptHistory;
-      yield* store.publish();
     });
   const setView = (view: TranscriptView) => updateView(() => view);
   /**
@@ -171,17 +169,17 @@ export function makeTranscriptNavigation(
         const expanded = store.state.view.expanded;
         if (!history.hasLater()) {
           history.following = true;
-          store.rememberView({ anchor: null, expanded });
-          return yield* store.publish('later');
+          const view = store.rememberView({ anchor: null, expanded });
+          return yield* store.update((state) => ({ ...state, view }), 'later');
         }
-        const previous = store.snapshot;
-        const snapshot = yield* store.read('getChat', { target });
+        const previous = store.state.snapshot;
+        const snapshot = yield* chat.getChat({ target });
         history.resetToLatest();
-        store.rememberView({ anchor: null, expanded });
+        const view = store.rememberView({ anchor: null, expanded });
+        yield* store.update((state) => ({ ...state, view }));
         // A watch received during this explicit read wins its coherent live boundary.
-        yield* options.acceptSnapshot(
-          store.snapshot !== previous && store.snapshot ? store.snapshot : snapshot,
-        );
+        const watched = store.state.snapshot;
+        yield* options.acceptSnapshot(watched !== previous && watched ? watched : snapshot);
       });
       yield* jobs.run(historyJob, work, { replace: true });
     }),
