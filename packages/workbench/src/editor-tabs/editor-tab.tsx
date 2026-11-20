@@ -1,4 +1,5 @@
 import { useRef } from 'react';
+import { useAtomValue } from '@effect/atom-react';
 import * as stylex from '@stylexjs/stylex';
 import { Button } from '@base-ui/react/button';
 import { Tabs } from '@base-ui/react/tabs';
@@ -10,7 +11,7 @@ import { workbench } from '@moonbase/ui/workbench';
 import { Icon } from '@moonbase/ui/icons';
 import { FileIcon } from '@moonbase/ui/file-icons';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import { fileKey, type EditorSnapshot, type CheckoutView } from '@moonbase/application/editor';
+import { fileKey, type CheckoutTabs } from '@moonbase/application/editor';
 import type { FocusReturn } from '../focus-return.ts';
 import { EditorTabMenu } from './editor-tab-menu.tsx';
 import type { EditorActions } from '../editor-actions.ts';
@@ -48,7 +49,6 @@ export function findTabHint(path: string, openFiles: readonly string[]) {
  */
 export function EditorTab({
   actions,
-  state,
   checkout,
   view,
   path,
@@ -60,9 +60,8 @@ export function EditorTab({
   withFocus,
 }: {
   actions: EditorActions;
-  state: EditorSnapshot;
   checkout: CheckoutTarget;
-  view: CheckoutView;
+  view: CheckoutTabs;
   path: string;
   git: boolean;
   tabMotion: Transition;
@@ -76,15 +75,16 @@ export function EditorTab({
   const captured = useRef<string[]>([]),
     keyboard = useRef(false);
   const file = { checkout, path },
-    current = state.buffers.find((buffer) => fileKey(buffer.target) === fileKey(file)),
-    dirty = current && current.text !== current.disk.text;
+    current = useAtomValue(actions.atoms.buffers.status(fileKey(file))),
+    dirty = current?.dirty;
+  const preserving = useAtomValue(actions.atoms.session.preserving);
   const fileView = view.fileViews.get(path) || 'file';
   const label = path.split('/').at(-1)!,
     hint = findTabHint(path, view.openFiles);
   const mark = fileTypeMark(path);
   return (
     <Menu.Root
-      disabled={state.preserving}
+      disabled={preserving}
       onOpenChange={(open) => {
         if (open) captured.current = [...view.openFiles];
         else keyboard.current = false;
@@ -137,7 +137,7 @@ export function EditorTab({
             [view.preview === path && 'Preview', dirty && 'Unsaved'].filter(Boolean).join(', ') ||
             undefined
           }
-          draggable={!state.preserving}
+          draggable={!preserving}
           onDragStart={(event) => {
             drag.start(path);
             event.dataTransfer.setData('text/plain', path);
@@ -176,7 +176,7 @@ export function EditorTab({
             (view.active === path || dirty) && workbench.visibleTabClose,
           )}
           aria-label={`Close ${path}`}
-          disabled={state.preserving}
+          disabled={preserving}
           // The editor's own work: closing unmounts this tab, and the close opens what is left.
           onClick={() => actions.start(closeFiles([path]))}>
           {dirty ? (
@@ -193,7 +193,7 @@ export function EditorTab({
       </Menu.Trigger>
       <EditorTabMenu
         actions={actions}
-        preserving={state.preserving}
+        preserving={preserving}
         file={file}
         buffer={current}
         openFiles={view.openFiles}

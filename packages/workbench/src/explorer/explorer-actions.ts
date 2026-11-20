@@ -111,7 +111,7 @@ export function listExplorerActions({
       icon: 'follow',
       checked: following,
       run: () => {
-        const follow = !(actions.getSnapshot().recovery.followActiveFile ?? true);
+        const follow = !actions.read(actions.atoms.views.followActiveFile);
         // Turning it on reveals each checkout's active file, followed or not.
         if (follow) for (const key of followed.keys()) followed.set(key, null);
         actions.setFollowActiveFile(follow);
@@ -123,8 +123,8 @@ export function listExplorerActions({
       checked: hideIgnoredFiles,
       run: () =>
         actions.tree(checkout, {
-          hideIgnoredFiles: !actions.getSnapshot().recovery.views.get(checkout.checkoutId)?.tree
-            .hideIgnoredFiles,
+          hideIgnoredFiles: !actions.read(actions.atoms.views.checkoutTree(checkout.checkoutId))
+            ?.hideIgnoredFiles,
         }),
     },
     'separator',

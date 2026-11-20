@@ -4,7 +4,8 @@ import { controls } from '@moonbase/ui/controls';
 import { gitStatusHues, gitStatusUI } from '@moonbase/ui/files';
 import { workbench } from '@moonbase/ui/workbench';
 import type { CheckoutTarget, FileTarget, FileView } from '@moonbase/contracts/workspace';
-import { checkoutKey, type EditorSnapshot } from '@moonbase/application/editor';
+import { useAtomValue } from '@effect/atom-react';
+import { checkoutKey } from '@moonbase/application/editor';
 import { gitStatusMarks } from '../files-tree/files-tree-status.ts';
 import type { EditorActions } from '../editor-actions.ts';
 import { useEditorTask } from '../use-editor-task.ts';
@@ -24,20 +25,18 @@ const changeAreas = [
  */
 export function ChangesView({
   actions,
-  state,
   checkout,
   target,
   mode,
 }: {
   actions: EditorActions;
-  state: EditorSnapshot;
   checkout: CheckoutTarget;
   /** The active file, and the view it shows in. */
   target: FileTarget | undefined;
   mode: FileView;
 }) {
   const run = useEditorTask(actions);
-  const git = state.git[checkoutKey(checkout)],
+  const git = useAtomValue(actions.atoms.discovery.git(checkoutKey(checkout))),
     changes = git?.changes ?? [];
   return (
     <>

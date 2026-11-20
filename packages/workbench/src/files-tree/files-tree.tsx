@@ -9,14 +9,11 @@ import {
   useRef,
   type Ref,
 } from 'react';
+import { useAtomValue } from '@effect/atom-react';
 import { controls } from '@moonbase/ui/controls';
 import { filesUI } from '@moonbase/ui/files';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import {
-  checkoutKey,
-  type EditorSnapshot,
-  type MutationAction,
-} from '@moonbase/application/editor';
+import { checkoutKey, type MutationAction } from '@moonbase/application/editor';
 import { listFileCommands } from './file-commands.ts';
 import type { FileClipboard } from './paste-plan.ts';
 import { isInDropRegion, type MoveRecord } from './files-tree-drop.ts';
@@ -43,7 +40,6 @@ import { useEditorTask } from '../use-editor-task.ts';
 export function FilesTree({
   ref,
   actions,
-  state,
   checkout,
   active,
   anchorReset,
@@ -69,7 +65,6 @@ export function FilesTree({
   /** The tree element, where focus returns to the tree. */
   ref?: Ref<HTMLDivElement>;
   actions: EditorActions;
-  state: EditorSnapshot;
   checkout: CheckoutTarget;
   active: string;
   anchorReset: number;
@@ -114,7 +109,14 @@ export function FilesTree({
   /** Pastes into `folder`, as ⌘V does into the focused one. */
   onPaste: (folder: string) => void;
 }) {
-  const tree = state.recovery.views.get(checkout.checkoutId)!.tree,
+  // The tree reads only its own checkout's pieces: typing in a buffer changes none of them.
+  const { atoms } = actions,
+    checkoutIdentity = checkoutKey(checkout);
+  const tree = useAtomValue(atoms.views.checkoutTree(checkout.checkoutId))!,
+    listings = useAtomValue(atoms.discovery.listings(checkoutIdentity)),
+    dirty = useAtomValue(atoms.buffers.dirtyPaths(checkoutIdentity)),
+    gitChanges = useAtomValue(atoms.discovery.git(checkoutIdentity))?.changes,
+    disposed = useAtomValue(atoms.session.disposed),
     treeElement = useRef<HTMLDivElement>(null),
     anchor = useRef<string | null>(null),
     id = useId();
@@ -127,23 +129,14 @@ export function FilesTree({
   const setAnchor = (path: string | null) => {
     anchor.current = path;
   };
-  const checkoutIdentity = checkoutKey(checkout),
-    expanded = new Set(tree.expanded),
+  const expanded = new Set(tree.expanded),
     selected = new Set(tree.selected),
-    dirtyPaths = new Set(
-      state.buffers
-        .filter(
-          (buffer) =>
-            checkoutKey(buffer.target.checkout) === checkoutIdentity &&
-            buffer.text !== buffer.disk.text,
-        )
-        .map((buffer) => buffer.target.path),
-    );
+    dirtyPaths = new Set(dirty);
   const focus = useTreeFocus({ actions, checkout, treeElement, visible });
   const { edit, rows, treeRows, editPath, startEdit, endEdit, commitEdit } = useTreeEdit({
     actions,
     checkout,
-    listings: state.listings,
+    listings,
     expanded,
     hideIgnored: !!tree.hideIgnoredFiles,
     setAnchor,
@@ -153,8 +146,7 @@ export function FilesTree({
     createRequest,
     onCreateRequestTaken,
   });
-  const gitChanges = state.git[checkoutIdentity]?.changes,
-    statuses = useMemo(() => rollUpGitStatus(gitChanges ?? []), [gitChanges]);
+  const statuses = useMemo(() => rollUpGitStatus(gitChanges ?? []), [gitChanges]);
   const rowId = (path: string) => `${id}-${encodeURIComponent(path)}`;
   const rowsById = new Map(rows.map((row) => [rowId(row.path), row]));
   /** The listed row an event happened in, or undefined for the tree's empty area. */
@@ -174,7 +166,7 @@ export function FilesTree({
     returnTreeFocus: focus.returnTreeFocus,
     visible,
     dialogOpen,
-    disposed: state.disposed,
+    disposed,
   });
   const target = useDropTarget({ actions, checkout, treeElement, expanded });
   const dropInputs = {
@@ -191,7 +183,7 @@ export function FilesTree({
   };
   const entryDrag = useEntryDrag({
     ...dropInputs,
-    listings: state.listings,
+    listings,
     selection: tree.selected,
     onMoved,
     closeMenu: menu.closeMenu,
@@ -200,12 +192,10 @@ export function FilesTree({
   const dropFolder = target.dropFolder;
   // Hiding ignored entries moves focus to the folder that still shows and drops hidden selections.
   const shownFocus = tree.hideIgnoredFiles
-      ? findShownPath(state.listings, checkoutIdentity, tree.focus)
+      ? findShownPath(listings, checkoutIdentity, tree.focus)
       : tree.focus,
     shownSelection = tree.hideIgnoredFiles
-      ? tree.selected.filter(
-          (path) => findShownPath(state.listings, checkoutIdentity, path) === path,
-        )
+      ? tree.selected.filter((path) => findShownPath(listings, checkoutIdentity, path) === path)
       : tree.selected,
     hiddenSelection =
       shownFocus !== tree.focus || shownSelection.length !== tree.selected.length
@@ -242,7 +232,7 @@ export function FilesTree({
   const commandContext = {
     actions,
     checkout,
-    listings: state.listings,
+    listings,
     canRequestMutation,
     requestMutation,
     startEdit,
@@ -300,18 +290,16 @@ export function FilesTree({
     },
     cancelCut: onCancelCut,
   };
-  const root = state.listings[JSON.stringify([checkoutIdentity, ''])];
+  const root = listings[JSON.stringify([checkoutIdentity, ''])];
   return (
     <>
-      {Object.entries(state.listings)
-        .filter(([key]) => key.startsWith(JSON.stringify([checkoutIdentity]).slice(0, -1) + ','))
-        .map(([key, listing]) =>
-          listing.error || listing.partial ? (
-            <p key={key} role="status" {...stylex.props(controls.status)}>
-              {listing.error ?? 'File listing is partial. Refresh to retry.'}
-            </p>
-          ) : null,
-        )}
+      {Object.entries(listings).map(([key, listing]) =>
+        listing.error || listing.partial ? (
+          <p key={key} role="status" {...stylex.props(controls.status)}>
+            {listing.error ?? 'File listing is partial. Refresh to retry.'}
+          </p>
+        ) : null,
+      )}
       <div
         ref={treeElement}
         role="tree"

@@ -40,6 +40,7 @@ Unsaved work:
 - The workspace's client recovery store is the only writer of recovery. The editor sends `openTab`, `closeTab`, `updateDraft` and `updateLayout` through `RecoveryOutbox`, in order; `RecoverySync.flush` succeeds only once everything before it is committed, and `recoveryReady` is false while an edit is unsent, a save unsettled or a file operation unacknowledged.
 - Close, Reload and Quit's Discard wait for their `closeTab`. Unsent text of a buffer the store replaced is kept in an `(unsaved)` file beside it, never dropped.
 - Once drafts can't be stored (a `DraftStorageError`, shown as the state's `storageError`), the chat's mutations and Quit stay blocked for its lifetime.
+- An update copies only the entries it touches (`DraftMap` in `src/editor/draft-map.ts`) and keeps the identity of everything it left as it was, so `makeEditorAtoms`' per-concept atoms (`views.checkoutTabs(id)`, `buffers.status(key)`, `discovery.listings(key)` and the rest) notify only views that read what changed. Typing changes a buffer's text, which only `buffers.state` follows. `snapshot` is the whole editor at once for headless readers and tests; views don't read it.
 - In memory, recovery views are `Map`s. Only the store's layout, which crosses IPC and disk, is plain objects, built with `Object.fromEntries` so a path such as `__proto__` stays a key.
 
 Never duplicate a Send or a file operation:

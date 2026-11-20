@@ -3,10 +3,11 @@ import * as monaco from 'monaco-editor';
 import * as stylex from '@stylexjs/stylex';
 import { workbench } from '@moonbase/ui/workbench';
 import { colors, syntax, type } from '@moonbase/ui/tokens.stylex';
-import { checkoutKey, fileKey, type EditorSnapshot } from '@moonbase/application/editor';
+import { useAtomValue } from '@effect/atom-react';
+import { fileKey } from '@moonbase/application/editor';
 import type { FileTarget, FileView } from '@moonbase/contracts/workspace';
 import type { EditorActions } from './editor-actions.ts';
-import { Effect } from 'effect';
+import { useMonacoModels } from './monaco-models.ts';
 
 /** A one-shot request to put the cursor on a match, made after opening its file. */
 export type EditorReveal = {
@@ -45,7 +46,6 @@ export type MonacoViewHandle = {
 export function MonacoView({
   ref,
   actions,
-  state,
   target,
   mode,
   visible,
@@ -54,7 +54,6 @@ export function MonacoView({
 }: {
   ref?: Ref<MonacoViewHandle>;
   actions: EditorActions;
-  state: EditorSnapshot;
   target?: FileTarget;
   mode: FileView;
   visible: boolean;
@@ -67,9 +66,6 @@ export function MonacoView({
   useLayoutEffect(() => {
     visibility.current = visible;
   }, [visible]);
-  const models = useRef(
-    new Map<string, { model: monaco.editor.ITextModel; listener: monaco.IDisposable }>(),
-  );
   const mounted = useRef<
     monaco.editor.IStandaloneCodeEditor | monaco.editor.IStandaloneDiffEditor | null
   >(null);
@@ -86,10 +82,13 @@ export function MonacoView({
   );
   const releaseView = useRef<(() => void) | null>(null),
     revealed = useRef(0);
-  const key = target ? fileKey(target) : '',
-    buffer = state.buffers.find((buffer) => fileKey(buffer.target) === key);
-  const comparison = state.comparisons[key];
-  const hasBuffer = !!buffer;
+  const { atoms } = actions;
+  const key = target ? fileKey(target) : '';
+  // The buffer's text reaches its model outside render: this view follows only whether it has one.
+  const hasBuffer = !!useAtomValue(atoms.buffers.status(key)),
+    comparison = useAtomValue(atoms.discovery.comparison(key)),
+    disposed = useAtomValue(atoms.session.disposed),
+    preserving = useAtomValue(atoms.session.preserving);
   useLayoutEffect(() => {
     monaco.editor.defineTheme('moonbase', {
       base: 'vs-dark',
@@ -127,85 +126,34 @@ export function MonacoView({
     });
     // Monaco measures glyphs once; measure again after the bundled font finishes loading.
     void document.fonts.ready.then(() => monaco.editor.remeasureFonts());
-    const ownedModels = models.current;
     return () => {
       releaseView.current?.();
       releaseView.current = null;
-      for (const item of ownedModels.values()) {
-        item.listener.dispose();
-        item.model.dispose();
-      }
-      ownedModels.clear();
     };
   }, [actions]);
-  useLayoutEffect(() => {
-    for (const buffer of state.disposed ? [] : state.buffers) {
-      const key = fileKey(buffer.target);
-      let entry = models.current.get(key);
-      if (!entry) {
-        const model = monaco.editor.createModel(
-          buffer.text,
-          undefined,
-          monaco.Uri.from({
-            scheme: 'moonbase',
-            authority: actions.clientId,
-            path:
-              '/' +
-              encodeURIComponent(checkoutKey(buffer.target.checkout)) +
-              '/' +
-              buffer.target.path,
-          }),
-        );
-        const listener = model.onDidChangeContent(() => {
-          const current = actions.buffer(buffer.target),
-            text = model.getValue(undefined, true);
-          if (current && current.text !== text)
-            actions.start(
-              actions.edit(buffer.target, text).pipe(
-                Effect.tapError(() =>
-                  Effect.sync(() => {
-                    // The refused text goes; the buffer's stays.
-                    const kept = actions.buffer(buffer.target);
-                    if (kept && model.getValue(undefined, true) !== kept.text)
-                      model.setValue(kept.text);
-                  }),
-                ),
-              ),
-            );
-        });
-        entry = { model, listener };
-        models.current.set(key, entry);
-      }
-      if (entry.model.getValue(undefined, true) !== buffer.text) entry.model.setValue(buffer.text);
+  // A model going away takes the view showing it first.
+  const models = useMonacoModels(actions, (model) => {
+    const instance = mounted.current;
+    if (
+      instance &&
+      ('getModifiedEditor' in instance
+        ? instance.getModifiedEditor().getModel()
+        : instance.getModel()) === model
+    ) {
+      releaseView.current?.();
+      releaseView.current = null;
     }
-    for (const [key, item] of models.current)
-      if (state.disposed || !state.buffers.some((buffer) => fileKey(buffer.target) === key)) {
-        const instance = mounted.current;
-        if (
-          instance &&
-          ('getModifiedEditor' in instance
-            ? instance.getModifiedEditor().getModel()
-            : instance.getModel()) === item.model
-        ) {
-          releaseView.current?.();
-          releaseView.current = null;
-        }
-        item.listener.dispose();
-        item.model.dispose();
-        models.current.delete(key);
-      }
   });
   useLayoutEffect(() => {
     const element = container.current;
-    if (!element || !target || state.disposed || (!buffer && !comparison)) return;
+    if (!element || !target || disposed || (!hasBuffer && !comparison)) return;
     const working = models.current.get(key)?.model;
     const track = (
       editor: monaco.editor.ICodeEditor,
       selected: FileView | `${FileView}:original`,
     ) => {
       const position = actions
-        .getSnapshot()
-        .recovery.views.get(target.checkout.checkoutId)
+        .read(atoms.views.checkoutView(target.checkout.checkoutId))
         ?.positions.get(target.path)?.[selected];
       if (position) {
         editor.setPosition({ lineNumber: position.line, column: position.column });
@@ -244,7 +192,7 @@ export function MonacoView({
       minimap: { enabled: false },
       padding: { top: 16, bottom: 16 },
       editContext: false,
-      readOnly: !working || actions.getSnapshot().preserving,
+      readOnly: !working || actions.read(atoms.session.preserving),
       ariaLabel: target.path + ' editor',
     };
     let release: () => void;
@@ -300,13 +248,12 @@ export function MonacoView({
     releaseView.current = cleanup;
     return cleanup;
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- Recreate the view only for identity/mode/baseline changes; buffer edits sync through the existing model above.
-  }, [actions, key, mode, hasBuffer, comparison?.original, comparison?.title, state.disposed]);
+  }, [actions, key, mode, hasBuffer, comparison?.original, comparison?.title, disposed]);
   useLayoutEffect(() => {
     const editor = mounted.current;
     if (!editor || !target) return;
     const positions = actions
-      .getSnapshot()
-      .recovery.views.get(target.checkout.checkoutId)
+      .read(atoms.views.checkoutView(target.checkout.checkoutId))
       ?.positions.get(target.path);
     const modified = positions?.[mode],
       original = positions?.[`${mode}:original`];
@@ -322,20 +269,11 @@ export function MonacoView({
       restoreScroll(editor.getModifiedEditor(), modified);
     } else restoreScroll(editor, modified);
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- Restore visibility on the same view identities as creation; typing must not relayout the editor.
-  }, [
-    visible,
-    actions,
-    key,
-    mode,
-    hasBuffer,
-    comparison?.original,
-    comparison?.title,
-    state.disposed,
-  ]);
+  }, [visible, actions, key, mode, hasBuffer, comparison?.original, comparison?.title, disposed]);
   useLayoutEffect(() => {
     const editor = mounted.current;
     if (editor) {
-      const readOnly = state.preserving || !hasBuffer;
+      const readOnly = preserving || !hasBuffer;
       if ('getModifiedEditor' in editor) {
         const diffOptions: monaco.editor.IDiffEditorConstructionOptions = {
           readOnly,
@@ -345,7 +283,7 @@ export function MonacoView({
         editor.updateOptions(diffOptions);
       } else editor.updateOptions({ readOnly });
     }
-  }, [visible, state.preserving, hasBuffer, comparison?.title, target?.path]);
+  }, [visible, preserving, hasBuffer, comparison?.title, target?.path]);
   // After the visibility restore above, so a reveal made while hidden wins over the saved scroll.
   useLayoutEffect(() => {
     const editor = mounted.current;

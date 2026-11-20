@@ -2,11 +2,11 @@ import * as stylex from '@stylexjs/stylex';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@base-ui/react/button';
 import { Effect } from 'effect';
+import { useAtomValue } from '@effect/atom-react';
 import { Dialog } from '@base-ui/react/dialog';
 import { controls } from '@moonbase/ui/controls';
 import {
   mutationUnavailable,
-  type EditorSnapshot,
   type MutationAction,
   type MutationRunResult,
 } from '@moonbase/application/editor';
@@ -37,16 +37,12 @@ export type RunMutation = (
  * dialogs being open. `confirmation` renders the editor's replace prompt. Unmounting declines a
  * pending prompt.
  */
-export function useMutationRunner(
-  actions: EditorActions,
-  state: EditorSnapshot,
-  dialogOpen: () => boolean,
-) {
+export function useMutationRunner(actions: EditorActions, dialogOpen: () => boolean) {
   // Where the running mutation's replace prompt returns focus as it closes.
   const [promptFocus, setPromptFocus] = useState<{ finalFocus?: () => HTMLElement | false }>({});
   useEffect(
     () => () => {
-      const prompt = actions.getSnapshot().replacePrompt;
+      const prompt = actions.read(actions.atoms.replacePrompt);
       if (prompt) actions.answerMutation(prompt.id, false);
     },
     [actions],
@@ -75,7 +71,7 @@ export function useMutationRunner(
         return finish(yield* actions.mutate(action, { destination }));
       }),
     );
-  const prompt = state.replacePrompt;
+  const prompt = useAtomValue(actions.atoms.replacePrompt);
   const confirmation = prompt && (
     <ReplacePrompt
       key={prompt.id}

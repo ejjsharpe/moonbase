@@ -4,7 +4,8 @@ import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import { space } from '@moonbase/ui/tokens.stylex';
 import type { FileTarget } from '@moonbase/contracts/workspace';
-import { fileKey, type EditorSnapshot } from '@moonbase/application/editor';
+import { useAtomValue } from '@effect/atom-react';
+import { fileKey, type BufferStatus } from '@moonbase/application/editor';
 import type { EditorActions } from '../editor-actions.ts';
 import { useEditorTask } from '../use-editor-task.ts';
 
@@ -14,16 +15,17 @@ import { useEditorTask } from '../use-editor-task.ts';
  */
 export function FileNotices({
   actions,
-  state,
   target,
   buffer,
 }: {
   actions: EditorActions;
-  state: EditorSnapshot;
   target: FileTarget;
-  buffer: EditorSnapshot['buffers'][number] | undefined;
+  /** How the file's buffer stands, or undefined while it has none. */
+  buffer: BufferStatus | undefined;
 }) {
   const run = useEditorTask(actions);
+  const preserving = useAtomValue(actions.atoms.session.preserving),
+    comparison = useAtomValue(actions.atoms.discovery.comparison(fileKey(target)));
   return (
     <>
       {buffer?.pendingSave && !buffer.saving && (
@@ -31,7 +33,7 @@ export function FileNotices({
           Save result unconfirmed. Your edits are retained.{' '}
           <Button
             {...stylex.props(controls.button)}
-            disabled={state.preserving}
+            disabled={preserving}
             onClick={() => run(actions.save(target))}>
             Retry Save
           </Button>
@@ -62,7 +64,7 @@ export function FileNotices({
           </div>
         </div>
       )}
-      {!buffer && !state.comparisons[fileKey(target)] && (
+      {!buffer && !comparison && (
         <p role="status" {...stylex.props(controls.alert)}>
           File unavailable; retained tab and recovery references remain.{' '}
           <Button {...stylex.props(controls.button)} onClick={() => run(actions.open(target))}>

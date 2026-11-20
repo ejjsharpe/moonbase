@@ -5,7 +5,6 @@ import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
   checkoutKey,
   mutationUnavailable,
-  type EditorSnapshot,
   type MutationAction,
 } from '@moonbase/application/editor';
 import { useFileClipboard } from './files-tree/use-file-clipboard.ts';
@@ -27,12 +26,10 @@ export type MutationDialog = {
  */
 export function useWorkbenchMutations({
   actions,
-  state,
   openCheckouts,
   pickerOpen,
 }: {
   actions: EditorActions;
-  state: EditorSnapshot;
   openCheckouts: readonly CheckoutTarget[];
   pickerOpen: boolean;
 }) {
@@ -47,7 +44,7 @@ export function useWorkbenchMutations({
   const canRequestMutation = (action: MutationAction) =>
     !isDialogOpen() && actions.admitsMutation(action);
   // Applies the workbench's part of the gate and leaves the rest to the editor's gate.
-  const runner = useMutationRunner(actions, state, isDialogOpen);
+  const runner = useMutationRunner(actions, isDialogOpen);
   // Moves and renames made from the tree, one per checkout, for Undo; any other file operation
   // from the tree or a dialog forgets the checkout's.
   const moveUndo = useMoveUndo(actions, runner.runMutation, openCheckouts);
@@ -72,14 +69,19 @@ export function useWorkbenchMutations({
   /** Opens the Import dialog for approved file references, into an open checkout. */
   function importFiles(checkout: CheckoutTarget, references: string[]) {
     if (!references.length) return;
-    const snapshot = actions.getSnapshot();
-    if (snapshot.preserving || isDialogOpen() || snapshot.closePrompt) {
+    const { atoms } = actions;
+    if (
+      actions.read(atoms.session.preserving) ||
+      isDialogOpen() ||
+      actions.read(atoms.closePrompt)
+    ) {
       actions.report('Finish the current editor dialog or preservation before importing files.');
       return;
     }
+    const known = actions.read(atoms.views.checkouts);
     if (
-      !snapshot.recovery.openCheckoutIds.includes(checkout.checkoutId) ||
-      !snapshot.recovery.checkouts.some((item) => checkoutKey(item) === checkoutKey(checkout))
+      !known.openCheckoutIds.includes(checkout.checkoutId) ||
+      !known.checkouts.some((item) => checkoutKey(item) === checkoutKey(checkout))
     ) {
       actions.report('Open the exact import checkout before importing files.');
       return;

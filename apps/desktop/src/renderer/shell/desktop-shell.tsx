@@ -92,7 +92,11 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
   const application = useDesktopApplication(desktopApplication),
     controller = useEditorActions(editor),
     { lifecycle, chat, composer } = application,
-    state = useAtomValue(editor.atoms.snapshot);
+    // The window reads only the editor pieces it shows, so typing in a file re-renders none of it.
+    known = useAtomValue(editor.atoms.views.checkouts),
+    preserving = useAtomValue(editor.atoms.session.preserving),
+    recoveryFailed = useAtomValue(editor.atoms.recoveryFailed),
+    editorErrors = useAtomValue(editor.atoms.alerts);
   const worktrees = Context.get(editor.context, EditorWorktrees);
   const registry = useContext(RegistryContext);
   const [destination, setDestination] = useState<'project' | 'chat'>('chat');
@@ -114,14 +118,15 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
     selected,
     folderProjects,
     recent: recentCheckouts,
-  } = readShellCheckouts(state?.recovery);
+  } = readShellCheckouts(known);
   const chatTab = !!chat || !['closed', 'cleanup-blocked'].includes(lifecycle.chat.state);
   const projectValue = selected ? tabValue({ kind: 'project', checkout: selected }) : 'empty';
   const view = (destination === 'chat' || !selected) && chatTab ? 'chat' : projectValue;
   const { panels, focus, focusView, restoreFocus } = useViewFocus(view);
   // One ChatView at a time: in the project dock while it shows, otherwise in Agents.
   const dockVisible = view !== 'chat' && !!selected && !!chat && dockOpen;
-  const activePath = selected && state && state.recovery.views.get(selected.checkoutId)?.active;
+  const selectedTabs = useAtomValue(editor.atoms.views.checkoutTabs(selected?.checkoutId ?? ''));
+  const activePath = selected && selectedTabs?.active;
   const projectCheckouts = selected
     ? openCheckouts.filter(
         (checkout) =>
@@ -359,12 +364,12 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
       />
       <Rail
         checkouts={openCheckouts}
-        selectedCheckoutId={state?.recovery.selectedCheckoutId}
+        selectedCheckoutId={known.selectedCheckoutId}
         value={view}
         chatVisible={chatTab}
         chatOpen={!!chat}
         disabled={lifecycle.phase !== 'live'}
-        preserving={!!state?.preserving}
+        preserving={preserving}
         openCheckout={native.chooseCheckout ? () => run(openCheckout) : undefined}
         recentCheckouts={recentCheckouts}
         reopenCheckout={(checkout) => {
@@ -403,9 +408,9 @@ export const DesktopShell = forwardRef<DesktopShellHandle, DesktopShellProps>(fu
         lifecycle={lifecycle}
         closing={closing}
         agents={view === 'chat'}
-        recoveryFailed={!!state?.recoveryFailed}
-        preserving={!!state?.preserving}
-        editorError={view === 'chat' && !selected ? state?.errors.at(-1) : undefined}
+        recoveryFailed={recoveryFailed}
+        preserving={preserving}
+        editorError={view === 'chat' && !selected ? editorErrors.at(-1) : undefined}
         clearEditorErrors={() => controller.clearErrors()}
       />
       {controller ? (

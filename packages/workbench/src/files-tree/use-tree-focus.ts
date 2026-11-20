@@ -39,10 +39,9 @@ export function useTreeFocus({
   /** The tree, when it is shown for an open checkout and can take focus back. */
   function returnTreeFocus() {
     const element = treeElement.current,
-      snapshot = actions.getSnapshot(),
-      recovery = snapshot.recovery;
+      recovery = actions.read(actions.atoms.views.checkouts);
     return visibility.current &&
-      !snapshot.disposed &&
+      !actions.read(actions.atoms.session.disposed) &&
       element?.isConnected &&
       element.getClientRects().length &&
       recovery.openCheckoutIds.includes(checkout.checkoutId) &&

@@ -7,12 +7,15 @@ import {
   emptyEditorRecovery,
   type CheckoutView,
 } from '../recovery/recovery-layout.ts';
-import { isCheckoutListed, type ViewsState } from './views.ts';
+import { draftViews, isCheckoutListed, settleViews, type ViewsState } from './views.ts';
 
 export type EditorViewsShape = {
   readonly state: SubscriptionRef.SubscriptionRef<ViewsState>;
   readonly get: Effect.Effect<ViewsState>;
-  /** Changes a copy of the views: `f` may mutate the copy it is given, which then replaces them. */
+  /**
+   * Changes a draft of the views, which then replaces them: `f` may mutate each checkout view it
+   * reads, and replaces the recovery's lists rather than changing them in place.
+   */
   readonly modify: <A>(f: (draft: ViewsState) => A) => Effect.Effect<A>;
   /**
    * The checkout's view, once the editor is ready and knows this exact checkout (open, unless
@@ -38,9 +41,9 @@ export class EditorViews extends Context.Service<EditorViews, EditorViewsShape>(
       });
       const modify = <A>(f: (draft: ViewsState) => A) =>
         SubscriptionRef.modify(state, (current) => {
-          const draft = structuredClone(current) as ViewsState;
+          const draft = draftViews(current);
           const result = f(draft);
-          return [result, draft] as const;
+          return [result, settleViews(current, draft)] as const;
         });
       return {
         state,

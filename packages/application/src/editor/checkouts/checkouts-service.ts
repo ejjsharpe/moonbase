@@ -142,11 +142,12 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
           } else if (collision) return yield* new EditorError({ reason: 'checkout-identity' });
           const reopening = yield* views.modify(({ recovery }) => {
             if (!isCheckoutListed(recovery, target)) {
-              recovery.checkouts.push(target);
+              recovery.checkouts = [...recovery.checkouts, target];
               recovery.views.set(target.checkoutId, emptyCheckoutView());
             }
             const reopening = !recovery.openCheckoutIds.includes(target.checkoutId);
-            if (reopening) recovery.openCheckoutIds.push(target.checkoutId);
+            if (reopening)
+              recovery.openCheckoutIds = [...recovery.openCheckoutIds, target.checkoutId];
             return reopening;
           });
           if (reopening) yield* tree.observe(target);

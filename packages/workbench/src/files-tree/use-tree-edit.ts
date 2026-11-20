@@ -110,7 +110,7 @@ export function useTreeEdit({
   }, [sourceGone]);
   /** Starts typing a name: expands a folder created in, and selects an entry renamed. */
   function startEdit(kind: TreeEditKind, path: string) {
-    const current = actions.getSnapshot().recovery.views.get(checkout.checkoutId)?.tree;
+    const current = actions.read(actions.atoms.views.checkoutTree(checkout.checkoutId));
     if (!current) return;
     if (kind === 'create-file' || kind === 'create-directory') {
       const opening = listFoldersToExpand(path).filter(
@@ -122,7 +122,7 @@ export function useTreeEdit({
       setAnchor(path);
       actions.tree(checkout, { focus: path, selected: [path] });
     }
-    const started = actions.getSnapshot().recovery.views.get(checkout.checkoutId)!.tree;
+    const started = actions.read(actions.atoms.views.checkoutTree(checkout.checkoutId))!;
     setEdit({
       kind,
       path,
@@ -138,7 +138,7 @@ export function useTreeEdit({
    */
   function endEdit(ended: TreeEdit, focusPath: string | undefined, focusTree: boolean) {
     setEdit((current) => (current?.id === ended.id ? null : current));
-    const now = actions.getSnapshot().recovery.views.get(checkout.checkoutId)?.tree;
+    const now = actions.read(actions.atoms.views.checkoutTree(checkout.checkoutId));
     const untouched =
       !!now &&
       now.focus === ended.focus &&

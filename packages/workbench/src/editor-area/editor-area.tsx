@@ -3,7 +3,8 @@ import * as stylex from '@stylexjs/stylex';
 import { Tabs } from '@base-ui/react/tabs';
 import { workbench } from '@moonbase/ui/workbench';
 import type { CheckoutTarget, FileTarget, FileView } from '@moonbase/contracts/workspace';
-import type { EditorSnapshot, CheckoutView } from '@moonbase/application/editor';
+import { useAtomValue } from '@effect/atom-react';
+import { fileKey, type CheckoutTabs } from '@moonbase/application/editor';
 import { CheatSheet, editorShortcuts } from '../cheat-sheet.tsx';
 import { EditorTabs, type EditorTabsHandle } from '../editor-tabs/editor-tabs.tsx';
 import type { FocusReturn } from '../focus-return.ts';
@@ -22,11 +23,9 @@ import type { WorkbenchServices } from '../workbench-editor.ts';
  */
 export function EditorArea({
   actions,
-  state,
   checkout,
   view,
   target,
-  buffer,
   mode,
   git,
   visible,
@@ -40,11 +39,9 @@ export function EditorArea({
   withFocus,
 }: {
   actions: EditorActions;
-  state: EditorSnapshot;
   checkout: CheckoutTarget;
-  view: CheckoutView;
+  view: CheckoutTabs;
   target: FileTarget | undefined;
-  buffer: EditorSnapshot['buffers'][number] | undefined;
   mode: FileView;
   git: boolean;
   visible: boolean;
@@ -58,6 +55,8 @@ export function EditorArea({
   withFocus: FocusReturn['withFocus'];
 }) {
   const run = useEditorTask(actions);
+  // How the active file's buffer stands, which changes with its status, not as one types.
+  const buffer = useAtomValue(actions.atoms.buffers.status(target ? fileKey(target) : ''));
   return (
     <section
       data-title-anchor=""
@@ -70,7 +69,6 @@ export function EditorArea({
         <EditorTabs
           ref={tabsRef}
           actions={actions}
-          state={state}
           checkout={checkout}
           view={view}
           git={git}
@@ -79,21 +77,16 @@ export function EditorArea({
         />
         <div {...stylex.props(workbench.pane, workbench.canvasPane)}>
           {showBreadcrumbs && target && (
-            <Breadcrumbs
-              checkout={checkout}
-              path={target.path}
-              unsaved={!!buffer && buffer.text !== buffer.disk.text}
-            />
+            <Breadcrumbs checkout={checkout} path={target.path} unsaved={!!buffer?.dirty} />
           )}
           {target ? (
-            <FileNotices actions={actions} state={state} target={target} buffer={buffer} />
+            <FileNotices actions={actions} target={target} buffer={buffer} />
           ) : (
             <CheatSheet shortcuts={[...editorShortcuts, ...shortcuts]} />
           )}
           <MonacoView
             ref={monacoRef}
             actions={actions}
-            state={state}
             target={target}
             mode={mode}
             visible={visible}
