@@ -3,6 +3,7 @@ import * as Atom from 'effect/reactivity/Atom';
 import { followRef } from '../../follow-ref.ts';
 import type { CheckoutView } from '../recovery/recovery-layout.ts';
 import type { EditorViewsShape } from './views-service.ts';
+import { isFollowingActiveFile } from './views.ts';
 
 /** A checkout's tabs: what its tab strip shows, without the positions that move as one types. */
 export type CheckoutTabs = Pick<CheckoutView, 'openFiles' | 'active' | 'preview' | 'fileViews'>;
@@ -28,7 +29,7 @@ export function makeViewsAtoms(views: EditorViewsShape) {
       return { checkouts, openCheckoutIds, selectedCheckoutId };
     }).pipe(Atom.withEquality(Equal.equals)),
     sidebarWidth: Atom.readable((get) => get(recovery).sidebarWidth),
-    followActiveFile: Atom.readable((get) => get(recovery).followActiveFile ?? true),
+    followActiveFile: Atom.readable((get) => isFollowingActiveFile(get(recovery))),
     checkoutView,
     /** One checkout's tabs, by its ID. */
     checkoutTabs: Atom.family((checkoutId: string) =>

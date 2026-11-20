@@ -11,7 +11,7 @@ import {
 } from '@moonbase/application/editor';
 import { checkout, fixture, target } from './editor-fixture.ts';
 
-test('typing in a buffer notifies none of the atoms the files tree, the tabs or the workbench read', async () => {
+test('typing in a buffer notifies none of the atoms the files tree, the tabs, the workbench or the window read', async () => {
   const f = await fixture('atoms-typing');
   const registry = AtomRegistry.make();
   const atoms = makeEditorAtoms(f.editor.context as Context.Context<EditorServices>);
@@ -19,7 +19,7 @@ test('typing in a buffer notifies none of the atoms the files tree, the tabs or 
   try {
     await f.editor.open(typed, { intent: 'keep' });
     await f.editor.open(target('b.ts'), { intent: 'keep' });
-    // The pieces the workbench's root, its files tree and its tab strip subscribe to.
+    // The pieces the workbench's root, its files tree, its tab strip and the window subscribe to.
     const read: Record<string, Atom.Atom<unknown>> = {
       checkouts: atoms.views.checkouts,
       tabs: atoms.views.checkoutTabs(checkout.checkoutId),
@@ -34,7 +34,13 @@ test('typing in a buffer notifies none of the atoms the files tree, the tabs or 
       ready: atoms.session.ready,
       preserving: atoms.session.preserving,
       closePrompt: atoms.closePrompt,
+      replacePrompt: atoms.replacePrompt,
       mutating: atoms.mutating,
+      operations: atoms.operations,
+      // Derived from the outbox, which every keystroke changes.
+      recoveryFailed: atoms.recoveryFailed,
+      alerts: atoms.alerts,
+      worktrees: atoms.worktrees,
     };
     const notified = new Map<string, number>();
     // Read once, as a view reads what it renders, so each change after reaches its listener.
@@ -66,6 +72,11 @@ test('typing in a buffer notifies none of the atoms the files tree, the tabs or 
     await type('const a = 1;xyz', 16);
     await f.editor.flush();
     assert.deepEqual(Object.fromEntries(notified), {});
+    // An edit that leaves the text as it was leaves the buffers as they were.
+    const buffers = registry.get(atoms.buffers.state);
+    f.editor.edit(typed, 'const a = 1;xyz');
+    await f.editor.flush();
+    assert.equal(registry.get(atoms.buffers.state), buffers);
   } finally {
     registry.dispose();
     await f.dispose();

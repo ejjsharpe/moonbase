@@ -19,6 +19,7 @@ import { makeDiscoveryAtoms } from './discovery/discovery-atoms.ts';
 import { makeLookupAtoms } from './lookup/lookup-atoms.ts';
 import { makeTextSearchAtoms } from './text-search/text-search-atoms.ts';
 import { listUnsettled } from './operations/operations.ts';
+import { hasEditFailed } from './recovery/recovery-outbox.ts';
 import { toEditorSnapshot } from './editor-snapshot.ts';
 import type { EditorServices } from './editor-layer.ts';
 import { followChanges, followRef } from '../follow-ref.ts';
@@ -50,7 +51,7 @@ export function makeEditorAtoms(context: Context.Context<EditorServices>) {
     discovery,
     alerts,
     /** The last recovery edit failed; edits made since are not kept until a flush succeeds. */
-    recoveryFailed: Atom.readable((get) => get(outbox).failure !== undefined),
+    recoveryFailed: Atom.readable((get) => hasEditFailed(get(outbox))),
     /** File operations whose outcome needs resolving. */
     operations: Atom.readable((get) => listUnsettled(get(operations))).pipe(
       Atom.withEquality(Equal.equals),

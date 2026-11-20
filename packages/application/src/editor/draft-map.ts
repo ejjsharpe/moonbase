@@ -1,23 +1,3 @@
-import { Equal } from 'effect';
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && Object.getPrototypeOf(value) === Object.prototype;
-
-/**
- * `next`, sharing what equals `previous`: `previous` itself when the two are equal, else, for a
- * plain object, each field that is. A change that copied a value keeps the identity of what it
- * left as it was, so atoms reading that part notify no one.
- */
-export function shareEqual<A>(previous: A, next: A): A {
-  if (Equal.equals(previous, next)) return previous;
-  if (!isPlainObject(previous) || !isPlainObject(next)) return next;
-  const shared: Record<string, unknown> = { ...next };
-  for (const key of Object.keys(next))
-    if (Object.prototype.hasOwnProperty.call(previous, key))
-      shared[key] = shareEqual(previous[key], next[key]);
-  return shared as A;
-}
-
 /**
  * A map a change may mutate, whose entries are copied the first time the change reads them, so a
  * change copies only the entries it touches; the rest stay the state's own.
@@ -25,11 +5,21 @@ export function shareEqual<A>(previous: A, next: A): A {
 export class DraftMap<K, V> extends Map<K, V> {
   readonly #previous: ReadonlyMap<K, V>;
   readonly #copy: (value: V) => V;
+  readonly #keep: (previous: V, next: V) => V;
   readonly #touched = new Set<K>();
-  constructor(previous: ReadonlyMap<K, V>, copy: (value: V) => V) {
+  /**
+   * `copy` drafts an entry the first time a change reads it; `keep` settles a touched entry,
+   * returning `previous` when the change left it as it was.
+   */
+  constructor(
+    previous: ReadonlyMap<K, V>,
+    copy: (value: V) => V,
+    keep: (previous: V, next: V) => V,
+  ) {
     super();
     this.#previous = previous;
     this.#copy = copy;
+    this.#keep = keep;
     for (const [key, value] of previous) Map.prototype.set.call(this, key, value);
   }
   override get(key: K) {
@@ -68,7 +58,7 @@ export class DraftMap<K, V> extends Map<K, V> {
     for (const [key, value] of Map.prototype.entries.call(this) as MapIterator<[K, V]>) {
       const shared =
         this.#touched.has(key) && this.#previous.has(key)
-          ? shareEqual(this.#previous.get(key)!, value)
+          ? this.#keep(this.#previous.get(key)!, value)
           : value;
       settled.set(key, shared);
       const [previousKey, previousValue] = previous[index++] ?? [];

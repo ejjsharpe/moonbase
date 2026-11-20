@@ -39,9 +39,11 @@ export const maximumResyncs = 3;
 export const isStructural = (edit: RecoveryEditRequest, bufferId: string) =>
   (edit.kind === 'openTab' || edit.kind === 'closeTab') && edit.bufferId === bufferId;
 
+/** Whether the last edit failed, so edits made since are not kept until a flush succeeds. */
+export const hasEditFailed = (state: OutboxState) => state.failure !== undefined;
 /** Whether every edit made so far has committed. */
 export const isOutboxIdle = (state: OutboxState) =>
-  !state.queue.length && !state.sending && state.failure === undefined && !state.unsettled;
+  !state.queue.length && !state.sending && !hasEditFailed(state) && !state.unsettled;
 
 const pending = (state: OutboxState) => [state.sending, ...state.queue];
 /** Whether an edit not yet committed opens or closes the buffer. */

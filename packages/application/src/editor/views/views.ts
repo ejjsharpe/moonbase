@@ -1,6 +1,7 @@
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import type { EditorRecovery } from '../recovery/recovery-layout.ts';
 import { DraftMap, settleMap } from '../draft-map.ts';
+import { shareEqual } from '../share-equal.ts';
 import { sameCheckout, type ClosedAction } from '../recovery/recovery-references.ts';
 
 /** The editor's tabs and views: its recovery layout, and the closes Reopen can undo. */
@@ -8,14 +9,14 @@ export type ViewsState = { recovery: EditorRecovery; closed: readonly ClosedActi
 
 /**
  * A draft of the views that a change may mutate, copying only what it touches: each checkout view
- * it reads is a copy. The recovery's other fields are the state's own, so a change replaces a list
+ * it reads is a deep copy, settled by value. The recovery's other fields are the state's own, so a change replaces a list
  * (such as `checkouts`) rather than changing it in place.
  */
 export const draftViews = (state: ViewsState): ViewsState => ({
   ...state,
   recovery: {
     ...state.recovery,
-    views: new DraftMap(state.recovery.views, (view) => structuredClone(view)),
+    views: new DraftMap(state.recovery.views, (view) => structuredClone(view), shareEqual),
   },
 });
 
@@ -29,6 +30,10 @@ export function settleViews(previous: ViewsState, draft: ViewsState): ViewsState
   if (kept && draft.closed === previous.closed) return previous;
   return { ...draft, recovery: kept ? previous.recovery : recovery };
 }
+
+/** Whether the files tree reveals the active file; it does unless turned off. */
+export const isFollowingActiveFile = (recovery: EditorRecovery) =>
+  recovery.followActiveFile ?? true;
 
 /** Whether the checkout is one the editor knows, under this exact target. */
 export const isCheckoutListed = (recovery: EditorRecovery, checkout: CheckoutTarget) =>
