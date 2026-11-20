@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Deferred, Effect, Exit, Fiber, Latch, Ref, Scheduler, type Scope } from 'effect';
+import { Deferred, Effect, Exit, Fiber, Latch, Ref, type Scope } from 'effect';
 import { makeRunAgain } from '../src/run-again.ts';
 
 /** A run whose passes each wait on `gate` once started, counting them. */
@@ -46,38 +46,23 @@ test('a call during a run joins it, and a latest one runs it once more after', (
     }),
   ));
 
-test('a latest call that arrives just after the run took its last ask still gets a pass', () =>
-  // A call lands between a run's last take and its end only when the run yields to the scheduler
-  // there, on using up its step budget. Growing the run's last pass one step at a time, under a
-  // small budget, spends it at every point of that stretch once, the call waiting to go next.
+test('a call made as an interrupted run settles still gets a pass of its own', () =>
   run(
     Effect.gen(function* () {
-      let filler: Effect.Effect<void> = Effect.void;
-      for (let size = 0; size < 64; size++) {
-        filler = Effect.andThen(filler, Effect.void);
-        const runAgain = yield* makeRunAgain<string>();
-        const count = yield* Ref.make(0);
-        const gate = yield* Deferred.make<void>();
-        const pass = Ref.update(count, (n) => n + 1);
-        const first = yield* Effect.forkChild(
-          runAgain.run('k', Effect.andThen(Deferred.await(gate), Effect.andThen(pass, filler))),
-        );
-        yield* Effect.yieldNow;
-        const late = yield* Effect.forkChild(
-          Effect.gen(function* () {
-            yield* Deferred.await(gate);
-            const before = yield* Ref.get(count);
-            yield* runAgain.run('k', pass, { latest: true });
-            return before;
-          }),
-        );
-        yield* Effect.yieldNow;
-        yield* Deferred.succeed(gate, undefined);
-        yield* Fiber.join(first);
-        const before = yield* Fiber.join(late);
-        assert((yield* Ref.get(count)) > before, `a pass began after the call (size ${size})`);
-      }
-    }).pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, 64)),
+      const runAgain = yield* makeRunAgain<string>();
+      const { count, started, once } = yield* passes;
+      const passed = yield* Deferred.make<number>();
+      const pass = Ref.update(count, (n) => n + 1);
+      const askAgain = runAgain.run('k', pass, { latest: true }).pipe(
+        Effect.andThen(Ref.get(count)),
+        Effect.flatMap((n) => Deferred.succeed(passed, n)),
+      );
+      // The interrupted run's caller asks again the moment it settles, before `interrupt` returns.
+      yield* Effect.forkChild(runAgain.run('k', once).pipe(Effect.onExit(() => askAgain)));
+      yield* started.await;
+      yield* runAgain.interrupt('k');
+      assert.equal(yield* Deferred.await(passed), 2);
+    }),
   ));
 
 test('interrupting a caller leaves the shared run going, and interrupting the key ends it and its callers', () =>

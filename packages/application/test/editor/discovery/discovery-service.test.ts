@@ -1,12 +1,26 @@
 import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
-import { Deferred, Effect, Exit, Fiber, Layer, ManagedRuntime, Option } from 'effect';
+import {
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  ManagedRuntime,
+  Option,
+  Stream,
+  SubscriptionRef,
+} from 'effect';
 import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import { type CheckoutTarget, type WorkspaceEvent } from '@moonbase/contracts/workspace';
 import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
-import { WorkspaceUnavailableError } from '@moonbase/contracts/workspace-host-errors';
+import {
+  CheckoutChangedError,
+  WorkspaceUnavailableError,
+} from '@moonbase/contracts/workspace-host-errors';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
 import {
+  EditorAlerts,
   EditorCheckouts,
   EditorDiscovery,
   EditorLoader,
@@ -85,12 +99,16 @@ describe('the discovery service on its own', () => {
     const runtime = ManagedRuntime.make(memory.layer);
     const base = await runtime.runPromise(Effect.service(WorkspaceService));
     const holding = await runtime.runPromise(Deferred.make<void>());
+    const answer = await runtime.runPromise(Deferred.make<void>());
     let hold = false;
     const workspace = Layer.succeed(WorkspaceService, {
       ...base,
       listDirectory: (input) =>
         hold
-          ? Effect.andThen(Deferred.succeed(holding, undefined), Effect.never)
+          ? Effect.andThen(
+              Deferred.succeed(holding, undefined),
+              Effect.andThen(Deferred.await(answer), base.listDirectory(input)),
+            )
           : base.listDirectory(input),
     });
     const editor = ManagedRuntime.make(
@@ -110,9 +128,89 @@ describe('the discovery service on its own', () => {
             isOpen: Effect.succeed(true),
             onChanged: () => Effect.void,
           });
-          for (let turn = 0; turn < 20; turn++) yield* Effect.yieldNow;
-          assert.equal(listing.pollUnsafe(), undefined, 'the listing is still reading');
-          yield* Fiber.interrupt(listing);
+          yield* Deferred.succeed(answer, undefined);
+          const { entries } = yield* Fiber.join(listing);
+          assert(entries.some((entry) => entry.path === 'a.ts'));
+        }),
+      );
+    } finally {
+      await editor.dispose();
+      await runtime.dispose();
+    }
+  });
+
+  test('a watch that fails while its replacement waits on the refresh cannot leave the checkout lost', async () => {
+    const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'one' } }]);
+    const runtime = ManagedRuntime.make(memory.layer);
+    const base = await runtime.runPromise(Effect.service(WorkspaceService));
+    const [failOld, oldStopped] = await runtime.runPromise(
+      Effect.all([Deferred.make<void>(), Deferred.make<void>()]),
+    );
+    let watches = 0;
+    // The first watch fails, past retrying, once `failOld` opens; stopping it opens `oldStopped`.
+    const workspace = Layer.succeed(WorkspaceService, {
+      ...base,
+      watch: (input) =>
+        ++watches === 1
+          ? Stream.fromEffect(
+              Effect.andThen(
+                Deferred.await(failOld),
+                Effect.fail(new CheckoutChangedError({ change: 'watch-directory' })),
+              ).pipe(Effect.onInterrupt(() => Deferred.succeed(oldStopped, undefined))),
+            )
+          : base.watch(input),
+    });
+    const editor = ManagedRuntime.make(
+      Layer.provideMerge(editorLayer({ clientId: 'c' }), workspace),
+    );
+    try {
+      await editor.runPromise(
+        Effect.gen(function* () {
+          yield* (yield* EditorLoader).load;
+          const opened = yield* (yield* EditorCheckouts).openCheckout(checkout.root);
+          const discovery = yield* EditorDiscovery;
+          const { alerts } = yield* EditorAlerts;
+          const [reading, cancelling, leaving] = yield* Effect.all([
+            Deferred.make<void>(),
+            Deferred.make<void>(),
+            Deferred.make<void>(),
+          ]);
+          // A refresh that takes until `leaving` opens to stop.
+          yield* Effect.forkChild(
+            discovery.refresh(opened, {
+              isCurrent: Effect.succeed(true),
+              refreshListings: Effect.andThen(
+                Deferred.succeed(reading, undefined),
+                Effect.never,
+              ).pipe(
+                Effect.onInterrupt(() =>
+                  Effect.andThen(Deferred.succeed(cancelling, undefined), Deferred.await(leaving)),
+                ),
+              ),
+              refreshComparison: Effect.void,
+            }),
+          );
+          yield* Deferred.await(reading);
+          const observing = yield* Effect.forkChild(
+            discovery.observe(opened, {
+              isOpen: Effect.succeed(true),
+              onChanged: () => Effect.void,
+            }),
+          );
+          yield* Deferred.await(cancelling);
+          // The old watch fails while the refresh winds down: it has been stopped, or it reports.
+          yield* Deferred.succeed(failOld, undefined);
+          yield* Effect.raceFirst(
+            Deferred.await(oldStopped),
+            SubscriptionRef.changes(alerts).pipe(
+              Stream.filter((shown) => shown.length > 0),
+              Stream.runHead,
+            ),
+          );
+          yield* Deferred.succeed(leaving, undefined);
+          yield* Fiber.join(observing);
+          assert.equal(yield* discovery.isWatchLost(opened), false);
+          assert.equal(watches, 2);
         }),
       );
     } finally {

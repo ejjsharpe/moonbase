@@ -1,4 +1,4 @@
-import { Effect, Fiber, FiberMap, HashSet, Option, Ref, type Scope } from 'effect';
+import { Effect, Fiber, FiberSet, HashMap, Option, SynchronizedRef, type Scope } from 'effect';
 
 /** Work run one at a time per key, which a call joins or has run once more after. */
 export type RunAgain<K, E> = {
@@ -16,40 +16,72 @@ export type RunAgain<K, E> = {
   readonly interrupt: (key: K) => Effect.Effect<void>;
 };
 
+/** A key's run, and whether a call asked it to go once more. */
+type Run<E> = {
+  /** Tells this run from a later one of the same key. */
+  readonly id: object;
+  readonly fiber: Fiber.Fiber<void, E>;
+  readonly again: boolean;
+};
+
 /** Keyed run-again: the chat list's reloads and the editor's checkout refreshes. */
 export const makeRunAgain = <K, E = never>(): Effect.Effect<RunAgain<K, E>, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const runs = yield* FiberMap.make<K, void, E>();
-    /** Keys a call asked to run again since their run last began a pass. */
-    const asked = yield* Ref.make(HashSet.empty<K>());
-    const take = (key: K) =>
-      Ref.modify(asked, (keys) => [HashSet.has(keys, key), HashSet.remove(keys, key)] as const);
-    const loop = (key: K, once: Effect.Effect<void, E>) =>
+    const fibers = yield* FiberSet.make<void, E>();
+    /** Each key's run while it is going: a run leaves only by its own last take or interruption. */
+    const runs = yield* SynchronizedRef.make(HashMap.empty<K, Run<E>>());
+    const owned = (map: HashMap.HashMap<K, Run<E>>, key: K, id: object) =>
+      Option.filter(HashMap.get(map, key), (run) => run.id === id);
+    /**
+     * Takes the run's ask to go again, or, with none, ends the run in the same step, so a later
+     * call either sets an ask this run sees or finds no run and starts one.
+     */
+    const takeAgain = (key: K, id: object) =>
+      SynchronizedRef.modify(runs, (map) =>
+        Option.match(owned(map, key, id), {
+          onNone: () => [false, map] as const,
+          onSome: (run) =>
+            run.again
+              ? ([true, HashMap.set(map, key, { ...run, again: false })] as const)
+              : ([false, HashMap.remove(map, key)] as const),
+        }),
+      );
+    // A failed or interrupted run removes its own entry, never a successor's.
+    const leave = (key: K, id: object) =>
+      SynchronizedRef.update(runs, (map) =>
+        Option.isSome(owned(map, key, id)) ? HashMap.remove(map, key) : map,
+      );
+    const loop = (key: K, id: object, once: Effect.Effect<void, E>) =>
       Effect.gen(function* () {
-        while (yield* take(key)) yield* once;
-      }).pipe(Effect.onError(() => Ref.update(asked, HashSet.remove(key))));
-    // Finding the key's run and starting one if there is none happen in one synchronous step.
-    // The run starts once recorded, so a call it makes meanwhile joins it.
-    const join = (key: K, once: Effect.Effect<void, E>) =>
-      Effect.suspend(() => {
-        const running = FiberMap.getUnsafe(runs, key);
-        return Effect.flatMap(
-          Option.isSome(running)
-            ? Effect.succeed(running.value)
-            : FiberMap.run(runs, key, loop(key, once), { startImmediately: false }),
-          Fiber.join,
-        );
-      });
+        do yield* once;
+        while (yield* takeAgain(key, id));
+      }).pipe(Effect.onError(() => leave(key, id)));
     return {
       run: (key, once, { latest = false } = {}) =>
-        Effect.gen(function* () {
-          if (latest || !FiberMap.hasUnsafe(runs, key)) yield* Ref.update(asked, HashSet.add(key));
-          // A run that ended just as the call asked leaves its ask: the call starts the next.
-          do yield* join(key, once);
-          while (HashSet.has(yield* Ref.get(asked), key));
-        }),
-      // A run interrupted before it started never ran `loop`'s cleanup, so its ask goes here.
+        Effect.flatMap(
+          SynchronizedRef.modifyEffect(runs, (map) => {
+            const running = HashMap.get(map, key);
+            if (Option.isSome(running)) {
+              const run = running.value;
+              return Effect.succeed([
+                run.fiber,
+                latest ? HashMap.set(map, key, { ...run, again: true }) : map,
+              ] as const);
+            }
+            // The run starts once recorded, so its first take finds it.
+            const id = {};
+            return Effect.map(
+              FiberSet.run(fibers, loop(key, id, once), { startImmediately: false }),
+              (fiber) => [fiber, HashMap.set(map, key, { id, fiber, again: false })] as const,
+            );
+          }),
+          Fiber.join,
+        ),
+      // A run interrupted before it started never ran `loop`'s cleanup, so its entry goes here.
       interrupt: (key) =>
-        Effect.andThen(FiberMap.remove(runs, key), Ref.update(asked, HashSet.remove(key))),
+        Effect.flatMap(
+          SynchronizedRef.modify(runs, (map) => [HashMap.get(map, key), HashMap.remove(map, key)]),
+          Option.match({ onNone: () => Effect.void, onSome: (run) => Fiber.interrupt(run.fiber) }),
+        ),
     } satisfies RunAgain<K, E>;
   });
