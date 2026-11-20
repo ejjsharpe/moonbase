@@ -23,6 +23,8 @@ function makeChatAtoms(context: Context.Context<ChatServices>) {
   const drafts = followRef(Context.get(context, ChatDrafts).state);
   const link = followRef(Context.get(context, ChatLink).state);
   const selection = followRef(Context.get(context, ChatSelection).state);
+  /** The open chat's transcript, or an empty one while none is open. */
+  const transcript = followRef((get) => get(selection).transcript);
   const sends = followRef(Context.get(context, ChatSends).state);
   const setup = Context.get(context, ChatProviderSetup);
   const providers = followRef(setup.state);
@@ -56,15 +58,15 @@ function makeChatAtoms(context: Context.Context<ChatServices>) {
       Object.keys(get(sends).dispatching),
     ).pipe(Atom.withEquality(isSameItems)),
     /** The open chat's latest snapshot. */
-    snapshot: Atom.readable((get) => get(selection).snapshot),
+    snapshot: Atom.readable((get) => get(transcript).snapshot),
     /** The open chat's working folder, as its snapshot names it (null before one arrives). */
-    snapshotFolder: Atom.readable((get) => get(selection).snapshot?.conversation.cwd ?? null),
+    snapshotFolder: Atom.readable((get) => get(transcript).snapshot?.conversation.cwd ?? null),
     /** The open chat's transcript. */
-    transcript: Atom.readable((get) => get(selection).transcript),
+    transcript,
     /** The transcript's Find: its query, matches and status. */
-    find: Atom.readable((get) => get(selection).transcript.find),
+    find: Atom.readable((get) => get(transcript).find),
     /** Whether the transcript's Find bar is open. */
-    findOpen: Atom.readable((get) => get(selection).transcript.find.open),
+    findOpen: Atom.readable((get) => get(transcript).find.open),
     /** Provider setup as a view shows it, or null when the host serves none. */
     providers: Atom.readable((get) => {
       if (!setup.available) return null;

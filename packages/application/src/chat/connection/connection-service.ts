@@ -75,7 +75,8 @@ export class ChatConnection extends Context.Service<ChatConnection, ChatConnecti
         if (port) yield* actions.fork(providers.refresh);
         const listed = yield* Effect.exit(list.listFirst);
         const { transcript } = yield* SubscriptionRef.get(selection.state);
-        if (transcript.observation === 'failed') yield* selection.close;
+        if ((yield* SubscriptionRef.get(transcript)).observation === 'failed')
+          yield* selection.close;
         const { selected } = (yield* drafts.get).saved;
         if (selected && !(yield* selection.isOpen)) yield* selection.open(selected);
         yield* sends.queryAll;

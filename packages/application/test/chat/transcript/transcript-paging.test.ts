@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ChatInput } from '@moonbase/contracts/chat';
 import { HostUnavailableError } from '@moonbase/contracts/host-errors';
-import { digest, part, transcriptHarness } from './transcript-fixture.ts';
+import { digest, part, tick, transcriptHarness, until } from './transcript-fixture.ts';
 
 test('a snapshot with no room for entries continues history from its older cursor', async (t) => {
   const f = await transcriptHarness(t, 200);
@@ -39,8 +39,10 @@ test('a snapshot with no room for entries continues history from its older curso
 test('every accepted snapshot change publishes once, with the snapshot', async (t) => {
   const f = await transcriptHarness(t, 40);
   const publications = f.publications;
+  // A subscriber sees each publication after the change that made it.
+  const published = (count: number) => until(() => f.publications === publications + count);
   await f.publish({ ...f.snapshot, state: 'running' });
-  assert.equal(f.publications, publications + 1);
+  await published(1);
   assert.equal(f.published!.state, 'running');
   const entry = {
     ...f.entries[0],
@@ -52,14 +54,15 @@ test('every accepted snapshot change publishes once, with the snapshot', async (
     },
   };
   await f.publish({ ...f.snapshot, entries: [entry, ...f.snapshot.entries] });
-  assert.equal(f.publications, publications + 2);
+  await published(2);
   assert.equal(f.state.entries.at(-1)!.id, 'appended');
   const snapshot = f.published;
   await f.transcript.openFind();
-  assert.equal(f.publications, publications + 3);
-  assert.equal(f.published, snapshot, 'a state change alone publishes no snapshot');
+  await published(3);
+  assert.equal(f.published, snapshot, 'a state change alone keeps the snapshot');
   const before = f.state;
   await f.publish(structuredClone(f.snapshot));
+  await tick();
   assert.equal(f.publications, publications + 3);
   assert.equal(f.state, before);
 });

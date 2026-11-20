@@ -15,7 +15,7 @@ import type { Pending } from './drafts/drafts.ts';
 import { ChatLink, type LinkState } from './link/link-service.ts';
 import type { ChatListShown } from './chat-list/chat-list.ts';
 import { ChatList } from './chat-list/chat-list-service.ts';
-import { ChatSelection, type SelectionState } from './selection/selection-service.ts';
+import { ChatSelection } from './selection/selection-service.ts';
 import { ChatSends, type SendsState } from './sends/sends-service.ts';
 import type { TranscriptState } from './transcript/transcript-state.ts';
 
@@ -53,7 +53,8 @@ export const toChatState = (parts: {
   drafts: DraftsState;
   link: LinkState;
   list: ChatListShown;
-  selection: SelectionState;
+  /** The open chat's transcript (`ChatSelection`'s), with its snapshot. */
+  transcript: TranscriptState;
   sends: SendsState;
 }): ChatState => ({
   remote: parts.link.remote,
@@ -63,8 +64,8 @@ export const toChatState = (parts: {
   chats: parts.list.chats,
   nextChats: parts.list.nextChats,
   seen: parts.drafts.saved.seen,
-  snapshot: parts.selection.snapshot,
-  transcript: parts.selection.transcript,
+  snapshot: parts.transcript.snapshot,
+  transcript: parts.transcript,
   selected: parts.drafts.saved.selected,
   draft: parts.drafts.draft,
   mentions: parts.drafts.mentions,
@@ -84,7 +85,9 @@ export const readChatState = Effect.gen(function* () {
     drafts: yield* SubscriptionRef.get((yield* ChatDrafts).state),
     link: yield* SubscriptionRef.get((yield* ChatLink).state),
     list: yield* SubscriptionRef.get((yield* ChatList).state),
-    selection: yield* SubscriptionRef.get((yield* ChatSelection).state),
+    transcript: yield* SubscriptionRef.get(
+      (yield* SubscriptionRef.get((yield* ChatSelection).state)).transcript,
+    ),
     sends: yield* SubscriptionRef.get((yield* ChatSends).state),
   });
 });
@@ -97,16 +100,20 @@ export const watchChatState = Stream.unwrap(
       (yield* ChatDrafts).state,
       (yield* ChatLink).state,
       (yield* ChatList).state,
-      (yield* ChatSelection).state,
       (yield* ChatSends).state,
     ] as const;
+    // The open chat's transcript, followed afresh as the selection opens and closes chats.
+    const transcript = Stream.switchMap(
+      SubscriptionRef.changes((yield* ChatSelection).state),
+      (selection) => SubscriptionRef.changes(selection.transcript),
+    );
     return Stream.mergeAll(
-      refs.map((ref) =>
-        Stream.map(
+      [
+        ...refs.map((ref) =>
           SubscriptionRef.changes(ref as SubscriptionRef.SubscriptionRef<unknown>),
-          () => undefined,
         ),
-      ),
+        transcript,
+      ].map((changes) => Stream.map(changes, () => undefined)),
       { concurrency: 'unbounded' },
     );
   }),

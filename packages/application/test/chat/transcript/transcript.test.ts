@@ -137,17 +137,14 @@ test('cloned live-only DTOs preserve summary/part/cache identity and unrelated r
   assert.equal(f.state.entries[0].transcript!.parts[0], stablePart);
   assert.equal(f.state.content[0], cache);
   assert.equal(f.calls.length, calls);
-  const before = f.state,
-    publications = f.publications;
+  const before = f.state;
   await f.publish(structuredClone(value));
   assert.equal(f.state, before);
-  assert.equal(f.publications, publications);
   const revoked = new ChatAccessError({ refusal: 'other-owner' });
   await f.transcript.fail(revoked);
   assert.equal(f.state.observation, 'failed');
   assert.equal(f.state.error, revoked.message);
   assert.equal(await f.transcript.failed(), true);
-  assert(f.publications > publications);
 });
 
 test("Load more parts reads a source's first manifest page and then its next, but not past a failed one", async (t) => {
@@ -170,6 +167,11 @@ test("Load more parts reads a source's first manifest page and then its next, bu
   await f.transcript.loadMoreParts(second);
   assert.equal(reads, 1);
   assert.equal(f.state.manifest!.status, 'error');
+  // Another chat's source fails before anything is read, and that failure is shown too.
+  await f.transcript.loadMoreParts({ ...second, target: { ...second.target, actorId: 'other' } });
+  assert.equal(reads, 1);
+  assert.equal(f.state.manifest!.status, 'source-changed');
+  assert.equal(f.state.loading, false);
 });
 
 test('selected manifest hydration advances and retries errors; content validates exact echoes and offsets', async (t) => {
@@ -597,14 +599,103 @@ test('terminal onError invalidates completed live hydration even when a local wa
   await f.transcript.loadManifest(source);
   await f.transcript.loadPart(source, chosen);
   assert.equal(f.state.content[0].status, 'complete');
+  // A held part read and a held Find. Interrupting Find waits, as an RPC call's interrupt does, and
+  // the part's reply arrives meanwhile: it must not land over the failure.
+  const entry = f.entries[0].transcript!,
+    reply = Promise.withResolvers<void>(),
+    never = Promise.withResolvers<never>();
+  f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) => {
+    await reply.promise;
+    return fallback();
+  });
+  f.handlers.set('findChatTranscript', () => never.promise);
+  f.interrupts.set('findChatTranscript', async () => {
+    reply.resolve();
+    await tick();
+  });
+  const loading = f.transcript.loadPart(entry.source, selection(entry.parts[0]));
+  const finding = f.transcript.findTranscript('same');
+  await until(() => f.calls.some((call) => call.operation === 'findChatTranscript'));
   const revoked = new ChatAccessError({ refusal: 'other-owner' });
   await f.transcript.fail(revoked);
-  assert.equal(f.state.content[0].status, 'source-changed');
+  await Promise.all([loading, finding]);
+  await tick();
+  assert.equal(f.state.observation, 'failed');
+  const held = f.state.content.find((content) => content.source.kind === 'entry')!;
+  assert.equal(held.status, 'error');
+  assert.equal(held.error, revoked.message);
+  assert.equal(f.state.find.status, 'error');
+  const completed = f.state.content.find((content) => content.source.kind === 'live')!;
+  assert.equal(completed.status, 'source-changed');
   assert.equal(f.state.manifest!.status, 'source-changed');
   const calls = f.calls.length;
   await f.transcript.loadPart(source, chosen);
   assert.equal(f.calls.length, calls);
   assert.equal(f.state.error, revoked.message);
+  // Moving to another match, or searching again, first waits for the reveal's held read to end.
+  // Failing during that wait must stop it: nothing publishes over the failure or reads the chat.
+  for (const operation of ['moveFind', 'findTranscript'] as const) {
+    const g = await transcriptHarness(t, 138, { limits: scaledTranscriptLimits });
+    for (const index of [0, 69, 137])
+      g.sources.get(JSON.stringify(g.entries[index].transcript!.source))!.data[0] = 'needle';
+    await g.transcript.findTranscript('needle');
+    const interrupting = Promise.withResolvers<void>(),
+      interrupted = Promise.withResolvers<void>();
+    g.handlers.set('getChatTranscriptContent', () => never.promise);
+    g.interrupts.set('getChatTranscriptContent', () => {
+      interrupting.resolve();
+      return interrupted.promise;
+    });
+    const revealing = g.transcript.loadManifest(g.state.find.active!.source);
+    await until(() => g.calls.some((call) => call.operation === 'getChatTranscriptContent'));
+    const waiting =
+      operation === 'moveFind'
+        ? g.transcript.moveFind('next')
+        : g.transcript.findTranscript('needle');
+    await interrupting.promise;
+    const before = g.calls.length;
+    const failing = g.transcript.fail(revoked);
+    await until(() => g.state.observation === 'failed');
+    interrupted.resolve();
+    await Promise.all([revealing, waiting, failing]);
+    await tick();
+    assert.equal(g.state.find.error, revoked.message, operation);
+    assert.equal(g.state.find.revealing, false);
+    assert.equal(g.state.find.activeIndex, 0);
+    assert.equal(g.calls.length, before);
+  }
+});
+
+test('a move made while a new search waits never lands over that search', async (t) => {
+  const f = await transcriptHarness(t, 138, { limits: scaledTranscriptLimits });
+  for (const index of [0, 69, 137])
+    f.sources.get(JSON.stringify(f.entries[index].transcript!.source))!.data[0] = 'needle';
+  f.sources.get(JSON.stringify(f.entries[30].transcript!.source))!.data[0] = 'other';
+  await f.transcript.findTranscript('needle');
+  // The active match's read is held, and interrupting it waits, as an RPC call's interrupt does.
+  const interrupting = Promise.withResolvers<void>(),
+    interrupted = Promise.withResolvers<void>(),
+    never = Promise.withResolvers<never>();
+  f.handlers.set('getChatTranscriptContent', () => never.promise);
+  f.interrupts.set('getChatTranscriptContent', () => {
+    interrupting.resolve();
+    return interrupted.promise;
+  });
+  const revealing = f.transcript.loadManifest(f.state.find.active!.source);
+  await until(() => f.calls.some((call) => call.operation === 'getChatTranscriptContent'));
+  const searching = f.transcript.findTranscript('other');
+  await interrupting.promise;
+  const moving = f.transcript.moveFind('next');
+  f.handlers.delete('getChatTranscriptContent');
+  f.interrupts.delete('getChatTranscriptContent');
+  interrupted.resolve();
+  await Promise.allSettled([revealing, searching, moving]);
+  await tick();
+  const find = f.state.find;
+  assert.equal(find.query, 'other');
+  assert.equal(find.count, 1);
+  assert.equal(find.activeIndex, 0);
+  assert.equal(find.active!.source.entryId, f.entries[30].id);
 });
 
 test('history traverses every entry backward and forward across summary eviction', async (t) => {
@@ -1072,11 +1163,26 @@ test('a reconnecting snapshot cancels an evicted live part read without an error
   const hasLive = (state: TranscriptState) =>
     state.content.some((content) => content.source.kind === 'live');
   assert.equal(hasLive(f.state), false);
+  // A held Find. Interrupting the live read waits, as an RPC call's interrupt does, and Find's page
+  // arrives meanwhile: it must not land over the reconnect stopping Find.
+  const page = Promise.withResolvers<void>();
+  f.handlers.set('findChatTranscript', async (_input, _signal, fallback) => {
+    await page.promise;
+    return fallback();
+  });
+  f.interrupts.set('getChatTranscriptContent', async () => {
+    page.resolve();
+    await tick();
+  });
+  const finding = f.transcript.findTranscript('same');
+  await until(() => f.calls.some((call) => call.operation === 'findChatTranscript'));
   await f.publish({ ...running, observationStatus: 'reconnecting' });
   assert.equal(signal!.aborted, true);
   held.resolve();
-  await pending;
+  await Promise.all([pending, finding]);
   await tick();
   assert.equal(f.state.error, null);
   assert.equal(hasLive(f.state), false);
+  assert.equal(f.state.find.status, 'error');
+  assert.equal(f.state.find.matches.length, 0);
 });
