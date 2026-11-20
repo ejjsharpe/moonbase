@@ -64,8 +64,11 @@ test('a sign-in’s reply replaces a held status read, and answers never enter s
   const loggingOut = f.run(setup.logout('openai'));
   await waitFor(() => providers.calls.some((call) => call.operation === 'logoutProvider'));
   await f.run(setup.login('openai'));
+  // Setup stays busy until every command settles, not just the newest.
+  assert.equal(shown().busy, true);
   logout.reject(unavailable());
   await loggingOut;
+  await waitFor(() => !shown().busy);
   assert.equal(shown().error, null);
   assert.equal(shown().status?.flow?.state, 'running');
 });

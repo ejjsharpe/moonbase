@@ -50,8 +50,6 @@ type Setup = {
   revisions: ReadonlyMap<string, number>;
   /** In the order they were released, oldest first. */
   released: ReadonlySet<string>;
-  /** Counts changes that leave the rest alone, such as a sign-out. */
-  version: number;
 };
 
 export type ProviderSetupConfiguration = {
@@ -98,13 +96,13 @@ export const ProviderSetupLive = (
         owners: new Map(),
         revisions: new Map(),
         released: new Set(),
-        version: 0,
       });
       /** When each owner holding a flow last used provider setup; reading it changes nothing. */
       const usage = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
       // Each owner's running sign-in; closing the layer interrupts each and waits for Pi to settle.
       const flows = yield* FiberMap.make<string, void>();
-      const changed = SubscriptionRef.update(setup, (s) => ({ ...s, version: s.version + 1 }));
+      /** Wakes the watches after a change outside `setup`, such as a sign-out: every update publishes. */
+      const changed = SubscriptionRef.update(setup, (s) => s);
       const updateFlow = (owner: string, id: string, change: (flow: Flow) => Flow) =>
         SubscriptionRef.update(setup, (s) => {
           const flow = s.owners.get(owner);
