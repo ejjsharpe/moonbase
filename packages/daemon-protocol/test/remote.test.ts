@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createServer, type Socket } from 'node:net';
 import { test, type TestContext } from 'node:test';
 import { Effect, Exit, Layer, ManagedRuntime, Queue, Scope, Stream } from 'effect';
 import { TestClock } from 'effect/testing';
@@ -252,15 +253,29 @@ test('a dropped daemon shows reconnecting, then resets its watches; healthy traf
       (status) => status === 'connected',
     );
     await advanceUntil(() => list.values.length > lists && list.values.at(-1)!.reset, Boolean);
-    // Traffic `renewMs` after the reconnect proves the connection healthy.
-    await client.advance(P.streamLimits.renewMs);
-    await client.chat.command('listChats', { session });
+    // Staying up `renewMs` after the reconnect proves the connection healthy. The clock moves a
+    // second at a time, each step answered by the daemon, so a frame always arrives between two
+    // pings and the socket never goes silent.
+    for (let up = 0; up < P.streamLimits.renewMs; up += 1000) {
+      await client.advance(1000);
+      await client.chat.command('listChats', { session });
+    }
   }
   assert.deepEqual([...chat.errors, ...list.errors], []);
-  // Failed reconnects through the whole budget in one outage end the watch.
+  // Failed reconnects through the whole budget in one outage end the watch, even against a host
+  // that takes its whole health deadline to fail each one: it never opened, so renews nothing.
   await d.stop();
+  const held: Socket[] = [];
+  const silent = createServer((socket) => void held.push(socket));
+  await new Promise<void>((listening) =>
+    silent.listen(Number(new URL(d.endpoint().origin).port), '127.0.0.1', listening),
+  );
   await advanceUntil(() => chat.errors.length, Boolean);
   assert(isUnavailable(chat.errors[0]));
+  // One health check per retry, each held until its deadline.
+  assert.equal(held.length, P.streamLimits.reconnectMs.length);
+  for (const socket of held) socket.destroy();
+  await new Promise((closed) => silent.close(closed));
   // A new connection generation ends a watch at once.
   await d.start();
   const again = record<ChatSnapshot>();

@@ -1,19 +1,20 @@
 import {
   Cause,
   Clock,
-  Deferred,
+  Data,
   Effect,
+  Equal,
   Exit,
   Fiber,
-  Layer,
+  Hash,
   Queue,
-  Schedule,
-  Scope,
-  Semaphore,
+  RcMap,
+  Ref,
   Stream,
+  type Scope,
+  type Semaphore,
 } from 'effect';
-import { RpcClient, RpcSerialization, type Rpc, type RpcGroup } from 'effect/rpc';
-import * as Socket from 'effect/socket/Socket';
+import type { Rpc } from 'effect/rpc';
 import {
   ConnectionError,
   HostVerificationError,
@@ -26,42 +27,24 @@ import {
   IncompatibleHostError,
   type DaemonLinkError,
 } from '@moonbase/contracts/host-errors';
-import {
-  chatHostCapabilities,
-  type ChatHostHealth,
-  type ChatHostTarget,
-} from '@moonbase/contracts/host';
+import type { ChatHostHealth, ChatHostTarget } from '@moonbase/contracts/host';
 import { rpcLimits } from '@moonbase/contracts/rpc-upgrade';
 import { ConnectionService, type VerifiedChatEndpoint } from '@moonbase/contracts/services';
-import { requestUpgradeNonce } from '../health.ts';
 import * as P from './protocol.ts';
-import { upgradeProtocols } from '../upgrade-proof.ts';
+import { reconnectSchedule } from './reconnect-schedule.ts';
+import {
+  openRpcConnection,
+  type RpcConnection,
+  type RpcSocketConfiguration,
+} from './rpc-connection.ts';
 
 /** What a watch delivers: a value (`reset` when it replaced missed updates) or a gap. */
 export type WatchUpdate<A> = { value: A; reset: boolean } | { reconnecting: true };
 export type ErrorClass = abstract new (...args: never) => unknown;
-/** One connection to a daemon's socket, and the health it signed when it was opened. */
-type Generation = {
-  connectionId: string;
-  client: Record<string, unknown>;
-  health: ChatHostHealth;
-  scope: Scope.Closeable;
-  alive: boolean;
-};
 
 /** One socket of a host's daemon, as a link reaches it. */
-export type RpcLinkConfiguration<Rpcs extends Rpc.Any> = {
+export type RpcLinkConfiguration<Rpcs extends Rpc.Any> = RpcSocketConfiguration<Rpcs> & {
   host: ChatHostTarget;
-  group: RpcGroup.RpcGroup<Rpcs>;
-  /** Where the socket upgrades, and the protocol a proof for it binds. */
-  path: string;
-  protocol: string;
-  /** What signed health advertises for this socket; a host without it is refused unsent. */
-  capability?: string;
-  /** The largest message the client accepts from the daemon (D11). */
-  inboundBytes: number;
-  /** How long the client waits for any message before it drops the connection; 5 s by default. */
-  pingTimeoutMs?: number;
   /** The errors the group's procedures declare: the only failures the client takes from it. */
   errors: readonly ErrorClass[];
   /**
@@ -110,51 +93,34 @@ const lostReply = (mutation: boolean, operation: string) =>
 const generationChanged = (mutation: boolean, operation: string) =>
   mutation ? new UncertainError({ operation }) : unavailable('generation-changed');
 const notServed = () => new IncompatibleHostError({ reason: 'not-served' });
+/**
+ * A watch's subscription its connection lost: the socket dropped, or the daemon ended it
+ * interrupted, as a closing RPC server does. It is subscribed again, and never leaves the link.
+ */
+class SubscriptionLost extends Data.TaggedError('SubscriptionLost') {}
 /** Whether a failure came from the transport rather than the daemon. */
-const isTransport = (error: unknown) =>
-  typeof error === 'object' &&
-  error !== null &&
-  (error as { _tag?: string })._tag === 'RpcClientError';
+const isTransport = (error: unknown) => {
+  const tag = typeof error === 'object' && error !== null && (error as { _tag?: unknown })._tag;
+  return tag === 'RpcClientError' || tag === 'SocketError' || tag === 'SubscriptionLost';
+};
 /** A reply or update the client refused: its own refusal, else the daemon's reply was invalid. */
 const refusedReply = (error: unknown, reason: 'invalid-reply' | 'invalid-update') =>
   error instanceof IncompatibleHostError || error instanceof InvalidChatRequestError
     ? error
     : new IncompatibleHostError({ reason });
 
-/**
- * A daemon's WebSocket bounded inbound (D11): a message over `bytes` closes it before anything
- * reads it.
- */
-function boundInbound(ws: WebSocket, bytes: number): Socket.WebSocketLike {
-  const wrapped = new Map<unknown, (event: Socket.WebSocketEvent) => void>();
-  return {
-    get readyState() {
-      return ws.readyState;
-    },
-    get binaryType() {
-      return ws.binaryType;
-    },
-    set binaryType(value: WebSocket['binaryType']) {
-      ws.binaryType = value;
-    },
-    addEventListener(type, listener, options) {
-      if (type !== 'message') return ws.addEventListener(type, listener as never, options);
-      const bounded = (event: Socket.WebSocketEvent) => {
-        const data = event.data as string | ArrayBuffer | Uint8Array;
-        const size = typeof data === 'string' ? data.length : data.byteLength;
-        if (size > bytes) return ws.close(1009);
-        listener(event);
-      };
-      wrapped.set(listener, bounded);
-      ws.addEventListener('message', bounded as never, options);
-    },
-    removeEventListener(type, listener) {
-      ws.removeEventListener(type, (wrapped.get(listener) ?? listener) as never);
-      wrapped.delete(listener);
-    },
-    close: (code, reason) => ws.close(code, reason),
-    send: (data) => ws.send(data),
-  } as Socket.WebSocketLike;
+/** A connection generation, as the link keys its connections: equal by `connectionId`. */
+class Generation implements Equal.Equal {
+  readonly endpoint: VerifiedChatEndpoint;
+  constructor(endpoint: VerifiedChatEndpoint) {
+    this.endpoint = endpoint;
+  }
+  [Equal.symbol](that: unknown) {
+    return that instanceof Generation && that.endpoint.connectionId === this.endpoint.connectionId;
+  }
+  [Hash.symbol]() {
+    return Hash.string(this.endpoint.connectionId);
+  }
 }
 
 /** Permits of a semaphore a request holds while the daemon runs it: a place, or its bytes. */
@@ -169,7 +135,7 @@ const holdPlace = <A, E>(
   holds: readonly Hold[],
   deadlineMs: number,
   mutation: boolean,
-  connection: { scope: Scope.Scope; isOpen(): boolean },
+  connection: { scope: Scope.Scope; isOpen: Effect.Effect<boolean> },
   send: Effect.Effect<A, E>,
   late: E,
   unsent: E,
@@ -197,7 +163,7 @@ const holdPlace = <A, E>(
         taken.push(hold);
       }
       // A connection that closed while the request waited carries nothing more: it was never sent.
-      if (!connection.isOpen()) {
+      if (!(yield* connection.isOpen)) {
         yield* release(taken);
         return yield* Effect.fail(unsent);
       }
@@ -221,25 +187,24 @@ const holdPlace = <A, E>(
           }),
         ),
       ).pipe(Effect.onInterrupt(() => abandon));
-      // A send stopped by its connection closing lost its reply.
-      return yield* Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
-        ? Effect.fail(late)
-        : exit;
+      // A send stopped by its connection closing ends interrupted, as `call` reads it.
+      return yield* exit;
     }),
   );
 
 /**
  * A link to one socket of a host's daemon, shared by the services built with it: one connection
- * per connection generation, opened on first use with a fresh upgrade proof and again after it
- * closes. A request is sent once: one whose connection drops, whose reply is late or arrives
- * after the generation changed is `Unavailable`, or `Uncertain` for a mutation.
+ * per connection generation, opened on first use and reopened by the RPC client when it drops,
+ * each time with a fresh upgrade proof. An older generation's connection closes once nothing uses
+ * it, and one given up on is replaced on next use. A request is sent once: one whose connection
+ * drops, whose reply is late or arrives after the generation changed is `Unavailable`, or
+ * `Uncertain` for a mutation.
  */
 export const makeRpcLink = <Rpcs extends Rpc.Any>(config: RpcLinkConfiguration<Rpcs>) =>
   Effect.gen(function* () {
     const connections = yield* ConnectionService;
     const host = config.host;
     const lookUpEndpoint = connections.endpoint({ host });
-    const lock = yield* Semaphore.make(1);
     const linkErrors = [
       ...config.errors,
       ConnectionError,
@@ -250,120 +215,34 @@ export const makeRpcLink = <Rpcs extends Rpc.Any>(config: RpcLinkConfiguration<R
     /** Whether a failure is the daemon's (as presented) or the link's own, rather than unknown. */
     const isLinkError = (error: unknown): error is DaemonLinkError => isOneOf(linkErrors, error);
     const linkScope = yield* Effect.scope;
-    let current: Generation | undefined;
-    /** Closes a generation's connection, marking it gone first, so nothing waiting sends on it. */
-    const closeGeneration = (generation: Generation) =>
-      Effect.suspend(() => {
-        generation.alive = false;
-        return Scope.close(generation.scope, Exit.void);
-      });
-    yield* Effect.addFinalizer(() =>
-      Effect.suspend(() => (current ? closeGeneration(current) : Effect.void)),
-    );
-
-    /** Opens a connection to `endpoint` and waits until it is upgraded. */
-    const open = (endpoint: VerifiedChatEndpoint) =>
-      Effect.gen(function* () {
-        const scope = yield* Scope.make();
-        const opened = Deferred.makeUnsafe<ChatHostHealth, DaemonLinkError>();
-        const generation = {
-          connectionId: endpoint.connectionId,
-          scope,
-          alive: true,
-        } as Generation;
-        const acquire = Effect.gen(function* () {
-          const { health, upgradeNonce } = yield* requestUpgradeNonce(endpoint);
-          if (!health.capabilities.includes(chatHostCapabilities.rpc))
-            return yield* Effect.fail(new IncompatibleHostError({ reason: 'not-daemon' }));
-          if (config.capability !== undefined && !health.capabilities.includes(config.capability))
-            return yield* Effect.fail(notServed());
-          const url = new URL(config.path, endpoint.origin.replace(/^http:/, 'ws:'));
-          // The connection closes with the scope that acquired it.
-          const ws = yield* Effect.acquireRelease(
-            Effect.sync(
-              () =>
-                new globalThis.WebSocket(
-                  url,
-                  upgradeProtocols(
-                    endpoint.token,
-                    upgradeNonce,
-                    endpoint.expected,
-                    config.protocol,
-                  ),
-                ),
-            ),
-            (ws) => Effect.sync(() => ws.close()),
-          );
-          ws.addEventListener('open', () => Deferred.doneUnsafe(opened, Exit.succeed(health)), {
-            once: true,
-          });
-          ws.addEventListener(
-            'close',
-            () => Deferred.doneUnsafe(opened, Exit.fail(unavailable('refused'))),
-            { once: true },
-          );
-          return boundInbound(ws, config.inboundBytes);
-        }).pipe(
-          Effect.tapError((error) =>
-            Effect.sync(() =>
-              Deferred.doneUnsafe(
-                opened,
-                Exit.fail(isLinkError(error) ? error : unavailable('unreachable')),
-              ),
-            ),
-          ),
-          Effect.mapError(
-            (cause) =>
-              new Socket.SocketError({
-                reason: new Socket.SocketOpenError({ kind: 'Unknown', cause }),
-              }),
-          ),
-        );
-        const transport = RpcClient.layerProtocolSocket({
-          retryPolicy: Schedule.recurs(0),
-          ...(config.pingTimeoutMs === undefined ? {} : { pingTimeout: config.pingTimeoutMs }),
-        }).pipe(
-          Layer.provide([
-            Layer.effect(
-              Socket.Socket,
-              Socket.fromWebSocket(acquire, { openTimeout: rpcLimits.connectMs }),
-            ),
-            RpcSerialization.layerJson,
-            Layer.succeed(RpcClient.ConnectionHooks, {
-              onConnect: Effect.void,
-              onDisconnect: Effect.sync(() => {
-                generation.alive = false;
-              }),
+    const sockets: RcMap.RcMap<Generation, RpcConnection> = yield* RcMap.make({
+      lookup: (generation: Generation): Effect.Effect<RpcConnection, never, Scope.Scope> =>
+        openRpcConnection(
+          config,
+          generation.endpoint,
+          isLinkError,
+          // Given up on, it closes and is replaced on next use: out of the map before anything
+          // else runs, then closed in the link's scope, since closing it waits for its retry.
+          Effect.asVoid(
+            Effect.forkIn(RcMap.invalidate(sockets, generation), linkScope, {
+              startImmediately: true,
             }),
-          ]),
-        );
-        const context = yield* Layer.buildWithScope(transport, scope);
-        const client = yield* RpcClient.make(config.group, { disableTracing: true }).pipe(
-          Effect.provideContext(context),
-          Scope.provide(scope),
-        );
-        const health = yield* Deferred.await(opened).pipe(
-          Effect.timeoutOrElse({
-            duration: rpcLimits.connectMs,
-            orElse: () => Effect.fail(unavailable('unreachable')),
-          }),
-          Effect.tapError(() => Scope.close(scope, Exit.void)),
-        );
-        return Object.assign(generation, { client: client as never, health });
-      });
-    /** The open connection for `endpoint`'s generation, or a new one; an older one closes. */
+          ),
+        ),
+      idleTimeToLive: Infinity,
+    });
+    /**
+     * The connection for `endpoint`'s generation, opened once however many ask at once; an older
+     * generation's closes, failing what it still carries. None is held by its users, so it stays
+     * open until then (or until given up on), between requests too.
+     */
     const connect = (endpoint: VerifiedChatEndpoint) =>
-      lock.withPermits(1)(
-        Effect.gen(function* () {
-          if (current?.alive && current.connectionId === endpoint.connectionId) return current;
-          const old = current;
-          current = undefined;
-          if (old) yield* closeGeneration(old);
-          const opened = yield* open(endpoint);
-          current = opened;
-          return opened;
-        }),
-      );
+      Effect.gen(function* () {
+        const generation = new Generation(endpoint);
+        for (const key of yield* RcMap.keys(sockets))
+          if (!Equal.equals(key, generation)) yield* RcMap.invalidate(sockets, key);
+        return yield* Effect.scoped(RcMap.get(sockets, generation));
+      });
     const isCurrent = (endpoint: VerifiedChatEndpoint) =>
       Effect.map(Effect.exit(lookUpEndpoint), (now) =>
         Exit.isSuccess(now) ? now.value.connectionId === endpoint.connectionId : false,
@@ -377,14 +256,20 @@ export const makeRpcLink = <Rpcs extends Rpc.Any>(config: RpcLinkConfiguration<R
     ): Effect.Effect<A, E | DaemonLinkError> =>
       Effect.gen(function* () {
         const endpoint = yield* lookUpEndpoint;
-        const generation = yield* connect(endpoint);
-        if (!generation.health.capabilities.includes(options.capability))
+        const connection = yield* connect(endpoint);
+        const health = yield* connection.ready.pipe(
+          Effect.timeoutOrElse({
+            duration: rpcLimits.connectMs,
+            orElse: () => Effect.fail(unavailable('unreachable')),
+          }),
+        );
+        if (!health.capabilities.includes(options.capability))
           return yield* Effect.fail(notServed());
         const deadlineMs = options.deadlineMs ?? P.requestDeadlineMs;
         const late = lostReply(options.mutation, operation),
           unsent = unavailable('busy');
         const send = (
-          generation.client[operation] as (payload: object) => Effect.Effect<unknown, unknown>
+          connection.client[operation] as (payload: object) => Effect.Effect<unknown, unknown>
         )(payload);
         const exit = yield* Effect.exit(
           options.places
@@ -392,24 +277,35 @@ export const makeRpcLink = <Rpcs extends Rpc.Any>(config: RpcLinkConfiguration<R
                 options.places,
                 deadlineMs,
                 options.mutation,
-                { scope: linkScope, isOpen: () => generation.alive },
+                { scope: linkScope, isOpen: connection.isOpen },
                 send,
                 late,
                 unsent,
               )
             : send.pipe(
-                Effect.timeoutOrElse({ duration: deadlineMs, orElse: () => Effect.fail(late) }),
+                Effect.timeoutOrElse({
+                  duration: deadlineMs,
+                  orElse: () => Effect.fail(late),
+                }),
               ),
         );
         if (Exit.isFailure(exit)) {
-          if (Cause.hasInterruptsOnly(exit.cause)) return yield* Effect.interrupt;
-          const error = Cause.squash(exit.cause);
+          // The caller's own interruption never reaches here: an interrupted reply is the
+          // daemon's, as a closing RPC server sends each request it runs (#404), or its
+          // connection's as it closes.
+          const interrupted = Cause.hasInterruptsOnly(exit.cause);
+          const error = interrupted ? undefined : Cause.squash(exit.cause);
           if (error === late) return yield* Effect.fail(late);
           // Refused before it was sent, whatever became of the connection since.
           if (error === unsent) return yield* Effect.fail(unsent);
-          // Only an error the daemon's procedures declare is its answer; anything else lost it.
-          if (isTransport(error) || !isOneOf(config.errors, error))
-            return yield* Effect.fail(lostReply(options.mutation, operation));
+          // Only an error the daemon's procedures declare is its answer; anything else lost it,
+          // to a generation change if there was one.
+          if (interrupted || isTransport(error) || !isOneOf(config.errors, error))
+            return yield* Effect.fail(
+              (yield* isCurrent(endpoint))
+                ? lostReply(options.mutation, operation)
+                : generationChanged(options.mutation, operation),
+            );
         }
         // A reply belongs to the generation it was sent on; one that changed since is stale.
         if (!(yield* isCurrent(endpoint)))
@@ -420,7 +316,7 @@ export const makeRpcLink = <Rpcs extends Rpc.Any>(config: RpcLinkConfiguration<R
           );
         const output = exit.value as A;
         yield* Effect.try({
-          try: () => options.check?.(output, generation.health),
+          try: () => options.check?.(output, health),
           catch: (error) =>
             options.mutation
               ? lostReply(true, operation)
@@ -431,16 +327,17 @@ export const makeRpcLink = <Rpcs extends Rpc.Any>(config: RpcLinkConfiguration<R
 
     /**
      * Follows a watch: each update turned into the value it describes by `next`. When its
-     * connection drops it subscribes again within a budget of `streamLimits.reconnectMs` per
-     * outage, renewed once a connection has carried values for `streamLimits.renewMs`, and starts
-     * from a fresh value; it fails when the daemon ends it, the connection generation changes or
-     * the budget runs out.
+     * connection drops, or the daemon ends it interrupted, it subscribes again on
+     * `reconnectSchedule` once the connection has reopened, and starts from a fresh value; it fails
+     * when the daemon ends it otherwise, the connection generation changes, the connection is
+     * given up on or the schedule runs out.
      */
     const follow = <A, E>(operation: string, payload: object, options: FollowOptions<A>) =>
       Stream.callback<WatchUpdate<A>, E | DaemonLinkError>(
         (queue) =>
           Effect.gen(function* () {
             const first = yield* lookUpEndpoint;
+            const clock = yield* Clock.Clock;
             // A connection publication ends the watch once its generation is gone.
             yield* Effect.forkScoped(
               connections.watch().pipe(
@@ -456,81 +353,85 @@ export const makeRpcLink = <Rpcs extends Rpc.Any>(config: RpcLinkConfiguration<R
                 Effect.ignore,
               ),
             );
-            // Backoff and the healthy period that renews it run on the fiber's Clock.
-            const clock = yield* Clock.Clock;
-            let delivered = false,
-              failures = 0;
-            for (;;) {
-              let firstAt: number | undefined;
-              // The first value after subscribing again replaced whatever was missed.
-              let resetting = delivered;
-              const ended = yield* Effect.exit(
-                Effect.gen(function* () {
-                  const endpoint = yield* lookUpEndpoint;
-                  if (endpoint.connectionId !== first.connectionId)
-                    return yield* Effect.fail(generationChanged(false, operation));
-                  const generation = yield* connect(endpoint);
-                  if (!generation.health.capabilities.includes(options.capability))
-                    return yield* Effect.fail(notServed());
-                  let state: A | undefined;
-                  const updates = (
-                    generation.client[operation] as (
-                      payload: object,
-                    ) => Stream.Stream<unknown, unknown>
-                  )(payload).pipe(
-                    Stream.mapError((error) =>
-                      isTransport(error) || !isOneOf(config.errors, error)
-                        ? error
-                        : config.present(error, operation, payload),
-                    ),
-                  );
-                  yield* Stream.runForEach(updates, (update) =>
-                    Effect.try({
-                      try: () => {
-                        const value = options.next(state, update);
-                        state = value;
-                        firstAt ??= clock.currentTimeMillisUnsafe();
-                        Queue.offerUnsafe(queue, { value, reset: resetting });
-                        resetting = false;
-                        delivered = true;
-                      },
-                      catch: (error) =>
-                        refusedReply(error, 'invalid-update') as E | IncompatibleHostError,
-                    }),
-                  );
-                  // A watch the daemon ended by itself is unavailable.
-                  return yield* Effect.fail(unavailable('watch-ended'));
-                }),
+            // Once a value has been delivered, a lost subscription reads as reconnecting and the
+            // first value after it replaces whatever was missed.
+            const delivered = yield* Ref.make(false);
+            // When this subscription delivered its first value: one that had been delivering for
+            // `renewMs` renews the reconnect budget.
+            const firstAt = yield* Ref.make<number | undefined>(undefined);
+            const subscribe = Effect.gen(function* () {
+              yield* Ref.set(firstAt, undefined);
+              const endpoint = yield* lookUpEndpoint;
+              if (endpoint.connectionId !== first.connectionId)
+                return yield* Effect.fail(generationChanged(false, operation));
+              const connection = yield* connect(endpoint);
+              const health = yield* connection.reopened;
+              if (!health.capabilities.includes(options.capability))
+                return yield* Effect.fail(notServed());
+              let previous: A | undefined;
+              let reset = yield* Ref.get(delivered);
+              const updates = (
+                connection.client[operation] as (payload: object) => Stream.Stream<unknown, unknown>
+              )(payload).pipe(
+                Stream.mapError((error) =>
+                  isTransport(error) || !isOneOf(config.errors, error)
+                    ? error
+                    : config.present(error, operation, payload),
+                ),
               );
-              if (Exit.isSuccess(ended)) return;
-              if (Cause.hasInterruptsOnly(ended.cause)) return yield* ended;
-              const error = Cause.squash(ended.cause);
-              if (!isTransport(error))
-                return yield* Effect.fail(isLinkError(error) ? error : unavailable());
-              if (
-                firstAt !== undefined &&
-                clock.currentTimeMillisUnsafe() - firstAt >= P.streamLimits.renewMs
-              )
-                failures = 0;
-              if (failures >= P.streamLimits.reconnectMs.length)
-                return yield* Effect.fail(unavailable());
-              if (delivered) Queue.offerUnsafe(queue, { reconnecting: true });
-              yield* Effect.sleep(P.streamLimits.reconnectMs[failures++]!);
-            }
+              yield* Stream.runForEach(updates, (update) =>
+                Effect.try({
+                  try: () => options.next(previous, update),
+                  catch: (error) =>
+                    refusedReply(error, 'invalid-update') as E | IncompatibleHostError,
+                }).pipe(
+                  Effect.flatMap((value) => {
+                    previous = value;
+                    const offered = Queue.offer(queue, { value, reset });
+                    reset = false;
+                    return offered.pipe(
+                      Effect.andThen(Ref.set(delivered, true)),
+                      Effect.andThen(
+                        Ref.update(firstAt, (at) => at ?? clock.currentTimeMillisUnsafe()),
+                      ),
+                    );
+                  }),
+                ),
+              );
+              // A watch the daemon ended by itself is unavailable.
+              return yield* Effect.fail(unavailable('watch-ended'));
+            }).pipe(
+              Effect.scoped,
+              // The watch's own interruption never reaches here, so an interrupted end is the
+              // daemon's (#404), and a transport failure that died is as lost as one that failed.
+              Effect.catchCause((cause) =>
+                Cause.hasInterruptsOnly(cause) || isTransport(Cause.squash(cause))
+                  ? Effect.fail(new SubscriptionLost())
+                  : Effect.failCause(cause),
+              ),
+            );
+            yield* subscribe.pipe(
+              Effect.retry(
+                reconnectSchedule({
+                  upSince: Ref.get(firstAt),
+                  isRetryable: isTransport,
+                  onRetry: () =>
+                    Effect.flatMap(Ref.get(delivered), (gap) =>
+                      gap ? Effect.asVoid(Queue.offer(queue, { reconnecting: true })) : Effect.void,
+                    ),
+                }),
+              ),
+            );
           }).pipe(
             Effect.catchCause((cause) =>
-              Cause.hasInterruptsOnly(cause)
-                ? Effect.void
-                : Effect.asVoid(
-                    Queue.failCause(
-                      queue,
-                      Cause.fail(
-                        ((error) => (isLinkError(error) ? error : unavailable()))(
-                          Cause.squash(cause),
-                        ),
-                      ),
-                    ),
+              Effect.asVoid(
+                Queue.failCause(
+                  queue,
+                  Cause.fail(
+                    ((error) => (isLinkError(error) ? error : unavailable()))(Cause.squash(cause)),
                   ),
+                ),
+              ),
             ),
           ),
         { bufferSize: 1, strategy: 'sliding' },

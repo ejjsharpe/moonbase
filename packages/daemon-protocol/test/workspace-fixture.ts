@@ -15,6 +15,7 @@ import {
 } from '@moonbase/contracts/workspace-host-errors';
 import { chatProtocolVersion } from '@moonbase/contracts/host';
 import { RemoteWorkspaceHostLive } from '../src/client/remote-workspace.ts';
+import { CloseRpcFirst } from '../src/server/close-rpc-first.ts';
 import { serveChat, type ChatServerOptions } from '../src/server/server.ts';
 import { controlledChat, host, nonce } from './controlled-chat-fixture.ts';
 import { refusingDaemon } from './served-services.ts';
@@ -109,14 +110,18 @@ export async function serveWorkspace(
     runtime = ManagedRuntime.make(TestClock.layer());
   let scope: Scope.Closeable | undefined,
     port = 0;
-  const start = async () => {
+  /** Starts the daemon; `closeRpcFirst` closes its RPC servers before Bun when next stopped. */
+  const start = async ({ closeRpcFirst = false } = {}) => {
     scope = Effect.runSync(Scope.make());
     const server = await runtime.runPromise(
       serveChat(
         { host, token, port },
         { chat: chat.client, daemon: refusingDaemon() },
         { ...options, ...(workspace ? { workspace } : {}) },
-      ).pipe(Effect.provideService(Scope.Scope, scope)),
+      ).pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provideService(CloseRpcFirst, closeRpcFirst),
+      ),
     );
     port = Number(new URL(server.origin).port);
   };
