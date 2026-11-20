@@ -164,9 +164,7 @@ export class ClientStore extends Store {
       reserved();
       return true;
     }).pipe(
-      Effect.mapError(
-        (error) => new WorkspaceStoreError({ failure: 'reservation', detail: errorText(error) }),
-      ),
+      Effect.mapError(() => new WorkspaceStoreError({ failure: 'reservation' })),
       Effect.flatMap((reserved) =>
         reserved ? Effect.succeed(null) : this.step(() => this.readSave(id)),
       ),

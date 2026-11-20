@@ -22,6 +22,8 @@ import { cancellationPoint } from '../cancellation.ts';
 import { Checkouts } from './checkouts.ts';
 
 const isHelperFailure = Schema.is(HelperFailure);
+/** What a creation's cleanup left behind. */
+type Leftover = IncompleteCleanupError['remains'];
 /** What Git wrote to stderr, when it did; otherwise the error's own safe text. */
 const failureText = (error: unknown) =>
   (isHelperFailure(error) && error.stderr.trim()) || errorText(error);
@@ -196,14 +198,14 @@ export class Worktrees {
           answeredNo(failure) ? Effect.succeed(false) : Effect.fail(failure),
         ),
       );
-      if (existing) return yield* new BranchTakenError({ branch, inside: false });
+      if (existing) return yield* new BranchTakenError({ inside: false });
       const commit = yield* Effect.interruptible(
         directory.git(['rev-parse', '--verify', '--quiet', '--end-of-options', base + '^{commit}']),
       ).pipe(
         Effect.map((output) => output.toString().trim()),
         Effect.orElseSucceed(() => ''),
       );
-      if (!/^[a-f0-9]{40,64}$/.test(commit)) return yield* new InvalidBaseError({ base });
+      if (!/^[a-f0-9]{40,64}$/.test(commit)) return yield* new InvalidBaseError();
       // The empty old value creates the branch only if it does not exist, and the reflog entry and
       // the new worktree's lock reason name this creation, so cleanup removes only what it made.
       const created = { ref, commit, nonce: `moonbase: create worktree ${randomUUID()}` };
@@ -220,11 +222,7 @@ export class Worktrees {
           cancelled || (isHelperFailure(failure) && failure.uncertain)
             ? yield* this.removeBranch(directory, created, false)
             : undefined;
-        if (cleanup)
-          return yield* new IncompleteCleanupError({
-            remains: cleanup,
-            inspect: `branch ${branch}`,
-          });
+        if (cleanup) return yield* new IncompleteCleanupError({ remains: cleanup });
         if (cancelled) return yield* Effect.interrupt;
         return yield* Effect.fail(asCreationFailure(failure));
       }
@@ -263,12 +261,7 @@ export class Worktrees {
           before,
           created,
         );
-        if (cleanup)
-          return yield* new IncompleteCleanupError({
-            remains: cleanup,
-            inspect: `${location} and branch ${branch}`,
-            failure: failureText(failure),
-          });
+        if (cleanup) return yield* new IncompleteCleanupError({ remains: cleanup });
         if (failure === undefined) return yield* Effect.interrupt;
         return yield* Effect.fail(asCreationFailure(failure));
       }
@@ -297,7 +290,7 @@ export class Worktrees {
     parentIdentity: string,
     before: WorktreeRecord[],
     created: CreatedBranch,
-  ): Effect.Effect<string | undefined> {
+  ): Effect.Effect<Leftover | undefined> {
     return Effect.gen({ self: this }, function* () {
       const listed = yield* directory.git(listArgs, undefined, { untranslated: true });
       const registered = readWorktrees(listed.toString()).find((worktree) =>
@@ -311,18 +304,17 @@ export class Worktrees {
           registered.ref !== created.ref ||
           registered.head !== created.commit
         )
-          return 'another worktree is at the location';
+          return 'other-worktree';
         // Through a parent swapped for a link, the removal would reach another folder.
-        if (folderIdentity(dirname(location)) !== parentIdentity)
-          return 'the location parent changed';
+        if (folderIdentity(dirname(location)) !== parentIdentity) return 'parent-changed';
         // Still locked by this creation, it holds nothing but this creation's checkout (perhaps
         // partial) and what its hooks wrote: remove it despite the lock and any changes.
         yield* directory.git(['worktree', 'remove', '--force', '--force', '--', location]);
       }
       // A checkout left at the location may still use the branch, so both are kept.
-      if (yield* exists(location)) return 'location still exists';
+      if (yield* exists(location)) return 'location-exists';
       return yield* this.removeBranch(directory, created, true);
-    }).pipe(Effect.catch((error) => Effect.succeed(failureText(error))));
+    }).pipe(Effect.catch(() => Effect.succeed('cleanup-failed' as const)));
   }
   /**
    * Deletes the branch this creation made while it is unchanged: still at its commit, with this
@@ -333,7 +325,7 @@ export class Worktrees {
     directory: Directory,
     { ref, commit, nonce }: CreatedBranch,
     made: boolean,
-  ): Effect.Effect<string | undefined> {
+  ): Effect.Effect<Leftover | undefined> {
     const resolveRef = directory
       .git(['rev-parse', '--verify', '--quiet', '--end-of-options', ref])
       .pipe(
@@ -346,11 +338,11 @@ export class Worktrees {
         Effect.as(true),
         Effect.orElseSucceed(() => false),
       );
-      if (symbolic) return 'the branch was replaced by a symbolic ref';
+      if (symbolic) return 'symbolic-branch';
       const current = yield* resolveRef;
       if (!current) return undefined;
       // A branch that moved is someone's work; one this creation did not make is theirs.
-      if (current !== commit) return made ? 'the branch has moved since it was made' : undefined;
+      if (current !== commit) return made ? 'moved-branch' : undefined;
       const latest = yield* directory
         .git(['log', '-g', '-n', '1', '--format=%H%x00%gs', '--end-of-options', ref, '--'])
         .pipe(
@@ -361,11 +353,11 @@ export class Worktrees {
         yield* directory
           .git(['update-ref', '--no-deref', '-d', ref, commit])
           .pipe(Effect.orElseSucceed(() => undefined));
-        return (yield* resolveRef) === commit ? 'branch still exists' : undefined;
+        return (yield* resolveRef) === commit ? 'branch-exists' : undefined;
       }
       if (!made && latest) return undefined;
-      return 'branch still exists and its reflog does not confirm this creation made it';
-    }).pipe(Effect.catch((error) => Effect.succeed(failureText(error))));
+      return 'unconfirmed-branch';
+    }).pipe(Effect.catch(() => Effect.succeed('cleanup-failed' as const)));
   }
 }
 
@@ -416,7 +408,7 @@ const exists = (path: string) =>
   );
 
 function asCreationFailure(error: unknown) {
-  return isWorkspaceHostError(error) ? error : new WorktreeGitError({ detail: failureText(error) });
+  return isWorkspaceHostError(error) ? error : new WorktreeGitError();
 }
 /** A failure from `cause`, which may be an interruption: the first failure, or none. */
 const failureOf = (cause: Cause.Cause<unknown>) =>

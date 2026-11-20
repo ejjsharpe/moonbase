@@ -64,7 +64,17 @@ class InjectedStoreFailure extends WorkspaceStoreError {
     super({ failure: 'publication' });
     this.#text = text;
   }
-  override get message() {
+  override get message(): string {
+    return this.#text;
+  }
+}
+class InjectedRefusal extends RecordedRefusalError {
+  readonly #text: string;
+  constructor(text: string) {
+    super({ refusal: 'invalid' });
+    this.#text = text;
+  }
+  override get message(): string {
     return this.#text;
   }
 }
@@ -307,9 +317,9 @@ export function fauxWorkspace(given: Seed[]) {
         const project = projectSeeds(checkout).filter((seed) => seed.checkout.vcs === 'git');
         const branchOf = (seed: HeldSeed) => seed.checkout.vcs === 'git' && seed.checkout.branch;
         const source = project.find((seed) => branchOf(seed) === base);
-        if (!source) fail(new InvalidBaseError({ base }));
+        if (!source) fail(new InvalidBaseError());
         if (project.some((seed) => branchOf(seed) === branch))
-          fail(new BranchTakenError({ branch, inside: false }));
+          fail(new BranchTakenError({ inside: false }));
         if (seeds.some((seed) => seed.checkout.root === location))
           fail(new WorkspaceConflictError({ conflict: 'location-exists' }));
         const head = new Map(source!.head ?? Object.entries(source!.files));
@@ -593,10 +603,10 @@ export function fauxWorkspace(given: Seed[]) {
       else error = new InjectedStoreFailure(failure);
       faults.set(name, { error, after });
     },
-    /** Refuses `name`'s next call as given, before it runs, as a host replays a refusal with its text. */
+    /** Refuses `name`'s next call as given, before it runs, as a host replays a refusal; shown as `text`. */
     refuseNext(name: WorkspaceCommand, text: string) {
       faults.set(name, {
-        error: new RecordedRefusalError({ refusal: 'invalid', text }),
+        error: new InjectedRefusal(text),
         after: false,
       });
     },

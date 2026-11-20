@@ -22,7 +22,6 @@ import {
   DaemonRpcLink,
   DaemonRpcLinkLive,
   followWatch,
-  presentRemoteError,
   type DaemonRpc,
   type RemoteError,
 } from './daemon-rpc-link.ts';
@@ -51,7 +50,6 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, DaemonRpcLink> = La
           // A chat a client makes chooses its own folder and model, which only a daemon offers.
           capability:
             operation === 'createChat' ? chatHostCapabilities.local : chatHostCapabilities.chat,
-          present: (error) => presentRemoteError(error, operation),
           check: (output, health) =>
             // Every host is a daemon whose chats choose their own folder and model.
             operation === 'getChatHost' && !health.capabilities.includes(chatHostCapabilities.local)
@@ -130,7 +128,6 @@ const sendDaemonCommand = <K extends DaemonCommand, A extends DaemonOutput<K>, E
 ) =>
   link.call(operation, (method) => send(method, { host: link.host, input }), {
     capability: daemonCommandCapabilities[operation],
-    present: (error) => presentRemoteError(error, operation),
     check: (output) => {
       const requestId = (input as { requestId?: string }).requestId;
       if (requestId !== undefined && (output as { requestId?: string }).requestId !== requestId)

@@ -4,7 +4,7 @@ import type { ErrorGroup } from './error-groups.ts';
 
 // The errors a `ConnectionService` fails with. They belong to the port, since contracts imports
 // no implementation: SSH, the loopback connection, desktop's own daemon and the daemon protocol's
-// health check build them. Each reason has what it means for the request (`error-groups`) and its
+// health check build them. Each reason has what it means for the request (its `group`) and its
 // message, which is Moonbase's own; nothing from a remote host, a path or a cause reaches one (D11).
 
 const connectionReasons = {
@@ -101,6 +101,9 @@ export type ConnectionErrorReason = keyof typeof connectionReasons;
 export class ConnectionError extends Schema.TaggedError<ConnectionError>()('ConnectionError', {
   reason: Schema.Literals(Object.keys(connectionReasons) as [ConnectionErrorReason]),
 }) {
+  get group(): ErrorGroup {
+    return connectionReasons[this.reason][0];
+  }
   override get message(): string {
     return connectionReasons[this.reason][1];
   }
@@ -136,6 +139,9 @@ export class HostVerificationError extends Schema.TaggedError<HostVerificationEr
     reason: Schema.Literals(Object.keys(verificationReasons) as [HostVerificationReason]),
   },
 ) {
+  get group(): ErrorGroup {
+    return verificationReasons[this.reason][0];
+  }
   override get message(): string {
     return verificationReasons[this.reason][1];
   }
@@ -167,6 +173,9 @@ export type LocalDaemonErrorReason = keyof typeof localDaemonReasons;
 export class LocalDaemonError extends Schema.TaggedError<LocalDaemonError>()('LocalDaemonError', {
   reason: Schema.Literals(Object.keys(localDaemonReasons) as [LocalDaemonErrorReason]),
 }) {
+  get group(): ErrorGroup {
+    return 'unavailable';
+  }
   override get message(): string {
     return localDaemonReasons[this.reason];
   }
@@ -178,11 +187,3 @@ export type ConnectionFailure =
   | HostVerificationError
   | LocalDaemonError
   | CancelledError;
-
-/** What a connection failure means for its request, by its reason (see `error-groups`). */
-export const getConnectionErrorGroup = (
-  error: ConnectionError | HostVerificationError,
-): ErrorGroup =>
-  error._tag === 'ConnectionError'
-    ? connectionReasons[error.reason][0]
-    : verificationReasons[error.reason][0];

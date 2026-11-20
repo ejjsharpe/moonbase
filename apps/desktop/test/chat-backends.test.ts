@@ -237,7 +237,7 @@ test('turning a chat into a project is one daemon operation, asked again only wh
       adoptCheckout: (target) => adopted.push(target.root),
     });
   const owner = await make();
-  refusal = new RecordedRefusalError({ refusal: 'unauthorized', text: 'Not yours.' });
+  refusal = new RecordedRefusalError({ refusal: 'unauthorized' });
   assert.equal(getErrorGroup(await fail(owner.turnIntoProject('planted'))), 'access');
   assert.deepEqual(adopted, []);
   // An unknown outcome is asked for again under its request, after a restart too, and so is one

@@ -1,4 +1,5 @@
 import * as Schema from 'effect/Schema';
+import type { ErrorGroup } from './error-groups.ts';
 import { isWorkspaceHostError, type WorkspaceHostError } from './workspace-host-errors.ts';
 
 // What the client-facing `WorkspaceService` fails with (epic #273 D14): the file host's errors,
@@ -18,6 +19,9 @@ export class RecoveryConflictError extends Schema.TaggedError<RecoveryConflictEr
     conflict: Schema.Literals(Object.keys(recoveryConflicts) as (keyof typeof recoveryConflicts)[]),
   },
 ) {
+  get group(): ErrorGroup {
+    return 'conflict';
+  }
   override get message() {
     return recoveryConflicts[this.conflict];
   }
@@ -47,6 +51,9 @@ export class RecoveryPublicationError extends Schema.TaggedError<RecoveryPublica
     detail: Schema.optional(Schema.String),
   },
 ) {
+  get group(): ErrorGroup {
+    return 'storage';
+  }
   override get message() {
     return pendingPublications[this.pending] + (this.detail ?? '');
   }
@@ -69,6 +76,9 @@ export class InvalidRecoveryRequestError extends Schema.TaggedError<InvalidRecov
     problem: Schema.Literals(Object.keys(recoveryProblems) as (keyof typeof recoveryProblems)[]),
   },
 ) {
+  get group(): ErrorGroup {
+    return 'refusal';
+  }
   override get message() {
     return recoveryProblems[this.problem];
   }
@@ -78,6 +88,9 @@ export class UnreadableRecoveryError extends Schema.TaggedError<UnreadableRecove
   'UnreadableRecoveryError',
   { client: Schema.String },
 ) {
+  get group(): ErrorGroup {
+    return 'refusal';
+  }
   override get message() {
     return `Recovery of ${this.client} is unreadable and may hold drafts at the destination.`;
   }
@@ -87,6 +100,9 @@ export class ObserverAccessError extends Schema.TaggedError<ObserverAccessError>
   'ObserverAccessError',
   {},
 ) {
+  get group(): ErrorGroup {
+    return 'access';
+  }
   override get message() {
     return 'Observer has not opened this exact checkout.';
   }
@@ -96,6 +112,9 @@ export class SaveNotSentError extends Schema.TaggedError<SaveNotSentError>()(
   'SaveNotSentError',
   {},
 ) {
+  get group(): ErrorGroup {
+    return 'unavailable';
+  }
   override get message() {
     return 'The save never reached the host; its text was kept as a draft. Save it again as a new request.';
   }
@@ -105,6 +124,9 @@ export class UnexpectedHostReplyError extends Schema.TaggedError<UnexpectedHostR
   'UnexpectedHostReplyError',
   {},
 ) {
+  get group(): ErrorGroup {
+    return 'incompatible';
+  }
   override get message() {
     return 'The host reports a different text saved.';
   }
@@ -132,11 +154,7 @@ export const recoveryErrors = [
   SaveNotSentError,
   UnexpectedHostReplyError,
 ] as const;
-const recoveryTags: ReadonlySet<string> = new Set(recoveryErrors.map((error) => error.identifier));
-const isRecoveryError = (value: unknown): value is RecoveryError => {
-  const tag = value instanceof Error ? (value as { _tag?: unknown })._tag : undefined;
-  return typeof tag === 'string' && recoveryTags.has(tag);
-};
+const isRecoveryError = Schema.is(Schema.Union(recoveryErrors));
 
 /** Whether `value` is one of the workspace's errors, the host's or the recovery store's. */
 export const isWorkspaceError = (value: unknown): value is WorkspaceError =>

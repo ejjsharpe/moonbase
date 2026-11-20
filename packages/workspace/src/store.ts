@@ -10,7 +10,6 @@ import {
   InvalidRequestError,
   WorkspaceStoreError,
 } from '@moonbase/contracts/workspace-host-errors';
-import { errorText } from './validation.ts';
 
 /** Per bucket, the decoder of a stored record's JSON body (see `strictDecoders`). */
 export type Decoders = Record<string, (body: unknown) => Exit.Exit<unknown, unknown>>;
@@ -135,8 +134,8 @@ export class Store {
   write(sql: string, parameters: SQLInputValue[]) {
     try {
       return this.statement(sql).run(...parameters);
-    } catch (error) {
-      throw new WorkspaceStoreError({ failure: 'publication', detail: errorText(error) });
+    } catch {
+      throw new WorkspaceStoreError({ failure: 'publication' });
     }
   }
   reserve<T>(bucket: string, key: string, value: T): T | null {
@@ -145,8 +144,8 @@ export class Store {
         'INSERT INTO records VALUES(?,?,?) ON CONFLICT(bucket,key) DO NOTHING',
       ).run(bucket, key, JSON.stringify(value));
       return Number(result.changes) === 0 ? this.get<T>(bucket, key) : null;
-    } catch (error) {
-      throw new WorkspaceStoreError({ failure: 'reservation', detail: errorText(error) });
+    } catch {
+      throw new WorkspaceStoreError({ failure: 'reservation' });
     }
   }
   delete(bucket: string, key: string) {

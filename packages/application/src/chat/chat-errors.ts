@@ -5,13 +5,9 @@ import {
   isUnavailable,
   type ErrorGroup,
 } from '@moonbase/contracts/error-groups';
-import {
-  getTranscriptReadGroup,
-  type TranscriptReadError,
-} from './transcript/transcript-errors.ts';
 
 // What the chat application itself refuses or reports (epic #273 D14). Each reason names what
-// happened, what it means for the request (`error-groups`) and its message, which is Moonbase's
+// happened, what it means for the request (its `group`) and its message, which is Moonbase's
 // own. `describeChatFailure` is the one place a failure becomes the text the chat shows.
 
 const reasons = {
@@ -52,6 +48,9 @@ export type ChatRefusalReason = keyof typeof reasons;
 export class ChatRefusedError extends Schema.TaggedError<ChatRefusedError>()('ChatRefusedError', {
   reason: Schema.Literals(Object.keys(reasons) as ChatRefusalReason[]),
 }) {
+  get group(): ErrorGroup {
+    return reasons[this.reason][0];
+  }
   override get message(): string {
     return reasons[this.reason][1];
   }
@@ -100,24 +99,16 @@ export class NewChatDraftError extends Schema.TaggedError<NewChatDraftError>()(
   }
 }
 
-const isTagged = (value: unknown, tag: string) =>
-  value instanceof Error && (value as { _tag?: unknown })._tag === tag;
-const isOwnError = (value: unknown): value is ChatRefusedError | DraftStorageError =>
-  isTagged(value, 'ChatRefusedError') || isTagged(value, 'DraftStorageError');
-const isTranscriptReadError = (value: unknown): value is TranscriptReadError =>
-  isTagged(value, 'TranscriptReadError');
-const isRefusedFor = (error: unknown, group: ErrorGroup) =>
-  isTagged(error, 'ChatRefusedError') && reasons[(error as ChatRefusedError).reason][0] === group;
+const isDraftStorageError = (value: unknown): value is DraftStorageError =>
+  value instanceof Error && (value as { _tag?: unknown })._tag === 'DraftStorageError';
 
-/** The host could not be reached (a restarted daemon, say): watching again may succeed. */
-export const isChatUnavailable = (error: unknown) =>
-  isUnavailable(error) ||
-  isRefusedFor(error, 'unavailable') ||
-  (isTranscriptReadError(error) && getTranscriptReadGroup(error) === 'unavailable');
+/**
+ * The host could not be reached (a restarted daemon, say): watching again may succeed. The chat's
+ * own errors declare their group too, so this is `error-groups`' own.
+ */
+export const isChatUnavailable = isUnavailable;
 /** What a transcript read was reading changed under it. */
-export const isChatConflict = (error: unknown) =>
-  isConflict(error) ||
-  (isTranscriptReadError(error) && getTranscriptReadGroup(error) === 'conflict');
+export const isChatConflict = isConflict;
 
 const fixedText = {
   UncertainError: 'The outcome is uncertain. Check it before retrying; do not send it again.',
@@ -145,7 +136,6 @@ export function describeChatOutcome(error: unknown): string | undefined {
 export function describeChatFailure(error: unknown): string {
   const outcome = describeChatOutcome(error);
   if (outcome !== undefined) return outcome;
-  if (isOwnError(error) || isTranscriptReadError(error) || isKnownError(error))
-    return (error as Error).message;
+  if (isDraftStorageError(error) || isKnownError(error)) return (error as Error).message;
   return fallback;
 }

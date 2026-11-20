@@ -1,4 +1,5 @@
 import * as Schema from 'effect/Schema';
+import type { ErrorGroup } from './error-groups.ts';
 import { UnauthorizedError, type UncertainError } from './errors.ts';
 import type { ConnectionFailure } from './connection-errors.ts';
 
@@ -25,6 +26,9 @@ export class HostUnavailableError extends Schema.TaggedError<HostUnavailableErro
   'HostUnavailableError',
   { reason: Schema.Literals(Object.keys(unavailable) as (keyof typeof unavailable)[]) },
 ) {
+  get group(): ErrorGroup {
+    return 'unavailable';
+  }
   override get message() {
     return unavailable[this.reason];
   }
@@ -47,6 +51,9 @@ export class IncompatibleHostError extends Schema.TaggedError<IncompatibleHostEr
     reason: Schema.Literals(Object.keys(incompatibilities) as (keyof typeof incompatibilities)[]),
   },
 ) {
+  get group(): ErrorGroup {
+    return 'incompatible';
+  }
   override get message() {
     return incompatibilities[this.reason];
   }
@@ -57,6 +64,9 @@ export class HostKeyExposedError extends Schema.TaggedError<HostKeyExposedError>
   'HostKeyExposedError',
   {},
 ) {
+  get group(): ErrorGroup {
+    return 'refusal';
+  }
   override get message() {
     return 'Keep the private host key separate from public chat identities and settings.';
   }
@@ -67,6 +77,9 @@ export class RequestReusedError extends Schema.TaggedError<RequestReusedError>()
   'RequestReusedError',
   {},
 ) {
+  get group(): ErrorGroup {
+    return 'refusal';
+  }
   override get message() {
     return 'Request ID is already bound to another operation or input.';
   }

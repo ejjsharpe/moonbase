@@ -1,7 +1,7 @@
 import { Effect, Layer, Semaphore, Stream } from 'effect';
 import type { RpcGroup } from 'effect/rpc';
 import type { RpcClientError } from 'effect/rpc/RpcClientError';
-import { CancelledError, UnauthorizedError, UncertainError } from '@moonbase/contracts/errors';
+import { UnauthorizedError } from '@moonbase/contracts/errors';
 import { chatHostCapabilities, type ChatHostTarget } from '@moonbase/contracts/host';
 import { IncompatibleHostError } from '@moonbase/contracts/host-errors';
 import {
@@ -22,82 +22,12 @@ import type {
   WorkspaceWatchValue,
 } from '@moonbase/contracts/workspace-host';
 import {
-  BranchTakenError,
-  GitStatusFormatError,
-  IncompleteCleanupError,
-  InterruptedRequestError,
-  InvalidBaseError,
-  InvalidPatternError,
   InvalidRequestError,
-  RecordedRefusalError,
-  WorkspaceStoreError,
-  WorktreeGitError,
   type WorkspaceHostError,
 } from '@moonbase/contracts/workspace-host-errors';
 import { decodeHostInput, hostInputCheckout } from '@moonbase/contracts/workspace-host-schema';
 import { hostDeadlineMs, isHostStatusCall, WorkspaceRpcs } from '@moonbase/contracts/workspace-rpc';
 import { makeRpcLink, type ProcedureMethod } from './rpc-link.ts';
-
-/** The client's own text for a refusal a host recorded, by its kind. */
-const recordedRefusals = {
-  invalid: 'The host refused this request as invalid.',
-  unauthorized: 'The host did not authorize this request.',
-  conflict: 'The host found a conflict with this request.',
-  incompatible: 'The host’s authority or protocol is incompatible.',
-} as const;
-
-/**
- * A file host's error as the client shows it (D11): decoded into the client's own classes, with
- * every field a host could fill with text (Git's output, paths, a pattern's reason, a refusal's
- * text) dropped or replaced by the client's own, so its message is the client's. A branch
- * `createWorktree` found taken is named as the client asked for it, from its `input`; a chat
- * worktree's derives its own, so it names none.
- */
-export function presentWorkspaceError(
-  error: WorkspaceHostError,
-  operation: string,
-  input?: unknown,
-): WorkspaceHostError {
-  switch (error._tag) {
-    case 'BranchTakenError': {
-      const branch =
-        operation === 'createWorktree'
-          ? (input as { branch?: unknown } | undefined)?.branch
-          : undefined;
-      return new BranchTakenError({
-        inside: error.inside,
-        ...(typeof branch === 'string' ? { branch } : {}),
-      });
-    }
-    case 'UncertainError':
-      return new UncertainError({ operation });
-    case 'UnauthorizedError':
-      return new UnauthorizedError({ operation });
-    case 'CancelledError':
-      return new CancelledError({ operation });
-    case 'InterruptedRequestError':
-      return new InterruptedRequestError({ operation });
-    case 'InvalidBaseError':
-      return new InvalidBaseError({});
-    case 'InvalidPatternError':
-      return new InvalidPatternError({});
-    case 'WorktreeGitError':
-      return new WorktreeGitError({});
-    case 'GitStatusFormatError':
-      return new GitStatusFormatError({});
-    case 'IncompleteCleanupError':
-      return new IncompleteCleanupError({});
-    case 'WorkspaceStoreError':
-      return new WorkspaceStoreError({ failure: error.failure });
-    case 'RecordedRefusalError':
-      return new RecordedRefusalError({
-        refusal: error.refusal,
-        text: recordedRefusals[error.refusal],
-      });
-    default:
-      return error;
-  }
-}
 
 type WorkspaceRpc = RpcGroup.Rpcs<typeof WorkspaceRpcs>;
 
@@ -200,7 +130,6 @@ export const RemoteWorkspaceHostLive = (config: {
                     { semaphore: places, permits: 1 },
                     { semaphore: bytes, permits: size },
                   ],
-              present: (error) => presentWorkspaceError(error, operation, input),
               check: (output) =>
                 outputCheckouts(operation, output).every(
                   (checkout) => checkout.hostId === host.hostId,
@@ -241,7 +170,6 @@ export const RemoteWorkspaceHostLive = (config: {
               link
                 .follow('watchWorkspace', (method) => method({ host, checkout }), {
                   capability: chatHostCapabilities.workspace,
-                  present: (error) => presentWorkspaceError(error, 'watchWorkspace'),
                   next: (_previous: WorkspaceWatchValue | undefined, value: WorkspaceWatchValue) =>
                     Effect.succeed(value),
                 })

@@ -23,7 +23,7 @@ import { HostUnavailableError, IncompatibleHostError } from '@moonbase/contracts
 import { ChatRpcs } from '@moonbase/contracts/chat-rpc';
 import { LocalHostRpcs, ProviderSetupRpcs } from '@moonbase/contracts/daemon-rpc';
 import { isMutationRpc } from '@moonbase/contracts/rpc-annotations';
-import { declaredErrorsOf, isOneOf, type Procedure } from '../declared-errors.ts';
+import { declaredErrorsOf, isDeclaredBy, type Procedure } from '../declared-errors.ts';
 import type { MutationInput, MutationReplay } from './mutation-replay.ts';
 import { projectWatchDelta } from './watch-deltas.ts';
 
@@ -49,10 +49,10 @@ export const toWire = <Rpcs extends Procedure, const Tag extends Rpcs['_tag']>(
   group: RpcGroup.RpcGroup<Rpcs>,
   operation: Tag,
 ) => {
-  const errors = declaredErrorsOf(group.requests.get(operation)!);
+  const isDeclared = isDeclaredBy(declaredErrorsOf(group.requests.get(operation)!));
   return (error: unknown): Rpc.ErrorExit<Rpc.ExtractTag<Rpcs, Tag>> | HostUnavailableError =>
     // An instance of a class the union names is of its type.
-    isOneOf(errors, error)
+    isDeclared(error)
       ? (error as Rpc.ErrorExit<Rpc.ExtractTag<Rpcs, Tag>>)
       : new HostUnavailableError({ reason: 'failed' });
 };

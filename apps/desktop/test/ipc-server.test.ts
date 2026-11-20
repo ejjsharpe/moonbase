@@ -216,7 +216,7 @@ test('a handler’s defect reaches the renderer without its diagnostics, and its
       ok: false,
       error: { _tag: 'IpcFailedError' },
     });
-    const declared = new WorkspaceStoreError({ failure: 'publication', detail: 'Disk full.' });
+    const declared = new WorkspaceStoreError({ failure: 'publication' });
     failure = Effect.fail(declared);
     await assert.rejects(
       f.workspace((w) => w.readFile(read)),

@@ -3,7 +3,8 @@ import * as Schema from 'effect/Schema';
 import type { ErrorGroup } from '@moonbase/contracts/error-groups';
 
 // What a transcript read found wrong with what it read (epic #273 D14). Each problem names what
-// happened and its message is Moonbase's own; `describeChatFailure` shows it.
+// happened, what it means for the read (its `group`) and its message, which is Moonbase's own;
+// `describeChatFailure` shows it.
 
 const problems = {
   'source-changed': ['conflict', 'Transcript source changed or is stale.'],
@@ -41,14 +42,13 @@ export class TranscriptReadError extends Schema.TaggedError<TranscriptReadError>
   'TranscriptReadError',
   { problem: Schema.Literals(Object.keys(problems) as TranscriptReadProblem[]) },
 ) {
+  get group(): ErrorGroup {
+    return problems[this.problem][0];
+  }
   override get message(): string {
     return problems[this.problem][1];
   }
 }
-
-/** What a transcript read's problem means for the read (see `error-groups`). */
-export const getTranscriptReadGroup = (error: TranscriptReadError): ErrorGroup =>
-  problems[error.problem][0];
 
 /** Runs a synchronous check, failing with the `TranscriptReadError` it throws. */
 export const checkTranscript = <A>(check: () => A): Effect.Effect<A, TranscriptReadError> =>

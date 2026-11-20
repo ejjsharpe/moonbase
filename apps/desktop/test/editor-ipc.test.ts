@@ -452,7 +452,7 @@ test('captured imports belong to the document: released with it, or at once when
     await assert.rejects(late);
     assert.deepEqual(released, [['kept'], ['late']]);
     // A failed release has no request to answer with, so it is reported.
-    const failure = new WorkspaceStoreError({ failure: 'publication', detail: 'Release failed' });
+    const failure = new WorkspaceStoreError({ failure: 'publication' });
     release = Effect.fail(failure);
     capture = Promise.withResolvers();
     capture.resolve(['failing']);

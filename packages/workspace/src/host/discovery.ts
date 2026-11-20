@@ -511,8 +511,8 @@ export class Discovery {
           const stderr = failure.stderr.trim();
           if (!received) {
             // A bad pattern fails before any file is searched, so it leaves no JSON behind.
-            const reason = failure.status === 2 ? regexFailure(stderr) : undefined;
-            return Effect.fail(reason ? new InvalidPatternError({ reason }) : failure);
+            const invalid = failure.status === 2 && regexFailure(stderr) !== undefined;
+            return Effect.fail(invalid ? new InvalidPatternError() : failure);
           }
           // Exit 2 after searching means some files could not be read; the rest are complete.
           if (failure.status === 2)

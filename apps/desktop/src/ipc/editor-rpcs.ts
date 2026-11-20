@@ -20,6 +20,7 @@ import { IpcAdmission } from './ipc-admission.ts';
 import {
   IpcAuthorityError,
   IpcInputError,
+  ipcErrors,
   NativeActionError,
 } from '@moonbase/contracts/ipc-errors';
 import { workspaceServiceErrors } from './ipc-errors.ts';
@@ -27,15 +28,10 @@ import { exact, RelativeCheckoutPathSchema } from './ipc-limits.ts';
 
 /** The editor's client ID, the only one its document may act as. */
 export const editorClientId = 'desktop-primary';
-// Each procedure's errors: what its handler refuses, and what the workspace fails with.
-const union = <const E extends readonly Schema.Top[]>(errors: E) =>
-  Schema.Union([...new Set(errors)] as unknown as E);
-/** A workspace command or watch for something main never approved for this document. */
-const error = union([IpcAuthorityError, ...workspaceServiceErrors]);
-/** An operation's status or acknowledgement: also a malformed request identity. */
-const statusError = union([IpcAuthorityError, IpcInputError, ...workspaceServiceErrors]);
-/** A native import: also the native action's own refusals. */
-const importError = union([IpcAuthorityError, NativeActionError, ...workspaceServiceErrors]);
+// Each procedure's errors: what the `WorkspaceService` port fails with, which names desktop IPC's
+// errors as well as the workspace's, since a window reaches it over IPC. Main's own refusals (a
+// document's authority, a malformed request identity, a native action) are among IPC's.
+const error = Schema.Union([...ipcErrors, ...workspaceServiceErrors]);
 /** A workspace command, a mutation where the file host's operation it runs is one. */
 const command = <const K extends keyof typeof workspaceInputSchemas>(operation: K) =>
   Rpc.make(operation, {
@@ -47,7 +43,7 @@ const statusCommand = <const K extends 'operationStatus' | 'acknowledgeOperation
   Rpc.make(operation, {
     payload: exact(workspaceInputSchemas[operation]),
     success: toWireReply(workspaceOutputSchemas[operation]),
-    error: statusError,
+    error,
   })
     .annotate(Mutation, isHostMutation(operation))
     .annotate(StatusCall, isHostStatusCall(operation));
@@ -104,9 +100,9 @@ export class EditorRpcs extends RpcGroup.make(
   }),
   /** The native folder picker; the chosen root may then be opened once. */
   Rpc.make('chooseCheckout', { success: Schema.NullOr(Schema.String) }),
-  Rpc.make('chooseImports', { payload: checkout, success: imports, error: importError }),
+  Rpc.make('chooseImports', { payload: checkout, success: imports, error }),
   /** Finder files on the clipboard, after the user consents. */
-  Rpc.make('pasteImports', { payload: checkout, success: imports, error: importError }),
+  Rpc.make('pasteImports', { payload: checkout, success: imports, error }),
   Rpc.make('dropImports', {
     payload: exact(
       Schema.Struct({
@@ -118,7 +114,7 @@ export class EditorRpcs extends RpcGroup.make(
       }),
     ),
     success: imports,
-    error: importError,
+    error,
   }),
   /** Main writes the clipboard, so the renderer can put only checkout paths on it. */
   Rpc.make('copyPaths', {
@@ -132,10 +128,10 @@ export class EditorRpcs extends RpcGroup.make(
         relative: Schema.Boolean,
       }),
     ),
-    error: union([IpcAuthorityError, IpcInputError]),
+    error: Schema.Union([IpcAuthorityError, IpcInputError]),
   }),
   Rpc.make('revealPath', {
     payload: exact(Schema.Struct({ ...checkoutField, path: RelativeCheckoutPathSchema })),
-    error: union([IpcAuthorityError, IpcInputError, NativeActionError]),
+    error: Schema.Union([IpcAuthorityError, IpcInputError, NativeActionError]),
   }),
 ).middleware(IpcAdmission) {}

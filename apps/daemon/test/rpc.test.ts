@@ -92,7 +92,6 @@ test('one RPC connection runs every procedure and holds chat, chat-list and prov
                 capability: daemon
                   ? daemonCommandCapabilities[operation as DaemonCommand]
                   : chatHostCapabilities.chat,
-                present: (error) => error,
               },
             ),
           ),

@@ -86,12 +86,16 @@ test('a rename or copy lists its target as added and skips the source path recor
 
 test('empty output has no changes and malformed records are refused', () => {
   assert.deepEqual(parse(''), []);
-  // A typed failure, not a defect, so getStatus reports the empty status with its note.
+  // A typed failure, not a defect, so getStatus reports the empty status with its note. The
+  // record stays on the host: it can name a checkout's paths, and the note reaches clients.
   for (const output of [
     records('M'),
     records('MMfile.ts'),
-    records('X  file.ts'),
+    records('X  /private/checkout/file.ts'),
     records(' X file.ts'),
-  ])
-    assert.ok(Effect.runSync(Effect.flip(parseGitStatus(output))) instanceof GitStatusFormatError);
+  ]) {
+    const error = Effect.runSync(Effect.flip(parseGitStatus(output)));
+    assert.ok(error instanceof GitStatusFormatError);
+    assert.ok(!JSON.stringify(error).includes('file.ts') && !error.message.includes('file.ts'));
+  }
 });
