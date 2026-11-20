@@ -1,43 +1,30 @@
 import {
-  Cause,
   Context,
   Effect,
-  Exit,
   FiberHandle,
   FiberSet,
   Fiber,
   Layer,
   Option,
+  Ref,
+  Semaphore,
   Stream,
   SubscriptionRef,
 } from 'effect';
-import type { ProviderCommand, ProviderInput, ProviderState } from '@moonbase/contracts/providers';
+import type { ProviderCommand, ProviderInput } from '@moonbase/contracts/providers';
 import { ChatConfig } from '../chat-config.ts';
 import type { ProviderSetupPort } from '../chat-ports.ts';
-import { describeChatFailure, isChatUnavailable } from '../chat-errors.ts';
+import { isChatUnavailable } from '../chat-errors.ts';
 import { ChatActions } from '../actions/actions-service.ts';
 import { retryWatch } from '../../watch-retry.ts';
-
-export type ProviderSetupSnapshot = {
-  status: ProviderState | null;
-  /** A command is running. */
-  busy: boolean;
-  error: string | null;
-};
-/** A command that started; its identity is what `ProviderSetupState` tracks. */
-type Command = { readonly read: boolean };
-/** Provider setup's state: what a view shows, and what decides whose reply shows. */
-export type ProviderSetupState = ProviderSetupSnapshot & {
-  /** Commands that started and haven't settled; `busy` while any does. */
-  active: ReadonlySet<Command>;
-  /** The newest command: only its reply or error shows. */
-  owner: Command | null;
-  /** The open watch has delivered: it is the state's source and command replies stop replacing it. */
-  watched: boolean;
-};
+import {
+  settleCommand,
+  startCommand,
+  type ProviderSetupCommand,
+  type ProviderSetupState,
+} from './provider-setup.ts';
 
 type Call = ReturnType<ProviderSetupPort['getProviders']>;
-type Reply = Exit.Exit<Effect.Success<Call>, Effect.Error<Call>>;
 
 export type ChatProviderSetupShape = {
   /** Whether the host serves provider setup. */
@@ -49,31 +36,6 @@ export type ChatProviderSetupShape = {
   readonly cancel: (flowId: string) => Effect.Effect<void>;
   readonly openUrl: (flowId: string) => Effect.Effect<void>;
   readonly logout: (providerId: string) => Effect.Effect<void>;
-};
-
-/** A command starts, unless it is a read and a mutation runs, whose reply is newer. */
-const startCommand = (s: ProviderSetupState, command: Command): ProviderSetupState | null =>
-  command.read && [...s.active].some((other) => !other.read)
-    ? null
-    : { ...s, active: new Set([...s.active, command]), owner: command, busy: true, error: null };
-
-/**
- * A command settles: it is no longer active, and its reply shows if it is still the newest
- * command, a failure as the error and a success as the status until the watch delivers.
- */
-const settleCommand = (
-  s: ProviderSetupState,
-  command: Command,
-  reply: Reply,
-): ProviderSetupState => {
-  const active = new Set(s.active);
-  active.delete(command);
-  const settled = { ...s, active, busy: active.size > 0 };
-  if (s.owner !== command) return settled;
-  if (Exit.isSuccess(reply)) return s.watched ? settled : { ...settled, status: reply.value };
-  return Cause.hasInterruptsOnly(reply.cause)
-    ? settled
-    : { ...settled, error: describeChatFailure(Cause.squash(reply.cause)) };
 };
 
 /**
@@ -108,11 +70,27 @@ export class ChatProviderSetup extends Context.Service<ChatProviderSetup, ChatPr
       const update = (f: (s: ProviderSetupState) => ProviderSetupState) =>
         SubscriptionRef.update(state, f);
 
+      /**
+       * Admitting work and registering its fiber are one step under this permit, so competing
+       * starts and closing see each other whole: a command is either registered or never starts.
+       */
+      const admission = yield* Semaphore.make(1);
+      const closing = yield* Ref.make(false);
+      /** Runs `start` as one admitted step, unless the chat is closing. */
+      const admit = <A>(start: Effect.Effect<A | undefined>) =>
+        admission.withPermit(
+          Effect.gen(function* () {
+            if ((yield* Ref.get(closing)) || !(yield* actions.accepting)) return undefined;
+            return yield* start;
+          }),
+        );
+
       if (port)
-        // Registered last, so it runs first: running commands settle and show their replies, then
-        // a sign-in still running is cancelled, so it doesn't outlive the chat.
+        // Registered last, so it runs first: admission stops, running commands settle and show
+        // their replies, then a sign-in still running is cancelled, so it doesn't outlive the chat.
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
+            yield* admission.withPermit(Ref.set(closing, true));
             yield* FiberHandle.clear(watching);
             yield* FiberSet.awaitEmpty(mutations);
             const flow = (yield* SubscriptionRef.get(state)).status?.flow;
@@ -127,13 +105,8 @@ export class ChatProviderSetup extends Context.Service<ChatProviderSetup, ChatPr
         Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             const setup = port;
-            if (!setup || !(yield* actions.accepting)) return;
-            const self: Command = { read: operation === 'getProviders' };
-            const started = yield* SubscriptionRef.modify(state, (s) => {
-              const next = startCommand(s, self);
-              return next ? [true, next] : [false, s];
-            });
-            if (!started) return;
+            if (!setup) return;
+            const self: ProviderSetupCommand = { read: operation === 'getProviders' };
             const call = (setup[operation] as (input: ProviderInput<K>) => Call)(input);
             // A command settles once it ends, after its own cleanup, even if interrupted. A read is
             // interruptible; a mutation first interrupts the read, whose reply is older, then runs
@@ -145,17 +118,25 @@ export class ChatProviderSetup extends Context.Service<ChatProviderSetup, ChatPr
                   : Effect.andThen(FiberHandle.clear(reading), call),
               ).pipe(Effect.flatMap((reply) => update((s) => settleCommand(s, self, reply)))),
             );
-            const fiber = self.read
-              ? yield* FiberHandle.run(reading, work)
-              : yield* FiberSet.run(mutations, work);
-            yield* restore(Fiber.await(fiber));
+            const fiber = yield* admit(
+              Effect.gen(function* () {
+                const started = yield* SubscriptionRef.modify(state, (s) => {
+                  const next = startCommand(s, self);
+                  return next ? [true, next] : [false, s];
+                });
+                if (!started) return undefined;
+                return self.read
+                  ? yield* FiberHandle.run(reading, work)
+                  : yield* FiberSet.run(mutations, work);
+              }),
+            );
+            if (fiber) yield* restore(Fiber.await(fiber));
           }),
         );
 
       /** Opens the watch unless one is open or waiting to reopen. */
       const watch = Effect.gen(function* () {
-        if (!port || !(yield* actions.accepting)) return;
-        if (Option.isSome(yield* FiberHandle.get(watching))) return;
+        if (!port) return;
         const attempt = (_rewatched: boolean, up: Effect.Effect<void>) =>
           port.watch().pipe(
             Stream.runForEach((status) =>
@@ -166,15 +147,20 @@ export class ChatProviderSetup extends Context.Service<ChatProviderSetup, ChatPr
             ),
             Effect.ensuring(update((s) => ({ ...s, watched: false }))),
           );
-        yield* FiberHandle.run(
-          watching,
-          Effect.ignore(
-            retryWatch(attempt, {
-              retryMs: limits.watchRetryMs,
-              healthyMs: limits.watchHealthyMs,
-              isRetryable: isChatUnavailable,
-            }),
-          ),
+        yield* admit(
+          Effect.gen(function* () {
+            if (Option.isSome(yield* FiberHandle.get(watching))) return;
+            yield* FiberHandle.run(
+              watching,
+              Effect.ignore(
+                retryWatch(attempt, {
+                  retryMs: limits.watchRetryMs,
+                  healthyMs: limits.watchHealthyMs,
+                  isRetryable: isChatUnavailable,
+                }),
+              ),
+            );
+          }),
         );
       });
       /** Commands that start or continue a sign-in first make sure its progress is watched. */

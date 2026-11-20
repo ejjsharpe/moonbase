@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Effect, Exit, Fiber, SubscriptionRef } from 'effect';
+import { Effect, Exit, Fiber, Scheduler, SubscriptionRef } from 'effect';
 import type { ProviderState } from '@moonbase/contracts/providers';
 import { ChatProviderSetup } from '@moonbase/application/chat';
 import {
@@ -73,10 +73,11 @@ test('a sign-in’s reply replaces a held status read, and answers never enter s
   };
   const loggingIn = f.run(setup.login('openai'));
   await loggingOut;
-  assert.equal(shown().error, null);
-  assert.equal(shown().busy, true);
+  // Read before the login is released, and assert after, so a failure never leaves it held.
+  const { error, busy } = shown();
   loggedOut.resolve();
   await loggingIn;
+  assert.deepEqual({ error, busy }, { error: null, busy: true });
   assert.equal(shown().busy, false);
   assert.equal(shown().error, null);
   assert.equal(shown().status?.flow?.state, 'running');
@@ -146,4 +147,27 @@ test('closing the chat cancels a sign-in still running, even one its caller stop
     operation: 'cancelProviderLogin',
     input: { flowId: 'flow' },
   });
+});
+
+test('closing the chat waits for a sign-in caught starting, then cancels it once', async (t) => {
+  const held = Promise.withResolvers<ProviderState>();
+  const { f, setup, providers, shown } = await setupFixture(t, (operation) =>
+    operation === 'startProviderLogin' ? held.promise : status,
+  );
+  await f.run(setup.refresh);
+  // The login yields to the event loop every few steps, so closing starts once it is admitted
+  // but before it has started.
+  const loggingIn = f.runtime.runFork(
+    setup.login('openai').pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, 3)),
+  );
+  await waitFor(() => shown().busy);
+  const closing = f.close();
+  held.resolve(signingIn);
+  await closing;
+  await f.runtime.runPromise(Fiber.await(loggingIn));
+  assert.deepEqual(
+    providers.calls.filter((call) => call.operation === 'cancelProviderLogin'),
+    [{ operation: 'cancelProviderLogin', input: { flowId: 'flow' } }],
+  );
+  assert.equal(shown().busy, false);
 });
