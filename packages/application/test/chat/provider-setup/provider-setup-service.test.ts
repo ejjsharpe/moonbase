@@ -155,16 +155,30 @@ test('closing the chat waits for a sign-in caught starting, then cancels it once
     operation === 'startProviderLogin' ? held.promise : status,
   );
   await f.run(setup.refresh);
-  // The login yields to the event loop every few steps, so closing starts once it is admitted
-  // but before it has started.
+  // The login yields once, as soon as it is admitted and before it has started, and closing
+  // starts in that pause.
+  const paused = Promise.withResolvers<void>();
+  class PauseOnceAdmitted extends Scheduler.MixedScheduler {
+    pausing = true;
+    override shouldYield(fiber: Fiber.Fiber<unknown, unknown>) {
+      if (!this.pausing || !shown().busy) return super.shouldYield(fiber);
+      this.pausing = false;
+      paused.resolve();
+      return true;
+    }
+  }
   const loggingIn = f.runtime.runFork(
-    setup.login('openai').pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, 3)),
+    setup.login('openai').pipe(Effect.provideService(Scheduler.Scheduler, new PauseOnceAdmitted())),
   );
-  await waitFor(() => shown().busy);
-  const closing = f.close();
-  held.resolve(signingIn);
-  await closing;
-  await f.runtime.runPromise(Fiber.await(loggingIn));
+  try {
+    await paused.promise;
+    const closing = f.close();
+    held.resolve(signingIn);
+    await closing;
+    await f.runtime.runPromise(Fiber.await(loggingIn));
+  } finally {
+    held.resolve(signingIn);
+  }
   assert.deepEqual(
     providers.calls.filter((call) => call.operation === 'cancelProviderLogin'),
     [{ operation: 'cancelProviderLogin', input: { flowId: 'flow' } }],

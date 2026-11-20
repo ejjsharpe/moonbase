@@ -6,7 +6,6 @@ import {
   Fiber,
   Layer,
   Option,
-  Ref,
   Semaphore,
   Stream,
   SubscriptionRef,
@@ -75,12 +74,13 @@ export class ChatProviderSetup extends Context.Service<ChatProviderSetup, ChatPr
        * starts and closing see each other whole: a command is either registered or never starts.
        */
       const admission = yield* Semaphore.make(1);
-      const closing = yield* Ref.make(false);
+      // The service's scope is closed before its finalizers run, so a start after that is refused.
+      const scope = yield* Effect.scope;
       /** Runs `start` as one admitted step, unless the chat is closing. */
       const admit = <A>(start: Effect.Effect<A | undefined>) =>
         admission.withPermit(
           Effect.gen(function* () {
-            if ((yield* Ref.get(closing)) || !(yield* actions.accepting)) return undefined;
+            if (scope.state._tag === 'Closed' || !(yield* actions.accepting)) return undefined;
             return yield* start;
           }),
         );
@@ -90,7 +90,8 @@ export class ChatProviderSetup extends Context.Service<ChatProviderSetup, ChatPr
         // their replies, then a sign-in still running is cancelled, so it doesn't outlive the chat.
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
-            yield* admission.withPermit(Ref.set(closing, true));
+            // Waits for a command already admitted to register, so it is waited for below.
+            yield* admission.withPermit(Effect.void);
             yield* FiberHandle.clear(watching);
             yield* FiberSet.awaitEmpty(mutations);
             const flow = (yield* SubscriptionRef.get(state)).status?.flow;
