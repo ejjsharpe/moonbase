@@ -292,13 +292,38 @@ test('provider-owned setup binds prompts and URLs to the live document, supports
       _tag: 'ProviderSetupRefusedError',
       reason: 'claude-code-sign-in',
     });
-  await foreign.command('logoutProvider', { providerId: 'openai' });
-  assert.equal(
-    (await foreign.command('getProviders', {})).providers.find(
-      (provider) => provider.id === 'openai',
-    )?.configured,
-    false,
+  // Another owner's watch reads while the sign-out is still removing credentials, and once
+  // they're gone it reads again, so it never keeps reporting a signed-out provider as configured.
+  const watched: Status[] = [];
+  const closeWatch = makeProviderSetupCalls(runtime, 'document-c').watch(
+    (status) => watched.push(status),
+    (error) => assert.fail(String(error)),
   );
+  const openaiConfigured = () =>
+    watched.at(-1)?.providers.find((provider) => provider.id === 'openai')?.configured;
+  /** Waits until `ready`, failing if it never is. */
+  const waitUntil = async (ready: () => boolean) => {
+    for (let i = 0; i < 200 && !ready(); i++) await new Promise((resolve) => setImmediate(resolve));
+    assert(ready(), 'The watch never reached the expected state');
+  };
+  await waitUntil(() => watched.length > 0);
+  const removing = Promise.withResolvers<void>(),
+    removed = Promise.withResolvers<void>();
+  const logout = models.logout.bind(models);
+  models.logout = async (providerId) => {
+    removing.resolve();
+    await removed.promise;
+    return logout(providerId);
+  };
+  const before = watched.length;
+  const loggingOut = foreign.command('logoutProvider', { providerId: 'openai' });
+  await removing.promise;
+  await waitUntil(() => watched.length > before);
+  assert.equal(openaiConfigured(), true);
+  removed.resolve();
+  await loggingOut;
+  await waitUntil(() => openaiConfigured() === false);
+  await closeWatch();
 });
 
 test('a status failure unwinds a newly started login before returning an error without flow ownership', async (t) => {

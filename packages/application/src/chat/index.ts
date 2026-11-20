@@ -48,8 +48,8 @@ export type { ChatFileSearchSnapshot } from './file-search/file-search.ts';
 export {
   ChatProviderSetup,
   type ChatProviderSetupShape,
-  type ProviderSetupSnapshot,
 } from './provider-setup/provider-setup-service.ts';
+export type { ProviderSetupSnapshot } from './provider-setup/provider-setup.ts';
 
 export {
   makeTranscript,
