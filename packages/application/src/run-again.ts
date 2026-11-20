@@ -48,6 +48,8 @@ export const makeRunAgain = <K, E = never>(): Effect.Effect<RunAgain<K, E>, neve
           do yield* join(key, once);
           while (HashSet.has(yield* Ref.get(asked), key));
         }),
-      interrupt: (key) => FiberMap.remove(runs, key),
+      // A run interrupted before it started never ran `loop`'s cleanup, so its ask goes here.
+      interrupt: (key) =>
+        Effect.andThen(FiberMap.remove(runs, key), Ref.update(asked, HashSet.remove(key))),
     } satisfies RunAgain<K, E>;
   });

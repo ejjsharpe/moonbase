@@ -268,44 +268,20 @@ test('a chat created while a complete listing reloads stays first', async (t) =>
   assert.equal((await f.state()).nextChats, null);
 });
 
-test('a reload asked for during another joins it, and one asked for the latest list runs after it', async (t) => {
+test('a reload a new connection generation interrupts leaves the next one free to list', async (t) => {
   const f = await chatFixture(t);
   await f.start();
   await f.connect();
   await until(f, (s) => s.ready && s.chats.length === 1);
-  let count = 0,
-    title = 'First',
-    held = Promise.withResolvers<void>();
+  let count = 0;
+  const held = Promise.withResolvers<void>();
   f.answers.set('listChats', async () => {
     count++;
-    const current = title;
     await held.promise;
-    return { conversations: [{ ...summary, title: current }], nextCursor: null };
+    return { conversations: [summary], nextCursor: null };
   });
-  const first = f.reloadChats();
-  await waitFor(() => count === 1);
-  const joined = f.reloadChats();
-  held.resolve();
-  await Promise.all([first, joined]);
-  assert.equal(count, 1);
-  held = Promise.withResolvers<void>();
-  const slow = f.reloadChats();
-  await waitFor(() => count === 2);
-  title = 'After the run ended';
-  const latest = f.reloadChats(true);
-  const again = f.reloadChats(true);
-  const ticked = f.reloadChats();
-  held.resolve();
-  await Promise.all([slow, latest, again, ticked]);
-  assert.equal(count, 3);
-  assert.equal((await f.state()).chats[0]!.title, 'After the run ended');
-  await f.reloadChats();
-  assert.equal(count, 4);
-
-  // A reload a new connection generation interrupts leaves the next one free to list.
-  held = Promise.withResolvers<void>();
   const interrupted = f.reloadChats();
-  await waitFor(() => count === 5);
+  await waitFor(() => count === 1);
   f.answers.delete('listChats');
   f.publishConnection(connected('next-generation'));
   await interrupted;

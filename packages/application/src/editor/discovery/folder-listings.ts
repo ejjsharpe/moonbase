@@ -1,9 +1,7 @@
 import {
   Cache,
-  Cause,
   Effect,
   Equal,
-  Exit,
   Fiber,
   FiberMap,
   Hash,
@@ -14,13 +12,8 @@ import {
 import type { WorkspaceServiceShape } from '@moonbase/contracts/workspace-service';
 import type { CheckoutTarget, DirectoryListing } from '@moonbase/contracts/workspace';
 import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
-import {
-  classify,
-  classifyShown,
-  keepClassification,
-  listingKey,
-  type DiscoveryState,
-} from './discovery.ts';
+import { keepClassification, listingKey, type DiscoveryState } from './discovery.ts';
+import { makeFolderClassification } from './folder-classification.ts';
 
 /** A folder of a checkout, compared by its `listingKey`, and whether its caller reports. */
 class FolderKey implements Equal.Equal {
@@ -54,12 +47,9 @@ type ListingRead = {
 };
 
 /**
- * The editor's folder listings and their Git classification. A read of a folder is joined until
- * it is listed or a change makes it stale (`invalidate`); a newer read keeps the older one's
- * listing from showing. A newer read also cancels the classification it replaces, except for
- * one kept running per folder: refreshes that come faster than Git answers would otherwise keep
- * every entry on its last classification, so a file un-ignored by a .gitignore edit would stay
- * dimmed. Whichever answer applies last is the newest: the newest read's cancels the kept one.
+ * The editor's folder listings. A read of a folder is joined until it is listed or a change makes
+ * it stale (`invalidate`); a newer read keeps the older one's listing from showing, and cancels
+ * its classification (see `makeFolderClassification`).
  */
 export const makeFolderListings = (options: {
   readonly workspace: WorkspaceServiceShape;
@@ -73,84 +63,14 @@ export const makeFolderListings = (options: {
     const { workspace, state, checkoutScope, report } = options;
     /** Per folder, the read whose listing shows next. */
     const showing = yield* FiberMap.make<string>();
-    /** Per folder, the classification of the listing shown. */
-    const classifying = yield* FiberMap.make<string>();
-    /** Per folder, a superseded classification left to finish. */
-    const kept = yield* FiberMap.make<string>();
     const isLive = (checkout: CheckoutTarget, scope: Scope.Scope) =>
       Effect.map(options.isOpen(checkout), (open) => open && scope.state._tag !== 'Closed');
-    const setListing = (key: string, f: (shown: DirectoryListing) => DirectoryListing) =>
-      SubscriptionRef.update(state, (s) =>
-        s.listings[key] ? { ...s, listings: { ...s.listings, [key]: f(s.listings[key]) } } : s,
-      );
-
-    /** A superseded classification's answer, which applies to the entries it classified. */
-    const finishKept = (
-      folder: FolderKey,
-      scope: Scope.Scope,
-      asked: Fiber.Fiber<{ paths: readonly string[]; error?: string }, unknown>,
-      listing: DirectoryListing,
-    ) =>
-      Effect.gen(function* () {
-        const answer = yield* Fiber.await(asked);
-        if (
-          Exit.isFailure(answer) ||
-          answer.value.error ||
-          !(yield* isLive(folder.checkout, scope))
-        )
-          return;
-        yield* setListing(folder.key, (shown) =>
-          classifyShown(shown, listing.entries, answer.value.paths),
-        );
-      }).pipe(Effect.onInterrupt(() => Fiber.interrupt(asked)));
-
-    /** Classifies the listing just shown, as `shown`, with Git. */
-    const classifyListing = (
-      folder: FolderKey,
-      scope: Scope.Scope,
-      listing: DirectoryListing,
-      shown: DirectoryListing,
-      loud: Ref.Ref<boolean>,
-    ) =>
-      Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          const { checkout, path, key } = folder;
-          const asked = yield* Effect.forkIn(
-            workspace
-              .getIgnoredPaths({
-                checkout,
-                path,
-                paths: listing.entries.map((entry) => entry.path),
-              })
-              .pipe(
-                Effect.tapError((error) =>
-                  Effect.flatMap(Ref.get(loud), (loud) => (loud ? report(error) : Effect.void)),
-                ),
-              ),
-            scope,
-            { startImmediately: true },
-          );
-          // Superseded by a newer read: kept running if no other is, else cancelled.
-          const keep = Effect.suspend(() =>
-            FiberMap.hasUnsafe(kept, key)
-              ? Fiber.interrupt(asked)
-              : FiberMap.run(kept, key, finishKept(folder, scope, asked, listing)),
-          );
-          const answer = yield* restore(Fiber.await(asked)).pipe(Effect.onInterrupt(() => keep));
-          if (Exit.isSuccess(answer)) {
-            // The newest answer: the kept one, older, can no longer replace it.
-            yield* FiberMap.remove(kept, key);
-            if (yield* isLive(checkout, scope))
-              yield* setListing(key, () => classify(listing, answer.value));
-          } else if (!Cause.hasInterruptsOnly(answer.cause) && (yield* isLive(checkout, scope))) {
-            // Without an answer, entries show as unclassified, not a stale classification, unless
-            // the kept one classified them since.
-            yield* setListing(key, (current) =>
-              current === shown ? { ...current, entries: listing.entries } : current,
-            );
-          }
-        }),
-      );
+    const classification = yield* makeFolderClassification({
+      workspace,
+      state,
+      isLive,
+      report,
+    });
 
     /** Shows a read's listing, carrying the last classification over, then classifies it. */
     const showListing = (
@@ -167,11 +87,7 @@ export const makeFolderListings = (options: {
           return [shown, { ...s, listings: { ...s.listings, [folder.key]: shown } }] as const;
         });
         if (!listing.entries.some((entry) => entry.ignored === undefined)) return;
-        yield* FiberMap.run(
-          classifying,
-          folder.key,
-          classifyListing(folder, scope, listing, shown, loud),
-        );
+        yield* classification.classify(folder, scope, listing, shown, loud);
       }).pipe(Effect.ignore);
 
     const reads: Cache.Cache<FolderKey, ListingRead> = yield* Cache.make({
@@ -181,9 +97,13 @@ export const makeFolderListings = (options: {
           Effect.gen(function* () {
             const { checkout, path, key } = folder;
             const scope = yield* checkoutScope(checkout);
-            yield* FiberMap.remove(classifying, key);
+            yield* classification.cancel(key);
             const listed = yield* Effect.forkIn(
-              workspace.listDirectory({ checkout, path, includeIgnoredStatus: false }),
+              workspace.listDirectory({
+                checkout,
+                path,
+                includeIgnoredStatus: false,
+              }),
               scope,
               { startImmediately: true },
             );

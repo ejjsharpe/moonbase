@@ -4,9 +4,13 @@ import {
   Effect,
   Exit,
   Fiber,
+  FiberMap,
+  HashMap,
   Layer,
+  Option,
   PubSub,
   RcMap,
+  Ref,
   Scope,
   Stream,
   SubscriptionRef,
@@ -99,8 +103,8 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
         const session = yield* EditorSession;
         const alerts = yield* EditorAlerts;
         const views = yield* EditorViews;
-        // Each checkout's watch and reads run in its scope, under the session's, so releasing the
-        // checkout ends them and closing the editor ends them all.
+        // Each checkout's reads run in its scope and its watch in `watches`, both under the
+        // session's scope, so releasing the checkout ends them and closing the editor ends them all.
         const root = session.scope;
         const state = yield* SubscriptionRef.make(emptyDiscovery);
         const changed = yield* PubSub.unbounded<CheckoutTarget>();
@@ -111,6 +115,10 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
           root,
         );
         const refreshes = yield* Scope.provide(makeRunAgain<string>(), root);
+        /** Per checkout, its watch: a new watch replaces it, leaving the checkout's reads going. */
+        const watches = yield* Scope.provide(FiberMap.make<string>(), root);
+        /** Per checkout, the watch that holds it, which stays so once the watch is lost. */
+        const holders = yield* Ref.make(HashMap.empty<string, object>());
         const checkoutScope = (checkout: CheckoutTarget) =>
           Effect.scoped(RcMap.get(scopes, checkoutKey(checkout)));
         const listings = yield* Scope.provide(
@@ -132,20 +140,29 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
             Effect.flatMap(Effect.forkIn(effect, scope, { startImmediately: true }), Fiber.join),
           ).pipe(Effect.tapError(alerts.report));
 
+        /** Ends the checkout's refresh and forgets its lost watch. */
+        const settle = (key: string) =>
+          Effect.andThen(
+            update((s) => ({ ...s, lostWatches: s.lostWatches.filter((k) => k !== key) })),
+            refreshes.interrupt(key),
+          );
+
         const release = (checkout: CheckoutTarget) =>
           Effect.gen(function* () {
             const key = checkoutKey(checkout);
-            yield* update((s) => ({ ...s, lostWatches: s.lostWatches.filter((k) => k !== key) }));
-            yield* refreshes.interrupt(key);
+            yield* settle(key);
+            yield* Ref.update(holders, HashMap.remove(key));
+            yield* FiberMap.remove(watches, key);
             yield* RcMap.invalidate(scopes, key);
           });
 
         const observe: EditorDiscoveryShape['observe'] = (checkout, { isOpen, onChanged }) =>
           Effect.gen(function* () {
             const key = checkoutKey(checkout);
-            yield* release(checkout);
-            const scope = yield* checkoutScope(checkout);
-            const isCurrent = Effect.sync(() => scope.state._tag !== 'Closed');
+            const holder = {};
+            const isCurrent = Effect.map(Ref.get(holders), (current) =>
+              Option.exists(HashMap.get(current, key), (held) => held === holder),
+            );
             const live = Effect.map(
               Effect.all([isOpen, isCurrent]),
               ([open, current]) => open && current,
@@ -189,7 +206,9 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
                 }),
               ),
             );
-            yield* Effect.forkIn(watch, scope, { startImmediately: true });
+            yield* settle(key);
+            yield* Ref.update(holders, HashMap.set(key, holder));
+            yield* FiberMap.run(watches, key, watch);
           });
 
         const list: EditorDiscoveryShape['list'] = (checkout, path, report = true) =>

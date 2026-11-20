@@ -79,6 +79,47 @@ describe('the discovery service on its own', () => {
       await runtime.dispose();
     }
   });
+
+  test('a read begun before a watch starts is not ended by it', async () => {
+    const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'one' } }]);
+    const runtime = ManagedRuntime.make(memory.layer);
+    const base = await runtime.runPromise(Effect.service(WorkspaceService));
+    const holding = await runtime.runPromise(Deferred.make<void>());
+    let hold = false;
+    const workspace = Layer.succeed(WorkspaceService, {
+      ...base,
+      listDirectory: (input) =>
+        hold
+          ? Effect.andThen(Deferred.succeed(holding, undefined), Effect.never)
+          : base.listDirectory(input),
+    });
+    const editor = ManagedRuntime.make(
+      Layer.provideMerge(editorLayer({ clientId: 'c' }), workspace),
+    );
+    try {
+      await editor.runPromise(
+        Effect.gen(function* () {
+          yield* (yield* EditorLoader).load;
+          const opened = yield* (yield* EditorCheckouts).openCheckout(checkout.root);
+          const discovery = yield* EditorDiscovery;
+          yield* discovery.release(opened);
+          hold = true;
+          const listing = yield* Effect.forkChild(discovery.list(opened, ''));
+          yield* Deferred.await(holding);
+          yield* discovery.observe(opened, {
+            isOpen: Effect.succeed(true),
+            onChanged: () => Effect.void,
+          });
+          for (let turn = 0; turn < 20; turn++) yield* Effect.yieldNow;
+          assert.equal(listing.pollUnsafe(), undefined, 'the listing is still reading');
+          yield* Fiber.interrupt(listing);
+        }),
+      );
+    } finally {
+      await editor.dispose();
+      await runtime.dispose();
+    }
+  });
 });
 
 async function until(check: () => unknown) {
