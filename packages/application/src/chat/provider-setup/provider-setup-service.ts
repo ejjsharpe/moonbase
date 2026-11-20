@@ -124,8 +124,14 @@ export class ChatProviderSetup extends Context.Service<ChatProviderSetup, ChatPr
         Effect.gen(function* () {
           yield* begin;
           yield* FiberHandle.clear(reading);
-          const mutation = yield* FiberSet.run(mutations, Effect.uninterruptible(Effect.exit(call)));
-          const reply = yield* FiberHandle.run(replying, Effect.flatMap(Fiber.join(mutation), show));
+          const mutation = yield* FiberSet.run(
+            mutations,
+            Effect.uninterruptible(Effect.exit(call)),
+          );
+          const reply = yield* FiberHandle.run(
+            replying,
+            Effect.flatMap(Fiber.join(mutation), show),
+          );
           return [reply, mutation];
         });
       const command = <K extends ProviderCommand>(operation: K, input: ProviderInput<K>) =>
@@ -134,9 +140,9 @@ export class ChatProviderSetup extends Context.Service<ChatProviderSetup, ChatPr
           if (!setup || !(yield* actions.accepting)) return;
           const call = (setup[operation] as (input: ProviderInput<K>) => Call)(input);
           const start = operation === 'getProviders' ? startRead : startMutation;
-          const started: ReadonlyArray<Fiber.Fiber<unknown>> = yield* starting.withPermit(
+          const started: readonly Fiber.Fiber<unknown>[] = yield* starting.withPermit(
             Effect.gen(function* () {
-              const fibers: ReadonlyArray<Fiber.Fiber<unknown>> = yield* start(call);
+              const fibers: readonly Fiber.Fiber<unknown>[] = yield* start(call);
               if (fibers.length) yield* FiberHandle.run(settling, settle);
               return fibers;
             }),
