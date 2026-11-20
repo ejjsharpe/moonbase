@@ -12,8 +12,17 @@ export const runOrJoin = <A, E, R>(
   Effect.suspend(() => {
     const running = FiberHandle.getUnsafe(handle);
     if (Option.isSome(running)) return Fiber.join(running.value);
-    // `onlyIfMissing` never replaces a step another caller started meanwhile: join that one.
-    return Effect.flatMap(FiberHandle.run(handle, step, { onlyIfMissing: true }), (started) =>
-      Fiber.join(Option.getOrElse(FiberHandle.getUnsafe(handle), () => started)),
-    );
+    // The step's first instruction marks it as ours: `run` starts it immediately, so this is set
+    // before `run` returns. Reading the handle after `run` instead could see a later step.
+    let mine = false;
+    const owned = Effect.suspend(() => {
+      mine = true;
+      return step;
+    });
+    return Effect.flatMap(FiberHandle.run(handle, owned, { onlyIfMissing: true }), (started) => {
+      if (mine) return Fiber.join(started);
+      // Another caller's step started meanwhile: join it, or start again if it has ended.
+      const other = FiberHandle.getUnsafe(handle);
+      return Option.isSome(other) ? Fiber.join(other.value) : runOrJoin(handle, step);
+    });
   });
