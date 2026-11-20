@@ -1,5 +1,5 @@
 import { NativeSourceError } from '@moonbase/contracts/workspace-host-errors';
-import { HelperFailure } from '../system-failures.ts';
+import { classifyHelperFailure, type HelperFailure } from '../system-failures.ts';
 
 // The helper (`native/filesystem.c`) reports a failure as `<errno>:<message>: <strerror>`; strerror
 // holds no `: `, so the message runs to the first line's last one. These are the messages it
@@ -12,11 +12,11 @@ const refusals = new Map<string, NativeSourceError['problem']>([
 ]);
 
 /**
- * `error` as the native import refusal the helper reported, or undefined when it reported
- * anything else (which stays a system failure).
+ * The native import refusal the helper reported by ending with exit 1, or undefined when it
+ * reported anything else (which stays a helper failure).
  */
-export const findNativeHelperRefusal = (error: unknown) => {
-  if (!(error instanceof HelperFailure) || error.status !== 1 || error.uncertain) return undefined;
-  const problem = refusals.get(/^\d+:(.*): /.exec(error.stderr)?.[1] ?? '');
+export const findNativeHelperRefusal = (failure: HelperFailure) => {
+  if (classifyHelperFailure(failure) !== 'failed' || failure.status !== 1) return undefined;
+  const problem = refusals.get(/^\d+:(.*): /.exec(failure.stderr)?.[1] ?? '');
   return problem && new NativeSourceError({ problem });
 };

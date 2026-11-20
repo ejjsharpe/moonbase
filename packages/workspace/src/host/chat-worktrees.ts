@@ -1,14 +1,10 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { Data, Effect, Schedule } from 'effect';
+import { Effect, Schedule, Schema } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { maximumBranchName } from '@moonbase/contracts/workspace-host-schema';
-import {
-  BranchTakenError,
-  InvalidRequestError,
-  WorkspaceConflictError,
-} from '@moonbase/contracts/workspace-host-errors';
-import { attempt } from '../attempt.ts';
+import { BranchTakenError, InvalidRequestError } from '@moonbase/contracts/workspace-host-errors';
+import { systemCall } from '../system-failures.ts';
 import type { Directory } from '../filesystem.ts';
 import { requireGit } from '../validation.ts';
 import { cancellationPoint } from '../cancellation.ts';
@@ -39,20 +35,18 @@ export const makeChatWorktree = ({ root, branch }: { root: string; branch: strin
     )
       return yield* new InvalidRequestError({ problem: 'chat-branch-name' });
     const target = yield* Effect.interruptible(checkouts.open(root));
-    yield* attempt(() => requireGit(target));
+    yield* requireGit(target);
     const listed = yield* Effect.interruptible(worktrees.listWorktrees(target));
     const parent = `${listed.worktrees.find((worktree) => worktree.main)?.root ?? target.root}-worktrees`;
     // Checked before anything is made, since the folder doesn't exist yet to check itself. An empty
     // one left by a failed creation is kept for the next.
-    yield* checkouts.permitContainer(parent);
+    yield* checkouts.permitNewFolder(parent);
     yield* cancellationPoint;
-    yield* attempt(() => {
-      try {
-        mkdirSync(parent);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      }
-    });
+    yield* systemCall(() => mkdirSync(parent)).pipe(
+      Effect.catchTag('SystemFailure', (failure) =>
+        failure.code === 'EEXIST' ? Effect.void : Effect.fail(failure),
+      ),
+    );
     const directory = yield* checkouts.directory(target);
     /** Creates the worktree under `prefix`, then `prefix-2`, `prefix-3` and so on while taken. */
     const createNumbered = (prefix: string) =>
@@ -66,7 +60,7 @@ export const makeChatWorktree = ({ root, branch }: { root: string; branch: strin
             schedule: Schedule.recurs(maximumAttempts - 1),
             // A taken branch or location: try the next name.
             while: (error) =>
-              error instanceof BranchTakenError || error instanceof WorkspaceConflictError,
+              error._tag === 'BranchTakenError' || error._tag === 'WorkspaceConflictError',
           }),
         );
       });
@@ -96,7 +90,11 @@ export const makeChatWorktree = ({ root, branch }: { root: string; branch: strin
   });
 
 /** A branch named like one of a chat branch's folders blocks it; never leaves this module. */
-class FolderClash extends Data.TaggedError('FolderClash') {}
+class FolderClash extends Schema.TaggedError<FolderClash>()('FolderClash', {}) {
+  override get message() {
+    return 'A branch is named like a folder of the chat branch.';
+  }
+}
 
 /**
  * How existing branches block `name` as a folder/file clash in Git's ref store: one named like a

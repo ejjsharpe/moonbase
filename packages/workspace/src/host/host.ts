@@ -6,10 +6,10 @@ import {
   WorkspaceUnsupportedError,
   type WorkspaceHostError,
 } from '@moonbase/contracts/workspace-host-errors';
-import { attempt, type WorkspaceFailure } from '../attempt.ts';
+import type { WorkspaceFailure } from '../attempt.ts';
 import { asWorkspaceError, runOwned, withWorkspaceErrors } from '../owned-work.ts';
 import { decodeConfiguration, type WorkspaceHostConfiguration } from '../schema.ts';
-import { path } from '../validation.ts';
+import { requirePath } from '../validation.ts';
 import { Checkouts } from './checkouts.ts';
 import { WorkspaceDiscovery } from './discovery.ts';
 import { HostJournal } from './host-journal.ts';
@@ -142,7 +142,7 @@ const makeFileHost = Effect.gen(function* () {
           const directory = yield* checkouts.directory(input.checkout);
           return yield* Effect.forEach(input.paths, (p) =>
             Effect.gen(function* () {
-              yield* attempt(() => path(p));
+              yield* requirePath(p);
               return {
                 target: { checkout: input.checkout, path: p },
                 ...(yield* directory.entry(p)),
@@ -162,10 +162,10 @@ const makeFileHost = Effect.gen(function* () {
     acknowledgeSave: (input) => run(journal.acknowledgeSave(input), { persistence: true }),
     listOperations: (input) =>
       run(
-        attempt(() => {
-          checkouts.approval(input.checkout);
-          return readOperationFeed(store, journal.epoch, input.checkout, input.after);
-        }),
+        Effect.andThen(
+          checkouts.approval(input.checkout),
+          readOperationFeed(store, journal.epoch, input.checkout, input.after),
+        ),
         { persistence: true },
       ),
     createChatWorktree: (input) => run(createChatWorktree(input)),
@@ -195,14 +195,11 @@ const makeFileHost = Effect.gen(function* () {
 export function makeFileHostLayer(configuration: WorkspaceHostConfiguration) {
   const settings = Layer.effect(
     HostSettings,
-    Effect.map(
-      attempt(() => decodeConfiguration(configuration)),
-      (config) => ({
-        config,
-        allowRoot: configuration.allowRoot,
-        chats: configuration.chats,
-      }),
-    ),
+    Effect.map(decodeConfiguration(configuration), (config) => ({
+      config,
+      allowRoot: configuration.allowRoot,
+      chats: configuration.chats,
+    })),
   );
   const helpers = Layer.mergeAll(
     HostJournal.layer,

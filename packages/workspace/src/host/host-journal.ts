@@ -15,8 +15,8 @@ import type {
   SaveStatus,
 } from '@moonbase/contracts/workspace-host';
 import { randomUUID } from 'node:crypto';
-import type { Store } from '../store.ts';
-import { attempt, type WorkspaceFailure } from '../attempt.ts';
+import type { Store, StoreFailure } from '../store.ts';
+import type { WorkspaceFailure } from '../attempt.ts';
 import { Checkouts } from './checkouts.ts';
 import { HostSettings } from './host-settings.ts';
 import { HostStore } from './host-store.ts';
@@ -51,6 +51,8 @@ type JournalDependencies = {
   /** The journal's time: when entries were reserved, settled and acknowledged. */
   clock: Clock.Clock;
   retentionMs: number;
+  /** Names this store's feed (see `Journal.epoch`). */
+  epoch: string;
 };
 
 /**
@@ -73,14 +75,13 @@ export class Journal {
   private compactedAt = 0;
   /** Names this store's feed; a recreated store starts a new one. */
   readonly epoch: string;
-  constructor({ store, checkouts, leases, clock, retentionMs }: JournalDependencies) {
+  constructor({ store, checkouts, leases, clock, retentionMs, epoch }: JournalDependencies) {
     this.store = store;
     this.checkouts = checkouts;
     this.leases = leases;
     this.clock = clock;
     this.retentionMs = retentionMs;
-    this.epoch = store.get<string>('meta', 'feed-epoch') ?? randomUUID();
-    store.put('meta', 'feed-epoch', this.epoch);
+    this.epoch = epoch;
   }
 
   private now() {
@@ -89,6 +90,9 @@ export class Journal {
 
   saveId = (i: SaveIdentity) => key(i.installationId, i.clientId, i.requestId);
   operationId = (i: OperationIdentity) => key(i.installationId, i.clientId, i.id);
+
+  // The private methods below are synchronous steps on the store; the public ones run them as
+  // Effects, each in one step.
 
   private read<T>(kind: JournalKind, id: string): T | Fenced | null {
     const row = this.store
@@ -124,7 +128,7 @@ export class Journal {
   /** Starts an acknowledged entry's retention window. */
   private retain(kind: JournalKind, id: string) {
     return Effect.andThen(
-      attempt(() =>
+      this.store.step(() =>
         this.store.write(
           'UPDATE journal SET retained_at=? WHERE kind=? AND id=? AND retained_at IS NULL',
           [this.now(), kind, id],
@@ -146,18 +150,33 @@ export class Journal {
       }));
   }
 
-  getSave(id: string) {
+  private readSave(id: string) {
     return this.volatileSaves.get(id) ?? this.read<HostSaveRecord>('saves', id);
   }
+  getSave(id: string): Effect.Effect<HostSaveRecord | Fenced | null, StoreFailure> {
+    return this.store.step(() => this.readSave(id));
+  }
   /** Reserves a save's ID; returns what already holds it, a fence included. */
-  reserveSave(id: string, record: HostSaveRecord) {
+  private reserveSaveNow(id: string, record: HostSaveRecord) {
     const { input } = record;
     const columns = [input.target.checkout.checkoutId, input.installationId, input.clientId];
     const taken = this.reserve('saves', id, [...columns, record.result ? 0 : 1, null], record);
-    return taken === null ? null : this.getSave(id);
+    return taken === null ? null : this.readSave(id);
   }
-  startSave(id: string) {
-    this.activeSaves.add(id);
+  /** Reserves a save's ID for a save that already has its outcome; returns what holds it. */
+  reserveSave(id: string, record: HostSaveRecord) {
+    return this.store.step(() => this.reserveSaveNow(id, record));
+  }
+  /**
+   * Reserves a save's ID and marks it running in one step, so a status query never sees it as
+   * interrupted; returns what already holds the ID.
+   */
+  admitSave(id: string, record: HostSaveRecord) {
+    return this.store.step(() => {
+      const occupied = this.reserveSaveNow(id, record);
+      if (!occupied) this.activeSaves.add(id);
+      return occupied;
+    });
   }
   finishSave(id: string) {
     this.activeSaves.delete(id);
@@ -166,41 +185,60 @@ export class Journal {
     this.volatileSaves.set(id, record);
   }
   /** Records a save's outcome; on failure the caller keeps it in memory for the next replay. */
-  settleSave(id: string, record: HostSaveRecord) {
-    this.update('saves', id, !record.result, record);
-    this.volatileSaves.delete(id);
+  settleSave(id: string, record: HostSaveRecord): Effect.Effect<void, StoreFailure> {
+    return this.store.step(() => {
+      this.update('saves', id, !record.result, record);
+      this.volatileSaves.delete(id);
+    });
+  }
+  /**
+   * Records a finished save's outcome, which stays in memory for the next replay when that
+   * fails; a save that reached the disk reports the publication pending.
+   */
+  publishSave(id: string, record: HostSaveRecord & { result: HostSaveResult }, failure: string) {
+    const result: HostSaveResult = record.result;
+    return this.settleSave(id, record).pipe(
+      Effect.as<HostSaveResult | (HostSaveResult & { persistencePending: true; message: string })>(
+        result,
+      ),
+      Effect.catch((error) =>
+        Effect.sync(() => {
+          this.retainSave(id, record);
+          return result.kind === 'saved'
+            ? { ...result, persistencePending: true, message: failure + errorText(error) }
+            : result;
+        }),
+      ),
+    );
   }
   /** A save request as the journal keeps it: its text's version in place of the text. */
   saveInput({ text: _text, ...input }: HostInput<'saveFile'>, version: string) {
     return { ...input, version };
   }
   replaySave(id: string, input: HostSaveRecord['input'], record: HostSaveRecord | Fenced) {
-    if (record === 'fenced') throw new WorkspaceConflictError({ conflict: 'save-not-started' });
-    if (!same(record.input, input)) throw new WorkspaceConflictError({ conflict: 'save-payload' });
-    if (!record.result) throw new UnresolvedWorkError({ state: 'save-interrupted' });
-    const result: HostSaveResult = record.result;
-    if (this.volatileSaves.has(id)) {
-      try {
-        this.settleSave(id, record);
-      } catch (error) {
-        if (result.kind === 'saved')
-          return {
-            ...result,
-            persistencePending: true,
-            message: 'Saved to disk; durable request publication pending. ' + errorText(error),
-          };
-      }
-    }
-    return result;
+    return Effect.gen({ self: this }, function* () {
+      if (record === 'fenced')
+        return yield* new WorkspaceConflictError({ conflict: 'save-not-started' });
+      if (!same(record.input, input))
+        return yield* new WorkspaceConflictError({ conflict: 'save-payload' });
+      if (!record.result) return yield* new UnresolvedWorkError({ state: 'save-interrupted' });
+      if (!this.volatileSaves.has(id)) return record.result;
+      // Kept in memory after a failed publication: published now, or kept for the next replay.
+      return yield* this.publishSave(
+        id,
+        record as HostSaveRecord & { result: HostSaveResult },
+        'Saved to disk; durable request publication pending. ',
+      );
+    });
   }
   saveStatus(input: SaveIdentity): Effect.Effect<SaveStatus, WorkspaceFailure> {
     return Effect.gen({ self: this }, function* () {
       const id = this.saveId(input),
-        record = yield* attempt(() => this.getSave(id));
+        record = yield* this.getSave(id);
       if (record === null) {
         // Answering `not-started` is a promise: a delayed request must not run after the client
         // discards its intent, so the ID stays taken for as long as an entry is kept.
-        yield* attempt(() => this.fence('saves', id));
+        yield* this.store.step(() => this.fence('saves', id));
         return { kind: 'not-started' } as const;
       }
       if (record === 'fenced') return { kind: 'not-started' } as const;
@@ -210,7 +248,7 @@ export class Journal {
         !this.leases.isActive(record.input.target.checkout.checkoutId)
       )
         yield* this.resolveSave(id, record);
-      if (record.result && this.volatileSaves.has(id)) this.settleOrRetain(id, record);
+      if (record.result && this.volatileSaves.has(id)) yield* this.settleOrRetain(id, record);
       if (!record.result) return { kind: 'uncertain', message: record.message } as const;
       return record.result;
     });
@@ -219,68 +257,78 @@ export class Journal {
   private resolveSave(id: string, record: HostSaveRecord) {
     return this.checkouts.directory(record.input.target.checkout).pipe(
       Effect.flatMap((directory) => readSaveOutcome(directory, record)),
-      Effect.map((result) => {
+      Effect.flatMap((result) => {
         record.result = result;
-        this.settleOrRetain(id, record);
+        return this.settleOrRetain(id, record);
       }),
       Effect.catch(() => Effect.void),
     );
   }
   private settleOrRetain(id: string, record: HostSaveRecord) {
-    try {
-      this.settleSave(id, record);
-    } catch {
-      this.retainSave(id, record);
-    }
+    return this.settleSave(id, record).pipe(
+      Effect.catch(() => Effect.sync(() => this.retainSave(id, record))),
+    );
   }
   acknowledgeSave(input: SaveIdentity): Effect.Effect<void, WorkspaceFailure> {
     return Effect.gen({ self: this }, function* () {
       const id = this.saveId(input),
-        record = yield* attempt(() => this.getSave(id));
+        record = yield* this.getSave(id);
       if (!record || record === 'fenced') return;
       if (!record.result)
         return yield* new UnresolvedWorkError({ state: 'save-unacknowledgeable' });
-      if (this.volatileSaves.has(id)) yield* attempt(() => this.settleSave(id, record));
+      if (this.volatileSaves.has(id)) yield* this.settleSave(id, record);
       yield* this.retain('saves', id);
     });
   }
   /** Saves started but with no outcome yet, in one checkout. */
   getPendingSaves(target: CheckoutTarget) {
-    return this.rows<HostSaveRecord>(
-      "SELECT id, kind, body FROM journal WHERE kind='saves' AND checkout=? AND unsettled=1",
-      [target.checkoutId],
+    return this.store.step(() =>
+      this.rows<HostSaveRecord>(
+        "SELECT id, kind, body FROM journal WHERE kind='saves' AND checkout=? AND unsettled=1",
+        [target.checkoutId],
+      ),
     );
   }
 
-  getOperation(id: string) {
+  private readOperation(id: string) {
     return this.volatileOperations.get(id) ?? this.read<HostOperationRecord>('operations', id);
   }
-  /** Reserves an operation's ID; returns what already holds it, a fence included. */
+  getOperation(id: string): Effect.Effect<HostOperationRecord | Fenced | null, StoreFailure> {
+    return this.store.step(() => this.readOperation(id));
+  }
+  /**
+   * Reserves an operation's ID; returns what already holds it, a fence included. Synchronous, to
+   * run in one step with claiming the native references the operation uses.
+   */
   reserveOperation(id: string, record: HostOperationRecord) {
     const { input } = record;
     const columns = [input.checkout.checkoutId, input.installationId, input.clientId];
     const taken = this.reserve('operations', id, [...columns, 1, null], record);
-    return taken === null ? null : this.getOperation(id);
+    return taken === null ? null : this.readOperation(id);
   }
   /** Progress while items run; the outcome and feed entry come from `finalizeOperation`. */
-  writeOperation(id: string, record: HostOperationRecord) {
-    this.update('operations', id, true, record);
+  writeOperation(id: string, record: HostOperationRecord): Effect.Effect<void, StoreFailure> {
+    return this.store.step(() => this.update('operations', id, true, record));
   }
   retainOperation(id: string, record: HostOperationRecord) {
     this.volatileOperations.set(id, record);
   }
   /** A checkout's operations that still block the requesting client: uncertain, or its own and unacknowledged. */
   getUnsettledOperations(target: CheckoutTarget, installationId: string, clientId: string) {
-    return this.rows<HostOperationRecord>(
-      "SELECT id, kind, body FROM journal WHERE kind='operations' AND checkout=? AND (unsettled=1 OR (retained_at IS NULL AND installation=? AND client=?))",
-      [target.checkoutId, installationId, clientId],
+    return this.store.step(() =>
+      this.rows<HostOperationRecord>(
+        "SELECT id, kind, body FROM journal WHERE kind='operations' AND checkout=? AND (unsettled=1 OR (retained_at IS NULL AND installation=? AND client=?))",
+        [target.checkoutId, installationId, clientId],
+      ),
     );
   }
   /** A checkout's operations that are uncertain, or unacknowledged by the requesting installation. */
   getUnsettledCheckoutOperations(target: CheckoutTarget, installationId: string) {
-    return this.rows<HostOperationRecord>(
-      "SELECT id, kind, body FROM journal WHERE kind='operations' AND checkout=? AND (unsettled=1 OR (retained_at IS NULL AND installation=?))",
-      [target.checkoutId, installationId],
+    return this.store.step(() =>
+      this.rows<HostOperationRecord>(
+        "SELECT id, kind, body FROM journal WHERE kind='operations' AND checkout=? AND (unsettled=1 OR (retained_at IS NULL AND installation=?))",
+        [target.checkoutId, installationId],
+      ),
     );
   }
   replayOperation(id: string, input: HostInput<'mutate'>, record: HostOperationRecord | Fenced) {
@@ -360,10 +408,10 @@ export class Journal {
   ): Effect.Effect<HostOperationResult | null, WorkspaceFailure> {
     return Effect.gen({ self: this }, function* () {
       const id = this.operationId(input),
-        record = yield* attempt(() => this.getOperation(id));
+        record = yield* this.getOperation(id);
       if (record === null) {
         // As with saves: a client that hears `null` discards its intent, so the ID never runs.
-        yield* attempt(() => this.fence('operations', id));
+        yield* this.store.step(() => this.fence('operations', id));
         return null;
       }
       if (record === 'fenced') return null;
@@ -391,7 +439,7 @@ export class Journal {
   ): Effect.Effect<void, WorkspaceFailure> {
     return Effect.gen({ self: this }, function* () {
       const id = this.operationId(input),
-        record = yield* attempt(() => this.getOperation(id));
+        record = yield* this.getOperation(id);
       if (!record || record === 'fenced') return;
       if (record.result.outcome === 'uncertain')
         return yield* new UnresolvedWorkError({ state: 'operation-unacknowledgeable' });
@@ -412,19 +460,17 @@ export class Journal {
   ): Effect.Effect<void, WorkspaceFailure> {
     return Effect.gen({ self: this }, function* () {
       let blocked = false;
-      for (const { id, record } of yield* attempt(() => this.getPendingSaves(target))) {
+      for (const { id, record } of yield* this.getPendingSaves(target)) {
         if (!overlaps(paths, [record.input.target.path])) continue;
-        const current = yield* attempt(() => this.getSave(id));
+        const current = yield* this.getSave(id);
         if (current && current !== 'fenced' && !current.result)
           yield* this.resolveSave(id, current);
         blocked ||= !(current && current !== 'fenced' && current.result);
       }
-      const operations = yield* attempt(() =>
-        this.getUnsettledOperations(target, installationId, clientId),
-      );
+      const operations = yield* this.getUnsettledOperations(target, installationId, clientId);
       for (const { id, record } of operations) {
         if (!overlaps(paths, footprint(record.input))) continue;
-        const current = yield* attempt(() => this.getOperation(id));
+        const current = yield* this.getOperation(id);
         if (!current || current === 'fenced') continue;
         yield* this.recoverOperation(id, current);
         // What is left blocks: an uncertain operation, or this client's own unacknowledged one.
@@ -438,36 +484,42 @@ export class Journal {
 
   /** Reserves a request's ID; returns the record that already holds it. */
   reserveRequest(id: string, input: HostRequestRecord['input']) {
-    return this.reserve<HostRequestRecord>('requests', id, [null, null, null, 0, this.now()], {
-      input,
-    }) as HostRequestRecord | null;
+    return this.store.step(
+      () =>
+        this.reserve<HostRequestRecord>('requests', id, [null, null, null, 0, this.now()], {
+          input,
+        }) as HostRequestRecord | null,
+    );
   }
   /** Records a request's outcome, replayed for its ID for the retention window. */
   settleRequest(id: string, record: HostRequestRecord) {
-    this.store.write('UPDATE journal SET body=?, retained_at=? WHERE kind=? AND id=?', [
-      JSON.stringify(record),
-      this.now(),
-      'requests',
-      id,
-    ]);
+    return this.store.step(() =>
+      this.store.write('UPDATE journal SET body=?, retained_at=? WHERE kind=? AND id=?', [
+        JSON.stringify(record),
+        this.now(),
+        'requests',
+        id,
+      ]),
+    );
   }
   /** Drops a reservation so a retry under the same ID runs again. */
   releaseRequest(id: string) {
-    this.store.write("DELETE FROM journal WHERE kind='requests' AND id=?", [id]);
+    return this.store.step(() =>
+      this.store.write("DELETE FROM journal WHERE kind='requests' AND id=?", [id]),
+    );
   }
   requestId = (operation: string, i: { installationId: string; requestId: string }) =>
     key(operation, i.installationId, i.requestId);
   /** Replays a request's recorded outcome. */
   replayRequest(record: HostRequestRecord, operation: RequestOperation, input: unknown) {
     if (!same(record.input, input))
-      throw new WorkspaceConflictError({ conflict: 'request-payload' });
-    if (record.result) return record.result;
+      return Effect.fail(new WorkspaceConflictError({ conflict: 'request-payload' }));
+    if (record.result) return Effect.succeed(record.result);
     if (record.error)
-      throw new RecordedRefusalError({
-        refusal: record.error.refusal,
-        text: record.error.message,
-      });
-    throw new InterruptedRequestError({ operation });
+      return Effect.fail(
+        new RecordedRefusalError({ refusal: record.error.refusal, text: record.error.message }),
+      );
+    return Effect.fail(new InterruptedRequestError({ operation }));
   }
 
   /** Discards entries whose retention window has passed; unacknowledged ones stay. */
@@ -517,16 +569,19 @@ export class HostJournal extends Context.Service<HostJournal, Journal>()(
       const store = yield* HostStore;
       const checkouts = yield* Checkouts;
       const leases = yield* Leases;
-      const journal = yield* attempt(
-        () =>
-          new Journal({
-            store,
-            checkouts,
-            leases,
-            clock,
-            retentionMs: config.journalRetentionMs ?? 7 * 24 * 60 * 60 * 1000,
-          }),
-      );
+      const epoch = yield* store.step(() => {
+        const epoch = store.get<string>('meta', 'feed-epoch') ?? randomUUID();
+        store.put('meta', 'feed-epoch', epoch);
+        return epoch;
+      });
+      const journal = new Journal({
+        store,
+        checkouts,
+        leases,
+        clock,
+        retentionMs: config.journalRetentionMs ?? 7 * 24 * 60 * 60 * 1000,
+        epoch,
+      });
       // Acknowledged entries past their window are discarded when the store opens.
       yield* journal.compact();
       return journal;

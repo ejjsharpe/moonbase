@@ -1,6 +1,6 @@
 import { Cause, Clock, Effect, Exit } from 'effect';
 import { emptyRecoveryState, type RecoveryState } from '@moonbase/contracts/recovery';
-import { attempt, type WorkspaceFailure } from '../attempt.ts';
+import type { WorkspaceFailure } from '../attempt.ts';
 import { invalidStored } from '../store.ts';
 import { SystemFailure } from '../system-failures.ts';
 import { errorText, same } from '../validation.ts';
@@ -54,7 +54,7 @@ const recoverEvidence = (context: RecoveryContext, openIds?: Set<string>) =>
     const { store, host } = context;
     const notes = new Map<string, string>();
     const groups = new Map<string, SaveRecord[]>();
-    for (const record of yield* attempt(() => store.readSaves(unresolvedSaves)))
+    for (const record of yield* store.step(() => store.readSaves(unresolvedSaves)))
       groups.set(record.input.clientId, [...(groups.get(record.input.clientId) ?? []), record]);
     yield* Effect.forEach(
       [...groups.values()],
@@ -88,7 +88,7 @@ const recoverEvidence = (context: RecoveryContext, openIds?: Set<string>) =>
       { concurrency: 8, discard: true },
     );
     yield* Effect.forEach(
-      yield* attempt(() => context.getOpenOperations()),
+      yield* store.step(() => context.getOpenOperations()),
       (record) => {
         const id = operationKey(record);
         if (context.isCheckoutActive(record.input.checkout.checkoutId)) return Effect.void;
@@ -101,7 +101,7 @@ const recoverEvidence = (context: RecoveryContext, openIds?: Set<string>) =>
     );
     yield* acknowledgeSaves(
       context,
-      (yield* attempt(() =>
+      (yield* store.step(() =>
         store.all<StoredSave>(
           'saves',
           pendingSaves + " AND json_extract(body, '$.state') = 'settled'",
@@ -109,7 +109,7 @@ const recoverEvidence = (context: RecoveryContext, openIds?: Set<string>) =>
       )).map((r) => ({ state: r.state, input: r.request })),
     );
     yield* Effect.forEach(
-      (yield* attempt(() => context.getOpenOperations())).filter(
+      (yield* store.step(() => context.getOpenOperations())).filter(
         (r) =>
           !r.remote &&
           !r.hostAcknowledged &&
@@ -136,7 +136,7 @@ const recoverEvidence = (context: RecoveryContext, openIds?: Set<string>) =>
 export const loadRecovery = (context: RecoveryContext, clientId: string, hostWaitMs: number) =>
   Effect.gen(function* () {
     const { store } = context;
-    const recoveries = yield* attempt(() => store.readRecoveries());
+    const recoveries = yield* store.step(() => store.readRecoveries());
     // This client's own recovery must read; another's that does not is reported.
     if (recoveries.unreadable.some((r) => r.client === clientId))
       return yield* Effect.fail(invalidStored());
@@ -160,7 +160,7 @@ export const loadRecovery = (context: RecoveryContext, clientId: string, hostWai
     const notes =
       (yield* phase(recoverEvidence(bounded, new Set(before?.state.openCheckoutIds ?? [])))) ??
       new Map<string, string>();
-    const stored = yield* attempt(() => store.readRecovery(clientId)),
+    const stored = yield* store.step(() => store.readRecovery(clientId)),
       state: RecoveryState = stored?.state ?? emptyRecoveryState(clientId);
     yield* Effect.forEach(
       state.checkouts.filter((c) => state.openCheckoutIds.includes(c.checkoutId)),
@@ -181,7 +181,7 @@ export const loadRecovery = (context: RecoveryContext, clientId: string, hostWai
       errors.push(
         'The local host did not answer in time; files are checked again on the next load.',
       );
-    return yield* attempt(() => {
+    return yield* store.step(() => {
       const relevant = context
         .getOpenOperations()
         .filter(

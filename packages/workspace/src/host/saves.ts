@@ -3,9 +3,8 @@ import type { HostInput, HostSaveResult } from '@moonbase/contracts/workspace-ho
 import { UncertainError } from '@moonbase/contracts/errors';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import { attempt } from '../attempt.ts';
 import type { HostSaveRecord } from '../schema.ts';
-import { errorText, hash, path } from '../validation.ts';
+import { errorText, hash, requirePath } from '../validation.ts';
 import { cancellationPoint } from '../cancellation.ts';
 import { Checkouts } from './checkouts.ts';
 import { HostJournal } from './host-journal.ts';
@@ -22,15 +21,13 @@ export const saveFile = (input: HostInput<'saveFile'>) =>
     const checkouts = yield* Checkouts;
     const journal = yield* HostJournal;
     const references = yield* NativeReferences;
-    yield* attempt(() => {
-      path(input.target.path);
-      checkouts.approval(input.target.checkout);
-    });
+    yield* requirePath(input.target.path);
+    yield* checkouts.approval(input.target.checkout);
     const proposed = { text: input.text, version: hash(input.text) };
     const kept = journal.saveInput(input, proposed.version);
     const id = journal.saveId(input),
-      previous = yield* attempt(() => journal.getSave(id));
-    if (previous) return yield* attempt(() => journal.replaySave(id, kept, previous));
+      previous = yield* journal.getSave(id);
+    if (previous) return yield* journal.replaySave(id, kept, previous);
     yield* journal.assertSettled(
       input.target.checkout,
       [input.target.path],
@@ -44,17 +41,12 @@ export const saveFile = (input: HostInput<'saveFile'>) =>
     yield* cancellationPoint;
     if (disk.version !== input.expectedVersion) {
       const result = { kind: 'conflict', disk } as const;
-      const occupied = yield* attempt(() => journal.reserveSave(id, { input: kept, result }));
-      return occupied ? yield* attempt(() => journal.replaySave(id, kept, occupied)) : result;
+      const occupied = yield* journal.reserveSave(id, { input: kept, result });
+      return occupied ? yield* journal.replaySave(id, kept, occupied) : result;
     }
     const record: HostSaveRecord = { input: kept };
-    // Reserved and marked running in one step, so a status query never sees it as interrupted.
-    const occupied = yield* attempt(() => {
-      const occupied = journal.reserveSave(id, record);
-      if (!occupied) journal.startSave(id);
-      return occupied;
-    });
-    if (occupied) return yield* attempt(() => journal.replaySave(id, kept, occupied));
+    const occupied = yield* journal.admitSave(id, record);
+    if (occupied) return yield* journal.replaySave(id, kept, occupied);
     return yield* Effect.gen(function* () {
       const temporary = join(dirname(input.target.path), '.moonbase-save-' + randomUUID());
       const stagingIdentity = (yield* directory.io(
@@ -68,19 +60,11 @@ export const saveFile = (input: HostInput<'saveFile'>) =>
         yield* directory.io(['replace', input.target.path, temporary, stagingIdentity]);
         record.result = { kind: 'saved', version: proposed.version };
       }
-      const result: HostSaveResult = record.result;
-      try {
-        journal.settleSave(id, record);
-      } catch (error) {
-        journal.retainSave(id, record);
-        if (result.kind === 'saved')
-          return {
-            ...result,
-            persistencePending: true,
-            message: 'Saved to disk; durable request publication failed: ' + errorText(error),
-          };
-      }
-      return result;
+      return yield* journal.publishSave(
+        id,
+        record as HostSaveRecord & { result: HostSaveResult },
+        'Saved to disk; durable request publication failed: ',
+      );
     }).pipe(
       // The disk may have changed: the request stays journalled, for its status to settle.
       Effect.catchCause((cause) => {

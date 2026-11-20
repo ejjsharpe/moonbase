@@ -1,13 +1,12 @@
-import { randomUUID } from 'node:crypto';
 import { InvalidRequestError } from '@moonbase/contracts/workspace-host-errors';
 import type { SQLInputValue } from 'node:sqlite';
-import { Effect } from 'effect';
+import { Effect, type Scope } from 'effect';
 import type { FileDocument } from '@moonbase/contracts/workspace';
 import type { RecoveryState } from '@moonbase/contracts/recovery';
 import { Store } from '../store.ts';
-import { errorText, key, text, textDocument } from '../validation.ts';
+import { errorText, hash, isFileText, key } from '../validation.ts';
 import { WorkspaceStoreError } from '@moonbase/contracts/workspace-host-errors';
-import { attempt } from '../attempt.ts';
+import { attempt, type WorkspaceFailure } from '../attempt.ts';
 import {
   type SaveRecord,
   type StoredSave,
@@ -34,11 +33,31 @@ export type StoredRecovery = {
   state: RecoveryState;
 };
 
+/**
+ * Opens the client store in `directory` for the current scope, with its identity to a file host:
+ * the one it holds, else `installationId` or one minted now, kept from then on.
+ */
+export const openClientStore = (
+  directory: string,
+  installationId?: string,
+): Effect.Effect<{ store: ClientStore; installationId: string }, WorkspaceFailure, Scope.Scope> =>
+  Effect.gen(function* () {
+    // Opening runs its no-follow checks and SQLite's open in one synchronous step.
+    const store = yield* Effect.acquireRelease(
+      attempt(() => new ClientStore(directory)),
+      (store) => Effect.sync(() => store.close()),
+    );
+    const claimed = yield* store.claim(
+      'installation',
+      installationId,
+      new InvalidRequestError({ problem: 'store-client' }),
+    );
+    return { store, installationId: claimed };
+  });
+
 /** The clients' recoveries, saves and operations; the file name is stable. */
 export class ClientStore extends Store {
-  /** This store's identity to a file host, minted the first time and kept in the store. */
-  readonly installationId: string;
-  constructor(directory: string, installationId?: string) {
+  constructor(directory: string) {
     super(directory, {
       file: 'moonbase-workspace-v1.sqlite',
       applicationId: 1296193363,
@@ -50,14 +69,6 @@ export class ClientStore extends Store {
         CREATE INDEX IF NOT EXISTS open_operations ON records(bucket) WHERE bucket='operations' AND ${openOperations};`,
       decoders: clientDecoders,
     });
-    try {
-      const claimed = installationId ?? this.get<string>('meta', 'installation') ?? randomUUID();
-      this.claim('installation', claimed, new InvalidRequestError({ problem: 'store-client' }));
-      this.installationId = claimed;
-    } catch (error) {
-      this.close();
-      throw error;
-    }
   }
   /**
    * The recovery body this store last read or wrote for each client, with its state, so a row
@@ -157,7 +168,7 @@ export class ClientStore extends Store {
         (error) => new WorkspaceStoreError({ failure: 'reservation', detail: errorText(error) }),
       ),
       Effect.flatMap((reserved) =>
-        reserved ? Effect.succeed(null) : attempt(() => this.readSave(id)),
+        reserved ? Effect.succeed(null) : this.step(() => this.readSave(id)),
       ),
     );
   }
@@ -179,14 +190,12 @@ export class ClientStore extends Store {
         .map((row) => [row.part, row.text]),
     );
     const input = parts.get('text'),
-      baseline = parts.get('baseline') as string | undefined;
-    try {
-      text(input);
-      if (baseline !== undefined && textDocument(baseline).version !== stored.baseline)
-        throw Error();
-    } catch {
+      baseline = parts.get('baseline');
+    if (
+      !isFileText(input) ||
+      (baseline !== undefined && !(isFileText(baseline) && hash(baseline) === stored.baseline))
+    )
       throw invalidStored();
-    }
     return fromStoredSave(stored, input, baseline);
   }
   /**

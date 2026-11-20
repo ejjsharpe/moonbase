@@ -1,4 +1,4 @@
-import { Schema } from 'effect';
+import { Effect, Exit, Schema } from 'effect';
 import { type CommandInput, type SaveResult } from '@moonbase/contracts/workspace';
 import type { RecoveryState } from '@moonbase/contracts/recovery';
 import { RecoveryStateSchema } from '@moonbase/contracts/recovery-schema';
@@ -29,14 +29,11 @@ export const ClientConfigurationSchema = struct({
   /** How long loading recovery waits on the host before it gives up on it for this load. */
   hostWaitMs: optional(natural),
 });
-const configuration = Schema.decodeUnknownSync(ClientConfigurationSchema, { reportInput: false });
-export function decodeClientConfiguration(value: unknown) {
-  try {
-    return configuration(value);
-  } catch {
-    throw new InvalidRequestError({ problem: 'configuration' });
-  }
-}
+/** The recovery store's configuration; one that does not decode is refused without naming its input. */
+export const decodeClientConfiguration = (value: unknown) =>
+  Schema.decodeUnknownEffect(ClientConfigurationSchema)(value).pipe(
+    Effect.mapError(() => new InvalidRequestError({ problem: 'configuration' })),
+  );
 const { text: _text, ...saveRequestFields } = workspaceInputSchemas.saveFile.fields;
 /**
  * A save the client sent (or is about to send), as stored: its request without the text, which
@@ -162,31 +159,27 @@ const StoredRecoverySchema = RecoveryStateSchema.check(
     state.buffers.every((b) => !b.draft || hash(b.draft.disk.text) === b.draft.disk.version),
   ),
 );
-const storedRecovery = Schema.decodeUnknownSync(StoredRecoverySchema, {
-  onExcessProperty: 'error',
-  reportInput: false,
-});
-/** A client's stored recovery from its row's body. */
+/** A recovery row's body, its JSON exactly a stored recovery state. */
+const StoredRecoveryJson = Schema.fromJsonString(StoredRecoverySchema);
+const strict = { onExcessProperty: 'error' } as const;
+const decodeStoredRecovery = Schema.decodeUnknownExit(StoredRecoveryJson, strict);
+const encodeStoredRecovery = Schema.encodeExit(StoredRecoveryJson, strict);
+/**
+ * A client's stored recovery from its row's body. Synchronous, as the store reads recoveries
+ * inside its one-step transactions.
+ */
 export function parseRecovery(body: unknown, clientId: string): RecoveryState {
-  try {
-    if (typeof body !== 'string') throw Error();
-    const state = storedRecovery(JSON.parse(body));
-    if (state.clientId !== clientId) throw Error();
-    return state;
-  } catch {
-    throw invalidStored();
-  }
+  const decoded = decodeStoredRecovery(body);
+  if (Exit.isFailure(decoded) || decoded.value.clientId !== clientId) throw invalidStored();
+  return decoded.value;
 }
 /**
- * The body to store for a client's recovery, decoded as `parseRecovery` will read it back;
- * refuses one that would not read, so a written row never hides its drafts.
+ * The body to store for a client's recovery, encoded by the schema `parseRecovery` reads it
+ * back with; refuses one that would not read, so a written row never hides its drafts.
  */
 export function encodeStorableRecovery(state: RecoveryState, clientId: string): string {
-  const body = JSON.stringify(state);
-  try {
-    parseRecovery(body, clientId);
-  } catch {
+  const encoded = state.clientId === clientId ? encodeStoredRecovery(state) : undefined;
+  if (encoded === undefined || Exit.isFailure(encoded))
     throw new InvalidRecoveryRequestError({ problem: 'invalid-state' });
-  }
-  return body;
+  return encoded.value;
 }

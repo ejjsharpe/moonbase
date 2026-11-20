@@ -7,7 +7,7 @@ import type {
   SaveStatus,
 } from '@moonbase/contracts/workspace-host';
 import { UnresolvedWorkError } from '@moonbase/contracts/workspace-host-errors';
-import { attempt, type WorkspaceFailure } from '../attempt.ts';
+import type { WorkspaceFailure } from '../attempt.ts';
 import { getOperationPaths } from '../operation-paths.ts';
 import { canonical, key, overlaps, same } from '../validation.ts';
 import type { FeedCursor, FeedGap, OperationRecord, StoredSave } from './client-schema.ts';
@@ -170,16 +170,20 @@ export class RecoveryContext {
   }
   /** Refuses to start over work whose outcome this client has not settled. */
   assertSettled(target: CheckoutTarget, paths: string[], clientId: string) {
-    return attempt(
-      () =>
-        this.getUnsettledOperations(target, clientId).some((r) =>
-          overlaps(paths, getRecordPaths(r)),
-        ) || this.getPendingSaves(target).some((r) => overlaps(paths, [r.request.target.path])),
-    ).pipe(
-      Effect.flatMap((blocked) =>
-        blocked ? Effect.fail(new UnresolvedWorkError({ state: 'awaits-recovery' })) : Effect.void,
-      ),
-    );
+    return this.store
+      .step(
+        () =>
+          this.getUnsettledOperations(target, clientId).some((r) =>
+            overlaps(paths, getRecordPaths(r)),
+          ) || this.getPendingSaves(target).some((r) => overlaps(paths, [r.request.target.path])),
+      )
+      .pipe(
+        Effect.flatMap((blocked) =>
+          blocked
+            ? Effect.fail(new UnresolvedWorkError({ state: 'awaits-recovery' }))
+            : Effect.void,
+        ),
+      );
   }
   /**
    * Marks a checkout's history incomplete: its drafts may be at paths a missed move left behind.

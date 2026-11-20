@@ -7,12 +7,19 @@ import {
   InvalidPathError,
   InvalidRequestError,
 } from '@moonbase/contracts/workspace-host-errors';
-import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
+import { constants, fstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { attempt, type WorkspaceFailure } from '../attempt.ts';
-import { HelperFailure } from '../system-failures.ts';
-import { Directory, identity, O_NOFOLLOW_ANY } from '../filesystem.ts';
+import type { StoreFailure } from '../store.ts';
+import { systemCall, type SystemFailure } from '../system-failures.ts';
+import {
+  Directory,
+  identity,
+  O_NOFOLLOW_ANY,
+  statDescriptor,
+  withDescriptor,
+} from '../filesystem.ts';
 import { makeFilesystemHelper } from '../filesystem-helper.ts';
 import { makeGitGate } from '../git-gate.ts';
 import type { Approval } from '../schema.ts';
@@ -37,6 +44,18 @@ const holdsOrIsInside = (a: string, b: string) => {
   };
   return inside(x, y) || inside(y, x);
 };
+const folderFlags = constants.O_RDONLY | constants.O_DIRECTORY | O_NOFOLLOW_ANY;
+const entryFlags = constants.O_RDONLY | constants.O_NONBLOCK | O_NOFOLLOW_ANY;
+/** The identity of the folder at `path`, opened without following links. */
+const folderIdentity = (path: string) =>
+  systemCall(() => identity(statDescriptor(path, folderFlags)));
+/** `effect`'s value, or undefined when what it opens does not exist. */
+const unlessMissing = <A>(effect: Effect.Effect<A, SystemFailure>) =>
+  effect.pipe(
+    Effect.catchTag('SystemFailure', (failure) =>
+      failure.code === 'ENOENT' ? Effect.succeed(undefined) : Effect.fail(failure),
+    ),
+  );
 /** The repository a checkout root's Git names: its common directory and which worktree it is. */
 type Repository = {
   common: { path: string; identity: string };
@@ -65,9 +84,11 @@ export class Checkouts extends Context.Service<
     /** The Git the host runs. */
     readonly git: string;
     /** The approval of exactly `target`; refuses any other host's or a changed one. */
-    approval(target: CheckoutTarget): Approval;
+    approval(target: CheckoutTarget): Effect.Effect<Approval, CheckoutAccessError | StoreFailure>;
+    /** Whether a path holds, or sits inside, the host's state or a reserved path. */
+    isReserved(path: string): boolean;
     /** Refuses a path that holds, or sits inside, the host's state or a reserved path. */
-    refuseReserved(path: string): void;
+    refuseReserved(path: string): Effect.Effect<void, InvalidPathError>;
     /** The checkout's open directory, re-checked. */
     directory(target: CheckoutTarget): Effect.Effect<Directory, WorkspaceFailure>;
     /** Whether `path` is the root of an approved checkout that still holds. */
@@ -76,12 +97,15 @@ export class Checkouts extends Context.Service<
     policy(target: CheckoutTarget): Effect.Effect<void, WorkspaceFailure>;
     /** The root policy's answer for `real`; a refusal or a throw denies. */
     permit(real: string, requested: string): Effect.Effect<void, WorkspaceFailure>;
-    /** A new worktree's location: reserved paths and, as it doesn't exist yet, its parent's policy. */
-    permitLocation(location: string): Effect.Effect<void, WorkspaceFailure>;
-    /** The folder a chat's worktrees go in, and the policy of its parent, where it is made. */
-    permitContainer(parent: string): Effect.Effect<void, WorkspaceFailure>;
+    /**
+     * A folder the host is about to make (a new worktree's location, or the folder a chat's
+     * worktrees go in): reserved paths and, as it doesn't exist yet, its parent's policy.
+     */
+    permitNewFolder(path: string): Effect.Effect<void, WorkspaceFailure>;
     /** The root's `.git` entry, or null when it has none. */
-    gitEntry(root: string): Approval['gitEntry'];
+    gitEntry(
+      root: string,
+    ): Effect.Effect<Approval['gitEntry'], CheckoutChangedError | SystemFailure>;
     /**
      * Approves a checkout root: a Git checkout's root, or a plain folder in no repository.
      * `created` names a worktree this host just made at exactly `root`, in the repository whose
@@ -111,18 +135,28 @@ export class Checkouts extends Context.Service<
       const makeDirectory = (root: string, expected: string) =>
         new Directory(root, expected, filesystemHelper, git, gitReady);
 
-      const approval = (target: CheckoutTarget) => {
-        if (target.hostId !== config.hostId) throw new CheckoutAccessError({ refusal: 'remote' });
-        const stored = store.get<Approval>('approvals', target.checkoutId);
-        if (!stored || !same(stored.target, target))
-          throw new CheckoutAccessError({ refusal: 'not-approved' });
-        return stored;
-      };
-      const refuseReserved = (path: string) => {
+      const approval = (target: CheckoutTarget) =>
+        target.hostId !== config.hostId
+          ? Effect.fail(new CheckoutAccessError({ refusal: 'remote' }))
+          : store
+              .step(() => store.get<Approval>('approvals', target.checkoutId))
+              .pipe(
+                Effect.flatMap((stored) =>
+                  stored && same(stored.target, target)
+                    ? Effect.succeed(stored)
+                    : Effect.fail(new CheckoutAccessError({ refusal: 'not-approved' })),
+                ),
+              );
+      const isReserved = (path: string) => {
         const real = resolveNearest(path);
-        for (const each of reserved)
-          if (holdsOrIsInside(real, each)) throw new InvalidPathError({ problem: 'reserved' });
+        return reserved.some((each) => holdsOrIsInside(real, each));
       };
+      const refuseReserved = (path: string) =>
+        Effect.suspend(() =>
+          isReserved(path)
+            ? Effect.fail(new InvalidPathError({ problem: 'reserved' }))
+            : Effect.void,
+        );
       const permit = (real: string, requested: string): Effect.Effect<void, WorkspaceFailure> =>
         allowRoot
           ? Effect.suspend(() => allowRoot(real, requested)).pipe(
@@ -135,55 +169,46 @@ export class Checkouts extends Context.Service<
               ),
             )
           : Effect.void;
-      const gitEntry = (root: string) => {
-        let fd: number;
-        try {
-          fd = openSync(
-            join(root, '.git'),
-            constants.O_RDONLY | constants.O_NONBLOCK | O_NOFOLLOW_ANY,
-          );
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-          throw error;
-        }
-        try {
-          const info = fstatSync(fd);
-          if (!(info.isDirectory() || (info.isFile() && info.size < 4096 && info.nlink === 1)))
-            throw new CheckoutChangedError({ change: 'git-metadata' });
-          return {
-            identity: identity(info),
-            pointer: info.isFile() ? readFileSync(fd, 'utf8') : null,
-          };
-        } finally {
-          closeSync(fd);
-        }
-      };
-      /** Checks an open directory still is the approved checkout, and its repository unchanged. */
-      const verify = (target: CheckoutTarget, directory: Directory, approved: Approval) => {
-        directory.check();
-        // A plain folder runs no Git, so only its own identity matters.
-        if (!approved.common) return;
-        if (!same(gitEntry(target.root), approved.gitEntry))
-          throw new CheckoutChangedError({ change: 'git-metadata-identity' });
-        const fd = openSync(
-          approved.common.path,
-          constants.O_RDONLY | constants.O_DIRECTORY | O_NOFOLLOW_ANY,
+      const gitEntry = (root: string) =>
+        unlessMissing(
+          systemCall(() =>
+            // Read through the descriptor its type was checked on, in one step.
+            withDescriptor(openSync(join(root, '.git'), entryFlags), (fd) => {
+              const info = fstatSync(fd);
+              if (!(info.isDirectory() || (info.isFile() && info.size < 4096 && info.nlink === 1)))
+                return 'invalid' as const;
+              return {
+                identity: identity(info),
+                pointer: info.isFile() ? readFileSync(fd, 'utf8') : null,
+              };
+            }),
+          ),
+        ).pipe(
+          Effect.flatMap((entry) =>
+            entry === 'invalid'
+              ? Effect.fail(new CheckoutChangedError({ change: 'git-metadata' }))
+              : Effect.succeed(entry ?? null),
+          ),
         );
-        try {
-          if (!(identity(fstatSync(fd)) === approved.common.identity))
-            throw new CheckoutChangedError({ change: 'common-directory' });
-        } finally {
-          closeSync(fd);
-        }
-      };
+      /** Checks an open directory still is the approved checkout, and its repository unchanged. */
+      const verify = (target: CheckoutTarget, directory: Directory, approved: Approval) =>
+        Effect.gen(function* () {
+          yield* directory.check();
+          // A plain folder runs no Git, so only its own identity matters.
+          if (!approved.common) return;
+          if (!same(yield* gitEntry(target.root), approved.gitEntry))
+            return yield* new CheckoutChangedError({ change: 'git-metadata-identity' });
+          if (!((yield* folderIdentity(approved.common.path)) === approved.common.identity))
+            return yield* new CheckoutChangedError({ change: 'common-directory' });
+        });
       /**
        * Every use re-checks reserved paths and the root policy, so a root replaced since it was
        * approved, or one that a smaller policy no longer allows, grants nothing.
        */
       const authorize = (target: CheckoutTarget) =>
         Effect.gen(function* () {
-          const approved = yield* attempt(() => approval(target));
-          yield* attempt(() => refuseReserved(target.root));
+          const approved = yield* approval(target);
+          yield* refuseReserved(target.root);
           yield* permit(target.root, target.root);
           return approved;
         });
@@ -211,7 +236,7 @@ export class Checkouts extends Context.Service<
         Effect.gen(function* () {
           const approved = yield* authorize(target);
           const open = yield* retained(target, approved);
-          yield* attempt(() => verify(target, open, approved));
+          yield* verify(target, open, approved);
           return open;
         });
       /** Opens `root` for the length of `use` only, so checks never use up the retained cap. */
@@ -227,21 +252,23 @@ export class Checkouts extends Context.Service<
         );
       /** Approvals of exactly `root`; a replaced checkout may leave a stale one beside the current. */
       const approvalsAt = (root: string) =>
-        store.all<Approval>(
-          'approvals',
-          "bucket='approvals' AND json_extract(body, '$.target.root')=?",
-          [root],
+        store.step(() =>
+          store.all<Approval>(
+            'approvals',
+            "bucket='approvals' AND json_extract(body, '$.target.root')=?",
+            [root],
+          ),
         );
       const hasFolder = (path: string) =>
         Effect.gen(function* () {
-          for (const each of yield* attempt(() => approvalsAt(path))) {
+          for (const each of yield* approvalsAt(path)) {
             const held = yield* Effect.exit(
               Effect.gen(function* () {
                 const approved = yield* authorize(each.target);
                 const open = directories.get(each.target.checkoutId);
-                if (open) return yield* attempt(() => verify(each.target, open, approved));
+                if (open) return yield* verify(each.target, open, approved);
                 return yield* withTransient(each.target.root, approved.identity, (transient) =>
-                  attempt(() => verify(each.target, transient, approved)),
+                  verify(each.target, transient, approved),
                 );
               }),
             );
@@ -251,27 +278,15 @@ export class Checkouts extends Context.Service<
           return false;
         });
       const policy = (target: CheckoutTarget) =>
-        attempt(() => {
-          const common = approval(target).common;
+        Effect.gen(function* () {
+          const common = (yield* approval(target)).common;
           if (!common) return;
           for (const p of ['info', 'info/exclude']) {
-            let fd: number;
-            try {
-              fd = openSync(
-                join(common.path, p),
-                constants.O_RDONLY | constants.O_NONBLOCK | O_NOFOLLOW_ANY,
-              );
-            } catch (error) {
-              if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
-              throw error;
-            }
-            try {
-              const info = fstatSync(fd);
-              if (!(p === 'info' ? info.isDirectory() : info.isFile()))
-                throw new CheckoutChangedError({ change: 'ignore-policy' });
-            } finally {
-              closeSync(fd);
-            }
+            const info = yield* unlessMissing(
+              systemCall(() => statDescriptor(join(common.path, p), entryFlags)),
+            );
+            if (info && !(p === 'info' ? info.isDirectory() : info.isFile()))
+              return yield* new CheckoutChangedError({ change: 'ignore-policy' });
           }
         });
       /** The repository whose working tree `directory` is the top of. */
@@ -279,28 +294,20 @@ export class Checkouts extends Context.Service<
         Effect.gen(function* () {
           const root = directory.root;
           const top = (yield* directory.git(['rev-parse', '--show-toplevel'])).toString().trim();
-          if (!(realpathSync(top) === root))
+          if (!((yield* systemCall(() => realpathSync(top))) === root))
             return yield* new InvalidPathError({ problem: 'not-checkout-root' });
           const output = yield* directory.git(['rev-parse', '--git-dir', '--git-common-dir']);
-          return yield* attempt((): Repository => {
-            const [gitDirectory, common] = output
+          const [gitDirectory, common] = yield* systemCall(() =>
+            output
               .toString()
               .trim()
               .split('\n')
-              .map((p) => realpathSync(resolve(root, p)));
-            const fd = openSync(
-              common,
-              constants.O_RDONLY | constants.O_DIRECTORY | O_NOFOLLOW_ANY,
-            );
-            try {
-              return {
-                common: { path: common, identity: identity(fstatSync(fd)) },
-                worktree: gitDirectory === common ? 'main' : 'linked',
-              };
-            } finally {
-              closeSync(fd);
-            }
-          });
+              .map((p) => realpathSync(resolve(root, p))),
+          );
+          return {
+            common: { path: common, identity: yield* folderIdentity(common) },
+            worktree: gitDirectory === common ? 'main' : 'linked',
+          } satisfies Repository;
         });
       const open = (
         requested: string,
@@ -311,21 +318,14 @@ export class Checkouts extends Context.Service<
             !(typeof requested === 'string' && isAbsolute(requested) && !requested.includes('\0'))
           )
             return yield* new InvalidPathError({ problem: 'root-not-absolute' });
-          const root = yield* attempt(() => realpathSync(requested));
+          const root = yield* systemCall(() => realpathSync(requested));
           if (created)
             if (!(root === created.root))
               return yield* new CheckoutChangedError({ change: 'worktree-location' });
-          yield* attempt(() => refuseReserved(root));
+          yield* refuseReserved(root);
           yield* permit(root, requested);
-          const id = yield* attempt(() => {
-            const fd = openSync(root, constants.O_RDONLY | constants.O_DIRECTORY | O_NOFOLLOW_ANY);
-            try {
-              return identity(fstatSync(fd));
-            } finally {
-              closeSync(fd);
-            }
-          });
-          const entry = yield* attempt(() => gitEntry(root));
+          const id = yield* folderIdentity(root);
+          const entry = yield* gitEntry(root);
           return yield* withTransient(root, id, (directory) =>
             Effect.gen(function* () {
               const repository = entry || created ? yield* inspectRepository(directory) : null;
@@ -344,12 +344,10 @@ export class Checkouts extends Context.Service<
                   .git(['rev-parse', '--git-dir'], undefined, { untranslated: true })
                   .pipe(
                     Effect.as(true),
-                    Effect.catch((error) =>
-                      error instanceof HelperFailure &&
-                      error.status === 128 &&
-                      /not a git repository/i.test(error.stderr)
+                    Effect.catchTag('HelperFailure', (failure) =>
+                      failure.status === 128 && /not a git repository/i.test(failure.stderr)
                         ? Effect.succeed(false)
-                        : Effect.fail(error),
+                        : Effect.fail(failure),
                     ),
                   );
                 if (inside) return yield* new InvalidPathError({ problem: 'not-checkout-root' });
@@ -361,7 +359,7 @@ export class Checkouts extends Context.Service<
                     : [config.hostId, id],
                 ),
               );
-              const previous = yield* attempt(() => approvalsAt(root));
+              const previous = yield* approvalsAt(root);
               const current = previous.find(
                 (a) => a.identity === id && a.target.projectId === projectId,
               );
@@ -392,7 +390,7 @@ export class Checkouts extends Context.Service<
                     worktree: repository.worktree,
                   }
                 : { vcs: 'none', ...base };
-              yield* attempt(() =>
+              yield* store.step(() =>
                 store.put('approvals', target.checkoutId, {
                   target,
                   identity: id,
@@ -407,20 +405,16 @@ export class Checkouts extends Context.Service<
       return {
         git,
         approval,
+        isReserved,
         refuseReserved,
         directory,
         hasFolder,
         policy,
         permit,
-        permitLocation: (location) =>
+        permitNewFolder: (path) =>
           Effect.gen(function* () {
-            yield* attempt(() => refuseReserved(location));
-            if (allowRoot) yield* permit(dirname(location), dirname(location));
-          }),
-        permitContainer: (parent) =>
-          Effect.gen(function* () {
-            yield* attempt(() => refuseReserved(parent));
-            if (allowRoot) yield* permit(dirname(parent), dirname(parent));
+            yield* refuseReserved(path);
+            if (allowRoot) yield* permit(dirname(path), dirname(path));
           }),
         gitEntry,
         open,

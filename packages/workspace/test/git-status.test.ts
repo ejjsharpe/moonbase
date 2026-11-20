@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { Effect } from 'effect';
 import { GitStatusFormatError } from '@moonbase/contracts/workspace-host-errors';
 import { parseGitStatus } from '../src/host/git-status.ts';
+
+const parse = (output: string) => Effect.runSync(parseGitStatus(output));
 
 const records = (...rows: string[]) => rows.map((row) => row + '\0').join('');
 
 test('each differing side of a tracked path becomes its own change with its kind', () => {
   assert.deepEqual(
-    parseGitStatus(
+    parse(
       records(
         'M  staged.ts',
         ' M unstaged.ts',
@@ -47,7 +50,7 @@ test('each differing side of a tracked path becomes its own change with its kind
 test('every unmerged pair is one conflicted change, never a staged and an unstaged one', () => {
   const codes = ['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'];
   assert.deepEqual(
-    parseGitStatus(records(...codes.map((code) => `${code} ${code}.ts`))),
+    parse(records(...codes.map((code) => `${code} ${code}.ts`))),
     codes.map((code) => ({
       path: `${code}.ts`,
       area: 'conflicted',
@@ -60,9 +63,7 @@ test('every unmerged pair is one conflicted change, never a staged and an unstag
 
 test('untracked files are untracked, ignored records are skipped and paths keep their spaces', () => {
   assert.deepEqual(
-    parseGitStatus(
-      records('?? new folder/a file.ts', '!! ignored.log', ' M  leading space.ts', 'M  tail '),
-    ),
+    parse(records('?? new folder/a file.ts', '!! ignored.log', ' M  leading space.ts', 'M  tail ')),
     [
       { path: 'new folder/a file.ts', area: 'untracked', kind: 'untracked' },
       { path: ' leading space.ts', area: 'unstaged', kind: 'modified' },
@@ -73,7 +74,7 @@ test('untracked files are untracked, ignored records are skipped and paths keep 
 
 test('a rename or copy lists its target as added and skips the source path record', () => {
   assert.deepEqual(
-    parseGitStatus(records('R  new.ts', 'old.ts', 'CM copy.ts', 'source.ts', ' M after.ts')),
+    parse(records('R  new.ts', 'old.ts', 'CM copy.ts', 'source.ts', ' M after.ts')),
     [
       { path: 'new.ts', area: 'staged', kind: 'added' },
       { path: 'copy.ts', area: 'staged', kind: 'added' },
@@ -84,12 +85,13 @@ test('a rename or copy lists its target as added and skips the source path recor
 });
 
 test('empty output has no changes and malformed records are refused', () => {
-  assert.deepEqual(parseGitStatus(''), []);
-  for (const output of [records('M'), records('MMfile.ts'), records('X  file.ts')])
-    assert.throws(
-      () => parseGitStatus(output),
-      (error) =>
-        error instanceof GitStatusFormatError &&
-        error.message.startsWith('Unrecognized Git status record'),
-    );
+  assert.deepEqual(parse(''), []);
+  // A typed failure, not a defect, so getStatus reports the empty status with its note.
+  for (const output of [
+    records('M'),
+    records('MMfile.ts'),
+    records('X  file.ts'),
+    records(' X file.ts'),
+  ])
+    assert.ok(Effect.runSync(Effect.flip(parseGitStatus(output))) instanceof GitStatusFormatError);
 });

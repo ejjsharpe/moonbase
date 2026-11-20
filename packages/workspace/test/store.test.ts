@@ -3,8 +3,9 @@ import { test } from 'node:test';
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import { Store } from '../src/store.ts';
+import { strictDecoders } from '../src/schema.ts';
 
 const rounds = 20;
 test('concurrent transactions and plain writes on one store neither collide nor lose writes', async () => {
@@ -13,7 +14,7 @@ test('concurrent transactions and plain writes on one store neither collide nor 
     file: 'test.sqlite',
     applicationId: 1,
     schema: '',
-    decoders: { rows: (value) => value },
+    decoders: strictDecoders({ rows: Schema.Number }),
   });
   try {
     // Eight fibers interleave on the one connection; a transaction that yielded inside itself

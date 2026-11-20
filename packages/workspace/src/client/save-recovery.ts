@@ -16,7 +16,7 @@ import {
 } from '@moonbase/contracts/workspace-errors';
 import { WorkspaceConflictError } from '@moonbase/contracts/workspace-host-errors';
 import { UncertainError } from '@moonbase/contracts/errors';
-import { attempt, type WorkspaceFailure } from '../attempt.ts';
+import type { WorkspaceFailure } from '../attempt.ts';
 import { errorText, hash, same } from '../validation.ts';
 import { fromStoredSave, toStoredSave, type SaveRecord, type StoredSave } from './client-schema.ts';
 import { followRestoredCheckouts } from './feed-sync.ts';
@@ -48,7 +48,7 @@ export const getBaseline = (
   input: CommandInput<'saveFile'>,
 ): Effect.Effect<SaveRecord['baseline'], WorkspaceFailure> =>
   Effect.gen(function* () {
-    const draft = (yield* attempt(() =>
+    const draft = (yield* context.store.step(() =>
       context.store.readRecovery(input.clientId),
     ))?.state.buffers.find((b) => same(b.target, input.target))?.draft;
     if (draft && draft.disk.version === input.expectedVersion)
@@ -128,7 +128,9 @@ export const acknowledgeSaves = (
       context.host
         .acknowledgeSave({ clientId: record.input.clientId, requestId: record.input.requestId })
         .pipe(
-          Effect.andThen(attempt(() => context.store.markSaveDone(saveKey(record.input)))),
+          Effect.andThen(
+            context.store.step(() => context.store.markSaveDone(saveKey(record.input))),
+          ),
           Effect.map(() => {
             record.state = 'done';
           }),

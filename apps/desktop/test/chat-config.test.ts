@@ -3,7 +3,11 @@ import { test } from 'node:test';
 import { mkdtemp, writeFile, chmod, symlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readConfiguration } from '../src/main/chat/config.ts';
+import { Effect } from 'effect';
+import { readConfiguration as readConfigurationEffect } from '../src/main/chat/config.ts';
+
+const readConfiguration = (path: string | undefined) =>
+  Effect.runPromise(readConfigurationEffect(path));
 test('private configuration is owner-only, bounded, explicit and projected; bad files never initialize transport', async (t) => {
   await assert.rejects(readConfiguration(''), {
     _tag: 'StartupError',

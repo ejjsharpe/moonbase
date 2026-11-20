@@ -1,17 +1,25 @@
-import type { Effect } from 'effect';
+import { Effect, Exit, Schema } from 'effect';
 import { O_NOFOLLOW_ANY } from './filesystem.ts';
 import { attempt, type WorkspaceFailure } from './attempt.ts';
+import { asSystemFailure, type SystemFailure } from './system-failures.ts';
 import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
 import { chmodSync, constants, closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import {
   InvalidRequestError,
   WorkspaceStoreError,
 } from '@moonbase/contracts/workspace-host-errors';
 import { errorText } from './validation.ts';
 
-export type Decoders = Record<string, (value: unknown) => unknown>;
+/** Per bucket, the decoder of a stored record's JSON body (see `strictDecoders`). */
+export type Decoders = Record<string, (body: unknown) => Exit.Exit<unknown, unknown>>;
 export const invalidStored = () => new WorkspaceStoreError({ failure: 'invalid-data' });
+/** What a store read or write fails with: the store's own error, or SQLite's as a system failure. */
+export type StoreFailure = WorkspaceStoreError | SystemFailure;
+const isStoreError = Schema.is(WorkspaceStoreError);
+const asStoreFailure = (error: unknown): StoreFailure =>
+  isStoreError(error) ? error : asSystemFailure(error);
 
 /**
  * A private SQLite file of keyed records, each decoded strictly by its bucket. The file host and
@@ -62,20 +70,40 @@ export class Store {
       throw error;
     }
   }
-  /** Binds the store to one identity the first time and refuses any other afterwards. */
-  claim(key: string, value: string, refusal: Error) {
-    const identity = this.get<string>('meta', key);
-    if (identity && identity !== value) throw refusal;
-    if (!identity) this.put('meta', key, value);
+  /**
+   * Binds the store to one identity the first time and refuses any other afterwards. Returns the
+   * identity it holds; one that holds none takes `value`, or a new one when `value` is undefined.
+   */
+  claim<E>(
+    key: string,
+    value: string | undefined,
+    refusal: E,
+  ): Effect.Effect<string, E | StoreFailure> {
+    return this.step(() => {
+      const identity = this.get<string>('meta', key);
+      if (identity) return identity;
+      const claimed = value ?? randomUUID();
+      this.put('meta', key, claimed);
+      return claimed;
+    }).pipe(
+      Effect.flatMap((identity) =>
+        value !== undefined && identity !== value ? Effect.fail(refusal) : Effect.succeed(identity),
+      ),
+    );
   }
+  /** A stored record's body, decoded by its bucket's decoder; anything else is invalid data. */
   parse<T>(bucket: string, body: unknown): T {
-    try {
-      if (typeof body !== 'string') throw Error();
-      if (!Object.hasOwn(this.decoders, bucket)) throw Error();
-      return this.decoders[bucket](JSON.parse(body)) as T;
-    } catch {
-      throw invalidStored();
-    }
+    const decoded = Object.hasOwn(this.decoders, bucket) ? this.decoders[bucket](body) : undefined;
+    if (decoded === undefined || Exit.isFailure(decoded)) throw invalidStored();
+    return decoded.value as T;
+  }
+  /**
+   * Runs one synchronous step of reads and writes on the store, with no transaction. Nothing
+   * else on this connection runs inside it. `work` calls only the store's own methods, so it
+   * fails with the store's error, or SQLite's as a system failure.
+   */
+  step<A>(work: () => A): Effect.Effect<A, StoreFailure> {
+    return Effect.try({ try: work, catch: asStoreFailure });
   }
   /** One prepared statement per SQL text, prepared once. */
   statement(sql: string) {

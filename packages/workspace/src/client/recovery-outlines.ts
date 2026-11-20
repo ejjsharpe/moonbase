@@ -4,7 +4,6 @@ import {
   type RecoveryOutline,
   type RecoveryState,
 } from '@moonbase/contracts/recovery';
-import { attempt } from '../attempt.ts';
 import { same } from '../validation.ts';
 import type { ClientStore } from './client-store.ts';
 
@@ -26,14 +25,16 @@ export function outlineRecovery(state: RecoveryState): RecoveryOutline {
  */
 export const makeRecoveryOutlines = (store: ClientStore) =>
   Effect.gen(function* () {
-    const initial = yield* attempt(
-      () =>
-        new Map<string, RecoveryOutline>(
-          store
-            .readRecoveries()
-            .readable.map(({ client, state }) => [client, outlineRecovery(state)]),
-        ),
-    ).pipe(Effect.orElseSucceed(() => new Map<string, RecoveryOutline>()));
+    const initial = yield* store
+      .step(
+        () =>
+          new Map<string, RecoveryOutline>(
+            store
+              .readRecoveries()
+              .readable.map(({ client, state }) => [client, outlineRecovery(state)]),
+          ),
+      )
+      .pipe(Effect.orElseSucceed(() => new Map<string, RecoveryOutline>()));
     // The clients written so far are in the outlines already.
     store.takeWrittenClients();
     const outlines = yield* SubscriptionRef.make<ReadonlyMap<string, RecoveryOutline>>(initial);
@@ -42,7 +43,7 @@ export const makeRecoveryOutlines = (store: ClientStore) =>
     const refresh = Semaphore.withPermit(turn)(
       Effect.gen(function* () {
         const current = yield* SubscriptionRef.get(outlines);
-        const next = yield* attempt(() => {
+        const next = yield* store.step(() => {
           let changed: Map<string, RecoveryOutline> | undefined;
           for (const client of store.takeWrittenClients()) {
             let outline: RecoveryOutline | undefined;

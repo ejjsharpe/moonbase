@@ -18,7 +18,7 @@ import {
   isUncertain,
 } from '@moonbase/contracts/error-groups';
 import { join } from 'node:path';
-import { asWorkspaceFailure, attempt, type WorkspaceFailure } from '../attempt.ts';
+import { asWorkspaceFailure, type WorkspaceFailure } from '../attempt.ts';
 import type { HostRequestRecord } from '../schema.ts';
 import { makeChatWorktree } from './chat-worktrees.ts';
 import { Checkouts } from './checkouts.ts';
@@ -56,17 +56,19 @@ const once = <K extends RequestOperation>(
   Effect.gen(function* () {
     const journal = yield* HostJournal;
     const id = journal.requestId(operation, input);
-    return (yield* journal.runningRequests(id, input, operation, () => {
+    return (yield* journal.runningRequests(id, input, operation, () =>
       // A reservation already in the journal is a finished request (or one an earlier host
       // process left), replayed; otherwise this one runs.
-      try {
-        const record = journal.reserveRequest(id, input);
-        if (record) return attempt(() => journal.replayRequest(record, operation, input));
-      } catch (error) {
-        return Effect.fail(asWorkspaceFailure(error));
-      }
-      return settleRequest(journal, id, input, work);
-    })) as HostOutput<K>;
+      journal
+        .reserveRequest(id, input)
+        .pipe(
+          Effect.flatMap((record) =>
+            record
+              ? journal.replayRequest(record, operation, input)
+              : settleRequest(journal, id, input, work),
+          ),
+        ),
+    )) as HostOutput<K>;
   });
 
 /**
@@ -85,23 +87,21 @@ const settleRequest = <A extends CheckoutTarget, R>(
     const exit = yield* Effect.exit(work);
     if (Exit.isSuccess(exit)) {
       // The worktree or repository exists; a failed record makes a replay report it interrupted.
-      yield* Effect.exit(attempt(() => journal.settleRequest(id, { input, result: exit.value })));
+      yield* Effect.exit(journal.settleRequest(id, { input, result: exit.value }));
       return exit.value;
     }
     const failure = Option.getOrUndefined(Cause.findErrorOption(exit.cause));
     const refusal = getRecordedRefusal(failure);
     // A failed record makes a replay of this ID report the request interrupted.
-    yield* Effect.exit(
-      attempt(() => {
-        if (refusal)
-          journal.settleRequest(id, {
-            input,
-            error: { refusal, message: (failure as WorkspaceFailure).message },
-          });
-        else if (!(isWorkspaceHostError(failure) && isUncertain(failure)))
-          journal.releaseRequest(id);
-      }),
-    );
+    if (refusal)
+      yield* Effect.exit(
+        journal.settleRequest(id, {
+          input,
+          error: { refusal, message: (failure as WorkspaceFailure).message },
+        }),
+      );
+    else if (!(isWorkspaceHostError(failure) && isUncertain(failure)))
+      yield* Effect.exit(journal.releaseRequest(id));
     return yield* Effect.failCause(exit.cause);
   });
 
@@ -113,7 +113,7 @@ export const createWorktree = (input: HostInput<'createWorktree'>) =>
     Effect.gen(function* () {
       const checkouts = yield* Checkouts;
       const worktrees = yield* WorkspaceWorktrees;
-      yield* attempt(() => checkouts.approval(input.checkout));
+      yield* checkouts.approval(input.checkout);
       return yield* worktrees.createWorktree(input);
     }),
   );
@@ -147,7 +147,7 @@ export const turnChatIntoProject = (input: HostInput<'turnChatIntoProject'>) =>
       if (target.root !== folder)
         return yield* new CheckoutAccessError({ refusal: 'chat-folder-changed' });
       // Only its own `.git` folder: a `.git` file (or a link) would make it another repository's.
-      const { common, gitEntry } = yield* attempt(() => checkouts.approval(target));
+      const { common, gitEntry } = yield* checkouts.approval(target);
       if (common && (gitEntry?.pointer !== null || common.path !== join(folder, '.git')))
         return yield* new CheckoutAccessError({ refusal: 'chat-folder-repository' });
       yield* chats
@@ -173,14 +173,12 @@ export const initializeRepository = (input: HostInput<'initializeRepository'>) =
       if (!(target.vcs === 'none'))
         return yield* new InvalidRequestError({ problem: 'already-git' });
       const directory = yield* checkouts.directory(target);
-      if (yield* attempt(() => checkouts.gitEntry(target.root)))
+      if (yield* checkouts.gitEntry(target.root))
         return yield* new WorkspaceConflictError({ conflict: 'git-entry' });
-      yield* attempt(() => {
-        if (journal.getPendingSaves(target).length)
-          throw new InvalidRequestError({ problem: 'save-pending' });
-        if (journal.getUnsettledCheckoutOperations(target, input.installationId).length)
-          throw new InvalidRequestError({ problem: 'operation-pending' });
-      });
+      if ((yield* journal.getPendingSaves(target)).length)
+        return yield* new InvalidRequestError({ problem: 'save-pending' });
+      if ((yield* journal.getUnsettledCheckoutOperations(target, input.installationId)).length)
+        return yield* new InvalidRequestError({ problem: 'operation-pending' });
       yield* Effect.interruptible(directory.initializeGit());
       // `open` approves a Git target here only as the main worktree of the folder's own `.git`.
       const initialized = yield* Effect.interruptible(checkouts.open(target.root));

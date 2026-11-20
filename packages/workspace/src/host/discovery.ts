@@ -1,17 +1,23 @@
 import { Context, Effect, Layer, Stream } from 'effect';
 import { accessSync, constants } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
-import type { CheckoutTarget, CommandInput, CommandOutput } from '@moonbase/contracts/workspace';
+import type {
+  CheckoutTarget,
+  CommandInput,
+  CommandOutput,
+  FileDocument,
+} from '@moonbase/contracts/workspace';
 import {
   InvalidPathError,
   InvalidPatternError,
   InvalidRequestError,
   WorkspaceUnavailableError,
 } from '@moonbase/contracts/workspace-host-errors';
-import { attempt, type WorkspaceFailure } from '../attempt.ts';
-import { HelperFailure, SystemFailure } from '../system-failures.ts';
+import type { WorkspaceFailure } from '../attempt.ts';
+import { classifyHelperFailure, type HelperFailure } from '../system-failures.ts';
 import { matchPath, compareMatches } from '@moonbase/contracts/lookup';
-import { document, errorText, path, requireGit } from '../validation.ts';
+import { isCheckoutPath } from '@moonbase/contracts/workspace-schema';
+import { decodeDocument, errorText, requirePath, requireGit } from '../validation.ts';
 import { Checkouts, readBranch } from './checkouts.ts';
 import { HostSettings } from './host-settings.ts';
 import { parseGitStatus } from './git-status.ts';
@@ -60,18 +66,11 @@ export function regexFailure(stderr: string) {
   return reason || first.replace(/:$/, '') || undefined;
 }
 
-/** What the helper reported, when `error` is its failure. */
-const helperFailure = (error: unknown): Partial<HelperFailure> =>
-  error instanceof HelperFailure ? error : {};
-
 /**
  * Whether the run ended on its own with exit 1 and nothing on stderr, which Git and ripgrep use
  * for "nothing found". A run stopped at its limit may exit 1 too, and found nothing certain.
  */
-const foundNothing = (error: unknown) => {
-  const failure = helperFailure(error);
-  return failure.status === 1 && !failure.stderr && !failure.uncertain;
-};
+const foundNothing = (failure: HelperFailure) => classifyHelperFailure(failure) === 'nothing-found';
 
 /** The first standalone ripgrep on `PATH`, when none is configured. */
 const findRipgrep = () =>
@@ -108,11 +107,9 @@ export class Discovery {
   }
   listDirectory(input: CommandInput<'listDirectory'>) {
     return Effect.gen({ self: this }, function* () {
-      yield* attempt(() => {
-        path(input.path, true);
-        if (!(input.includeIgnoredStatus !== false || !input.hideIgnored))
-          throw new InvalidRequestError({ problem: 'ignore-filtering' });
-      });
+      yield* requirePath(input.path, true);
+      if (!(input.includeIgnoredStatus !== false || !input.hideIgnored))
+        return yield* new InvalidRequestError({ problem: 'ignore-filtering' });
       const directory = yield* this.checkouts.directory(input.checkout);
       yield* directory.entry(input.path);
       const entries = (yield* directory.io(['list', input.path || '.']))
@@ -153,14 +150,12 @@ export class Discovery {
     input: CommandInput<'getIgnoredPaths'>,
   ): Effect.Effect<CommandOutput<'getIgnoredPaths'>, WorkspaceFailure> {
     return Effect.gen({ self: this }, function* () {
-      yield* attempt(() => {
-        path(input.path, true);
-        input.paths.forEach((item) => {
-          path(item);
-          if (!(dirname(item) === (input.path || '.')))
-            throw new InvalidPathError({ problem: 'ignore-not-child' });
-        });
-      });
+      yield* requirePath(input.path, true);
+      for (const item of input.paths) {
+        yield* requirePath(item);
+        if (!(dirname(item) === (input.path || '.')))
+          return yield* new InvalidPathError({ problem: 'ignore-not-child' });
+      }
       const directory = yield* this.checkouts.directory(input.checkout);
       yield* directory.entry(input.path);
       // A plain folder has no Git ignore policy, so nothing in it is ignored.
@@ -183,8 +178,8 @@ export class Discovery {
             input.paths.join('\0') + (input.paths.length ? '\0' : ''),
           )
           .pipe(
-            Effect.catch((error) =>
-              foundNothing(error) ? Effect.succeed(Buffer.alloc(0)) : Effect.fail(error),
+            Effect.catchTag('HelperFailure', (failure) =>
+              foundNothing(failure) ? Effect.succeed(Buffer.alloc(0)) : Effect.fail(failure),
             ),
           );
         return { paths: output.toString().split('\0').filter(Boolean) };
@@ -211,11 +206,8 @@ export class Discovery {
           '--untracked-files=all',
           '--no-renames',
         ]);
-        const changes = yield* attempt(() => {
-          const changes = parseGitStatus(output.toString());
-          for (const change of changes) path(change.path);
-          return changes;
-        });
+        const changes = yield* parseGitStatus(output.toString());
+        for (const change of changes) yield* requirePath(change.path);
         return { branch: yield* readBranch(directory), changes };
       }).pipe(
         Effect.catch((error) =>
@@ -230,31 +222,27 @@ export class Discovery {
   }
   readComparison(input: CommandInput<'readComparison'>) {
     return Effect.gen({ self: this }, function* () {
-      yield* attempt(() => {
-        path(input.target.path);
-        requireGit(input.target.checkout);
-      });
+      yield* requirePath(input.target.path);
+      yield* requireGit(input.target.checkout);
       const directory = yield* this.checkouts.directory(input.target.checkout),
         p = input.target.path;
-      const working = yield* directory
-        .read(p)
-        .pipe(
-          Effect.catch((error) =>
-            !(error instanceof SystemFailure && error.code === 'ENOENT') &&
-            !helperFailure(error).stderr?.includes('No such file')
-              ? Effect.fail(error)
-              : Effect.succeed(null),
-          ),
-        );
+      // A file missing from the working tree compares as no text.
+      const working = yield* directory.read(p).pipe(
+        Effect.map((document): FileDocument | null => document),
+        Effect.catchTags({
+          SystemFailure: (failure) =>
+            failure.code === 'ENOENT' ? Effect.succeed(null) : Effect.fail(failure),
+          HelperFailure: (failure) =>
+            failure.stderr.includes('No such file') ? Effect.succeed(null) : Effect.fail(failure),
+        }),
+      );
       return yield* Effect.gen(function* () {
         let original = '';
         if (input.area === 'staged') {
           const exists = yield* directory.git(['rev-parse', '--verify', '--quiet', 'HEAD']).pipe(
             Effect.as(true),
-            Effect.catch((error) =>
-              helperFailure(error).status === 1 && !helperFailure(error).uncertain
-                ? Effect.succeed(false)
-                : Effect.fail(error),
+            Effect.catchTag('HelperFailure', (failure) =>
+              foundNothing(failure) ? Effect.succeed(false) : Effect.fail(failure),
             ),
           );
           const entries = exists
@@ -266,7 +254,7 @@ export class Discovery {
               'blob',
               entries.split(' ')[2].split('\t')[0],
             ]);
-            original = (yield* attempt(() => document(blob))).text;
+            original = (yield* decodeDocument(blob)).text;
           }
         } else if (input.area === 'unstaged') {
           const entries = (yield* directory.git(['ls-files', '--stage', '-z', '--', p])).toString();
@@ -275,7 +263,7 @@ export class Discovery {
             const stage = rows.find((row) => row.split(' ')[2]?.startsWith('0\t'));
             if (!stage) return yield* new WorkspaceUnavailableError({ cause: 'merge-stages' });
             const blob = yield* directory.git(['cat-file', 'blob', stage.split(' ')[1]]);
-            original = (yield* attempt(() => document(blob))).text;
+            original = (yield* decodeDocument(blob)).text;
           }
         }
         let title = 'Untracked file';
@@ -299,7 +287,7 @@ export class Discovery {
       const directory = yield* this.checkouts.directory(input.checkout),
         limit = input.limit ?? 100;
       const supplied = input.history ?? [];
-      yield* attempt(() => supplied.forEach((p) => path(p)));
+      for (const p of supplied) yield* requirePath(p);
       const excluded = (p: string) => excludedNames.includes(p) || p.endsWith('.code-search');
       let cells = 0,
         partial = false;
@@ -327,15 +315,15 @@ export class Discovery {
         let enumerationError: string | undefined;
         const ripgrep = yield* this.requireRipgrep();
         const bytes = yield* directory.io(['lookup', ripgrep, ...args, '.']).pipe(
-          Effect.catch((error) => {
-            const output = helperFailure(error).output;
-            if (output?.length && output.lastIndexOf(0) >= 0) {
+          Effect.catchTag('HelperFailure', (failure) => {
+            const output = failure.output;
+            if (output.length && output.lastIndexOf(0) >= 0) {
               partial = true;
-              enumerationError = errorText(error);
+              enumerationError = errorText(failure);
               return Effect.succeed(output.subarray(0, output.lastIndexOf(0) + 1));
             }
-            if (foundNothing(error)) return Effect.succeed(Buffer.alloc(0));
-            return Effect.fail(error);
+            if (foundNothing(failure)) return Effect.succeed(Buffer.alloc(0));
+            return Effect.fail(failure);
           }),
         );
         const candidates = [
@@ -353,17 +341,14 @@ export class Discovery {
         for (const [index, p] of candidates.slice(0, 20000).entries()) {
           // Lets other work run, and a cancelled lookup stop, between batches.
           if (index % 32 === 0) yield* Effect.interruptible(Effect.yieldNow);
-          yield* attempt(() => path(p));
+          yield* requirePath(p);
           const entry = yield* Effect.exit(directory.entry(p, spellings));
           if (entry._tag === 'Failure') partial = true;
           else if (!entry.value.directory) eligible.push(p);
         }
         // Exact entered paths have a scoped no-follow exception to discovery ignore/exclusions.
         const exactEntry = yield* Effect.exit(
-          Effect.andThen(
-            attempt(() => path(input.query)),
-            directory.entry(input.query),
-          ),
+          Effect.andThen(requirePath(input.query), directory.entry(input.query)),
         );
         if (
           exactEntry._tag === 'Success' &&
@@ -469,11 +454,7 @@ export class Discovery {
         if (data.path.text === undefined || data.lines.text === undefined || !data.line_number)
           return;
         const p = data.path.text.replace(/^\.\//, '');
-        try {
-          path(p);
-        } catch {
-          return;
-        }
+        if (!isCheckoutPath(p)) return;
         let file = files.get(p);
         if (!file) {
           // Output is sorted by path, so every later file is past the cap too.
@@ -515,23 +496,23 @@ export class Discovery {
       yield* directory.lines(['lookup', ripgrep, ...args]).pipe(
         Stream.takeWhile((row) => accept(row) !== 'stop'),
         Stream.runDrain,
-        Effect.catch((cause) => {
-          const failure = helperFailure(cause);
+        Effect.catchTag('HelperFailure', (failure) => {
+          const ending = classifyHelperFailure(failure);
           // A run stopped at its time or output limit may exit with any status, so its status
           // says nothing about the search: what arrived before the stop is a partial result. A
           // run killed from elsewhere is still uncertain, and fails or ends early below.
-          if (failure.limitReached) {
+          if (ending === 'limit') {
             partial = true;
             error =
               'Search stopped at its time or output limit; refine the query to see every match.';
             return Effect.void;
           }
-          if (foundNothing(cause)) return Effect.void;
-          const stderr = String(failure.stderr ?? '').trim();
+          if (foundNothing(failure)) return Effect.void;
+          const stderr = failure.stderr.trim();
           if (!received) {
             // A bad pattern fails before any file is searched, so it leaves no JSON behind.
             const reason = failure.status === 2 ? regexFailure(stderr) : undefined;
-            return Effect.fail(reason ? new InvalidPatternError({ reason }) : cause);
+            return Effect.fail(reason ? new InvalidPatternError({ reason }) : failure);
           }
           // Exit 2 after searching means some files could not be read; the rest are complete.
           if (failure.status === 2)

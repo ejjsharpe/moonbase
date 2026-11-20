@@ -2,7 +2,6 @@ import { Effect, Exit } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import type { RecoveryState } from '@moonbase/contracts/recovery';
 import type { OperationFeed, OperationFeedEntry } from '@moonbase/contracts/workspace-host';
-import { attempt } from '../attempt.ts';
 import { canonical, errorText, key } from '../validation.ts';
 import type { FeedCursor, FeedGap, OperationRecord, SaveRecord } from './client-schema.ts';
 import type { StoredRecovery } from './client-store.ts';
@@ -18,10 +17,10 @@ import { feedKey, type RecoveryContext } from './recovery-context.ts';
 export const followCheckouts = (context: RecoveryContext, targets: CheckoutTarget[]) =>
   Effect.gen(function* () {
     const { store } = context;
-    const { readable } = yield* attempt(() => store.readRecoveries());
+    const { readable } = yield* store.step(() => store.readRecoveries());
     for (const target of targets) {
       const followed =
-        context.getFeedCursor(target) &&
+        (yield* store.step(() => context.getFeedCursor(target))) &&
         readable.some((r) =>
           r.state.checkouts.some(
             (c) => c.hostId === target.hostId && c.checkoutId === target.checkoutId,
@@ -31,7 +30,7 @@ export const followCheckouts = (context: RecoveryContext, targets: CheckoutTarge
       const feed = yield* Effect.exit(
         context.host.listOperations({ checkout: target, after: null }),
       );
-      yield* attempt(() => {
+      yield* store.step(() => {
         if (Exit.isSuccess(feed))
           store.put('feed-cursors', feedKey(target), {
             sequence: feed.value.through,
@@ -56,9 +55,10 @@ export const followRestoredCheckouts = (context: RecoveryContext, records: SaveR
     [...targets],
     ([id, target]) =>
       Effect.gen(function* () {
-        if (context.store.get<FeedCursor>('feed-cursors', id)) return;
+        if (yield* context.store.step(() => context.store.get<FeedCursor>('feed-cursors', id)))
+          return;
         const feed = yield* context.host.listOperations({ checkout: target, after: null });
-        yield* attempt(() =>
+        yield* context.store.step(() =>
           context.store.put('feed-cursors', id, { sequence: feed.through, epoch: feed.epoch }),
         );
       }).pipe(
@@ -115,7 +115,7 @@ const syncCheckoutFeed = (context: RecoveryContext, target: CheckoutTarget) =>
         store.put('feed-cursors', id, { sequence: feed.through, epoch: feed.epoch });
       });
     });
-    let cursor = yield* attempt(() => store.get<FeedCursor>('feed-cursors', id));
+    let cursor = yield* store.step(() => store.get<FeedCursor>('feed-cursors', id));
     // A checkout that entered a recovery without being followed (such as by a restored save).
     if (!cursor) return yield* restart;
     for (;;) {
@@ -144,7 +144,7 @@ const applyFeedPage = (
 ) =>
   Effect.gen(function* () {
     const { store } = context;
-    const records = yield* attempt(() => readFeedRecords(context, feed.operations));
+    const records = yield* store.step(() => readFeedRecords(context, feed.operations));
     const advance = () => {
       if (feed.floor > cursor.sequence) context.markGap(target);
       store.put('feed-cursors', feedKey(target), { sequence: feed.through, epoch: feed.epoch });
