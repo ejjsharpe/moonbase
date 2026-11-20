@@ -61,8 +61,8 @@ export class ChatConnection extends Context.Service<ChatConnection, ChatConnecti
       const started = yield* Ref.make(false);
       const refreshing = yield* FiberHandle.make<void, unknown>();
       const watching = yield* FiberHandle.make<void, never>();
-      /** Completes with the next state the connection's watch delivers. */
-      const nextEvent = yield* Ref.make(yield* Deferred.make<void>());
+      /** How many states the connection's watch has delivered. */
+      const delivered = yield* Ref.make(0);
 
       const verify = Effect.gen(function* () {
         const host = yield* config.chat.getChatHost({ host: config.session.host });
@@ -121,24 +121,19 @@ export class ChatConnection extends Context.Service<ChatConnection, ChatConnecti
        */
       const readLatest = <E>(read: Effect.Effect<ConnectionSnapshot, E>) =>
         Effect.gen(function* () {
-          const event = yield* Ref.get(nextEvent);
+          const before = yield* Ref.get(delivered);
           // The read runs to its end (or the chat's) even when its reply is dropped: it may be a
           // mutation.
           const fiber = yield* Effect.forkIn(read, scope, { startImmediately: true });
-          const overtaken = yield* Effect.raceFirst(
-            Effect.as(Fiber.await(fiber), false),
-            Effect.as(Deferred.await(event), true),
-          );
           const reply = yield* Fiber.join(fiber);
-          if (!overtaken) yield* onConnection(reply);
+          if ((yield* Ref.get(delivered)) === before) yield* onConnection(reply);
         });
 
       const watchConnection = port
         ? port.watch().pipe(
             Stream.runForEach((next) =>
               Effect.gen(function* () {
-                const event = yield* Ref.getAndSet(nextEvent, yield* Deferred.make<void>());
-                yield* Deferred.succeed(event, undefined);
+                yield* Ref.update(delivered, (count) => count + 1);
                 yield* onConnection(next);
               }),
             ),

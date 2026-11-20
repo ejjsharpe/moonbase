@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Effect } from 'effect';
+import { Effect, Fiber } from 'effect';
+import { MoonbaseApplication } from '@moonbase/application';
 import { isEditorError } from '@moonbase/application/editor';
 import { fauxChat, makeApplication } from './application-fixture.ts';
 
@@ -261,6 +262,47 @@ test('named targets keep separate drafts and switch only once the old chat is re
     await f.dispose();
   }
 });
+
+test(
+  'a switch whose caller is interrupted while it acquires still ends, and opens join it',
+  {
+    timeout: 5_000,
+  },
+  async () => {
+    const local = fauxChat(),
+      remote = fauxChat(),
+      acquiring = Promise.withResolvers<void>(),
+      held = Promise.withResolvers<typeof remote.dependencies>();
+    const f = makeApplication({
+      chatTargets: [
+        { id: 'local', label: 'Local', acquire: Effect.succeed(local.dependencies) },
+        {
+          id: 'remote',
+          label: 'Remote',
+          acquire: Effect.promise(() => (acquiring.resolve(), held.promise)),
+        },
+      ],
+    });
+    try {
+      await f.start();
+      const caller = f.runtime.runFork(
+        Effect.flatMap(
+          MoonbaseApplication as unknown as Effect.Effect<MoonbaseApplication['Service']>,
+          (a) => a.selectChatTarget('remote'),
+        ),
+      );
+      await acquiring.promise;
+      await f.run(Fiber.interrupt(caller));
+      const opening = f.app((a) => a.openChat);
+      held.resolve(remote.dependencies);
+      assert(await opening);
+      assert.equal((await f.snapshot()).chatTargetId, 'remote');
+      assert.equal(await f.app((a) => a.chat.busy), false);
+    } finally {
+      await f.dispose();
+    }
+  },
+);
 
 test('release ends the chat first and leaves the editor fenced until it closes', async () => {
   const chat = fauxChat();

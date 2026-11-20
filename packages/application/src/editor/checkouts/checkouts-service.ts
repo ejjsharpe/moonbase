@@ -189,43 +189,45 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
           yield* assertRebindable(checkout);
           // The folder's approval ends with `git init`: send the edits while it holds.
           yield* recovery.send;
-          yield* session.beginInitialization(checkout.checkoutId);
-          const outcome = yield* Effect.gen(function* () {
-            // End the folder's reads.
-            yield* discovery.release(checkout);
-            const replied = yield* Effect.exit(
-              Effect.flatMap(workspace.initializeRepository({ checkout }), (initialized) =>
-                isInitialized(checkout, initialized)
-                  ? Effect.succeed(initialized)
-                  : Effect.fail(new EditorError({ reason: 'initializing-other' })),
-              ),
-            );
-            let initialized: CheckoutTarget;
-            if (Exit.isSuccess(replied)) initialized = replied.value;
-            else {
-              // A failed or lost reply may follow a `git init` that ran: the folder then opens as
-              // its repository, and moves there as if the reply had arrived.
-              const reopened = yield* findInitialized(checkout);
-              if (!reopened) {
-                const failure = replied.cause.reasons.find((reason) => reason._tag === 'Fail');
-                if (failure) yield* alerts.report(failure.error);
-                if (yield* isOpen(checkout)) yield* tree.observe(checkout);
-                return yield* Effect.failCause(replied.cause);
+          const outcome = yield* session.initialize(
+            checkout.checkoutId,
+            Effect.gen(function* () {
+              // End the folder's reads.
+              yield* discovery.release(checkout);
+              const replied = yield* Effect.exit(
+                Effect.flatMap(workspace.initializeRepository({ checkout }), (initialized) =>
+                  isInitialized(checkout, initialized)
+                    ? Effect.succeed(initialized)
+                    : Effect.fail(new EditorError({ reason: 'initializing-other' })),
+                ),
+              );
+              let initialized: CheckoutTarget;
+              if (Exit.isSuccess(replied)) initialized = replied.value;
+              else {
+                // A failed or lost reply may follow a `git init` that ran: the folder then opens
+                // as its repository, and moves there as if the reply had arrived.
+                const reopened = yield* findInitialized(checkout);
+                if (!reopened) {
+                  const failure = replied.cause.reasons.find((reason) => reason._tag === 'Fail');
+                  if (failure) yield* alerts.report(failure.error);
+                  if (yield* isOpen(checkout)) yield* tree.observe(checkout);
+                  return yield* Effect.failCause(replied.cause);
+                }
+                initialized = reopened;
               }
-              initialized = reopened;
-            }
-            const added = yield* Effect.exit(addCheckout(initialized));
-            if (Exit.isSuccess(added)) return { target: added.value, failure: undefined };
-            yield* settleInitialization(checkout, initialized);
-            const reason = added.cause.reasons.find((item) => item._tag === 'Fail');
-            return {
-              target: undefined,
-              failure: new EditorError({
-                reason: 'initializing-unfinished',
-                detail: reason ? describeEditorFailure(reason.error) : undefined,
-              }),
-            };
-          }).pipe(Effect.ensuring(session.endInitialization));
+              const added = yield* Effect.exit(addCheckout(initialized));
+              if (Exit.isSuccess(added)) return { target: added.value, failure: undefined };
+              yield* settleInitialization(checkout, initialized);
+              const reason = added.cause.reasons.find((item) => item._tag === 'Fail');
+              return {
+                target: undefined,
+                failure: new EditorError({
+                  reason: 'initializing-unfinished',
+                  detail: reason ? describeEditorFailure(reason.error) : undefined,
+                }),
+              };
+            }),
+          );
           // Edits made meanwhile are sent now, under the Git target.
           if (!(yield* session.get).preserving) {
             if (outcome.failure) yield* Effect.catch(recovery.flush, alerts.report);

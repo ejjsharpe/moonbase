@@ -1,4 +1,16 @@
-import { Context, Deferred, Effect, Exit, Layer, Ref, Scope, SubscriptionRef } from 'effect';
+import {
+  Context,
+  Effect,
+  Exit,
+  Fiber,
+  FiberHandle,
+  FiberSet,
+  Layer,
+  Option,
+  Scope,
+  ScopedRef,
+  SubscriptionRef,
+} from 'effect';
 import type { ChatDependencies } from '../chat/chat-ports.ts';
 import { chatLayer, type ChatServices } from '../chat/chat-layer.ts';
 import { ChatActions } from '../chat/actions/actions-service.ts';
@@ -6,6 +18,7 @@ import { ChatDrafts } from '../chat/drafts/drafts-service.ts';
 import { TranscriptViewMemory } from '../chat/transcript/transcript-view-memory.ts';
 import { ChatComposers, type ChatComposer } from '../chat/composer/composer-service.ts';
 import { makeComposerChat } from '../chat/composer/composer-chat.ts';
+import { runOrJoin } from '../run-or-join.ts';
 import {
   ApplicationLifecycleError,
   describeApplicationFailure,
@@ -26,29 +39,16 @@ export type ChatHostState = {
   cleanupPending: boolean;
   /** Releases that failed, newest last: at most 4. */
   cleanupErrors: readonly string[];
+  /** A close is keeping the chat's drafts before it releases it. */
+  closing: boolean;
+  /** The host is being released for good: it opens nothing more. */
+  releasing: boolean;
 };
 
 export type ChatHostOptions = {
   chat?: Effect.Effect<ChatDependencies | null, unknown>;
   chatTargets?: readonly NamedChatTarget[];
   defaultChatTargetId?: string;
-};
-
-type Opened = Deferred.Deferred<Context.Context<ChatServices> | null, ApplicationLifecycleError>;
-type ChatInstance = {
-  chat: Context.Context<ChatServices>;
-  composer: ChatComposer;
-  scope: Scope.Closeable;
-};
-/** What the host is doing: each running step, which later callers join, and the open chat. */
-type Steps = {
-  current: ChatInstance | null;
-  opening?: Opened;
-  switching?: Opened;
-  /** The last release, which a switch waits for. */
-  cleanup?: Deferred.Deferred<void, unknown>;
-  closing: boolean;
-  releasing: boolean;
 };
 
 export type ChatHostShape = {
@@ -80,9 +80,17 @@ export type ChatHostShape = {
   readonly reportCleanup: (error: unknown) => Effect.Effect<void>;
 };
 
-/** Fences or reopens an instance's admissions. */
-const fenceInstance = (instance: ChatInstance, open: boolean) =>
-  Context.get(instance.chat, ChatActions).setAdmissionsOpen(open);
+type Chat = Context.Context<ChatServices>;
+
+/** Fences or reopens a chat's admissions. */
+const fenceChat = (chat: Chat, open: boolean) =>
+  Context.get(chat, ChatActions).setAdmissionsOpen(open);
+
+/** Waits for the fiber a handle runs, if any. */
+const awaitHandle = <A, E>(handle: FiberHandle.FiberHandle<A, E>) =>
+  Effect.flatMap(FiberHandle.get(handle), (running) =>
+    Option.isSome(running) ? Effect.asVoid(Fiber.await(running.value)) : Effect.void,
+  );
 
 const failureOf = (exit: Exit.Failure<unknown, unknown>) => {
   const reason = exit.cause.reasons.find((item) => item._tag === 'Fail' || item._tag === 'Die');
@@ -98,7 +106,6 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
     Layer.effect(
       ChatHost,
       Effect.gen(function* () {
-        const root = yield* Effect.scope;
         const composers = yield* ChatComposers;
         const transcriptMemory = new TranscriptViewMemory();
         const targets = options.chatTargets ?? [];
@@ -111,13 +118,21 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
           composer: null,
           cleanupPending: false,
           cleanupErrors: [],
+          closing: false,
+          releasing: false,
         });
-        const steps = yield* Ref.make<Steps>({ current: null, closing: false, releasing: false });
+        /** The open chat's scope: replacing it releases the chat and composer built in it. */
+        const instance = yield* ScopedRef.fromAcquire(Effect.scope);
+        // Made after the instance, so closing the host interrupts its steps before the release.
+        const opening = yield* FiberHandle.make<Chat | null, ApplicationLifecycleError>();
+        const switching = yield* FiberHandle.make<Chat | null, ApplicationLifecycleError>();
+        /** Releases of closed chats, which run on after their close. */
+        const cleanups = yield* FiberSet.make<void>();
+        const get = SubscriptionRef.get(state);
         const update = (f: (s: ChatHostState) => ChatHostState) => SubscriptionRef.update(state, f);
-        const step = (f: (s: Steps) => Steps) => Ref.update(steps, f);
-        const releasing = Effect.map(Ref.get(steps), (s) => s.releasing);
+        const releasing = Effect.map(get, (s) => s.releasing);
         const stopAll = Effect.andThen(
-          step((s) => ({ ...s, releasing: true })),
+          update((s) => ({ ...s, releasing: true })),
           Effect.sync(() => transcriptMemory.clear()),
         );
         yield* Effect.addFinalizer(() => stopAll);
@@ -132,35 +147,26 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
             ].slice(-4),
           }));
 
-        /** Releases an instance: closing its scope releases its chat and composer. */
-        const releaseInstance = (instance: { scope: Scope.Closeable }) =>
-          Effect.flatMap(Effect.exit(Scope.close(instance.scope, Exit.void)), (exit) =>
-            Exit.isFailure(exit) ? Effect.fail(failureOf(exit)) : Effect.void,
-          );
-        /** Releases the chat's instance as the application's cleanup, which blocks reopening. */
-        const ownCleanup = (instance: { scope: Scope.Closeable }) =>
-          Effect.gen(function* () {
-            const done = yield* Deferred.make<void, unknown>();
-            yield* step((s) => ({ ...s, cleanup: done }));
-            yield* update((s) => ({ ...s, cleanupPending: true }));
-            const exit = yield* Effect.exit(releaseInstance(instance));
-            yield* update((s) => ({ ...s, cleanupPending: false }));
-            if (Exit.isFailure(exit)) {
-              const error = failureOf(exit);
-              yield* recordCleanupError(error);
-              yield* update((s) => ({
-                ...s,
-                status: 'cleanup-blocked',
-                error: describeApplicationFailure(error),
-              }));
-            }
-            yield* Deferred.done(done, exit);
-            return yield* exit;
-          });
+        /** Releases the chat's scope as the application's cleanup, which blocks reopening. */
+        const ownCleanup = Effect.gen(function* () {
+          yield* update((s) => ({ ...s, cleanupPending: true }));
+          const exit = yield* Effect.exit(ScopedRef.set(instance, Effect.scope));
+          yield* update((s) => ({ ...s, cleanupPending: false }));
+          if (Exit.isFailure(exit)) {
+            const error = failureOf(exit);
+            yield* recordCleanupError(error);
+            yield* update((s) => ({
+              ...s,
+              status: 'cleanup-blocked',
+              error: describeApplicationFailure(error),
+            }));
+            return yield* Effect.fail(error);
+          }
+        });
 
         const acquire = Effect.gen(function* () {
-          const scope = yield* Scope.fork(root, 'sequential');
-          const { targetId } = yield* SubscriptionRef.get(state);
+          const scope = yield* ScopedRef.get(instance);
+          const { targetId } = yield* get;
           const capability =
             targets.find((target) => target.id === targetId)?.acquire ?? options.chat!;
           const opened = yield* Effect.exit(
@@ -183,18 +189,18 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
           );
           if (Exit.isSuccess(opened) && opened.value && !(yield* releasing)) {
             const { chat, composer } = opened.value;
-            yield* step((s) => ({ ...s, current: { chat, composer, scope } }));
             yield* update((s) => ({ ...s, status: 'ready', chat, composer }));
             return chat;
           }
           if (Exit.isSuccess(opened)) {
-            yield* Effect.exit(ownCleanup({ scope }));
-            if (!(yield* releasing)) yield* update((s) => ({ ...s, status: 'unavailable' }));
+            const released = yield* Effect.exit(ownCleanup);
+            if (Exit.isSuccess(released) && !(yield* releasing))
+              yield* update((s) => ({ ...s, status: 'unavailable' }));
             return null;
           }
           const errors: unknown[] = [failureOf(opened)];
           yield* update((s) => ({ ...s, status: 'initialization-failed' }));
-          const released = yield* Effect.exit(ownCleanup({ scope }));
+          const released = yield* Effect.exit(ownCleanup);
           if (Exit.isFailure(released)) {
             errors.push(failureOf(released));
             yield* update((s) => ({ ...s, status: 'cleanup-blocked' }));
@@ -203,126 +209,101 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
           return null;
         });
 
-        const openSelected: Effect.Effect<
-          Context.Context<ChatServices> | null,
-          ApplicationLifecycleError
-        > = Effect.gen(function* () {
-          const current = yield* Ref.get(steps);
-          if (current.releasing) return yield* fail('closing');
-          if (current.opening) return yield* Deferred.await(current.opening);
-          if (current.current) return current.current.chat;
-          if (!configured) return null;
-          const { cleanupPending, status } = yield* SubscriptionRef.get(state);
-          if (cleanupPending || status === 'cleanup-blocked') return yield* fail('cleanup-pending');
-          const done = yield* Deferred.make<
-            Context.Context<ChatServices> | null,
-            ApplicationLifecycleError
-          >();
-          yield* step((s) => ({ ...s, opening: done }));
-          yield* update((s) => ({ ...s, status: 'opening', error: null }));
-          const exit = yield* Effect.exit(acquire);
-          yield* step((s) => ({ ...s, opening: undefined }));
-          yield* Deferred.done(done, exit);
-          return yield* exit;
-        });
+        /** Opens the selected target's chat in `opening`, which later callers join. */
+        const openSelected = runOrJoin(
+          opening,
+          Effect.gen(function* () {
+            const current = yield* get;
+            if (current.releasing) return yield* fail('closing');
+            if (current.chat) return current.chat;
+            if (!configured) return null;
+            if (current.cleanupPending || current.status === 'cleanup-blocked')
+              return yield* fail('cleanup-pending');
+            yield* update((s) => ({ ...s, status: 'opening', error: null }));
+            return yield* acquire;
+          }),
+        );
 
         const close: Effect.Effect<boolean> = Effect.gen(function* () {
-          const taken = yield* Ref.modify(steps, (s) =>
-            s.releasing || !s.current || s.closing
+          const taken = yield* SubscriptionRef.modify(state, (s) =>
+            s.releasing || !s.chat || s.closing
               ? [undefined, s]
-              : [s.current, { ...s, closing: true }],
+              : [s.chat, { ...s, closing: true }],
           );
           if (!taken) return false;
-          yield* fenceInstance(taken, false);
+          yield* fenceChat(taken, false);
           return yield* Effect.gen(function* () {
-            const kept = yield* Context.get(taken.chat, ChatDrafts).preserve;
-            const now = yield* Ref.get(steps);
-            if (!kept || now.releasing || now.current !== taken) return false;
-            yield* step((s) => ({ ...s, current: null }));
+            const kept = yield* Context.get(taken, ChatDrafts).preserve;
+            const now = yield* get;
+            if (!kept || now.releasing || now.chat !== taken) return false;
             yield* update((s) => ({ ...s, status: 'closed', chat: null, composer: null }));
-            yield* Effect.forkIn(Effect.exit(ownCleanup(taken)), root, { startImmediately: true });
+            yield* FiberSet.run(cleanups, Effect.ignore(ownCleanup));
             return true;
           }).pipe(
             Effect.ensuring(
               Effect.gen(function* () {
-                const now = yield* Ref.get(steps);
-                if (!now.releasing && now.current === taken) yield* fenceInstance(taken, true);
-                yield* step((s) => ({ ...s, closing: false }));
+                const now = yield* get;
+                if (!now.releasing && now.chat === taken) yield* fenceChat(taken, true);
+                yield* update((s) => ({ ...s, closing: false }));
               }),
             ),
           );
         });
 
-        const select = (id: string) =>
+        /** Closes the open chat and opens target `id`'s, in `switching`. */
+        const switchTo = (id: string) =>
           Effect.gen(function* () {
-            const now = yield* Ref.get(steps);
-            if (now.releasing || now.switching || !targets.some((target) => target.id === id))
-              return yield* fail('target-unavailable');
-            if (id === (yield* SubscriptionRef.get(state)).targetId) return yield* openSelected;
-            const done = yield* Deferred.make<
-              Context.Context<ChatServices> | null,
-              ApplicationLifecycleError
-            >();
-            yield* step((s) => ({ ...s, switching: done }));
-            const exit = yield* Effect.exit(
-              Effect.gen(function* () {
-                const { opening } = yield* Ref.get(steps);
-                if (opening) yield* Effect.exit(Deferred.await(opening));
-                if ((yield* Ref.get(steps)).current && !(yield* close))
-                  return yield* fail('preserve-first');
-                const { cleanup } = yield* Ref.get(steps);
-                if (cleanup) yield* Effect.exit(Deferred.await(cleanup));
-                if (yield* releasing) return null;
-                yield* update((s) => ({ ...s, targetId: id }));
-                return yield* openSelected;
-              }),
-            );
-            yield* step((s) => ({ ...s, switching: undefined }));
-            yield* Deferred.done(done, exit);
-            return yield* exit;
+            yield* awaitHandle(opening);
+            if ((yield* get).chat && !(yield* close)) return yield* fail('preserve-first');
+            yield* FiberSet.awaitEmpty(cleanups);
+            if (yield* releasing) return null;
+            yield* update((s) => ({ ...s, targetId: id }));
+            return yield* openSelected;
           });
 
         return {
           state,
           targets: targets.map(({ id, label }) => ({ id, label })),
           configured,
-          open: Effect.flatMap(Ref.get(steps), (s) =>
-            s.switching ? Deferred.await(s.switching) : openSelected,
-          ),
-          close,
-          select,
-          settle: Effect.gen(function* () {
-            const { switching } = yield* Ref.get(steps);
-            if (switching) yield* Effect.exit(Deferred.await(switching));
-            const { opening } = yield* Ref.get(steps);
-            if (opening) yield* Effect.exit(Deferred.await(opening));
+          open: Effect.suspend(() => {
+            const running = FiberHandle.getUnsafe(switching);
+            return Option.isSome(running) ? Fiber.join(running.value) : openSelected;
           }),
-          busy: Effect.map(Ref.get(steps), (s) => !!s.opening || !!s.switching || s.closing),
+          close,
+          select: (id) =>
+            Effect.gen(function* () {
+              const current = yield* get;
+              const switchRunning = Option.isSome(yield* FiberHandle.get(switching));
+              if (current.releasing || switchRunning || !targets.some((target) => target.id === id))
+                return yield* fail('target-unavailable');
+              if (id === current.targetId) return yield* openSelected;
+              return yield* runOrJoin(switching, switchTo(id));
+            }),
+          settle: Effect.andThen(awaitHandle(switching), awaitHandle(opening)),
+          busy: Effect.map(
+            Effect.all([FiberHandle.get(opening), FiberHandle.get(switching), get]),
+            ([open, switched, s]) => Option.isSome(open) || Option.isSome(switched) || s.closing,
+          ),
           fence: (open) =>
-            Effect.flatMap(Ref.get(steps), (s) =>
-              s.current ? fenceInstance(s.current, open) : Effect.void,
-            ),
-          preserve: Effect.flatMap(Ref.get(steps), (s) =>
-            s.current ? Context.get(s.current.chat, ChatDrafts).preserve : Effect.succeed(true),
+            Effect.flatMap(get, (s) => (s.chat ? fenceChat(s.chat, open) : Effect.void)),
+          preserve: Effect.flatMap(get, (s) =>
+            s.chat ? Context.get(s.chat, ChatDrafts).preserve : Effect.succeed(true),
           ),
           release: Effect.gen(function* () {
             yield* stopAll;
-            const taken = yield* Ref.modify(steps, (s) => [s, { ...s, current: null }]);
-            if (taken.current) yield* fenceInstance(taken.current, false);
-            yield* update((s) => ({ ...s, chat: null, composer: null }));
-            if (taken.opening) yield* Effect.exit(Deferred.await(taken.opening));
-            if (taken.switching) yield* Effect.exit(Deferred.await(taken.switching));
-            // An acquisition that finished meanwhile released its own instance.
-            const { cleanup } = yield* Ref.get(steps);
-            const pending = taken.current
-              ? ownCleanup(taken.current)
-              : cleanup && Deferred.await(cleanup);
-            const released: Exit.Exit<unknown, unknown> = pending
-              ? yield* Effect.exit(pending)
-              : Exit.void;
-            if (Exit.isFailure(released)) {
-              return yield* fail('cleanup-failed', joinFailures([failureOf(released)]));
-            }
+            const taken = yield* SubscriptionRef.modify(state, (s) => [
+              s.chat,
+              { ...s, chat: null, composer: null },
+            ]);
+            if (taken) yield* fenceChat(taken, false);
+            yield* awaitHandle(opening);
+            yield* awaitHandle(switching);
+            // An acquisition that finished meanwhile released its own chat.
+            if (taken) yield* Effect.exit(ownCleanup);
+            else yield* FiberSet.awaitEmpty(cleanups);
+            const { status, cleanupErrors } = yield* get;
+            if (status === 'cleanup-blocked')
+              return yield* fail('cleanup-failed', cleanupErrors.at(-1));
           }),
           reportCleanup: recordCleanupError,
         } satisfies ChatHostShape;
