@@ -223,13 +223,21 @@ export function transcriptFixture(count = 640) {
         fallback(operation, input)),
     ) as never;
   };
-  // Interrupting a port read aborts its signal without waiting for the handler.
+  const interrupts = new Map<string, () => Promise<void>>();
+  // Interrupting a port read aborts its signal without waiting for the handler. Its interruption
+  // ends at once, unless a test sets `interrupts` for the operation: then it waits for that, as an
+  // RPC call's interrupt waits to send its own message.
   const port = new Proxy({} as ChatPort, {
     get: (_port, operation: string) => (input: unknown) =>
       Effect.tryPromise({
         try: (signal) => command(operation, input, signal),
         catch: (error) => error as never,
-      }),
+      }).pipe(
+        Effect.onInterrupt(() => {
+          const interrupt = interrupts.get(operation);
+          return interrupt ? Effect.promise(interrupt) : Effect.void;
+        }),
+      ),
   });
   // The content read a whole-source stream reads through.
   const read: TranscriptRead<unknown> = (input) => port.getChatTranscriptContent(input);
@@ -240,6 +248,7 @@ export function transcriptFixture(count = 640) {
     entries,
     calls,
     handlers,
+    interrupts,
     sources,
     /** The snapshot `getChat` serves. */
     get snapshot() {

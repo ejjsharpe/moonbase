@@ -68,7 +68,9 @@ export type TranscriptStore = {
   /**
    * Applies `change`, bounds what is retained and derives the rows, then publishes if anything
    * changed, keeping an unchanged state's identity. `direction` is the page read that grew the
-   * records, which evicts from the end it moved away from.
+   * records, which evicts from the end it moved away from. `change` runs in one synchronous step
+   * with the publish, holding the state, so it may interrupt the reads it makes stale: none resumes
+   * between the two, and one it interrupts publishes how it ended only after this change.
    */
   readonly update: (
     change?: (state: TranscriptState) => TranscriptState,

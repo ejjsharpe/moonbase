@@ -1,4 +1,4 @@
-import { Effect, type Scope, type SubscriptionRef } from 'effect';
+import { Effect, Fiber, type Scope, type SubscriptionRef } from 'effect';
 import type {
   ChatSnapshot,
   ChatSummary,
@@ -93,64 +93,78 @@ export const makeTranscript = (
     );
 
     const acceptSnapshot = (input: ChatSnapshot) =>
-      Effect.gen(function* () {
-        yield* checkTranscript(() => checkSnapshotSources(input, dependencies.target));
-        const old = store.state.snapshot ?? undefined;
-        const next = reuseSnapshot(input, old, store.history);
-        store.history.acceptSnapshot(next.entries, old, input);
-        const reconnecting = input.observationStatus === 'reconnecting';
-        const upper = store.findBoundary.upper;
-        const stopFind = reconnecting && !!store.state.find.query;
-        if (stopFind) search.forgetFind();
-        // Parts and a manifest whose source the snapshot made stale, or that it changed. They are
-        // marked before their reads are interrupted, so an interrupted read leaves the mark.
-        const isCurrent = (source: ChatTranscriptSource) =>
-          isSourceCurrent(dependencies.target, next, source);
-        const stale = new Set(
-          store.contents.markStale(
-            (content) => !isCurrent(content.source) || isContentChanged(content, next),
-          ),
-        );
-        const { manifest } = store.state;
-        const manifestStale =
-          !!manifest && (!isCurrent(manifest.source) || isManifestChanged(manifest, old, next));
-        if (manifestStale) stale.add(manifestJob);
-        let observation: TranscriptState['observation'] = dependencies.local
-          ? 'local'
-          : 'streaming';
-        if (reconnecting) observation = 'reconnecting';
-        yield* store.update((state) => {
-          const find = {
-            ...state.find,
-            refreshAvailable: upper !== undefined && upper !== input.transcriptBoundary,
-          };
-          return {
-            ...state,
-            snapshot: old && areJsonValuesEqual(old, next) ? old : next,
-            observation,
-            find: stopFind
-              ? {
-                  ...find,
-                  revealing: false,
-                  status: 'error',
-                  error: 'Connection changed. Refresh results after reconnecting.',
-                }
-              : find,
-            manifest: manifestStale
-              ? {
-                  ...manifest,
-                  status: 'source-changed',
-                  error: 'Transcript source changed or is stale. Reload the manifest.',
-                }
-              : manifest,
-          };
-        });
-        // Reads of a live source the snapshot made stale, and of what it changed.
-        yield* jobs.interrupt(
-          ({ source }, key) => stale.has(key) || (source?.kind === 'live' && !isCurrent(source)),
-        );
-        if (stopFind) yield* search.stopFind;
-      });
+      Effect.andThen(
+        checkTranscript(() => checkSnapshotSources(input, dependencies.target)),
+        Effect.withFiber((self) => {
+          let stopped: readonly Fiber.Fiber<void>[] = [];
+          // Marking reads stale, interrupting them and publishing are one synchronous step, so no
+          // reply resumes between them and writes over the marks.
+          const accepted = store.update((state) => {
+            const old = state.snapshot ?? undefined;
+            const next = reuseSnapshot(input, old, store.history);
+            store.history.acceptSnapshot(next.entries, old, input);
+            const reconnecting = input.observationStatus === 'reconnecting';
+            const upper = store.findBoundary.upper;
+            const stopFind = reconnecting && !!state.find.query;
+            if (stopFind) search.forgetFind();
+            // Parts and a manifest whose source the snapshot made stale, or that it changed.
+            const isCurrent = (source: ChatTranscriptSource) =>
+              isSourceCurrent(dependencies.target, next, source);
+            const stale = new Set(
+              store.contents.markStale(
+                (content) => !isCurrent(content.source) || isContentChanged(content, next),
+              ),
+            );
+            const { manifest } = state;
+            const manifestStale =
+              !!manifest && (!isCurrent(manifest.source) || isManifestChanged(manifest, old, next));
+            if (manifestStale) stale.add(manifestJob);
+            // Find while reconnecting, and reads of a live source the snapshot made stale, and of
+            // what it changed.
+            stopped = [
+              ...(stopFind ? search.interruptFindUnsafe(self.id) : []),
+              ...jobs.interruptUnsafe(
+                ({ source }, key) =>
+                  stale.has(key) || (source?.kind === 'live' && !isCurrent(source)),
+                self.id,
+              ),
+            ];
+            let observation: TranscriptState['observation'] = dependencies.local
+              ? 'local'
+              : 'streaming';
+            if (reconnecting) observation = 'reconnecting';
+            const find = {
+              ...state.find,
+              refreshAvailable: upper !== undefined && upper !== input.transcriptBoundary,
+            };
+            return {
+              ...state,
+              snapshot: old && areJsonValuesEqual(old, next) ? old : next,
+              observation,
+              find: stopFind
+                ? {
+                    ...find,
+                    revealing: false,
+                    status: 'error',
+                    error: 'Connection changed. Refresh results after reconnecting.',
+                  }
+                : find,
+              manifest:
+                manifest && manifestStale
+                  ? {
+                      ...manifest,
+                      status: 'source-changed',
+                      error: 'Transcript source changed or is stale. Reload the manifest.',
+                    }
+                  : manifest,
+            };
+          });
+          return Effect.andThen(
+            accepted,
+            Effect.suspend(() => Fiber.awaitAll(stopped)),
+          );
+        }),
+      ).pipe(Effect.asVoid);
 
     const navigation = makeTranscriptNavigation(store, jobs, {
       acceptSnapshot,
@@ -174,13 +188,19 @@ export const makeTranscript = (
           : Effect.void;
       }),
       fail: (error) =>
-        Effect.suspend(() => {
+        Effect.withFiber((self) => {
           const failure = describeChatFailure(error);
-          // Marked before interrupting (and failing stops new reads), so interrupted loads keep
-          // their failure rather than `partial`.
-          store.contents.markFailed(failure);
-          search.forgetFind();
+          let stopped: readonly Fiber.Fiber<void>[] = [];
+          // Marking, publishing and interrupting every read (failing stops new ones) are one
+          // synchronous step, so no reply resumes between them and writes over the failure, and
+          // interrupted loads keep their failure rather than `partial`.
           const failed = store.update((state) => {
+            store.contents.markFailed(failure);
+            search.forgetFind();
+            stopped = [
+              ...search.interruptFindUnsafe(self.id),
+              ...jobs.interruptUnsafe(() => true, self.id),
+            ];
             const { manifest, find } = state;
             return {
               ...state,
@@ -201,10 +221,10 @@ export const makeTranscript = (
                 : {}),
             };
           });
-          return failed.pipe(
-            Effect.andThen(search.stopFind),
-            Effect.andThen(jobs.interrupt(() => true)),
-          );
+          return Effect.andThen(
+            failed,
+            Effect.suspend(() => Fiber.awaitAll(stopped)),
+          ).pipe(Effect.asVoid);
         }),
       restoreView: navigation.restoreView,
       openFind: search.openFind,

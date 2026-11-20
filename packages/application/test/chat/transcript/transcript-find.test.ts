@@ -64,6 +64,10 @@ test('query replacement, closing Find and closing the transcript fence late resu
     const state = f.state.find;
     if (action === 'scope') assert.equal(f.state, before);
     else assert.notEqual(state.query, 'same');
+    if (action === 'replace') {
+      assert.equal(state.status, 'complete');
+      assert.equal(state.query, 'different');
+    }
     assert.equal(state.error, null);
   }
 });

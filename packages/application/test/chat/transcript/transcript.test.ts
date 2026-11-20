@@ -599,9 +599,34 @@ test('terminal onError invalidates completed live hydration even when a local wa
   await f.transcript.loadManifest(source);
   await f.transcript.loadPart(source, chosen);
   assert.equal(f.state.content[0].status, 'complete');
+  // A held part read and a held Find. Interrupting Find waits, as an RPC call's interrupt does, and
+  // the part's reply arrives meanwhile: it must not land over the failure.
+  const entry = f.entries[0].transcript!,
+    reply = Promise.withResolvers<void>(),
+    never = Promise.withResolvers<never>();
+  f.handlers.set('getChatTranscriptContent', async (_input, _signal, fallback) => {
+    await reply.promise;
+    return fallback();
+  });
+  f.handlers.set('findChatTranscript', () => never.promise);
+  f.interrupts.set('findChatTranscript', async () => {
+    reply.resolve();
+    await tick();
+  });
+  const loading = f.transcript.loadPart(entry.source, selection(entry.parts[0]));
+  const finding = f.transcript.findTranscript('same');
+  await until(() => f.calls.some((call) => call.operation === 'findChatTranscript'));
   const revoked = new ChatAccessError({ refusal: 'other-owner' });
   await f.transcript.fail(revoked);
-  assert.equal(f.state.content[0].status, 'source-changed');
+  await Promise.all([loading, finding]);
+  await tick();
+  assert.equal(f.state.observation, 'failed');
+  const held = f.state.content.find((content) => content.source.kind === 'entry')!;
+  assert.equal(held.status, 'error');
+  assert.equal(held.error, revoked.message);
+  assert.equal(f.state.find.status, 'error');
+  const completed = f.state.content.find((content) => content.source.kind === 'live')!;
+  assert.equal(completed.status, 'source-changed');
   assert.equal(f.state.manifest!.status, 'source-changed');
   const calls = f.calls.length;
   await f.transcript.loadPart(source, chosen);
@@ -1074,11 +1099,26 @@ test('a reconnecting snapshot cancels an evicted live part read without an error
   const hasLive = (state: TranscriptState) =>
     state.content.some((content) => content.source.kind === 'live');
   assert.equal(hasLive(f.state), false);
+  // A held Find. Interrupting the live read waits, as an RPC call's interrupt does, and Find's page
+  // arrives meanwhile: it must not land over the reconnect stopping Find.
+  const page = Promise.withResolvers<void>();
+  f.handlers.set('findChatTranscript', async (_input, _signal, fallback) => {
+    await page.promise;
+    return fallback();
+  });
+  f.interrupts.set('getChatTranscriptContent', async () => {
+    page.resolve();
+    await tick();
+  });
+  const finding = f.transcript.findTranscript('same');
+  await until(() => f.calls.some((call) => call.operation === 'findChatTranscript'));
   await f.publish({ ...running, observationStatus: 'reconnecting' });
   assert.equal(signal!.aborted, true);
   held.resolve();
-  await pending;
+  await Promise.all([pending, finding]);
   await tick();
   assert.equal(f.state.error, null);
   assert.equal(hasLive(f.state), false);
+  assert.equal(f.state.find.status, 'error');
+  assert.equal(f.state.find.matches.length, 0);
 });

@@ -51,6 +51,14 @@ export type TranscriptJobs = {
   readonly interrupt: (
     select: (read: TranscriptJobRead, key: string) => boolean,
   ) => Effect.Effect<void>;
+  /**
+   * Interrupts the running jobs `select` picks, synchronously, on behalf of fiber `by`, and returns
+   * them to wait for. None resumes its read once this returns, even if its interruption waits.
+   */
+  readonly interruptUnsafe: (
+    select: (read: TranscriptJobRead, key: string) => boolean,
+    by: number,
+  ) => readonly Fiber.Fiber<void>[];
 };
 
 /**
@@ -100,8 +108,9 @@ export const makeTranscriptJobs = (
       Effect.gen(function* () {
         if (store.failed) return;
         const history = key === historyJob;
-        // Publishing that the read started is the job's first step, so whatever that prompts (a
-        // cancel, a newer read) finds the job in the map and can interrupt it.
+        // Publishing that the read started is the job's first step. `FiberMap.run` records the job
+        // only once its fiber suspends, but what the publish prompts (a cancel, a newer read) runs
+        // in subscribers' own fibers, after this one yields, so it finds the job in the map.
         const started = store.update((state) => ({
           ...state,
           error: history ? null : state.error,
@@ -126,17 +135,21 @@ export const makeTranscriptJobs = (
         );
         yield* joinRead(options.replace ? fiber : (running(key) ?? fiber));
       });
+    const interruptUnsafe: TranscriptJobs['interruptUnsafe'] = (select, by) => {
+      const stopped = [...jobs]
+        .filter(([key, fiber]) => select(fiber.getRef(JobRead), key))
+        .map(([, fiber]) => fiber);
+      for (const fiber of stopped) fiber.interruptUnsafe(by);
+      return stopped;
+    };
     return {
       run,
       running,
       remove: (key) => FiberMap.remove(jobs, key),
       interrupt: (select) =>
-        Effect.suspend(() =>
-          Fiber.interruptAll(
-            [...jobs]
-              .filter(([key, fiber]) => select(fiber.getRef(JobRead), key))
-              .map(([, f]) => f),
-          ),
+        Effect.withFiber((self) => Fiber.awaitAll(interruptUnsafe(select, self.id))).pipe(
+          Effect.asVoid,
         ),
+      interruptUnsafe,
     } satisfies TranscriptJobs;
   });

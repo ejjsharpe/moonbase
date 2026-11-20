@@ -1,4 +1,4 @@
-import { Effect, FiberHandle, type Scope } from 'effect';
+import { Effect, Fiber, FiberHandle, type Scope } from 'effect';
 import type { ChatTranscriptMatch } from '@moonbase/contracts/chat';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import { describeChatFailure } from '../chat-errors.ts';
@@ -20,12 +20,15 @@ export type TranscriptSearch = {
   /** Stops revealing the active match, keeping the query and its results. */
   readonly cancelFindReveal: Effect.Effect<void>;
   /**
-   * Drops the fixed boundary, synchronously, for a caller that then runs `stopFind` and publishes
-   * Find no longer revealing.
+   * Drops the fixed boundary, synchronously, for a caller that then stops Find and publishes it no
+   * longer revealing.
    */
   readonly forgetFind: () => void;
-  /** Interrupts the search, the reveal and the reads started for it. */
-  readonly stopFind: Effect.Effect<void>;
+  /**
+   * Interrupts the search, the reveal and the reads started for it, synchronously, on behalf of
+   * fiber `by`, and returns them to wait for: none publishes again once this returns.
+   */
+  readonly interruptFindUnsafe: (by: number) => readonly Fiber.Fiber<void>[];
 };
 
 export const makeTranscriptSearch = (
@@ -44,7 +47,19 @@ export const makeTranscriptSearch = (
     const showFindError = (error: unknown) => updateFind({ error: describeChatFailure(error) });
     const interruptRevealReads = jobs.interrupt((read) => read.revealing);
     const stopReveal = Effect.andThen(FiberHandle.clear(reveals), interruptRevealReads);
-    const stopFind = Effect.andThen(FiberHandle.clear(searches), stopReveal);
+    /** Interrupts every fiber of Find before waiting on any, so none publishes during the wait. */
+    const interruptFindUnsafe = (by: number) => {
+      const stopped: Fiber.Fiber<void>[] = [];
+      for (const handle of [searches, reveals]) {
+        const fiber = handle.state._tag === 'Open' ? handle.state.fiber : undefined;
+        if (fiber) stopped.push(fiber);
+      }
+      for (const fiber of stopped) fiber.interruptUnsafe(by);
+      return [...stopped, ...jobs.interruptUnsafe((read) => read.revealing, by)];
+    };
+    const stopFind = Effect.withFiber((self) => Fiber.awaitAll(interruptFindUnsafe(self.id))).pipe(
+      Effect.asVoid,
+    );
     // A cancelled Find has no fixed boundary to replay or refresh against.
     const forgetFind = () => {
       store.findBoundary = { start: null, upper: undefined };
@@ -164,6 +179,6 @@ export const makeTranscriptSearch = (
           yield* joinRead(yield* FiberHandle.run(reveals, moveToMatch(previous, index)));
         }),
       forgetFind,
-      stopFind,
+      interruptFindUnsafe,
     } satisfies TranscriptSearch;
   });
