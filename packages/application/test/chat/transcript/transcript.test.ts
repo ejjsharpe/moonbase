@@ -666,6 +666,38 @@ test('terminal onError invalidates completed live hydration even when a local wa
   }
 });
 
+test('a move made while a new search waits never lands over that search', async (t) => {
+  const f = await transcriptHarness(t, 138, { limits: scaledTranscriptLimits });
+  for (const index of [0, 69, 137])
+    f.sources.get(JSON.stringify(f.entries[index].transcript!.source))!.data[0] = 'needle';
+  f.sources.get(JSON.stringify(f.entries[30].transcript!.source))!.data[0] = 'other';
+  await f.transcript.findTranscript('needle');
+  // The active match's read is held, and interrupting it waits, as an RPC call's interrupt does.
+  const interrupting = Promise.withResolvers<void>(),
+    interrupted = Promise.withResolvers<void>(),
+    never = Promise.withResolvers<never>();
+  f.handlers.set('getChatTranscriptContent', () => never.promise);
+  f.interrupts.set('getChatTranscriptContent', () => {
+    interrupting.resolve();
+    return interrupted.promise;
+  });
+  const revealing = f.transcript.loadManifest(f.state.find.active!.source);
+  await until(() => f.calls.some((call) => call.operation === 'getChatTranscriptContent'));
+  const searching = f.transcript.findTranscript('other');
+  await interrupting.promise;
+  const moving = f.transcript.moveFind('next');
+  f.handlers.delete('getChatTranscriptContent');
+  f.interrupts.delete('getChatTranscriptContent');
+  interrupted.resolve();
+  await Promise.allSettled([revealing, searching, moving]);
+  await tick();
+  const find = f.state.find;
+  assert.equal(find.query, 'other');
+  assert.equal(find.count, 1);
+  assert.equal(find.activeIndex, 0);
+  assert.equal(find.active!.source.entryId, f.entries[30].id);
+});
+
 test('history traverses every entry backward and forward across summary eviction', async (t) => {
   const f = await transcriptHarness(t, 300, { limits: scaledTranscriptLimits });
   for (const direction of ['earlier', 'later'] as const) {

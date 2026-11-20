@@ -161,6 +161,8 @@ export const makeTranscriptSearch = (
           forgetFind();
           const replace = Effect.gen(function* () {
             yield* Fiber.awaitAll(stopped);
+            // A move made during the wait revealed the replaced query's match; stop it too.
+            yield* stopReveal;
             yield* store.update((state) => ({
               ...state,
               find: {
