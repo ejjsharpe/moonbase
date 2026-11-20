@@ -57,7 +57,7 @@ const FolderReadErrorSchema = Schema.Union(folderReadErrors),
  * The error union each daemon operation, and the provider setup watch, declares; a union's
  * `members` are its error classes.
  */
-export const daemonErrorSchemas = {
+const daemonErrorSchemas = {
   approveFolder: FolderApprovalErrorSchema,
   listRecentFolders: FolderReadErrorSchema,
   checkChatFolder: FolderReadErrorSchema,

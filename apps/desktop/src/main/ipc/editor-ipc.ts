@@ -1,14 +1,9 @@
 import { realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { Effect, Exit, Scope, Stream, type Cause } from 'effect';
-import type {
-  CheckoutTarget,
-  CommandInput,
-  CommandOutput,
-  WorkspaceCommand,
-} from '@moonbase/contracts/workspace';
-import type { WorkspaceServiceShape } from '@moonbase/contracts/services';
-import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
+import type { RpcGroup } from 'effect/rpc';
+import type { CheckoutTarget, CommandInput, WorkspaceCommand } from '@moonbase/contracts/workspace';
+import type { WorkspaceHandlers, WorkspaceServiceShape } from '@moonbase/contracts/services';
 import { EditorRpcs, editorClientId } from '../../ipc/editor-rpcs.ts';
 import {
   IpcAuthorityError,
@@ -47,6 +42,7 @@ const isRequestId = Schema.is(IpcRequestIdSchema);
  */
 export function makeEditorIpcHandlers(options: EditorIpcOptions, document: Scope.Scope) {
   const { workspace, native, approvals } = options;
+  const commands: WorkspaceHandlers = workspace;
   const grants: DocumentGrants = approvals.makeDocumentGrants();
   const checkApproved = (checkout: CheckoutTarget) =>
     approvals.isApproved(checkout)
@@ -58,10 +54,7 @@ export function makeEditorIpcHandlers(options: EditorIpcOptions, document: Scope
       Effect.gen(function* () {
         const refusal = yield* Effect.sync(() => approvals.findRefusal(operation, input, grants));
         if (refusal) return yield* new IpcAuthorityError({ refusal });
-        const run = workspace[operation] as (
-          input: CommandInput<K>,
-        ) => Effect.Effect<CommandOutput<K>, WorkspaceError>;
-        const output = yield* run(input);
+        const output = yield* commands[operation](input);
         yield* Effect.sync(() => approvals.record(operation, output, grants));
         return output;
       });
@@ -183,5 +176,5 @@ export function makeEditorIpcHandlers(options: EditorIpcOptions, document: Scope
         if (!isInside(root, real)) return yield* new IpcInputError({ problem: 'checkout-path' });
         yield* native.reveal(real);
       }),
-  });
+  } satisfies RpcGroup.HandlersFrom<RpcGroup.Rpcs<typeof EditorRpcs>>);
 }

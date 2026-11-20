@@ -21,7 +21,8 @@ import {
 import { UnauthorizedError } from '@moonbase/contracts/errors';
 import { HostUnavailableError, IncompatibleHostError } from '@moonbase/contracts/host-errors';
 import { ChatRpcs } from '@moonbase/contracts/chat-rpc';
-import { isDaemonMutation, LocalHostRpcs, ProviderSetupRpcs } from '@moonbase/contracts/daemon-rpc';
+import { LocalHostRpcs, ProviderSetupRpcs } from '@moonbase/contracts/daemon-rpc';
+import { isMutationRpc } from '@moonbase/contracts/rpc-annotations';
 import { declaredErrorsOf, isOneOf, type Procedure } from '../declared-errors.ts';
 import type { MutationInput, MutationReplay } from './mutation-replay.ts';
 import { projectWatchDelta } from './watch-deltas.ts';
@@ -166,7 +167,7 @@ const makeServeDaemonCommand =
         : Effect.fail(notServed()),
     );
     const run = Effect.suspend(service).pipe(Effect.mapError(wire));
-    if (!isDaemonMutation(operation)) return Effect.andThen(checked, run);
+    if (!isMutationRpc(group.requests.get(operation)!)) return Effect.andThen(checked, run);
     return Rpc.uninterruptible(
       Effect.andThen(checked, replay(operation, input, run)).pipe(Effect.mapError(wire)),
     );

@@ -44,7 +44,7 @@ export const chatProjectErrors = unique([
 const WorkspaceErrorSchema = Schema.Union(workspaceErrors),
   ChatProjectErrorSchema = Schema.Union(chatProjectErrors);
 /** The error union a workspace operation or the watch declares; its `members` are the error classes. */
-export const workspaceErrorSchemaOf = (operation: HostCommand | 'watchWorkspace') =>
+const workspaceErrorSchemaOf = (operation: HostCommand | 'watchWorkspace') =>
   operation === 'turnChatIntoProject' ? ChatProjectErrorSchema : WorkspaceErrorSchema;
 
 /** One request: the host it is for, named at the top level, and the operation's input. */
