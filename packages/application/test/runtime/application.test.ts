@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Effect } from 'effect';
+import { Context, Effect, Fiber, Stream } from 'effect';
+import type { ProviderState } from '@moonbase/contracts/providers';
+import { MoonbaseApplication } from '@moonbase/application';
+import { ChatProviderSetup, type ProviderSetupPort } from '@moonbase/application/chat';
 import { isEditorError } from '@moonbase/application/editor';
 import { fauxChat, makeApplication } from './application-fixture.ts';
 
@@ -161,7 +164,28 @@ test('a failed final chat write restores admissions without reversing a complete
 test('a closed chat owns its release, which blocks reopening until it ends', async () => {
   const chat = fauxChat(),
     held = Promise.withResolvers<void>();
-  const f = makeApplication({ editor: true, chat: Effect.succeed(chat.dependencies) });
+  // A sign-in still running when the chat ends is cancelled; this host's cancel dies.
+  const signingIn: ProviderState = {
+    providers: [],
+    flow: {
+      id: 'flow',
+      providerId: 'openai',
+      state: 'running',
+      message: 'Sign in',
+      canOpenUrl: false,
+      prompt: null,
+    },
+  };
+  const providers = {
+    getProviders: () => Effect.succeed({ providers: [], flow: null }),
+    startProviderLogin: () => Effect.succeed(signingIn),
+    cancelProviderLogin: () => Effect.die(Error('cancel-died')),
+    watch: () => Stream.never,
+  } as unknown as ProviderSetupPort;
+  const f = makeApplication({
+    editor: true,
+    chat: Effect.succeed({ ...chat.dependencies, providers }),
+  });
   try {
     await f.start();
     const old = (await f.chat())!;
@@ -182,7 +206,20 @@ test('a closed chat owns its release, which blocks reopening until it ends', asy
     assert.equal(chat.storage.writes, writes);
     held.resolve();
     await f.cleanupSettled();
-    assert(await f.app((a) => a.openChat));
+    const reopened = (await f.app((a) => a.openChat))!;
+    // A release that fails blocks reopening, and the application's release reports it.
+    await f.app(() => Context.get(reopened, ChatProviderSetup).login('openai'));
+    assert.equal(await f.app((a) => a.closeChat), true);
+    await f.cleanupSettled();
+    assert.equal((await f.snapshot()).chat.state, 'cleanup-blocked');
+    await assert.rejects(
+      f.app((a) => a.openChat),
+      isLifecycleError('cleanup-pending'),
+    );
+    await assert.rejects(
+      f.app((a) => a.release),
+      isLifecycleError('cleanup-failed'),
+    );
   } finally {
     await f.dispose();
   }
@@ -261,6 +298,47 @@ test('named targets keep separate drafts and switch only once the old chat is re
     await f.dispose();
   }
 });
+
+test(
+  'a switch whose caller is interrupted while it acquires still ends, and opens join it',
+  {
+    timeout: 5_000,
+  },
+  async () => {
+    const local = fauxChat(),
+      remote = fauxChat(),
+      acquiring = Promise.withResolvers<void>(),
+      held = Promise.withResolvers<typeof remote.dependencies>();
+    const f = makeApplication({
+      chatTargets: [
+        { id: 'local', label: 'Local', acquire: Effect.succeed(local.dependencies) },
+        {
+          id: 'remote',
+          label: 'Remote',
+          acquire: Effect.promise(() => (acquiring.resolve(), held.promise)),
+        },
+      ],
+    });
+    try {
+      await f.start();
+      const caller = f.runtime.runFork(
+        Effect.flatMap(
+          MoonbaseApplication as unknown as Effect.Effect<MoonbaseApplication['Service']>,
+          (a) => a.selectChatTarget('remote'),
+        ),
+      );
+      await acquiring.promise;
+      await f.run(Fiber.interrupt(caller));
+      const opening = f.app((a) => a.openChat);
+      held.resolve(remote.dependencies);
+      assert(await opening);
+      assert.equal((await f.snapshot()).chatTargetId, 'remote');
+      assert.equal(await f.app((a) => a.chat.busy), false);
+    } finally {
+      await f.dispose();
+    }
+  },
+);
 
 test('release ends the chat first and leaves the editor fenced until it closes', async () => {
   const chat = fauxChat();

@@ -55,6 +55,7 @@ Authority and liveness:
 - Ports that receive untrusted data decode and size-bound every reply. The chat trusts its ports' outputs and checks only their meaning: echoed sources and selections, cursors, offsets, authority and liveness.
 - Lists and setup follow their port's watch; nothing polls on a timer.
 - An open or a reveal is its caller's (`EditorSession.runWithCaller`): interrupting the caller abandons it before it changes the view. Saves, file operations and closes are the editor's (`EditorSession.run`), which only closing the editor interrupts; a caller interrupted meanwhile just stops waiting.
+- Opening and switching the chat (`ChatHost`) and preparing Quit (`MoonbaseApplication.prepareQuit`) belong to the host and the application: later callers join the step running, and an interrupted caller only stops waiting.
 
 Errors (D14) and host text (D11):
 

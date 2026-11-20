@@ -1,4 +1,5 @@
-import { Context, Deferred, Effect, Exit, Layer, Option, Ref, SubscriptionRef } from 'effect';
+import { Context, Effect, Exit, FiberHandle, Layer, Option, Ref, SubscriptionRef } from 'effect';
+import { runOrJoin } from './run-or-join.ts';
 import { EditorPreservation } from '../editor/preservation/preservation-service.ts';
 import { EditorSession } from '../editor/session/session-service.ts';
 import { EditorLoader } from '../editor/editor-loader.ts';
@@ -64,11 +65,10 @@ export const toApplicationSnapshot = (
   cleanup: { pending: chat.cleanupPending ? ['chat'] : [], errors: chat.cleanupErrors },
 });
 
-/** Whether Quit consented, an unload check runs, or a preparation runs (which callers join). */
+/** Whether Quit consented, or an unload check runs. */
 type QuitState = {
   consented: boolean;
   checkingUnload: boolean;
-  preparation?: Deferred.Deferred<boolean>;
 };
 
 /**
@@ -91,6 +91,8 @@ export class MoonbaseApplication extends Context.Service<
         const loader = yield* Effect.serviceOption(EditorLoader);
         const phase = yield* SubscriptionRef.make<ApplicationPhase>('live');
         const quit = yield* Ref.make<QuitState>({ consented: false, checkingUnload: false });
+        /** The running Quit preparation, which later calls join. */
+        const preparation = yield* FiberHandle.make<boolean, never>();
         const getPhase = SubscriptionRef.get(phase);
         const recoveryReady = Option.match(preservation, {
           onNone: () => Effect.succeed(true),
@@ -177,27 +179,21 @@ export class MoonbaseApplication extends Context.Service<
             yield* Ref.update(quit, (q) => ({ ...q, checkingUnload: false }));
             return kept;
           }),
-          prepareQuit: Effect.gen(function* () {
-            const { preparation, checkingUnload } = yield* Ref.get(quit);
-            if (preparation) return yield* Deferred.await(preparation);
-            if (checkingUnload) return false;
-            const current = yield* getPhase;
-            if (current === 'prepared') return true;
-            if (current !== 'live') return false;
-            const done = yield* Deferred.make<boolean>();
-            yield* Ref.update(quit, (q) => ({ ...q, preparation: done }));
-            yield* SubscriptionRef.set(phase, 'preparing');
-            const exit = yield* Effect.exit(prepare);
-            const consent = Exit.isSuccess(exit) && exit.value;
-            if (Exit.isFailure(exit)) {
+          prepareQuit: runOrJoin(
+            preparation,
+            Effect.gen(function* () {
+              const { consented, checkingUnload } = yield* Ref.get(quit);
+              if (consented) return true;
+              if (checkingUnload || (yield* getPhase) !== 'live') return false;
+              yield* SubscriptionRef.set(phase, 'preparing');
+              const exit = yield* Effect.exit(prepare);
+              if (Exit.isSuccess(exit)) return exit.value;
               const failure = exit.cause.reasons.find((reason) => reason._tag === 'Fail');
               yield* chat.reportCleanup(failure?._tag === 'Fail' ? failure.error : undefined);
               yield* restore;
-            }
-            if (!consent) yield* Ref.update(quit, (q) => ({ ...q, preparation: undefined }));
-            yield* Deferred.succeed(done, consent);
-            return consent;
-          }),
+              return false;
+            }),
+          ),
           release: Effect.gen(function* () {
             yield* SubscriptionRef.set(phase, 'disposing');
             yield* fence(false);

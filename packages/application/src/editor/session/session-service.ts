@@ -1,4 +1,15 @@
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Ref, Scope, SubscriptionRef } from 'effect';
+import {
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  FiberHandle,
+  Layer,
+  Option,
+  Scope,
+  SubscriptionRef,
+} from 'effect';
 import { EditorError } from '../editor-errors.ts';
 import { awaitForCaller } from '../await-for-caller.ts';
 
@@ -63,11 +74,14 @@ export type EditorSessionShape = {
   /** Fails unless recovery has loaded and the editor isn't closing. */
   readonly assertReady: Effect.Effect<void, EditorError>;
   /**
-   * Marks `checkoutId` as initializing until `endInitialization`. Edits wait meanwhile: they
-   * would name the folder target that `git init` retires.
+   * Runs `initializeRepository`'s work in the editor's scope, marking `checkoutId` as
+   * initializing until it ends. Edits wait meanwhile: they would name the folder target that
+   * `git init` retires. Fails while another initialization runs.
    */
-  readonly beginInitialization: (checkoutId: string) => Effect.Effect<void>;
-  readonly endInitialization: Effect.Effect<void>;
+  readonly initialize: <A, E>(
+    checkoutId: string,
+    work: Effect.Effect<A, E>,
+  ) => Effect.Effect<A, E | EditorError>;
   /** Waits until no `initializeRepository` runs. */
   readonly awaitInitialization: Effect.Effect<void>;
   /**
@@ -90,16 +104,17 @@ export class EditorSession extends Context.Service<EditorSession, EditorSessionS
         const state = yield* SubscriptionRef.make(initialState);
         // Closing interrupts all of its work at once: no piece of it waits on another's end.
         const scope = yield* Scope.fork(yield* Effect.scope, 'parallel');
-        const initialization = yield* Ref.make<Deferred.Deferred<void> | undefined>(undefined);
+        /** The running `initializeRepository`, which `awaitInitialization` waits for. */
+        const initialization = yield* Scope.provide(FiberHandle.make(), scope);
         const get = SubscriptionRef.get(state);
         const update = (f: (state: SessionState) => SessionState) =>
           SubscriptionRef.update(state, f);
-        const awaitInitialization: Effect.Effect<void> = Effect.gen(function* () {
-          for (;;) {
-            const done = yield* Ref.get(initialization);
-            if (!done) return;
-            yield* Deferred.await(done);
-          }
+        // Another may start as one ends, so wait again until none runs.
+        const awaitInitialization: Effect.Effect<void> = Effect.suspend(() => {
+          const running = FiberHandle.getUnsafe(initialization);
+          return Option.isSome(running)
+            ? Effect.andThen(Fiber.await(running.value), awaitInitialization)
+            : Effect.void;
         });
         const admits = Effect.map(get, (current) => current.admissionsOpen && !current.closing);
         const admit = Effect.flatMap(admits, (open) =>
@@ -155,16 +170,24 @@ export class EditorSession extends Context.Service<EditorSession, EditorSessionS
             if (!current.ready) return Effect.fail(new EditorError({ reason: 'not-ready' }));
             return Effect.void;
           }),
-          beginInitialization: (checkoutId) =>
+          initialize: (checkoutId, work) =>
             Effect.gen(function* () {
-              yield* Ref.set(initialization, yield* Deferred.make<void>());
-              yield* update((s) => ({ ...s, initializing: checkoutId }));
+              // `onlyIfMissing` starts nothing while another runs. Ours marks itself in its first
+              // instruction, which `run` runs before it returns, so no later step can be mistaken for it.
+              let mine = false;
+              const marked = Effect.suspend(() => {
+                mine = true;
+                return update((s) => ({ ...s, initializing: checkoutId }));
+              }).pipe(
+                Effect.andThen(work),
+                Effect.ensuring(update((s) => ({ ...s, initializing: null }))),
+              );
+              const started = yield* FiberHandle.run(initialization, marked, {
+                onlyIfMissing: true,
+              });
+              if (!mine) return yield* new EditorError({ reason: 'initializing-already' });
+              return yield* Fiber.join(started);
             }),
-          endInitialization: Effect.gen(function* () {
-            const done = yield* Ref.getAndSet(initialization, undefined);
-            if (done) yield* Deferred.succeed(done, undefined);
-            yield* update((s) => ({ ...s, initializing: null }));
-          }),
           awaitInitialization,
           close,
         } satisfies EditorSessionShape;
